@@ -24,7 +24,14 @@ import com.vettid.app.BuildConfig
 import com.vettid.app.R
 import com.vettid.app.debug.DebugHost
 import com.vettid.app.debug.debugTools
+import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.data.feed.FeedTarget
+import com.vettid.core.notify.NotificationOpenInbox
+import com.vettid.core.notify.Visible
+import com.vettid.core.ui.components.InfoBanner
+import com.vettid.feature.settings.NotificationSettingsRoute
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.toRoute
 import com.vettid.core.ui.components.DrawerItem
 import com.vettid.core.ui.components.NotificationBell
 import com.vettid.feature.approvals.ApprovalDetailRoute
@@ -147,6 +154,21 @@ fun AppShell(
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         gateVm.onForeground()
         if (gated) armed = true
+        shell.setVisible(visibleOf(backStackEntry))
+    }
+    // What is on screen is not notified (ANDROID-PLAN 0.1.23, Notification modes 7); in the background, everything is.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { shell.setVisible(null) }
+    LaunchedEffect(backStackEntry?.id) { shell.setVisible(visibleOf(backStackEntry)) }
+    // Notifications (0.1.23, §9 question 13): the permission asked once while a mode other than Off is in effect,
+    // and the one-time note for installs that never chose a mode.
+    val notifyPrompt by shell.notifyPrompt.collectAsStateWithLifecycle()
+    val notifyContext = LocalContext.current
+    val askNotify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { shell.permissionAsked() }
+    LaunchedEffect(notifyPrompt.ask) {
+        if (!notifyPrompt.ask) return@LaunchedEffect
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(notifyContext, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (granted) shell.permissionAsked() else askNotify.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
     // The proactive release notice (owner decision 2026-10-09): the banner, the notification's tap, and the one
     // request for the notification permission (API 33+), made when the first notice shows and never again.
@@ -238,7 +260,16 @@ fun AppShell(
                     onUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
                     onDismiss = releaseVm::dismiss,
                 )
-                val bannerShown = alarmShown || deletionShown || gate.bannerShown() || release.visible
+                if (notifyPrompt.note) {
+                    InfoBanner(
+                        stringResource(R.string.notify_note),
+                        Modifier.testTag("notify_note"),
+                        stringResource(R.string.owner_check_notice_ok),
+                        shell::noteShown,
+                        statusBarPadding = !alarmShown && !deletionShown && !gate.bannerShown() && !release.visible,
+                    )
+                }
+                val bannerShown = alarmShown || deletionShown || gate.bannerShown() || release.visible || notifyPrompt.note
                 Box(
                     Modifier
                         .weight(1f)
@@ -362,6 +393,25 @@ fun AppShell(
         navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true }
     }
 
+    // A notification's tap (ANDROID-PLAN 0.1.23): the item, read, then its target (or the list when it has none);
+    // the on-phone service's own notification opens Settings → Notifications.
+    val tap by shell.tap.collectAsStateWithLifecycle()
+    LaunchedEffect(tap) {
+        val t = tap ?: return@LaunchedEffect
+        shell.tapTaken()
+        when (t) {
+            NotificationOpenInbox.Open.Settings -> navController.navigate(NotificationSettingsRoute) { launchSingleTop = true }
+            is NotificationOpenInbox.Open.Item -> {
+                val target = shell.openItem(t.itemId)?.let { FeedKinds.target(it) }
+                if (target == null || target == FeedTarget.Sheet) {
+                    navController.navigate(NotificationsRoute()) { launchSingleTop = true }
+                } else {
+                    navController.openFeedTarget(target)
+                }
+            }
+        }
+    }
+
     // An invitation link the app was opened with (§6.4): the accept screen, where the member confirms.
     val inviteLink by shell.inviteLink.collectAsStateWithLifecycle()
     LaunchedEffect(inviteLink) {
@@ -416,6 +466,18 @@ private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>):
     return topLevel ?: debugItems.firstOrNull { item ->
         debugTools.routeFor(item.key)?.let { isCurrent(it::class) } ?: false
     }?.key
+}
+
+/** The screen in front as the notifications see it: the Notifications list, or a screen an item opens. */
+private fun visibleOf(e: NavBackStackEntry?): Visible? {
+    val d = e?.destination ?: return null
+    return when {
+        d.hasRoute(NotificationsRoute::class) -> Visible.Notifications
+        d.hasRoute(ConversationRoute::class) -> Visible.Target(FeedTarget.Conversation(e.toRoute<ConversationRoute>().connectionId))
+        d.hasRoute(ApprovalDetailRoute::class) -> Visible.Target(FeedTarget.ApprovalEntry(e.toRoute<ApprovalDetailRoute>().key))
+        d.hasRoute(ConnectionDetailRoute::class) -> Visible.Target(FeedTarget.Connection(e.toRoute<ConnectionDetailRoute>().connectionId))
+        else -> null
+    }
 }
 
 /** The screen a notification opens (ANDROID-PLAN 0.1.23, 4); the sheet is the Notifications screen's own. */

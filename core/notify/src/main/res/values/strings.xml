@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Channels (ANDROID-PLAN 0.1.23, Notification modes 6). -->
+    <string name="notify_channel_messages">Messages</string>
+    <string name="notify_channel_messages_body">New messages from your connections</string>
+    <string name="notify_channel_requests">Requests</string>
+    <string name="notify_channel_requests_body">Requests waiting for your decision</string>
+    <string name="notify_channel_calls">Calls</string>
+    <string name="notify_channel_calls_body">Missed calls</string>
+    <string name="notify_channel_security">Security alarms</string>
+    <string name="notify_channel_security_body">A credential used somewhere else, failed checks, your vault locked or moved</string>
+    <string name="notify_channel_owner_check">Daily check</string>
+    <string name="notify_channel_owner_check_body">When your daily check is due, with what is waiting</string>
+    <string name="notify_channel_activity">Vault activity</string>
+    <string name="notify_channel_activity_body">Other activity in your vault, without sound</string>
+    <string name="notify_channel_connection">Connection</string>
+    <string name="notify_channel_connection_body">VettID’s own connection to your vault</string>
+
+    <!-- Lock screen (private notifications show this until the phone is unlocked). -->
+    <string name="notify_public_activity">New activity in VettID</string>
+    <string name="notify_public_attention">VettID needs your attention</string>
+    <string name="notify_newer_app">Open VettID on a newer version</string>
+
+    <!-- The vault's state. -->
+    <string name="notify_locked_title">Your vault is locked</string>
+    <string name="notify_locked_body">You won’t be notified until you unlock it</string>
+    <string name="notify_check_due_title">Daily check due</string>
+    <string name="notify_check_waiting">%1$s waiting</string>
+    <string name="notify_check_unknown">Something may be waiting</string>
+    <string name="notify_check_nothing_counted">Do the daily check to keep using your vault</string>
+    <string name="notify_and">%1$s and %2$s</string>
+    <plurals name="notify_count_messages">
+        <item quantity="one">%1$d message</item>
+        <item quantity="other">%1$d messages</item>
+    </plurals>
+    <plurals name="notify_count_requests">
+        <item quantity="one">%1$d request</item>
+        <item quantity="other">%1$d requests</item>
+    </plurals>
+    <plurals name="notify_count_calls">
+        <item quantity="one">%1$d call</item>
+        <item quantity="other">%1$d calls</item>
+    </plurals>
+    <plurals name="notify_count_other">
+        <item quantity="one">%1$d other thing</item>
+        <item quantity="other">%1$d other things</item>
+    </plurals>
+
+    <!-- The on-phone service's own notification: never names a connection. -->
+    <string name="notify_service_connected">VettID is connected</string>
+    <string name="notify_service_connecting">VettID is connecting</string>
+    <string name="notify_service_waiting">Waiting for network</string>
+    <string name="notify_service_locked">Vault locked</string>
+    <string name="notify_service_check_due">Daily check due</string>
+</resources>

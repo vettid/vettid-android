@@ -8,6 +8,24 @@ import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.feed.FeedRepository
+import com.vettid.core.data.prefs.NotificationMode
+import com.vettid.core.data.vault.BackgroundVault
+import com.vettid.core.notify.AndroidPoster
+import com.vettid.core.notify.AndroidServiceControl
+import com.vettid.core.notify.BootStart
+import com.vettid.core.notify.FeedNotifier
+import com.vettid.core.notify.ModeController
+import com.vettid.core.notify.NotificationOpenInbox
+import com.vettid.core.notify.NotifySettings
+import com.vettid.core.notify.NotifyVisibility
+import com.vettid.core.notify.PushProvider
+import com.vettid.core.notify.ServiceStatus
+import com.vettid.core.notify.VaultNotifySource
+import com.vettid.core.push.fcm.FcmPushProvider
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
@@ -159,6 +177,62 @@ object AppModule {
 
     @Provides
     fun feedRepository(m: VaultManager): FeedRepository = m.feed
+
+    // --- the notification modes (ANDROID-PLAN 0.1.23 D7) ---
+
+    @Provides
+    fun backgroundVault(m: VaultManager): BackgroundVault = m
+
+    @Provides
+    @Singleton
+    fun pushProvider(@ApplicationContext context: Context): PushProvider = FcmPushProvider(context)
+
+    @Provides
+    @Singleton
+    fun serviceStatus(): ServiceStatus = ServiceStatus()
+
+    @Provides
+    @Singleton
+    fun notifyVisibility(): NotifyVisibility = NotifyVisibility()
+
+    @Provides
+    @Singleton
+    fun notificationOpenInbox(): NotificationOpenInbox = NotificationOpenInbox()
+
+    @Provides
+    @Singleton
+    fun modeController(
+        @ApplicationContext context: Context,
+        prefs: PreferencesRepository,
+        m: VaultManager,
+        push: PushProvider,
+        @AppScope scope: CoroutineScope,
+    ): ModeController =
+        ModeController(scope, prefs.preferences.map { it.effectiveNotificationMode }, m.phase, AndroidServiceControl(context), push)
+
+    /** After a reboot or an app update: the service, if the mode is the on-phone service and the phone has a vault. */
+    @Provides
+    fun bootStart(prefs: PreferencesRepository, m: VaultManager, modes: ModeController): BootStart = BootStart {
+        modes.apply(prefs.preferences.first().effectiveNotificationMode, m.enrolledOnThisPhone)
+    }
+
+    @Provides
+    @Singleton
+    fun feedNotifier(
+        @ApplicationContext context: Context,
+        prefs: PreferencesRepository,
+        m: VaultManager,
+        visibility: NotifyVisibility,
+        @AppScope scope: CoroutineScope,
+    ): FeedNotifier = FeedNotifier(
+        scope,
+        VaultNotifySource(m, scope),
+        prefs.preferences.map { NotifySettings(it.effectiveNotificationMode, it.notificationPreviews) }
+            .stateIn(scope, SharingStarted.Eagerly, NotifySettings(NotificationMode.OFF)), // until the preferences are read
+        visibility.visible,
+        { context.resources },
+        AndroidPoster(context),
+    )
 
     @Provides
     fun canaryManifestRepository(m: VaultManager): CanaryManifestRepository = m.canary

@@ -10,6 +10,9 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.wipe.AndroidWipeTargets
 import com.vettid.core.data.wipe.LocalWipe
+import com.vettid.core.notify.Channels
+import com.vettid.core.notify.FeedNotifier
+import com.vettid.core.notify.ModeController
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -34,6 +37,12 @@ class VettIdApplication : Application() {
     @Inject
     lateinit var releaseNotifier: ReleaseUpdateNotifier
 
+    @Inject
+    lateinit var feedNotifier: FeedNotifier
+
+    @Inject
+    lateinit var modes: ModeController
+
     override fun onCreate() {
         // Before injection, so before anything reads local state: a wipe of a replaced phone that the process did
         // not live to finish is finished now (owner decision, 2026-10-05; LocalWipe).
@@ -47,6 +56,11 @@ class VettIdApplication : Application() {
         registerActivityLifecycleCallbacks(Foreground { onForeground() })
         // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
         releaseNotifier.start()
+        // The notification modes (ANDROID-PLAN 0.1.23 D7): the channels, feed items as notifications, and the
+        // on-phone service while the mode is the service and the phone has a vault.
+        runCatching { Channels.ensure(this) }
+        feedNotifier.start()
+        modes.start()
     }
 
     /**
@@ -58,6 +72,7 @@ class VettIdApplication : Application() {
     private fun onForeground() {
         connections.evictAll()
         account.onForeground()
+        modes.retry() // a service start Android refused in the background
         if (account.phase.value is AppPhase.Unreachable) scope.launch { account.refresh() }
     }
 

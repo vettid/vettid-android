@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Whether Google Play services are on the phone (FcmPushProvider): package visibility since Android 11. -->
+    <queries>
+        <package android:name="com.google.android.gms" />
+    </queries>
+</manifest>

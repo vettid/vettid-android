@@ -170,6 +170,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 dismissError = vm::dismissError,
                 sharedProfile = { host.navigate(SharedProfileRoute) },
                 releaseUpdate = host.onReleaseUpdate,
+                notifications = { host.navigate(NotificationSettingsRoute) },
             ),
             ownerCheck = ownerCheck,
             ownerCheckActions = OwnerCheckSettingsActions(
@@ -297,6 +298,9 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
             ),
         )
     }
+    composable<NotificationSettingsRoute> {
+        NotificationSettingsRouteContent(hiltViewModel(), host.onBack)
+    }
 }
 
 /** The theme choice after [mode], cycling System → Light → Dark. */
@@ -348,6 +352,7 @@ data class SettingsActions(
     val dismissError: () -> Unit = {},
     val sharedProfile: () -> Unit = {},
     val releaseUpdate: () -> Unit = {},
+    val notifications: () -> Unit = {},
 )
 
 /**
@@ -524,10 +529,13 @@ fun SettingsContent(
                     modifier = Modifier.testTag("theme"),
                 )
                 SettingsDivider()
-                SettingsInfoRow(
-                    stringResource(R.string.settings_app_notifications),
-                    stringResource(R.string.settings_app_notifications_body),
+                // ANDROID-PLAN 0.1.23: how notifications reach this phone, what they show, the channels.
+                SettingsRow(
+                    label = stringResource(R.string.settings_app_notifications),
+                    onClick = actions.notifications,
                     icon = Icons.Outlined.Notifications,
+                    supporting = stringResource(modeSummary(state.preferences.effectiveNotificationMode)),
+                    modifier = Modifier.testTag("notifications"),
                 )
             }
 

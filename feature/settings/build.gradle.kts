@@ -5,6 +5,8 @@ plugins {
 
 dependencies {
     implementation(projects.core.data)
+    // Settings → Notifications (ANDROID-PLAN 0.1.23): the on-phone service's state and the push provider.
+    implementation(projects.core.notify)
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     // BackHandler, and the camera permission for the in-app profile-photo camera (no Photo Picker: owner, 2026-10-08).

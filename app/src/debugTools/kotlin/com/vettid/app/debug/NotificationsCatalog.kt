@@ -92,3 +92,23 @@ internal object NotificationsCatalog {
         "shell.bell" to { Bars() },
     )
 }
+
+/** Settings → Notifications (ANDROID-PLAN 0.1.23, Notification modes 1): the modes, the status line, what notifications show. */
+internal object NotificationSettingsCatalog {
+    private val base = com.vettid.feature.settings.NotificationSettingsUiState(service = com.vettid.core.notify.KeeperStatus.CONNECTED)
+
+    @Composable
+    private fun Screen(s: com.vettid.feature.settings.NotificationSettingsUiState) =
+        com.vettid.feature.settings.NotificationSettingsContent(s, com.vettid.feature.settings.NotificationSettingsActions())
+
+    val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
+        "settings.notifications" to { Screen(base) },
+        "settings.notifications_waiting" to { Screen(base.copy(service = com.vettid.core.notify.KeeperStatus.WAITING_FOR_NETWORK)) },
+        "settings.notifications_locked" to { Screen(base.copy(service = com.vettid.core.notify.KeeperStatus.LOCKED)) },
+        "settings.notifications_blocked" to { Screen(base.copy(phone = com.vettid.feature.settings.PhoneNotifyState(allowed = false))) },
+        "settings.notifications_battery" to { Screen(base.copy(phone = com.vettid.feature.settings.PhoneNotifyState(background = false))) },
+        "settings.notifications_no_play" to { Screen(base.copy(push = com.vettid.core.notify.PushAvailability.MISSING_SERVICES)) },
+        "settings.notifications_off" to { Screen(base.copy(mode = com.vettid.core.data.prefs.NotificationMode.OFF, service = null)) },
+        "settings.notifications_nothing" to { Screen(base.copy(previews = com.vettid.core.data.prefs.NotificationPreviews.NOTHING)) },
+    )
+}
