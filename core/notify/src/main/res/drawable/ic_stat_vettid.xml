@@ -1,11 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The small icon of VettID's notifications: Material "notifications" (Apache 2.0). -->
+<!-- The small icon of VettID's notifications: the rook silhouette with the keyhole cut out, as in the themed
+     launcher icon (ic_launcher_monochrome). The rook (264 x 350) is scaled to 20dp tall and centred. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M12,22c1.1,0 2,-0.9 2,-2h-4c0,1.1 0.89,2 2,2zM18,16v-5c0,-3.07 -1.64,-5.64 -4.5,-6.32V4c0,-0.83 -0.67,-1.5 -1.5,-1.5s-1.5,0.67 -1.5,1.5v0.68C7.63,5.36 6,7.92 6,11v5l-2,2v1h16v-1l-2,-2z" />
+    <group
+        android:scaleX="0.05714"
+        android:scaleY="0.05714"
+        android:translateX="4.457"
+        android:translateY="2.171">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M8,0 L47,0 Q55,0 55,8 L55,54 L104,54 L104,8 Q104,0 112,0 L151,0 Q159,0 159,8 L159,54 L208,54 L208,8 Q208,0 216,0 L255,0 Q263,0 263,8 L263,76 Q263,86 254,90 L240,96 L23,96 L9,90 Q0,86 0,76 L0,8 Q0,0 8,0 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M31,112 Q31,108 35,108 L229,108 Q233,108 233,112 L257,330 Q258,344 245,344 L19,344 Q6,344 7,330 Z M116.93,214.78 L104,282 Q102,292 112,292 L152,292 Q162,292 160,282 L147.07,214.78 A29,29 0 1,0 116.93,214.78 Z" />
+    </group>
 </vector>
