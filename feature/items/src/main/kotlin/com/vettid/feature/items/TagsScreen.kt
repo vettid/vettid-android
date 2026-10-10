@@ -1,22 +1,33 @@
 package com.vettid.feature.items
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -25,9 +36,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -48,9 +63,14 @@ import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.LargeTitle
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.components.RowAction
+import com.vettid.core.ui.components.TagDot
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.core.ui.theme.TagColor
+import com.vettid.core.ui.theme.TagColors
+import com.vettid.core.ui.theme.VettIdTheme
 import com.vettid.core.ui.theme.tagColor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -61,7 +81,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import javax.inject.Inject
 
-/** The tags (§10.8): create, rename (a merge of one), describe, delete. */
+/** The tags (§10.8): create, rename (a merge of one), describe, colour, delete. */
 @Serializable
 data object TagsRoute
 
@@ -75,6 +95,12 @@ sealed interface TagDialog {
     data class ConfirmRename(val tag: String, val into: String, val change: TagChange) : TagDialog
 
     data class ConfirmDelete(val tag: String, val change: TagChange) : TagDialog
+
+    /** The tag's colour, one of the palette's ten (owner decision 2026-10-09). */
+    data class Colour(val tag: TagView) : TagDialog
+
+    /** Why `@profile` has no colour to pick: it always uses the member's own. */
+    data object ProfileColour : TagDialog
 }
 
 /** Immutable UI state of the tags screen. */
@@ -116,6 +142,25 @@ class TagsViewModel @Inject constructor(private val sharing: SharingRepository) 
     fun edit(t: TagView) {
         if (t.reserved) return
         state.update { it.copy(dialog = TagDialog.Edit(t, t.tag, t.description.orEmpty()), error = null) }
+    }
+
+    /** The colour picker of [t]; for `@profile`, why it has none. */
+    fun askColour(t: TagView) = state.update {
+        it.copy(dialog = if (t.reserved) TagDialog.ProfileColour else TagDialog.Colour(t), error = null)
+    }
+
+    /** Stores the palette colour of [slot] for the picker's tag (`tag.set`, its description and icon kept). */
+    fun pickColour(slot: Int) {
+        val d = state.value.dialog as? TagDialog.Colour ?: return
+        val color = TagColors.stored.getOrNull(slot)
+        when {
+            color == null -> Unit
+            TagColors.slotOf(d.tag.color) == slot -> dismiss()
+            else -> run {
+                sharing.setTagColor(d.tag.tag, color)
+                done()
+            }
+        }
     }
 
     fun setName(v: String) = state.update { s ->
@@ -232,6 +277,8 @@ data class TagsActions(
     val onConfirmDelete: () -> Unit = {},
     val onDismiss: () -> Unit = {},
     val onDismissError: () -> Unit = {},
+    val onColour: (TagView) -> Unit = {},
+    val onPickColour: (Int) -> Unit = {},
 )
 
 @Composable
@@ -244,6 +291,7 @@ internal fun TagsRouteContent(host: ItemsHost) {
             onBack = host.onBack, onRetry = vm::refresh, onCreate = vm::askCreate, onEdit = vm::edit, onName = vm::setName,
             onDescription = vm::setDescription, onSave = vm::save, onDelete = vm::askDelete, onConfirmRename = vm::confirmRename,
             onConfirmDelete = vm::confirmDelete, onDismiss = vm::dismiss, onDismissError = vm::dismissError,
+            onColour = vm::askColour, onPickColour = vm::pickColour,
         ),
     )
 }
@@ -283,7 +331,7 @@ fun TagsScreen(state: TagsUiState, actions: TagsActions, modifier: Modifier = Mo
                     body = stringResource(R.string.items_tags_empty_body),
                 )
                 else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(state.tags, key = { it.tag }) { t -> TagRow(t, actions.onEdit) }
+                    items(state.tags, key = { it.tag }) { t -> TagRow(t, actions.onEdit, actions.onColour) }
                     item { Spacer(Modifier.height(96.dp)) }
                 }
             }
@@ -293,7 +341,7 @@ fun TagsScreen(state: TagsUiState, actions: TagsActions, modifier: Modifier = Mo
 }
 
 @Composable
-private fun TagRow(t: TagView, onEdit: (TagView) -> Unit) {
+private fun TagRow(t: TagView, onEdit: (TagView) -> Unit, onColour: (TagView) -> Unit) {
     val counts = pluralStringResource(R.plurals.items_tag_items, t.items, t.items) +
         if (t.rules.isEmpty()) "" else " · " + pluralStringResource(R.plurals.items_tag_rules, t.rules.size, t.rules.size)
     VettIdListRow(
@@ -305,7 +353,9 @@ private fun TagRow(t: TagView, onEdit: (TagView) -> Unit) {
         },
         meta = if (t.reserved) counts else null,
         tileIcon = if (t.reserved) Icons.Outlined.Person else Icons.AutoMirrored.Outlined.Label,
-        tileColors = tagColor(t.tag),
+        tileColors = tagColor(t.tag, t.color),
+        // The colour button (owner decision 2026-10-09); `@profile`'s says why it is always gold.
+        action = RowAction(Icons.Outlined.Palette, stringResource(R.string.items_tags_cd_colour, tagLabel(t.tag)), { onColour(t) }),
         onClick = if (t.reserved) null else ({ onEdit(t) }),
         modifier = Modifier.testTag("tag_${t.tag}"),
     )
@@ -333,9 +383,69 @@ private fun TagDialogs(state: TagsUiState, actions: TagsActions) {
             destructive = true,
             modifier = Modifier.testTag("tags_confirm_delete"),
         )
+        is TagDialog.Colour -> TagColourDialog(d.tag, state.busy, actions)
+        TagDialog.ProfileColour -> AlertDialog(
+            onDismissRequest = actions.onDismiss,
+            title = { Text(stringResource(R.string.items_tags_colour_profile_title)) },
+            text = { Text(stringResource(R.string.items_tags_colour_profile)) },
+            confirmButton = { TextButton(onClick = actions.onDismiss) { Text(stringResource(R.string.items_ok)) } },
+            modifier = Modifier.testTag("tag_colour_profile"),
+        )
         null -> Unit
     }
 }
+
+/** The palette's names, by slot ([TagColors.names]). */
+private val colourNames = listOf(
+    R.string.items_tag_colour_red, R.string.items_tag_colour_orange, R.string.items_tag_colour_green, R.string.items_tag_colour_teal,
+    R.string.items_tag_colour_blue, R.string.items_tag_colour_indigo, R.string.items_tag_colour_violet, R.string.items_tag_colour_pink,
+    R.string.items_tag_colour_brown, R.string.items_tag_colour_slate,
+)
+
+/** The ten palette colours in two rows, the one the tag shows checked; a tap stores the colour. */
+@Composable
+private fun TagColourDialog(tag: TagView, busy: Boolean, actions: TagsActions) {
+    val current = TagColors.shownSlot(tag.tag, tag.color)
+    val palette = if (VettIdTheme.colors.isDark) TagColors.dark else TagColors.light
+    AlertDialog(
+        onDismissRequest = actions.onDismiss,
+        title = { Text(stringResource(R.string.items_tags_colour_title, tagLabel(tag.tag))) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.selectableGroup()) {
+                palette.indices.chunked(SWATCHES_PER_ROW).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                        row.forEach { i ->
+                            ColourSwatch(palette[i], i, stringResource(colourNames[i]), i == current, !busy) { actions.onPickColour(i) }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = actions.onDismiss) { Text(stringResource(R.string.items_cancel)) } },
+        modifier = Modifier.testTag("tag_colour"),
+    )
+}
+
+@Composable
+@Suppress("LongParameterList")
+private fun ColourSwatch(c: TagColor, slot: Int, name: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val cd = if (selected) stringResource(R.string.items_tags_cd_colour_selected, name) else name
+    Box(
+        modifier = Modifier
+            .size(Spacing.touchTarget)
+            .clip(CircleShape)
+            .background(c.container)
+            .then(if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier)
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .semantics { contentDescription = cd }
+            .testTag("tag_colour_${TagColors.names[slot]}"),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) Icon(Icons.Outlined.Check, contentDescription = null, tint = c.onContainer)
+    }
+}
+
+private const val SWATCHES_PER_ROW = 5
 
 /** The dry run in words (§10.8): the items it changes and, for a rename, what newly gets shared. */
 @Composable
@@ -384,6 +494,11 @@ private fun TagForm(title: String, name: String, description: String, tag: TagVi
                     )
                 }
                 if (tag != null) {
+                    TextButton(onClick = { actions.onColour(tag) }, enabled = !busy, modifier = Modifier.testTag("tag_form_colour")) {
+                        TagDot(tag.tag, stored = tag.color)
+                        Spacer(Modifier.width(Spacing.s))
+                        Text(stringResource(R.string.items_tags_edit_colour))
+                    }
                     TextButton(onClick = actions.onDelete, enabled = !busy, modifier = Modifier.testTag("tag_form_delete")) {
                         Text(stringResource(R.string.items_tags_delete), color = MaterialTheme.colorScheme.error)
                     }

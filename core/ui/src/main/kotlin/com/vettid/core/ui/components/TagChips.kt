@@ -30,8 +30,8 @@ import com.vettid.core.ui.theme.VettIdShape
 import com.vettid.core.ui.theme.tagColor
 
 /**
- * An item tag as a small pill in the tag's own colour ([com.vettid.core.ui.theme.TagColors]: the same tag has the
- * same colour everywhere; `@profile` is gold). [label] is what is shown ("Shared profile" for `@profile`), [tag] the
+ * An item tag as a small pill in the tag's own colour ([com.vettid.core.ui.theme.TagColors]: the colour the vault
+ * stores for it, the same everywhere; `@profile` is gold). [label] is what is shown ("Shared profile" for `@profile`), [tag] the
  * tag itself, which picks the colour.
  */
 @Composable
@@ -73,10 +73,10 @@ fun TagChipLine(tags: List<String>, label: @Composable (String) -> String, modif
     }
 }
 
-/** A small dot in [tag]'s colour (a tag's choice in a menu). */
+/** A small dot in [tag]'s colour (a tag's choice in a menu); [stored] is its registry colour when the caller has it. */
 @Composable
-fun TagDot(tag: String, modifier: Modifier = Modifier) {
-    Box(modifier.size(12.dp).clip(VettIdShape.pill).background(tagColor(tag).container))
+fun TagDot(tag: String, modifier: Modifier = Modifier, stored: String? = null) {
+    Box(modifier.size(12.dp).clip(VettIdShape.pill).background(tagColor(tag, stored).container))
 }
 
 /**

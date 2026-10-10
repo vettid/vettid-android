@@ -3,12 +3,15 @@
 
 package com.vettid.core.data.items
 
+import com.vettid.core.crypto.envelope.Inner
+import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.GrantFetched
 import com.vettid.core.vault.TagInfo
 import com.vettid.core.vault.TagPage
 import com.vettid.core.vault.VaultJson
+import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -40,8 +43,12 @@ class SharingManagerTest {
             return tagPages.removeFirstOrNull() ?: TagPage(1)
         }
 
-        override suspend fun tagSet(version: Long, tag: String, color: String?, description: String?): Long {
-            calls += "tagSet:$version:$tag:$description"
+        /** Codes `tag.set` answers with, one per call, before it succeeds. */
+        var setErrors = ArrayDeque<String>()
+
+        override suspend fun tagSet(version: Long, tag: String, color: String?, icon: String?, description: String?): Long {
+            calls += "tagSet:$version:$tag:$color:$icon:$description"
+            setErrors.removeFirstOrNull()?.let { throw VaultOpException("tag.set", it) }
             return version + 1
         }
 
@@ -409,5 +416,104 @@ class SharingManagerTest {
         assertTrue(o.getValue("r3").isEmpty())
         assertTrue(ShareRule("r9", 1, "c1", tags = listOf("a", "b")).multiTag)
         assertFalse(ask.multiTag)
+    }
+
+    // --- tag colours (owner decision 2026-10-09) ---
+
+    /** The first tag without a colour by name, with "#00000<n>" (n = colours stored so far): a stand-in for TagColors.next. */
+    private val next: (List<TagView>) -> Pair<String, String>? = { tags ->
+        tags.filter { !it.tag.startsWith("@") && it.color == null }.minByOrNull { it.tag }?.let { it.tag to "#00000${tags.count { t -> t.color != null }}" }
+    }
+
+    private fun page(v: Long, vararg t: TagInfo) = TagPage(v, t.toList())
+
+    @Test
+    fun coloursAreStoredOneAtATimeWithTheDescriptionAndIconKept() = runTest {
+        ops.tagPages = ArrayDeque(
+            listOf(page(4, TagInfo("@profile", items = 1), TagInfo("travel", icon = "plane", description = "Trips"), TagInfo("medical", color = "#ff0000"), TagInfo("home"))),
+        )
+        assertEquals(2, m.assignColors(next))
+        // Sorted order, each with the version the last one answered; the profile never.
+        assertEquals(listOf("tagList:null", "tagSet:4:home:#000001:null:null", "tagSet:5:travel:#000002:plane:Trips"), ops.calls)
+        assertEquals(mapOf("medical" to "#ff0000", "home" to "#000001", "travel" to "#000002"), m.colors.value)
+        assertEquals(6, m.tags.value!!.version)
+        // Nothing left: no more writes.
+        ops.calls.clear()
+        assertEquals(0, m.assignColors(next))
+        assertTrue(ops.calls.none { it.startsWith("tagSet") })
+    }
+
+    @Test
+    fun aConflictReadsTheRegistryAgainAndKeepsWhatAnotherDeviceStored() = runTest {
+        ops.tagPages = ArrayDeque(
+            listOf(
+                page(4, TagInfo("a"), TagInfo("b")),
+                // Another device stored "a" meanwhile.
+                page(6, TagInfo("a", color = "#abcdef"), TagInfo("b")),
+            ),
+        )
+        ops.setErrors = ArrayDeque(listOf("conflict"))
+        assertEquals(1, m.assignColors(next))
+        assertEquals(listOf("tagList:null", "tagSet:4:a:#000000:null:null", "tagList:null", "tagSet:6:b:#000001:null:null"), ops.calls)
+        assertEquals(mapOf("a" to "#abcdef", "b" to "#000001"), m.colors.value)
+    }
+
+    @Test
+    fun anyOtherFailureStopsQuietlyAndTheHashColourStays() = runTest {
+        ops.tagPages = ArrayDeque(listOf(page(4, TagInfo("a"), TagInfo("b"))))
+        ops.setErrors = ArrayDeque(listOf("owner_check_required"))
+        assertEquals(0, m.assignColors(next))
+        assertEquals(1, ops.calls.count { it.startsWith("tagSet") })
+        assertTrue(m.colors.value.isEmpty())
+        // Conflicts forever: bounded.
+        ops.setErrors = ArrayDeque(List(100) { "conflict" })
+        assertEquals(0, m.assignColors(next))
+        assertTrue(ops.calls.count { it.startsWith("tagSet") } < 12)
+    }
+
+    @Test
+    fun theMembersColourKeepsTheEntryAndIsSentAgainAfterAConflict() = runTest {
+        ops.tagPages = ArrayDeque(listOf(page(4, TagInfo("travel", color = "#000001", icon = "plane", description = "Trips")), page(7, TagInfo("travel", color = "#000003", icon = "plane", description = "Trips, all"))))
+        ops.setErrors = ArrayDeque(listOf("conflict"))
+        m.setTagColor("travel", "#59bbfb")
+        assertEquals(
+            listOf("tagList:null", "tagSet:4:travel:#59bbfb:plane:Trips", "tagList:null", "tagSet:7:travel:#59bbfb:plane:Trips, all", "tagList:null"),
+            ops.calls,
+        )
+        try {
+            m.setTagColor("@profile", "#59bbfb")
+            fail("@profile has no colour stored")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.OTHER, e.kind)
+        }
+    }
+
+    @Test
+    fun aDescriptionEditKeepsTheColourAndTheIcon() = runTest {
+        ops.tagPages = ArrayDeque(listOf(page(4, TagInfo("travel", color = "#000001", icon = "plane", description = "Trips"))))
+        m.refreshTags()
+        m.setTag("travel", "Holidays", "#000001")
+        assertTrue("tagSet:4:travel:#000001:plane:Holidays" in ops.calls)
+    }
+
+    @Test
+    fun coloursOutliveATagChangedUntilReadAgainAndGoOnLock() = runTest {
+        ops.tagPages = ArrayDeque(listOf(page(4, TagInfo("travel", color = "#000001"))))
+        m.refreshTags()
+        m.onEvent(VaultMessage(Inner(id = Ulid.new(), type = "sync.event", ts = Instant.now(), body = """{"kind":"tag.changed","version":5}""".toByteArray())))
+        assertNull(m.tags.value)
+        assertEquals(mapOf("travel" to "#000001"), m.colors.value)
+        m.clear()
+        assertTrue(m.colors.value.isEmpty())
+    }
+
+    @Test
+    fun aTagFirstUsedOnAnItemMakesTheRegistryReadAgain() = runTest {
+        ops.tagPages = ArrayDeque(listOf(page(4, TagInfo("travel", color = "#000001"))))
+        m.refreshTags()
+        m.onTagsUsed(listOf("travel", "@profile"))
+        assertEquals(4L, m.tags.value?.version)
+        m.onTagsUsed(listOf("travel", "garden"))
+        assertNull(m.tags.value)
     }
 }

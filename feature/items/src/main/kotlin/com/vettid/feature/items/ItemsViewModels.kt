@@ -747,6 +747,8 @@ class ItemEditViewModel @Inject constructor(
                     items.setSensitivity(id, version, draft.sensitivity, to, pw.takeIf { critical || to == Sensitivity.CRITICAL })
                 }
                 state.update { it.copy(busy = false, prompt = null, savedId = id, dirty = false) }
+                // A tag first used here gets its colour stored (owner decision 2026-10-09).
+                sharing.onTagsUsed(draft.tags)
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false) }
                 if (stored) reloadAfter(s.itemId!!, to)

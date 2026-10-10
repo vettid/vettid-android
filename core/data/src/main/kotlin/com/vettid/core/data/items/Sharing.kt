@@ -2,13 +2,17 @@ package com.vettid.core.data.items
 
 import java.time.Instant
 
-/** A tag of the registry or in use (§10.8 `tag.list`): how many items carry it and which share rules name it. */
+/**
+ * A tag of the registry or in use (§10.8 `tag.list`): how many items carry it and which share rules name it, and its
+ * stored presentation ([color] `#rrggbb`, [icon], [description]), which `tag.set` replaces as a whole.
+ */
 data class TagView(
     val tag: String,
     val items: Int = 0,
     val rules: List<String> = emptyList(),
     val color: String? = null,
     val description: String? = null,
+    val icon: String? = null,
 ) {
     val reserved: Boolean get() = tag.startsWith("@")
 }

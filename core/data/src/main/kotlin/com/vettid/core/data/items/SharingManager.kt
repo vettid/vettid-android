@@ -32,10 +32,38 @@ interface SharingRepository {
     /** The tag registry and the tags in use, as last listed. */
     val tags: StateFlow<TagRegistry?>
 
+    /**
+     * The colours the registry stores (§10.8 `color`), by tag, as last listed: kept while the registry is read again
+     * after a `tag.changed`, empty once the vault locks. Tags without one show their hash colour.
+     */
+    val colors: StateFlow<Map<String, String>>
+
     suspend fun refreshTags(): TagRegistry
 
-    /** Creates a registry entry (`tag.set`); [description] at most 256 bytes. */
+    /**
+     * Creates or replaces a registry entry (`tag.set`); [description] at most 256 bytes. `tag.set` clears what it is
+     * not sent, so the entry's stored icon goes with it unchanged.
+     */
     suspend fun setTag(tag: String, description: String? = null, color: String? = null)
+
+    /**
+     * The member's choice of colour for [tag] (`tag.set`, owner decision 2026-10-09), its description and icon kept;
+     * after a `conflict` (another device changed the registry) the registry is read again and the choice sent once
+     * more. Never for an `@` tag (`@profile` is always the member's gold).
+     */
+    suspend fun setTagColor(tag: String, color: String)
+
+    /**
+     * Stores a colour for every tag that has none (owner decision 2026-10-09): [next] picks the next tag and its
+     * `#rrggbb` from the registry, null when none is left; each is sent with `tag.set` (the registry's version, the
+     * tag's description and icon kept), one at a time. A `conflict` re-reads the registry and goes on with what is
+     * stored there (a colour another device stored is kept); any other failure stops, the rest waiting for the next
+     * time. Returns how many were stored.
+     */
+    suspend fun assignColors(next: (List<TagView>) -> Pair<String, String>?): Int
+
+    /** Tags just put on an item: one the registry has no colour for makes it read again (and so coloured). */
+    fun onTagsUsed(tags: List<String>)
 
     /** Renames [from] to [into] (a merge of one tag, §10.8); [dryRun] only says what it would do. */
     suspend fun renameTag(from: String, into: String, dryRun: Boolean): TagChange
@@ -74,7 +102,7 @@ interface SharingRepository {
 interface SharingOps {
     suspend fun tagList(after: String?): TagPage
 
-    suspend fun tagSet(version: Long, tag: String, color: String?, description: String?): Long
+    suspend fun tagSet(version: Long, tag: String, color: String?, icon: String?, description: String?): Long
 
     suspend fun tagMerge(version: Long, from: List<String>, into: String, dryRun: Boolean): JsonObject
 
@@ -100,8 +128,8 @@ interface SharingOps {
 internal class VaultSharingOps(private val api: VaultApi) : SharingOps {
     override suspend fun tagList(after: String?): TagPage = api.tagList(after = after)
 
-    override suspend fun tagSet(version: Long, tag: String, color: String?, description: String?): Long =
-        api.tagSet(version, tag, color = color, description = description)
+    override suspend fun tagSet(version: Long, tag: String, color: String?, icon: String?, description: String?): Long =
+        api.tagSet(version, tag, color = color, icon = icon, description = description)
 
     override suspend fun tagMerge(version: Long, from: List<String>, into: String, dryRun: Boolean): JsonObject =
         api.tagMerge(version, from, into, dryRun)
@@ -135,12 +163,23 @@ class SharingManager(
 ) : SharingRepository {
     private val registry = MutableStateFlow<TagRegistry?>(null)
     override val tags: StateFlow<TagRegistry?> = registry.asStateFlow()
+    private val stored = MutableStateFlow<Map<String, String>>(emptyMap())
+    override val colors: StateFlow<Map<String, String>> = stored.asStateFlow()
 
     fun clear() {
         registry.value = null
+        stored.value = emptyMap()
     }
 
-    /** `tag.changed` from another device: the registry is re-read when next shown. */
+    private fun publish(r: TagRegistry) {
+        registry.value = r
+        stored.value = r.tags.mapNotNull { t -> t.color?.let { t.tag to it } }.toMap()
+    }
+
+    /**
+     * `tag.changed` from another device: the registry is re-read when next shown (and at once by the root of the UI,
+     * which keeps the tags' colours current); the colours stay until then.
+     */
     fun onEvent(m: VaultMessage) {
         if (m.type == "sync.event" && VaultJson.str(m.body, "kind") == "tag.changed") registry.value = null
     }
@@ -152,18 +191,63 @@ class SharingManager(
         do {
             val page = vaultGuard { ops().tagList(after) }
             version = page.version
-            out += page.tags.map { TagView(it.tag, it.items, it.rules, it.color, it.description) }
+            out += page.tags.map { TagView(it.tag, it.items, it.rules, it.color, it.description, it.icon) }
             after = page.next?.takeIf { page.tags.isNotEmpty() }
         } while (after != null && out.size < MAX_TAGS_LISTED)
-        return TagRegistry(version, out).also { registry.value = it }
+        return TagRegistry(version, out).also { publish(it) }
     }
 
     private suspend fun version(): Long = (registry.value ?: refreshTags()).version
 
     override suspend fun setTag(tag: String, description: String?, color: String?) {
         val n = ItemChecks.normalizeTag(tag, reserved = false) ?: throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
-        vaultGuard { ops().tagSet(version(), n, color, description?.takeIf { it.isNotBlank() }) }
+        val icon = registry.value?.tags?.firstOrNull { it.tag == n }?.icon
+        vaultGuard { ops().tagSet(version(), n, color, icon, description?.takeIf { it.isNotBlank() }) }
         refreshTags()
+    }
+
+    override suspend fun setTagColor(tag: String, color: String) {
+        if (tag.startsWith("@")) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        try {
+            putColor(registry.value ?: refreshTags(), tag, color)
+        } catch (e: VaultFailure) {
+            if (e.kind != FailureKind.CONFLICT) throw e
+            putColor(refreshTags(), tag, color)
+        }
+        refreshTags()
+    }
+
+    /** `tag.set` of [tag] in [r] with [color], everything else of its entry as stored; the registry's new version. */
+    private suspend fun putColor(r: TagRegistry, tag: String, color: String): Long {
+        val t = r.tags.firstOrNull { it.tag == tag } ?: TagView(tag)
+        return vaultGuard { ops().tagSet(r.version, tag, color, t.icon, t.description) }
+    }
+
+    override suspend fun assignColors(next: (List<TagView>) -> Pair<String, String>?): Int {
+        var r = registry.value ?: refreshTags()
+        var count = 0
+        var conflicts = 0
+        var step = next(r.tags)?.takeUnless { it.first.startsWith("@") }
+        while (step != null && count < MAX_ASSIGNED) {
+            val (tag, color) = step
+            r = try {
+                val v = putColor(r, tag, color)
+                count++
+                val tags = r.tags.map { if (it.tag == tag) it.copy(color = color) else it }
+                // Without a version in the answer the registry is read again for the next one.
+                if (v > 0) TagRegistry(v, tags).also { publish(it) } else refreshTags()
+            } catch (e: VaultFailure) {
+                if (e.kind != FailureKind.CONFLICT || ++conflicts > MAX_CONFLICTS) return count
+                refreshTags()
+            }
+            step = next(r.tags)?.takeUnless { it.first.startsWith("@") }
+        }
+        return count
+    }
+
+    override fun onTagsUsed(tags: List<String>) {
+        val known = stored.value
+        if (tags.any { !it.startsWith("@") && it !in known }) registry.value = null
     }
 
     override suspend fun renameTag(from: String, into: String, dryRun: Boolean): TagChange {
@@ -277,6 +361,12 @@ class SharingManager(
     companion object {
         private const val CODE_BAD_REQUEST = "bad_request"
         private const val MAX_TAGS_LISTED = 4_096
+
+        /** At most this many colours stored in one go (the registry holds 512 entries, §10.8). */
+        private const val MAX_ASSIGNED = 512
+
+        /** Version conflicts tolerated in one go (another device assigning at the same time) before giving up. */
+        private const val MAX_CONFLICTS = 8
 
         /** §10.12: a request entry's label at most 128 bytes, its reason at most 256. */
         const val MAX_LABEL = 128

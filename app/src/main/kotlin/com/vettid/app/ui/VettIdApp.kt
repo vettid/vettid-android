@@ -143,16 +143,19 @@ fun VettIdApp(
                         composable<UnlockDest> { UnlockRoute() }
                         composable<UpdateDest> { ReleaseUpdateFlowRoute() }
                         composable<MainDest> {
-                            AppShell(
-                                launchRoute = launchRoute,
-                                accountName = account?.fullName ?: account?.displayEmail
-                                    ?: stringResource(R.string.account_placeholder_name),
-                                account = account,
-                                portalUrl = portal,
-                                alarm = alarm,
-                                onLockVault = viewModel::lockVault,
-                                onEnableAppLock = onEnableAppLock,
-                            )
+                            // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).
+                            TagColorsHost {
+                                AppShell(
+                                    launchRoute = launchRoute,
+                                    accountName = account?.fullName ?: account?.displayEmail
+                                        ?: stringResource(R.string.account_placeholder_name),
+                                    account = account,
+                                    portalUrl = portal,
+                                    alarm = alarm,
+                                    onLockVault = viewModel::lockVault,
+                                    onEnableAppLock = onEnableAppLock,
+                                )
+                            }
                         }
                     }
                 }

@@ -37,6 +37,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import com.vettid.core.ui.theme.TagColors
 import org.junit.Rule
 import org.junit.Test
 import java.time.Instant
@@ -109,6 +110,56 @@ class SharingViewModelsTest {
         advanceUntilIdle()
         assertEquals(FailureKind.IN_USE, vm.uiState.value.error)
         assertNull(vm.uiState.value.dialog)
+    }
+
+    // --- tag colours (owner decision 2026-10-09) ---
+
+    @Test
+    fun theColourPickerStoresTheChosenPaletteColour() = runTest {
+        sharing.registry = sharing.registry.copy(tags = sharing.registry.tags.map { if (it.tag == "travel") it.copy(color = TagColors.stored[2], description = "Trips") else it })
+        val vm = TagsViewModel(sharing)
+        advanceUntilIdle()
+        val travel = vm.uiState.value.tags.first { it.tag == "travel" }
+        vm.askColour(travel)
+        assertEquals(TagDialog.Colour(travel), vm.uiState.value.dialog)
+        // The current colour again: nothing to store.
+        vm.pickColour(2)
+        assertNull(vm.uiState.value.dialog)
+        assertTrue(sharing.calls.none { it.startsWith("setTagColor") })
+        vm.askColour(travel)
+        vm.pickColour(4)
+        advanceUntilIdle()
+        assertTrue("setTagColor:travel:${TagColors.stored[4]}" in sharing.calls)
+        assertNull(vm.uiState.value.dialog)
+        val stored = vm.uiState.value.tags.first { it.tag == "travel" }
+        assertEquals(TagColors.stored[4], stored.color)
+        assertEquals("Trips", stored.description)
+        // Out of range: ignored.
+        vm.askColour(stored)
+        vm.pickColour(10)
+        assertEquals(1, sharing.calls.count { it.startsWith("setTagColor") })
+    }
+
+    @Test
+    fun theSharedProfileSaysWhyItHasNoColourToPick() = runTest {
+        val vm = TagsViewModel(sharing)
+        advanceUntilIdle()
+        vm.askColour(vm.uiState.value.tags.first { it.tag == "@profile" })
+        assertEquals(TagDialog.ProfileColour, vm.uiState.value.dialog)
+        vm.pickColour(0)
+        assertTrue(sharing.calls.none { it.startsWith("setTagColor") })
+    }
+
+    @Test
+    fun aRefusedColourKeepsThePickerAndSaysWhy() = runTest {
+        sharing.fail["setTagColor:travel:${TagColors.stored[1]}"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
+        val vm = TagsViewModel(sharing)
+        advanceUntilIdle()
+        vm.askColour(vm.uiState.value.tags.first { it.tag == "travel" })
+        vm.pickColour(1)
+        advanceUntilIdle()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
+        assertTrue(vm.uiState.value.dialog is TagDialog.Colour)
     }
 
     private fun ruleVm(ruleId: String? = null) = RuleEditViewModel(

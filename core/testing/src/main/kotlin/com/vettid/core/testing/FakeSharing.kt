@@ -39,6 +39,15 @@ class FakeSharing : SharingRepository {
     private var next = 1
 
     override val tags = MutableStateFlow<TagRegistry?>(null)
+    override val colors = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** Tags passed to [onTagsUsed]. */
+    val used = mutableListOf<List<String>>()
+
+    private fun publish() {
+        tags.value = registry
+        colors.value = registry.tags.mapNotNull { t -> t.color?.let { t.tag to it } }.toMap()
+    }
 
     private fun call(n: String) {
         calls += n
@@ -47,17 +56,43 @@ class FakeSharing : SharingRepository {
 
     override suspend fun refreshTags(): TagRegistry {
         call("refreshTags")
-        tags.value = registry
+        publish()
         return registry
     }
 
     override suspend fun setTag(tag: String, description: String?, color: String?) {
         call("setTag:$tag")
+        val icon = registry.tags.firstOrNull { it.tag == tag }?.icon
         registry = registry.copy(
             version = registry.version + 1,
-            tags = registry.tags.filterNot { it.tag == tag } + TagView(tag, description = description),
+            tags = registry.tags.filterNot { it.tag == tag } + TagView(tag, description = description, color = color, icon = icon),
         )
-        tags.value = registry
+        publish()
+    }
+
+    override suspend fun setTagColor(tag: String, color: String) {
+        call("setTagColor:$tag:$color")
+        if (tag.startsWith("@")) throw VaultFailure(FailureKind.OTHER, "bad_request")
+        val tags = if (registry.tags.none { it.tag == tag }) registry.tags + TagView(tag) else registry.tags
+        registry = registry.copy(version = registry.version + 1, tags = tags.map { if (it.tag == tag) it.copy(color = color) else it })
+        publish()
+    }
+
+    override suspend fun assignColors(next: (List<TagView>) -> Pair<String, String>?): Int {
+        call("assignColors")
+        var n = 0
+        while (true) {
+            val (tag, color) = next(registry.tags) ?: break
+            val tags = registry.tags.map { if (it.tag == tag) it.copy(color = color) else it }
+            registry = registry.copy(version = registry.version + 1, tags = tags)
+            n++
+        }
+        publish()
+        return n
+    }
+
+    override fun onTagsUsed(tags: List<String>) {
+        used += tags
     }
 
     override suspend fun renameTag(from: String, into: String, dryRun: Boolean): TagChange {
