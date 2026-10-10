@@ -44,6 +44,11 @@ class FakeFeed : FeedRepository {
         seed(items.value.map { if (it.itemId == itemId) read(it) else it })
     }
 
+    override fun markViewed(itemIds: Collection<String>) {
+        calls += "markViewed:${itemIds.sorted().joinToString(",")}"
+        seed(items.value.map { if (it.itemId in itemIds && it.priority != FeedManager.PRIORITY_URGENT) read(it) else it })
+    }
+
     override suspend fun delete(itemId: String) {
         call("delete:$itemId")
         items.update { l -> l.filterNot { it.itemId == itemId } }

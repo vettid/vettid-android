@@ -259,6 +259,28 @@ class FeedManagerTest {
     }
 
     @Test
+    fun viewedItemsAreMarkedReadExceptUrgentOnes() = runTest {
+        val ops = Ops()
+        val m = opened(
+            ops,
+            item("m1", 1),
+            item("m2", 2),
+            item("r", 3, status = "read"),
+            item("a", 4, kind = "credential.alarm", priority = "urgent"),
+            item("x", 5, status = "archived"),
+        )
+        m.markViewed(listOf("m1", "m2", "r", "a", "x", "gone"))
+        settle { ops.updates.size == 2 }
+        assertEquals(setOf("m1" to "read", "m2" to "read"), ops.updates.toSet())
+        assertEquals(listOf("a"), m.items.value.filter { it.status == "active" }.map { it.itemId })
+        assertEquals(1, m.badge.value.unread)
+        assertTrue(m.badge.value.urgent)
+        m.markViewed(listOf("m1", "a")) // nothing left to mark
+        advanceUntilIdle()
+        assertEquals(2, ops.updates.size)
+    }
+
+    @Test
     fun anAskDecidedAndAConversationOpenedMarkTheirItemsRead() = runTest {
         val ops = Ops()
         val ask = item("g", 1, kind = "grant.request").copy(ref = "req1")

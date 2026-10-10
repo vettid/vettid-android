@@ -35,13 +35,20 @@ data class FeedSection(val day: LocalDate?, val items: List<FeedItem>)
 /**
  * The list's grouping (ANDROID-PLAN 0.1.23, 3), kept pure for tests: newest first by `at` (a batch keeps its first
  * ask's `at`); unread `urgent` items in Needs attention at the top; the others in day groups in local time. The
- * Archived view lists the archived items only, the main list everything else; [unreadOnly] keeps the `active` ones.
+ * Archived view lists the archived items only, the main list everything else; [unreadOnly] keeps the `active` ones
+ * and those read by viewing while the screen is open ([fresh], ANDROID-PLAN 0.1.26).
  */
 object FeedSections {
-    fun of(items: List<FeedItem>, archived: Boolean, unreadOnly: Boolean, zone: ZoneId): List<FeedSection> {
+    fun of(
+        items: List<FeedItem>,
+        archived: Boolean,
+        unreadOnly: Boolean,
+        zone: ZoneId,
+        fresh: Set<String> = emptySet(),
+    ): List<FeedSection> {
         val shown = items.filter { i ->
             if (archived) i.status == FeedManager.STATUS_ARCHIVED else i.status != FeedManager.STATUS_ARCHIVED &&
-                (!unreadOnly || i.status == FeedManager.STATUS_ACTIVE)
+                (!unreadOnly || i.status == FeedManager.STATUS_ACTIVE || i.itemId in fresh)
         }.sortedWith(compareByDescending<FeedItem> { FeedManager.at(it) ?: Instant.EPOCH }.thenByDescending { it.itemId })
         val urgent = if (archived) emptyList() else shown.filter { it.status == FeedManager.STATUS_ACTIVE && FeedKinds.urgent(it) }
         val rest = shown - urgent.toSet()
@@ -74,8 +81,17 @@ data class NotificationsUiState(
     val error: FailureKind? = null,
     /** A screen to open (consumed by the screen through [NotificationsViewModel.targetTaken]). */
     val open: FeedTarget? = null,
+    /**
+     * Items that were unread when the screen came into view, or arrived while it was in view, and were marked read by
+     * viewing (ANDROID-PLAN 0.1.26): they keep the gold dot and stay under the Unread chip until the member leaves.
+     */
+    val fresh: Set<String> = emptySet(),
 ) {
-    fun sections(zone: ZoneId = ZoneId.systemDefault()): List<FeedSection> = FeedSections.of(items, archived, unreadOnly, zone)
+    fun sections(zone: ZoneId = ZoneId.systemDefault()): List<FeedSection> = FeedSections.of(items, archived, unreadOnly, zone, fresh)
+
+    /** Whether [item] shows as unread: `active`, or read by viewing while the screen is open. */
+    fun showsUnread(item: FeedItem): Boolean =
+        item.status == FeedManager.STATUS_ACTIVE || (item.status == FeedManager.STATUS_READ && item.itemId in fresh)
 
     val unread: Int get() = items.count { it.status == FeedManager.STATUS_ACTIVE }
 }
@@ -84,6 +100,12 @@ data class NotificationsUiState(
  * Notifications (ANDROID-PLAN 0.1.23): the vault's feed from [FeedRepository], with names from the app's caches.
  * Tapping an item marks it read and opens its target, or the detail sheet when the target is gone; swiping archives
  * (with Undo) or marks read and unread; the Archived view moves items back or deletes them (confirmed).
+ *
+ * **Viewing marks read** (ANDROID-PLAN 0.1.26): while the screen is in view ([shown] to [paused]), every unread item
+ * that is not `urgent` is marked read ([FeedRepository.markViewed]): those unread when it came into view, and those
+ * that arrive while it is. Each item at most once while this screen lives, so an item the member marks unread stays
+ * unread. They keep their dot ([NotificationsUiState.fresh]) until the member leaves ([left]). Urgent items (Needs
+ * attention) stay unread until tapped or marked read.
  */
 @Suppress("TooManyFunctions")
 @HiltViewModel
@@ -97,9 +119,21 @@ class NotificationsViewModel @Inject constructor(
     private val state = MutableStateFlow(NotificationsUiState(archived = saved.get<Boolean>(ARG_ARCHIVED) ?: false))
     val uiState: StateFlow<NotificationsUiState> = state.asStateFlow()
 
+    /** Whether the screen is in view (resumed). */
+    private var inView = false
+
+    /** Items seen while in view: an item not among them that shows up is an arrival. */
+    private val seen = mutableSetOf<String>()
+
+    /** Items marked read by viewing, or marked unread by the member: never marked read by viewing (again). */
+    private val handled = mutableSetOf<String>()
+
     init {
         viewModelScope.launch {
-            combine(feed.items, feed.load) { i, l -> i to l }.collect { (i, l) -> state.update { it.copy(items = i, load = l) } }
+            combine(feed.items, feed.load) { i, l -> i to l }.collect { (i, l) ->
+                state.update { it.copy(items = i, load = l) }
+                if (inView) markViewed(arrivalsOnly = true)
+            }
         }
         viewModelScope.launch {
             combine(connections.connections, approvals.approvals, items.items) { c, a, i ->
@@ -108,6 +142,41 @@ class NotificationsViewModel @Inject constructor(
         }
         if (feed.load.value == ListLoad.NOT_LOADED) refresh()
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
+    }
+
+    /** The screen came into view (resumed): the unread items that are not urgent are marked read. */
+    fun shown() {
+        if (state.value.archived) return
+        inView = true
+        markViewed(arrivalsOnly = false)
+    }
+
+    /** The screen is no longer in the foreground (paused): nothing more is marked read until it is [shown] again. */
+    fun paused() {
+        inView = false
+    }
+
+    /** The member left the screen (stopped): the items read by viewing show as read from now on. */
+    fun left() {
+        inView = false
+        state.update { it.copy(fresh = emptySet()) }
+    }
+
+    /**
+     * Marks read the unread items that are not urgent and not yet handled: all of them when the screen comes into
+     * view, else only those not seen before (arrivals; not an item another device marked unread meanwhile).
+     */
+    private fun markViewed(arrivalsOnly: Boolean) {
+        val now = state.value.items
+        val ids = now.filter { i ->
+            i.status == FeedManager.STATUS_ACTIVE && !FeedKinds.urgent(i) && i.itemId !in handled &&
+                (!arrivalsOnly || i.itemId !in seen)
+        }.map { it.itemId }
+        now.forEach { seen += it.itemId }
+        if (ids.isEmpty()) return
+        handled += ids
+        state.update { it.copy(fresh = it.fresh + ids) }
+        feed.markViewed(ids)
     }
 
     fun refresh() {
@@ -155,15 +224,27 @@ class NotificationsViewModel @Inject constructor(
 
     fun undoArchive() {
         val u = state.value.undo ?: return
+        handled += u.itemId
         state.update { it.copy(undo = null) }
         setStatus(u.itemId, u.previous)
     }
 
     fun undoShown() = state.update { it.copy(undo = null) }
 
-    /** Start-to-end swipe: read ↔ unread. */
-    fun toggleRead(item: FeedItem) =
-        setStatus(item.itemId, if (item.status == FeedManager.STATUS_ACTIVE) FeedManager.STATUS_READ else FeedManager.STATUS_ACTIVE)
+    /**
+     * Start-to-end swipe: read ↔ unread, as the row shows it. An item read by viewing (still dotted) loses its dot; an
+     * item marked unread is not marked read by viewing again while this screen lives.
+     */
+    fun toggleRead(item: FeedItem) {
+        val id = item.itemId
+        if (state.value.showsUnread(item)) {
+            state.update { it.copy(fresh = it.fresh - id) }
+            if (item.status == FeedManager.STATUS_ACTIVE) setStatus(id, FeedManager.STATUS_READ)
+        } else {
+            handled += id
+            setStatus(id, FeedManager.STATUS_ACTIVE)
+        }
+    }
 
     /** Archived view: back to the main list, read. */
     fun moveToNotifications(item: FeedItem) = setStatus(item.itemId, FeedManager.STATUS_READ)
@@ -178,7 +259,7 @@ class NotificationsViewModel @Inject constructor(
 
     fun markAllRead() {
         if (state.value.markingAll) return
-        state.update { it.copy(markingAll = true) }
+        state.update { it.copy(markingAll = true, fresh = emptySet()) }
         viewModelScope.launch {
             guard { feed.markAllRead() }
             state.update { it.copy(markingAll = false) }
