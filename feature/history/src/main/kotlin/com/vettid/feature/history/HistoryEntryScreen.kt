@@ -119,7 +119,18 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
                     )
                 }
                 Field(R.string.history_detail_kind, e.kind, mono = true)
-                e.deviceId?.let { Field(R.string.history_detail_device, it, mono = true) }
+                e.deviceId?.let { id ->
+                    // ANDROID-PLAN 0.1.27: the device's name ("Removed device" once unlisted), "(this phone)" for
+                    // this one; the id stays below. Without the device list, the id alone, as before.
+                    val name = state.deviceName ?: if (state.devicesKnown) stringResource(R.string.history_device_removed) else null
+                    val shown = when {
+                        state.thisDevice && name != null -> stringResource(R.string.history_device_this_phone, name)
+                        state.thisDevice -> stringResource(R.string.history_device_this_phone_alone)
+                        else -> name
+                    }
+                    shown?.let { Field(R.string.history_detail_device, it, Modifier.testTag("history_entry_device")) }
+                    Field(R.string.history_detail_device_id, id, mono = true)
+                }
                 e.ref?.let { ref ->
                     Field(R.string.history_detail_ref, ref, mono = true)
                     val label = stringResource(R.string.history_detail_ref)
@@ -143,8 +154,8 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
 }
 
 @Composable
-private fun Field(label: Int, value: String, mono: Boolean = false) {
-    Column(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
+private fun Field(label: Int, value: String, modifier: Modifier = Modifier, mono: Boolean = false) {
+    Column(modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
         Text(stringResource(label), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             value,

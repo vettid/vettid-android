@@ -558,7 +558,9 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
         if (nearEnd && !state.end) actions.onLoadMore()
     }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("history_list")) {
-        items(state.entries, key = { it.seq }) { e -> EntryRow(e, state.connectionNames, state.itemNames, actions.onOpen) }
+        items(state.entries, key = { it.seq }) { e ->
+            EntryRow(e, RowNames(state.connectionNames, state.itemNames, state.deviceNames), actions.onOpen)
+        }
         item(key = "footer") {
             Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.l), contentAlignment = Alignment.Center) {
                 when {
@@ -589,18 +591,23 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     }
 }
 
+/** What a row resolves its ids with: connection, item and device names (devices null while not known). */
+private data class RowNames(val connections: Map<String, String>, val items: Map<String, String>, val devices: Map<String, String>?)
+
 @Composable
-private fun EntryRow(e: AuditRecord, names: Map<String, String>, itemNames: Map<String, String>, onOpen: (Long) -> Unit) {
-    val connection = e.connectionId?.let { names[it] ?: stringResource(R.string.history_connection_removed) }
+private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
+    val connection = e.connectionId?.let { names.connections[it] ?: stringResource(R.string.history_connection_removed) }
     // ANDROID-PLAN 0.1.11: the item's name where the entry refers to one; a removed one shows "Deleted item".
-    val item = AuditKinds.itemOf(e.kind, e.ref)?.let { itemNames[it] ?: stringResource(R.string.history_item_deleted) }
+    val item = AuditKinds.itemOf(e.kind, e.ref)?.let { names.items[it] ?: stringResource(R.string.history_item_deleted) }
         ?: AuditKinds.exportSummary(e.kind, e.ref)?.let { (format, count) ->
             val entries = pluralStringResource(R.plurals.history_export_count, count, count)
             stringResource(R.string.history_export_summary, format.uppercase(), entries)
         }
+    // ANDROID-PLAN 0.1.27: the device's name (`vault.unlocked`, a device's `vault.locked`, any entry with `device_id`).
+    val device = HistoryDevice.name(e.deviceId, names.devices, stringResource(R.string.history_device_removed))
     VettIdListRow(
         title = HistoryText.title(e.kind),
-        supporting = listOfNotNull(item, connection).joinToString(" · ").ifEmpty { stringResource(AuditKinds.categoryLabel(e.category)) },
+        supporting = HistoryDevice.supporting(listOf(item, connection, device), stringResource(AuditKinds.categoryLabel(e.category))),
         meta = e.at?.let { Times.short(it) },
         tileIcon = categoryIcon(e.category),
         tileColors = categoryColor(categoryHue(e.category)),

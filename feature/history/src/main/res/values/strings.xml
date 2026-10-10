@@ -52,6 +52,9 @@
     <string name="history_detail_kind">Event type</string>
     <string name="history_detail_connection">Connection</string>
     <string name="history_detail_device">Device</string>
+    <string name="history_detail_device_id">Device ID</string>
+    <string name="history_device_this_phone">%1$s (this phone)</string>
+    <string name="history_device_this_phone_alone">This phone</string>
     <string name="history_detail_ref">Reference</string>
     <string name="history_detail_direction">Direction</string>
     <string name="history_detail_direction_in">Incoming</string>
