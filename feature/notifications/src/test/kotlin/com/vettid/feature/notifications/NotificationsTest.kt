@@ -162,4 +162,134 @@ class NotificationsTest {
         assertEquals(0, m.uiState.value.unread)
         assertFalse(m.uiState.value.markingAll)
     }
+
+    private fun status(id: String) = feed.items.value.first { it.itemId == id }.status
+
+    private fun current(id: String) = feed.items.value.first { it.itemId == id }
+
+    @Test
+    fun viewingMarksTheUnreadNonUrgentItemsReadAndKeepsTheirDotsUntilLeaving() = runTest {
+        feed.seed(
+            listOf(
+                item("message.received", "m1"),
+                item("credential.alarm", "a", priority = "urgent", c = null),
+                item("owner_check.locked", "l", priority = "urgent", c = null),
+                item("message.received", "m2", status = "read"),
+                item("message.received", "m3", status = "archived"),
+            ),
+        )
+        val m = vm()
+        advanceUntilIdle()
+        assertTrue(feed.calls.none { it.startsWith("markViewed") }) // not before the screen is in view
+        m.shown()
+        advanceUntilIdle()
+        assertEquals(listOf("markViewed:m1"), feed.calls.filter { it.startsWith("markViewed") })
+        assertEquals("read", status("m1"))
+        assertEquals("active", status("a"))
+        assertEquals("active", status("l"))
+        assertEquals("archived", status("m3"))
+        // The bell: only the urgent items are left, so it stays red.
+        assertEquals(2, feed.badge.value.unread)
+        assertTrue(feed.badge.value.urgent)
+        // The dot and the Unread chip keep m1 while the screen is open; not m2 (read before).
+        val ui = m.uiState.value
+        assertEquals(setOf("m1"), ui.fresh)
+        assertTrue(ui.showsUnread(current("m1")))
+        assertFalse(ui.showsUnread(current("m2")))
+        assertEquals(setOf("a", "l", "m1"), FeedSections.of(ui.items, false, unreadOnly = true, zone = ZoneOffset.UTC, fresh = ui.fresh).flatMap { it.items }.map { it.itemId }.toSet())
+        // Leaving: m1 shows as read on return; nothing is marked again.
+        m.paused()
+        m.left()
+        assertTrue(m.uiState.value.fresh.isEmpty())
+        assertFalse(m.uiState.value.showsUnread(current("m1")))
+        m.shown()
+        advanceUntilIdle()
+        assertEquals(1, feed.calls.count { it.startsWith("markViewed") })
+        assertEquals("active", status("a"))
+    }
+
+    @Test
+    fun itemsArrivingWhileInViewAreMarkedReadButNotWhilePaused() = runTest {
+        feed.seed(listOf(item("message.received", "m1", status = "read")))
+        val m = vm()
+        advanceUntilIdle()
+        m.shown()
+        advanceUntilIdle()
+        feed.seed(feed.items.value + item("message.received", "n1") + item("credential.alarm", "a", priority = "urgent", c = null))
+        advanceUntilIdle()
+        assertTrue("markViewed:n1" in feed.calls)
+        assertEquals("read", status("n1"))
+        assertEquals("active", status("a"))
+        assertTrue("n1" in m.uiState.value.fresh)
+        m.paused()
+        feed.seed(feed.items.value + item("message.received", "n2"))
+        advanceUntilIdle()
+        assertEquals("active", status("n2"))
+        m.shown()
+        advanceUntilIdle()
+        assertEquals("read", status("n2"))
+        assertEquals(setOf("n1", "n2"), m.uiState.value.fresh)
+    }
+
+    @Test
+    fun anItemMarkedUnreadIsNotMarkedReadAgainByViewing() = runTest {
+        feed.seed(listOf(item("message.received", "m1"), item("message.received", "m2", status = "read")))
+        val m = vm()
+        advanceUntilIdle()
+        m.shown()
+        advanceUntilIdle()
+        // m1 was read by viewing and still has its dot: the swipe reads "Mark as read" and only takes the dot away.
+        m.toggleRead(current("m1"))
+        advanceUntilIdle()
+        assertFalse(m.uiState.value.showsUnread(current("m1")))
+        assertTrue(feed.calls.none { it.startsWith("setStatus:m1") })
+        // Then Mark as unread, for m1 and for m2 (read before the screen opened): they stay unread.
+        m.toggleRead(current("m1"))
+        m.toggleRead(current("m2"))
+        advanceUntilIdle()
+        feed.seed(feed.items.value + item("message.received", "n1")) // an arrival runs the viewing again
+        advanceUntilIdle()
+        assertEquals("active", status("m1"))
+        assertEquals("active", status("m2"))
+        assertEquals("read", status("n1"))
+        // Coming back to the screen does not mark them either while it lives.
+        m.paused()
+        m.left()
+        m.shown()
+        advanceUntilIdle()
+        assertEquals("active", status("m1"))
+        assertEquals("active", status("m2"))
+        assertEquals(listOf("markViewed:m1", "markViewed:n1"), feed.calls.filter { it.startsWith("markViewed") })
+    }
+
+    @Test
+    fun anItemAnotherDeviceMarksUnreadWhileInViewStaysUnread() = runTest {
+        feed.seed(listOf(item("message.received", "m1", status = "read")))
+        val m = vm()
+        advanceUntilIdle()
+        m.shown()
+        advanceUntilIdle()
+        feed.seed(listOf(item("message.received", "m1"))) // feed.updated from another device
+        advanceUntilIdle()
+        assertEquals("active", status("m1"))
+        assertTrue(feed.calls.none { it.startsWith("markViewed") })
+    }
+
+    @Test
+    fun theArchivedViewMarksNothingAndMarkAllReadClearsTheDots() = runTest {
+        feed.seed(listOf(item("message.received", "m1"), item("message.received", "m2", status = "archived")))
+        val archived = vm(archived = true)
+        advanceUntilIdle()
+        archived.shown()
+        advanceUntilIdle()
+        assertTrue(feed.calls.none { it.startsWith("markViewed") })
+        val m = vm()
+        advanceUntilIdle()
+        m.shown()
+        advanceUntilIdle()
+        assertEquals(setOf("m1"), m.uiState.value.fresh)
+        m.markAllRead()
+        advanceUntilIdle()
+        assertTrue(m.uiState.value.fresh.isEmpty())
+    }
 }

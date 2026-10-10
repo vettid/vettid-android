@@ -79,6 +79,13 @@ interface FeedRepository {
     /** Marks [itemId] read without waiting for the answer (a tap on a row or a notification). */
     fun markReadQuietly(itemId: String)
 
+    /**
+     * Items shown on the Notifications screen (ANDROID-PLAN 0.1.26): those of [itemIds] still unread and not `urgent`
+     * are marked read, one `feed.update` each, at most 4 in flight (shared with [markAllRead]), without waiting for the
+     * answers and past the screen's end. Urgent items stay unread until tapped or marked read.
+     */
+    fun markViewed(itemIds: Collection<String>)
+
     /** `feed.delete` (only from Archived, confirmed). */
     suspend fun delete(itemId: String)
 
@@ -120,6 +127,9 @@ class FeedManager(
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
     private val reads = Mutex()
+
+    /** Mark all as read and viewed items share it: at most 4 `feed.update` in flight. */
+    private val marking = Semaphore(MARK_ALL_IN_FLIGHT)
 
     @Volatile
     private var catchUpQueued = false
@@ -337,14 +347,26 @@ class FeedManager(
         }
     }
 
-    override suspend fun markAllRead() {
-        val ids = synchronized(lock) { byId.values.filter { it.status == STATUS_ACTIVE }.map { it.itemId } }
+    override fun markViewed(itemIds: Collection<String>) {
+        val wanted = itemIds.toSet()
+        val ids = synchronized(lock) {
+            byId.values.filter { it.itemId in wanted && it.status == STATUS_ACTIVE && it.priority != PRIORITY_URGENT }.map { it.itemId }
+        }
         if (ids.isEmpty()) return
-        val gate = Semaphore(MARK_ALL_IN_FLIGHT)
+        scope.launch { runCatching { markRead(ids) } }
+    }
+
+    override suspend fun markAllRead() {
+        markRead(synchronized(lock) { byId.values.filter { it.status == STATUS_ACTIVE }.map { it.itemId } })
+    }
+
+    /** `feed.update{status: "read"}` for each of [ids], at most 4 in flight; throws the first failure after the others ran. */
+    private suspend fun markRead(ids: List<String>) {
+        if (ids.isEmpty()) return
         val failures = coroutineScope {
             ids.map { id ->
                 async {
-                    gate.withPermit {
+                    marking.withPermit {
                         try {
                             setStatus(id, STATUS_READ)
                             null

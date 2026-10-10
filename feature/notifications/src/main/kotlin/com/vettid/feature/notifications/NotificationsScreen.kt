@@ -58,6 +58,7 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +83,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -129,6 +133,23 @@ fun NavGraphBuilder.notificationsDestination(host: NotificationsHost) {
     composable<NotificationsRoute> {
         val vm: NotificationsViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        // Viewing marks read (ANDROID-PLAN 0.1.26): while resumed; the dots of what was read by viewing until stopped.
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        DisposableEffect(lifecycle, vm) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> vm.shown()
+                    Lifecycle.Event.ON_PAUSE -> vm.paused()
+                    Lifecycle.Event.ON_STOP -> vm.left()
+                    else -> Unit
+                }
+            }
+            lifecycle.addObserver(observer)
+            onDispose {
+                lifecycle.removeObserver(observer)
+                vm.left()
+            }
+        }
         LaunchedEffect(state.open) {
             val t = state.open ?: return@LaunchedEffect
             vm.targetTaken()
@@ -240,7 +261,14 @@ fun NotificationsScreen(state: NotificationsUiState, actions: NotificationsActio
                         sections.forEach { s ->
                             item(key = "h:${s.day}") { SectionHeader(s.day) }
                             items(s.items, key = { it.itemId }) { item ->
-                                SwipeRow(item, state.names, state.archived, attention = s.day == null, actions = actions)
+                                SwipeRow(
+                                    item,
+                                    state.names,
+                                    state.archived,
+                                    attention = s.day == null,
+                                    unread = state.showsUnread(item),
+                                    actions = actions,
+                                )
                             }
                         }
                     }
@@ -357,12 +385,19 @@ private fun SectionHeader(day: LocalDate?) {
 /** A row in a [SwipeToDismissBox]: end-to-start archives (Archived: deletes), start-to-end reads (Archived: moves back). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SwipeRow(item: FeedItem, names: FeedNames, archived: Boolean, attention: Boolean, actions: NotificationsActions) {
+private fun SwipeRow(
+    item: FeedItem,
+    names: FeedNames,
+    archived: Boolean,
+    attention: Boolean,
+    unread: Boolean,
+    actions: NotificationsActions,
+) {
     val swipe = rememberSwipeToDismissBoxState()
     val scope = rememberCoroutineScope()
     SwipeToDismissBox(
         state = swipe,
-        backgroundContent = { SwipeBackground(swipe.dismissDirection, item, archived) },
+        backgroundContent = { SwipeBackground(swipe.dismissDirection, unread, archived) },
         onDismiss = { value ->
             when (value) {
                 SwipeToDismissBoxValue.EndToStart -> if (archived) actions.onAskDelete(item) else actions.onArchive(item)
@@ -373,12 +408,12 @@ private fun SwipeRow(item: FeedItem, names: FeedNames, archived: Boolean, attent
             scope.launch { swipe.reset() }
         },
     ) {
-        FeedRow(item, names, archived, attention, actions)
+        FeedRow(item, names, archived, attention, actions, unread)
     }
 }
 
 @Composable
-private fun SwipeBackground(direction: SwipeToDismissBoxValue, item: FeedItem, archived: Boolean) {
+private fun SwipeBackground(direction: SwipeToDismissBoxValue, unread: Boolean, archived: Boolean) {
     val colors = MaterialTheme.colorScheme
     val (icon, label, bg) = when (direction) {
         SwipeToDismissBoxValue.EndToStart -> if (archived) {
@@ -388,7 +423,7 @@ private fun SwipeBackground(direction: SwipeToDismissBoxValue, item: FeedItem, a
         }
         SwipeToDismissBoxValue.StartToEnd -> if (archived) {
             Triple(Icons.Outlined.Unarchive, R.string.notifications_move_back, colors.secondaryContainer)
-        } else if (item.status == FeedManager.STATUS_ACTIVE) {
+        } else if (unread) {
             Triple(Icons.Outlined.MarkEmailRead, R.string.notifications_mark_read, colors.primaryContainer)
         } else {
             Triple(Icons.Outlined.MarkEmailUnread, R.string.notifications_mark_unread, colors.primaryContainer)
@@ -405,16 +440,23 @@ private fun SwipeBackground(direction: SwipeToDismissBoxValue, item: FeedItem, a
 
 /**
  * One item (ANDROID-PLAN 0.1.23, 3): the connection's tile, or the kind's icon in its History category colour; the
- * title and a second line; the time and a gold dot while unread. `urgent` unread items sit in Needs attention on the
+ * title and a second line; the time and a gold dot while unread ([unread]: also an item read by viewing while the
+ * screen is open, ANDROID-PLAN 0.1.26). `urgent` unread items sit in Needs attention on the
  * error container with a red leading bar; `high` has an amber tile and says "Important"; `low` is quieter.
  */
 @Suppress("LongMethod", "CyclomaticComplexMethod") // one row: tile, texts, time, dot, swipe actions and menu
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FeedRow(item: FeedItem, names: FeedNames, archived: Boolean, attention: Boolean, actions: NotificationsActions) {
+fun FeedRow(
+    item: FeedItem,
+    names: FeedNames,
+    archived: Boolean,
+    attention: Boolean,
+    actions: NotificationsActions,
+    unread: Boolean = item.status == FeedManager.STATUS_ACTIVE,
+) {
     val colors = MaterialTheme.colorScheme
     val bar = colors.error
-    val unread = item.status == FeedManager.STATUS_ACTIVE
     val title = FeedKinds.title(item, names).text()
     val supporting = FeedKinds.supporting(item, names)?.text()
     val at = FeedManager.at(item)
