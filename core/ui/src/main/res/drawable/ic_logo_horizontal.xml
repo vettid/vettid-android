@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The brand kit's horizontal logo without the tagline, transparent background (vettid-horizontal-transparent.svg
-     and its identical -on-light file): the rook and the VETTID wordmark, which is custom lettering (shapes, never
-     retyped). Only the artwork, 631.6 x 200 of the kit's 752 x 300 canvas: the clear space is the caller's
-     (VettIdLogo). Never below 160dp wide (BRAND.md); smaller, use the rook alone (ic_rook). -->
+<!-- The brand kit's horizontal logo without the tagline for DARK surfaces (vettid-horizontal-transparent.svg): the
+     rook and the VETTID wordmark, both Rook Gold. The wordmark is custom lettering (shapes, never retyped). Only the
+     artwork, 631.6 x 200 of the kit's 752 x 300 canvas: the clear space is the caller's (VettIdLogo, which also
+     picks this file or ic_logo_horizontal_on_light by the app's theme). Never on a light surface (BRAND.md: never
+     the gold wordmark on white). Never below 160dp wide; smaller, use the rook alone (ic_rook). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:width="160dp"

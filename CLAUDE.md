@@ -152,7 +152,8 @@ vettid.org repo's `local/android-ui/`).
 - Brand assets follow the brand kit (vettid.org `local/brand/kit`, `BRAND.md`): the launcher icon is the kit's app
   icon (gold rook, keyhole cut out, on VettID Blue #2E2D88; `ic_launcher_*`, legacy PNGs in `mipmap-<density>`); in the
   app, `RookLogo` (the rook alone, any size) or `VettIdLogo` (the horizontal logo, never under 160dp wide, clear space
-  `VettIdLogoDefaults.clearSpace`). Never type "VettID" next to the rook as a logo, never the tagline on a screen, never
+  `VettIdLogoDefaults.clearSpace`; gold wordmark on dark surfaces, the kit's `-on-light` artwork with the VettID Blue
+  wordmark on light ones, picked by the app's theme, never by a `-night` resource: the member can force a theme). Never type "VettID" next to the rook as a logo, never the tagline on a screen, never
   recolour the artwork. The rook's shapes are the kit's paths, guarded by `RookKeyholeTest`. Non-production builds
   (debug, devStack, staging) add a white band to the launcher icon's background (`app/src/nonProduction`, not part of
   the kit).

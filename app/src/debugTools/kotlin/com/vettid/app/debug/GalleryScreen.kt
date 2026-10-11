@@ -124,6 +124,7 @@ fun GalleryScreen(
             ) {
                 RookLogo(height = 48.dp)
                 Spacer(Modifier.width(Spacing.xl))
+                // Follows the gallery's theme chips: gold wordmark on dark, the kit's on-light file (blue wordmark) on light.
                 VettIdLogo()
             }
             Spacer(Modifier.height(Spacing.l))
