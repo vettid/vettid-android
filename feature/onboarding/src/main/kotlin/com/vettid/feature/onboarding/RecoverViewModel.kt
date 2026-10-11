@@ -48,7 +48,7 @@ enum class RecoverStep {
      */
     NO_BACKUP,
 
-    /** The vault is on this phone now. */
+    /** The vault is connected to the credential on this phone now. */
     DONE,
 }
 
