@@ -18,7 +18,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TransferInViewModelTest {
@@ -159,6 +162,16 @@ class TransferInViewModelTest {
     fun anHsRespWithin60SecondsShowsTheCode() = runTest {
         vault.transferHsResp = CompletableDeferred()
         val vm = TransferInViewModel(vault, vault)
+        // The approval countdown is still running when this test ends, and `runTest` drains it: its clock follows the
+        // test's virtual time, or it would spin through virtual seconds until 10 real minutes have passed.
+        val start = Instant.now()
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
         vm.scan()
         vm.scanned(qr())
         advanceTimeBy(45_000)
