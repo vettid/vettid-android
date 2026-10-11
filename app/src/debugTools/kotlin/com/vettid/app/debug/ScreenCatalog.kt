@@ -76,6 +76,8 @@ import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.RecoveryView
 import com.vettid.core.data.vault.ReleaseInfoView
 import com.vettid.core.data.vault.ReleaseView
+import com.vettid.core.data.vault.SignerClass
+import com.vettid.core.data.vault.SignerView
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.StepState
@@ -258,6 +260,7 @@ private object NoTransferIn : TransferInActions {
 private object NoTransferOut : TransferOutActions {
     override fun create() = Unit
     override fun codesMatch() = Unit
+    override fun confirmSigner() = Unit
     override fun askReject(show: Boolean) = Unit
     override fun reject() = Unit
     override fun setPin(v: String) = Unit
@@ -283,6 +286,7 @@ private object NoUnlock : UnlockActions {
     override fun setPin(v: String) = Unit
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
+    override fun showSignerHelp(show: Boolean) = Unit
     override fun askErase() = Unit
     override fun dismissErase() = Unit
     override fun confirmErase() = Unit
@@ -511,6 +515,21 @@ object ScreenCatalog {
     private val transferPending = TransferPendingView(transferOffer.transferId, "Pixel 10 Pro", "042817")
     private val out = TransferOutUiState(step = TransferOutStep.SHOWING, offer = transferOffer, secondsLeft = 540)
 
+    private fun signerPending(new: String, current: SignerClass?) =
+        transferPending.copy(signer = new, signerChanged = true, currentSigner = current)
+
+    private fun signerOverview(c: SignerClass) = VaultOverview(
+        "3f9c2a7be41d4c0e9b8a6f5d2c1e0a9b", "unlocked", ReleaseInfoView(10, "active", null, 10, null), 10, null, false, 1, 4,
+        signer = SignerView(c, "31a19613aa10f209e08945f947f94f7ce3e6e5ac342457ff9969a67986928e65"),
+    )
+
+    /** The signer entries of History (VAULT-MESSAGING 0.27.0 §10.9, §11.7.1). */
+    private val signerEntries = listOf(
+        AuditRecord("s3", 13, Instant.now().minusSeconds(300), "device.signer_changed", deviceId = "app-2", ref = "vettid:google_play"),
+        AuditRecord("s2", 12, Instant.now().minusSeconds(4_000), "device.signer_refused", ref = "unpinned"),
+        AuditRecord("s1", 11, Instant.now().minusSeconds(90_000), "device.signer_bound", ref = "vettid"),
+    )
+
     @Composable
     private fun TOut(state: TransferOutUiState) = TransferOutContent(state, NoTransferOut, {}, {})
 
@@ -645,6 +664,22 @@ object ScreenCatalog {
         },
         "unlock.refused" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), refused = true), NoUnlock)
+        },
+        // VAULT-MESSAGING 0.27.0 §11.7.1: the release does not accept this installation's signer (not a wrong PIN).
+        "unlock.signer_refused" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), signerRefused = true),
+                NoUnlock,
+            )
+        },
+        "unlock.signer_refused_help" to {
+            UnlockContent(
+                UnlockUiState(
+                    loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), signerRefused = true,
+                    signerHelp = true,
+                ),
+                NoUnlock,
+            )
         },
         "unlock.not_recognised" to {
             UnlockContent(
@@ -797,6 +832,13 @@ object ScreenCatalog {
                 {}, {},
             )
         },
+        // "Installed from" (ANDROID-PLAN 0.1.36 §7): the vault's signer binding, per class; tapped, with the explanation.
+        "settings.status_signer_vettid" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}) },
+        "settings.status_signer_google_play" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.GOOGLE_PLAY)), {}, {}) },
+        "settings.status_signer_development" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.DEVELOPMENT)), {}, {}) },
+        "settings.status_signer_details" to {
+            VaultStatusContent(LoadState(false, signerOverview(SignerClass.GOOGLE_PLAY)), {}, {}, signerDetails = true)
+        },
         "settings.pin" to { ChangePinContent(ChangePinUiState(current = "975310", pin = "1111"), {}, {}, {}, {}, {}) },
         "settings.recovery" to {
             RecoveryContent(
@@ -807,6 +849,28 @@ object ScreenCatalog {
         "settings.transfer" to { TOut(TransferOutUiState()) },
         "settings.transfer_show" to { TOut(out) },
         "settings.transfer_compare" to { TOut(out.copy(step = TransferOutStep.COMPARE, pending = transferPending, secondsLeft = 571)) },
+        // A transfer to an app with another signer (VAULT-MESSAGING 0.27.0 §6.7.1, ANDROID-PLAN 0.1.36 §7): the
+        // confirmation before the PIN, each way, a development build, and after the vault's `signer_unconfirmed`.
+        "settings.transfer_signer" to {
+            TOut(out.copy(step = TransferOutStep.SIGNER, pending = signerPending("google_play", SignerClass.VETTID), secondsLeft = 560))
+        },
+        "settings.transfer_signer_reverse" to {
+            TOut(out.copy(step = TransferOutStep.SIGNER, pending = signerPending("vettid", SignerClass.GOOGLE_PLAY), secondsLeft = 560))
+        },
+        "settings.transfer_signer_development" to {
+            TOut(out.copy(step = TransferOutStep.SIGNER, pending = signerPending("vettid", SignerClass.DEVELOPMENT), secondsLeft = 560))
+        },
+        "settings.transfer_signer_unknown" to {
+            TOut(out.copy(step = TransferOutStep.SIGNER, pending = signerPending("google_play", null), secondsLeft = 560))
+        },
+        "settings.transfer_signer_unconfirmed" to {
+            TOut(
+                out.copy(
+                    step = TransferOutStep.SIGNER, pending = signerPending("google_play", SignerClass.VETTID), secondsLeft = 498,
+                    signerUnconfirmed = true,
+                ),
+            )
+        },
         "settings.transfer_approve" to { TOut(out.copy(step = TransferOutStep.APPROVE, pending = transferPending, pin = "975310", password = "pw", secondsLeft = 512)) },
         "settings.transfer_approve_confirm" to {
             TOut(out.copy(step = TransferOutStep.APPROVE, pending = transferPending, pin = "975310", password = "pw", confirmApprove = true))
@@ -1086,6 +1150,10 @@ object ScreenCatalog {
                 onBack = {},
             )
         },
+        "history.signer" to {
+            HistoryScreen(HistoryUiState(signerEntries + historyEntries.take(3), connectionNames = historyNames, loading = false, end = true), chrome, HistoryActions())
+        },
+        "history.entry_signer" to { HistoryEntryScreen(HistoryEntryUiState(signerEntries.first(), loading = false), onBack = {}) },
         "history.entry_unknown" to {
             HistoryEntryScreen(HistoryEntryUiState(historyEntries.last(), loading = false), onBack = {})
         },

@@ -3,6 +3,7 @@ package com.vettid.feature.history
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import com.vettid.core.data.feed.FeedKinds
 
 /** The member-facing title of an audit kind ([AuditKinds]), in Compose and from a [Context] (search). */
 object HistoryText {
@@ -19,6 +20,19 @@ object HistoryText {
         is AuditKinds.Title.Summary -> stringResource(R.string.history_kind_summary, stringResource(t.res))
         is AuditKinds.Title.Dropped -> stringResource(R.string.history_kind_dropped, t.reason)
         is AuditKinds.Title.Unknown -> stringResource(R.string.history_kind_unknown, t.kind)
+    }
+}
+
+/** The signer entries' second line (VAULT-MESSAGING 0.27.0 §11.7.1), in the words of ANDROID-PLAN §7. */
+object HistorySigner {
+    fun text(context: Context, d: AuditKinds.SignerDetail): String = when (d) {
+        is AuditKinds.SignerDetail.Bound -> context.getString(FeedKinds.signerLabel(d.signerClass)).replaceFirstChar { it.uppercase() }
+        is AuditKinds.SignerDetail.Changed -> context.getString(
+            com.vettid.core.data.R.string.data_feed_signer_from_to,
+            context.getString(FeedKinds.signerLabel(d.from)), context.getString(FeedKinds.signerLabel(d.to)),
+        )
+        is AuditKinds.SignerDetail.Refused ->
+            context.getString(if (d.unbound) R.string.history_signer_refused_unbound else R.string.history_signer_refused_unpinned)
     }
 }
 

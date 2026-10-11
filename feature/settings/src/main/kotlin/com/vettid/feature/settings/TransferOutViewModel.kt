@@ -31,6 +31,12 @@ enum class TransferOutStep {
     /** The new phone's handshake checked out: compare the SAS. */
     COMPARE,
 
+    /**
+     * The new phone's VettID has another signer than the one the vault is bound to (`signer_changed`, VAULT-MESSAGING
+     * 0.27.0 §11.7.1): the member confirms the change, named in words, before the PIN is asked for.
+     */
+    SIGNER,
+
     /** The codes match: the PIN and the password approve, which completes the transfer. */
     APPROVE,
     EXPIRED,
@@ -56,6 +62,13 @@ data class TransferOutUiState(
     val waitSeconds: Long = 0,
     val confirmReject: Boolean = false,
     val confirmApprove: Boolean = false,
+    /** The member confirmed the change of signer ([TransferOutStep.SIGNER]): the approval names the new app's class. */
+    val signerConfirmed: Boolean = false,
+    /**
+     * The vault answered `signer_unconfirmed`: it wants the confirmation this app had not sent. Nothing was spent
+     * or counted and the transfer is still open; the confirmation is shown, then the PIN and password again.
+     */
+    val signerUnconfirmed: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
@@ -73,6 +86,9 @@ data class TransferOutUiState(
 interface TransferOutActions {
     fun create()
     fun codesMatch()
+
+    /** [TransferOutStep.SIGNER]: the member read the change of signer and continues to the PIN. */
+    fun confirmSigner()
     fun askReject(show: Boolean)
     fun reject()
     fun setPin(v: String)
@@ -141,7 +157,7 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
                 state.update { it.copy(secondsLeft = left) }
                 if (left == 0L) {
                     val s = state.value.step
-                    if (s == TransferOutStep.SHOWING || s == TransferOutStep.COMPARE || s == TransferOutStep.APPROVE) expire()
+                    if (s in OPEN_STEPS) expire()
                     break
                 }
                 delay(TICK_MS)
@@ -154,11 +170,20 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
         state.update {
             it.copy(
                 step = TransferOutStep.EXPIRED, offer = null, pending = null, pin = "", password = "", busy = false, confirmApprove = false,
+                signerConfirmed = false, signerUnconfirmed = false,
             )
         }
     }
 
-    override fun codesMatch() = state.update { it.copy(step = TransferOutStep.APPROVE, error = null) }
+    /** §6.7.1 step 2 (0.27.0): when the signer differs, the app says so before it asks for the PIN. */
+    override fun codesMatch() = state.update {
+        val ask = it.pending?.signerChanged == true && !it.signerConfirmed
+        it.copy(step = if (ask) TransferOutStep.SIGNER else TransferOutStep.APPROVE, error = null)
+    }
+
+    override fun confirmSigner() = state.update {
+        if (it.step != TransferOutStep.SIGNER) it else it.copy(step = TransferOutStep.APPROVE, signerConfirmed = true, error = null)
+    }
 
     override fun askReject(show: Boolean) = state.update { it.copy(confirmReject = show) }
 
@@ -190,19 +215,43 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
     override fun approve() {
         val s = state.value
         val id = s.offer?.transferId ?: return
-        if (!s.canApprove) return
+        // Only from the approval step: never past the comparison or the confirmation of a changed signer.
+        if (s.step != TransferOutStep.APPROVE || !s.canApprove) return
         state.update { it.copy(busy = true, confirmApprove = false, error = null) }
         viewModelScope.launch {
             try {
-                val wiped = move.transferApprove(id, s.pin, s.password)
+                // §6.7.1 step 3: `signer` only as the member's confirmation, and exactly the class the vault named.
+                val signer = s.pending?.signer?.takeIf { s.signerConfirmed }
+                val wiped = move.transferApprove(id, s.pin, s.password, signer)
                 ticker?.cancel()
                 state.update {
                     it.copy(step = if (wiped) it.step else TransferOutStep.MOVED, busy = false, pin = "", password = "", offer = null)
                 }
             } catch (e: VaultFailure) {
+                if (e.code == CODE_SIGNER_UNCONFIRMED) {
+                    signerUnconfirmed()
+                    return@launch
+                }
                 state.update { it.copy(busy = false, pin = "", password = "", error = e.kind, errorCode = e.code) }
                 if (e.retryAfterSeconds > 0) startBackoff(e.retryAfterSeconds)
             }
+        }
+    }
+
+    /**
+     * `signer_unconfirmed` (§6.7.1 step 3, §11.7.1): the vault refused the approval before it spent the UTK or
+     * tried the PIN, and the transfer stays open. Not a wrong PIN and no wait: the confirmation is shown (again,
+     * if the vault's view of the signer changed since the pending) and the next approval names the class. When
+     * the vault never named a class there is nothing to confirm with: the failure is shown as it is.
+     */
+    private fun signerUnconfirmed() = state.update {
+        if (it.pending?.signer == null) {
+            it.copy(busy = false, pin = "", password = "", error = FailureKind.OTHER, errorCode = CODE_SIGNER_UNCONFIRMED)
+        } else {
+            it.copy(
+                step = TransferOutStep.SIGNER, busy = false, pin = "", password = "", signerConfirmed = false,
+                signerUnconfirmed = true, error = null, errorCode = null,
+            )
         }
     }
 
@@ -223,7 +272,7 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
         val id = s.offer?.transferId
         waiter?.cancel()
         ticker?.cancel()
-        if (id != null && s.step in setOf(TransferOutStep.SHOWING, TransferOutStep.COMPARE, TransferOutStep.APPROVE)) {
+        if (id != null && s.step in OPEN_STEPS) {
             // Not cancelled with this ViewModel: leaving the screen clears it.
             viewModelScope.launch(NonCancellable) {
                 try {
@@ -240,5 +289,9 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
         val WINDOW: Duration = Duration.ofMinutes(10)
         const val TICK_MS = 1000L
         const val MAX_PIN = 32
+        const val CODE_SIGNER_UNCONFIRMED = "signer_unconfirmed"
+
+        /** The steps in which the transfer is open at the vault: leaving cancels it, the deadline expires it. */
+        val OPEN_STEPS = setOf(TransferOutStep.SHOWING, TransferOutStep.COMPARE, TransferOutStep.SIGNER, TransferOutStep.APPROVE)
     }
 }

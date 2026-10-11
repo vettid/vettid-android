@@ -32,6 +32,7 @@
     <string name="data_failure_owner_check_required">Your daily check is due. What you entered is kept: the check opens when you leave this screen.</string>
     <string name="data_failure_in_use">A sharing rule uses this tag. Change or delete the rule first.</string>
     <string name="data_failure_limit">A limit was reached. Remove something first.</string>
+    <string name="data_failure_signer_refused">This vault no longer accepts this installation of VettID. Update the app, or recover your vault with a current version.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>
     <string name="data_pin_problem_short">Use at least %1$d digits.</string>
@@ -119,6 +120,12 @@
     <string name="data_feed_device_unlinked">A device was removed</string>
     <string name="data_feed_device_transferred">Your vault moved to this phone</string>
     <string name="data_feed_device_replaced">Your vault moved to a new phone</string>
+    <string name="data_feed_device_signer_changed">Your vault moved to another version of VettID</string>
+    <string name="data_feed_signer_from_to">From %1$s to %2$s</string>
+    <string name="data_signer_google_play">Google Play (signed by Google)</string>
+    <string name="data_signer_vettid">F-Droid or direct (signed by VettID)</string>
+    <string name="data_signer_development">a development build</string>
+    <string name="data_signer_other">another signer</string>
     <string name="data_feed_device_session">A device asks for access</string>
     <string name="data_feed_device_approval">A device asks to approve a request</string>
     <string name="data_feed_credential_alarm">Your credential was used somewhere else</string>

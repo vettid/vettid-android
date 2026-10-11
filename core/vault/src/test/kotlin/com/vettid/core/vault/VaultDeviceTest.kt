@@ -1,5 +1,6 @@
-// Fixtures (spec vectors, JSON bodies of the fake relay, member API and vault) stay on one line each.
-@file:Suppress("MaxLineLength")
+// Fixtures (spec vectors, JSON bodies of the fake relay, member API and vault) stay on one line each. One class:
+// every test shares the in-process fake vault and relay below.
+@file:Suppress("MaxLineLength", "LargeClass")
 
 package com.vettid.core.vault
 
@@ -838,6 +839,208 @@ class VaultDeviceTest {
         val e = assertThrows(NotATransferCodeException::class.java) { runBlocking { d.startTransfer(expired, RecordingAttester()) } }
         assertTrue(e.expired)
         assertNull(deposits.poll(200, TimeUnit.MILLISECONDS))
+    }
+
+    /** Fills the device's credential (one blob, an empty UTK pool), as [credentialOperationsSealToUtksAndKeepTheBlob]. */
+    private suspend fun CoroutineScope.withCredential(d: VaultDevice, v: FakeVault, api: VaultApi) {
+        val utk = KemPrivateKey.generate()
+        val create = async(Dispatchers.IO) { api.credentialCreate("password one") }
+        val get = v.open(nextDeposit().second)
+        val utkJson = """{"utk_id":"00112233445566aa","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
+        d.handle(v.seal(get.type, """{"utks":[$utkJson]}""", re = get.id, status = Inner.STATUS_OK))
+        val cr = v.open(nextDeposit().second)
+        d.handle(v.seal(cr.type, """{"credential":"QkxPQg==","version":1,"key":"k","utks":[]}""", re = cr.id, status = Inner.STATUS_OK))
+        val ack = v.open(nextDeposit().second)
+        d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+        create.await()
+    }
+
+    /**
+     * VAULT-MESSAGING 0.27.0 §6.7.1 step 3, §11.7.1: `device.transfer.pending` brings the new app's signer class and
+     * `signer_changed`; an approval without `signer` is answered `signer_unconfirmed` before the UTK is spent, so the
+     * retry is sealed to the same UTK and names the class.
+     */
+    @Test
+    fun aTransferApprovalNamesTheSignerAndAnUnconfirmedOneKeepsItsUtk() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            withCredential(d, v, api)
+            val pending = async(Dispatchers.Unconfined, start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                api.awaitTransferPending("t-1", java.time.Duration.ofSeconds(5))
+            }
+            d.handle(v.seal("device.transfer.pending", """{"transfer_id":"t-1","name":"Pixel 10","sas":"123456","signer":"google_play","signer_changed":true}"""))
+            assertEquals(TransferPending("t-1", "Pixel 10", "123456", "google_play", true), pending.await())
+
+            // An approval as a build from before 0.27.0 sends it: no `signer`.
+            val utk = KemPrivateKey.generate()
+            val first = async(Dispatchers.IO) { runCatching { api.transferApprove("t-1", "246802", "password one") } }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            val utkJson = """{"utk_id":"00112233445566cc","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
+            d.handle(v.seal(get.type, """{"utks":[$utkJson]}""", re = get.id, status = Inner.STATUS_OK))
+            val a1 = v.open(nextDeposit().second)
+            assertEquals("device.transfer.approve", a1.type)
+            val b1 = StrictJson.parseObject(a1.body)
+            assertEquals("t-1", b1.string("transfer_id"))
+            assertEquals("00112233445566cc", b1.string("utk_id"))
+            assertTrue("signer" !in b1.members)
+            d.handle(
+                v.msg(
+                    v.keyring.current()!!.seal(
+                        Inner(id = Ulid.new(), type = a1.type, ts = Instant.now(), re = a1.id, status = Inner.STATUS_ERROR,
+                            error = com.vettid.core.crypto.envelope.InnerError("signer_unconfirmed")),
+                    ),
+                ),
+            )
+            val e = first.await().exceptionOrNull() as VaultOpException
+            assertEquals("signer_unconfirmed", e.code)
+            // The vault did not spend the UTK: it is back in the pool, first.
+            assertEquals(1, d.utkCount)
+
+            // The retry, with the member's confirmation: the same UTK (no credential.utk.get), and the class.
+            val second = async(Dispatchers.IO) { api.transferApprove("t-1", "246802", "password one", signer = "google_play") }
+            val a2 = v.open(nextDeposit().second)
+            assertEquals("device.transfer.approve", a2.type)
+            val b2 = StrictJson.parseObject(a2.body)
+            assertEquals("00112233445566cc", b2.string("utk_id"))
+            assertEquals("google_play", b2.string("signer"))
+            assertEquals("t-1", b2.string("transfer_id"))
+            val payload = StrictJson.parseObject(
+                com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, "00112233445566cc", a2.type, a2.id, b2.base64("sealed")),
+            )
+            assertEquals("246802", payload.string("pin"))
+            assertEquals("password one", payload.string("password"))
+            assertTrue("signer" !in payload.members) // an outer member, as transfer_id
+            d.handle(v.seal(a2.type, "{}", re = a2.id, status = Inner.STATUS_OK))
+            second.await()
+            assertEquals(0, d.utkCount)
+        }
+    }
+
+    /** A pending from a vault before 0.27.0, or for an app without a signer, has neither member. */
+    @Test
+    fun aTransferPendingWithoutSignerMembersIsUnchanged() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            for ((body, expected) in listOf(
+                """{"transfer_id":"t-2","name":"Old","sas":"654321"}""" to TransferPending("t-2", "Old", "654321", null, false),
+                """{"transfer_id":"t-2","name":"Old","sas":"654321","signer":"vettid","signer_changed":false}""" to
+                    TransferPending("t-2", "Old", "654321", "vettid", false),
+                // Not a boolean: not a confirmation the app may skip silently, but nothing it can act on either.
+                """{"transfer_id":"t-2","name":"Old","sas":"654321","signer":"vettid","signer_changed":"true"}""" to
+                    TransferPending("t-2", "Old", "654321", "vettid", false),
+            )) {
+                val pending = async(Dispatchers.Unconfined, start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                    api.awaitTransferPending("t-2", java.time.Duration.ofSeconds(5))
+                }
+                d.handle(v.seal("device.transfer.pending", body))
+                assertEquals(expected, pending.await())
+            }
+        }
+    }
+
+    /** A test attester with a "Keystore" chain: [attest] makes a new one, [chain] returns it (§11.7.1). */
+    private class ChainAttester : com.vettid.core.altchan.Attester {
+        private val pair: java.security.KeyPair = java.security.KeyPairGenerator.getInstance("EC").apply {
+            initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+        }.generateKeyPair()
+        var kept: List<ByteArray>? = null
+        var generation = 0
+
+        override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest {
+            generation++
+            kept = listOf(ByteArray(600) { generation.toByte() }, ByteArray(500) { 0x7f })
+            return com.vettid.core.crypto.altchan.DeviceAttest.android(kept!!)
+        }
+
+        override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion =
+            com.vettid.core.crypto.altchan.DeviceAssertion.android(
+                java.security.Signature.getInstance("SHA256withECDSA").run {
+                    initSign(pair.private)
+                    update(message)
+                    sign()
+                },
+            )
+
+        override fun chain(): List<ByteArray>? = kept
+    }
+
+    /**
+     * VAULT-MESSAGING 0.27.0 §11.7.1: every unlock carries the device key's chain while the vault has not shown this
+     * app a signer in `device.list`; it stops once it has (kept across a restart), and starts again after a new
+     * attestation (a new key).
+     */
+    @Test
+    fun unlocksCarryTheChainUntilTheVaultShowsASigner() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, _) = pairedDevice(this, store, secrets)
+            val pcr0 = "a3".repeat(48)
+            val etk = KemPrivateKey.generate()
+            val pair = java.security.KeyPairGenerator.getInstance("EC").apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+            val entry = JsonBuilder().uint("release", 3).string("pcr0", pcr0).string("pcr1", "13".repeat(48)).string("pcr2", "23".repeat(48))
+                .string("seal_key", "arn:aws:kms:us-east-1:111122223333:key/test").string("status", "active")
+                .string("published_at", "2026-10-01T00:00:00Z").string("notes", "https://vettid.org/releases/3").build()
+            val doc = JsonBuilder().uint("v", 1).uint("serial", 7).string("issued_at", "2026-10-01T00:00:00Z").raw("releases", "[$entry]").bytes()
+            val der = java.security.Signature.getInstance("SHA256withECDSA").run {
+                initSign(pair.private)
+                update(com.vettid.core.attestation.manifest.ReleaseManifest.LABEL.toByteArray())
+                update(0)
+                update(doc)
+                sign()
+            }
+            val raw = org.bouncycastle.asn1.ASN1Sequence.getInstance(der).let { seq ->
+                seq.map { org.bouncycastle.util.BigIntegers.asUnsignedByteArray(32, (it as org.bouncycastle.asn1.ASN1Integer).value) }.reduce { a, b -> a + b }
+            }
+            val key = com.vettid.core.attestation.manifest.ManifestKey(pair.public.encoded)
+            val served = JsonBuilder().string("manifest", Base64s.encodeStd(doc)).base64("sig", raw).string("key_id", key.keyId).bytes()
+            val manifest = com.vettid.core.attestation.manifest.ManifestVerifier(listOf(key)).verify(served)
+            val enclave = com.vettid.core.attestation.VerifiedEnclave(
+                com.vettid.core.crypto.altchan.Descriptor.parse(
+                    com.vettid.core.crypto.altchan.Descriptor.marshal("inst-a", etk.publicKey, pcr0, Instant.now().plusSeconds(3600)),
+                ),
+                com.vettid.core.attestation.nitro.Measurements(pcr0, "13".repeat(48), "23".repeat(48)),
+                manifest.byPcr0(pcr0)!!,
+            )
+            val att = ChainAttester().apply { attest(ByteArray(32)) }
+
+            fun chainOf(dev: VaultDevice, b: com.vettid.core.altchan.BuiltUnlock): List<String>? {
+                assertNotNull(dev)
+                val (padded, _) = Envelope.openSealed(Envelope.parse(b.request.envelope()), etk)
+                val inner = Inner.parse(com.vettid.core.crypto.envelope.Padding.unpadFixed(padded, com.vettid.core.crypto.envelope.Padding.ALT_CHANNEL_REQUEST), Mode.SEALED)
+                val a = StrictJson.parseObject(inner.body).obj("device_assertion")
+                return if (a.members.containsKey("chain")) a.array("chain").map { (it as com.vettid.core.crypto.json.JsonString).value } else null
+            }
+            val options = com.vettid.core.altchan.UnlockOptions()
+            val sent = att.kept!!.map { Base64s.encodeStd(it) }
+
+            // A vault enrolled before 0.27.0 (or whose device.list this app has not read): the chain, every time.
+            assertTrue(!d.signerSeen)
+            assertEquals(sent, chainOf(d, d.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            assertEquals(sent, chainOf(d, d.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            // device.list showed no signer: nothing changes.
+            d.markSignerSeen(false)
+            assertEquals(sent, chainOf(d, d.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            // device.list showed the signer: no chain any more, also after a restart.
+            d.markSignerSeen(true)
+            assertNull(chainOf(d, d.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!
+            assertTrue(again.signerSeen)
+            assertNull(chainOf(again, again.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            // The entry lost its signer (a vault restored to an older state): the chain again.
+            again.markSignerSeen(false)
+            assertEquals(sent, chainOf(again, again.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            // A new attestation is a new key: whatever was seen before no longer counts, and the new chain goes out.
+            again.markSignerSeen(true)
+            again.prepareEnroll("guid-1", "246802", enclave, manifest, att)
+            assertTrue(!again.signerSeen)
+            assertEquals(2, att.generation)
+            assertEquals(att.kept!!.map { Base64s.encodeStd(it) }, chainOf(again, again.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+        }
     }
 
     @Test

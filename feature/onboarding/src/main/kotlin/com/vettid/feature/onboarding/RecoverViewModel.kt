@@ -439,6 +439,10 @@ class RecoverViewModel @Inject constructor(
                 }
                 UnlockAttempt.RecoveryPending, UnlockAttempt.StateRollback ->
                     state.update { it.copy(busy = false, pin = "", error = FailureKind.OTHER) }
+                // §11.7.1 (0.27.0): the release does not pin this installation's signer; not a wrong PIN.
+                UnlockAttempt.SignerRefused -> state.update {
+                    it.copy(busy = false, pin = "", error = FailureKind.SIGNER_REFUSED, errorCode = SIGNER_REFUSED)
+                }
             }
         }
     }
@@ -516,6 +520,7 @@ class RecoverViewModel @Inject constructor(
         const val CODE_UNKNOWN_DEVICE = "unknown_device"
         const val CODE_REQUIRED = "credential_required"
         const val CODE_NO_BACKUP = "no_backup"
+        private const val SIGNER_REFUSED = "signer_refused"
 
         /** MEMBER-API 2.1.0: the account site's "Delete my vault and start over". */
         const val START_OVER_PATH = "/account/vault/deletion/"

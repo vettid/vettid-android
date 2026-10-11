@@ -22,7 +22,7 @@ class NotificationMappingTest {
         Channels.CALLS to listOf("call.missed"),
         Channels.SECURITY to listOf(
             "credential.alarm", "owner_check.locked", "owner_check.failed", "owner_check.hold_changed", "credential.password_failed",
-            "credential.reset", "device.replaced", "device.transferred",
+            "credential.reset", "device.replaced", "device.transferred", "device.signer_changed",
         ),
         Channels.ACTIVITY to listOf(
             "connection.added", "connection.request.peer_declined", "connection.asks_paused", "connection.stale", "connection.removed",

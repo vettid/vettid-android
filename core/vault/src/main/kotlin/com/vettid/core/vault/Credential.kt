@@ -100,6 +100,8 @@ internal class CredentialOps(private val d: VaultDevice) {
         val r = d.requestWithId(id, type, body)
         if (r.inner.status != Inner.STATUS_OK) {
             rk?.destroy()
+            // §6.7.1 step 3 (0.27.0): refused before the UTK was spent; the retry uses the same one.
+            if (r.inner.error?.code == CODE_SIGNER_UNCONFIRMED) d.returnUtk(utk)
             // The error's body: `backoff` carries `retry_after` (§10.1, 0.17.0).
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
@@ -156,5 +158,9 @@ internal class CredentialOps(private val d: VaultDevice) {
         } finally {
             rk.destroy()
         }
+    }
+
+    private companion object {
+        const val CODE_SIGNER_UNCONFIRMED = "signer_unconfirmed"
     }
 }

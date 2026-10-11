@@ -40,6 +40,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.IN_USE -> R.string.data_failure_in_use
     FailureKind.REJECTED -> R.string.data_failure_rejected
     FailureKind.OWNER_CHECK_REQUIRED -> R.string.data_failure_owner_check_required
+    FailureKind.SIGNER_REFUSED -> R.string.data_failure_signer_refused
     FailureKind.OTHER -> R.string.data_failure_other
 }
 

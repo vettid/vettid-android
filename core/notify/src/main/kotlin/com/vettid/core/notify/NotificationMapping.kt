@@ -21,6 +21,7 @@ object NotificationMapping {
     private val SECURITY = setOf(
         "credential.alarm", "owner_check.locked", "owner_check.failed", "owner_check.hold_changed",
         "credential.password_failed", "credential.reset", "device.replaced", "device.transferred",
+        "device.signer_changed",
     )
 
     /** The channel [item] notifies on; null when it does not notify. */

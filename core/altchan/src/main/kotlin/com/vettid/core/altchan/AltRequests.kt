@@ -2,9 +2,12 @@ package com.vettid.core.altchan
 
 import com.vettid.core.attestation.VerifiedEnclave
 import com.vettid.core.attestation.manifest.ReleaseManifest
+import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.Ed25519PrivateKey
 import com.vettid.core.crypto.Randomness
 import com.vettid.core.crypto.altchan.AltChannel
+import com.vettid.core.crypto.altchan.DeviceAssertion
+import com.vettid.core.crypto.altchan.DeviceAttest
 import com.vettid.core.crypto.altchan.EnrollRequest
 import com.vettid.core.crypto.altchan.UnlockRequest
 import com.vettid.core.crypto.envelope.Timestamps
@@ -53,8 +56,17 @@ data class PendingUnlock(val requestId: String, val release: String, val number:
 /** A member-approved release update (§11.10.3). */
 data class Approval(val toPcr0: String, val toRelease: Long)
 
-/** The less common unlock paths (§11.10.4, §11.11.4). */
-data class UnlockOptions(val approve: Approval? = null, val abandon: Boolean = false, val cancelRecovery: Boolean = false)
+/**
+ * The less common unlock paths (§11.10.4, §11.11.4). [sendChain] (0.27.0, §11.7.1): the unlock's
+ * `device_assertion` carries the device key's certificate chain, which the device asks for while the vault has
+ * not shown it a signer for this app (`device.list`); the callers above the device never set it.
+ */
+data class UnlockOptions(
+    val approve: Approval? = null,
+    val abandon: Boolean = false,
+    val cancelRecovery: Boolean = false,
+    val sendChain: Boolean = false,
+)
 
 /**
  * Builds the sealed requests of the alternate channel, as vettid-vault's
@@ -129,7 +141,9 @@ object AltRequests {
         val tss = Timestamps.formatMillis(t)
         val rid = Ulid.new(t)
         val challenge = AltChannel.devattChallenge(rid, vaultId, tss)
-        val assertion = attester.assert(challenge)
+        // §11.7.1 (0.27.0): the bound key's chain, while the vault has not recorded this app's signer. Not part of
+        // the signing string; a bound key ignores it. Never on the release approval below.
+        val assertion = unlockAssertion(attester, challenge, options.sendChain)
         val upd = when {
             options.abandon -> Approval(rel.pcr0, rel.number)
             else -> options.approve
@@ -146,11 +160,16 @@ object AltRequests {
                 manifestSha256 = manifest.sha256Hex, toPcr0 = upd?.toPcr0 ?: "", cancelRecovery = options.cancelRecovery,
             ),
         )
-        val body = UnlockRequest(
-            userGuid, vaultId, rid, ik.publicKey, pin, state.stateSeq, minHeader, token, assertion, manifest.sha256Hex, manifest.serial,
-            update, options.cancelRecovery, ik.signRaw(signing.toByteArray()),
-        ).marshal()
-        val env = AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_UNLOCK, rid, t, body)
+        val sig = ik.signRaw(signing.toByteArray())
+
+        fun seal(a: DeviceAssertion): ByteArray {
+            val body = UnlockRequest(
+                userGuid, vaultId, rid, ik.publicKey, pin, state.stateSeq, minHeader, token, a, manifest.sha256Hex, manifest.serial,
+                update, options.cancelRecovery, sig,
+            ).marshal()
+            return AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_UNLOCK, rid, t, body)
+        }
+        val env = sealFitting(assertion, ::seal)
         return BuiltUnlock(
             SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex),
             PendingUnlock(rid, rel.pcr0, rel.number, manifest.serial, upd?.toRelease ?: 0),
@@ -222,9 +241,33 @@ object AltRequests {
         return SealedRequest(rid, enclave.descriptor.kid.toString(), env, null)
     }
 
+    /** The unlock's assertion over [challenge], with the device key's chain when [withChain] and there is a usable one. */
+    private fun unlockAssertion(attester: Attester, challenge: ByteArray, withChain: Boolean): DeviceAssertion {
+        val a = attester.assert(challenge)
+        val chain = if (withChain) usableChain(attester) else null
+        return if (chain != null) DeviceAssertion.android(a.sig(), chain) else a
+    }
+
+    /**
+     * [seal] of [assertion]; when it carries a chain that does not fit the request's 12,288 bytes (none that an
+     * enrollment carried does not, vettid-vault's chainsize_test), the unlock goes without the chain rather than
+     * not at all.
+     */
+    private fun sealFitting(assertion: DeviceAssertion, seal: (DeviceAssertion) -> ByteArray): ByteArray = try {
+        seal(assertion)
+    } catch (e: CryptoException.Format) {
+        if (assertion.chain() == null) throw e
+        seal(assertion.withoutChain())
+    }
+
+    /** [attester]'s chain if it is one a `device_assertion` can carry (1–10 certificates), else null. */
+    private fun usableChain(attester: Attester): List<ByteArray>? =
+        attester.chain()?.takeIf { c -> c.size in 1..DeviceAttest.MAX_CHAIN && c.none { it.isEmpty() || it.size > MAX_CERT } }
+
     private fun relayJson(r: RelayAddr): String =
         JsonBuilder().string("url", r.url).string("mailbox", r.mailbox).base64("pk", r.pk()).build()
 
     private const val NONCE_SIZE = 32
+    private const val MAX_CERT = 16 * 1024
     private const val PCR_HEX = 96
 }

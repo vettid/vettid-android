@@ -65,9 +65,41 @@ real AWS Nitro root and the production relay. It shows "VettID Staging" as its
 name, `-staging` in the drawer's version line and `staging` under Settings →
 attestation → Environment.
 
-Staging images accept device attestation only from the package `com.vettid.app`
-signed with the staging key, so the staging build uses the release application
-id: it replaces a release install and cannot sit next to one (test phones only).
+The staging build's application id is **`com.vettid.app.staging`**
+(`applicationIdSuffix ".staging"`; ANDROID-PLAN 0.1.35 §5, VAULT-MESSAGING
+0.26.0 §11.10.8), from the build that goes with staging release S10: staging
+images accept device attestation from exactly that package, signed with a
+staging key, and production images from `com.vettid.app`. The staging and the
+production app therefore install side by side on one phone: nothing is shared
+between them (every provider authority and declared permission is under the
+application id, the notifications' intents are explicit, `push.register` sends
+the application id as `app_id`). What follows the id:
+
+| | release | staging |
+|---|---|---|
+| Application id | `com.vettid.app` | `com.vettid.app.staging` |
+| Same-device setup link (App Link) | `account.vettid.org/vault/enroll/` | `account.staging.vettid.org/vault/enroll/` only (`vettidAccountHost`); verified by `https://account.staging.vettid.org/.well-known/assetlinks.json`, which names `com.vettid.app.staging` |
+| Invitation links (`relay.vettid.org/connect`, `vettid://connect`) | verified App Link | claimed, not verified (the relay's statement names production's package): the relay's page opens, and Android asks which app when both are installed |
+| Firebase app (`vettidFcm<Type>ApplicationId`) | production's project, package `com.vettid.app` | the staging project's Android app registered for `com.vettid.app.staging` |
+
+`checkStagingApk` fails unless the staging build's merged manifest has that
+id, authorities and permissions under it, and the staging account site as its
+only account App Link host; `checkReleaseApk` and `checkFossReleaseApk` hold
+the release builds to `com.vettid.app` and `account.vettid.org` the same way
+(`:app:check<Variant>ApplicationId`). Debug builds keep `com.vettid.app.dev`
+and the dev-stack build `com.vettid.app.devstack` (the dev stack's device
+policy names those two). The staging id is never published to a store.
+
+A staging build with the old id (`com.vettid.app`) is, to Android, another
+app: no update carries its vault to the new build. It keeps unlocking its
+vault and can approve the move to S10, but on S10 it can no longer enroll,
+receive a transfer or register a recovery. Per vault: move it to S10 with the
+old build, install the new build beside it (do not uninstall the old one
+first), attach the vault to the new build by a direct transfer (another
+phone), a recovery (the code typed or scanned) or a new enrollment, then
+uninstall the old build (VAULT-MESSAGING §11.10.8, "Moving the existing
+staging vaults").
+
 It is signed from a properties file outside the repository, by default
 `~/.vettid/staging-signing.properties` (another path: `-PvettidStagingSigning=<path>`):
 
@@ -82,12 +114,65 @@ keyPassword=<...>
 ```
 
 ```bash
-adb -s <serial> uninstall com.vettid.app   # only if another signature is installed
+adb -s <serial> uninstall com.vettid.app.staging   # only if another signature is installed
 ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 :app:installStaging
 ```
 
 Without the file the staging APK is built unsigned (as in CI) and there is no
 `installStaging` task.
+
+### Signer binding
+
+From VAULT-MESSAGING 0.27.0 (§11.7.1; ANDROID-PLAN 0.1.36 §7) each vault is
+bound to the signing certificate of its app, which the enclave reads from the
+key attestation. Google Play installs are signed by Google, F-Droid and direct
+installs by VettID; the vault names the class (`vettid`, `google_play`,
+`development`) and the app supplies the words.
+
+- **The chain at unlock.** A vault enrolled before 0.27.0 has no recorded
+  signer. The app sends the device key's certificate chain in the unlock's
+  `device_assertion.chain` (the same certificates as at attestation, read from
+  Android Keystore: `Attester.chain()`, `DeviceAttestationKey.chain()`) at
+  every unlock until its own `device.list` entry shows a `signer`
+  (`VaultDevice.signerSeen`, kept with the device state, false again after
+  every new attestation). Never on a release approval; not part of any signing
+  string; a chain that would not fit the request is left out.
+- **`signer_refused`** is an unlock result of its own (`UnlockAttempt.SignerRefused`):
+  not a wrong PIN, no count and no wait. The unlock screen says "This vault no
+  longer accepts this installation of VettID. Update the app, or recover your
+  vault with a current version." and offers "How to recover your vault".
+- **Settings → Vault status** shows "Installed from: Google Play (signed by
+  Google)", "Installed from: F-Droid or direct (signed by VettID)" or
+  "Development build"; tapping it explains the two versions and shows the
+  certificate's digest. No line when the vault reports no signer.
+- **A transfer to an app with another signer** (`device.transfer.pending`
+  with `signer_changed`): the old phone names the change before the PIN, with
+  Continue and Cancel, and the approval carries `signer`. `signer_unconfirmed`
+  (nothing spent or counted, the transfer still open) shows the confirmation
+  and retries with the same UTK.
+- History and the notifications name `device.signer_bound`,
+  `device.signer_changed` and `device.signer_refused` in words.
+
+The vault relies on Android Keystore returning later the chain it returned at
+attestation (same leaf key, same serial numbers). On a phone,
+`ANDROID_SERIAL=<serial> ./gradlew :core:keystore:connectedDebugAndroidTest`
+(`theKeystoreReturnsTheSameChainLaterThatItReturnedAtAttestation`: byte for
+byte after signing, through a new `KeyStore` instance and a new key object)
+and `:core:altchan:connectedDebugAndroidTest` (`KeystoreAttester.chain()`
+against the attestation) check it within one run; they are compiled in CI and
+run by hand.
+
+Binding an existing vault by its chain cannot be observed on the staging
+phones: the vaults enrolled before S10 belong to the build with the old
+application id, whose chain names the old package (the enclave would answer
+`attestation`, so that build must not send one, and it does not: it predates
+this code), and every vault the `com.vettid.app.staging` build holds was
+attested on S10 or later and is bound from the start. What a phone shows
+instead: after enrolling, transferring or recovering to the new build, the
+first unlocks carry the chain (the vault ignores it for a bound key) and
+succeed, and Settings → Vault status then shows the "Installed from" line. An
+unlock answered "This phone could not be verified" there would mean a chain
+was judged and failed.
 
 ### Google push
 

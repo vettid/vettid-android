@@ -13,8 +13,9 @@ import okhttp3.OkHttpClient
  * site proxies the `/api/` routes), the staging manifest at staging.vettid.org pinned
  * to the staging channel's key A, the real AWS Nitro root and the production
  * relay (the staging images pin it). Device attestation is the phone's real
- * Keystore key; staging images accept it only from `com.vettid.app` signed
- * with the staging key (vettid-vault enclave/releasecfg/staging.json).
+ * Keystore key; staging images accept it only from `com.vettid.app.staging`
+ * (this build type's application id, from staging release S10) signed with a
+ * staging key (vettid-vault enclave/releasecfg/staging.json).
  * Setup codes and their links are accepted from the staging account site only.
  */
 internal val currentEnvironment: AppEnvironment = object : AppEnvironment {

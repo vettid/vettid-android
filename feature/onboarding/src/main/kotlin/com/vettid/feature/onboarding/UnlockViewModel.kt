@@ -57,6 +57,14 @@ data class UnlockUiState(
     val recoveryPending: Boolean = false,
     val stateRollback: Boolean = false,
     /**
+     * The vault answered `signer_refused` (VAULT-MESSAGING 0.27.0 §11.7.1): its release does not accept this
+     * installation of VettID. A state of its own, not a wrong PIN: no count, no wait, and the same answer
+     * whatever PIN is sent. Cleared by any other answer of the vault.
+     */
+    val signerRefused: Boolean = false,
+    /** The member opened "How to recover your vault" under that notice. */
+    val signerHelp: Boolean = false,
+    /**
      * The last unlock's result was unreadable, as a phone the vault no longer knows sees it (§11.4: random
      * bytes): "Erase VettID from this phone" is offered. Cleared by any answer that shows the vault knows
      * this phone (a sealed result); a network failure leaves it as it was.
@@ -97,7 +105,7 @@ data class UnlockUiState(
 
     override fun toString(): String =
         "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, serviceWait=$serviceWaitSeconds, " +
-            "refused=$refused, " +
+            "refused=$refused, signerRefused=$signerRefused, " +
             "notRecognised=$notRecognised, erasing=$erasing, checkDue=$checkDue)"
 
     private companion object {
@@ -117,6 +125,9 @@ interface UnlockActions {
     fun setPassword(v: String)
     fun submit()
     fun cancelRecoveryAndUnlock()
+
+    /** Shows or hides the recovery and transfer help under the `signer_refused` notice. */
+    fun showSignerHelp(show: Boolean)
 
     /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.notRecognised]). */
     fun askErase()
@@ -200,6 +211,8 @@ class UnlockViewModel @Inject constructor(
 
     override fun cancelRecoveryAndUnlock() = attempt(cancelRecovery = true)
 
+    override fun showSignerHelp(show: Boolean) = state.update { it.copy(signerHelp = show && it.signerRefused) }
+
     override fun askErase() = state.update { if (it.notRecognised && !it.erasing) it.copy(eraseConfirm = true) else it }
 
     override fun dismissErase() = state.update { it.copy(eraseConfirm = false) }
@@ -224,8 +237,15 @@ class UnlockViewModel @Inject constructor(
                 vault.unlock(s.pin, offer, cancelRecovery)
             }
             // §3.6.5: the password is not kept beyond the unlock and the check that follows it.
-            state.update { it.copy(password = "", notRecognised = notRecognisedAfter(r, it.notRecognised)) }
+            state.update {
+                it.copy(
+                    password = "", notRecognised = notRecognisedAfter(r, it.notRecognised),
+                    signerRefused = signerRefusedAfter(r, it.signerRefused),
+                )
+            }
             when (r) {
+                // §11.7.1: not a PIN failure: no "wrong PIN" text, no count, no backoff. The notice says what to do.
+                UnlockAttempt.SignerRefused -> state.update { it.copy(busy = false, pin = "", message = null) }
                 UnlockAttempt.Success -> state.update { it.copy(busy = false, pin = "", recoveryPending = false) }
                 is UnlockAttempt.BadPin -> {
                     state.update { it.copy(busy = false, pin = "", message = UnlockMessage.BadPin) }
@@ -257,6 +277,17 @@ class UnlockViewModel @Inject constructor(
      */
     private fun notRecognisedAfter(r: UnlockAttempt, before: Boolean): Boolean =
         if (r is UnlockAttempt.Failed) r.code == CODE_UNREADABLE || r.kind == FailureKind.UNAUTHORIZED || before else false
+
+    /**
+     * Whether the `signer_refused` notice stays: set by that answer, cleared by any other sealed answer (the
+     * vault accepted this installation's signer after all, e.g. on another release), kept through failures that
+     * never reached the enclave (network, a paused service).
+     */
+    private fun signerRefusedAfter(r: UnlockAttempt, before: Boolean): Boolean = when (r) {
+        UnlockAttempt.SignerRefused -> true
+        is UnlockAttempt.Failed -> before
+        else -> false
+    }
 
     private fun startBackoff(seconds: Long) {
         if (seconds <= 0) return

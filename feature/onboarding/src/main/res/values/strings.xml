@@ -132,6 +132,12 @@
     <string name="unlock_not_recognised_title">Your vault did not recognise this phone</string>
     <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>
     <string name="unlock_erase">Erase VettID from this phone</string>
+    <string name="unlock_signer_refused_title">This installation is not accepted</string>
+    <string name="unlock_signer_refused_body">This vault no longer accepts this installation of VettID. Update the app, or recover your vault with a current version.</string>
+    <string name="unlock_signer_refused_help">How to recover your vault</string>
+    <string name="unlock_signer_refused_help_hide">Hide</string>
+    <string name="unlock_signer_refused_help_title">Recovering or moving your vault</string>
+    <string name="unlock_signer_refused_help_body">First update VettID from where you installed it and try again: your PIN was not counted as wrong.\n\nIf that does not help, recover your vault. Start a recovery on the account site, install a current version of VettID (on this phone after removing this one, or on another phone) and choose \"I lost my phone: recover my vault\" on its first screen, then scan or type the recovery code. A recovery takes 24 hours and needs your PIN and your credential password.\n\nMoving your vault to a new phone directly is not possible while this phone cannot open it.</string>
     <string name="unlock_refused_title">Your vault is refusing this phone</string>
     <string name="unlock_refused_body">Messages from this phone to your vault keep being refused. If you moved VettID to another phone, this one may have been replaced. Enter your PIN to check with your vault.</string>
     <string name="unlock_erase_confirm_title">Erase VettID from this phone?</string>

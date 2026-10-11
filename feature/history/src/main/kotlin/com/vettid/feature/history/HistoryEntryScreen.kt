@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
@@ -107,6 +108,10 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
                             modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("history_open_item"),
                         ) { Text(stringResource(R.string.history_detail_open_item)) }
                     }
+                }
+                AuditKinds.signerDetail(e.kind, e.ref)?.let {
+                    val text = HistorySigner.text(LocalContext.current, it)
+                    Field(R.string.history_detail_signer, text, Modifier.testTag("history_entry_signer"))
                 }
                 e.direction?.let {
                     Field(

@@ -31,6 +31,37 @@ object AuditKinds {
     }
 
     const val KIND_EXPORTED = "audit.exported"
+
+    /**
+     * What a signer entry's `ref` says (VAULT-MESSAGING 0.27.0 §10.9, §11.7.1; classes, never digests):
+     * `device.signer_bound` the class, `device.signer_changed` `<old class>:<new class>`, `device.signer_refused`
+     * `unpinned` or `unbound`. Null for another kind or a `ref` that does not read (the title alone then).
+     */
+    sealed interface SignerDetail {
+        data class Bound(val signerClass: String) : SignerDetail
+
+        data class Changed(val from: String, val to: String) : SignerDetail
+
+        /** [unbound]: no signer was recorded for the installation; otherwise its signer is not one the release accepts. */
+        data class Refused(val unbound: Boolean) : SignerDetail
+    }
+
+    fun signerDetail(kind: String, ref: String?): SignerDetail? = when (kind) {
+        KIND_SIGNER_BOUND -> ref?.takeIf { it.isNotEmpty() && ':' !in it }?.let { SignerDetail.Bound(it) }
+        KIND_SIGNER_CHANGED -> ref?.split(':')?.takeIf { p -> p.size == 2 && p.all { it.isNotEmpty() } }
+            ?.let { SignerDetail.Changed(it[0], it[1]) }
+        KIND_SIGNER_REFUSED -> when (ref) {
+            "unpinned" -> SignerDetail.Refused(unbound = false)
+            "unbound" -> SignerDetail.Refused(unbound = true)
+            else -> null
+        }
+        else -> null
+    }
+
+    const val KIND_SIGNER_BOUND = "device.signer_bound"
+    const val KIND_SIGNER_CHANGED = "device.signer_changed"
+    const val KIND_SIGNER_REFUSED = "device.signer_refused"
+
     /** How [kind] reads: a known title, a known title as an hourly summary, a dropped message, or unknown. */
     sealed interface Title {
         data class Known(@param:StringRes val res: Int) : Title
@@ -87,6 +118,9 @@ object AuditKinds {
         "device.transfer.aborted" to R.string.history_kind_device_transfer_aborted,
         "device.transfer.attestation_failed" to R.string.history_kind_device_transfer_attestation_failed,
         "device.replaced" to R.string.history_kind_device_replaced,
+        KIND_SIGNER_BOUND to R.string.history_kind_device_signer_bound,
+        KIND_SIGNER_CHANGED to R.string.history_kind_device_signer_changed,
+        KIND_SIGNER_REFUSED to R.string.history_kind_device_signer_refused,
         "device.session.granted" to R.string.history_kind_device_session_granted,
         "device.session.ended" to R.string.history_kind_device_session_ended,
         "approval.granted" to R.string.history_kind_approval_granted,

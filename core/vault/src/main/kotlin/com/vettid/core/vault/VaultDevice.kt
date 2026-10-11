@@ -466,6 +466,7 @@ class VaultDevice private constructor(
             // §7.1: the app's open token for the vault's first deposit, ≤ 10 min.
             val open = own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES))
             val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, appIdentity(), open, alt(), now())
+            st.signerSeen = false // a new attestation is a new key (§11.7.1)
             setAlt(b.state)
             save()
             b.request
@@ -487,7 +488,10 @@ class VaultDevice private constructor(
         if (st.vault == null && !recovering) throw VaultStateException("not paired with a vault")
         // A recovering app does not know the vault's relay key yet: an open token for its mailbox (§11.11.5).
         val tok = if (recovering) own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES)) else mintForVault()
-        val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), options, now())
+        // §11.7.1 (0.27.0): the device key's chain goes with every unlock until the vault has shown this app its
+        // signer in device.list ([signerSeen]); a vault that has recorded one ignores it.
+        val opts = options.copy(sendChain = !st.signerSeen)
+        val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), opts, now())
         pendingUnlock = b.pending
         save()
         b
@@ -525,6 +529,7 @@ class VaultDevice private constructor(
         lock.withLock {
             if (st.vault != null) throw VaultStateException("already paired with a vault")
             val req = AltRequests.buildRecoveryRegister(userGuid, code, enclave, attester, appIdentity(), now())
+            st.signerSeen = false // a new attestation is a new key (§11.7.1)
             st.vaultId = code.vaultId
             st.recovery = RecoveryRecord(code.recoveryId, req.requestId)
             save()
@@ -660,6 +665,7 @@ class VaultDevice private constructor(
             val at = t.truncatedTo(ChronoUnit.MILLIS)
             val id = Ulid.new(at)
             val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
+            st.signerSeen = false // a new attestation is a new key (§11.7.1)
             val profile = JsonBuilder().string("name", st.name).bytes()
             // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
             startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey)
@@ -1118,6 +1124,29 @@ class VaultDevice private constructor(
     internal suspend fun endRecovery() = lock.withLock {
         st.recovery = null
         save()
+    }
+
+    /**
+     * Puts back a UTK the vault did not spend (`signer_unconfirmed`, §6.7.1 step 3: refused before the UTK is
+     * spent), first in the pool, so that the retry is sealed to the same one.
+     */
+    internal suspend fun returnUtk(u: UtkRecord) = lock.withLock {
+        if (st.utks.none { it.id == u.id }) st.utks.add(0, u)
+        save()
+    }
+
+    /**
+     * Whether the vault has shown this app its signer (`device.list`, §11.7.1); while false, unlocks carry the
+     * device key's certificate chain.
+     */
+    val signerSeen: Boolean get() = st.signerSeen
+
+    /** Records what this app's own `device.list` entry said about its signer ([seen]: it carries `signer`). */
+    suspend fun markSignerSeen(seen: Boolean) = lock.withLock {
+        if (st.signerSeen != seen) {
+            st.signerSeen = seen
+            save()
+        }
     }
 
     /** Takes an unexpired UTK from the pool, or null when it is empty. */

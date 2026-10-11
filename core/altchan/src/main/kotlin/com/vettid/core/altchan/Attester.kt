@@ -16,6 +16,14 @@ interface Attester {
 
     /** Signs [message] (an unlock challenge's 32 bytes, or an approval string's bytes). */
     fun assert(message: ByteArray): DeviceAssertion
+
+    /**
+     * The certificate chain of the device key as it is now (leaf first, DER), or null when there is no key or
+     * the chain cannot be read (VAULT-MESSAGING 0.27.0 §11.7.1): the same certificates [attest] returned for
+     * that key, which Android Keystore keeps with it. An unlock re-sends it while the vault has not recorded
+     * this app's signer. Never throws.
+     */
+    fun chain(): List<ByteArray>? = null
 }
 
 /**
@@ -28,4 +36,11 @@ class KeystoreAttester(private val key: DeviceAttestationKey = DeviceAttestation
     override fun attest(challenge: ByteArray): DeviceAttest = DeviceAttest.android(key.generate(challenge).chain.map { it.encoded })
 
     override fun assert(message: ByteArray): DeviceAssertion = DeviceAssertion.android(key.sign(message))
+
+    @Suppress("TooGenericExceptionCaught") // a Keystore that cannot give the chain: the unlock goes without it
+    override fun chain(): List<ByteArray>? = try {
+        if (key.exists()) key.chain().map { it.encoded }.takeIf { it.isNotEmpty() } else null
+    } catch (_: Exception) {
+        null
+    }
 }

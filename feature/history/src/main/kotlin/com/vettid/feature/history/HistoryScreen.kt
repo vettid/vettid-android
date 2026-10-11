@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -603,6 +604,8 @@ private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
             val entries = pluralStringResource(R.plurals.history_export_count, count, count)
             stringResource(R.string.history_export_summary, format.uppercase(), entries)
         }
+        // VAULT-MESSAGING 0.27.0 §11.7.1: the signer entries name their classes in words.
+        ?: AuditKinds.signerDetail(e.kind, e.ref)?.let { HistorySigner.text(LocalContext.current, it) }
     // ANDROID-PLAN 0.1.27: the device's name (`vault.unlocked`, a device's `vault.locked`, any entry with `device_id`).
     val device = HistoryDevice.name(e.deviceId, names.devices, stringResource(R.string.history_device_removed))
     VettIdListRow(

@@ -79,6 +79,16 @@ class KeystoreAttesterDeviceTest {
             }
             assertTrue(ok)
         }
+
+        // §11.7.1 (0.27.0): what an unlock re-sends is the attestation's chain, certificate for certificate, also
+        // from another attester object over the same key (a later process start), and nothing without a key.
+        val sent = da.chain()
+        for (later in listOf(att.chain(), KeystoreAttester(DeviceAttestationKey(alias)).chain())) {
+            assertEquals(sent.size, later!!.size)
+            sent.forEachIndexed { i, c -> assertArrayEquals("certificate $i", c, later[i]) }
+        }
+        AndroidKeys.delete(alias)
+        assertEquals(null, att.chain())
     }
 
     private companion object {

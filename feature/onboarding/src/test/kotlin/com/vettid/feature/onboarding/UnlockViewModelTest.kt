@@ -180,6 +180,65 @@ class UnlockViewModelTest {
         assertEquals(AppPhase.Unlocked, vault.phase.value)
     }
 
+    /**
+     * VAULT-MESSAGING 0.27.0 §11.7.1: `signer_refused` is a state of its own. Not a wrong PIN: no message under the
+     * field, no countdown, the field stays usable; the same answer for any PIN keeps the notice, and nothing offers
+     * to erase the phone (the vault knows it).
+     */
+    @Test
+    fun signerRefusedIsItsOwnStateNotAWrongPin() = runTest {
+        vault.unlockResults += UnlockAttempt.SignerRefused
+        vault.unlockResults += UnlockAttempt.SignerRefused
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        var s = vm.uiState.value
+        assertTrue(s.signerRefused)
+        assertNull(s.message)
+        assertEquals(0L, s.waitSeconds)
+        assertEquals("", s.pin)
+        assertFalse(s.busy)
+        assertTrue(s.pinAllowed)
+        assertFalse(s.notRecognised)
+        assertFalse(s.recoveryPending)
+        assertEquals(AppPhase.Locked, vault.phase.value)
+        // The help opens and closes; a different PIN gets the same answer and the same state.
+        vm.showSignerHelp(true)
+        assertTrue(vm.uiState.value.signerHelp)
+        vm.showSignerHelp(false)
+        assertFalse(vm.uiState.value.signerHelp)
+        vm.setPin("11112222")
+        vm.submit()
+        advanceUntilIdle()
+        s = vm.uiState.value
+        assertTrue(s.signerRefused)
+        assertNull(s.message)
+        assertEquals(0L, s.waitSeconds)
+        vm.askErase()
+        assertFalse(vm.uiState.value.eraseConfirm)
+    }
+
+    /** The notice goes when the vault answers anything else (a release that pins the signer again), and stays through a network failure. */
+    @Test
+    fun signerRefusedClearsOnAnotherAnswerOfTheVault() = runTest {
+        vault.unlockResults += UnlockAttempt.SignerRefused
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NETWORK, null)
+        vault.unlockResults += UnlockAttempt.BadPin(retryAfterSeconds = 0)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.showSignerHelp(true) // nothing to help with yet
+        assertFalse(vm.uiState.value.signerHelp)
+        for (expected in listOf(true, true, false)) {
+            vm.setPin("40281795")
+            vm.submit()
+            advanceUntilIdle()
+            assertEquals(expected, vm.uiState.value.signerRefused)
+        }
+        assertEquals(UnlockMessage.BadPin, vm.uiState.value.message)
+    }
+
     @Test
     fun stateRollbackAndFailures() = runTest {
         vault.unlockResults += UnlockAttempt.StateRollback

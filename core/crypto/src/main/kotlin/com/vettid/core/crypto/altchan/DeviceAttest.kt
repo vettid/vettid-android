@@ -47,21 +47,41 @@ class DeviceAttest private constructor(val platform: String, private val chain: 
 /**
  * `device_assertion` of `vault.unlock` (§11.4) and the approval of a release
  * update (§11.10.3): a DER ECDSA P-256 signature by the device attestation key.
+ *
+ * (0.27.0, §11.7.1) An unlock's assertion MAY carry `chain`: the certificate
+ * chain of the bound device key, leaf first, exactly as it went out at
+ * attestation, which the app sends while the vault has not recorded its
+ * signer. It is not part of any signing string, and an approval never has it.
  */
-class DeviceAssertion private constructor(val platform: String, private val sig: ByteArray) {
+class DeviceAssertion private constructor(val platform: String, private val sig: ByteArray, private val chain: List<ByteArray>?) {
     fun sig(): ByteArray = sig.copyOf()
 
-    fun marshal(): String = JsonBuilder().string("platform", platform).base64("sig", sig).build()
+    /** The certificate chain sent with this assertion (leaf first), or null. */
+    fun chain(): List<ByteArray>? = chain?.map { it.copyOf() }
+
+    /** The same assertion without its chain (a request that would not fit with it). */
+    fun withoutChain(): DeviceAssertion = DeviceAssertion(platform, sig, null)
+
+    fun marshal(): String {
+        val b = JsonBuilder().string("platform", platform).base64("sig", sig)
+        chain?.let { c -> b.raw("chain", JsonBuilder.array(c.map { JsonBuilder.quote(Base64s.encodeStd(it)) })) }
+        return b.build()
+    }
 
     companion object {
-        fun android(sig: ByteArray): DeviceAssertion {
+        /** [chain]: null for none; otherwise 1–10 DER certificates, leaf first (as [DeviceAttest.android]). */
+        fun android(sig: ByteArray, chain: List<ByteArray>? = null): DeviceAssertion {
             if (sig.isEmpty() || sig.size > DeviceAttest.MAX_BLOB) throw CryptoException.Format("device_assertion sig")
-            return DeviceAssertion(DeviceAttest.PLATFORM_ANDROID, sig.copyOf())
+            val bad = chain != null &&
+                (chain.isEmpty() || chain.size > DeviceAttest.MAX_CHAIN || chain.any { it.isEmpty() || it.size > DeviceAttest.MAX_BLOB })
+            if (bad) throw CryptoException.Format("device_assertion chain")
+            return DeviceAssertion(DeviceAttest.PLATFORM_ANDROID, sig.copyOf(), chain?.map { it.copyOf() })
         }
 
         fun parse(o: JsonObject): DeviceAssertion {
             if (o.string("platform") != DeviceAttest.PLATFORM_ANDROID) throw CryptoException.Format("device_assertion platform")
-            return android(o.base64("sig"))
+            val chain = if (o.members.containsKey("chain")) o.array("chain").map { Base64s.decodeStd(it.asString()) } else null
+            return android(o.base64("sig"), chain)
         }
     }
 }

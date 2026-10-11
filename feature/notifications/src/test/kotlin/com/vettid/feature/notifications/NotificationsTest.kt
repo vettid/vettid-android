@@ -67,6 +67,23 @@ class NotificationsTest {
         assertEquals("Alice asks for 3 things", FeedKinds.title(item("grant.request", count = 3), names).resolve(res))
         assertEquals("3 things", FeedKinds.supporting(item("grant.request", count = 3), names)?.resolve(res))
         assertEquals("A daily check failed: wrong password", FeedKinds.title(item("owner_check.failed", ref = "password"), names).resolve(res))
+        // VAULT-MESSAGING 0.27.0 §11.7.1: the classes of a signer change, in the plan's words; never a raw kind.
+        val changed = item("device.signer_changed", c = null, ref = "vettid:google_play", priority = "high")
+        assertEquals("Your vault moved to another version of VettID", FeedKinds.title(changed, names).resolve(res))
+        assertEquals(
+            "From F-Droid or direct (signed by VettID) to Google Play (signed by Google)",
+            FeedKinds.supporting(changed, names)?.resolve(res),
+        )
+        assertEquals(
+            "From a development build to F-Droid or direct (signed by VettID)",
+            FeedKinds.supporting(item("device.signer_changed", c = null, ref = "development:vettid"), names)?.resolve(res),
+        )
+        assertEquals(
+            "From another signer to Google Play (signed by Google)",
+            FeedKinds.supporting(item("device.signer_changed", c = null, ref = "unknown:google_play"), names)?.resolve(res),
+        )
+        assertEquals(null, FeedKinds.supporting(item("device.signer_changed", c = null, ref = "vettid"), names))
+        assertEquals(FeedTarget.Devices, FeedKinds.target(changed))
         assertEquals(FeedTarget.ApprovalEntry("grant:g1"), FeedKinds.target(item("grant.request", ref = "g1")))
         assertEquals(FeedTarget.Conversation("c1"), FeedKinds.target(item("message.received")))
         assertEquals(FeedTarget.ShareRule("c1", "r1"), FeedKinds.target(item("share.rate_limited")))

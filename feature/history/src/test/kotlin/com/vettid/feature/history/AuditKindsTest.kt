@@ -36,6 +36,7 @@ class AuditKindsTest {
         "location.share.stopped", "location.share.received", "location.share.ended", "location.requested",
         "location.history.deleted", "location.history.shared", "location.history.received", "wallet.created",
         "wallet.deleted", "wallet.address_issued", "wallet.signed", "drop.suppressed", "audit.exported",
+        "device.signer_bound", "device.signer_changed", "device.signer_refused",
     )
 
     @Test
@@ -47,6 +48,28 @@ class AuditKindsTest {
         assertEquals("json" to 812, AuditKinds.exportSummary("audit.exported", "format=json;count=812;seqs=1-812;filters=none"))
         assertEquals(null, AuditKinds.exportSummary("audit.exported", "count=1"))
         assertEquals(null, AuditKinds.exportSummary("item.added", "format=csv;count=1"))
+    }
+
+    /** VAULT-MESSAGING 0.27.0 §10.9, §11.7.1: the signer entries are Devices entries whose `ref` names classes. */
+    @Test
+    fun theSignerEntriesReadTheirRef() {
+        for (k in listOf("device.signer_bound", "device.signer_changed", "device.signer_refused")) {
+            assertEquals(AuditCategory.DEVICES, AuditCategory.of(k))
+            assertTrue(AuditKinds.title(k) is AuditKinds.Title.Known)
+        }
+        assertEquals(AuditKinds.SignerDetail.Bound("vettid"), AuditKinds.signerDetail("device.signer_bound", "vettid"))
+        assertEquals(
+            AuditKinds.SignerDetail.Changed("vettid", "google_play"),
+            AuditKinds.signerDetail("device.signer_changed", "vettid:google_play"),
+        )
+        assertEquals(AuditKinds.SignerDetail.Refused(unbound = false), AuditKinds.signerDetail("device.signer_refused", "unpinned"))
+        assertEquals(AuditKinds.SignerDetail.Refused(unbound = true), AuditKinds.signerDetail("device.signer_refused", "unbound"))
+        // A ref that does not read leaves the title alone; other kinds have no signer detail.
+        assertEquals(null, AuditKinds.signerDetail("device.signer_changed", "vettid"))
+        assertEquals(null, AuditKinds.signerDetail("device.signer_changed", "a:b:c"))
+        assertEquals(null, AuditKinds.signerDetail("device.signer_bound", null))
+        assertEquals(null, AuditKinds.signerDetail("device.signer_refused", "other"))
+        assertEquals(null, AuditKinds.signerDetail("device.paired", "vettid"))
     }
 
     @Test

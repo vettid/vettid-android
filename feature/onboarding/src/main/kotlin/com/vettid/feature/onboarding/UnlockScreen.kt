@@ -201,6 +201,7 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     else -> Unit
                 }
             }
+            if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)
             if (state.notRecognised) NotRecognisedNotice(state.erasing, actions::askErase)
         }
     }
@@ -241,6 +242,34 @@ private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
             Spacer(Modifier.width(Spacing.m))
             Text(stringResource(R.string.unlock_erasing), style = MaterialTheme.typography.bodyMedium)
         }
+    }
+}
+
+/**
+ * The vault's release does not accept this installation of VettID (`signer_refused`, VAULT-MESSAGING 0.27.0
+ * §11.7.1; the text is the spec's). Not a wrong PIN: nothing counts and nothing waits. [help] shows how to recover
+ * or transfer the vault (both start elsewhere: the account site, or another phone where the vault is open).
+ */
+@Composable
+private fun SignerRefusedNotice(help: Boolean, onHelp: (Boolean) -> Unit) {
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(R.string.unlock_signer_refused_title),
+        stringResource(R.string.unlock_signer_refused_body),
+        modifier = Modifier.testTag("unlock_signer_refused"),
+        actions = {
+            TextButton(onClick = { onHelp(!help) }, modifier = Modifier.testTag("signer_refused_help")) {
+                Text(stringResource(if (help) R.string.unlock_signer_refused_help_hide else R.string.unlock_signer_refused_help))
+            }
+        },
+    )
+    if (help) {
+        NoticeCard(
+            NoticeKind.INFO,
+            stringResource(R.string.unlock_signer_refused_help_title),
+            stringResource(R.string.unlock_signer_refused_help_body),
+            modifier = Modifier.testTag("signer_refused_help_text"),
+        )
     }
 }
 

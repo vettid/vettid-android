@@ -244,7 +244,7 @@ interface MoveRepository {
      * `device.unlinked{transferred}`, which erases this phone (the app is then SignedOut, as freshly
      * installed). True when that happened; false when the notice has not arrived yet (it wipes when it does).
      */
-    suspend fun transferApprove(transferId: String, pin: String, password: String): Boolean
+    suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String? = null): Boolean
 
     suspend fun transferReject(transferId: String)
 

@@ -17,6 +17,12 @@
     <string name="history_kind_device_transfer_aborted">Move to a new phone stopped</string>
     <string name="history_kind_device_transfer_attestation_failed">Move refused: the new phone was not verified</string>
     <string name="history_kind_device_replaced">Old phone replaced</string>
+    <string name="history_kind_device_signer_bound">Version of VettID recorded for this vault</string>
+    <string name="history_kind_device_signer_changed">Vault moved to another version of VettID</string>
+    <string name="history_kind_device_signer_refused">An installation of VettID was refused</string>
+    <string name="history_signer_refused_unpinned">This vault release does not accept its signer</string>
+    <string name="history_signer_refused_unbound">No signer was recorded for it</string>
+    <string name="history_detail_signer">Version of VettID</string>
     <string name="history_kind_device_session_granted">Desktop session granted</string>
     <string name="history_kind_device_session_ended">Desktop session ended</string>
     <string name="history_kind_approval_granted">Request approved</string>
