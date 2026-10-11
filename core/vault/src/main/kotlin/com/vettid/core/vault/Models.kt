@@ -4,6 +4,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.put
 
 // Body models of VAULT-MESSAGING §10 that the v1 app reads. Unknown members
 // are ignored (§10.1); members the app does not read stay in the raw bodies.
@@ -344,8 +348,33 @@ data class SyncEvent(val kind: String, val body: JsonObject)
 /** `device.transfer.create`'s answer (§10.3): [link] is the pairing link the new phone scans (QR `t: "p"`). */
 data class TransferOffer(val transferId: String, val link: String, val exp: String?)
 
-/** `device.transfer.pending` (§10.3): the new app's self-asserted [name] and the SAS to compare. */
-data class TransferPending(val transferId: String, val name: String, val sas: String)
+/**
+ * `device.transfer.pending` (§10.3): the new app's self-asserted [name] and the SAS to compare. (0.27.0, §11.7.1)
+ * [signer]: the attested class of the new app's signer; [signerChanged]: it differs from the vault's binding, and
+ * the approval must then name [signer].
+ */
+data class TransferPending(
+    val transferId: String,
+    val name: String,
+    val sas: String,
+    val signer: String? = null,
+    val signerChanged: Boolean = false,
+) {
+    companion object {
+        /** The body of a `device.transfer.pending` for [transferId]; `signer_changed` counts only as a JSON `true`. */
+        internal fun of(transferId: String, o: JsonObject) = TransferPending(
+            transferId, VaultJson.str(o, "name") ?: "", VaultJson.str(o, "sas") ?: "",
+            signer = VaultJson.str(o, "signer"),
+            signerChanged = (o["signer_changed"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true,
+        )
+
+        /** The outer members of a `device.transfer.approve` beside the sealed ones: `signer` only when confirmed. */
+        internal fun approval(transferId: String, signer: String?): JsonObjectBuilder.() -> Unit = {
+            put("transfer_id", transferId)
+            signer?.let { put("signer", it) }
+        }
+    }
+}
 
 /**
  * The member's account snapshot from the member API (§11.13, 0.15.0): display only, never a security signal.

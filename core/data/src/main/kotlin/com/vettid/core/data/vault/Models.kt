@@ -172,6 +172,13 @@ sealed interface UnlockAttempt {
     /** The release update was refused ([code]); the vault stayed where it was. */
     data class UpdateRefused(val code: String) : UnlockAttempt
 
+    /**
+     * `signer_refused` (VAULT-MESSAGING 0.27.0 §11.7.1): the running release does not pin the signer recorded
+     * for this installation's key (or recorded none and got no valid chain). Decided before the PIN and the same
+     * whatever PIN was sent: not a PIN failure, no backoff, nothing to wait for.
+     */
+    data object SignerRefused : UnlockAttempt
+
     /** [retryAfterSeconds]: when the service said when to try again (`Retry-After`, e.g. [FailureKind.SERVICE_PAUSED]). */
     data class Failed(val kind: FailureKind, val code: String?, val retryAfterSeconds: Long = 0) : UnlockAttempt
 
@@ -229,6 +236,11 @@ data class VaultOverview(
     val provisional: Boolean?,
     val devices: Int?,
     val connections: Int?,
+    /**
+     * The vault's signer binding from this app's own `device.list` entry (VAULT-MESSAGING 0.27.0 §10.3), for the
+     * "Installed from" line; null when the vault reports none or is not open.
+     */
+    val signer: SignerView? = null,
 )
 
 /** MEMBER-API `ReleaseInfo` (advisory; the manifest decides). */
@@ -309,6 +321,12 @@ enum class FailureKind {
 
     /** The owner rejected this phone's transfer on their old phone (`device.pair.rejected`, §6.7). */
     REJECTED,
+
+    /**
+     * The vault's release does not accept this installation's signer (`signer_refused`, VAULT-MESSAGING 0.27.0
+     * §11.7.1): not a wrong PIN, nothing counted; the app is updated, or the vault recovered with a current one.
+     */
+    SIGNER_REFUSED,
     OTHER,
 }
 
@@ -393,5 +411,18 @@ data class TransferOfferView(
     val expiresAt: Instant,
 )
 
-/** `device.transfer.pending` (§6.7.1): the new phone's handshake checked out. */
-data class TransferPendingView(val transferId: String, val name: String, val sas: String)
+/**
+ * `device.transfer.pending` (§6.7.1): the new phone's handshake checked out. (0.27.0, §11.7.1) [signer]: the
+ * attested class of the new app's signer as the vault named it (null: an older vault, or not an Android app);
+ * [signerChanged]: it differs from the signer the vault is bound to, so the member confirms the change before the
+ * PIN and the approval names [signer]; [currentSigner]: this app's own signer, for that confirmation's text (null
+ * when it could not be read).
+ */
+data class TransferPendingView(
+    val transferId: String,
+    val name: String,
+    val sas: String,
+    val signer: String? = null,
+    val signerChanged: Boolean = false,
+    val currentSigner: SignerClass? = null,
+)

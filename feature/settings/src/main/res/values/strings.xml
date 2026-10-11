@@ -116,6 +116,12 @@
     <string name="settings_status_devices">Devices</string>
     <string name="settings_status_connections">Connections</string>
     <string name="settings_status_provisional">Confirmed</string>
+    <!-- The vault's signer binding (ANDROID-PLAN 0.1.36 §7; the wording is the requirement) -->
+    <string name="settings_signer_installed_google_play">Installed from: Google Play (signed by Google)</string>
+    <string name="settings_signer_installed_vettid">Installed from: F-Droid or direct (signed by VettID)</string>
+    <string name="settings_signer_installed_development">Development build</string>
+    <string name="settings_signer_explanation">The Google Play version is signed by Google, so it trusts Google\'s signing; the F-Droid and direct versions are signed by VettID and do not. To change version, transfer your vault to the other version on another phone, or reinstall and recover it, which takes 24 hours.</string>
+    <string name="settings_signer_digest">Signing certificate (SHA-256): %1$s</string>
     <string name="settings_status_advisory">Status comes from the account service and is for information only; your vault\'s own answers decide.</string>
     <string name="settings_notice_update_available">An update is available: release %1$d. Update it from Settings → Vault → Update available.</string>
     <string name="settings_notice_final_warning">Your vault\'s release ends on %1$s. Update it before then (Settings → Vault → Update available), or the vault can no longer be opened.</string>
@@ -208,6 +214,19 @@
     <string name="settings_transfer_reject">Reject</string>
     <string name="settings_transfer_reject_title">Reject the transfer?</string>
     <string name="settings_transfer_reject_body">Nothing changes: your vault stays with this phone. The new phone is told it was rejected.</string>
+    <string name="settings_transfer_signer_title">The new phone has another version of VettID</string>
+    <string name="settings_transfer_signer_body">The new phone\'s VettID %1$s; this one %2$s. Continue only if you installed it yourself.</string>
+    <string name="settings_transfer_signer_new_google_play">was installed from Google Play (signed by Google)</string>
+    <string name="settings_transfer_signer_new_vettid">was installed from F-Droid or direct (signed by VettID)</string>
+    <string name="settings_transfer_signer_new_development">is a development build</string>
+    <string name="settings_transfer_signer_new_other">has a different signer</string>
+    <string name="settings_transfer_signer_this_google_play">is from Google Play (signed by Google)</string>
+    <string name="settings_transfer_signer_this_vettid">is from F-Droid or direct (signed by VettID)</string>
+    <string name="settings_transfer_signer_this_development">is a development build</string>
+    <string name="settings_transfer_signer_this_other">has another signer</string>
+    <string name="settings_transfer_signer_continue">Continue</string>
+    <string name="settings_transfer_signer_cancel">Cancel</string>
+    <string name="settings_transfer_signer_unconfirmed">Your vault asked you to confirm the new phone\'s version of VettID first. Nothing was counted; enter your PIN and password again.</string>
     <string name="settings_transfer_approve_title">Approve the move</string>
     <string name="settings_transfer_approve_body">Your vault checks your PIN and your credential password, then moves your credential to %1$s. This phone then erases VettID and returns to the welcome screen, as if freshly installed.</string>
     <string name="settings_transfer_pin">Vault PIN</string>

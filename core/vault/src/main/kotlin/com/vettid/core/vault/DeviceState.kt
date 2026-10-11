@@ -29,6 +29,12 @@ internal data class DeviceState(
     val utks: MutableList<UtkRecord> = mutableListOf(),
     var recovery: RecoveryRecord? = null,
     val outbox: MutableList<OutboxEntry> = mutableListOf(),
+    /**
+     * The vault has shown this app a signer on its own `device.list` entry (VAULT-MESSAGING 0.27.0 §11.7.1): the
+     * unlocks stop carrying the device key's certificate chain. False again after every new attestation (a new
+     * key, whose signer the vault has not shown yet) and after an unlock answered `signer_refused`.
+     */
+    var signerSeen: Boolean = false,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

@@ -65,11 +65,28 @@ The A2 exit test:
   versions break on API 37).
 
 - The `staging` build type (README "Staging build"): release-like, application id
-  `com.vettid.app`, talks to the staging vault service (`src/staging`, `Endpoints.STAGING`,
-  `ManifestKeys.STAGING`). Signed only from the owner's properties file outside the repo
+  `com.vettid.app.staging` (ANDROID-PLAN 0.1.35, from staging release S10; installs next to a
+  release build; release stays `com.vettid.app`), talks to the staging vault service (`src/staging`,
+  `Endpoints.STAGING`, `ManifestKeys.STAGING`); its only account App Link host is
+  `account.staging.vettid.org` (manifest placeholder `vettidAccountHost`). Signed only from the
+  owner's properties file outside the repo
   (`~/.vettid/staging-signing.properties`); never create, read or ask for it or the
   keystore. Without it the APK is unsigned. `checkReleaseApk` / `checkStagingApk` fail if
-  an APK carries another environment's endpoints or pins, or dev-stack/debug-tools code.
+  an APK carries another environment's endpoints or pins, or dev-stack/debug-tools code, or
+  (`check<Variant>ApplicationId`) another application id, an authority or permission outside its
+  id, or the other environment's account host.
+- Signer binding (README "Signer binding"; VAULT-MESSAGING 0.27.0 §11.7.1, ANDROID-PLAN 0.1.36 §7): the unlock's
+  `device_assertion.chain` (`Attester.chain()`, sent while `VaultDevice.signerSeen` is false, i.e. until the app's
+  own `device.list` entry shows `signer`, and again after an unlock answered `signer_refused`; never on a release
+  approval; a real chain is captured by hand with `AttestationChainDumpTest`, README), `UnlockAttempt.SignerRefused` /
+  `FailureKind.SIGNER_REFUSED` (not a PIN failure), `SignerWire` / `SignerClass` in `:core:data`, the "Installed
+  from" line (`VaultOverview.signer`), `TransferOutStep.SIGNER` and `signer` in `device.transfer.approve`
+  (`signer_unconfirmed` gives the UTK back). The vault names classes; every word is the app's (`SignerText.kt`,
+  `FeedKinds.signerLabel`). Screens: `unlock.signer_refused`, `unlock.signer_refused_help`,
+  `settings.status_signer_vettid`, `settings.status_signer_google_play`, `settings.status_signer_development`,
+  `settings.status_signer_details`, `settings.transfer_signer`, `settings.transfer_signer_reverse`,
+  `settings.transfer_signer_development`, `settings.transfer_signer_unknown`, `settings.transfer_signer_unconfirmed`,
+  `history.signer`, `history.entry_signer`, `notifications.signer_changed`.
 
 - Two distributions (README "F-Droid build"; flavour dimension `distribution`): `full` (Google Play, VettID's
   releases; every build type) and `foss` (F-Droid; `fossRelease` only), same application id and version. `foss`
@@ -101,7 +118,7 @@ The A2 exit test:
 ## Device testing
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:
-`com.vettid.app.devstack`); never install over `com.vettid.app`. Screenshot launch extras (debug only):
+`com.vettid.app.devstack`; `staging`: `com.vettid.app.staging`); never install over `com.vettid.app`. Screenshot launch extras (debug only):
 `adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|history|credential|settings|help --ez vettid.screenshot true`
 (`vettid.screenshot` lets the debug app draw over the keyguard of a locked test phone; the phone stays locked).
 Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in

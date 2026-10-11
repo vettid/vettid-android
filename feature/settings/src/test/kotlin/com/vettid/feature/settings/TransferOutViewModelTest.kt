@@ -2,6 +2,7 @@ package com.vettid.feature.settings
 
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.core.testing.FakeVault
@@ -163,6 +164,152 @@ class TransferOutViewModelTest {
         assertTrue(vm.uiState.value.waitSeconds in 1..30)
         assertEquals(AppPhase.Unlocked, vault.phase.value)
         vm.leave()
+    }
+
+    private suspend fun TestScope.atCompare(vm: TransferOutViewModel, p: TransferPendingView) {
+        vm.create()
+        advanceTimeBy(100)
+        vault.pendingTransfer.complete(p)
+        advanceTimeBy(100)
+        assertEquals(TransferOutStep.COMPARE, vm.uiState.value.step)
+    }
+
+    /**
+     * VAULT-MESSAGING 0.27.0 §6.7.1, §11.7.1; ANDROID-PLAN 0.1.36 §7: a new phone whose VettID has another signer is
+     * named before the PIN is asked for, and the approval carries the class the vault named.
+     */
+    @Test
+    fun aChangeOfSignerIsConfirmedBeforeThePin() = runTest {
+        vault.transferSignerRequired = "google_play"
+        val vm = viewModel()
+        atCompare(vm, pending.copy(signer = "google_play", signerChanged = true, currentSigner = SignerClass.VETTID))
+        vm.codesMatch()
+        assertEquals(TransferOutStep.SIGNER, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.signerConfirmed)
+        // Nothing is approved from the confirmation step, whatever is typed.
+        vm.setPin("111111")
+        vm.setPassword("pw")
+        vm.approve()
+        advanceTimeBy(100)
+        assertFalse("transferApprove" in vault.calls)
+        vm.confirmSigner()
+        assertEquals(TransferOutStep.APPROVE, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.signerConfirmed)
+        vm.askApprove(true)
+        vm.approve()
+        advanceTimeBy(100)
+        assertEquals(listOf<String?>("google_play"), vault.transferSigners)
+        assertEquals(vault.offer.transferId, vault.lastTransferApproved)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
+    }
+
+    /** Cancel on the confirmation rejects the transfer (after the usual confirmation), so the code cannot be used. */
+    @Test
+    fun theChangeOfSignerCanBeRefused() = runTest {
+        val vm = viewModel()
+        atCompare(vm, pending.copy(signer = "development", signerChanged = true, currentSigner = SignerClass.VETTID))
+        vm.codesMatch()
+        assertEquals(TransferOutStep.SIGNER, vm.uiState.value.step)
+        vm.askReject(true)
+        assertTrue(vm.uiState.value.confirmReject)
+        vm.reject()
+        advanceTimeBy(100)
+        assertEquals(TransferOutStep.REJECTED, vm.uiState.value.step)
+        assertEquals(vault.offer.transferId, vault.lastTransferRejected)
+        assertFalse("transferApprove" in vault.calls)
+    }
+
+    /** The same signer, or a vault from before 0.27.0: no confirmation and no `signer` in the approval. */
+    @Test
+    fun theSameSignerAsksNothingAndSendsNoSigner() = runTest {
+        vault.transferSignerClass = "vettid"
+        val vm = viewModel()
+        atCompare(vm, pending.copy(signer = "vettid", signerChanged = false))
+        vm.codesMatch()
+        assertEquals(TransferOutStep.APPROVE, vm.uiState.value.step)
+        vm.setPin("111111")
+        vm.setPassword("pw")
+        vm.approve()
+        advanceTimeBy(100)
+        assertEquals(listOf<String?>(null), vault.transferSigners)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
+    }
+
+    @Test
+    fun aPendingWithoutSignerMembersIsApprovedAsBefore() = runTest {
+        val vm = viewModel()
+        atCompare(vm, pending)
+        vm.codesMatch()
+        assertEquals(TransferOutStep.APPROVE, vm.uiState.value.step)
+        vm.setPin("111111")
+        vm.setPassword("pw")
+        vm.approve()
+        advanceTimeBy(100)
+        assertEquals(listOf<String?>(null), vault.transferSigners)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
+    }
+
+    /**
+     * `signer_unconfirmed` (the vault's binding changed after its pending said "unchanged"): not a wrong PIN, no
+     * wait; the confirmation is shown and the next approval names the class. The transfer stays open throughout.
+     */
+    @Test
+    fun anUnconfirmedSignerAsksForTheConfirmationAndRetries() = runTest {
+        vault.transferSignerRequired = "google_play"
+        val vm = viewModel()
+        atCompare(vm, pending.copy(signer = "google_play", signerChanged = false))
+        vm.codesMatch()
+        vm.setPin("111111")
+        vm.setPassword("pw")
+        vm.approve()
+        advanceTimeBy(100)
+        val s = vm.uiState.value
+        assertEquals(TransferOutStep.SIGNER, s.step)
+        assertTrue(s.signerUnconfirmed)
+        assertNull(s.error)
+        assertEquals(0L, s.waitSeconds)
+        assertEquals("", s.pin)
+        assertEquals("", s.password)
+        assertFalse(s.busy)
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+        assertNull(vault.lastTransferRejected)
+        vm.confirmSigner()
+        vm.setPin("111111")
+        vm.setPassword("pw")
+        vm.approve()
+        advanceTimeBy(100)
+        assertEquals(listOf(null, "google_play"), vault.transferSigners)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
+    }
+
+    /** A vault that wants a confirmation but never named a class: there is nothing to confirm with; no loop. */
+    @Test
+    fun anUnconfirmedSignerWithoutAClassIsAPlainFailure() = runTest {
+        vault.transferSignerRequired = "google_play"
+        val vm = viewModel()
+        atCompare(vm, pending)
+        vm.codesMatch()
+        vm.setPin("111111")
+        vm.setPassword("pw")
+        vm.approve()
+        advanceTimeBy(100)
+        assertEquals(TransferOutStep.APPROVE, vm.uiState.value.step)
+        assertEquals(FailureKind.OTHER, vm.uiState.value.error)
+        assertEquals("signer_unconfirmed", vm.uiState.value.errorCode)
+        assertEquals(1, vault.transferSigners.size)
+        vm.leave()
+    }
+
+    /** The approval window still runs on the confirmation step. */
+    @Test
+    fun theConfirmationStepExpiresWithTheTransfer() = runTest {
+        val vm = viewModel()
+        atCompare(vm, pending.copy(signer = "google_play", signerChanged = true))
+        vm.codesMatch()
+        assertEquals(TransferOutStep.SIGNER, vm.uiState.value.step)
+        advanceTimeBy(601_000)
+        assertEquals(TransferOutStep.EXPIRED, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.signerConfirmed)
     }
 
     @Test

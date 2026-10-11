@@ -49,7 +49,17 @@ import java.util.concurrent.atomic.AtomicLong
 class TestAndroidAttester : Attester {
     private val key: KeyPair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
 
-    override fun attest(challenge: ByteArray): DeviceAttest = DeviceAttest.android(TestAndroidCa.attest(key.public, challenge))
+    /** The chain of the last attestation, as Android Keystore keeps it with the key (VAULT-MESSAGING 0.27.0 §11.7.1). */
+    @Volatile
+    private var kept: List<ByteArray>? = null
+
+    override fun attest(challenge: ByteArray): DeviceAttest {
+        val chain = TestAndroidCa.attest(key.public, challenge)
+        kept = chain
+        return DeviceAttest.android(chain)
+    }
+
+    override fun chain(): List<ByteArray>? = kept?.map { it.copyOf() }
 
     override fun assert(message: ByteArray): DeviceAssertion = DeviceAssertion.android(
         Signature.getInstance("SHA256withECDSA").run {

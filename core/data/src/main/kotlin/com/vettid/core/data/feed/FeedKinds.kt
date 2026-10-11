@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import com.vettid.core.data.R
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ConnectionInfo
+import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.vault.FeedItem
 import java.time.Instant
 import java.time.ZoneId
@@ -104,6 +105,7 @@ object FeedKinds {
         "grant.request", "grant.shared", "grant.revoked", "share.pending", "share.rate_limited",
         "critical-secret.use.request", "item.revealed",
         "device.pair.pending", "device.paired", "device.unlinked", "device.transferred", "device.replaced",
+        "device.signer_changed",
         "device.session.pending", "approval.pending",
         "credential.alarm", "credential.password_failed", "credential.rotated", "credential.reset",
         "owner_check.failed", "owner_check.locked", "owner_check.hold_changed",
@@ -205,6 +207,7 @@ object FeedKinds {
             "device.unlinked" -> FeedText(R.string.data_feed_device_unlinked)
             "device.transferred" -> FeedText(R.string.data_feed_device_transferred)
             "device.replaced" -> FeedText(R.string.data_feed_device_replaced)
+            "device.signer_changed" -> FeedText(R.string.data_feed_device_signer_changed)
             "device.session.pending" -> FeedText(R.string.data_feed_device_session)
             "approval.pending" -> FeedText(R.string.data_feed_device_approval)
             "credential.alarm" -> FeedText(R.string.data_feed_credential_alarm)
@@ -263,10 +266,29 @@ object FeedKinds {
         }
     }
 
+    /**
+     * `device.signer_changed`'s `ref` (VAULT-MESSAGING 0.27.0 §11.7.1): `<old class>:<new class>`, as "From … to
+     * …" in the words of ANDROID-PLAN §7; null when it does not read (the title alone then).
+     */
+    fun signerChange(ref: String?): FeedText? {
+        val parts = ref?.split(':')?.takeIf { it.size == 2 } ?: return null
+        return FeedText(R.string.data_feed_signer_from_to, parts.map { FeedText(signerLabel(it)) })
+    }
+
+    /** A signer class in the member's words (the vault names the class only); a class this app does not know reads "another signer". */
+    @StringRes
+    fun signerLabel(signerClass: String?): Int = when (SignerClass.of(signerClass)) {
+        SignerClass.GOOGLE_PLAY -> R.string.data_signer_google_play
+        SignerClass.VETTID -> R.string.data_signer_vettid
+        SignerClass.DEVELOPMENT -> R.string.data_signer_development
+        null -> R.string.data_signer_other
+    }
+
     /** The row's second line: the item's name or the batch's "3 things"; null for none. */
     fun supporting(item: FeedItem, names: FeedNames): FeedText? = when {
         (item.count ?: 0) > 1 -> things(item.count ?: 0)
         item.kind == "guide" -> item.body?.takeIf { it.isNotBlank() }?.let { FeedText(literal = it.lineSequence().first()) }
+        item.kind == "device.signer_changed" -> signerChange(item.ref)
         else -> itemName(item, names)?.let { FeedText(literal = it) }
     }
 
@@ -285,7 +307,9 @@ object FeedKinds {
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
             "share.rate_limited" -> if (c != null && !ref.isNullOrEmpty()) FeedTarget.ShareRule(c, ref) else FeedTarget.Sheet
             "item.revealed" -> if (!ref.isNullOrEmpty()) FeedTarget.Item(ref) else FeedTarget.Sheet
-            "device.pair.pending", "device.paired", "device.unlinked", "device.transferred", "device.replaced" -> FeedTarget.Devices
+            "device.pair.pending", "device.paired", "device.unlinked", "device.transferred", "device.replaced",
+            "device.signer_changed",
+            -> FeedTarget.Devices
             "credential.alarm" -> FeedTarget.Alarm
             "credential.password_failed" -> FeedTarget.History
             "credential.rotated", "credential.reset" -> FeedTarget.Credential

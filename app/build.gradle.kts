@@ -40,12 +40,20 @@ fun fcmOptions(buildType: String): Map<String, String>? {
     return values
 }
 
+val productionAccountHost = "account.vettid.org"
+val stagingAccountHost = "account.staging.vettid.org"
+
+// Application ids (ANDROID-PLAN 0.1.35 §5 "Build types and application ids"): the release id, and each other build
+// type's suffix. The checks below hold every release-like APK to its own.
+val releaseApplicationId = "com.vettid.app"
+val stagingApplicationId = "$releaseApplicationId.staging"
+
 android {
     namespace = "com.vettid.app"
 
     defaultConfig {
         // Same application id as the v1 app (keeps the Play listing and signing key, D1).
-        applicationId = "com.vettid.app"
+        applicationId = releaseApplicationId
         // v1 ended at versionCode 7 / 1.0.55; the rewrite starts at 100 / 2.0.0.
         versionCode = 100
         versionName = "2.0.0-a0"
@@ -97,12 +105,14 @@ android {
             // No signing config in the repository: release builds are signed outside it.
         }
         // STAGING: a release-like build (R8, not debuggable, no debug tools, no
-        // :core:testing) that talks to the staging vault service (src/staging). Same
-        // application id as release: staging images pin the package com.vettid.app and
-        // accept only the staging signing key, so it replaces a release install on a
-        // test phone and cannot sit next to one.
+        // :core:testing) that talks to the staging vault service (src/staging). Its own
+        // application id, com.vettid.app.staging (ANDROID-PLAN 0.1.35 §5, VAULT-MESSAGING
+        // 0.26.0 §11.10.8, from staging release S10): staging images accept exactly that
+        // package in key attestation, signed with a staging key, and the staging and
+        // production apps install side by side. Never published to a store.
         create("staging") {
             initWith(getByName("release"))
+            applicationIdSuffix = ".staging"
             versionNameSuffix = "-staging"
             matchingFallbacks += listOf("release")
             signingConfig = signingConfigs.findByName("staging")
@@ -113,7 +123,10 @@ android {
         // Firebase's receiver and the messaging services exist in the manifest of every `full` build; they are
         // enabled only where the options are (src/full/AndroidManifest.xml, the only manifest that reads this; set
         // on the build type so that the unit-test manifests of a variant get it too).
-        manifestPlaceholders["vettidFcmEnabled"] = (fcmOptions(name) != null).toString()
+        manifestPlaceholders["vettidFcmEnabled"] = (fcmOptions(name) != null).toString()        // The account site whose same-device setup link (/vault/enroll/, VAULT-MESSAGING §11.12.1) this build claims
+        // as an App Link: its own environment's only. Each site's /.well-known/assetlinks.json names its
+        // environment's package (account.staging.vettid.org: com.vettid.app.staging, §11.10.8).
+        manifestPlaceholders["vettidAccountHost"] = if (name == "staging") stagingAccountHost else productionAccountHost
     }
 
     // Two distributions of the same app (README "F-Droid build"; same application id and version;
@@ -197,6 +210,57 @@ abstract class ApkContentCheck : DefaultTask() {
             check(found.isEmpty() && missing.isEmpty()) { "${apk.name}: forbidden $found, missing $missing" }
             logger.lifecycle("${apk.name}: ${forbidden.get().size} forbidden strings absent, ${required.get().size} required present")
         }
+    }
+}
+
+/**
+ * A release-like build carries its own application id and nothing that would collide with the other environment's
+ * app on the same phone (ANDROID-PLAN 0.1.35 §5: `com.vettid.app` for release, `com.vettid.app.staging` for staging,
+ * installed side by side). Reads the merged manifest and fails if
+ * - its package is not [applicationId];
+ * - a content provider's authority or a declared permission's name does not start with that id (two apps cannot
+ *   share an authority, nor declare one permission under different signatures);
+ * - its verified App Links (`autoVerify`) miss [requiredHosts] or name one of [forbiddenHosts]: a build claims its
+ *   own environment's account site only.
+ * `checkReleaseApk`, `checkFossReleaseApk` and `checkStagingApk` run it.
+ */
+abstract class ApplicationIdCheck : DefaultTask() {
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @get:Input
+    abstract val applicationId: Property<String>
+
+    @get:Input
+    abstract val requiredHosts: ListProperty<String>
+
+    @get:Input
+    abstract val forbiddenHosts: ListProperty<String>
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+
+        fun all(parent: org.w3c.dom.Element, tag: String) =
+            parent.getElementsByTagName(tag).let { l -> (0 until l.length).map { l.item(it) as org.w3c.dom.Element } }
+        val root = doc.documentElement
+        val id = applicationId.get()
+        val problems = mutableListOf<String>()
+        if (root.getAttribute("package") != id) problems += "package ${root.getAttribute("package")}, expected $id"
+        for (p in all(root, "provider")) {
+            p.getAttributeNS(ns, "authorities").split(';').filter { it.isNotEmpty() && !it.startsWith("$id.") }
+                .forEach { problems += "provider ${p.getAttributeNS(ns, "name")}: authority $it is not under $id" }
+        }
+        all(root, "permission").map { it.getAttributeNS(ns, "name") }.filterNot { it.startsWith("$id.") }
+            .forEach { problems += "declared permission $it is not under $id" }
+        val hosts = all(root, "intent-filter").filter { it.getAttributeNS(ns, "autoVerify") == "true" }
+            .flatMap { f -> all(f, "data").map { it.getAttributeNS(ns, "host") } }.filter { it.isNotEmpty() }.toSet()
+        problems += requiredHosts.get().filterNot { it in hosts }.map { "App Link host $it is missing" }
+        problems += forbiddenHosts.get().filter { it in hosts }.map { "App Link host $it belongs to another environment" }
+        check(problems.isEmpty()) { "${manifest.get().asFile}: $problems" }
+        logger.lifecycle("merged manifest: application id $id, its own authorities and permissions, App Link hosts $hosts")
     }
 }
 
@@ -408,17 +472,28 @@ androidComponents {
     onVariants { v ->
         val foss = v.flavorName == "foss"
         // The task names of the `full` distribution are the ones from before the distributions:
-        // checkReleasePushManifest, checkReleaseApk, checkStagingApk. `foss`: checkFossReleasePushManifest, checkFossReleaseApk.
+        // checkReleasePushManifest, checkReleaseApplicationId, checkReleaseApk, checkStagingApk. `foss`:
+        // checkFossReleasePushManifest, checkFossReleaseApplicationId, checkFossReleaseApk.
         val name = if (foss) v.name.cap() else v.buildType!!.cap()
         tasks.register<PushManifestCheck>("check${name}PushManifest") {
             manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
             pushConfigured.set(!foss && fcmOptions(v.buildType!!) != null)
             this.foss.set(foss)
         }
+        // The application id of each release-like build (ANDROID-PLAN 0.1.35 §5), and its own account site only.
+        val staging = v.buildType == "staging"
+        if (staging || v.buildType == "release") {
+            tasks.register<ApplicationIdCheck>("check${name}ApplicationId") {
+                manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+                applicationId.set(if (staging) stagingApplicationId else releaseApplicationId)
+                requiredHosts.set(listOf(if (staging) stagingAccountHost else productionAccountHost))
+                forbiddenHosts.set(listOf(if (staging) productionAccountHost else stagingAccountHost))
+            }
+        }
         when (v.buildType) {
             "release" -> {
                 val contents = tasks.register<ApkContentCheck>(if (foss) "checkFossReleaseApkContents" else "checkReleaseApk") {
-                    dependsOn("check${name}PushManifest")
+                    dependsOn("check${name}PushManifest", "check${name}ApplicationId")
                     apkDir.set(v.artifacts.get(SingleArtifact.APK))
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")))
@@ -434,7 +509,7 @@ androidComponents {
                 }
             }
             "staging" -> tasks.register<ApkContentCheck>("checkStagingApk") {
-                dependsOn("check${name}PushManifest")
+                dependsOn("check${name}PushManifest", "check${name}ApplicationId")
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
                 required.set(stagingPins)

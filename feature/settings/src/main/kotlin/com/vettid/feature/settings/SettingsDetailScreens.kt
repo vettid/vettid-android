@@ -45,6 +45,7 @@ import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CanaryManifestView
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseInfoView
+import com.vettid.core.data.vault.SignerView
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
@@ -102,14 +103,32 @@ private fun releaseNotice(r: ReleaseInfoView): String? = when (r.notice) {
     else -> null
 }
 
+/**
+ * What the "Installed from" line shows when tapped (ANDROID-PLAN 0.1.36 §7): what the two versions mean and how
+ * to change, with the signing certificate's digest (public; for support, VAULT-MESSAGING §11.7.1).
+ */
+@Composable
+private fun SignerDetails(signer: SignerView) {
+    NoticeCard(
+        NoticeKind.INFO,
+        stringResource(signer.signerClass.installedFromRes()),
+        stringResource(R.string.settings_signer_explanation) + "\n\n" +
+            stringResource(R.string.settings_signer_digest, signer.digest.chunked(DIGEST_GROUP).joinToString(" ")),
+        modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs).testTag("signer_details"),
+    )
+}
+
+private const val DIGEST_GROUP = 8
+
 /** Vault status (stateless). */
 @Suppress("CyclomaticComplexMethod")
 @Composable
-fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBack: () -> Unit) {
+fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBack: () -> Unit, signerDetails: Boolean = false) {
     DetailScaffold(onBackClick = onBack, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_status_title))
             val v = state.value
+            var signerOpen by rememberSaveable { mutableStateOf(signerDetails) }
             when {
                 state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
                 v == null -> LoadFailure(state.error ?: FailureKind.OTHER, retry)
@@ -134,6 +153,18 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                             },
                             icon = Icons.Outlined.Lock,
                         )
+                        // ANDROID-PLAN §7: under the vault's status, from the app's own device.list entry; no line when
+                        // the vault reports no signer.
+                        v.signer?.let { sg ->
+                            SettingsDivider()
+                            SettingsRow(
+                                label = stringResource(sg.signerClass.installedFromRes()),
+                                onClick = { signerOpen = !signerOpen },
+                                icon = Icons.Outlined.VerifiedUser,
+                                showChevron = false,
+                                modifier = Modifier.testTag("signer_line"),
+                            )
+                        }
                         SettingsDivider()
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_vault_id),
@@ -180,6 +211,7 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                             icon = Icons.Outlined.People,
                         )
                     }
+                    v.signer?.takeIf { signerOpen }?.let { SignerDetails(it) }
                     Text(
                         stringResource(R.string.settings_status_advisory),
                         style = MaterialTheme.typography.bodySmall,

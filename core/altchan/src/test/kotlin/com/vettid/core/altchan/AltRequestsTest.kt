@@ -93,6 +93,69 @@ class AltRequestsTest {
         assertEquals(PendingUnlock(b.request.requestId, TestSupport.pcr0, 3, 7, 0), b.pending)
     }
 
+    private val vid = "0123456789abcdef0123456789abcdef"
+
+    private fun unlockBody(att: Attester, options: UnlockOptions, state: AltState = AltState(release = TestSupport.pcr0, releaseNumber = 3)): Pair<BuiltUnlock, com.vettid.core.crypto.json.JsonObject> {
+        val b = AltRequests.buildUnlock("guid-1", vid, "246802", enclave.verified(manifest), manifest, att, ik, "v4.public.tok", state, options, now)
+        assertEquals(AltChannel.REQUEST_ENVELOPE_SIZE, b.request.envelope().size)
+        return b to StrictJson.parseObject(enclave.open(b.request.envelope()).body)
+    }
+
+    /** VAULT-MESSAGING 0.27.0 §11.7.1: the bound key's chain rides in `device_assertion`, outside every signing string. */
+    @Test
+    fun unlockCarriesTheChainOnlyWhenAsked() {
+        val leaf = ByteArray(700) { 0x31 }
+        val inter = ByteArray(650) { 0x32 }
+        val root = ByteArray(560) { 0x33 }
+        val att = TestSupport.SoftAttester().apply { keystoreChain = listOf(leaf, inter, root) }
+        // Not asked for (the vault has shown this app's signer): no member at all.
+        val (_, plain) = unlockBody(att, UnlockOptions())
+        assertFalse(plain.obj("device_assertion").members.containsKey("chain"))
+        // Asked for: exactly the Keystore's chain, leaf first.
+        val (b, o) = unlockBody(att, UnlockOptions(sendChain = true))
+        val chain = o.obj("device_assertion").array("chain").map { Base64s.decodeStd((it as com.vettid.core.crypto.json.JsonString).value) }
+        assertEquals(3, chain.size)
+        assertArrayEquals(leaf, chain[0])
+        assertArrayEquals(inter, chain[1])
+        assertArrayEquals(root, chain[2])
+        // The assertion and the identity signature cover what they covered before: the chain is in neither.
+        val tss = Timestamps.formatMillis(enclave.open(b.request.envelope()).ts)
+        assertTrue(att.verify(AltChannel.devattChallenge(b.request.requestId, vid, tss), Base64s.decodeStd(o.obj("device_assertion").string("sig"))))
+        val signing = AltChannel.unlockSigningString(
+            AltChannel.UnlockFields("guid-1", vid, b.request.requestId, tss, enclave.etk.publicKey.kid, 0, 0, "246802", "v4.public.tok", manifest.sha256Hex),
+        )
+        assertTrue(Ed25519.verifyRaw(ik.publicKey, signing.toByteArray(), o.base64("sig")))
+    }
+
+    /** §11.7.1: never on the release approval, which is the other `device_assertion` object of an unlock. */
+    @Test
+    fun aReleaseApprovalNeverCarriesTheChain() {
+        val att = TestSupport.SoftAttester().apply { keystoreChain = listOf(ByteArray(700) { 1 }, ByteArray(500) { 2 }) }
+        val (_, o) = unlockBody(att, UnlockOptions(approve = Approval("b4".repeat(48), 4), sendChain = true))
+        assertTrue(o.obj("device_assertion").members.containsKey("chain"))
+        val approval = o.obj("release_update").obj("approval")
+        assertFalse(approval.members.containsKey("chain"))
+        assertEquals(setOf("platform", "sig"), approval.members.keys)
+    }
+
+    /** A chain the request cannot carry never stops the unlock: it goes without (a vault that needs one answers so). */
+    @Test
+    fun anUnusableChainIsLeftOut() {
+        val none = TestSupport.SoftAttester()
+        assertFalse(unlockBody(none, UnlockOptions(sendChain = true)).second.obj("device_assertion").members.containsKey("chain"))
+        val eleven = TestSupport.SoftAttester().apply { keystoreChain = List(11) { ByteArray(100) { 7 } } }
+        assertFalse(unlockBody(eleven, UnlockOptions(sendChain = true)).second.obj("device_assertion").members.containsKey("chain"))
+        val empty = TestSupport.SoftAttester().apply { keystoreChain = emptyList() }
+        assertFalse(unlockBody(empty, UnlockOptions(sendChain = true)).second.obj("device_assertion").members.containsKey("chain"))
+        // 12,000 bytes of DER do not fit the request's 12,288 padded bytes (vettid-vault's chainsize_test).
+        val huge = TestSupport.SoftAttester().apply { keystoreChain = List(10) { ByteArray(1200) { 9 } } }
+        assertFalse(unlockBody(huge, UnlockOptions(sendChain = true)).second.obj("device_assertion").members.containsKey("chain"))
+        // A chain as phones produce it (five certificates, about 4.5 kB) fits, with a release approval beside it.
+        val real = TestSupport.SoftAttester().apply { keystoreChain = listOf(1100, 700, 750, 900, 1380).map { ByteArray(it) { 5 } } }
+        val (_, o) = unlockBody(real, UnlockOptions(approve = Approval("b4".repeat(48), 4), cancelRecovery = true, sendChain = true))
+        assertEquals(5, o.obj("device_assertion").array("chain").size)
+    }
+
     @Test
     fun unlockRefusesOlderReleasesAndManifests() {
         val att = TestSupport.SoftAttester()

@@ -96,6 +96,11 @@ object TestSupport {
         val pair: KeyPair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
         var lastChallenge: ByteArray? = null
 
+        /** What Android Keystore would hold for the key (§11.7.1); null: no chain to give. */
+        var keystoreChain: List<ByteArray>? = null
+
+        override fun chain(): List<ByteArray>? = keystoreChain
+
         override fun attest(challenge: ByteArray): DeviceAttest {
             lastChallenge = challenge
             return DeviceAttest.android(listOf(pair.public.encoded))

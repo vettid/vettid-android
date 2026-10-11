@@ -88,6 +88,57 @@ class KeystoreDeviceTest {
         assertTrue(!key.exists())
     }
 
+    /**
+     * VAULT-MESSAGING 0.27.0 §11.7.1: a vault enrolled before 0.27.0 is bound to its app's signer from the chain the
+     * app re-sends at unlock (`device_assertion.chain`), which the enclave accepts only if it is the chain of the
+     * attestation: the same leaf key and the same serial numbers. So Android Keystore must return, whenever it is
+     * asked later, exactly the certificates it returned when the key was made. Checked here byte for byte: right
+     * after generation, again after the key has signed, and through a fresh KeyStore instance and a fresh
+     * [DeviceAttestationKey] (what a later process start reads). Across a reboot and an OS update the same holds by
+     * Keystore's design (the chain is stored with the key blob); README "Staging build" has that manual check.
+     */
+    @Test
+    fun theKeystoreReturnsTheSameChainLaterThatItReturnedAtAttestation() {
+        val challenge = AltChannel.devattChallenge("01JB2Z6V9K3M4N5P6Q7R8S9T22", "", "2026-10-11T12:00:00.000Z")
+        val key = DeviceAttestationKey(testAlias)
+        val atAttestation = key.generate(challenge).chain.map { it.encoded }
+        assertTrue(atAttestation.size in 2..10)
+
+        fun same(later: List<java.security.cert.X509Certificate>, what: String) {
+            assertEquals(what, atAttestation.size, later.size)
+            later.forEachIndexed { i, c ->
+                assertArrayEquals("$what: certificate $i", atAttestation[i], c.encoded)
+                assertEquals("$what: serial $i", java.math.BigInteger(1, serial(atAttestation[i])), java.math.BigInteger(1, c.serialNumber.toByteArray()))
+            }
+        }
+        same(key.chain(), "read again")
+        // Signing does not touch the chain, however often.
+        repeat(3) { key.sign(AltChannel.devattChallenge("01JB2Z6V9K3M4N5P6Q7R8S9T2$it", "test-vault-0001", "2026-10-11T12:00:0$it.000Z")) }
+        same(key.chain(), "after signing")
+        // A fresh KeyStore instance and a fresh key object, as a later process start has.
+        same(DeviceAttestationKey(testAlias).chain(), "a new key object")
+        val fresh = java.security.KeyStore.getInstance(AndroidKeys.PROVIDER).apply { load(null) }
+        same(fresh.getCertificateChain(testAlias).map { it as java.security.cert.X509Certificate }, "a new KeyStore instance")
+        // The leaf is still the key that signs, and still carries the attestation's challenge.
+        assertArrayEquals(challenge, KeyDescription.parse(key.chain()[0]).challenge())
+        val msg = ByteArray(32) { 7 }
+        val sig = key.sign(msg)
+        assertTrue(
+            Signature.getInstance("SHA256withECDSA").run {
+                initVerify(key.chain()[0].publicKey)
+                update(msg)
+                verify(sig)
+            },
+        )
+        Log.i(TAG, "attestation chain stable: ${atAttestation.size} certificates, ${atAttestation.sumOf { it.size }} bytes of DER")
+        // What an unlock can carry (1-10 certificates); the request's size is checked in :core:altchan's tests.
+        assertTrue(DeviceAssertion.android(sig, atAttestation).marshal().contains("\"chain\":[\""))
+    }
+
+    private fun serial(der: ByteArray): ByteArray =
+        (java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(der.inputStream()) as java.security.cert.X509Certificate)
+            .serialNumber.toByteArray()
+
     @Test
     fun seedsAreWrappedByTheKeystore() {
         val wrapper = SeedWrapKey.wrapper("vettid.test.seed_wrap")

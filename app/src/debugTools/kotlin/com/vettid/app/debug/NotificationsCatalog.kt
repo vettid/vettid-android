@@ -83,6 +83,10 @@ internal object NotificationsCatalog {
         "notifications.empty_archived" to { Screen(NotificationsUiState(load = ListLoad.LOADED, archived = true)) },
         "notifications.loading" to { Screen(NotificationsUiState(load = ListLoad.LOADING)) },
         "notifications.failed" to { Screen(NotificationsUiState(load = ListLoad.FAILED)) },
+        // VAULT-MESSAGING 0.27.0 §11.7.1: the vault's app changed signer (priority high), with both classes in words.
+        "notifications.signer_changed" to {
+            Screen(loaded.copy(items = listOf(FeedItem("f00", 32, "device.signer_changed", at(1), "active", "high", ref = "vettid:google_play")) + items.take(3)))
+        },
         "notifications.delete_confirm" to { Screen(loaded.copy(archived = true, confirmDelete = items.last())) },
         "notifications.sheet_gone" to { DetailSheetContent(items[3], names, gone = true) },
         "notifications.sheet_removed" to { DetailSheetContent(items[9], names, gone = false) },

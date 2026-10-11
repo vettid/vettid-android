@@ -573,9 +573,24 @@ class VaultManager(
         scope.launch { runCatching { refreshAlarm(s) } }
         // §11.11.9: a start-over requested on the portal shows after every unlock.
         scope.launch { runCatching { vaultStatus(s) } }
+        // §11.7.1 (0.27.0): once the vault shows this app's signer, unlocks stop carrying the key's chain.
+        scope.launch { runCatching { ownSigner(s) } }
         ownerCheck.onOpened()
         return if (local.setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
     }
+
+    /**
+     * This app's signer from its own `device.list` entry (§10.3, §11.7.1), and with it the stop condition of the
+     * unlock's chain: the device keeps "the vault has shown a signer" ([com.vettid.core.vault.VaultDevice.markSignerSeen]).
+     * An answer without this app's entry changes nothing.
+     */
+    private suspend fun ownSigner(s: Session): SignerView? =
+        when (val own = SignerWire.own(s.api.deviceList(), s.device.deviceId)) {
+            is SignerWire.Own.Bound -> own.signer.also { s.device.markSignerSeen(true) }
+            SignerWire.Own.BoundUnknown -> null.also { s.device.markSignerSeen(true) }
+            SignerWire.Own.Unbound -> null.also { s.device.markSignerSeen(false) }
+            SignerWire.Own.NoEntry -> null
+        }
 
     private suspend fun refreshAlarm(s: Session) {
         val info = s.api.credentialVersion()
@@ -750,6 +765,8 @@ class VaultManager(
                     "bad_pin" -> UnlockAttempt.BadPin(r.retryAfterSeconds)
                     "backoff" -> UnlockAttempt.Backoff(r.retryAfterSeconds)
                     "recovery_pending" -> UnlockAttempt.RecoveryPending
+                    // §11.7.1 (0.27.0): sealed, decided before the PIN; not a PIN failure and no backoff.
+                    SignerWire.CODE_SIGNER_REFUSED -> UnlockAttempt.SignerRefused
                     "state_rollback" -> UnlockAttempt.StateRollback
                     "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, r.code)
                     "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, r.code)
@@ -835,6 +852,7 @@ class VaultManager(
             is UnlockAttempt.Backoff -> UpdateStepResult.Backoff(a.retryAfterSeconds)
             is UnlockAttempt.Failed -> UpdateStepResult.Failed(a.kind, a.code, a.retryAfterSeconds)
             UnlockAttempt.RecoveryPending -> UpdateStepResult.Failed(FailureKind.OTHER, "recovery_pending")
+            UnlockAttempt.SignerRefused -> UpdateStepResult.Failed(FailureKind.SIGNER_REFUSED, SignerWire.CODE_SIGNER_REFUSED)
             UnlockAttempt.StateRollback -> UpdateStepResult.Failed(FailureKind.ROLLBACK, "state_rollback")
         }
     }
@@ -855,9 +873,20 @@ class VaultManager(
     override suspend fun overview(): VaultOverview = guard {
         val s = session()
         val st = vaultStatus(s)
-        val vs = if (phaseFlow.value is AppPhase.Unlocked) {
+        val open = phaseFlow.value is AppPhase.Unlocked
+        val vs = if (open) {
             try {
                 s.api.status()
+            } catch (_: IOException) {
+                null
+            }
+        } else {
+            null
+        }
+        // "Installed from" (ANDROID-PLAN §7): from the app's own device.list entry; no line when it cannot be read.
+        val signer = if (open) {
+            try {
+                ownSigner(s)
             } catch (_: IOException) {
                 null
             }
@@ -873,6 +902,7 @@ class VaultManager(
             provisional = vs?.provisional,
             devices = vs?.devices,
             connections = vs?.connections,
+            signer = signer,
         )
     }
 
@@ -1238,8 +1268,11 @@ class VaultManager(
         val left = Duration.between(Instant.now(), until)
         if (left.isNegative || left.isZero) return@guard null
         try {
-            val p = session().api.awaitTransferPending(transferId, left)
-            TransferPendingView(p.transferId, p.name, p.sas)
+            val s = session()
+            val p = s.api.awaitTransferPending(transferId, left)
+            // §11.7.1: the confirmation names both signers; this app's own is read only when it is needed.
+            val current = if (p.signerChanged) runCatching { ownSigner(s) }.getOrNull()?.signerClass else null
+            TransferPendingView(p.transferId, p.name, p.sas, p.signer, p.signerChanged, current)
         } catch (_: TimeoutCancellationException) {
             null
         }
@@ -1250,9 +1283,9 @@ class VaultManager(
      * it right after the response, `afterRespond`, and only then removes this app); the proof is the
      * `device.unlinked{transferred}` that follows (step 4), which wipes this phone. Waits for it a little.
      */
-    override suspend fun transferApprove(transferId: String, pin: String, password: String): Boolean =
+    override suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String?): Boolean =
         holder.approveTransfer(UNLINK_WAIT_MS) {
-            guard { session().api.transferApprove(transferId, pin, password) }
+            guard { session().api.transferApprove(transferId, pin, password, signer) }
             openTransferId = null
         }
 

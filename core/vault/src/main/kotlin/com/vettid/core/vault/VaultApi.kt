@@ -199,24 +199,30 @@ class VaultApi(val device: VaultDevice) {
         )
     }
 
-    /** Waits for `device.transfer.pending{transfer_id, name, sas}`: the new app's handshake checked out. */
+    /**
+     * Waits for `device.transfer.pending{transfer_id, name, sas, signer?, signer_changed?}`: the new app's
+     * handshake checked out. (0.27.0, §11.7.1) `signer` is the attested class of the new app's signer and
+     * `signer_changed` whether it differs from the vault's binding; both absent from an older vault or for iOS.
+     */
     suspend fun awaitTransferPending(transferId: String, timeout: Duration): TransferPending =
-        device.awaitEvent("device.transfer.pending", timeout) { VaultJson.str(it, "transfer_id") == transferId }.body.let {
-            TransferPending(transferId, VaultJson.str(it, "name") ?: "", VaultJson.str(it, "sas") ?: "")
-        }
+        device.awaitEvent("device.transfer.pending", timeout) { VaultJson.str(it, "transfer_id") == transferId }
+            .let { TransferPending.of(transferId, it.body) }
 
     /**
      * `device.transfer.approve` with the blob and, sealed to a UTK, the PIN and the
      * password. `{}` means the transfer is complete: this app has been removed.
+     * [signer] (0.27.0, §6.7.1 step 3): the new app's signer class, the holder's explicit confirmation, sent when
+     * the pending said `signer_changed`; null sends no member. Without it the vault answers `signer_unconfirmed`
+     * before it spends the UTK or tries the PIN, and the transfer stays open.
      */
-    suspend fun transferApprove(transferId: String, pin: String, password: String) {
+    suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String? = null) {
         cred.credOp(
             "device.transfer.approve",
             {
                 put("password", password)
                 put("pin", pin)
             },
-            extra = { put("transfer_id", transferId) },
+            extra = TransferPending.approval(transferId, signer),
         )
     }
 

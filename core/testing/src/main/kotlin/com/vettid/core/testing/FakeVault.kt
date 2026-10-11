@@ -361,8 +361,25 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     /** Whether the vault's `device.unlinked{transferred}` follows an approval (and wipes this phone). */
     var transferConfirmed = true
 
-    override suspend fun transferApprove(transferId: String, pin: String, password: String): Boolean {
+    /**
+     * The class the vault wants confirmed (`device.transfer.pending.signer_changed`, VAULT-MESSAGING 0.27.0 §11.7.1):
+     * as vettid-vault, an approval that does not name it is answered `signer_unconfirmed` before anything is
+     * checked or counted, and one that names a class the new app does not have is refused the same way.
+     */
+    var transferSignerRequired: String? = null
+
+    /** The new app's class when the vault names one without requiring it (same signer). */
+    var transferSignerClass: String? = null
+
+    /** The `signer` of every approval sent, in order (null: the member was absent). */
+    val transferSigners = mutableListOf<String?>()
+
+    override suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String?): Boolean {
         call("transferApprove")
+        transferSigners += signer
+        val missing = transferSignerRequired != null && signer == null
+        val wrong = signer != null && signer != (transferSignerRequired ?: transferSignerClass)
+        if (missing || wrong) throw VaultFailure(FailureKind.OTHER, "signer_unconfirmed")
         lastTransferApproved = transferId
         lastPin = pin
         lastPassword = password

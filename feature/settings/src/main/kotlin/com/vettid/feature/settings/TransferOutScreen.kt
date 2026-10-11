@@ -40,6 +40,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
@@ -101,6 +102,31 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         ) {
             state.pending?.let { SasBox(it.sas) }
             Spacer(Modifier.height(Spacing.m))
+            Window(state.secondsLeft)
+            TransferError(state)
+        }
+        // §6.7.1 step 2 (0.27.0), ANDROID-PLAN §7: the change of signer, named, before the PIN. Cancel rejects the
+        // transfer (after its own confirmation, as everywhere).
+        TransferOutStep.SIGNER -> FormScaffold(
+            title = stringResource(R.string.settings_transfer_signer_title),
+            body = signerChangeText(SignerClass.of(state.pending?.signer), state.pending?.currentSigner),
+            primaryLabel = stringResource(R.string.settings_transfer_signer_continue),
+            onPrimary = actions::confirmSigner,
+            secondaryLabel = stringResource(R.string.settings_transfer_signer_cancel),
+            onSecondary = { actions.askReject(true) },
+            busy = state.busy,
+            onBack = leave,
+            modifier = Modifier.testTag("transfer_signer"),
+        ) {
+            if (state.signerUnconfirmed) {
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.settings_transfer_title),
+                    stringResource(R.string.settings_transfer_signer_unconfirmed),
+                    Modifier.testTag("transfer_signer_unconfirmed"),
+                )
+                Spacer(Modifier.height(Spacing.m))
+            }
             Window(state.secondsLeft)
             TransferError(state)
         }
