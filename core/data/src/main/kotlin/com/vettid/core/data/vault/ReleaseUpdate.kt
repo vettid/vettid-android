@@ -86,6 +86,19 @@ object ReleaseNotices {
 
     /** One local notification per release: only for a target newer than the last one notified. */
     fun shouldNotify(offer: ReleaseUpdateOffer?, lastNotified: Long): Boolean = offer != null && offer.target.number > lastNotified
+
+    /**
+     * The posted notification of release [lastNotified] no longer stands and is cancelled (owner report 2026-10-10,
+     * S9 canary): the update to it is done, or the offer as last read (after an unlock, at app start, on return to
+     * the foreground; [offerKnown]: read at least once in this process) no longer offers it — none at all (the vault
+     * runs it or a newer one, or the manifest dropped it), another release, or the vault's release has reached it.
+     * [lastNotified] is kept, so the cancelled release is never posted again ([shouldNotify]).
+     */
+    fun notificationStale(offer: ReleaseUpdateOffer?, offerKnown: Boolean, lastNotified: Long, progress: UpdateProgress?): Boolean {
+        val done = progress?.step == UpdateStep.DONE && progress.to.number >= lastNotified
+        val gone = offerKnown && (offer == null || offer.target.number != lastNotified || offer.current.number >= lastNotified)
+        return lastNotified > 0 && (done || gone)
+    }
 }
 
 /** One unlock of the update (VaultManager in the app; a fake in tests). */
@@ -192,6 +205,9 @@ data class UpdateProgress(
 interface ReleaseUpdateRepository {
     val offer: StateFlow<ReleaseUpdateOffer?>
 
+    /** [offer] has been read from the manifest at least once in this process (before that, null means "not known"). */
+    val offerKnown: StateFlow<Boolean>
+
     /** Non-null while an update is under way or its outcome is shown; the root of the UI shows it over every phase. */
     val progress: StateFlow<UpdateProgress?>
 
@@ -235,12 +251,15 @@ class ReleaseUpdateManager(
     private val offerFlow = MutableStateFlow<ReleaseUpdateOffer?>(null)
     private val progressFlow = MutableStateFlow<UpdateProgress?>(null)
     override val offer: StateFlow<ReleaseUpdateOffer?> = offerFlow.asStateFlow()
+    private val knownFlow = MutableStateFlow(false)
+    override val offerKnown: StateFlow<Boolean> = knownFlow.asStateFlow()
     override val progress: StateFlow<UpdateProgress?> = progressFlow.asStateFlow()
     private var job: Job? = null
 
     override suspend fun refreshOffer() {
         try {
             offerFlow.value = ops.offer()
+            knownFlow.value = true
         } catch (e: CancellationException) {
             throw e
         } catch (_: VaultFailure) {

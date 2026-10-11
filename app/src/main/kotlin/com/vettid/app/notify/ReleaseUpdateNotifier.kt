@@ -22,7 +22,7 @@ import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.feature.onboarding.releaseDate
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -36,6 +36,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * ANDROID-PLAN 0.1.31: before posting, What's new is looked up (the same rules and limits as the update screen); with
  * an entry the text is "Release N: <summary>" (an end-date warning keeps its date first and adds the summary). The
  * notification is not updated afterwards.
+ *
+ * It is cancelled once it no longer stands ([ReleaseNotices.notificationStale]: the update is done, or the offer read
+ * after an unlock or at app start no longer offers that release). The release stays recorded as notified, so it is
+ * never posted again.
  */
 class ReleaseUpdateNotifier(
     private val context: Context,
@@ -46,16 +50,21 @@ class ReleaseUpdateNotifier(
 ) {
     fun start() {
         scope.launch {
-            updates.offer.filterNotNull().collect { o ->
-                runCatching { maybeNotify(o) }.onFailure {
-                    android.util.Log.w("VettID", "release notification not posted: ${it.javaClass.simpleName}")
+            combine(updates.offer, updates.offerKnown, updates.progress) { o, known, p -> Triple(o, known, p) }.collect { (o, known, p) ->
+                runCatching {
+                    val last = prefs.preferences.first().releaseNotified
+                    // A notification for a release the vault runs (or that is no longer offered) goes (S9 canary).
+                    if (ReleaseNotices.notificationStale(o, known, last, p)) NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+                    if (o != null) maybeNotify(o, last)
+                }.onFailure {
+                    android.util.Log.w("VettID", "release notification not updated: ${it.javaClass.simpleName}")
                 }
             }
         }
     }
 
-    private suspend fun maybeNotify(o: ReleaseUpdateOffer) {
-        if (!ReleaseNotices.shouldNotify(o, prefs.preferences.first().releaseNotified) || !canPost()) return
+    private suspend fun maybeNotify(o: ReleaseUpdateOffer, lastNotified: Long) {
+        if (!ReleaseNotices.shouldNotify(o, lastNotified) || !canPost()) return
         val notes = withTimeoutOrNull(NOTES_WAIT_MS) { releaseNotes.whatsNew(o.target, o.between) } as? ReleaseNotes.Available
         post(o, notes?.entry?.summary)
         prefs.setReleaseNotified(o.target.number)

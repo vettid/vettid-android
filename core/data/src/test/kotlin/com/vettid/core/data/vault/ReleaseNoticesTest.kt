@@ -34,6 +34,37 @@ class ReleaseNoticesTest {
     }
 
     @Test
+    fun theNotificationGoesOnceTheVaultRunsTheRelease() {
+        val o = ReleaseUpdateOffer(rel(8), rel(9))
+        // Notified for 9 and still offered: it stays.
+        assertFalse(ReleaseNotices.notificationStale(o, true, 9, null))
+        // Nothing notified yet: nothing to cancel.
+        assertFalse(ReleaseNotices.notificationStale(null, true, 0, null))
+        // The update to 9 is done (S9 canary): cancelled even before the offer is read again.
+        val done = UpdateProgress(UpdateStep.DONE, rel(8), rel(9), vaultOpen = true)
+        assertTrue(ReleaseNotices.notificationStale(o, true, 9, done))
+        assertTrue(ReleaseNotices.notificationStale(o, false, 9, done))
+        // Any other step keeps it.
+        assertFalse(ReleaseNotices.notificationStale(o, true, 9, done.copy(step = UpdateStep.REFUSED)))
+        // After an unlock or at app start: no offer (the vault runs 9, or the manifest dropped it).
+        assertTrue(ReleaseNotices.notificationStale(null, true, 9, null))
+        // The vault's release reached the notified one (another device moved it), or another release is offered.
+        assertTrue(ReleaseNotices.notificationStale(ReleaseUpdateOffer(rel(9), rel(10)), true, 9, null))
+        assertTrue(ReleaseNotices.notificationStale(ReleaseUpdateOffer(rel(7), rel(8)), true, 9, null))
+        // Not read yet in this process (app start): a null offer says nothing; the notification stays.
+        assertFalse(ReleaseNotices.notificationStale(null, false, 9, null))
+    }
+
+    @Test
+    fun aCancelledReleaseIsNeverPostedAgain() {
+        // The record stays at 9 after the cancel: neither 9 nor an older release posts again; only a newer one.
+        assertFalse(ReleaseNotices.shouldNotify(ReleaseUpdateOffer(rel(8), rel(9)), 9))
+        assertFalse(ReleaseNotices.shouldNotify(ReleaseUpdateOffer(rel(7), rel(8)), 9))
+        assertFalse(ReleaseNotices.shouldNotify(null, 9))
+        assertTrue(ReleaseNotices.shouldNotify(ReleaseUpdateOffer(rel(9), rel(10)), 9))
+    }
+
+    @Test
     fun theKindFollowsTheVaultsRelease() {
         // An older active release, or a deprecated one without an end date: "available".
         assertEquals(UpdateNoticeKind.AVAILABLE, ReleaseUpdateOffer(rel(4), rel(5)).kind)
