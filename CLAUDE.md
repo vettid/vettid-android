@@ -151,7 +151,8 @@ vettid.org repo's `local/android-ui/`).
   OFL licences in `core/ui/fonts/`). Icons: Material Icons Outlined.
 - Brand assets follow the brand kit (vettid.org `local/brand/kit`, `BRAND.md`): the launcher icon is the kit's app
   icon (gold rook, keyhole cut out, on VettID Blue #2E2D88; `ic_launcher_*`, legacy PNGs in `mipmap-<density>`); in the
-  app, `RookLogo` (the rook alone, any size). Never type "VettID" next to the rook as a logo, never the tagline on a screen, never
+  app, `RookLogo` (the rook alone, any size) or `VettIdLogo` (the horizontal logo, never under 160dp wide, clear space
+  `VettIdLogoDefaults.clearSpace`). Never type "VettID" next to the rook as a logo, never the tagline on a screen, never
   recolour the artwork. The rook's shapes are the kit's paths, guarded by `RookKeyholeTest`.
 - Connection tiles: indigo for all connections, teal for favourites (the owner's
   `favorite` flag), gold for the member's own avatar; use `ConnectionRow`.
