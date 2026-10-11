@@ -103,8 +103,12 @@ data class VaultStatusAnswer(val vault: VaultStatus?, val servicePaused: Boolean
 /** `POST /api/vault/enroll/redeem`'s answer (§11.12.1): the member's vault, the member, and a masked email to show. */
 data class Redeemed(val vaultId: String, val userGuid: String, val emailHint: String)
 
-/** `POST /api/vault/recovery/claim`'s answer (§11.11.7): the member (for the sealed register and unlock) and a masked email. */
-data class Claimed(val userGuid: String, val emailHint: String)
+/**
+ * `POST /api/vault/recovery/claim`'s answer (§11.11.7): the member (for the sealed register and unlock) and a masked
+ * email; since MEMBER-API 2.4.0 also the recovery's [vaultId] and [recoveryId], which an app that claimed by locator
+ * has from nowhere else (null from an older API).
+ */
+data class Claimed(val userGuid: String, val emailHint: String, val vaultId: String? = null, val recoveryId: String? = null)
 
 /** A sealed request ready to post (§11.3, §11.4, §11.11.3). */
 class SealedRequest(val requestId: String, val etkKid: String, envelope: ByteArray, val manifestSha256: String?) {
@@ -339,8 +343,21 @@ class MemberApiClient(
      */
     suspend fun recoveryClaim(vaultId: String, recoveryId: String, appKey: ByteArray): Claimed {
         val body = JsonBuilder().string("vault_id", vaultId).string("recovery_id", recoveryId).base64("app_key", appKey).build()
-        val o = call("POST", "/api/vault/recovery/claim", body, vault = vaultId) ?: throw IOException("member API: empty")
-        return Claimed(o.string("user_guid"), o.optString("email_hint") ?: "")
+        val o = call("POST", CLAIM, body, vault = vaultId) ?: throw IOException("member API: empty")
+        return Claimed(o.string("user_guid"), o.optString("email_hint") ?: "", o.optString("vault_id"), o.optString("recovery_id"))
+    }
+
+    /**
+     * Claims the recovery a typed code's [locator] names (MEMBER-API 2.4.0, VAULT-MESSAGING 0.25.0 §11.11.10): the
+     * body is exactly `{locator, app_key}`, signed by that key with an empty `vault` (the app does not know the
+     * vault yet). `404` for any miss (no such locator, or one of a replaced or cancelled recovery), `409
+     * recovery_not_available` unless the recovery is `available`. The answer names the vault and the recovery.
+     */
+    suspend fun recoveryClaimByLocator(locator: String, appKey: ByteArray): Claimed {
+        require(RecoveryCodes.isLocator(locator)) { "not a locator" }
+        val body = JsonBuilder().string("locator", locator).base64("app_key", appKey).build()
+        val o = call("POST", CLAIM, body, vault = "") ?: throw IOException("member API: empty")
+        return Claimed(o.string("user_guid"), o.optString("email_hint") ?: "", o.string("vault_id"), o.string("recovery_id"))
     }
 
     /**
@@ -367,6 +384,7 @@ class MemberApiClient(
         const val STAGING_MANIFEST = "https://staging.vettid.org/.well-known/vettid/pcr-manifest.json"
         const val MANIFEST_PATH = "/.well-known/vettid/pcr-manifest.json"
         private const val REDEEM = "/api/vault/enroll/redeem"
+        private const val CLAIM = "/api/vault/recovery/claim"
         private const val HTTP_OK = 200
         private const val MAX_BODY = 1 shl 20
         private const val MS_PER_S = 1000L

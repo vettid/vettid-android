@@ -30,6 +30,9 @@ interface MemberGateway {
     /** Claims the recovery named by a scanned recovery QR. */
     suspend fun claimRecovery(vaultId: String, recoveryId: String): Claimed
 
+    /** Claims the recovery a typed recovery code's locator names (MEMBER-API 2.4.0); the answer names the vault and the recovery. */
+    suspend fun claimRecoveryByLocator(locator: String): Claimed
+
     /** The member on this phone changed (a redeem or a claim): requests of the dev stack name them. */
     fun memberChanged(userGuid: String) {}
 
@@ -60,4 +63,6 @@ class AppKeyMemberGateway(
 
     override suspend fun claimRecovery(vaultId: String, recoveryId: String): Claimed =
         client.recoveryClaim(vaultId, recoveryId, signer.spki())
+
+    override suspend fun claimRecoveryByLocator(locator: String): Claimed = client.recoveryClaimByLocator(locator, signer.spki())
 }

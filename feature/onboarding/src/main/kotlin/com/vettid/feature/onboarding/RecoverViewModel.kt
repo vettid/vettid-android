@@ -3,6 +3,8 @@ package com.vettid.feature.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.altchan.RecoveryCode
+import com.vettid.core.altchan.RecoveryCodes
+import com.vettid.core.altchan.TypedRecoveryCode
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
@@ -23,6 +25,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.net.URI
+import java.net.URISyntaxException
 import javax.inject.Inject
 
 /** The steps of a recovery on this phone (VAULT-MESSAGING §11.11; ANDROID-PLAN §4 "Onboarding"). */
@@ -32,6 +36,9 @@ enum class RecoverStep {
     /** What is needed, and where the code comes from (the account portal; the app never signs in). */
     INTRO,
     SCAN,
+
+    /** The code typed instead of scanned (VAULT-MESSAGING 0.25.0 §11.11.10; ANDROID-PLAN 0.1.33). */
+    TYPE,
 
     /** `vault.recovery.register` (§11.11.3). */
     REGISTERING,
@@ -73,6 +80,27 @@ enum class CodeRefusal {
     NOT_AVAILABLE,
 }
 
+/**
+ * Why the typed entry is not (yet) a code this app sends (§11.11.10 steps 1 and 2). None of these is a wrong code:
+ * nothing reaches the member API or the vault, and nothing is counted.
+ */
+enum class TypedProblem {
+    /** A `U` was typed: the alphabet has none, and it is never guessed to be a `V`. */
+    LETTER_U,
+
+    /** A character that is neither a digit nor a letter. */
+    OTHER_CHARACTER,
+
+    /** 48 characters whose check characters do not match this app's account site: a typing mistake, or another site's code. */
+    BAD_CHECK,
+
+    /** Exactly the 32 characters an account page showed before MEMBER-API 2.4.0. */
+    SHORT_CODE,
+
+    /** Fewer than 12 groups. */
+    INCOMPLETE,
+}
+
 /** Immutable UI state of the recovery flow. The PIN and passwords live here only while the flow needs them. */
 data class RecoverUiState(
     val step: RecoverStep = RecoverStep.LOADING,
@@ -81,6 +109,18 @@ data class RecoverUiState(
     val otherApi: String? = null,
     /** The account the vault belongs to, masked (`email_hint` from the claim, §11.11.7). */
     val emailHint: String = "",
+    /**
+     * The typed entry in canonical form (at most 48 characters). Held in memory only: never in saved state, on disk,
+     * in a log or on the clipboard, and left out of [toString].
+     */
+    val typed: String = "",
+    val typedProblem: TypedProblem? = null,
+    /** The group (1 to 12) a refused character would have gone into, for [TypedProblem.LETTER_U] and [TypedProblem.OTHER_CHARACTER]. */
+    val typedGroup: Int = 0,
+    /** The host of this app's account site, for [TypedProblem.BAD_CHECK]'s text. */
+    val accountHost: String = "",
+    /** Seconds until the member API takes another claim from this network (`429`'s `Retry-After`); 0 when unknown or over. */
+    val retrySeconds: Long = 0,
     /** Wrong codes sent from this phone for the current recovery (the vault voids it at 5). */
     val wrongCodes: Int = 0,
     val preflight: PreflightInfo? = null,
@@ -102,6 +142,12 @@ data class RecoverUiState(
     val pinAllowed: Boolean
         get() = preflight != null && !preflight.rollback && preflightError != FailureKind.RELEASE_ENDED && waitSeconds == 0L && !busy
 
+    /** Complete groups of four typed so far (of [RecoveryCodes.TYPED_GROUPS]). */
+    val typedGroups: Int get() = typed.length / RecoveryCodes.GROUP
+
+    /** All 48 characters are there: **Continue** checks them. */
+    val typedComplete: Boolean get() = typed.length == RecoveryCodes.TYPED_LENGTH
+
     override fun toString(): String = "RecoverUiState(step=$step, busy=$busy, refusal=$refusal, error=$error)"
 
     companion object {
@@ -115,6 +161,15 @@ interface RecoverActions {
     fun scan()
     fun back(): Boolean
     fun scanned(text: String)
+
+    /** "Type the code instead". */
+    fun type()
+
+    /** The typed field changed (typing or a paste). */
+    fun setTyped(v: String)
+
+    /** **Continue** on the typed entry. */
+    fun submitTyped()
     fun retryPreflight()
     fun setApproveOffer(approve: Boolean)
     fun setPin(v: String)
@@ -127,12 +182,15 @@ interface RecoverActions {
 /**
  * Recovery on a new phone (VAULT-MESSAGING §11.11), as vettid-vault's
  * reference client runs it: the portal's QR is claimed with this phone's app
- * key (§11.11.7, 0.15.0: no sign-in; a typed code would lack the vault and
- * recovery ids the app can no longer look up) and registered over the alternate
+ * key (§11.11.7, 0.15.0: no sign-in) and registered over the alternate
  * channel with this phone's device attestation; then the PIN unlocks the
  * vault and the first handshake makes this phone a restricted app; then
  * `credential.recover` with the password hands the credential over and the
- * old app is removed. A vault without a backup copy of its credential cannot be
+ * old app is removed. The code can be typed instead (0.25.0 §11.11.10): the
+ * 48 characters the portal shows carry a locator that stands for the vault and
+ * the recovery at the claim, the code, and check characters this app verifies
+ * with its own member API origin before it sends anything; after the claim it is
+ * the scanned path. A vault without a backup copy of its credential cannot be
  * recovered at all (0.16.0, `no_backup`): the app says so and links to the
  * account site's start-over. Resumes where it stopped after a restart
  * ([MoveRepository.recoveryStage]).
@@ -145,9 +203,12 @@ class RecoverViewModel @Inject constructor(
     private val account: AccountRepository,
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), RecoverActions {
-    private val state = MutableStateFlow(RecoverUiState(startOverUrl = account.apiOrigin.trimEnd('/') + START_OVER_PATH))
+    private val state = MutableStateFlow(
+        RecoverUiState(startOverUrl = account.apiOrigin.trimEnd('/') + START_OVER_PATH, accountHost = hostOf(account.apiOrigin)),
+    )
     val uiState: StateFlow<RecoverUiState> = state.asStateFlow()
     private var ticker: Job? = null
+    private var retryTicker: Job? = null
     private var countedFor: String? = null
 
     init {
@@ -169,15 +230,23 @@ class RecoverViewModel @Inject constructor(
 
     // --- the code ---
 
-    override fun scan() = state.update { it.copy(step = RecoverStep.SCAN, refusal = null, error = null) }
+    override fun scan() {
+        if (state.value.busy) return
+        state.update { it.copy(step = RecoverStep.SCAN, refusal = null, error = null, typedProblem = null) }
+    }
+
+    override fun type() {
+        if (state.value.busy) return
+        state.update { it.copy(step = RecoverStep.TYPE, refusal = null, error = null, typedProblem = null) }
+    }
 
     /** Back within the flow; false when the member leaves it (the onboarding flow takes over). */
     override fun back(): Boolean {
         val s = state.value
         if (s.busy) return true
         return when (s.step) {
-            RecoverStep.SCAN -> {
-                state.update { it.copy(step = RecoverStep.INTRO, refusal = null) }
+            RecoverStep.SCAN, RecoverStep.TYPE -> {
+                state.update { it.copy(step = RecoverStep.INTRO, refusal = null, typedProblem = null) }
                 true
             }
             else -> false
@@ -197,25 +266,83 @@ class RecoverViewModel @Inject constructor(
             code == null -> state.update { it.copy(refusal = CodeRefusal.NOT_A_CODE) }
             api == null -> state.update { it.copy(refusal = CodeRefusal.NO_API) }
             api.trimEnd('/') != account.apiOrigin -> state.update { it.copy(refusal = CodeRefusal.OTHER_ENVIRONMENT, otherApi = api) }
-            else -> register(code)
+            else -> register(code.recoveryId) { move.registerRecovery(code) }
         }
     }
 
-    private fun register(code: RecoveryCode) {
+    /**
+     * The typed field (§11.11.10 step 1): separators dropped, upper case, I and L read as 1 and O as 0; a `U` or
+     * any other character is refused in the field (dropped and named, never guessed); a forty-ninth is ignored.
+     */
+    override fun setTyped(v: String) {
+        val s = state.value
+        if (s.busy || s.step != RecoverStep.TYPE) return
+        val input = RecoveryCodes.typedInput(v)
+        val pasted = input.text.length - s.typed.length > 1
+        val problem = when {
+            input.refused == RecoveryCodes.Refused.LETTER_U -> TypedProblem.LETTER_U
+            input.refused == RecoveryCodes.Refused.OTHER -> TypedProblem.OTHER_CHARACTER
+            // The bare code of an account page from before MEMBER-API 2.4.0, pasted whole.
+            pasted && input.text.length == RecoveryCodes.LENGTH -> TypedProblem.SHORT_CODE
+            else -> null
+        }
+        state.update { it.copy(typed = input.text, typedProblem = problem, typedGroup = input.refusedGroup) }
+    }
+
+    /**
+     * **Continue** (§11.11.10 step 2): the check characters are recomputed with this app's own member API origin.
+     * On a mismatch nothing is sent and nothing is counted; the entry stays for correction.
+     */
+    override fun submitTyped() {
+        val s = state.value
+        if (s.busy || s.step != RecoverStep.TYPE) return
+        val problem = when (val p = TypedRecoveryCode.parse(s.typed, account.apiOrigin)) {
+            is TypedRecoveryCode.Parsed.Ok -> {
+                val code = p.code
+                state.update { it.copy(typedProblem = null) }
+                register(code.locator) { move.registerTypedRecovery(code) }
+                return
+            }
+            TypedRecoveryCode.Parsed.BadCheck -> TypedProblem.BAD_CHECK
+            TypedRecoveryCode.Parsed.BareCode -> TypedProblem.SHORT_CODE
+            TypedRecoveryCode.Parsed.NotTyped -> TypedProblem.INCOMPLETE
+        }
+        state.update { it.copy(typedProblem = problem, typedGroup = 0, refusal = null, error = null) }
+    }
+
+    /**
+     * The claim and the register, however the code was read. Wrong codes are counted per recovery: the one the
+     * answer names (a typed code's claim), else [countKey] (a scanned QR's `recovery_id`).
+     */
+    private fun register(countKey: String, attempt: suspend () -> RecoveryRegistration) {
         val from = state.value.step
-        val recoveryId = code.recoveryId
-        state.update { it.copy(step = RecoverStep.REGISTERING, busy = true, refusal = null, error = null) }
+        retryTicker?.cancel()
+        state.update { it.copy(step = RecoverStep.REGISTERING, busy = true, refusal = null, error = null, retrySeconds = 0) }
         viewModelScope.launch {
             try {
-                when (val r = move.registerRecovery(code)) {
+                when (val r = attempt()) {
                     is RecoveryRegistration.Registered -> {
-                        state.update { it.copy(busy = false, emailHint = r.emailHint) }
+                        state.update { it.copy(busy = false, emailHint = r.emailHint, typed = "", typedProblem = null) }
                         toPin()
                     }
-                    is RecoveryRegistration.Refused -> refused(from, recoveryId, r.code)
+                    is RecoveryRegistration.Refused -> refused(from, r.recoveryId ?: countKey, r.code)
                 }
             } catch (e: VaultFailure) {
                 state.update { it.copy(step = from, busy = false, error = e.kind, errorCode = e.code) }
+                if (e.kind == FailureKind.RATE_LIMITED) startRetryWait(e.retryAfterSeconds)
+            }
+        }
+    }
+
+    /** Counts down a `429`'s wait, for the text only: the member may try again at any time (another network is not limited). */
+    private fun startRetryWait(seconds: Long) {
+        if (seconds <= 0) return
+        retryTicker?.cancel()
+        state.update { it.copy(retrySeconds = seconds) }
+        retryTicker = viewModelScope.launch {
+            while (state.value.retrySeconds > 0) {
+                delay(TICK_MS)
+                state.update { it.copy(retrySeconds = (it.retrySeconds - 1).coerceAtLeast(0)) }
             }
         }
     }
@@ -230,7 +357,7 @@ class RecoverViewModel @Inject constructor(
             CODE_NONE, CODE_USED -> CodeRefusal.GONE
             CODE_NOT_AVAILABLE -> CodeRefusal.NOT_AVAILABLE
             CODE_NO_BACKUP -> {
-                state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, refusal = null) }
+                state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, refusal = null, typed = "", typedProblem = null) }
                 noBackup()
                 return
             }
@@ -243,7 +370,12 @@ class RecoverViewModel @Inject constructor(
             wrong++
             if (wrong >= RecoverUiState.MAX_WRONG_CODES) refusal = CodeRefusal.VOIDED
         }
-        state.update { it.copy(step = from, busy = false, refusal = refusal, wrongCodes = wrong) }
+        // The typed characters stay for correction, and go when the recovery has ended (ANDROID-PLAN 0.1.33).
+        val ended = refusal == CodeRefusal.VOIDED || code == CODE_EXPIRED || code == CODE_USED
+        state.update {
+            val typed = if (ended) "" else it.typed
+            it.copy(step = from, busy = false, refusal = refusal, wrongCodes = wrong, typed = typed, typedProblem = null)
+        }
     }
 
     // --- the PIN (§11.11.5 step 1) ---
@@ -390,5 +522,12 @@ class RecoverViewModel @Inject constructor(
         private const val MIN_PIN = 6
         private const val MAX_PIN = 32
         private const val TICK_MS = 1000L
+
+        /** The host of [origin] (`account.vettid.org`), or [origin] itself when it is not a URL. */
+        internal fun hostOf(origin: String): String = try {
+            URI(origin).host ?: origin
+        } catch (_: URISyntaxException) {
+            origin
+        }
     }
 }

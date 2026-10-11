@@ -14,7 +14,8 @@ API's alternate channel and the typed vault client (A2,
 Credential, settings and the biometric app lock (A3); connections, messages and
 approvals (A4). Since then: VAULT-MESSAGING 0.10.1–0.10.5 (commit-then-reveal
 SAS, connection requests, invitation URLs, a peer's decline), recovery on a new
-phone and direct transfer, a replaced phone erasing itself, the pinned
+phone (the account site's recovery QR code scanned, or the 48 characters under it
+typed: VAULT-MESSAGING 0.25.0 §11.11.10, see *Recovery: typing the code*) and direct transfer, a replaced phone erasing itself, the pinned
 production manifest keys A and B, the daily owner check (VAULT-MESSAGING 0.13.0 §3.6), and
 the `staging` build type, which enrolls
 against the staging vault service (see *Staging build*). The Items screen is a
@@ -133,6 +134,30 @@ Crashlytics, no `FirebaseInitProvider`, automatic token creation and delivery
 metrics export off. `./gradlew :app:check<Variant>PushManifest` (run by
 `checkReleaseApk` and `checkStagingApk`) fails if a merged manifest carries
 anything of Firebase or Google beyond that.
+
+### Recovery: typing the code
+
+A new phone that cannot scan the account site's recovery QR code takes the code
+typed (VAULT-MESSAGING 0.25.0 §11.11.10, ANDROID-PLAN 0.1.33): **Type the code
+instead** on the recover screens. The site shows 48 characters in 12 groups of
+four: a 12-character locator from the member API, the 32-character code and 4
+check characters.
+
+- `RecoveryCodes` (`:core:altchan`) normalizes the input (case, spaces, hyphens,
+  I and L as 1, O as 0; a U or any other character is refused in the field, never
+  guessed) and computes the check characters; `TypedRecoveryCode.parse` verifies
+  them with the app's own built-in member API origin. A string that fails is
+  never sent and is not a wrong code; it also catches another environment's code
+  (a staging code in the production app). The §16 vector is in `RecoveryTypedTest`.
+- `MemberApiClient.recoveryClaimByLocator` posts `{locator, app_key}` to
+  `/api/vault/recovery/claim`, signed with an empty `vault`; the answer names the
+  vault and the recovery, and with the typed code that is the `RecoveryCode` a
+  scan gives. From there on (`VaultManager.registerTypedRecovery`) it is the
+  scanned path: register, PIN, credential password, the same texts and the same
+  count of wrong codes.
+- The entry lives in the view model only (never saved state, disk, logs or the
+  clipboard: the field offers no copy or cut) and its screen sets `FLAG_SECURE`
+  while it is shown (`SecureWindow`, `:core:ui`); no other screen does.
 
 ## Layout
 

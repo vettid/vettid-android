@@ -67,6 +67,9 @@ internal class DevMemberGateway(
     override suspend fun claimRecovery(vaultId: String, recoveryId: String): Claimed =
         throw MemberApiException(NOT_FOUND, MemberApiException.NOT_FOUND, "not simulated")
 
+    override suspend fun claimRecoveryByLocator(locator: String): Claimed =
+        throw MemberApiException(NOT_FOUND, MemberApiException.NOT_FOUND, "not simulated")
+
     override fun memberChanged(userGuid: String) {
         prefs.edit().putString(KEY_GUID, userGuid).commit()
     }

@@ -353,9 +353,11 @@ sealed interface RecoveryRegistration {
     /**
      * Refused: [code] is the enclave's (`no_recovery`, `used`, `expired`, `too_early`, `bad_code`,
      * `attestation`, `bad_request`, `retry`), `not_available` (the API's `409 recovery_not_available`, at the claim
-     * or the register) or `no_recovery` (the claim's `404`: the QR does not name the vault's current recovery).
+     * or the register) or `no_recovery` (the claim's `404`: the QR, or a typed code's locator, does not name a
+     * vault's current recovery). [recoveryId] is the recovery a typed code's claim named (0.25.0 §11.11.10), so that
+     * wrong codes are counted per recovery however they were read; null when the claim did not answer with one.
      */
-    data class Refused(val code: String) : RecoveryRegistration
+    data class Refused(val code: String, val recoveryId: String? = null) : RecoveryRegistration
 }
 
 /** `credential.recover`'s outcome (§11.11.5). */

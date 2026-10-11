@@ -175,6 +175,7 @@ class MemberApiTest {
             "/api/vault/recovery/claim" -> {
                 val o = StrictJson.parseObject(body)
                 assertEquals(Base64s.encodeStd(appKey.spki()), o.string("app_key"))
+                if (o.has("locator")) return claimByLocator(String(body), o.string("locator"), f["vault"]!!)
                 if (o.string("recovery_id") == "01JA0RECVERY0000000000001X") resp(200, """{"user_guid":"guid-1","email_hint":"s***@example.org"}""")
                 else resp(409, """{"error":"recovery_not_available","code":"recovery_not_available"}""")
             }
@@ -184,6 +185,29 @@ class MemberApiTest {
                 resp(200, """{"cancelled":${id == "01JDELETION0000000000000000"}}""")
             }
             else -> resp(404, """{"error":"not_found"}""")
+        }
+    }
+
+    private val locatorClaims = mutableListOf<String>()
+
+    /** The typed form's claim (MEMBER-API 2.4.0), as the member API answers it; the made-up locators pick the answer. */
+    private fun claimByLocator(body: String, locator: String, vault: String): MockResponse {
+        locatorClaims.add(body)
+        // Signed by the key it registers with an empty `vault`: anything else is not this route's caller.
+        if (vault != "") return resp(401, """{"error":"unauthorized","message":"unauthorized"}""")
+        return when (locator) {
+            "7ZK3M9QX2HTD" -> resp(
+                200,
+                """{"user_guid":"guid-1","email_hint":"s***@example.org","vault_id":"0123456789abcdef0123456789abcdef","recovery_id":"01JA0RECVERY0000000000001X"}""",
+            )
+            "N0TAVA11AB1E" -> resp(409, """{"error":"recovery_not_available","code":"recovery_not_available","message":"No recovery code is valid now"}""")
+            "RATE11M1TED0" -> MockResponse.Builder().code(429).addHeader("Retry-After", "754").addHeader("Content-Type", "application/json")
+                .body("""{"error":"rate_limited","message":"Too many requests"}""").build()
+            "BADREQVEST00" -> resp(400, """{"error":"bad_request","message":"Send exactly one of {vault_id, recovery_id, app_key} or {locator, app_key}"}""")
+            "PAVSED000000" -> MockResponse.Builder().code(503).addHeader("Retry-After", "120").addHeader("Content-Type", "application/json")
+                .body("""{"error":"vault_unavailable","code":"vault_unavailable","service":"paused"}""").build()
+            "01DAP1000000" -> resp(200, """{"user_guid":"guid-1","email_hint":"s***@example.org"}""")
+            else -> resp(404, """{"error":"not_found","message":"No such recovery"}""")
         }
     }
 
@@ -382,6 +406,71 @@ class MemberApiTest {
         vault = "0123456789abcdef0123456789abcdef"
         a.vaultStatusAnswer()
         assertEquals("/api/vault/status" to "0123456789abcdef0123456789abcdef", signed.last())
+    }
+
+    /** VAULT-MESSAGING 0.25.0 §11.11.10, MEMBER-API 2.4.0: the typed form's claim by locator. */
+    @Test
+    fun theClaimByLocatorSendsExactlyTheLocatorAndTheKeySignedWithAnEmptyVault() = runBlocking<Unit> {
+        // The client's own vault (a previous one on this phone) is never named: the app does not know the vault yet.
+        val a = api(MemberAuth.AppKey(appKey) { "previous-vault" })
+        val c = a.recoveryClaimByLocator("7ZK3M9QX2HTD", appKey.spki())
+        assertEquals(Claimed("guid-1", "s***@example.org", "0123456789abcdef0123456789abcdef", "01JA0RECVERY0000000000001X"), c)
+        assertEquals("/api/vault/recovery/claim" to "", signed.last())
+        assertEquals("POST /api/vault/recovery/claim", log.last())
+        // The body: these two members in this order and nothing else (no vault_id, no recovery_id, no code, no check).
+        assertEquals(listOf("""{"locator":"7ZK3M9QX2HTD","app_key":"${Base64s.encodeStd(appKey.spki())}"}"""), locatorClaims)
+        // Only a canonical locator is ever sent.
+        for (bad in listOf("7zk3m9qx2htd", "7ZK3M9QX2HT", "7ZK3M9QX2HTDV", "7ZK3M9QX2HTU", "")) {
+            assertThrows(bad, IllegalArgumentException::class.java) { runBlocking { a.recoveryClaimByLocator(bad, appKey.spki()) } }
+        }
+        assertEquals(1, locatorClaims.size)
+    }
+
+    @Test
+    fun theClaimByLocatorsRefusalsCarryTheApisCodeAndWait() = runBlocking<Unit> {
+        val a = api(MemberAuth.AppKey(appKey) { null })
+        fun refused(locator: String) = assertThrows(MemberApiException::class.java) { runBlocking { a.recoveryClaimByLocator(locator, appKey.spki()) } }
+        // Any miss (no such locator, a replaced or cancelled recovery's) is the same 404.
+        refused("M1SS00000000").let {
+            assertEquals(404, it.status)
+            assertEquals(MemberApiException.NOT_FOUND, it.code)
+        }
+        refused("N0TAVA11AB1E").let {
+            assertEquals(409, it.status)
+            assertEquals(MemberApiException.RECOVERY_NOT_AVAILABLE, it.code)
+        }
+        refused("RATE11M1TED0").let {
+            assertEquals(429, it.status)
+            assertEquals(MemberApiException.RATE_LIMITED, it.code)
+            assertEquals(754, it.retryAfterSeconds)
+        }
+        refused("BADREQVEST00").let {
+            assertEquals(400, it.status)
+            assertEquals("bad_request", it.code)
+        }
+        refused("PAVSED000000").let {
+            assertEquals(503, it.status)
+            assertEquals(MemberApiException.VAULT_UNAVAILABLE, it.code)
+            assertTrue(it.servicePaused)
+            assertEquals(120, it.retryAfterSeconds)
+        }
+        // A signature the API does not accept (here: another key's).
+        val other = SoftAppKey()
+        val forged = object : AppKeySigner {
+            override fun spki() = appKey.spki()
+
+            override fun sign(message: ByteArray) = other.sign(message)
+        }
+        val u = assertThrows(MemberApiException::class.java) {
+            runBlocking { api(MemberAuth.AppKey(forged) { null }).recoveryClaimByLocator("7ZK3M9QX2HTD", appKey.spki()) }
+        }
+        assertEquals(401, u.status)
+        assertEquals(MemberApiException.UNAUTHORIZED, u.code)
+        // An answer without the two identifiers (an API before 2.4.0 would not know the route's typed form) is not a claim.
+        assertThrows(com.vettid.core.crypto.CryptoException::class.java) { runBlocking { a.recoveryClaimByLocator("01DAP1000000", appKey.spki()) } }
+        // No server.
+        server.close()
+        assertThrows(java.io.IOException::class.java) { runBlocking { a.recoveryClaimByLocator("7ZK3M9QX2HTD", appKey.spki()) } }
     }
 
     @Test

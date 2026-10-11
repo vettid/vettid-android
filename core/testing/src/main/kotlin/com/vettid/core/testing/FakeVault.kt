@@ -1,6 +1,7 @@
 package com.vettid.core.testing
 
 import com.vettid.core.altchan.RecoveryCode
+import com.vettid.core.altchan.TypedRecoveryCode
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
@@ -82,6 +83,10 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     var recoveryStageValue = RecoveryStage.CODE
     val registrations = ArrayDeque<RecoveryRegistration>()
     var lastRegistered: RecoveryCode? = null
+
+    /** The typed code last given to [registerTypedRecovery], and the recovery its claim "named" for a refusal. */
+    var lastTyped: TypedRecoveryCode? = null
+    var typedRecoveryId: String? = "01JA0RECVERY0000000000001X"
     val recoveryUnlockResults = ArrayDeque<UnlockAttempt>()
     var recoverOutcome = RecoverOutcome.RECOVERED
 
@@ -291,6 +296,15 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         val r = registrations.removeFirstOrNull() ?: RecoveryRegistration.Registered(emailHint)
         if (r is RecoveryRegistration.Registered) phase.value = AppPhase.Setup(SetupStage.RECOVERING)
         return r
+    }
+
+    override suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration {
+        call("registerTypedRecovery")
+        lastTyped = typed
+        val r = registrations.removeFirstOrNull() ?: RecoveryRegistration.Registered(emailHint)
+        if (r is RecoveryRegistration.Registered) phase.value = AppPhase.Setup(SetupStage.RECOVERING)
+        // As VaultManager: a refusal after the claim names the recovery; the claim's own 404 names none.
+        return if (r is RecoveryRegistration.Refused && r.code != "no_recovery") r.copy(recoveryId = r.recoveryId ?: typedRecoveryId) else r
     }
 
     override suspend fun recoveryPreflight(): PreflightInfo {
