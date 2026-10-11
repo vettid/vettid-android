@@ -1,0 +1,60 @@
+# DRAFT F-Droid metadata for VettID (fdroiddata: metadata/com.vettid.app.yml). Not submitted anywhere.
+#
+# Route: reproducible builds (owner decision 2026-10-11). F-Droid builds the tagged commit itself, compares its
+# unsigned APK with the VettID-signed one at `Binaries`, and publishes VettID's APK when they are the same apart
+# from the signature. It has to be this way: a vault accepts an app only if its signing certificate is pinned in
+# the vault release (`android_signers`), so an APK signed by F-Droid's key could not open a vault.
+#
+# To fill in before a merge request to fdroiddata (marked TODO):
+# - the first release that has the `foss` distribution: its tag, commit, versionName and versionCode;
+# - AllowedAPKSigningKeys is set: VettID's own signing certificate, which signs the F-Droid APK and direct
+#   builds and which production vault releases pin. Google never holds this key: Google Play installs carry a
+#   different, Google-held certificate (owner decision 2026-10-11), so a Play install and an F-Droid install
+#   cannot update each other. Check it against the published APK before submitting
+#   (`apksigner verify --print-certs`);
+# - the signed foss APK published at the `Binaries` URL for that tag;
+# - store listing text and images in this repository (fastlane/metadata/android/en-US/), or Summary/Description here.
+
+Categories:
+  - Security
+  - Internet
+License: AGPL-3.0-only
+AuthorName: VettID
+WebSite: https://vettid.org
+SourceCode: https://github.com/vettid/vettid-android
+IssueTracker: https://github.com/vettid/vettid-android/issues
+
+AutoName: VettID
+
+RepoType: git
+Repo: https://github.com/vettid/vettid-android.git
+# %v is the versionName, %c the versionCode. The signed APK of the `foss` distribution, as a release asset.
+Binaries: https://github.com/vettid/vettid-android/releases/download/v%v/vettid-%v-foss.apk
+
+Builds:
+  - versionName: TODO          # e.g. 2.0.0 (no suffix: the same name as the Google Play build of that release)
+    versionCode: TODO          # e.g. 200
+    commit: TODO               # the full commit hash of tag v<versionName>
+    subdir: app
+    # The JDK the published APK is built with (README "F-Droid build").
+    sudo:
+      - apt-get update
+      - apt-get install -y openjdk-21-jdk-headless
+      - update-java-alternatives -a
+    gradle:
+      - foss
+    # Google push (Firebase) is the `full` distribution's alone. Removing its module leaves no proprietary
+    # coordinate in the tree that is built; settings.gradle.kts includes it only when the directory exists.
+    rm:
+      - core/push-fcm
+
+# The certificate of the APK at `Binaries` (and of every later one).
+AllowedAPKSigningKeys: 31a19613aa10f209e08945f947f94f7ce3e6e5ac342457ff9969a67986928e65
+
+AutoUpdateMode: Version
+# Release tags only: v2.0.0, v2.0.1, ... (the v1 app's tags, v2026MMDD-HHMMSS-release, do not match).
+UpdateCheckMode: Tags ^v[0-9]+\.[0-9]+\.[0-9]+$
+# versionCode and versionName are literals in the application module's build file.
+UpdateCheckData: app/build.gradle.kts|versionCode\s=\s(\d+)|.|versionName\s=\s"([^"]+)"
+CurrentVersion: TODO
+CurrentVersionCode: TODO

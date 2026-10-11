@@ -1,10 +1,10 @@
 package com.vettid.app
 
 import android.app.Activity
-import android.app.Application
 import android.os.Bundle
-import androidx.work.Configuration
 import com.vettid.app.di.AppScope
+import com.vettid.app.distribution.DistributionApplication
+import com.vettid.app.distribution.PushStartup
 import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.vault.AccountRepository
@@ -15,7 +15,6 @@ import com.vettid.core.notify.Channels
 import com.vettid.core.notify.FeedNotifier
 import com.vettid.core.notify.ModeController
 import com.vettid.core.notify.PushRegistrar
-import com.vettid.core.push.fcm.FcmPushProvider
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -23,14 +22,7 @@ import com.vettid.app.net.PoolEviction
 import javax.inject.Inject
 
 @HiltAndroidApp
-class VettIdApplication : Application(), Configuration.Provider {
-    /**
-     * WorkManager (a Google push wake's longer collect, `:core:push-fcm`) is initialised on first use, from here:
-     * its start-up initialiser is removed from the manifest, so a build without Google push never starts it.
-     */
-    override val workManagerConfiguration: Configuration
-        get() = Configuration.Builder().setMinimumLoggingLevel(android.util.Log.ERROR).build()
-
+class VettIdApplication : DistributionApplication() {
     @Inject
     lateinit var appLock: AppLock
 
@@ -54,7 +46,7 @@ class VettIdApplication : Application(), Configuration.Provider {
     lateinit var modes: ModeController
 
     @Inject
-    lateinit var fcm: FcmPushProvider
+    lateinit var pushStartup: PushStartup
 
     @Inject
     lateinit var pushRegistrar: PushRegistrar
@@ -76,10 +68,11 @@ class VettIdApplication : Application(), Configuration.Provider {
         // on-phone service while the mode is the service and the phone has a vault.
         runCatching { Channels.ensure(this) }
         feedNotifier.start()
-        // Google push (ANDROID-PLAN 0.1.30): in a build with the Firebase options, Firebase is initialised here,
-        // before any service runs, so that a wake that started this process is handled; the registration with the
-        // vault follows the mode. Without the options neither does anything.
-        runCatching { fcm.start() }
+        // Google push (ANDROID-PLAN 0.1.30; the `full` distribution): in a build with the Firebase options, Firebase
+        // is initialised here, before any service runs, so that a wake that started this process is handled; the
+        // registration with the vault follows the mode. Without the options, and in the `foss` distribution, neither
+        // does anything.
+        runCatching { pushStartup.start() }
         pushRegistrar.start()
         modes.start()
     }

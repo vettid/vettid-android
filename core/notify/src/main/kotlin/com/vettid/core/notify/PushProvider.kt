@@ -15,13 +15,20 @@ enum class PushAvailability {
 
     /** The push service is there but needs an update. */
     SERVICES_OUTDATED,
+
+    /**
+     * This build was made without any push service: the `foss` distribution (F-Droid), which contains no Google
+     * code ([NoGooglePushProvider]). It never becomes available on this install, whatever the phone has.
+     */
+    NOT_IN_THIS_BUILD,
 }
 
 /**
  * A push service that wakes the app for its vault (ANDROID-PLAN 0.1.30, Notification modes 4: contentless wakes;
  * the app then collects from its relay and decrypts on the phone as the on-phone service does). Today only the FCM
- * provider of `:core:push-fcm`, which is [PushAvailability.NOT_AVAILABLE_YET] in a build without the Firebase
- * configuration. The token goes to the member's vault only ([PushRegistrar]); the app never talks to the gateway.
+ * provider of `:core:push-fcm` (the `full` distribution), which is [PushAvailability.NOT_AVAILABLE_YET] in a build
+ * without the Firebase configuration; the `foss` distribution has [NoGooglePushProvider]. The token goes to the
+ * member's vault only ([PushRegistrar]); the app never talks to the gateway.
  */
 interface PushProvider {
     /** `platform` of `push.register` (VAULT-MESSAGING §14.1). */
@@ -54,4 +61,24 @@ object NoPushProvider : PushProvider {
     override var onWake: (suspend () -> Boolean)? = null
 
     override var onNewToken: (() -> Unit)? = null
+}
+
+/**
+ * The push provider of the `foss` distribution (F-Droid; README "F-Droid build"): the build contains no Google code,
+ * so there is no push service to ask, no token, and nothing is ever contacted. Settings shows "Google push" as not
+ * available in this build; the on-phone service is the way notifications reach the phone.
+ */
+object NoGooglePushProvider : PushProvider {
+    override fun availability() = PushAvailability.NOT_IN_THIS_BUILD
+
+    override suspend fun token(): String? = null
+
+    /** Nothing can wake this build: the callbacks are accepted and never called. */
+    override var onWake: (suspend () -> Boolean)?
+        get() = null
+        set(_) = Unit
+
+    override var onNewToken: (() -> Unit)?
+        get() = null
+        set(_) = Unit
 }

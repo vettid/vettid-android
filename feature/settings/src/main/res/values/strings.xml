@@ -47,6 +47,7 @@
     <string name="settings_notify_push_not_yet">Not available yet.</string>
     <string name="settings_notify_push_missing">Needs Google Play services, which this phone does not have.</string>
     <string name="settings_notify_push_outdated">Google Play services need an update.</string>
+    <string name="settings_notify_push_not_in_build">Not available in this build of VettID, which contains no Google software.</string>
     <string name="settings_notify_off">Off</string>
     <string name="settings_notify_off_body">Not recommended. You see messages, requests, calls and security alarms only when you open VettID.</string>
     <string name="settings_notify_off_confirm">Turn notifications off?</string>
