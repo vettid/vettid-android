@@ -50,7 +50,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.vettid.core.ui.components.AvatarSheetContent
 import com.vettid.core.ui.components.BottomFloatingControls
@@ -79,6 +78,7 @@ import com.vettid.core.ui.components.VettIdBackTopBar
 import com.vettid.core.ui.components.VettIdDrawerSheet
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
+import com.vettid.core.ui.components.VettIdLogo
 import com.vettid.core.ui.components.VettIdTopAppBar
 import com.vettid.core.ui.components.AvatarSheet
 import com.vettid.core.ui.components.DetailScaffold
@@ -123,8 +123,9 @@ fun GalleryScreen(
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             ) {
                 RookLogo(height = 48.dp)
-                Spacer(Modifier.width(Spacing.l))
-                Text("VettID", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(Spacing.xl))
+                // Follows the gallery's theme chips: gold wordmark on dark, the kit's on-light file (blue wordmark) on light.
+                VettIdLogo()
             }
             Spacer(Modifier.height(Spacing.l))
             Swatches()
