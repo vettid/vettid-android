@@ -137,8 +137,11 @@ installs by VettID; the vault names the class (`vettid`, `google_play`,
   Android Keystore: `Attester.chain()`, `DeviceAttestationKey.chain()`) at
   every unlock until its own `device.list` entry shows a `signer`
   (`VaultDevice.signerSeen`, kept with the device state, false again after
-  every new attestation). Never on a release approval; not part of any signing
-  string; a chain that would not fit the request is left out.
+  every new attestation, and false again after an unlock answered
+  `signer_refused`: a host can serve a header from before the binding, so the
+  next unlock carries the chain whatever `device.list` showed earlier). Never
+  on a release approval; not part of any signing string; a chain that would
+  not fit the request is left out.
 - **`signer_refused`** is an unlock result of its own (`UnlockAttempt.SignerRefused`):
   not a wrong PIN, no count and no wait. The unlock screen says "This vault no
   longer accepts this installation of VettID. Update the app, or recover your
@@ -163,6 +166,28 @@ byte after signing, through a new `KeyStore` instance and a new key object)
 and `:core:altchan:connectedDebugAndroidTest` (`KeystoreAttester.chain()`
 against the attestation) check it within one run; they are compiled in CI and
 run by hand.
+
+**Capturing a real attestation chain** (debug only, by hand, one phone; no
+vault is touched). `AttestationChainDumpTest` makes a throwaway key with the
+app's own key generation (`DeviceAttestationKey.generate`: the same
+`KeyGenParameterSpec`, StrongBox where the phone has it, a 32-byte challenge,
+no attest-key alias), asserts that only the leaf carries the KeyDescription
+extension (OID 1.3.6.1.4.1.11129.2.1.17) and that a second read of the chain
+is byte-identical, writes the chain as PEM (leaf first) and deletes the key:
+
+```bash
+adb -s <serial> logcat -c
+ANDROID_SERIAL=<serial> ./gradlew --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g \
+  :core:keystore:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.vettid.core.keystore.AttestationChainDumpTest
+adb -s <serial> logcat -d -s VettIDChainDump:I    # the PEM, between the BEGIN/END VETTID ATTESTATION CHAIN lines
+```
+
+The PEM is also collected from the phone into
+`core/keystore/build/outputs/connected_android_test_additional_output/debugAndroidTest/connected/<device>/vettid-attestation-chain.pem`.
+A certificate chain is public data; the test logs and writes nothing else of
+the phone. The test installs and removes only the module's own test package
+(`com.vettid.core.keystore.test`), never the app.
 
 Binding an existing vault by its chain cannot be observed on the staging
 phones: the vaults enrolled before S10 belong to the build with the old

@@ -970,7 +970,7 @@ class VaultDeviceTest {
     /**
      * VAULT-MESSAGING 0.27.0 §11.7.1: every unlock carries the device key's chain while the vault has not shown this
      * app a signer in `device.list`; it stops once it has (kept across a restart), and starts again after a new
-     * attestation (a new key).
+     * attestation (a new key) and after an unlock answered `signer_refused`.
      */
     @Test
     fun unlocksCarryTheChainUntilTheVaultShowsASigner() = runBlocking<Unit> {
@@ -1034,6 +1034,32 @@ class VaultDeviceTest {
             // The entry lost its signer (a vault restored to an older state): the chain again.
             again.markSignerSeen(false)
             assertEquals(sent, chainOf(again, again.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            // An unlock answered signer_refused (a host may have served a header from before the binding): the chain
+            // goes out again although device.list had shown a signer, also after a restart; a wrong PIN changes nothing.
+            fun result(b: com.vettid.core.altchan.BuiltUnlock, body: String): ByteArray {
+                val inner = Inner(id = Ulid.new(), type = "vault.unlock.result", ts = Instant.now(), re = b.request.requestId, status = Inner.STATUS_OK, body = body.toByteArray())
+                val padded = com.vettid.core.crypto.envelope.Padding.padFixed(inner.marshal(Mode.SEALED), com.vettid.core.crypto.envelope.Padding.ALT_CHANNEL)
+                return Envelope.sealSealed(again.kemKey, Kid.ANONYMOUS, padded).first
+            }
+            again.markSignerSeen(true)
+            val wrongPin = again.prepareUnlock("guid-1", "111111", enclave, manifest, att, options)
+            assertNull(chainOf(again, wrongPin))
+            assertEquals("bad_pin", again.openUnlockResult(result(wrongPin, """{"ok":false,"code":"bad_pin","header_seq":5,"retry_after":30}""")).code)
+            assertTrue(again.signerSeen)
+            val refusedUnlock = again.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)
+            assertNull(chainOf(again, refusedUnlock))
+            // As the vault writes it (retry_after 0), and as the spec shows it (no retry_after).
+            val refused = again.openUnlockResult(result(refusedUnlock, """{"ok":false,"code":"signer_refused","header_seq":6,"retry_after":0}"""))
+            assertEquals("signer_refused", refused.code)
+            assertEquals(0L, refused.retryAfterSeconds)
+            assertTrue(!again.signerSeen)
+            assertEquals(sent, chainOf(again, again.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+            val third = VaultDevice.load(config(store), secrets)!!
+            assertTrue(!third.signerSeen)
+            val retry = third.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)
+            assertEquals(sent, chainOf(third, retry))
+            assertEquals("signer_refused", third.openUnlockResult(result(retry, """{"ok":false,"code":"signer_refused","header_seq":6}""")).code)
+            assertTrue(!third.signerSeen)
             // A new attestation is a new key: whatever was seen before no longer counts, and the new chain goes out.
             again.markSignerSeen(true)
             again.prepareEnroll("guid-1", "246802", enclave, manifest, att)

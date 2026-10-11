@@ -102,7 +102,9 @@ data class UnlockResult(
             val ok = o.bool("ok")
             val headerSeq = o.uint("header_seq", 0, MAX)
             if (!ok) {
-                return@wrap UnlockResult(false, o.string("code"), headerSeq = headerSeq, retryAfterSeconds = o.uint("retry_after", 0, MAX))
+                // `retry_after` is 0 or absent where nothing waits (`signer_refused`, §11.7.1).
+                val retry = o.optUint("retry_after", 0, MAX) ?: 0
+                return@wrap UnlockResult(false, o.string("code"), headerSeq = headerSeq, retryAfterSeconds = retry)
             }
             val release = o.string("release")
             if (!Descriptor.isValidPcr(release)) throw AltResultException("result release")

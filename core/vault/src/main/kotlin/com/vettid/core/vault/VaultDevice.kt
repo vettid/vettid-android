@@ -504,6 +504,10 @@ class VaultDevice private constructor(
         pendingUnlock = null
         run {
             setAlt(AltRequests.applyUnlock(alt(), p, r))
+            // §11.7.1: a refusal for the signer means the vault that answered holds no (pinned) signer for this
+            // key, whatever device.list showed earlier (a host can serve an older header, from before the
+            // binding): the next unlock carries the chain again, until device.list shows a signer once more.
+            st.signerSeen = st.signerSeen && r.code != CODE_SIGNER_REFUSED
             if (r.ok) {
                 val bundle = r.vaultBundle
                 if (bundle != null && st.vault == null && st.recovery != null) adoptBundle(bundle)
@@ -1136,8 +1140,8 @@ class VaultDevice private constructor(
     }
 
     /**
-     * Whether the vault has shown this app its signer (`device.list`, §11.7.1); while false, unlocks carry the
-     * device key's certificate chain.
+     * Whether the vault has shown this app its signer (`device.list`, §11.7.1) and no unlock was answered
+     * `signer_refused` since; while false, unlocks carry the device key's certificate chain.
      */
     val signerSeen: Boolean get() = st.signerSeen
 
@@ -1228,6 +1232,9 @@ class VaultDevice private constructor(
         private const val USER_GUID_MAX = 128
         private const val PRINTABLE_MIN = 0x21
         private const val PRINTABLE_MAX = 0x7e
+
+        /** The unlock result of §11.7.1 (0.27.0): the release does not accept the signer recorded for this key. */
+        const val CODE_SIGNER_REFUSED = "signer_refused"
 
         /**
          * The member's `user_guid` from a transfer's `device.paired` (`transfer: true`, VAULT-MESSAGING 0.17.0

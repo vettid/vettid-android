@@ -77,7 +77,8 @@ The A2 exit test:
   id, or the other environment's account host.
 - Signer binding (README "Signer binding"; VAULT-MESSAGING 0.27.0 §11.7.1, ANDROID-PLAN 0.1.36 §7): the unlock's
   `device_assertion.chain` (`Attester.chain()`, sent while `VaultDevice.signerSeen` is false, i.e. until the app's
-  own `device.list` entry shows `signer`; never on a release approval), `UnlockAttempt.SignerRefused` /
+  own `device.list` entry shows `signer`, and again after an unlock answered `signer_refused`; never on a release
+  approval; a real chain is captured by hand with `AttestationChainDumpTest`, README), `UnlockAttempt.SignerRefused` /
   `FailureKind.SIGNER_REFUSED` (not a PIN failure), `SignerWire` / `SignerClass` in `:core:data`, the "Installed
   from" line (`VaultOverview.signer`), `TransferOutStep.SIGNER` and `signer` in `device.transfer.approve`
   (`signer_unconfirmed` gives the UTK back). The vault names classes; every word is the app's (`SignerText.kt`,
