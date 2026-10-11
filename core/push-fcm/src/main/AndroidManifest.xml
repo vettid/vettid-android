@@ -4,4 +4,17 @@
     <queries>
         <package android:name="com.google.android.gms" />
     </queries>
+
+    <application>
+        <!-- Google push wakes (ANDROID-PLAN 0.1.30, Notification modes 4; PUSH-GATEWAY §6): a data message without
+             content. Not exported: only Firebase's own receiver hands messages to it. The app's manifest enables it
+             only in a build that carries the Firebase options. -->
+        <service
+            android:name="com.vettid.core.push.fcm.VettIdMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
 </manifest>

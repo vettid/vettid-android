@@ -97,6 +97,13 @@ internal object NotificationsCatalog {
 internal object NotificationSettingsCatalog {
     private val base = com.vettid.feature.settings.NotificationSettingsUiState(service = com.vettid.core.notify.KeeperStatus.CONNECTED)
 
+    private fun push(state: com.vettid.core.notify.PushRegState, lastResult: String? = null) = base.copy(
+        mode = com.vettid.core.data.prefs.NotificationMode.PUSH,
+        service = null,
+        push = com.vettid.core.notify.PushAvailability.AVAILABLE,
+        registration = com.vettid.core.notify.PushStatus(state, lastResult),
+    )
+
     @Composable
     private fun Screen(s: com.vettid.feature.settings.NotificationSettingsUiState) =
         com.vettid.feature.settings.NotificationSettingsContent(s, com.vettid.feature.settings.NotificationSettingsActions())
@@ -108,6 +115,17 @@ internal object NotificationSettingsCatalog {
         "settings.notifications_blocked" to { Screen(base.copy(phone = com.vettid.feature.settings.PhoneNotifyState(allowed = false))) },
         "settings.notifications_battery" to { Screen(base.copy(phone = com.vettid.feature.settings.PhoneNotifyState(background = false))) },
         "settings.notifications_no_play" to { Screen(base.copy(push = com.vettid.core.notify.PushAvailability.MISSING_SERVICES)) },
+        // Google push (ANDROID-PLAN 0.1.30): offered in a build with the Firebase options, and its status lines.
+        "settings.notifications_push_available" to { Screen(base.copy(push = com.vettid.core.notify.PushAvailability.AVAILABLE)) },
+        "settings.notifications_push" to { Screen(push(com.vettid.core.notify.PushRegState.ACTIVE)) },
+        "settings.notifications_push_again" to { Screen(push(com.vettid.core.notify.PushRegState.REGISTERING_AGAIN)) },
+        "settings.notifications_push_unreachable" to { Screen(push(com.vettid.core.notify.PushRegState.ACTIVE, "gateway_error")) },
+        "settings.notifications_push_fallback" to {
+            Screen(push(com.vettid.core.notify.PushRegState.LIMITED).copy(service = com.vettid.core.notify.KeeperStatus.CONNECTED))
+        },
+        "settings.notifications_push_not_yet" to {
+            Screen(push(com.vettid.core.notify.PushRegState.UNAVAILABLE).copy(service = com.vettid.core.notify.KeeperStatus.CONNECTED))
+        },
         "settings.notifications_off" to { Screen(base.copy(mode = com.vettid.core.data.prefs.NotificationMode.OFF, service = null)) },
         "settings.notifications_nothing" to { Screen(base.copy(previews = com.vettid.core.data.prefs.NotificationPreviews.NOTHING)) },
     )

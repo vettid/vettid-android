@@ -308,6 +308,24 @@ class RelayClientTest {
         assertEquals(1, waits.size)
     }
 
+    /**
+     * The collector says when a collect request is out and when it ended (a push wake waits for a request that has
+     * been out long enough to have found the mailbox empty): around every round, also a failed one, and not during
+     * the backoff after it.
+     */
+    @Test
+    fun theCollectorSaysWhenARequestIsOut() = runBlocking<Unit> {
+        server.enqueue(json(503, """{"code":"internal","message":""}"""))
+        server.enqueue(json(200, """{"messages":[{"msg_id":"01S","deposited_at":"x","sender":"${VectorsTest.SENDER_PUB}","payload":"AQ=="}]}"""))
+        server.enqueue(MockResponse.Builder().code(204).build())
+        server.enqueue(json(404, """{"code":"mailbox_unknown","message":""}"""))
+        val log = mutableListOf<String>()
+        val c = RelayClient(server.url("/").toString(), key, OkHttpClient(), maxAttempts = 1)
+        val collector = MailboxCollector(c, sleep = { log.add("backoff") }, onRequest = { out -> log.add(if (out) "out" else "ended") })
+        assertThrows(RelayException::class.java) { runBlocking { collector.run { log.add("handle ${it.msgId}") } } }
+        assertEquals(listOf("out", "ended", "backoff", "out", "handle 01S", "ended", "out", "ended"), log)
+    }
+
     /** A message the handler leaves for redelivery ([LeaveUnacked]) is not acked; the next one is. */
     @Test
     fun aMessageLeftForRedeliveryIsNotAcked() = runBlocking<Unit> {

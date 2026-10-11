@@ -48,8 +48,12 @@ import com.vettid.core.data.prefs.NotificationMode
 import com.vettid.core.data.prefs.NotificationPreviews
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.notify.KeeperStatus
+import com.vettid.core.notify.NoPushControl
 import com.vettid.core.notify.PushAvailability
+import com.vettid.core.notify.PushControl
 import com.vettid.core.notify.PushProvider
+import com.vettid.core.notify.PushRegState
+import com.vettid.core.notify.PushStatus
 import com.vettid.core.notify.ServiceStatus
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailScaffold
@@ -90,6 +94,8 @@ data class NotificationSettingsUiState(
     val service: KeeperStatus? = null,
     val push: PushAvailability = PushAvailability.NOT_AVAILABLE_YET,
     val phone: PhoneNotifyState = PhoneNotifyState(),
+    /** The Google push registration with the vault (ANDROID-PLAN 0.1.30): `push` on the app's `device.list` entry. */
+    val registration: PushStatus = PushStatus(),
 ) {
     /** The status line (ANDROID-PLAN 0.1.23, Notification modes 1), most important first; null in Off. */
     val status: NotifyStatusLine?
@@ -99,13 +105,39 @@ data class NotificationSettingsUiState(
             service == KeeperStatus.LOCKED -> NotifyStatusLine.LOCKED
             service == KeeperStatus.CHECK_DUE -> NotifyStatusLine.CHECK_DUE
             service == KeeperStatus.WAITING_FOR_NETWORK -> NotifyStatusLine.WAITING
+            mode == NotificationMode.PUSH -> pushLine
             mode == NotificationMode.SERVICE && !phone.background -> NotifyStatusLine.BATTERY
             service == KeeperStatus.CONNECTED -> NotifyStatusLine.CONNECTED
             else -> NotifyStatusLine.CONNECTING
         }
+
+    /**
+     * Google push (ANDROID-PLAN 0.1.30, Notification modes 4): "Connected" while the registration is `active`
+     * ("Push service not reachable, retrying" when the vault's last wake or the registration itself met a gateway
+     * error), "Registering again" after `push.token-needed`, and "Push unavailable, using the on-phone service"
+     * while the vault cannot register (`limit`, `unavailable`, a refusal) and the service runs as the fallback.
+     */
+    private val pushLine: NotifyStatusLine
+        get() = when {
+            registration.state == PushRegState.RETRYING || registration.gatewayUnreachable -> NotifyStatusLine.PUSH_UNREACHABLE
+            registration.fallback -> NotifyStatusLine.PUSH_FALLBACK
+            registration.state == PushRegState.REGISTERING_AGAIN -> NotifyStatusLine.PUSH_REGISTERING_AGAIN
+            registration.active -> NotifyStatusLine.CONNECTED
+            else -> NotifyStatusLine.CONNECTING
+        }
+
+    /** The note under "Google push": the vault's `unavailable` keeps "Not available yet". */
+    val pushNote: PushAvailability
+        get() = if (push == PushAvailability.AVAILABLE && registration.state == PushRegState.UNAVAILABLE) {
+            PushAvailability.NOT_AVAILABLE_YET
+        } else {
+            push
+        }
 }
 
-enum class NotifyStatusLine { CONNECTED, CONNECTING, WAITING, LOCKED, CHECK_DUE, BLOCKED, BATTERY }
+enum class NotifyStatusLine {
+    CONNECTED, CONNECTING, WAITING, LOCKED, CHECK_DUE, BLOCKED, BATTERY, PUSH_REGISTERING_AGAIN, PUSH_UNREACHABLE, PUSH_FALLBACK
+}
 
 /** Settings → Notifications: the mode and what notifications show are device preferences (DataStore), not vault settings. */
 @HiltViewModel
@@ -113,12 +145,20 @@ class NotificationSettingsViewModel @Inject constructor(
     private val prefs: PreferencesRepository,
     service: ServiceStatus,
     private val push: PushProvider,
+    private val registration: PushControl = NoPushControl,
 ) : ViewModel() {
     private val phone = kotlinx.coroutines.flow.MutableStateFlow(PhoneNotifyState())
 
-    val uiState: StateFlow<NotificationSettingsUiState> = combine(prefs.preferences, service.status, phone) { p, s, ph ->
-        NotificationSettingsUiState(p.notificationMode ?: NotificationMode.SERVICE, p.notificationPreviews, s, push.availability(), ph)
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, NotificationSettingsUiState(push = push.availability()))
+    val uiState: StateFlow<NotificationSettingsUiState> =
+        combine(prefs.preferences, service.status, phone, registration.status) { p, s, ph, r ->
+            val mode = p.notificationMode ?: NotificationMode.SERVICE
+            NotificationSettingsUiState(mode, p.notificationPreviews, s, push.availability(), ph, r)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, NotificationSettingsUiState(push = push.availability()))
+
+    /** The screen is in front: the status line reads `push` from the vault's `device.list` again. */
+    fun refreshPush() {
+        viewModelScope.launch { registration.refresh() }
+    }
 
     fun setMode(m: NotificationMode) {
         if (m == NotificationMode.PUSH && push.availability() != PushAvailability.AVAILABLE) return
@@ -159,7 +199,10 @@ fun phoneNotifyState(context: Context): PhoneNotifyState {
 fun NotificationSettingsRouteContent(vm: NotificationSettingsViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val state by vm.uiState.collectAsStateWithLifecycle()
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.phoneState(phoneNotifyState(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        vm.phoneState(phoneNotifyState(context))
+        vm.refreshPush()
+    }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.phoneState(phoneNotifyState(context)) }
     fun open(i: Intent) = runCatching { context.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     NotificationSettingsContent(
@@ -183,8 +226,9 @@ fun NotificationSettingsRouteContent(vm: NotificationSettingsViewModel, onBack: 
 
 /**
  * Settings → Notifications (ANDROID-PLAN 0.1.23, Notification modes 1): "How notifications reach this phone" (the
- * on-phone service, recommended and the default; Google push, "Not available yet" until N4 or without Google Play
- * services; Off, not recommended, confirmed), the status line, **Show in notifications** and the system's
+ * on-phone service, recommended and the default; Google push, "Not available yet" in a build without the Firebase
+ * options or while the vault has no push gateway, "Needs Google Play services" without them; Off, not recommended,
+ * confirmed), the status line, **Show in notifications** and the system's
  * notification categories.
  */
 @Suppress("LongMethod")
@@ -205,7 +249,7 @@ fun NotificationSettingsContent(state: NotificationSettingsUiState, actions: Not
                     ) { actions.setMode(NotificationMode.SERVICE) }
                     ChoiceRow(
                         stringResource(R.string.settings_notify_push),
-                        stringResource(R.string.settings_notify_push_body) + "\n" + stringResource(pushNote(state.push)),
+                        stringResource(R.string.settings_notify_push_body) + "\n" + stringResource(pushNote(state.pushNote)),
                         selected = state.mode == NotificationMode.PUSH,
                         enabled = state.push == PushAvailability.AVAILABLE,
                         tag = "notify_mode_push",
@@ -264,18 +308,24 @@ fun NotificationSettingsContent(state: NotificationSettingsUiState, actions: Not
     }
 }
 
+/** The status line's kind and text. */
+private fun statusLook(line: NotifyStatusLine): Pair<NoticeKind, Int> = when (line) {
+    NotifyStatusLine.CONNECTED -> NoticeKind.SUCCESS to R.string.settings_notify_status_connected
+    NotifyStatusLine.CONNECTING -> NoticeKind.INFO to R.string.settings_notify_status_connecting
+    NotifyStatusLine.WAITING -> NoticeKind.INFO to R.string.settings_notify_status_waiting
+    NotifyStatusLine.LOCKED -> NoticeKind.WARNING to R.string.settings_notify_status_locked
+    NotifyStatusLine.CHECK_DUE -> NoticeKind.WARNING to R.string.settings_notify_status_check_due
+    NotifyStatusLine.BLOCKED -> NoticeKind.URGENT to R.string.settings_notify_status_blocked
+    NotifyStatusLine.BATTERY -> NoticeKind.WARNING to R.string.settings_notify_status_battery
+    NotifyStatusLine.PUSH_REGISTERING_AGAIN -> NoticeKind.INFO to R.string.settings_notify_status_push_again
+    NotifyStatusLine.PUSH_UNREACHABLE -> NoticeKind.WARNING to R.string.settings_notify_status_push_unreachable
+    NotifyStatusLine.PUSH_FALLBACK -> NoticeKind.WARNING to R.string.settings_notify_status_push_fallback
+}
+
 @Composable
 private fun StatusLine(state: NotificationSettingsUiState, actions: NotificationSettingsActions) {
     val line = state.status ?: return
-    val (kind, text) = when (line) {
-        NotifyStatusLine.CONNECTED -> NoticeKind.SUCCESS to R.string.settings_notify_status_connected
-        NotifyStatusLine.CONNECTING -> NoticeKind.INFO to R.string.settings_notify_status_connecting
-        NotifyStatusLine.WAITING -> NoticeKind.INFO to R.string.settings_notify_status_waiting
-        NotifyStatusLine.LOCKED -> NoticeKind.WARNING to R.string.settings_notify_status_locked
-        NotifyStatusLine.CHECK_DUE -> NoticeKind.WARNING to R.string.settings_notify_status_check_due
-        NotifyStatusLine.BLOCKED -> NoticeKind.URGENT to R.string.settings_notify_status_blocked
-        NotifyStatusLine.BATTERY -> NoticeKind.WARNING to R.string.settings_notify_status_battery
-    }
+    val (kind, text) = statusLook(line)
     NoticeCard(
         kind,
         stringResource(R.string.settings_notify_status),

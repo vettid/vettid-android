@@ -1,25 +1,192 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.core.push.fcm
 
 import com.vettid.core.notify.PushAvailability
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The FCM stub (ANDROID-PLAN 0.1.23, Notification modes 11): "not available yet" without configuration or Play services. */
+/**
+ * The FCM provider (ANDROID-PLAN 0.1.30, Notification modes 4 and 11) with a fake for Firebase: no Firebase, no
+ * Google Play services, no network. The option values are made up.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
 class FcmPushProviderTest {
-    private fun provider(installed: Boolean, configured: Boolean = false) =
-        FcmPushProvider(context = android.app.Application(), configured = configured, installed = { installed })
+    private class Firebase(var services: PlayServices = PlayServices.OK, var accepts: Boolean = true) : FcmClient {
+        val log = mutableListOf<String>()
+        var token: String? = "fake-token-1"
+        var hang = false
+
+        override fun init(config: FcmConfig): Boolean {
+            log += "init ${config.projectId}"
+            return accepts
+        }
+
+        override fun playServices(): PlayServices = services
+
+        override suspend fun token(): String? {
+            log += "token"
+            if (hang) awaitCancellation()
+            return token
+        }
+
+        override suspend fun deleteToken(): Boolean {
+            log += "delete"
+            return true
+        }
+    }
+
+    private class Later : WakeContinuation {
+        val log = mutableListOf<String>()
+
+        override fun enqueue() {
+            log += "enqueue"
+        }
+    }
+
+    private val fake = FcmConfig("1:000000000000:android:fake0000", "fake-project", "fake-api-key", "000000000000")
+    private val firebase = Firebase()
+    private val later = Later()
+
+    private fun provider(installed: Boolean = true, config: FcmConfig? = fake) =
+        FcmPushProvider(context = android.app.Application(), config = config, client = firebase, installed = { installed }, continuation = later)
+
+    // --- without the Firebase options: as a build without push ---
 
     @Test
-    fun notAvailableYetWithoutConfiguration() {
-        assertEquals(PushAvailability.NOT_AVAILABLE_YET, provider(installed = true).availability())
-        assertNull(runBlocking { provider(installed = true).token() })
+    fun notAvailableYetWithoutConfigurationAndFirebaseIsNeverTouched() = runTest {
+        val p = provider(config = null)
+        p.start()
+        assertEquals(PushAvailability.NOT_AVAILABLE_YET, p.availability())
+        assertNull(p.token())
+        p.deleteToken()
+        assertTrue("no Firebase call at all", firebase.log.isEmpty())
+        assertTrue("and nothing of WorkManager", later.log.isEmpty())
     }
 
     @Test
-    fun playServicesMissingIsSaid() {
-        assertEquals(PushAvailability.MISSING_SERVICES, provider(installed = false).availability())
-        assertEquals(PushAvailability.MISSING_SERVICES, provider(installed = false, configured = true).availability())
+    fun theOptionsAreAllOrNothing() {
+        assertEquals(fake, FcmConfig.of(" 1:000000000000:android:fake0000 ", "fake-project", "fake-api-key", "000000000000"))
+        assertNull(FcmConfig.of("", "", "", ""))
+        assertNull(FcmConfig.of(null, null, null, null))
+        assertNull("three of four is none", FcmConfig.of("1:000000000000:android:fake0000", "fake-project", "fake-api-key", " "))
+    }
+
+    // --- Google Play services ---
+
+    @Test
+    fun playServicesMissingIsSaid() = runTest {
+        // GrapheneOS without sandboxed Play: the package is not there.
+        assertEquals(PushAvailability.MISSING_SERVICES, provider(installed = false, config = null).availability())
+        val p = provider(installed = false)
+        p.start()
+        assertEquals(PushAvailability.MISSING_SERVICES, p.availability())
+        assertNull(p.token())
+        assertTrue("Firebase is not initialised on a phone without them", firebase.log.isEmpty())
+        // The package is there but Google Play services say they are not usable.
+        firebase.services = PlayServices.MISSING
+        assertEquals(PushAvailability.MISSING_SERVICES, provider().availability())
+    }
+
+    @Test
+    fun outdatedPlayServicesAreSaid() = runTest {
+        firebase.services = PlayServices.OUTDATED
+        val p = provider()
+        assertEquals(PushAvailability.SERVICES_OUTDATED, p.availability())
+        assertNull(p.token())
+        assertFalse("token" in firebase.log)
+    }
+
+    // --- with the options and Google Play services ---
+
+    @Test
+    fun availableWithTheOptionsAndFirebaseIsInitialisedOnceByHand() = runTest {
+        val p = provider()
+        p.start()
+        assertEquals(listOf("init fake-project"), firebase.log)
+        assertEquals(PushAvailability.AVAILABLE, p.availability())
+        assertEquals(PushAvailability.AVAILABLE, p.availability())
+        assertEquals("fake-token-1", p.token())
+        assertEquals("no token is asked for before the registration needs one", listOf("init fake-project", "token"), firebase.log)
+        p.deleteToken()
+        assertEquals("delete", firebase.log.last())
+    }
+
+    @Test
+    fun optionsFirebaseRefusesAreNotAvailableYet() = runTest {
+        firebase.accepts = false
+        val p = provider()
+        p.start()
+        assertEquals(PushAvailability.NOT_AVAILABLE_YET, p.availability())
+        assertNull(p.token())
+        p.deleteToken()
+        assertEquals(listOf("init fake-project"), firebase.log)
+        assertTrue(later.log.isEmpty())
+    }
+
+    @Test
+    fun aTokenGoogleDoesNotGiveIsNoToken() = runTest {
+        val p = provider()
+        firebase.token = null
+        assertNull(p.token())
+        firebase.hang = true
+        assertNull("no answer within 30 s", p.token())
+    }
+
+    // --- a wake ---
+
+    @Test
+    fun aWakeRunsTheCollectAndNothingElse() = runTest {
+        val p = provider()
+        var wakes = 0
+        p.onWake = {
+            wakes++
+            true
+        }
+        assertTrue(p.wake())
+        assertEquals(1, wakes)
+        assertTrue(later.log.isEmpty())
+        assertFalse("a wake asks Google for nothing", "token" in firebase.log)
+    }
+
+    @Test
+    fun aCollectLongerThanTheMessagesTimeGoesOnAsExpeditedWork() = runTest {
+        val p = provider()
+        p.onWake = { awaitCancellation() }
+        assertFalse(p.wake())
+        assertEquals(FcmPushProvider.WAKE_BUDGET_MS, testScheduler.currentTime)
+        assertEquals(listOf("enqueue"), later.log)
+        // So does one that could not reach the vault.
+        p.onWake = { false }
+        assertFalse(p.wake())
+        assertEquals(listOf("enqueue", "enqueue"), later.log)
+        // The continued collect is not continued again.
+        assertFalse(p.continueWake(1_000))
+        assertEquals(2, later.log.size)
+        p.onWake = { true }
+        assertTrue(p.continueWake(1_000))
+    }
+
+    @Test
+    fun aWakeBeforeAnythingListensDoesNothing() = runTest {
+        assertTrue(provider().wake())
+        assertTrue(later.log.isEmpty())
+    }
+
+    @Test
+    fun aRotatedTokenIsAnnouncedWithoutItsValue() {
+        val p = provider()
+        var rotated = 0
+        p.tokenRotated() // nobody listens yet
+        p.onNewToken = { rotated++ }
+        p.tokenRotated()
+        assertEquals(1, rotated)
     }
 }

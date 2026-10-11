@@ -42,11 +42,19 @@ import com.vettid.core.vault.VaultDevice
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
+import com.vettid.core.data.items.ListLoad
+import com.vettid.core.vault.pushRegister
+import com.vettid.core.vault.pushUnregister
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +68,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
@@ -70,6 +79,7 @@ import java.io.IOException
 import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeParseException
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The app's vault on this device: the member API signed by the app key
@@ -93,7 +103,7 @@ class VaultManager(
     private val scope: CoroutineScope,
     private val deviceName: String,
     private val wiper: LocalWipe,
-) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository, BackgroundVault {
+) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository, BackgroundVault, PushVault {
     private val app = context.applicationContext
     private val http = env.http(baseHttp)
     private val gateway: MemberGateway = env.memberGateway(app, http) { session?.device?.vaultId ?: local.vaultId.ifEmpty { null } }
@@ -150,6 +160,18 @@ class VaultManager(
 
     /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
     private val lockNotices = LockNotices()
+
+    /** `feed.event`s collected before the phase is known (a process started by a push wake), until it is ([HeldBackEvents]). */
+    private val heldBack = HeldBackEvents()
+
+    /** Held-back events being handed to the feed (a push wake waits for them). */
+    private val replaying = AtomicInteger(0)
+
+    /** Push wakes being handled ([collectForWake]). */
+    private val waking = AtomicInteger(0)
+
+    private val tokenNeededFlow =
+        MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     private class Session(val device: VaultDevice, val api: VaultApi, val member: MemberApiClient, val alt: AltChannelFlow)
 
@@ -245,6 +267,7 @@ class VaultManager(
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
                 previous = it
+                replayHeldBack(heldBack.release(it))
                 if (it == AppPhase.Unlocked) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
@@ -274,6 +297,24 @@ class VaultManager(
                 if (now && !held) feed.clear()
                 if (!now && held && phaseFlow.value == AppPhase.Unlocked) feed.open()
                 held = now
+            }
+        }
+    }
+
+    /**
+     * The vault is open: the `feed.event`s kept while that was not known arrive now, after the names their
+     * notifications show are read (the connections and the asks), as the on-phone service has them.
+     */
+    private fun replayHeldBack(events: List<VaultMessage>) {
+        if (events.isEmpty()) return
+        replaying.incrementAndGet()
+        scope.launch {
+            try {
+                runCatching { social.refresh() }
+                runCatching { social.refreshApprovals() }
+                events.forEach { e -> runCatching { feed.replay(e) } }
+            } finally {
+                replaying.decrementAndGet()
             }
         }
     }
@@ -396,7 +437,8 @@ class VaultManager(
                     items.onEvent(m)
                     sharing.onEvent(m)
                     social.onEvent(m)
-                    feed.onEvent(m)
+                    // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
+                    if (!heldBack.hold(m, phaseFlow.value)) feed.onEvent(m)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: RuntimeException) {
@@ -416,8 +458,16 @@ class VaultManager(
             "vault.locking" -> {
                 windowFlow.value = null
                 val p = phaseFlow.value
-                if (p is AppPhase.Unlocked || p is AppPhase.Setup) phaseFlow.value = AppPhase.Locked
+                if (p is AppPhase.Unlocked || p is AppPhase.Setup) {
+                    phaseFlow.value = AppPhase.Locked
+                } else if (waking.get() > 0 && !lockedHere && p !is AppPhase.SignedOut) {
+                    // A process started by the lock's own wake (§14.2 trigger 3) never saw the vault open: the
+                    // notice is live (ephemeral, 60 s) and not this phone's lock, which sends no wake.
+                    lockedElsewhereFlow.value = true
+                }
             }
+            // §14.2: the gateway reported the token gone, the vault erased the registration; a fresh one is asked for.
+            PushWire.TOKEN_NEEDED -> tokenNeededFlow.tryEmit(PushWire.reason(m))
             "credential.alarm" -> {
                 val b = m.body
                 val id = VaultJson.str(b, "alarm_id") ?: return
@@ -1221,6 +1271,7 @@ class VaultManager(
         windowFlow.value = null
         relayPaused = false
         lockedElsewhereFlow.value = false
+        heldBack.release(AppPhase.SignedOut)
         wiper.resetMemory()
         io { if (wiper.erase()) wiper.finish() }
         local = LocalAccount()
@@ -1254,6 +1305,70 @@ class VaultManager(
         if (relayPaused || phaseFlow.value != AppPhase.Unlocked) return
         d.stop()
         d.start(scope)
+    }
+
+    // --- PushVault: Google push (ANDROID-PLAN 0.1.30, VAULT-MESSAGING §14) ---
+
+    override val pushTokenNeeded: SharedFlow<String> = tokenNeededFlow.asSharedFlow()
+
+    override suspend fun pushRegister(platform: String, token: String, appId: String): PushRegisterOutcome {
+        // A locked vault answers nothing (the registration is DEK state, §12.1); held is fine (§3.6.3).
+        if (phaseFlow.value != AppPhase.Unlocked) return PushRegisterOutcome.NoAnswer
+        return try {
+            val o = guard { session().api.pushRegister(platform, token, appId) }
+            PushWire.state(o["push"] as? JsonObject)?.let { PushRegisterOutcome.Registered(it) } ?: PushRegisterOutcome.NoAnswer
+        } catch (e: VaultFailure) {
+            PushWire.outcome(e)
+        }
+    }
+
+    override suspend fun pushUnregister(): Boolean {
+        if (phaseFlow.value != AppPhase.Unlocked) return false
+        return try {
+            guard { session().api.pushUnregister() }
+            true
+        } catch (_: VaultFailure) {
+            false
+        }
+    }
+
+    override suspend fun pushState(): PushStateView? = guard {
+        val s = session()
+        PushWire.own(s.api.deviceList(), s.device.deviceId)
+    }
+
+    /**
+     * PUSH-GATEWAY §11.1 step 2: a wake means only "collect". The phase is read if this process does not know it (a
+     * process the wake started), the mailbox collection runs as when the app is open (decrypt, persist, ack), the
+     * feed catches up, and the notifications follow from the feed and the vault's state as in the on-phone service
+     * mode. Nothing is collected by a second path: the one collector of the process does it.
+     */
+    @Suppress("ReturnCount") // one early end per state in which there is nothing to collect
+    override suspend fun collectForWake(): Boolean {
+        waking.incrementAndGet()
+        try {
+            if (HeldBackEvents.unknown(phaseFlow.value)) refresh()
+            val p = phaseFlow.value
+            if (HeldBackEvents.unknown(p)) return false // not reachable now: the caller continues when there is a network
+            if (p != AppPhase.Unlocked && p != AppPhase.Locked) return true // no vault on this phone
+            val d = session?.device ?: return true
+            if (relayPaused) return true // the fallback service keeps the relay closed while the vault is locked
+            d.ensureCollecting()
+            if (p == AppPhase.Unlocked) feed.catchUp()
+            val began = System.nanoTime()
+            val settle = WakeSettle()
+            while (!settle.settled(System.nanoTime(), began, d.collectRequestSince, wakeBusy())) delay(WAKE_CHECK_MS)
+            return true
+        } finally {
+            waking.decrementAndGet()
+        }
+    }
+
+    /** A read that a wake's events started is still out (the held-back events, the feed's read). */
+    private fun wakeBusy(): Boolean {
+        val p = phaseFlow.value
+        return replaying.get() > 0 || heldBack.waiting && HeldBackEvents.unknown(p) ||
+            p == AppPhase.Unlocked && !held() && feed.load.value == ListLoad.LOADING
     }
 
     // --- helpers ---
@@ -1336,6 +1451,7 @@ class VaultManager(
 
         /** The bound of the best-effort network calls of a wipe (relay mailbox, member sign-out). */
         private const val BEST_EFFORT_MS = 5_000L
+        private const val WAKE_CHECK_MS = 250L
         private const val KEY_FINGERPRINT_CHARS = 12
         private const val GROUP = 4
         private val json = Json { ignoreUnknownKeys = true }

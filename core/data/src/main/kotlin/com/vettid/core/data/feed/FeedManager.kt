@@ -187,6 +187,21 @@ class FeedManager(
         }
     }
 
+    /**
+     * A `feed.event` that was held back while this phone did not know whether its vault was open (a process started
+     * by a push wake; `HeldBackEvents`), now that it is: an arrival like a live one. When the full read of the open
+     * already brought the item, it arrives as the feed has it now (not at all once read, archived or deleted).
+     */
+    fun replay(m: VaultMessage) {
+        if (m.type != "feed.event" || gated()) return
+        val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
+        // Whether the feed's read already covers the event, and the item as the list has it now (null: gone).
+        val (covered, listed) = synchronized(lock) {
+            (loadState.value == ListLoad.LOADED && item.seq <= cursor) to byId[item.itemId]
+        }
+        if (!covered) onItem(item) else if (listed?.status == STATUS_ACTIVE) arrivalFlow.tryEmit(listed)
+    }
+
     private fun onItem(item: FeedItem) {
         val inOrder = synchronized(lock) {
             if (loadState.value != ListLoad.LOADED) return@synchronized false
