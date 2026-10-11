@@ -308,7 +308,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                     Modifier.testTag("preflight_error"),
                 )
             }
-            if (p != null) PreflightNotices(p, true, {}, state.approveOffer, actions::setApproveOffer)
+            if (p != null) PreflightNotices(p, true, {}, state.approveOffer, actions::setApproveOffer, state.notes)
             if (!blocked && p != null) {
                 SecretField(
                     value = state.pin,

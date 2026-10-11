@@ -297,12 +297,15 @@ class AltChannelFlow(
  *   vault); the app tells the member before sending the PIN.
  * - [offer]: the newest `active` release when it is newer than the routed
  *   one; the member may approve the move in this unlock (§11.10.3).
+ * - [between]: the manifest's releases between the routed one and [offer]
+ *   (What's new lists their summaries, ANDROID-PLAN 0.1.31).
  */
 data class UnlockPreflight(
     val routed: Release,
     val lastNumber: Long,
     val manifestSerial: Long,
     val offer: Release?,
+    val between: List<Release> = emptyList(),
 ) {
     val rollback: Boolean get() = lastNumber != 0L && routed.number < lastNumber
     val softwareUpdated: Boolean get() = lastNumber != 0L && routed.number > lastNumber
@@ -311,7 +314,8 @@ data class UnlockPreflight(
         fun of(state: AltState, routed: Release, m: ReleaseManifest): UnlockPreflight {
             val newest = m.newest()
             val offer = newest?.takeIf { it.number > routed.number }
-            return UnlockPreflight(routed, state.releaseNumber, m.serial, offer)
+            val between = offer?.let { o -> m.releases.filter { it.number > routed.number && it.number < o.number } }.orEmpty()
+            return UnlockPreflight(routed, state.releaseNumber, m.serial, offer, between)
         }
     }
 }

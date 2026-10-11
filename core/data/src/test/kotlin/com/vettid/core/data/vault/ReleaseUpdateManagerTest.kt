@@ -342,4 +342,21 @@ class ReleaseUpdateManagerTest {
         m.refreshOffer()
         assertEquals(offer, m.offer.value)
     }
+
+    @Test
+    fun theOfferIsKnownOnlyOnceRead() = runTest {
+        val ops = object : ReleaseUpdateOps by Ops() {
+            var calls = 0
+
+            override suspend fun offer(): ReleaseUpdateOffer? = if (calls++ == 0) throw VaultFailure(FailureKind.NETWORK) else null
+        }
+        val m = ReleaseUpdateManager(backgroundScope, ops)
+        assertFalse(m.offerKnown.value)
+        // A failed read: still not known (a null offer then says nothing about a posted notification).
+        m.refreshOffer()
+        assertFalse(m.offerKnown.value)
+        m.refreshOffer()
+        assertTrue(m.offerKnown.value)
+        assertNull(m.offer.value)
+    }
 }

@@ -21,7 +21,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -33,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
+import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
@@ -104,7 +104,9 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                 )
             }
             if (p != null) {
-                PreflightNotices(p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer)
+                PreflightNotices(
+                    p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer, state.notes,
+                )
             }
             if (state.refused && !state.notRecognised) {
                 NoticeCard(
@@ -272,8 +274,8 @@ internal fun PreflightNotices(
     onAcknowledgeUpdate: () -> Unit,
     approveOffer: Boolean,
     onApproveOffer: (Boolean) -> Unit,
+    notes: ReleaseNotes?,
 ) {
-    val uri = LocalUriHandler.current
     if (p.rollback) {
         NoticeCard(
             NoticeKind.URGENT,
@@ -304,13 +306,13 @@ internal fun PreflightNotices(
     }
     val offer = p.offer
     if (offer != null && !p.rollback) {
+        // What's new first (ANDROID-PLAN 0.1.31), then the fingerprint and the approval.
+        WhatsNew(offer.number, notes, offer.notes)
         NoticeCard(
             NoticeKind.INFO,
             stringResource(R.string.unlock_offer_title, offer.number.toInt()),
             stringResource(R.string.unlock_offer_body, p.routed.number.toInt(), offer.number.toInt(), offer.fingerprint),
             modifier = Modifier.testTag("release_offer"),
-            actions = { TextButton(onClick = { uri.openUri(offer.notes) }) {
-                Text(stringResource(R.string.unlock_offer_notes)) } },
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,

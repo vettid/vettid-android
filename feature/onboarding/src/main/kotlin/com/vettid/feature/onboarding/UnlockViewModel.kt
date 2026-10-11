@@ -6,6 +6,8 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
+import com.vettid.core.data.vault.ReleaseNotes
+import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -40,6 +42,8 @@ data class UnlockUiState(
     val updateAcknowledged: Boolean = false,
     /** The member approves the offered release with this unlock (§11.10.3). */
     val approveOffer: Boolean = false,
+    /** What's new in the offered release (ANDROID-PLAN 0.1.31); null while it loads. Never gates the unlock. */
+    val notes: ReleaseNotes? = null,
     val pin: String = "",
     val busy: Boolean = false,
     val message: UnlockMessage? = null,
@@ -142,11 +146,13 @@ class UnlockViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val account: AccountRepository,
     ownerCheck: OwnerCheckRepository,
+    private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), UnlockActions {
     private val state = MutableStateFlow(UnlockUiState(email = account.account.value?.emailHint?.takeIf { it.isNotEmpty() }))
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
     private var ticker: Job? = null
     private var serviceTicker: Job? = null
+    private var notesJob: Job? = null
 
     init {
         retryPreflight()
@@ -163,11 +169,22 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
-                state.update { it.copy(loading = false, preflight = p) }
+                state.update { it.copy(loading = false, preflight = p, notes = null) }
+                loadNotes(p)
             } catch (e: VaultFailure) {
                 state.update { it.copy(loading = false, preflightError = e.kind) }
                 if (e.kind == FailureKind.SERVICE_PAUSED) startServiceWait(e.retryAfterSeconds)
             }
+        }
+    }
+
+    /** What's new for the offer (ANDROID-PLAN 0.1.31): information only, it never holds the unlock up. */
+    private fun loadNotes(p: PreflightInfo) {
+        val offer = p.offer?.takeIf { !p.rollback } ?: return
+        notesJob?.cancel()
+        notesJob = viewModelScope.launch {
+            val n = releaseNotes.whatsNew(offer, p.between)
+            state.update { if (it.preflight?.offer == offer) it.copy(notes = n) else it }
         }
     }
 

@@ -619,7 +619,7 @@ class VaultManager(
     override suspend fun preflight(): PreflightInfo = guard {
         val s = session()
         val p = s.alt.preflight(s.device.altState)
-        PreflightInfo(view(p.routed), p.lastNumber, p.softwareUpdated, p.rollback, p.offer?.let { view(it) })
+        PreflightInfo(view(p.routed), p.lastNumber, p.softwareUpdated, p.rollback, p.offer?.let { view(it) }, p.between.map { view(it) })
     }
 
     override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
@@ -730,7 +730,13 @@ class VaultManager(
             val m = s.alt.manifest(st.manifestSerial)
             val sealed = (st.release.takeIf { it.isNotEmpty() }?.let { m.byPcr0(it) } ?: m.byNumber(st.releaseNumber))
                 ?.takeIf { it.number == st.releaseNumber }
-            ReleaseUpdateOffer.of(sealed?.let { view(it) }, m.newest()?.let { view(it) })
+            val newest = m.newest()
+            val between = if (sealed != null && newest != null) {
+                m.releases.filter { it.number > sealed.number && it.number < newest.number }.map { view(it) }
+            } else {
+                emptyList()
+            }
+            ReleaseUpdateOffer.of(sealed?.let { view(it) }, newest?.let { view(it) }, between)
         }
 
         override fun ownerCheckDue(): Boolean =

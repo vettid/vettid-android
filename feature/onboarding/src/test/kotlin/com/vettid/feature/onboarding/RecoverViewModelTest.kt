@@ -9,6 +9,7 @@ import com.vettid.core.data.vault.RecoveryStage
 import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.UnlockAttempt
+import com.vettid.core.testing.FakeReleaseNotes
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
@@ -34,7 +35,7 @@ class RecoverViewModelTest {
 
     @Test
     fun scanRegisterPinPasswordDone() = runTest {
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertEquals(RecoverStep.INTRO, vm.uiState.value.step)
         vm.scan()
@@ -64,7 +65,7 @@ class RecoverViewModelTest {
 
     @Test
     fun scansThatAreNotThisAccountsRecoveryCodeAreRefusedLocally() = runTest {
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.scan()
         vm.scanned("https://example.org")
@@ -81,7 +82,7 @@ class RecoverViewModelTest {
     @Test
     fun wrongCodesAreCountedAndTheFifthVoidsTheRecovery() = runTest {
         repeat(5) { vault.registrations.add(RecoveryRegistration.Refused("bad_code")) }
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.scan()
         for (i in 1..4) {
@@ -98,7 +99,7 @@ class RecoverViewModelTest {
 
     @Test
     fun enclaveRefusalsSayWhy() = runTest {
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.scan()
         for ((c, r) in listOf(
@@ -122,7 +123,7 @@ class RecoverViewModelTest {
     fun aCancelledRecoveryAtThePinSaysSo() = runTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.OTHER, "unknown_device"))
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertEquals(RecoverStep.PIN, vm.uiState.value.step)
         vm.setPin("975310")
@@ -136,7 +137,7 @@ class RecoverViewModelTest {
     fun badPinStartsTheBackoff() = runTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.recoveryUnlockResults.add(UnlockAttempt.BadPin(30))
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.setPin("975310")
         vm.submitPin()
@@ -150,7 +151,7 @@ class RecoverViewModelTest {
     fun aReleaseThatEndedBlocksThePin() = runTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.fail["recoveryPreflight"] = FakeVault.failure(FailureKind.RELEASE_ENDED)
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertEquals(FailureKind.RELEASE_ENDED, vm.uiState.value.preflightError)
         assertFalse(vm.uiState.value.pinAllowed)
@@ -165,7 +166,7 @@ class RecoverViewModelTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.preflightInfo =
             PreflightInfo(FakeVault.release(3), 0, softwareUpdated = false, rollback = false, offer = FakeVault.release(4))
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.setApproveOffer(true)
         vm.setPin("975310")
@@ -178,7 +179,7 @@ class RecoverViewModelTest {
     private fun kotlinx.coroutines.test.TestScope.unlockedWith(backup: Boolean?): RecoverViewModel {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.recoveryCredentialBackupValue = backup
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertEquals(RecoverStep.PIN, vm.uiState.value.step)
         vm.setPin("975310")
@@ -212,7 +213,7 @@ class RecoverViewModelTest {
     fun noBackupAtTheUnlockCannotBeRecovered() = runTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.recoveryUnlockResults += UnlockAttempt.Failed(FailureKind.OTHER, "no_backup")
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.setPin("975310")
         vm.submitPin()
@@ -224,7 +225,7 @@ class RecoverViewModelTest {
     @Test
     fun noBackupAtTheRegisterCannotBeRecovered() = runTest {
         vault.registrations += RecoveryRegistration.Refused("no_backup")
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.scan()
         vm.scanned(qr)
@@ -250,7 +251,7 @@ class RecoverViewModelTest {
     fun credentialBackupFalseAlsoAppliesWhenTheFlowResumes() = runTest {
         vault.recoveryStageValue = RecoveryStage.PASSWORD
         vault.recoveryCredentialBackupValue = false
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertEquals(RecoverStep.NO_BACKUP, vm.uiState.value.step)
         assertFalse("recoverCredential" in vault.calls)
@@ -260,7 +261,7 @@ class RecoverViewModelTest {
     fun aWrongPasswordIsShownAndTheFieldCleared() = runTest {
         vault.recoveryStageValue = RecoveryStage.PASSWORD
         vault.fail["recoverCredential"] = FakeVault.failure(FailureKind.BAD_PASSWORD, "bad_password")
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         vm.setPassword("wrong")
         vm.submitPassword()
@@ -272,7 +273,7 @@ class RecoverViewModelTest {
 
     @Test
     fun noRecoveryShowsWhatToDo() = runTest {
-        val vm = RecoverViewModel(vault, vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertEquals(RecoverStep.INTRO, vm.uiState.value.step)
         assertFalse(vm.back())

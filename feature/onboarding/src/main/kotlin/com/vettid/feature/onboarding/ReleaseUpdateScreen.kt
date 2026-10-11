@@ -13,12 +13,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -83,6 +81,7 @@ fun ReleaseUpdateContent(state: ReleaseUpdateUiState, actions: ReleaseUpdateActi
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             when {
                 offer != null -> {
+                    WhatsNew(offer.target.number, state.notes, offer.target.notes)
                     OfferNotices(offer)
                     if (state.checkDue) {
                         NoticeCard(
@@ -134,10 +133,9 @@ private fun Checking(label: String) {
     }
 }
 
-/** The release offered (§11.10.3: number, fingerprint, notes) and, for an ending release, its end. */
+/** The release offered (§11.10.3: number, fingerprint; the notes are What's new above) and, for an ending release, its end. */
 @Composable
 private fun OfferNotices(offer: ReleaseUpdateOffer) {
-    val uri = LocalUriHandler.current
     when (offer.kind) {
         UpdateNoticeKind.ENDING -> NoticeCard(
             NoticeKind.URGENT,
@@ -159,7 +157,6 @@ private fun OfferNotices(offer: ReleaseUpdateOffer) {
         stringResource(R.string.unlock_offer_title, offer.target.number.toInt()),
         stringResource(R.string.unlock_offer_body, offer.current.number.toInt(), offer.target.number.toInt(), offer.target.fingerprint),
         modifier = Modifier.testTag("release_offer"),
-        actions = { TextButton(onClick = { uri.openUri(offer.target.notes) }) { Text(stringResource(R.string.unlock_offer_notes)) } },
     )
     Text(
         stringResource(R.string.release_update_how),

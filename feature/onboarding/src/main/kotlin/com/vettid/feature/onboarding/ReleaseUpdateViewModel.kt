@@ -3,6 +3,8 @@ package com.vettid.feature.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.ReleaseNotes
+import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateProgress
@@ -13,7 +15,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -26,6 +31,8 @@ data class ReleaseUpdateUiState(
     val pin: String = "",
     /** The owner check is due or held (§3.6.5): it comes first; the shell's gate shows it. */
     val checkDue: Boolean = false,
+    /** What's new in the offered release (ANDROID-PLAN 0.1.31); null while it loads. Never gates the approval. */
+    val notes: ReleaseNotes? = null,
 ) {
     val submitAllowed: Boolean get() = offer != null && !checkDue && pin.length >= MIN_PIN_LENGTH
 
@@ -53,12 +60,25 @@ interface ReleaseUpdateActions {
 class ReleaseUpdateViewModel @Inject constructor(
     private val updates: ReleaseUpdateRepository,
     ownerCheck: OwnerCheckRepository,
+    private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), ReleaseUpdateActions {
     private val state = MutableStateFlow(ReleaseUpdateUiState(offer = updates.offer.value, loading = updates.offer.value == null))
     val uiState: StateFlow<ReleaseUpdateUiState> = state.asStateFlow()
 
     init {
         viewModelScope.launch { updates.offer.collect { o -> state.update { it.copy(offer = o) } } }
+        // What's new for the offered release (number and PCR0); a new target loads again. Each visit retries.
+        viewModelScope.launch {
+            updates.offer.map { it?.let { o -> o.target to o.between } }
+                .distinctUntilChanged { a, b -> a?.first?.number == b?.first?.number && a?.first?.pcr0 == b?.first?.pcr0 }
+                .collectLatest { t ->
+                    state.update { it.copy(notes = null) }
+                    if (t != null) {
+                        val n = releaseNotes.whatsNew(t.first, t.second)
+                        state.update { it.copy(notes = n) }
+                    }
+                }
+        }
         viewModelScope.launch {
             updates.refreshOffer()
             state.update { it.copy(loading = false) }
