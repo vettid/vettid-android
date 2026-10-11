@@ -116,7 +116,8 @@ android {
         manifestPlaceholders["vettidFcmEnabled"] = (fcmOptions(name) != null).toString()
     }
 
-    // Two distributions of the same app (README "F-Droid build"; same application id and version; Google Play installs are signed by Google, F-Droid and direct builds by VettID):
+    // Two distributions of the same app (README "F-Droid build"; same application id and version;
+    // Google Play installs are signed by Google, F-Droid and direct builds by VettID):
     // - `full`: Google Play and VettID's own releases. Google push (Firebase Cloud Messaging, :core:push-fcm) is
     //   linked, and off unless the Gradle properties supply the Firebase options.
     // - `foss`: F-Droid. No Google proprietary code at all: no Firebase, no Google Play services, no WorkManager.
