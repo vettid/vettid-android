@@ -22,8 +22,8 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
 - Shared machine: memory and workers are capped in `gradle.properties`. Run
   builds with `--max-workers=2`, check `free -g` first (wait if < 8 GB
   available), and `./gradlew --stop` when done. No emulator.
-- `./gradlew :app:assembleDebug :app:assembleDevStack testDebugUnitTest :core:crypto:test :core:relay:test detekt :app:lintDebug :app:assembleRelease :app:assembleStaging :app:checkReleaseApk :app:checkStagingApk`
-  is what CI runs (`.github/workflows/ci.yml`, plus gitleaks over full history, with
+- `./gradlew :app:assembleDebug :app:assembleDevStack testDebugUnitTest :core:crypto:test :core:relay:test detekt :app:lintDebug :app:assembleRelease :app:assembleStaging :app:checkReleaseApk :app:checkStagingApk :app:checkFossReleaseApk`
+  is what CI runs (`:app:assembleRelease` builds both distributions' release APKs) (`.github/workflows/ci.yml`, plus gitleaks over full history, with
   `.gitleaks.toml` allowlisting the public §16 test-vector values).
 - `:core:crypto` is a pure Kotlin/JVM module (`vettid.jvm.library`); its tests include the
   vettid-vault §16 vectors (`src/test/resources/vectors`, see `SOURCE.md` there), which must
@@ -71,7 +71,18 @@ The A2 exit test:
   keystore. Without it the APK is unsigned. `checkReleaseApk` / `checkStagingApk` fail if
   an APK carries another environment's endpoints or pins, or dev-stack/debug-tools code.
 
-- Google push (ANDROID-PLAN 0.1.30, Notification modes 4; README "Google push"): `:core:push-fcm` is the only module
+- Two distributions (README "F-Droid build"; flavour dimension `distribution`): `full` (Google Play, VettID's
+  releases; every build type) and `foss` (F-Droid; `fossRelease` only), same application id and version. `foss`
+  contains no Google proprietary code: `:app:checkFossReleaseApk` fails on any Firebase, Google Play services,
+  datatransport, Play or WorkManager module, class, file or manifest entry. Distribution-specific code lives only in
+  `app/src/full` and `app/src/foss` (`DistributionApplication`, `DistributionModule`); anything of Google goes into
+  `:core:push-fcm` (its coordinates in that module's build file, never in the version catalogue) and nowhere else.
+  `foss` binds `NoGooglePushProvider` (`PushAvailability.NOT_IN_THIS_BUILD`, `settings.notifications_push_not_in_build`).
+  The `full` tasks keep their old names by alias (`:app:testDebugUnitTest`, `:app:lintDebug`, `:app:installStaging`,
+  `:app:connectedDevStackAndroidTest`); the APKs are `app/build/outputs/apk/<full|foss>/<type>/`. The `fossRelease`
+  APK must stay reproducible (F-Droid publishes the VettID-signed APK after rebuilding it): nothing of the build
+  time, path, machine or git state may go into a release APK.
+- Google push (ANDROID-PLAN 0.1.30, Notification modes 4; README "Google push"; the `full` distribution): `:core:push-fcm` is the only module
   with Firebase (firebase-messaging alone; no google-services.json, no Google Services plugin). The Firebase options
   come from the Gradle properties `vettidFcm<BuildType>{ApplicationId,ProjectId,ApiKey,SenderId}`; never commit
   values, and use obviously fake ones in tests. Without them (the default, CI) the provider is "not available yet",

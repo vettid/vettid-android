@@ -39,18 +39,13 @@ zxing = "3.5.4"
 # Phone values formatted while typed, stored in international format (Apache-2.0, pure Java).
 libphonenumber = "9.0.41"
 camerax = "1.6.2"
-# Google push (ANDROID-PLAN 0.1.30, Notification modes 4): Firebase Cloud Messaging, in :core:push-fcm only. No BoM, no
-# Google Services plugin, no google-services.json; no other Firebase product (no Analytics, no Crashlytics).
-firebaseMessaging = "25.1.3"
-# GoogleApiAvailability (is Google Play services there and current). Already a runtime dependency of
-# firebase-messaging at this version; named so that :core:push-fcm can compile against it.
-playServicesBase = "18.9.0"
+# Google push (Firebase Cloud Messaging, Google Play services' availability check): the versions are in
+# core/push-fcm/build.gradle.kts, the only place that names them, so that an F-Droid build that removes that module
+# has no proprietary coordinate left in the tree (README "F-Droid build").
 # A wake's collect that outlasts the 20 s of a push message continues as expedited work (:core:push-fcm).
 work = "2.11.2"
 
 [libraries]
-firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging", version.ref = "firebaseMessaging" }
-play-services-base = { group = "com.google.android.gms", name = "play-services-base", version.ref = "playServicesBase" }
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime", version.ref = "work" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }

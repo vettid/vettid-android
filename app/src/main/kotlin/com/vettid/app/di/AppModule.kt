@@ -28,8 +28,6 @@ import com.vettid.core.notify.PushRegState
 import com.vettid.core.notify.PushRegistrar
 import com.vettid.core.notify.ServiceStatus
 import com.vettid.core.notify.VaultNotifySource
-import com.vettid.core.push.fcm.FcmConfig
-import com.vettid.core.push.fcm.FcmPushProvider
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -200,19 +198,7 @@ object AppModule {
     @Provides
     fun backgroundVault(m: VaultManager): BackgroundVault = m
 
-    /**
-     * Google push (ANDROID-PLAN 0.1.30): available only in a build that carries the Firebase options (the Gradle
-     * properties of README "Google push"); without them "Not available yet", and nothing of Firebase runs.
-     */
-    @Provides
-    @Singleton
-    fun fcmPushProvider(@ApplicationContext context: Context): FcmPushProvider = FcmPushProvider(
-        context,
-        FcmConfig.of(BuildConfig.FCM_APPLICATION_ID, BuildConfig.FCM_PROJECT_ID, BuildConfig.FCM_API_KEY, BuildConfig.FCM_SENDER_ID),
-    )
-
-    @Provides
-    fun pushProvider(fcm: FcmPushProvider): PushProvider = fcm
+    // The PushProvider is the distribution's: Google push in `full`, none in `foss` (DistributionModule).
 
     @Provides
     fun pushVault(m: VaultManager): PushVault = m
