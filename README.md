@@ -121,6 +121,12 @@ push receiver and services are disabled in the manifest, and nothing contacts
 Google. With them, Google is first contacted when the member chooses Google push.
 On a phone without Google Play services (GrapheneOS without sandboxed Play) the
 choice reads "Needs Google Play services, which this phone does not have".
+If Google push was chosen and stops being usable (Google Play services disabled,
+removed or outdated, or an update to a build without it), the on-phone service
+runs instead, the status line reads "Google push is not available on this phone,
+using the on-phone service", and the vault is told to drop the registration when
+it next opens. The choice stays Google push and registers again by itself once
+the push service is back.
 
 Only `firebase-messaging` is linked (`:core:push-fcm`): no Analytics, no
 Crashlytics, no `FirebaseInitProvider`, automatic token creation and delivery

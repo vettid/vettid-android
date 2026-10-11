@@ -358,6 +358,61 @@ class PushRegistrarTest {
     }
 
     @Test
+    fun aPushServiceThatIsGoneIsSaidEvenOfAKnownRegistration() = runTest {
+        // ANDROID-PLAN 0.1.32: Google Play services disabled or removed while the app runs. The registration the
+        // vault holds cannot wake the phone any more, so the status leaves "active" (the mode controller then falls
+        // back to the on-phone service and has the registration dropped).
+        val r = registrar()
+        r.enable()
+        runCurrent()
+        assertTrue(r.status.value.active)
+        push.available = PushAvailability.MISSING_SERVICES
+        vault.phase.value = AppPhase.Locked
+        runCurrent()
+        vault.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals("no token: the vault is not asked", 1, log.size)
+        assertEquals(PushRegState.RETRYING, r.status.value.state)
+        assertTrue(r.status.value.fallback)
+        // What the mode controller then asks for: push.unregister, now, since the vault is open.
+        r.disable(wiped = false)
+        runCurrent()
+        assertEquals(listOf("register fcm tok-1 $APP_ID", "unregister"), log)
+        assertEquals(PushMemory(), memory.value)
+        assertEquals(PushRegState.OFF, r.status.value.state)
+        // A transient "no token" of a push service that is there keeps a known registration active, as before.
+        push.available = PushAvailability.AVAILABLE
+        r.enable()
+        runCurrent()
+        assertTrue(r.status.value.active)
+        push.noToken = true
+        vault.phase.value = AppPhase.Locked
+        runCurrent()
+        vault.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertTrue(r.status.value.active)
+    }
+
+    @Test
+    fun aColdStartWithoutThePushServiceDropsAnOldRegistrationAtTheNextOpen() = runTest {
+        // The process starts in the Google push mode with the push service unusable: the registration is never
+        // enabled; the mode controller asks for the drop.
+        memory.value = PushMemory(registered = true)
+        push.available = PushAvailability.NOT_AVAILABLE_YET
+        vault.phase.value = AppPhase.Locked
+        val r = registrar()
+        r.disable(wiped = false)
+        runCurrent()
+        assertTrue(log.isEmpty())
+        assertEquals(PushMemory(unregisterPending = true), memory.value)
+        vault.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals(listOf("unregister"), log)
+        assertEquals(PushMemory(), memory.value)
+        assertEquals(PushRegState.OFF, r.status.value.state)
+    }
+
+    @Test
     fun leavingTheModeUnregistersThenDeletesTheToken() = runTest {
         val r = registrar()
         r.enable()

@@ -132,6 +132,45 @@ class NotificationSettingsTest {
         assertNull(NotificationSettingsUiState(NotificationMode.OFF, registration = PushStatus(PushRegState.ACTIVE)).status)
     }
 
+    /** ANDROID-PLAN 0.1.32 (owner decision 2026-10-11): Google push chosen, the push service not usable any more. */
+    @Test
+    fun googlePushChosenButNotAvailableOnThePhoneSaysSoAndKeepsTheChoice() = runTest {
+        for (no in PushAvailability.entries - PushAvailability.AVAILABLE) {
+            val s = NotificationSettingsUiState(NotificationMode.PUSH, service = KeeperStatus.CONNECTED, push = no)
+            assertEquals("$no", NotifyStatusLine.PUSH_NOT_ON_PHONE, s.status)
+            assertEquals("the note under the choice gives the reason", no, s.pushNote)
+            // Whatever the registration last said, and while the fallback service is still connecting.
+            assertEquals(NotifyStatusLine.PUSH_NOT_ON_PHONE, s.copy(service = KeeperStatus.CONNECTING, registration = PushStatus(PushRegState.RETRYING)).status)
+            assertEquals(NotifyStatusLine.PUSH_NOT_ON_PHONE, s.copy(service = null, registration = PushStatus(PushRegState.ACTIVE)).status)
+            // What matters more still comes first, as for the other fallback.
+            assertEquals(NotifyStatusLine.LOCKED, s.copy(service = KeeperStatus.LOCKED).status)
+            assertEquals(NotifyStatusLine.WAITING, s.copy(service = KeeperStatus.WAITING_FOR_NETWORK).status)
+            assertEquals(NotifyStatusLine.BLOCKED, s.copy(phone = PhoneNotifyState(allowed = false)).status)
+            // It says nothing in the other modes.
+            assertEquals(NotifyStatusLine.CONNECTED, s.copy(mode = NotificationMode.SERVICE).status)
+        }
+        // The screen: the mode stays Google push (nothing writes the preference), and the line follows the phone
+        // when the screen comes to the front.
+        val prefs = InMemoryPreferencesRepository()
+        prefs.setNotificationMode(NotificationMode.PUSH)
+        val push = Push(PushAvailability.AVAILABLE)
+        val reg = Registration().also { it.status.value = PushStatus(PushRegState.ACTIVE) }
+        val vm = NotificationSettingsViewModel(prefs, ServiceStatus(), push, reg)
+        advanceUntilIdle()
+        assertEquals(NotifyStatusLine.CONNECTED, vm.uiState.value.status)
+        push.available = PushAvailability.MISSING_SERVICES
+        vm.refreshPush()
+        advanceUntilIdle()
+        assertEquals(NotifyStatusLine.PUSH_NOT_ON_PHONE, vm.uiState.value.status)
+        assertEquals(PushAvailability.MISSING_SERVICES, vm.uiState.value.pushNote)
+        assertEquals(NotificationMode.PUSH, vm.uiState.value.mode)
+        assertEquals(NotificationMode.PUSH, prefs.current.value.notificationMode)
+        push.available = PushAvailability.AVAILABLE
+        vm.refreshPush()
+        advanceUntilIdle()
+        assertEquals(NotifyStatusLine.CONNECTED, vm.uiState.value.status)
+    }
+
     @Test
     fun theStatusLineSaysTheMostImportantFirst() {
         val s = NotificationSettingsUiState(service = KeeperStatus.CONNECTED)

@@ -116,9 +116,12 @@ data class NotificationSettingsUiState(
      * ("Push service not reachable, retrying" when the vault's last wake or the registration itself met a gateway
      * error), "Registering again" after `push.token-needed`, and "Push unavailable, using the on-phone service"
      * while the vault cannot register (`limit`, `unavailable`, a refusal) and the service runs as the fallback.
+     * "Google push is not available on this phone, using the on-phone service" (0.1.32) when the push service itself
+     * is not usable any more (the note under the choice gives the reason); the mode stays Google push.
      */
     private val pushLine: NotifyStatusLine
         get() = when {
+            push != PushAvailability.AVAILABLE -> NotifyStatusLine.PUSH_NOT_ON_PHONE
             registration.state == PushRegState.RETRYING || registration.gatewayUnreachable -> NotifyStatusLine.PUSH_UNREACHABLE
             registration.fallback -> NotifyStatusLine.PUSH_FALLBACK
             registration.state == PushRegState.REGISTERING_AGAIN -> NotifyStatusLine.PUSH_REGISTERING_AGAIN
@@ -136,7 +139,8 @@ data class NotificationSettingsUiState(
 }
 
 enum class NotifyStatusLine {
-    CONNECTED, CONNECTING, WAITING, LOCKED, CHECK_DUE, BLOCKED, BATTERY, PUSH_REGISTERING_AGAIN, PUSH_UNREACHABLE, PUSH_FALLBACK
+    CONNECTED, CONNECTING, WAITING, LOCKED, CHECK_DUE, BLOCKED, BATTERY, PUSH_REGISTERING_AGAIN, PUSH_UNREACHABLE, PUSH_FALLBACK,
+    PUSH_NOT_ON_PHONE,
 }
 
 /** Settings → Notifications: the mode and what notifications show are device preferences (DataStore), not vault settings. */
@@ -149,14 +153,21 @@ class NotificationSettingsViewModel @Inject constructor(
 ) : ViewModel() {
     private val phone = kotlinx.coroutines.flow.MutableStateFlow(PhoneNotifyState())
 
+    /** Whether the push service is usable; it can change while the app runs (Google Play services disabled, say). */
+    private val available = kotlinx.coroutines.flow.MutableStateFlow(push.availability())
+
     val uiState: StateFlow<NotificationSettingsUiState> =
-        combine(prefs.preferences, service.status, phone, registration.status) { p, s, ph, r ->
+        combine(prefs.preferences, service.status, phone, registration.status, available) { p, s, ph, r, _ ->
             val mode = p.notificationMode ?: NotificationMode.SERVICE
             NotificationSettingsUiState(mode, p.notificationPreviews, s, push.availability(), ph, r)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, NotificationSettingsUiState(push = push.availability()))
 
-    /** The screen is in front: the status line reads `push` from the vault's `device.list` again. */
+    /**
+     * The screen is in front: the status line reads `push` from the vault's `device.list` again, and whether the
+     * push service is still usable on this phone.
+     */
     fun refreshPush() {
+        available.value = push.availability()
         viewModelScope.launch { registration.refresh() }
     }
 
@@ -320,6 +331,7 @@ private fun statusLook(line: NotifyStatusLine): Pair<NoticeKind, Int> = when (li
     NotifyStatusLine.PUSH_REGISTERING_AGAIN -> NoticeKind.INFO to R.string.settings_notify_status_push_again
     NotifyStatusLine.PUSH_UNREACHABLE -> NoticeKind.WARNING to R.string.settings_notify_status_push_unreachable
     NotifyStatusLine.PUSH_FALLBACK -> NoticeKind.WARNING to R.string.settings_notify_status_push_fallback
+    NotifyStatusLine.PUSH_NOT_ON_PHONE -> NoticeKind.WARNING to R.string.settings_notify_status_push_not_on_phone
 }
 
 @Composable

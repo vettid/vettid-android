@@ -127,6 +127,9 @@ class PushRetryBackoff {
  *   `retry_after`, else 1 minute doubling to 1 hour; `limit` stops everything for 24 hours, across restarts.
  * - **Leaving the mode**: `push.unregister`, then the token is deleted at the push service; when the vault cannot be
  *   told now (locked, no network) the token is deleted all the same and the vault is told at its next open.
+ * - **In the mode without a usable push service** (ANDROID-PLAN 0.1.32; Google Play services gone, or a build without
+ *   Google push): [disable] as when leaving, so a registration the vault may still hold is dropped at its next open,
+ *   and only then (a phone that never registered sends nothing). [enable] again when the push service is back.
  * - **A wake** ([onWake]) collects only in the mode; a wake for a registration this phone no longer wants drops it.
  */
 @Suppress("TooManyFunctions")
@@ -243,7 +246,10 @@ class PushRegistrar(
         val token = provider.token()
         if (token == null) {
             // The push service gave none (no network, Google Play services busy): tried again like a gateway error.
-            if (!m.registered) set(PushRegState.RETRYING)
+            // When the push service itself is gone (Google Play services disabled or removed while the app runs),
+            // it is said even of a known registration: the mode controller then falls back to the on-phone service
+            // and has the registration dropped ([ModeController]).
+            if (!m.registered || provider.availability() != PushAvailability.AVAILABLE) set(PushRegState.RETRYING)
             retryIn(backoff.nextDelayMs())
             return
         }

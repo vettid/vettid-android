@@ -81,7 +81,11 @@ The A2 exit test:
   starts the app's usual collect (`VaultManager.collectForWake`), and the notifications come from the feed as in
   the on-phone service mode. Screens: `settings.notifications_push_available`, `settings.notifications_push`,
   `settings.notifications_push_again`, `settings.notifications_push_unreachable`,
-  `settings.notifications_push_fallback`, `settings.notifications_push_not_yet`.
+  `settings.notifications_push_fallback`, `settings.notifications_push_not_yet`. Google push chosen but the push
+  service no longer usable on the phone (0.1.32, owner decision 2026-10-11; `ModeController`): the on-phone service
+  runs as the fallback, the mode preference is never changed, `push.unregister` goes to the vault at its next open if
+  a registration may still exist, and the registration resumes when the push service is back
+  (`settings.notifications_push_not_on_phone`).
 
 ## Device testing
 
