@@ -8,5 +8,4 @@
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
     </style>
     <color name="vettid_window">#FFFFFFFF</color>
-    <color name="vettid_launcher_background">#FF14142A</color>
 </resources>

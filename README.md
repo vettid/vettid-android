@@ -63,7 +63,9 @@ The `staging` build type is release-like (R8, not debuggable, no debug tools or
 staging manifest key (`ManifestKeys.STAGING`, key_id `e9b3a403423120ac`), the
 real AWS Nitro root and the production relay. It shows "VettID Staging" as its
 name, `-staging` in the drawer's version line and `staging` under Settings →
-attestation → Environment.
+attestation → Environment. Its launcher icon, like the debug and dev-stack
+builds', carries a white band across the bottom (`app/src/nonProduction`; the
+production icon is the brand kit's, unmarked).
 
 The staging build's application id is **`com.vettid.app.staging`**
 (`applicationIdSuffix ".staging"`; ANDROID-PLAN 0.1.35 §5, VAULT-MESSAGING

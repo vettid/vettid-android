@@ -10,7 +10,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.vettid.core.ui.R
 
-/** The VettID rook (gold, black keyhole) at [height]; width keeps the 264:350 ratio. */
+/**
+ * The VettID rook, the brand kit's icon without its tile (Rook Gold, the keyhole cut out) at [height]; width keeps
+ * the 264:350 ratio. The mark for every size below the logo's minimum ([VettIdLogo]).
+ */
 @Composable
 fun RookLogo(
     modifier: Modifier = Modifier,

@@ -1,6 +1,5 @@
 package com.vettid.core.ui.components
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -28,12 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.vettid.core.ui.R
 import com.vettid.core.ui.theme.Spacing
 
 /** One drawer destination. [badge] > 0 shows a gold count pill. */
@@ -92,26 +87,17 @@ fun VettIdDrawerSheet(
     }
 }
 
+/**
+ * The brand kit's horizontal logo at its minimum width (BRAND.md: 160dp; the wordmark is artwork, never typed),
+ * with at least the kit's clear space (14dp at this width) on every side.
+ */
 @Composable
 private fun DrawerHeader() {
-    Row(
+    VettIdLogo(
         modifier = Modifier
             .statusBarsPadding()
-            .padding(start = Spacing.xl, end = Spacing.xl, top = Spacing.s, bottom = Spacing.l),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Image(
-            painter = painterResource(R.drawable.ic_rook),
-            contentDescription = null,
-            modifier = Modifier.size(width = 21.dp, height = 28.dp),
-        )
-        Spacer(Modifier.width(Spacing.m))
-        Text(
-            text = stringResource(R.string.core_ui_brand_name),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-        )
-    }
+            .padding(start = Spacing.xl, end = Spacing.xl, top = Spacing.l, bottom = Spacing.l),
+    )
 }
 
 @Composable

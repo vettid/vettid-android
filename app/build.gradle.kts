@@ -175,6 +175,9 @@ android {
         getByName("devStack").kotlin.srcDir("src/debugTools/kotlin")
         getByName("release").kotlin.srcDir("src/noDebugTools/kotlin")
         getByName("staging").kotlin.srcDir("src/noDebugTools/kotlin")
+        // Every build that is not production carries a marked launcher icon (src/nonProduction: the white band on
+        // the icon's background; not part of the brand kit). Never `release`, so never the F-Droid build.
+        listOf("debug", "devStack", "staging").forEach { getByName(it).res.srcDir("src/nonProduction/res") }
     }
 }
 

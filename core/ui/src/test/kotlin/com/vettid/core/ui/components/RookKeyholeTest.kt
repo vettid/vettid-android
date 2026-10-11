@@ -18,6 +18,10 @@ class RookKeyholeTest {
         "src/main/res/drawable/ic_rook.xml",
         "../../app/src/main/res/drawable/ic_launcher_foreground.xml",
         "../../app/src/main/res/drawable/ic_launcher_monochrome.xml",
+        "../../app/src/nonProduction/res/drawable/ic_launcher_monochrome.xml",
+        "src/main/res/drawable/ic_logo_horizontal.xml",
+        "src/main/res/drawable/ic_logo_horizontal_on_light.xml",
+        "../notify/src/main/res/drawable/ic_stat_vettid.xml",
     )
 
     private fun pathData(file: File): List<String> =
