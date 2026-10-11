@@ -6,6 +6,8 @@ import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -14,21 +16,41 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TransferOutViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
 
+    /** When each test starts, by the view model's clock; the transfer code is valid for 10 minutes from then. */
+    private val start = Instant.parse("2026-10-11T12:00:00Z")
     private val vault = FakeVault(AppPhase.Unlocked).apply {
-        offer = TransferOfferView("01JTRANSFER000000000000000", "{}", "link", Instant.now().plusSeconds(600))
+        offer = TransferOfferView("01JTRANSFER000000000000000", "{}", "link", start.plusSeconds(CODE_SECONDS))
     }
     private val pending = TransferPendingView("01JTRANSFER000000000000000", "Pixel 10 Pro", "042817")
 
+    /**
+     * The view model's clock, following the test's virtual time. Its countdown compares this clock with the deadline
+     * and waits with `delay`; with the system clock the two disagree, and a countdown left running at the end of a
+     * test (`runTest` drains what is scheduled) spins through virtual seconds until the real deadline has passed.
+     */
+    private class VirtualClock(private val start: Instant, private val scheduler: TestCoroutineScheduler) : Clock() {
+        override fun instant(): Instant = start.plusMillis(scheduler.currentTime)
+
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+
+        override fun withZone(zone: ZoneId): Clock = this
+    }
+
+    private fun TestScope.viewModel() = TransferOutViewModel(vault).also { it.clock = VirtualClock(start, testScheduler) }
+
     @Test
     fun showCompareApproveMovesTheVault() = runTest {
-        val vm = TransferOutViewModel(vault)
+        val vm = viewModel()
         vm.create()
         advanceTimeBy(100)
         assertEquals(TransferOutStep.SHOWING, vm.uiState.value.step)
@@ -61,7 +83,7 @@ class TransferOutViewModelTest {
     @Test
     fun anApprovalTheVaultHasNotConfirmedYetSaysTheVaultMoved() = runTest {
         vault.transferConfirmed = false
-        val vm = TransferOutViewModel(vault)
+        val vm = viewModel()
         vm.create()
         advanceTimeBy(100)
         vault.pendingTransfer.complete(pending)
@@ -81,7 +103,7 @@ class TransferOutViewModelTest {
 
     @Test
     fun aMismatchRejects() = runTest {
-        val vm = TransferOutViewModel(vault)
+        val vm = viewModel()
         vm.create()
         advanceTimeBy(100)
         vault.pendingTransfer.complete(pending)
@@ -97,7 +119,7 @@ class TransferOutViewModelTest {
 
     @Test
     fun theCodeExpiresWithoutAScan() = runTest {
-        val vm = TransferOutViewModel(vault)
+        val vm = viewModel()
         vm.create()
         advanceTimeBy(100)
         vault.pendingTransfer.complete(null)
@@ -107,8 +129,24 @@ class TransferOutViewModelTest {
     }
 
     @Test
+    fun theCountdownEndsTheCodeAtItsDeadline() = runTest {
+        val vm = viewModel()
+        vm.create()
+        advanceTimeBy(100)
+        assertEquals(TransferOutStep.SHOWING, vm.uiState.value.step)
+        assertEquals(CODE_SECONDS, vm.uiState.value.secondsLeft)
+        advanceTimeBy((CODE_SECONDS - 2) * 1000)
+        assertEquals(TransferOutStep.SHOWING, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.secondsLeft in 1..2)
+        advanceTimeBy(3000)
+        assertEquals(TransferOutStep.EXPIRED, vm.uiState.value.step)
+        assertEquals(0L, vm.uiState.value.secondsLeft)
+        assertNull(vm.uiState.value.offer)
+    }
+
+    @Test
     fun aWrongPinKeepsTheTransferOpen() = runTest {
-        val vm = TransferOutViewModel(vault)
+        val vm = viewModel()
         vm.create()
         advanceTimeBy(100)
         vault.pendingTransfer.complete(pending)
@@ -129,7 +167,7 @@ class TransferOutViewModelTest {
 
     @Test
     fun leavingCancelsTheOpenTransfer() = runTest {
-        val vm = TransferOutViewModel(vault)
+        val vm = viewModel()
         vm.create()
         advanceTimeBy(100)
         vm.leave()
@@ -141,10 +179,14 @@ class TransferOutViewModelTest {
     @Test
     fun anOpenTransferIsReported() = runTest {
         vault.fail["transferCreate"] = FakeVault.failure(FailureKind.OTHER, "exists")
-        val vm = TransferOutViewModel(vault)
+        val vm = viewModel()
         vm.create()
         advanceTimeBy(100)
         assertEquals(TransferOutStep.INTRO, vm.uiState.value.step)
         assertEquals("exists", vm.uiState.value.errorCode)
+    }
+
+    private companion object {
+        const val CODE_SECONDS = 600L
     }
 }
