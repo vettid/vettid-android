@@ -27,6 +27,13 @@ class ReleaseNoticesTest {
     }
 
     @Test
+    fun theOfferKeepsOnlyTheReleasesInBetween() {
+        val o = ReleaseUpdateOffer.of(rel(4), rel(7), listOf(rel(3), rel(4), rel(5), rel(6), rel(7), rel(8)))!!
+        assertEquals(listOf(5L, 6L), o.between.map { it.number })
+        assertTrue(ReleaseUpdateOffer.of(rel(4), rel(5))!!.between.isEmpty())
+    }
+
+    @Test
     fun theKindFollowsTheVaultsRelease() {
         // An older active release, or a deprecated one without an end date: "available".
         assertEquals(UpdateNoticeKind.AVAILABLE, ReleaseUpdateOffer(rel(4), rel(5)).kind)

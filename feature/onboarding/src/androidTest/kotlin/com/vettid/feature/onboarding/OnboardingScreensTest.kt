@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
@@ -13,7 +14,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.vettid.core.data.vault.EarlierRelease
 import com.vettid.core.data.vault.PreflightInfo
+import com.vettid.core.data.vault.ReleaseLogEntry
+import com.vettid.core.data.vault.ReleaseNotes
+import com.vettid.core.data.vault.ReleaseSecurity
+import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseView
 import com.vettid.core.ui.theme.VettIdTheme
 import org.junit.Assert.assertEquals
@@ -35,6 +41,7 @@ private object NoUnlockActions : UnlockActions {
     override fun acknowledgeUpdate() = Unit
     override fun setApproveOffer(approve: Boolean) = Unit
     override fun setPin(v: String) = Unit
+    override fun setPassword(v: String) = Unit
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
     override fun askErase() = Unit
@@ -86,6 +93,56 @@ class OnboardingScreensTest {
         }
         rule.onNodeWithTag("software_updated").assertExists()
         rule.onNodeWithTag("unlock_pin").assertIsNotEnabled()
+    }
+
+    private val entry = ReleaseNotes.Available(
+        "vettid.org",
+        ReleaseLogEntry(5, "Faster unlocks.", listOf("One round trip less.", "https://evil.example stays text"), ReleaseSecurity.URGENT, "Fixes the backoff."),
+        listOf(EarlierRelease(4, "Sharing rules per tag.")),
+    )
+
+    @Test
+    fun whatsNewShowsTheEntryAsPlainTextFromItsHost() {
+        rule.setContent { VettIdTheme { WhatsNew(5, entry, "https://vettid.org/security/releases/5/") } }
+        rule.onNodeWithText("What's new in release 5").assertExists()
+        rule.onNodeWithTag("whats_new_summary").assertTextEquals("Faster unlocks.")
+        rule.onNodeWithText("One round trip less.").assertExists()
+        rule.onNodeWithText("https://evil.example stays text").assertHasNoClickAction()
+        rule.onNodeWithText("Security fix: update urgently").assertExists()
+        rule.onNodeWithText("Fixes the backoff.").assertExists()
+        rule.onNodeWithText("Also in earlier releases").assertExists()
+        rule.onNodeWithText("Release 4: Sharing rules per tag.").assertExists()
+        rule.onNodeWithText("From vettid.org").assertExists()
+        rule.onNodeWithTag("whats_new_full").assertExists()
+    }
+
+    @Test
+    fun whatsNewUnavailableStillLinksTheNotes() {
+        rule.setContent { VettIdTheme { WhatsNew(5, ReleaseNotes.Unavailable, "https://github.com/vettid/vettid-vault/releases/tag/s5") } }
+        rule.onNodeWithText("Release notes unavailable").assertExists()
+        rule.onNodeWithText("From vettid.org").assertDoesNotExist()
+        rule.onNodeWithTag("whats_new_full").assertExists()
+    }
+
+    @Test
+    fun theUnlockOfferShowsWhatsNewAndTheApproval() {
+        val preflight = PreflightInfo(release(4), 4, false, false, release(5))
+        rule.setContent { VettIdTheme { UnlockContent(UnlockUiState(loading = false, preflight = preflight), NoUnlockActions) } }
+        rule.onNodeWithTag("whats_new_loading").assertExists()
+        rule.onNodeWithTag("whats_new").assertExists()
+        rule.onNodeWithTag("approve_offer").assertExists()
+    }
+
+    @Test
+    fun theUpdateScreenCanApproveWhileTheNotesLoad() {
+        val offer = ReleaseUpdateOffer(release(4), release(5))
+        val actions = object : ReleaseUpdateActions {
+            override fun setPin(v: String) = Unit
+            override fun approve() = Unit
+        }
+        rule.setContent { VettIdTheme { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = offer, pin = "2468"), actions) {} } }
+        rule.onNodeWithTag("whats_new_loading").assertExists()
+        rule.onNodeWithTag("primary_button").assertIsEnabled()
     }
 
     @Test

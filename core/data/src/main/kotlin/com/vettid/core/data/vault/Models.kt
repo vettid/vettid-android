@@ -151,6 +151,8 @@ data class PreflightInfo(
     val rollback: Boolean,
     /** The newest active release, newer than the routed one: the member may approve the move. */
     val offer: ReleaseView?,
+    /** The manifest's releases between the routed one and [offer] (What's new, ANDROID-PLAN 0.1.31). */
+    val between: List<ReleaseView> = emptyList(),
 )
 
 /** The outcome of an unlock (§11.4). */

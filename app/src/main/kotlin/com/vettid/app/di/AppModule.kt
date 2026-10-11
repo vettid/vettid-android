@@ -47,6 +47,8 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.HistoryExportRepository
 import com.vettid.core.data.vault.HistoryRepository
 import com.vettid.core.data.vault.ProfileRepository
+import com.vettid.core.data.vault.ReleaseNotesClient
+import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.ReleaseUpdateInbox
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.app.notify.ReleaseUpdateNotifier
@@ -257,7 +259,17 @@ object AppModule {
         updates: ReleaseUpdateRepository,
         prefs: PreferencesRepository,
         @AppScope scope: CoroutineScope,
-    ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope)
+        notes: ReleaseNotesRepository,
+    ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope, notes)
+
+    /**
+     * What's new (ANDROID-PLAN 0.1.31): the channel's release log on the pinned manifest's host, in memory only.
+     * The client refuses redirects, sends no cookies and times out after 10 s.
+     */
+    @Provides
+    @Singleton
+    fun releaseNotesRepository(env: AppEnvironment, http: OkHttpClient): ReleaseNotesRepository =
+        ReleaseNotesClient(env.http(http), env.endpoints.manifestUrl)
 
     @Provides
     fun connectionsRepository(m: VaultManager): ConnectionsRepository = m.social

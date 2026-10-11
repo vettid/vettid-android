@@ -30,10 +30,15 @@ enum class UpdateNoticeKind {
  * [current], the release the vault is sealed to (the one this phone last unlocked into).
  *
  * The manifest has no security flag (VAULT-RELEASES keeps `security: none | recommended | urgent` in the release
- * log, which the app does not read), so a security release is not told apart: every notice is dismissed for
- * [ReleaseNotices.DISMISS_FOR] at most.
+ * log, which the app shows in What's new but never decides from), so a security release is not told apart: every
+ * notice is dismissed for [ReleaseNotices.DISMISS_FOR] at most.
  */
-data class ReleaseUpdateOffer(val current: ReleaseView, val target: ReleaseView) {
+data class ReleaseUpdateOffer(
+    val current: ReleaseView,
+    val target: ReleaseView,
+    /** The manifest's releases between [current] and [target]: What's new lists their summaries (ANDROID-PLAN 0.1.31). */
+    val between: List<ReleaseView> = emptyList(),
+) {
     val kind: UpdateNoticeKind
         get() = when {
             current.status == STATUS_REMOVED -> UpdateNoticeKind.ENDED
@@ -52,10 +57,10 @@ data class ReleaseUpdateOffer(val current: ReleaseView, val target: ReleaseView)
         const val STATUS_REMOVED = "removed"
 
         /** The offer for a vault sealed to [sealed] when [newest] is the manifest's newest `active` release; or none. */
-        fun of(sealed: ReleaseView?, newest: ReleaseView?): ReleaseUpdateOffer? = when {
+        fun of(sealed: ReleaseView?, newest: ReleaseView?, between: List<ReleaseView> = emptyList()): ReleaseUpdateOffer? = when {
             sealed == null || newest == null -> null
             newest.status != STATUS_ACTIVE || newest.number <= sealed.number -> null
-            else -> ReleaseUpdateOffer(sealed, newest)
+            else -> ReleaseUpdateOffer(sealed, newest, between.filter { it.number > sealed.number && it.number < newest.number })
         }
     }
 }

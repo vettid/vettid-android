@@ -22,6 +22,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.kotlinx.coroutines.test)
+    // What's new: the release log fetch (ReleaseNotesClientTest).
+    testImplementation(libs.okhttp.mockwebserver)
     // The A5 items scenario against the local dev stack (skipped without it).
     testImplementation(projects.core.testing)
 

@@ -7,6 +7,8 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.PreflightInfo
+import com.vettid.core.data.vault.ReleaseNotes
+import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.RecoverOutcome
 import com.vettid.core.data.vault.RecoveryRegistration
 import com.vettid.core.data.vault.RecoveryStage
@@ -84,6 +86,8 @@ data class RecoverUiState(
     val preflight: PreflightInfo? = null,
     val preflightError: FailureKind? = null,
     val approveOffer: Boolean = false,
+    /** What's new in the offered release (ANDROID-PLAN 0.1.31); null while it loads. Never gates the PIN. */
+    val notes: ReleaseNotes? = null,
     val pin: String = "",
     val pinWrong: Boolean = false,
     val waitSeconds: Long = 0,
@@ -139,6 +143,7 @@ class RecoverViewModel @Inject constructor(
     private val move: MoveRepository,
     private val vault: VaultRepository,
     private val account: AccountRepository,
+    private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), RecoverActions {
     private val state = MutableStateFlow(RecoverUiState(startOverUrl = account.apiOrigin.trimEnd('/') + START_OVER_PATH))
     val uiState: StateFlow<RecoverUiState> = state.asStateFlow()
@@ -253,7 +258,11 @@ class RecoverViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val p = move.recoveryPreflight()
-                state.update { it.copy(busy = false, preflight = p) }
+                state.update { it.copy(busy = false, preflight = p, notes = null) }
+                p.offer?.takeIf { !p.rollback }?.let { offer ->
+                    val n = releaseNotes.whatsNew(offer, p.between)
+                    state.update { if (it.preflight?.offer == offer) it.copy(notes = n) else it }
+                }
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false, preflightError = e.kind) }
             }

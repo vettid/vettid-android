@@ -31,6 +31,10 @@ import com.vettid.feature.history.HistoryUiState
 import com.vettid.app.ui.OwnerCheckBanners
 import com.vettid.app.ui.ReleaseBannerState
 import com.vettid.app.ui.ReleaseUpdateBanner
+import com.vettid.core.data.vault.EarlierRelease
+import com.vettid.core.data.vault.ReleaseLogEntry
+import com.vettid.core.data.vault.ReleaseNotes
+import com.vettid.core.data.vault.ReleaseSecurity
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.UpdateStep
@@ -288,7 +292,35 @@ private object NoUnlock : UnlockActions {
 object ScreenCatalog {
     private const val EMAIL = "sam@example.org"
     private fun release(n: Long, status: String = "active") =
-        ReleaseView(n, "%02d".format(n).repeat(48), status, null, "https://vettid.org/security/releases/$n")
+        ReleaseView(n, "%02d".format(n).repeat(48), status, null, "https://vettid.org/security/releases/$n/")
+
+    /** What's new (ANDROID-PLAN 0.1.31): a sample log entry, and one with a security fix and releases in between. */
+    private val whatsNew = ReleaseNotes.Available(
+        "vettid.org",
+        ReleaseLogEntry(
+            5,
+            "Faster unlocks and clearer messages when a release is starting.",
+            listOf(
+                "Unlocking takes one round trip less.",
+                "While a release starts, the app says how long it may take.",
+                "Nothing changes in how your data is stored.",
+            ),
+            ReleaseSecurity.NONE,
+            null,
+        ),
+        emptyList(),
+    )
+    private val whatsNewSecurity = ReleaseNotes.Available(
+        "vettid.org",
+        ReleaseLogEntry(
+            7,
+            "Fixes a flaw in the PIN backoff.",
+            listOf("The enclave counts wrong PINs across restarts."),
+            ReleaseSecurity.URGENT,
+            "A restart of the enclave reset the wrong-PIN count. Update to keep the backoff in force.",
+        ),
+        listOf(EarlierRelease(6, "New sharing rules per tag."), EarlierRelease(5, "Faster unlocks and clearer messages when a release is starting.")),
+    )
 
     private object NoUpdate : ReleaseUpdateActions, ReleaseUpdateFlowActions {
         override fun setPin(v: String) = Unit
@@ -551,7 +583,21 @@ object ScreenCatalog {
         "transfer_in.no_answer" to { TIn(TransferInUiState(step = TransferInStep.NOT_ANSWERED)) },
         "unlock" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), pin = "1234"), NoUnlock) },
         "unlock.updated" to {
-            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(4, "deprecated"), 3, true, false, release(5))), NoUnlock)
+            UnlockContent(
+                UnlockUiState(
+                    loading = false, email = EMAIL, preflight = PreflightInfo(release(4, "deprecated"), 3, true, false, release(5)), notes = whatsNew,
+                ),
+                NoUnlock,
+            )
+        },
+        "unlock.offer_unavailable" to {
+            UnlockContent(
+                UnlockUiState(
+                    loading = false, email = EMAIL, preflight = PreflightInfo(release(4), 4, false, false, release(5)),
+                    notes = ReleaseNotes.Unavailable,
+                ),
+                NoUnlock,
+            )
         },
         "unlock.rollback" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(2), 3, false, true, null)), NoUnlock) },
         "unlock.backoff" to {
@@ -1098,8 +1144,22 @@ object ScreenCatalog {
                 )
             }
         },
-        "release_update" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "2468"), NoUpdate) {} },
-        "release_update.ending" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateEnding), NoUpdate) {} },
+        "release_update" to {
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "2468", notes = whatsNew), NoUpdate) {}
+        },
+        "release_update.notes_loading" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer), NoUpdate) {} },
+        "release_update.notes_unavailable" to {
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, notes = ReleaseNotes.Unavailable), NoUpdate) {}
+        },
+        "release_update.security" to {
+            ReleaseUpdateContent(
+                ReleaseUpdateUiState(loading = false, offer = ReleaseUpdateOffer(release(4), release(7)), notes = whatsNewSecurity),
+                NoUpdate,
+            ) {}
+        },
+        "release_update.ending" to {
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateEnding, notes = whatsNew), NoUpdate) {}
+        },
         "release_update.check_first" to {
             ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, checkDue = true), NoUpdate) {}
         },

@@ -78,6 +78,7 @@
     <string name="release_channel_description">A new release for your vault is available, or your vault\'s release is ending.</string>
     <string name="release_notification_title">Vault update available</string>
     <string name="release_notification_available">Release %1$d is available for your vault. Tap to update.</string>
+    <string name="release_notification_summary">Release %1$d: %2$s</string>
     <string name="release_notification_ending">Your vault\'s release ends on %1$s. Tap to update to release %2$d.</string>
     <!-- The one-time note of the notification modes (ANDROID-PLAN 0.1.23, §9 question 13). -->
     <string name="notify_note">VettID now notifies you in the background. Change this in Settings → Notifications.</string>

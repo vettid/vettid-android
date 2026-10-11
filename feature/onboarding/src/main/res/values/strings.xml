@@ -117,7 +117,6 @@
     <string name="unlock_status_body">Update to the newest release to keep your vault working.</string>
     <string name="unlock_offer_title">Update available: release %1$d</string>
     <string name="unlock_offer_body">Your vault runs release %1$d. Release %2$d (fingerprint %3$s) is available. Anyone can rebuild it and compare the fingerprint.</string>
-    <string name="unlock_offer_notes">Release notes</string>
     <string name="unlock_offer_approve">Approve the update with this unlock</string>
     <string name="unlock_bad_pin">That PIN is not correct.</string>
     <string name="unlock_wait">Too many wrong PINs. Try again in %1$s.</string>
@@ -229,6 +228,18 @@
     <string name="move_back">Back</string>
     <string name="move_cd_qr_scanner">Camera view for scanning the code</string>
     <!-- The proactive release update (owner decision 2026-10-09, ANDROID-PLAN 0.1.19). -->
+    <!-- What's new (ANDROID-PLAN 0.1.31): the release log entry, information only. -->
+    <string name="release_notes_title">What\'s new in release %1$d</string>
+    <string name="release_notes_loading">Loading the release notes…</string>
+    <string name="release_notes_unavailable">Release notes unavailable</string>
+    <string name="release_notes_security_none">No security fix</string>
+    <string name="release_notes_security_recommended">Security fix: update recommended</string>
+    <string name="release_notes_security_urgent">Security fix: update urgently</string>
+    <string name="release_notes_earlier">Also in earlier releases</string>
+    <string name="release_notes_earlier_item">Release %1$d: %2$s</string>
+    <string name="release_notes_from">From %1$s</string>
+    <string name="release_notes_information">Release notes are information. What keeps your vault safe is the signed release list and the fingerprint below.</string>
+    <string name="release_notes_full">Full release notes</string>
     <string name="release_update_title">Update your vault</string>
     <string name="release_update_body">Approve release %1$d for your vault with your vault PIN.</string>
     <string name="release_update_approve">Approve and update</string>
