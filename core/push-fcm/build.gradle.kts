@@ -10,8 +10,13 @@ plugins {
 dependencies {
     implementation(projects.core.notify)
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.firebase.messaging)
-    implementation(libs.play.services.base)
+    // Proprietary (Google): named here and nowhere else, not in the version catalog, so that the `foss` distribution
+    // and an F-Droid build without this module carry no trace of them. No BoM, no Google Services plugin, no
+    // google-services.json; no other Firebase product (no Analytics, no Crashlytics).
+    implementation("com.google.firebase:firebase-messaging:25.1.3")
+    // GoogleApiAvailability (is Google Play services there and current). Already a runtime dependency of
+    // firebase-messaging at this version; named so that this module can compile against it.
+    implementation("com.google.android.gms:play-services-base:18.9.0")
     // A wake's collect that outlasts the push message's 20 s continues as expedited work.
     implementation(libs.androidx.work.runtime)
 

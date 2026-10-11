@@ -23,4 +23,7 @@ regexes = [
   '''MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERi26GuT8GpaLTazyDN1tvh''',
   '''MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8W''',
   '''01JB2Z6V9K3M4N5P6Q7R8S9T[0-9A-Z]{2}''',
+  # The SHA-256 of VettID's Android signing CERTIFICATE (public; pinned by production vault releases), in
+  # the draft F-Droid recipe's AllowedAPKSigningKeys (docs/fdroid/com.vettid.app.yml).
+  '''31a19613aa10f209e08945f947f94f7ce3e6e5ac342457ff9969a67986928e65''',
 ]

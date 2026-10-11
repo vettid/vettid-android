@@ -376,11 +376,14 @@ private fun ChoiceRow(label: String, body: String, selected: Boolean, tag: Strin
     }
 }
 
-private fun pushNote(p: PushAvailability): Int = when (p) {
+/** The note under "Google push" (ANDROID-PLAN §4 Notification modes, 1; the `foss` distribution: README "F-Droid build"). */
+@androidx.annotation.StringRes
+internal fun pushNote(p: PushAvailability): Int = when (p) {
     PushAvailability.AVAILABLE -> R.string.settings_notify_push_available
     PushAvailability.NOT_AVAILABLE_YET -> R.string.settings_notify_push_not_yet
     PushAvailability.MISSING_SERVICES -> R.string.settings_notify_push_missing
     PushAvailability.SERVICES_OUTDATED -> R.string.settings_notify_push_outdated
+    PushAvailability.NOT_IN_THIS_BUILD -> R.string.settings_notify_push_not_in_build
 }
 
 private fun previewLabel(p: NotificationPreviews): Int = when (p) {
