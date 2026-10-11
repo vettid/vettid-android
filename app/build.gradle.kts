@@ -1,4 +1,8 @@
 import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.variant.BuildConfigField
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedComponentResult
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
 import java.util.Properties
 import java.util.zip.ZipFile
 
@@ -22,7 +26,8 @@ val stagingSigning: Properties? = providers.fileContents(objects.fileProperty().
 // Google push (ANDROID-PLAN 0.1.30, Notification modes 4; README "Google push"): the Firebase options of a build type,
 // from the Gradle properties vettidFcm<BuildType>{ApplicationId,ProjectId,ApiKey,SenderId} (no google-services.json,
 // no Google Services plugin). All four or none: without them the build has no Google push ("Not available yet") and
-// Firebase's components stay disabled in its manifest. Each environment has its own Firebase project.
+// Firebase's components stay disabled in its manifest. Each environment has its own Firebase project. The `full`
+// distribution only: the `foss` distribution has no Firebase and reads none of these.
 val fcmOptionNames = listOf("ApplicationId", "ProjectId", "ApiKey", "SenderId")
 
 fun fcmOptions(buildType: String): Map<String, String>? {
@@ -85,6 +90,10 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Reproducible builds (README "F-Droid build"): no META-INF/version-control-info.textproto. Its content
+            // depends on how the source was checked out (a commit in a clone, an error text in a git worktree or a
+            // source archive), so two builds of the same commit would differ.
+            vcsInfo.include = false
             // No signing config in the repository: release builds are signed outside it.
         }
         // STAGING: a release-like build (R8, not debuggable, no debug tools, no
@@ -101,14 +110,34 @@ android {
     }
 
     buildTypes.configureEach {
-        val fcm = fcmOptions(name)
-        buildConfigField("String", "FCM_APPLICATION_ID", "\"${fcm?.get("ApplicationId").orEmpty()}\"")
-        buildConfigField("String", "FCM_PROJECT_ID", "\"${fcm?.get("ProjectId").orEmpty()}\"")
-        buildConfigField("String", "FCM_API_KEY", "\"${fcm?.get("ApiKey").orEmpty()}\"")
-        buildConfigField("String", "FCM_SENDER_ID", "\"${fcm?.get("SenderId").orEmpty()}\"")
-        // Firebase's receiver and the messaging services exist in the manifest of every build; they are enabled
-        // only where the options are (AndroidManifest.xml).
-        manifestPlaceholders["vettidFcmEnabled"] = (fcm != null).toString()
+        // Firebase's receiver and the messaging services exist in the manifest of every `full` build; they are
+        // enabled only where the options are (src/full/AndroidManifest.xml, the only manifest that reads this; set
+        // on the build type so that the unit-test manifests of a variant get it too).
+        manifestPlaceholders["vettidFcmEnabled"] = (fcmOptions(name) != null).toString()
+    }
+
+    // Two distributions of the same app (README "F-Droid build"; same application id, version and signer):
+    // - `full`: Google Play and VettID's own releases. Google push (Firebase Cloud Messaging, :core:push-fcm) is
+    //   linked, and off unless the Gradle properties supply the Firebase options.
+    // - `foss`: F-Droid. No Google proprietary code at all: no Firebase, no Google Play services, no WorkManager.
+    //   The on-phone service is the notification path; "Google push" is shown as not available in this build.
+    //   Only its release build exists (beforeVariants, below): debug, devStack and staging are `full` only.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("full") {
+            dimension = "distribution"
+            isDefault = true
+        }
+        create("foss") {
+            dimension = "distribution"
+        }
+    }
+
+    // F-Droid (and reproducible builds): no dependency metadata block, which is encrypted with a Google key and
+    // cannot be verified by anyone else. One setting for both distributions.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
     }
 
     packaging {
@@ -126,6 +155,8 @@ android {
     }
 
     sourceSets {
+        // src/full and src/foss: each distribution's DistributionApplication and DistributionModule (and, for
+        // `full`, the manifest entries of Google push).
         getByName("debug").kotlin.srcDir("src/debugTools/kotlin")
         getByName("devStack").kotlin.srcDir("src/debugTools/kotlin")
         getByName("release").kotlin.srcDir("src/noDebugTools/kotlin")
@@ -181,6 +212,10 @@ abstract class PushManifestCheck : DefaultTask() {
     @get:Input
     abstract val pushConfigured: Property<Boolean>
 
+    /** The `foss` distribution: nothing of Google or of WorkManager may be in the manifest at all. */
+    @get:Input
+    abstract val foss: Property<Boolean>
+
     @TaskAction
     fun check() {
         val ns = "http://schemas.android.com/apk/res/android"
@@ -190,12 +225,16 @@ abstract class PushManifestCheck : DefaultTask() {
         fun all(tag: String) = doc.getElementsByTagName(tag).let { l -> (0 until l.length).map { l.item(it) as org.w3c.dom.Element } }
 
         fun org.w3c.dom.Element.a(name: String) = getAttributeNS(ns, name)
+        val components = listOf("activity", "activity-alias", "service", "receiver", "provider").flatMap { all(it) }
         val problems = mutableListOf<String>()
         val permissions = all("uses-permission").map { it.a("name") }
+        if (foss.get()) {
+            checkFoss(permissions, all("package").map { it.a("name") }, components.map { it.a("name") }, all("meta-data").map { it.a("name") }, all("action").map { it.a("name") })
+            return
+        }
         problems += permissions.filter { it.startsWith("com.google.") && it != "com.google.android.c2dm.permission.RECEIVE" }
             .map { "permission $it" }
         problems += permissions.filter { it.contains("AD_ID") || it.contains("ADSERVICES") }.map { "permission $it" }
-        val components = listOf("activity", "service", "receiver", "provider").flatMap { all(it) }
         problems += components.map { it.a("name") }.filter { it.startsWith("com.google.") && it !in GOOGLE_COMPONENTS }.map { "component $it" }
         val meta = all("meta-data").associate { it.a("name") to it.a("value") }
         problems += meta.keys.filter { it.startsWith("com.google.firebase.components:") && it.substringAfter(':') !in REGISTRARS }
@@ -211,7 +250,22 @@ abstract class PushManifestCheck : DefaultTask() {
         logger.lifecycle("merged manifest: Firebase Messaging only, push components enabled=$expected")
     }
 
+    /** The `foss` distribution (F-Droid): no Google permission, component, registrar, query or action, no WorkManager. */
+    private fun checkFoss(permissions: List<String>, queries: List<String>, components: List<String>, meta: List<String>, actions: List<String>) {
+        fun google(name: String) = FOSS_FORBIDDEN.any { name.startsWith(it) }
+        val problems = permissions.filter { google(it) || it.contains("AD_ID") || it.contains("ADSERVICES") }.map { "permission $it" } +
+            queries.filter { google(it) }.map { "package query $it" } +
+            components.filter { google(it) || it.startsWith("androidx.work.") }.map { "component $it" } +
+            meta.filter { google(it) || it.startsWith("firebase_") || it.startsWith("androidx.work.") || it.startsWith("delivery_metrics") }.map { "meta-data $it" } +
+            actions.filter { google(it) }.map { "intent action $it" }
+        check(problems.isEmpty()) { "${manifest.get().asFile}: the foss distribution must carry nothing of Google: $problems" }
+        logger.lifecycle("merged manifest (foss): no Google permission, component, registrar, query or action, no WorkManager")
+    }
+
     companion object {
+        /** Manifest names that mean Google proprietary code ([checkFoss]). */
+        val FOSS_FORBIDDEN = listOf("com.google.", "com.android.vending", "com.android.installreferrer")
+
         /** Enabled only in a build with the Firebase options. */
         val PUSH_COMPONENTS = listOf(
             "com.vettid.core.push.fcm.VettIdMessagingService",
@@ -243,6 +297,80 @@ abstract class PushManifestCheck : DefaultTask() {
     }
 }
 
+/**
+ * The `foss` distribution contains no Google proprietary code (README "F-Droid build"; F-Droid's inclusion policy).
+ * Fails if
+ * - the variant's resolved runtime dependency graph has a module of a proprietary group (Firebase, Google Play
+ *   services, datatransport, Play Core, ML Kit, install referrer, billing, ads), whoever pulled it in, or
+ *   WorkManager, which only Google push used;
+ * - an APK's dex carries a class of those packages (their type descriptors survive R8 wherever a class is kept), or
+ *   the name of the permission that receives Google pushes;
+ * - an APK carries a file that those libraries ship (`firebase-*.properties`, `play-services-*.properties`, …).
+ * `checkFossReleaseApk` runs it in CI.
+ */
+abstract class NoGoogleCheck : DefaultTask() {
+    @get:Input
+    abstract val graph: Property<ResolvedComponentResult>
+
+    @get:InputFiles
+    abstract val apkDir: DirectoryProperty
+
+    @TaskAction
+    fun check() {
+        val seen = mutableSetOf<ResolvedComponentResult>()
+        val queue = ArrayDeque(listOf(graph.get()))
+        while (queue.isNotEmpty()) {
+            val c = queue.removeFirst()
+            if (seen.add(c)) c.dependencies.filterIsInstance<ResolvedDependencyResult>().forEach { queue += it.selected }
+        }
+        val modules = seen.mapNotNull { it.id as? ModuleComponentIdentifier }
+        val projects = seen.map { it.id.displayName }.filter { it.contains(":core:push-fcm") }
+        val bad = modules.filter { m -> GROUPS.any { m.group == it || m.group.startsWith("$it.") } }.map { it.displayName } + projects
+        check(bad.isEmpty()) { "the foss distribution depends on proprietary or push-only modules: $bad" }
+
+        val apks = apkDir.get().asFile.listFiles { f -> f.name.endsWith(".apk") }.orEmpty()
+        require(apks.isNotEmpty()) { "no APK in ${apkDir.get().asFile}" }
+        for (apk in apks) {
+            ZipFile(apk).use { z ->
+                val entries = z.entries().asSequence().toList()
+                val files = entries.map { it.name }.filter { n -> FILES.any { n.substringAfterLast('/').startsWith(it) } }
+                val dex = entries.filter { it.name.endsWith(".dex") }
+                    .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
+                val classes = DEX.filter { dex.contains(it) } +
+                    Regex("com\\.google\\.android\\.gms[A-Za-z0-9_.$]*").findAll(dex).map { it.value }.filterNot { it in ALLOWED }.distinct()
+                check(files.isEmpty() && classes.isEmpty()) { "${apk.name}: Google proprietary code in the foss distribution: files $files, dex $classes" }
+            }
+            logger.lifecycle("${apk.name}: ${modules.size} modules, none proprietary; no Google class, file or push permission in the APK")
+        }
+    }
+
+    companion object {
+        /** Maven groups (and their sub-groups) that F-Droid does not accept, and WorkManager (push-only here). */
+        val GROUPS = listOf(
+            "com.google.firebase", "com.google.android.gms", "com.google.android.datatransport", "com.google.android.play",
+            "com.google.mlkit", "com.google.android.libraries", "com.google.android.ump", "com.google.android.recaptcha",
+            "com.android.installreferrer", "com.android.billingclient", "com.crashlytics.sdk.android", "com.huawei",
+            "androidx.work",
+        )
+
+        /** Dex strings: the type descriptors of those packages, and Google push's permission and action. */
+        val DEX = listOf(
+            "Lcom/google/firebase/", "Lcom/google/android/gms/", "Lcom/google/android/datatransport/", "Lcom/google/android/play/",
+            "Lcom/google/mlkit/", "Lcom/android/installreferrer/", "Lcom/android/billingclient/", "Lcom/android/vending/",
+            "Landroidx/work/", "com.google.android.c2dm", "com.google.firebase",
+        )
+
+        /**
+         * The one Google Play services name a free library carries as a string: OkHttp (Apache-2.0) looks for a
+         * Conscrypt TLS provider under this package name by reflection, on phones that have one. No Google code.
+         */
+        val ALLOWED = setOf("com.google.android.gms.org.conscrypt.", "com.google.android.gms.org.conscrypt")
+
+        /** Version and marker files those libraries put into an APK. */
+        val FILES = listOf("firebase-", "play-services-", "transport-", "com.google.firebase", "com.google.android.gms")
+    }
+}
+
 val productionPins = listOf(
     "https://account.vettid.org",
     "https://vettid.org/.well-known/vettid/pcr-manifest.json",
@@ -258,28 +386,79 @@ val stagingPins = listOf(
 // The dev stack's addresses and the debug tools' launch extras and gallery.
 val devOnly = listOf("127.0.0.1", "relay.vettid.test", "vettid.start", "vettid.screenshot", "Component gallery")
 
+fun String.cap() = replaceFirstChar { it.uppercase() }
+
 androidComponents {
+    // The `foss` distribution is built for release only (F-Droid); every other build type is `full`, as before
+    // the distributions existed: no variant is built or tested twice.
+    beforeVariants(selector().withFlavor("distribution" to "foss")) { it.enable = it.buildType == "release" }
+
+    // Google push's options in BuildConfig: the `full` distribution only.
+    onVariants(selector().withFlavor("distribution" to "full")) { v ->
+        val fcm = fcmOptions(v.buildType!!)
+        for ((field, option) in listOf("FCM_APPLICATION_ID" to "ApplicationId", "FCM_PROJECT_ID" to "ProjectId", "FCM_API_KEY" to "ApiKey", "FCM_SENDER_ID" to "SenderId")) {
+            v.buildConfigFields!!.put(field, BuildConfigField("String", "\"${fcm?.get(option).orEmpty()}\"", null))
+        }
+    }
+
     onVariants { v ->
-        tasks.register<PushManifestCheck>("check${v.name.replaceFirstChar { it.uppercase() }}PushManifest") {
+        val foss = v.flavorName == "foss"
+        // The task names of the `full` distribution are the ones from before the distributions:
+        // checkReleasePushManifest, checkReleaseApk, checkStagingApk. `foss`: checkFossReleasePushManifest, checkFossReleaseApk.
+        val name = if (foss) v.name.cap() else v.buildType!!.cap()
+        tasks.register<PushManifestCheck>("check${name}PushManifest") {
             manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
-            pushConfigured.set(fcmOptions(v.buildType ?: v.name) != null)
+            pushConfigured.set(!foss && fcmOptions(v.buildType!!) != null)
+            this.foss.set(foss)
+        }
+        when (v.buildType) {
+            "release" -> {
+                val contents = tasks.register<ApkContentCheck>(if (foss) "checkFossReleaseApkContents" else "checkReleaseApk") {
+                    dependsOn("check${name}PushManifest")
+                    apkDir.set(v.artifacts.get(SingleArtifact.APK))
+                    // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
+                    forbidden.set(stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")))
+                    required.set(productionPins)
+                }
+                if (foss) {
+                    val runtime = configurations.named("${v.name}RuntimeClasspath")
+                    tasks.register<NoGoogleCheck>("checkFossReleaseApk") {
+                        dependsOn(contents)
+                        graph.set(runtime.flatMap { it.incoming.resolutionResult.rootComponent })
+                        apkDir.set(v.artifacts.get(SingleArtifact.APK))
+                    }
+                }
+            }
+            "staging" -> tasks.register<ApkContentCheck>("checkStagingApk") {
+                dependsOn("check${name}PushManifest")
+                apkDir.set(v.artifacts.get(SingleArtifact.APK))
+                forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
+                required.set(stagingPins)
+            }
         }
     }
-    onVariants(selector().withBuildType("release")) { v ->
-        tasks.register<ApkContentCheck>("checkReleaseApk") {
-            dependsOn("checkReleasePushManifest")
-            apkDir.set(v.artifacts.get(SingleArtifact.APK))
-            // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
-            forbidden.set(stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")))
-            required.set(productionPins)
-        }
-    }
-    onVariants(selector().withBuildType("staging")) { v ->
-        tasks.register<ApkContentCheck>("checkStagingApk") {
-            dependsOn("checkStagingPushManifest")
-            apkDir.set(v.artifacts.get(SingleArtifact.APK))
-            forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
-            required.set(stagingPins)
+}
+
+// The `full` distribution's per-variant tasks keep the names they had before the distributions (CI, the READMEs and
+// devstack/README.md use them): `:app:testDebugUnitTest` is `:app:testFullDebugUnitTest`, and so on. Without these,
+// a root `./gradlew testDebugUnitTest` would silently skip the app's own tests.
+afterEvaluate {
+    for (type in listOf("debug", "devStack", "staging", "release")) {
+        val t = type.cap()
+        for ((alias, target) in listOf(
+            "test${t}UnitTest" to "testFull${t}UnitTest",
+            "lint$t" to "lintFull$t",
+            "install$t" to "installFull$t",
+            "uninstall$t" to "uninstallFull$t",
+            "connected${t}AndroidTest" to "connectedFull${t}AndroidTest",
+        )) {
+            if (target in tasks.names && alias !in tasks.names) {
+                tasks.register(alias) {
+                    group = "full distribution"
+                    description = "Runs $target (the name from before the distributions)."
+                    dependsOn(target)
+                }
+            }
         }
     }
 }
@@ -288,9 +467,11 @@ dependencies {
     implementation(projects.core.ui)
     implementation(projects.core.data)
     implementation(projects.core.notify)
-    implementation(projects.core.pushFcm)
-    // Configuration.Provider only (VettIdApplication): WorkManager itself is used by :core:push-fcm.
-    implementation(libs.androidx.work.runtime)
+    // Google push: the `full` distribution only. Looked up by path, not by accessor: an F-Droid build removes the
+    // module's directory, and settings.gradle.kts then does not include it (the `foss` distribution never needs it).
+    findProject(":core:push-fcm")?.let { "fullImplementation"(it) }
+    // Configuration.Provider only (DistributionApplication of `full`): WorkManager itself is used by :core:push-fcm.
+    "fullImplementation"(libs.androidx.work.runtime)
     implementation(projects.feature.messages)
     implementation(projects.feature.connections)
     implementation(projects.feature.approvals)

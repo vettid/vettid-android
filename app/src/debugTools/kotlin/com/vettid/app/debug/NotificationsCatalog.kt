@@ -115,6 +115,8 @@ internal object NotificationSettingsCatalog {
         "settings.notifications_blocked" to { Screen(base.copy(phone = com.vettid.feature.settings.PhoneNotifyState(allowed = false))) },
         "settings.notifications_battery" to { Screen(base.copy(phone = com.vettid.feature.settings.PhoneNotifyState(background = false))) },
         "settings.notifications_no_play" to { Screen(base.copy(push = com.vettid.core.notify.PushAvailability.MISSING_SERVICES)) },
+        // The `foss` distribution (F-Droid): no Google push in the build.
+        "settings.notifications_push_not_in_build" to { Screen(base.copy(push = com.vettid.core.notify.PushAvailability.NOT_IN_THIS_BUILD)) },
         // Google push (ANDROID-PLAN 0.1.30): offered in a build with the Firebase options, and its status lines.
         "settings.notifications_push_available" to { Screen(base.copy(push = com.vettid.core.notify.PushAvailability.AVAILABLE)) },
         "settings.notifications_push" to { Screen(push(com.vettid.core.notify.PushRegState.ACTIVE)) },

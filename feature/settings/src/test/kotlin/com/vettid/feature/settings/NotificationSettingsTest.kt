@@ -101,6 +101,28 @@ class NotificationSettingsTest {
         assertEquals(NotificationMode.SERVICE, prefs.current.value.notificationMode)
     }
 
+    /** The `foss` distribution (F-Droid): Google push is shown, disabled, with the reason; the service is the mode. */
+    @Test
+    fun aBuildWithoutGooglePushShowsTheChoiceAsNotInThisBuild() = runTest {
+        val prefs = InMemoryPreferencesRepository()
+        val vm = NotificationSettingsViewModel(prefs, ServiceStatus(), com.vettid.core.notify.NoGooglePushProvider, Registration())
+        advanceUntilIdle()
+        assertEquals(NotificationMode.SERVICE, vm.uiState.value.mode)
+        assertEquals(PushAvailability.NOT_IN_THIS_BUILD, vm.uiState.value.push)
+        assertEquals(PushAvailability.NOT_IN_THIS_BUILD, vm.uiState.value.pushNote)
+        assertEquals(R.string.settings_notify_push_not_in_build, pushNote(vm.uiState.value.pushNote))
+        // The choice cannot be made (the row is disabled; the view model refuses it as well).
+        vm.setMode(NotificationMode.PUSH)
+        advanceUntilIdle()
+        assertNull(prefs.current.value.notificationMode)
+        assertEquals(NotificationMode.SERVICE, vm.uiState.value.mode)
+        // Each reason has a text of its own: "not yet" is not said of a build that will never have it.
+        assertEquals(PushAvailability.entries.size, PushAvailability.entries.map { pushNote(it) }.toSet().size)
+        // The on-phone service's status line is as in any build.
+        val state = NotificationSettingsUiState(service = KeeperStatus.CONNECTED, push = PushAvailability.NOT_IN_THIS_BUILD)
+        assertEquals(NotifyStatusLine.CONNECTED, state.status)
+    }
+
     @Test
     fun theGooglePushStatusLine() {
         fun line(state: PushRegState, lastResult: String? = null, service: KeeperStatus? = null, phone: PhoneNotifyState = PhoneNotifyState()) =
