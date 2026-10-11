@@ -176,6 +176,12 @@ fun RecoverContent(
         }
         RecoverStep.REGISTERING -> FormScaffold(title = stringResource(R.string.recover_title), primaryLabel = null, onPrimary = {}) {
             Waiting(stringResource(R.string.recover_registering), Modifier.testTag("registering"))
+            Text(
+                stringResource(R.string.recover_registering_starting),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("registering_starting"),
+            )
         }
         RecoverStep.PIN -> RecoverPin(state, actions)
         RecoverStep.PASSWORD -> FormScaffold(
@@ -331,7 +337,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
     }
 }
 
-/** "Your vault is on this phone now", after a recovery or a transfer. */
+/** "Your vault is connected to this phone now", after a recovery or a transfer: the vault itself never is on a phone. */
 @Composable
 fun MovedScreen(body: String, onGo: () -> Unit) {
     FormScaffold(

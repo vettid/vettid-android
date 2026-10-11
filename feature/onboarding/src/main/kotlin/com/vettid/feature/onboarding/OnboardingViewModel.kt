@@ -166,7 +166,7 @@ class OnboardingViewModel @Inject constructor(
                     enrolled = true
                     state.update { it.copy(step = OnboardingStep.PASSWORD, credentialOnly = true, busy = false) }
                 }
-                // A recovery or a transfer shows its own "your vault is on this phone now".
+                // A recovery or a transfer shows its own "your vault is connected to this phone now".
                 SetupStage.FINISHING -> if (!moving) go(OnboardingStep.DONE)
             }
             else -> Unit
