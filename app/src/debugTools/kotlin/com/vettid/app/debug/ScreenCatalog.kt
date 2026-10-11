@@ -843,7 +843,8 @@ object ScreenCatalog {
                 {}, {},
             )
         },
-        // "Installed from" (ANDROID-PLAN 0.1.36 §7): the vault's signer binding, per class; tapped, with the explanation.
+        // "Installed from" (ANDROID-PLAN 0.1.36 §7): the vault's signer binding, per class; tapped, with the explanation
+        // directly under the line (`settings.status_signer_details`; owner report 2026-10-11: it opened off-screen).
         "settings.status_signer_vettid" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}) },
         "settings.status_signer_google_play" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.GOOGLE_PLAY)), {}, {}) },
         "settings.status_signer_development" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.DEVELOPMENT)), {}, {}) },
