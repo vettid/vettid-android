@@ -198,10 +198,11 @@ after building the same commit itself and finding its own APK identical apart
 from the signature (owner decision 2026-10-11). The vault accepts an app only
 if its signing certificate is one the vault release pins (`android_signers`),
 so an APK signed with F-Droid's own key could not open a vault; with this route
-the F-Droid APK has VettID's signature: the same app-signing certificate that
-Google Play installs and direct builds carry (owner decision 2026-10-11,
-ANDROID-PLAN 0.1.34), so a member can move between the stores by updating.
-For that:
+the F-Droid APK has VettID's signature, from a key that only VettID holds.
+Google Play installs are signed by Google with a different key that Google
+holds (Play App Signing), so Google can never sign an update for an F-Droid or
+direct install, and moving between Google Play and F-Droid means a transfer or
+a recovery, not an update (owner decision 2026-10-11). For that:
 
 - The unsigned `fossRelease` APK must be the same bytes wherever it is built.
   It is, for a given JDK and commit: no build time, path, user, locale or time

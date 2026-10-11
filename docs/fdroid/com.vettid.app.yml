@@ -7,9 +7,11 @@
 #
 # To fill in before a merge request to fdroiddata (marked TODO):
 # - the first release that has the `foss` distribution: its tag, commit, versionName and versionCode;
-# - AllowedAPKSigningKeys is set: VettID's app-signing certificate, the one Google Play installs and direct
-#   builds also carry (owner decision 2026-10-11, ANDROID-PLAN 0.1.34) and the production vault release pins.
-#   Check it against the published APK before submitting (`apksigner verify --print-certs`);
+# - AllowedAPKSigningKeys is set: VettID's own signing certificate, which signs the F-Droid APK and direct
+#   builds and which production vault releases pin. Google never holds this key: Google Play installs carry a
+#   different, Google-held certificate (owner decision 2026-10-11), so a Play install and an F-Droid install
+#   cannot update each other. Check it against the published APK before submitting
+#   (`apksigner verify --print-certs`);
 # - the signed foss APK published at the `Binaries` URL for that tag;
 # - store listing text and images in this repository (fastlane/metadata/android/en-US/), or Summary/Description here.
 
