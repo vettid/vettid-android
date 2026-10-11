@@ -24,6 +24,14 @@ interface ServiceControl {
  * In the Google push mode the on-phone service keeps running until the vault holds the registration (PUSH-GATEWAY
  * §11.1 step 1: register, then stop the service), and runs again as the fallback while push cannot deliver
  * ([PushStatus.fallback]: `limit`, owner decision 2026-10-10; likewise `unavailable`, a refusal, gateway errors).
+ *
+ * Google push chosen, but the push service not usable on this phone (ANDROID-PLAN 0.1.32, Notification modes 4; owner
+ * decision 2026-10-11): Google Play services were disabled, removed or need an update, or the app was updated to a
+ * build without Google push. The on-phone service then runs as the fallback, and the vault is told to drop a
+ * registration it may still hold (`push.unregister`, at its next open when it cannot be told now), so that it stops
+ * waking a phone that cannot be woken. **The member's mode is never changed**: it stays Google push, and the
+ * registration starts again by itself once the push service is back (seen at the next [apply]: a phase or
+ * registration change, or the app coming to the foreground, [retry]).
  */
 class ModeController(
     private val scope: CoroutineScope,
@@ -35,6 +43,9 @@ class ModeController(
 ) {
     private var serviceOn = false
     private var pushOn = false
+
+    /** Google push is the mode on a phone with a vault, and the push service is not usable. */
+    private var pushUnavailable = false
     private var want: Pair<NotificationMode, Boolean>? = null
 
     fun start() {
@@ -54,12 +65,12 @@ class ModeController(
     @Synchronized
     fun apply(mode: NotificationMode, enrolled: Boolean) {
         want = mode to enrolled
-        val wantPush = enrolled && mode == NotificationMode.PUSH && push.availability() == PushAvailability.AVAILABLE
-        val wantService = enrolled && (mode == NotificationMode.SERVICE || wantPush && serviceForPush())
-        if (!wantPush && pushOn) {
-            registration.disable(wiped = !enrolled) // push.unregister, then the token is deleted
-            pushOn = false
-        }
+        val pushMode = enrolled && mode == NotificationMode.PUSH
+        val wantPush = pushMode && push.availability() == PushAvailability.AVAILABLE
+        // The mode is Google push and the push service is not usable: the on-phone service is the fallback.
+        val unavailable = pushMode && !wantPush
+        val wantService = enrolled && (mode == NotificationMode.SERVICE || unavailable || wantPush && serviceForPush())
+        leavePush(wantPush, unavailable, enrolled)
         if (!wantService && serviceOn) {
             service.stop()
             serviceOn = false
@@ -69,6 +80,18 @@ class ModeController(
             registration.enable()
             pushOn = true
         }
+    }
+
+    /** The registration that is no longer wanted, or cannot work, is dropped before anything else starts. */
+    private fun leavePush(wantPush: Boolean, unavailable: Boolean, enrolled: Boolean) {
+        if (!wantPush && pushOn) {
+            registration.disable(wiped = !enrolled) // push.unregister, then the token is deleted
+            pushOn = false
+        } else if (unavailable && !pushUnavailable) {
+            // Found so at the start of the process: the vault may still hold a registration from before.
+            registration.disable(wiped = false)
+        }
+        pushUnavailable = unavailable
     }
 
     /**

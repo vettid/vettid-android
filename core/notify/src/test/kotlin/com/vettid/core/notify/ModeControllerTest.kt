@@ -4,6 +4,7 @@
 package com.vettid.core.notify
 
 import com.vettid.core.data.prefs.NotificationMode
+import com.vettid.core.data.prefs.PushMemory
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.SetupStage
@@ -60,13 +61,173 @@ class ModeControllerTest {
     }
 
     @Test
-    fun googlePushNotAvailableYetRunsNothing() {
+    fun googlePushInABuildWithoutItKeepsTheServiceRunning() {
+        // ANDROID-PLAN 0.1.32 (owner decision 2026-10-11): the mode is Google push, the build has none ("Not
+        // available yet", or a build without Google code): the on-phone service is the fallback.
         val s = Service()
         val c = ModeController(kotlinx.coroutines.test.TestScope(), MutableStateFlow(NotificationMode.PUSH), MutableStateFlow(AppPhase.Locked), s, NoPushProvider)
         c.apply(NotificationMode.SERVICE, enrolled = true)
-        // Switching away stops the old path before the new one starts.
         c.apply(NotificationMode.PUSH, enrolled = true)
+        assertEquals(listOf("start"), s.calls)
+        assertTrue(c.running)
+        c.apply(NotificationMode.OFF, enrolled = true)
         assertEquals(listOf("start", "stop"), s.calls)
+    }
+
+    @Test
+    fun aColdStartInGooglePushWithoutThePushServiceFallsBackToTheService() = runTest {
+        // The process starts (boot, an app update, a relaunch) with Google push chosen earlier, and Google Play
+        // services are disabled, removed or outdated, or the build has no Google push any more.
+        for (no in PushAvailability.entries - PushAvailability.AVAILABLE) {
+            val mode = MutableStateFlow(NotificationMode.PUSH)
+            val phase = MutableStateFlow<AppPhase>(AppPhase.Starting)
+            val s = Service()
+            val reg = Registration(s.calls)
+            val c = ModeController(backgroundScope, mode, phase, s, FakePush(no), reg)
+            c.start()
+            runCurrent()
+            assertTrue("$no: nothing while the phase is unknown", s.calls.isEmpty())
+            phase.value = AppPhase.Locked
+            runCurrent()
+            // A registration from before may still exist: it is dropped (at the vault's next open), once; no
+            // registration is started; the on-phone service runs.
+            assertEquals("$no", listOf("push-unregister", "start"), s.calls)
+            assertTrue(c.running)
+            phase.value = AppPhase.Unlocked
+            runCurrent()
+            c.retry() // the app comes to the foreground
+            reg.status.value = PushStatus(PushRegState.OFF, "x")
+            runCurrent()
+            assertEquals("$no: nothing is repeated", listOf("push-unregister", "start"), s.calls)
+            assertEquals("the member's choice is never changed", NotificationMode.PUSH, mode.value)
+        }
+    }
+
+    @Test
+    fun thePushServiceGoingAwayWhileRunningFallsBackAndComingBackResumes() = runTest {
+        val mode = MutableStateFlow(NotificationMode.PUSH)
+        val phase = MutableStateFlow<AppPhase>(AppPhase.Unlocked)
+        val s = Service()
+        val push = FakePush()
+        val reg = Registration(s.calls)
+        val c = ModeController(backgroundScope, mode, phase, s, push, reg)
+        c.start()
+        runCurrent()
+        reg.status.value = PushStatus(PushRegState.ACTIVE)
+        runCurrent()
+        assertEquals(listOf("push-enable"), s.calls)
+        assertFalse(c.running)
+        // Google Play services are disabled while the app runs; the app next comes to the foreground.
+        push.available = PushAvailability.MISSING_SERVICES
+        c.retry()
+        // The old path stops first (push.unregister, so the vault stops waking a phone that cannot be woken), then
+        // the on-phone service starts.
+        assertEquals(listOf("push-enable", "push-unregister", "start"), s.calls)
+        assertTrue(c.running)
+        c.retry()
+        phase.value = AppPhase.Locked
+        runCurrent()
+        assertEquals("once", listOf("push-enable", "push-unregister", "start"), s.calls)
+        assertEquals(NotificationMode.PUSH, mode.value)
+        // They are back: the registration resumes by itself, and the service runs until the vault holds it.
+        push.available = PushAvailability.AVAILABLE
+        c.retry()
+        assertEquals(listOf("push-enable", "push-unregister", "start", "push-enable"), s.calls)
+        assertTrue(c.running)
+        reg.status.value = PushStatus(PushRegState.ACTIVE)
+        runCurrent()
+        assertEquals(listOf("push-enable", "push-unregister", "start", "push-enable", "stop"), s.calls)
+        assertFalse(c.running)
+    }
+
+    @Test
+    fun thePushServiceGoingAwayIsAlsoSeenWhenTheRegistrationSaysItCannotGetAToken() = runTest {
+        val s = Service()
+        val push = FakePush()
+        val reg = Registration(s.calls)
+        val c = ModeController(backgroundScope, MutableStateFlow(NotificationMode.PUSH), MutableStateFlow(AppPhase.Unlocked), s, push, reg)
+        c.start()
+        runCurrent()
+        reg.status.value = PushStatus(PushRegState.ACTIVE)
+        runCurrent()
+        push.available = PushAvailability.SERVICES_OUTDATED
+        reg.status.value = PushStatus(PushRegState.RETRYING) // PushRegistrar: no token from a push service that is gone
+        runCurrent()
+        assertEquals(listOf("push-enable", "push-unregister", "start"), s.calls)
+        assertTrue(c.running)
+    }
+
+    @Test
+    fun aWipeWhileFallenBackStopsTheServiceAndAsksNothingMore() = runTest {
+        val phase = MutableStateFlow<AppPhase>(AppPhase.Locked)
+        val s = Service()
+        val reg = Registration(s.calls)
+        val c = ModeController(backgroundScope, MutableStateFlow(NotificationMode.PUSH), phase, s, FakePush(PushAvailability.MISSING_SERVICES), reg)
+        c.start()
+        runCurrent()
+        phase.value = AppPhase.SignedOut
+        runCurrent()
+        assertEquals(listOf("push-unregister", "start", "stop"), s.calls)
+        assertFalse(c.running)
+    }
+
+    /** With the real registration: what the vault is sent, and when. */
+    @Test
+    fun aRegistrationFromBeforeIsDroppedAtTheNextVaultOpenAndOnlyThen() = runTest {
+        val log = mutableListOf<String>()
+        val vault = FakePushVault(start = AppPhase.Locked, log = log)
+        val memory = FakeMemory(PushMemory(registered = true))
+        val push = FakePush(PushAvailability.NOT_AVAILABLE_YET) // an update to a build without Google push
+        val mode = MutableStateFlow(NotificationMode.PUSH)
+        val registrar = PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { mode.value }, nowMs = { testScheduler.currentTime })
+        registrar.start()
+        val s = Service()
+        val c = ModeController(backgroundScope, mode, vault.phase, s, push, registrar)
+        c.start()
+        runCurrent()
+        assertEquals(listOf("start"), s.calls)
+        assertTrue("the vault is locked: nothing can be sent yet", log.isEmpty())
+        assertEquals(PushMemory(unregisterPending = true), memory.value)
+        vault.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals(listOf("unregister"), log)
+        assertEquals(PushMemory(), memory.value)
+        // Every later open sends nothing more, and never a registration.
+        vault.phase.value = AppPhase.Locked
+        runCurrent()
+        vault.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals(listOf("unregister"), log)
+        assertEquals(PushRegState.OFF, registrar.status.value.state)
+        assertTrue(c.running)
+        assertEquals(NotificationMode.PUSH, mode.value)
+        // The push service is back (a build with Google push again): registered at the next look, service until then.
+        push.available = PushAvailability.AVAILABLE
+        c.retry()
+        runCurrent()
+        assertEquals(2, log.size)
+        assertTrue("a new token (the old one was deleted when the registration was dropped)", log[1].startsWith("register fcm tok-") && log[1] != "register fcm tok-1 $APP_ID")
+        assertTrue(registrar.status.value.active)
+        assertFalse("push delivers again", c.running)
+        assertEquals(listOf("start", "stop"), s.calls)
+    }
+
+    @Test
+    fun aPhoneThatNeverRegisteredSendsTheVaultNothingWhenItFallsBack() = runTest {
+        val log = mutableListOf<String>()
+        val vault = FakePushVault(log = log)
+        val memory = FakeMemory()
+        val push = FakePush(PushAvailability.MISSING_SERVICES)
+        val mode = MutableStateFlow(NotificationMode.PUSH)
+        val registrar = PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { mode.value }, nowMs = { testScheduler.currentTime })
+        registrar.start()
+        val s = Service()
+        ModeController(backgroundScope, mode, vault.phase, s, push, registrar).start()
+        runCurrent()
+        assertEquals(listOf("start"), s.calls)
+        assertTrue(log.isEmpty())
+        assertTrue("no token to delete either", push.log.isEmpty())
+        assertEquals(PushMemory(), memory.value)
     }
 
     /** The registration as [ModeController] sees it; every call in [calls], shared with the service's. */
@@ -194,11 +355,12 @@ class ModeControllerTest {
         c.start()
         runCurrent()
         assertTrue(s.calls.isEmpty())
-        // GrapheneOS without Google Play services: nothing of push is asked for.
+        // GrapheneOS without Google Play services: no registration is started (the service is the fallback, 0.1.32).
         val missing = ModeController(backgroundScope, MutableStateFlow(NotificationMode.PUSH), MutableStateFlow(AppPhase.Unlocked), s, FakePush(PushAvailability.MISSING_SERVICES), reg)
         missing.start()
         runCurrent()
-        assertTrue(s.calls.isEmpty())
+        assertFalse("push-enable" in s.calls)
+        assertTrue(missing.running)
     }
 
     @Test

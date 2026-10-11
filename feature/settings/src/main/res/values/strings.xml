@@ -63,6 +63,7 @@
     <string name="settings_notify_status_push_again">Registering again</string>
     <string name="settings_notify_status_push_unreachable">Push service not reachable, retrying</string>
     <string name="settings_notify_status_push_fallback">Push unavailable, using the on-phone service</string>
+    <string name="settings_notify_status_push_not_on_phone">Google push is not available on this phone, using the on-phone service</string>
     <string name="settings_notify_open_android">Open Android settings</string>
     <string name="settings_notify_allow_background">Allow in background</string>
     <string name="settings_notify_show">Show in notifications</string>

@@ -125,6 +125,15 @@ internal object NotificationSettingsCatalog {
         "settings.notifications_push_fallback" to {
             Screen(push(com.vettid.core.notify.PushRegState.LIMITED).copy(service = com.vettid.core.notify.KeeperStatus.CONNECTED))
         },
+        // Google push chosen, Google Play services gone since (ANDROID-PLAN 0.1.32): the service is the fallback.
+        "settings.notifications_push_not_on_phone" to {
+            Screen(
+                push(com.vettid.core.notify.PushRegState.OFF).copy(
+                    service = com.vettid.core.notify.KeeperStatus.CONNECTED,
+                    push = com.vettid.core.notify.PushAvailability.MISSING_SERVICES,
+                ),
+            )
+        },
         "settings.notifications_push_not_yet" to {
             Screen(push(com.vettid.core.notify.PushRegState.UNAVAILABLE).copy(service = com.vettid.core.notify.KeeperStatus.CONNECTED))
         },
