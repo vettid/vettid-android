@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NOT PART OF THE BRAND KIT. Background of the launcher icon of the non-production builds (debug, devStack,
+     staging): VettID Blue with a white band across the bottom, so that these builds can be told from production on
+     the launcher. The band starts at 85dp: below the rook (which ends at 73.7dp) and its clear space (11dp). The
+     logo artwork (the foreground) is the production one, untouched. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#2E2D88"
+        android:pathData="M0,0 H108 V108 H0 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M0,85 H108 V108 H0 Z" />
+</vector>

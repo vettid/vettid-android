@@ -153,7 +153,9 @@ vettid.org repo's `local/android-ui/`).
   icon (gold rook, keyhole cut out, on VettID Blue #2E2D88; `ic_launcher_*`, legacy PNGs in `mipmap-<density>`); in the
   app, `RookLogo` (the rook alone, any size) or `VettIdLogo` (the horizontal logo, never under 160dp wide, clear space
   `VettIdLogoDefaults.clearSpace`). Never type "VettID" next to the rook as a logo, never the tagline on a screen, never
-  recolour the artwork. The rook's shapes are the kit's paths, guarded by `RookKeyholeTest`.
+  recolour the artwork. The rook's shapes are the kit's paths, guarded by `RookKeyholeTest`. Non-production builds
+  (debug, devStack, staging) add a white band to the launcher icon's background (`app/src/nonProduction`, not part of
+  the kit).
 - Connection tiles: indigo for all connections, teal for favourites (the owner's
   `favorite` flag), gold for the member's own avatar; use `ConnectionRow`.
 - Reuse `:core:ui` components (top bar, drawer, list row, empty state, floating

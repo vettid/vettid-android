@@ -18,6 +18,7 @@ class RookKeyholeTest {
         "src/main/res/drawable/ic_rook.xml",
         "../../app/src/main/res/drawable/ic_launcher_foreground.xml",
         "../../app/src/main/res/drawable/ic_launcher_monochrome.xml",
+        "../../app/src/nonProduction/res/drawable/ic_launcher_monochrome.xml",
         "src/main/res/drawable/ic_logo_horizontal.xml",
         "../notify/src/main/res/drawable/ic_stat_vettid.xml",
     )
