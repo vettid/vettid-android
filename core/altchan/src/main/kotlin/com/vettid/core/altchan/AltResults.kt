@@ -1,5 +1,6 @@
 package com.vettid.core.altchan
 
+import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.altchan.AltChannel
 import com.vettid.core.crypto.altchan.Descriptor
@@ -13,6 +14,7 @@ import com.vettid.core.crypto.json.JsonObject
 import com.vettid.core.crypto.json.StrictJson
 import java.io.IOException
 import java.time.Instant
+import java.util.Locale
 
 /** A sealed result could not be opened or parsed (or answers another request). */
 class AltResultException(what: String) : IOException("alternate channel: $what")
@@ -152,11 +154,15 @@ data class RecoveryCode(
         fun parseQr(b: ByteArray): RecoveryCode = wrap {
             val o = AltResults.obj(b)
             if (o.uint("v", 1, 1) != 1L || o.string("t") != "r") throw AltResultException("recovery QR")
-            val c = RecoveryCode(o.string("vault_id"), o.string("recovery_id"), o.string("code"), o.optString("api"))
+            checked(RecoveryCode(o.string("vault_id"), o.string("recovery_id"), o.string("code"), o.optString("api")))
+        }
+
+        /** [c] when its code, recovery id and vault id have the forms a recovery QR's must have. */
+        internal fun checked(c: RecoveryCode): RecoveryCode {
             if (!RecoveryCodes.isValid(c.code) || !Ulid.isValid(c.recoveryId) || !validVaultId(c.vaultId)) {
                 throw AltResultException("recovery QR")
             }
-            c
+            return c
         }
 
         /** A scanned QR's text (the compact JSON), or null when it is not a recovery QR. */
@@ -177,37 +183,192 @@ data class RecoveryCode(
 
 /**
  * The recovery code's form (§11.11.2): 20 random bytes as 32 Crockford base32
- * characters (`0-9A-HJKMNP-TV-Z`, upper case, no padding). The portal also shows
- * it as text in groups of four, for typing.
+ * characters (`0-9A-HJKMNP-TV-Z`, upper case, no padding); and its typed form
+ * (0.25.0, §11.11.10), which the portal shows under the QR as 12 groups of four:
+ *
+ * ```
+ * typed = locator (12) || code (32) || check (4)
+ * check = the first 20 bits of
+ *         SHA-256("vettid/vms/2/recovery-typed-check" || 0x00 || api || 0x00 || locator || code),
+ *         as 4 characters of the alphabet (most significant 5 bits first)
+ * ```
  */
 object RecoveryCodes {
     const val LENGTH = 32
     const val ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-    private const val GROUP = 4
+
+    /** The member API's locator, which stands for (`vault_id`, `recovery_id`) at the claim (60 random bits). */
+    const val LOCATOR_LENGTH = 12
+    const val CHECK_LENGTH = 4
+    const val TYPED_LENGTH = LOCATOR_LENGTH + LENGTH + CHECK_LENGTH
+    const val GROUP = 4
+    const val TYPED_GROUPS = TYPED_LENGTH / GROUP
+    private const val TYPED_CHECK_LABEL = "vettid/vms/2/recovery-typed-check"
+    private const val BITS_PER_CHAR = 5
+    private const val CHAR_MASK = 31
+    private const val BYTE_MASK = 0xff
+
+    /** Why a typed character was refused in the field (§11.11.10 step 1): never guessed, never sent. */
+    enum class Refused {
+        /** `U` is not in the alphabet and is not mapped: "Check whether it is a V." */
+        LETTER_U,
+
+        /** Anything else that is neither a digit nor a letter of the alphabet, a look-alike or a separator. */
+        OTHER,
+    }
+
+    /**
+     * What typed or pasted text holds: [text] the canonical characters so far (at most [TYPED_LENGTH]; a
+     * forty-ninth is ignored), and, when a character was refused, [refused] with [refusedGroup] (1 to 12), the
+     * group it would have gone into. Refused characters are dropped, never replaced.
+     */
+    class TypedInput(val text: String, val refused: Refused? = null, val refusedGroup: Int = 0) {
+        /** Groups of four that are complete. */
+        val groups: Int get() = text.length / GROUP
+
+        val complete: Boolean get() = text.length == TYPED_LENGTH
+
+        override fun toString(): String = "TypedInput(${text.length} characters, refused=$refused)"
+    }
 
     fun isValid(code: String): Boolean = code.length == LENGTH && code.all { it in ALPHABET }
 
+    fun isLocator(s: String): Boolean = s.length == LOCATOR_LENGTH && s.all { it in ALPHABET }
+
     /**
-     * A typed code in its canonical form, or null when it is not one: spaces and
+     * One character as the canonical form has it, null for a separator (dropped), or a [Refused]: spaces, hyphens
+     * and line breaks are dropped, letters upper-cased, and the Crockford look-alikes read as digits (I and L as 1,
+     * O as 0), which the canonical form never contains.
+     */
+    private fun canonical(ch: Char): Any? = when (val c = ch.uppercaseChar()) {
+        ' ', '-', '\t', '\n', '\r', '\u00a0' -> null
+        'I', 'L' -> '1'
+        'O' -> '0'
+        'U' -> Refused.LETTER_U
+        else -> if (c in ALPHABET) c else Refused.OTHER
+    }
+
+    private fun normalize(typed: String, length: Int): String? {
+        val sb = StringBuilder(length)
+        for (ch in typed) {
+            when (val c = canonical(ch)) {
+                null -> Unit
+                is Char -> sb.append(c)
+                else -> return null
+            }
+            if (sb.length > length) return null
+        }
+        return sb.toString().takeIf { it.length == length }
+    }
+
+    /**
+     * A typed code (the 32 characters alone) in its canonical form, or null when it is not one: spaces and
      * hyphens are dropped, letters upper-cased, and the Crockford look-alikes read
      * as digits (I and L as 1, O as 0), which the canonical form never contains.
      */
-    fun normalize(typed: String): String? {
-        val sb = StringBuilder(LENGTH)
-        for (ch in typed) {
-            when (val c = ch.uppercaseChar()) {
-                ' ', '-', '\t', '\n', '\r', '\u00a0' -> Unit
-                'I', 'L' -> sb.append('1')
-                'O' -> sb.append('0')
-                else -> if (c in ALPHABET) sb.append(c) else return null
+    fun normalize(typed: String): String? = normalize(typed, LENGTH)
+
+    /** The typed form (§11.11.10) in its canonical 48 characters, or null: the same rules; `U` is never mapped. */
+    fun normalizeTyped(typed: String): String? = normalize(typed, TYPED_LENGTH)
+
+    /**
+     * The typed form as a field takes it, character by character (§11.11.10 step 1): what is accepted so far and
+     * the first character that was refused, if any.
+     */
+    fun typedInput(raw: String): TypedInput {
+        val sb = StringBuilder(TYPED_LENGTH)
+        var refused: Refused? = null
+        var group = 0
+        for (ch in raw) {
+            if (sb.length == TYPED_LENGTH) break
+            when (val c = canonical(ch)) {
+                null -> Unit
+                is Char -> sb.append(c)
+                is Refused -> if (refused == null) {
+                    refused = c
+                    group = sb.length / GROUP + 1
+                }
             }
-            if (sb.length > LENGTH) return null
         }
-        return sb.toString().takeIf { it.length == LENGTH }
+        return TypedInput(sb.toString(), refused, group)
+    }
+
+    /** The member API origin as the check hashes it: the portal's own origin, no trailing slash, lower case. */
+    fun origin(api: String): String = api.trimEnd('/').lowercase(Locale.ROOT)
+
+    /**
+     * The 4 check characters for [api] (a member API origin), [locator] and [code] in canonical form. They hold no
+     * secret (anyone can compute them for a guess): they catch typing mistakes and another environment's code
+     * before anything is sent.
+     */
+    fun typedCheck(api: String, locator: String, code: String): String {
+        require(isLocator(locator) && isValid(code)) { "typed check: not a locator and a code" }
+        val h = Bytes.sha256("$TYPED_CHECK_LABEL\u0000${origin(api)}\u0000$locator$code".toByteArray(Charsets.UTF_8))
+        val bits = ((h[0].toInt() and BYTE_MASK) shl 12) or ((h[1].toInt() and BYTE_MASK) shl 4) or ((h[2].toInt() and BYTE_MASK) shr 4)
+        return buildString(CHECK_LENGTH) {
+            for (i in CHECK_LENGTH - 1 downTo 0) append(ALPHABET[(bits shr (i * BITS_PER_CHAR)) and CHAR_MASK])
+        }
     }
 
     /** The characters typed so far, in groups of four (`ABCD EFGH …`). */
     fun grouped(code: String): String = code.chunked(GROUP).joinToString(" ")
+}
+
+/**
+ * A typed recovery code whose check characters matched this app's member API origin (§11.11.10 step 2): the
+ * [locator] to claim with and the [code] for the enclave. Only [parse] makes one, so a string that fails the check
+ * can never reach the API. The check characters are verified and dropped; nothing here is ever stored or logged.
+ */
+class TypedRecoveryCode private constructor(val locator: String, val code: String) {
+    /**
+     * The same [RecoveryCode] a scan of this recovery's QR produces, from the claim's answer (§11.11.10 steps 3
+     * and 4): everything after it is the scanned path. [api] is this app's member API origin.
+     */
+    fun recoveryCode(claimed: Claimed, api: String): RecoveryCode {
+        val vaultId = claimed.vaultId ?: throw AltResultException("recovery claim")
+        val recoveryId = claimed.recoveryId ?: throw AltResultException("recovery claim")
+        return RecoveryCode.checked(RecoveryCode(vaultId, recoveryId, code, api.trimEnd('/')))
+    }
+
+    override fun equals(other: Any?): Boolean = other is TypedRecoveryCode && other.locator == locator && other.code == code
+
+    override fun hashCode(): Int = locator.hashCode() * HASH_PRIME + code.hashCode()
+
+    override fun toString(): String = "TypedRecoveryCode(…)"
+
+    /** What typed text turned out to be. */
+    sealed interface Parsed {
+        /** 48 characters whose check matches: [code] may be claimed. */
+        class Ok(val code: TypedRecoveryCode) : Parsed
+
+        /**
+         * 48 valid characters whose check does not match this app's origin: a typing mistake, or a code of
+         * another environment's account site. Input validation, not a wrong code: nothing is sent or counted.
+         */
+        data object BadCheck : Parsed
+
+        /** Exactly the 32 characters of a bare code (an account page from before MEMBER-API 2.4.0). */
+        data object BareCode : Parsed
+
+        /** Not 48 characters of the alphabet (too few, too many, or a character the code never contains). */
+        data object NotTyped : Parsed
+    }
+
+    companion object {
+        private const val HASH_PRIME = 31
+
+        /** [typed] as the member typed or pasted it; [api] is this app's own built-in member API origin. */
+        fun parse(typed: String, api: String): Parsed {
+            val t = RecoveryCodes.normalizeTyped(typed)
+                ?: return if (RecoveryCodes.normalize(typed) != null) Parsed.BareCode else Parsed.NotTyped
+            val locator = t.substring(0, RecoveryCodes.LOCATOR_LENGTH)
+            val code = t.substring(RecoveryCodes.LOCATOR_LENGTH, RecoveryCodes.LOCATOR_LENGTH + RecoveryCodes.LENGTH)
+            val check = t.substring(RecoveryCodes.LOCATOR_LENGTH + RecoveryCodes.LENGTH)
+            // Nothing secret is compared: anyone can compute the check characters for a guess.
+            val matches = RecoveryCodes.typedCheck(api, locator, code) == check
+            return if (matches) Parsed.Ok(TypedRecoveryCode(locator, code)) else Parsed.BadCheck
+        }
+    }
 }
 
 private inline fun <T> wrap(f: () -> T): T = try {

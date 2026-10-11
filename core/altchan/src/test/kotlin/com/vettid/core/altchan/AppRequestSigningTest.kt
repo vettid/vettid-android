@@ -23,6 +23,39 @@ class AppRequestSigningTest {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", g)
     }
 
+    /**
+     * The typed recovery code's claim (VAULT-MESSAGING 0.25.0 §11.11.10, MEMBER-API 2.4.0): the usual nine lines with
+     * the vault line EMPTY, over the body `{"locator","app_key"}`. Golden: the string is written out in full.
+     */
+    @Test
+    fun theClaimByLocatorIsSignedWithAnEmptyVaultLine() {
+        val body = """{"locator":"7ZK3M9QX2HTD","app_key":"AAEC"}""".toByteArray()
+        val s = AppRequestSigning.signingString("POST", "/api/vault/recovery/claim", "", "", "00112233445566778899aabbccddeeff", 1_791_000_000, "bm9uY2U", body)
+        val lines = s.split("\n")
+        assertEquals(9, lines.size)
+        assertEquals(
+            listOf(
+                "vettid/member-api/app/1",
+                "POST",
+                "/api/vault/recovery/claim",
+                "",
+                "",
+                "00112233445566778899aabbccddeeff",
+                "1791000000",
+                "bm9uY2U",
+                "19de332978b210045ee2fae3dd2a79038277f105976a6260f052d666ef50cb95",
+            ),
+            lines,
+        )
+        assertEquals("the body's hash", Bytes.hex(Bytes.sha256(body)), lines[8])
+
+        val key = MemberApiTest.SoftAppKey()
+        val h = AppRequestSigning.header(key, "POST", "/api/vault/recovery/claim", null, "", body, ts = 1_791_000_000, nonceBytes = "nonce".toByteArray())
+        assertTrue(h.startsWith("v=1; vault=; kid=${AppRequestSigning.akid(key.spki())}; ts=1791000000; nonce=bm9uY2U; sig="))
+        val msg = s.replace("00112233445566778899aabbccddeeff", AppRequestSigning.akid(key.spki()))
+        assertTrue(key.verify(msg.toByteArray(), Base64s.decodeRawUrl(h.substringAfter("sig="))))
+    }
+
     @Test
     fun akidIsTheFirst16BytesOfTheSpkiHashInLowerHex() {
         val spki = ByteArray(91) { it.toByte() }

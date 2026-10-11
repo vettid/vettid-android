@@ -1,5 +1,6 @@
 package com.vettid.feature.onboarding
 
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -40,6 +42,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.CameraPermission
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -73,8 +76,11 @@ internal fun localDateTime(rfc3339: String?): String? = try {
 
 /** The camera with a gold frame, or the permission notice; [camera] is replaced in the screen catalog. */
 @Composable
-internal fun ScannerBox(onText: (String) -> Unit, camera: (@Composable (Modifier) -> Unit)?) {
-    val permission = rememberCameraPermission()
+internal fun ScannerBox(
+    onText: (String) -> Unit,
+    camera: (@Composable (Modifier) -> Unit)?,
+    permission: CameraPermission = rememberCameraPermission(),
+) {
     LaunchedEffect(Unit) { if (!permission.granted && camera == null) permission.request() }
     if (permission.granted || camera != null) {
         val cd = stringResource(R.string.move_cd_qr_scanner)
@@ -145,7 +151,10 @@ fun RecoverFlow(
     RecoverContent(state, viewModel, onLeave, onNewVault, onOpenAccountSite)
 }
 
-/** One recovery step for [state] (stateless). [camera] replaces the camera preview (screen catalog). */
+/**
+ * One recovery step for [state] (stateless). [camera] replaces the camera preview (screen catalog); [secureTyping]
+ * keeps the typed-entry screen out of screenshots and the recent-apps preview (off only in the screen catalog).
+ */
 @Suppress("CyclomaticComplexMethod", "LongMethod", "LongParameterList")
 @Composable
 fun RecoverContent(
@@ -155,24 +164,19 @@ fun RecoverContent(
     onNewVault: () -> Unit,
     onOpenAccountSite: () -> Unit,
     camera: (@Composable (Modifier) -> Unit)? = null,
+    secureTyping: Boolean = true,
 ) {
     val leaveable = state.step in setOf(RecoverStep.INTRO, RecoverStep.LOADING)
     val back: () -> Unit = { if (!actions.back() && leaveable) onLeave() }
-    val canBack = leaveable || state.step == RecoverStep.SCAN
+    val canBack = leaveable || state.step == RecoverStep.SCAN || state.step == RecoverStep.TYPE
     BackHandler(enabled = canBack) { back() }
     val onBack: (() -> Unit)? = if (canBack) back else null
     when (state.step) {
         RecoverStep.LOADING, RecoverStep.INTRO -> RecoverIntro(state, actions, onBack, onOpenAccountSite)
-        RecoverStep.SCAN -> FormScaffold(
-            title = stringResource(R.string.recover_scan_title),
-            body = stringResource(R.string.recover_scan_body),
-            primaryLabel = null,
-            onPrimary = {},
-            onBack = onBack,
-        ) {
-            ScannerBox(actions::scanned, camera)
+        RecoverStep.SCAN -> RecoverScan(state, actions, onBack, camera)
+        RecoverStep.TYPE -> RecoverTypeScreen(state, actions, onBack, secureTyping) {
             CodeRefusalNotice(state)
-            Failure(state.error)
+            ClaimFailure(state)
         }
         RecoverStep.REGISTERING -> FormScaffold(title = stringResource(R.string.recover_title), primaryLabel = null, onPrimary = {}) {
             Waiting(stringResource(R.string.recover_registering), Modifier.testTag("registering"))
@@ -238,6 +242,51 @@ fun RecoverContent(
 
 private const val MIN_PIN = 6
 
+/**
+ * The scan step. **Type the code instead** (ANDROID-PLAN 0.1.33) is a text button under the camera, and the primary
+ * action when the camera permission is refused or the phone has no camera.
+ */
+@Composable
+private fun RecoverScan(state: RecoverUiState, actions: RecoverActions, onBack: (() -> Unit)?, camera: (@Composable (Modifier) -> Unit)?) {
+    val permission = rememberCameraPermission()
+    val hasCamera = camera != null || LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+    val canScan = hasCamera && (permission.granted || camera != null)
+    val type = stringResource(R.string.recover_type)
+    FormScaffold(
+        title = stringResource(R.string.recover_scan_title),
+        body = stringResource(R.string.recover_scan_body),
+        primaryLabel = if (canScan) null else type,
+        onPrimary = actions::type,
+        onBack = onBack,
+        secondaryLabel = if (canScan) type else null,
+        onSecondary = actions::type,
+    ) {
+        if (hasCamera) {
+            ScannerBox(actions::scanned, camera, permission)
+        } else {
+            NoticeCard(
+                NoticeKind.INFO,
+                stringResource(R.string.recover_scan_no_camera_title),
+                stringResource(R.string.recover_scan_no_camera_body),
+                Modifier.testTag("no_camera"),
+            )
+        }
+        CodeRefusalNotice(state)
+        ClaimFailure(state)
+    }
+}
+
+/** A failure of the claim or the register; a `429` says how long to wait when the member API said so. */
+@Composable
+private fun ClaimFailure(state: RecoverUiState) {
+    val wait = if (state.error == FailureKind.RATE_LIMITED && state.retrySeconds > 0) {
+        stringResource(R.string.recover_rate_limited_wait, formatWait(state.retrySeconds))
+    } else {
+        null
+    }
+    Failure(state.error, wait)
+}
+
 @Composable
 private fun RecoverIntro(state: RecoverUiState, actions: RecoverActions, onBack: (() -> Unit)?, onOpenAccountSite: () -> Unit) {
     FormScaffold(
@@ -246,13 +295,16 @@ private fun RecoverIntro(state: RecoverUiState, actions: RecoverActions, onBack:
         primaryLabel = if (state.step == RecoverStep.LOADING) null else stringResource(R.string.recover_scan),
         onPrimary = actions::scan,
         busy = state.busy || state.step == RecoverStep.LOADING,
-        secondaryLabel = stringResource(R.string.recover_open_site),
-        onSecondary = onOpenAccountSite,
+        // Under "Scan the code" (ANDROID-PLAN 0.1.33), as the setup code's screen has it.
+        secondaryLabel = if (state.step == RecoverStep.LOADING) null else stringResource(R.string.recover_type),
+        onSecondary = actions::type,
         onBack = onBack,
     ) {
         NoticeCard(NoticeKind.INFO, stringResource(R.string.recover_need_title), stringResource(R.string.recover_need_body))
         CodeRefusalNotice(state)
-        Failure(state.error)
+        ClaimFailure(state)
+        Spacer(Modifier.height(Spacing.l))
+        Link(stringResource(R.string.recover_open_site), onOpenAccountSite, "recover_open_site")
     }
 }
 
@@ -278,7 +330,7 @@ private fun CodeRefusalNotice(state: RecoverUiState) {
         if (r == CodeRefusal.BAD_CODE || r == CodeRefusal.NOT_A_CODE || r == CodeRefusal.RETRY) NoticeKind.WARNING else NoticeKind.URGENT,
         stringResource(R.string.recover_failed_title),
         text,
-        Modifier.testTag("code_refused"),
+        Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("code_refused"),
     )
 }
 

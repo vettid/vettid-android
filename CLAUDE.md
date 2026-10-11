@@ -107,7 +107,7 @@ Debug builds use application id `com.vettid.app.dev` (`devStack`:
 Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
 `app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `onboarding.setup_scan`, `onboarding.setup_type`, `onboarding.confirm_account`, `account_sheet`, `unlock.updated`,
 `credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
-`connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.no_backup`,
+`connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.no_backup`; the recovery code typed instead of scanned (ANDROID-PLAN 0.1.33, VAULT-MESSAGING 0.25.0 §11.11.10: `RecoveryCodes` / `TypedRecoveryCode` in `:core:altchan`, the claim by locator, `RecoverStep.TYPE`; the real screen sets `FLAG_SECURE` through `SecureWindow`, the catalog's does not), `recover.type`, `recover.type_partial`, `recover.type_complete`, `recover.type_refused`, `recover.type_bad_check`, `recover.type_short_code`, `recover.type_not_found`, `recover.type_bad_code`, `recover.type_rate_limited`;
 `transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
 did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
 repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`; the vault service paused for maintenance

@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.altchan.RecoveryCode
+import com.vettid.core.altchan.TypedRecoveryCode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
@@ -176,6 +177,13 @@ interface MoveRepository {
      * phone with its code (§11.11.3), attested.
      */
     suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration
+
+    /**
+     * The same for a typed code (VAULT-MESSAGING 0.25.0 §11.11.10), whose check characters already matched this
+     * app's member API origin: claims by its locator, takes the vault and the recovery from the answer, and then
+     * registers exactly as [registerRecovery] does for the scanned QR of that recovery.
+     */
+    suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration
 
     /** The release check before the PIN (§11.10.6), as for an unlock. */
     suspend fun recoveryPreflight(): PreflightInfo

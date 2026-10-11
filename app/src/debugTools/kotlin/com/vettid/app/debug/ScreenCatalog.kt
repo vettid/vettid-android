@@ -152,6 +152,7 @@ import com.vettid.feature.onboarding.RecoverActions
 import com.vettid.feature.onboarding.RecoverContent
 import com.vettid.feature.onboarding.RecoverStep
 import com.vettid.feature.onboarding.RecoverUiState
+import com.vettid.feature.onboarding.TypedProblem
 import com.vettid.feature.onboarding.TransferInActions
 import com.vettid.feature.onboarding.TransferInContent
 import com.vettid.feature.onboarding.TransferInStep
@@ -230,6 +231,9 @@ private object NoRecover : RecoverActions {
     override fun scan() = Unit
     override fun back(): Boolean = false
     override fun scanned(text: String) = Unit
+    override fun type() = Unit
+    override fun setTyped(v: String) = Unit
+    override fun submitTyped() = Unit
     override fun retryPreflight() = Unit
     override fun setApproveOffer(approve: Boolean) = Unit
     override fun setPin(v: String) = Unit
@@ -484,7 +488,16 @@ object ScreenCatalog {
     )
 
     @Composable
-    private fun Rec(state: RecoverUiState) = RecoverContent(state, NoRecover, {}, {}, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
+    private fun Rec(state: RecoverUiState) = RecoverContent(
+        state, NoRecover, {}, {}, {},
+        camera = { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) },
+        // The catalog is screenshotted; the app's own typed-entry screen sets FLAG_SECURE.
+        secureTyping = false,
+    )
+
+    // The typed recovery code (ANDROID-PLAN 0.1.33). TEST ONLY: VAULT-MESSAGING §16's public vector, never a real code.
+    private const val TYPED_SAMPLE = "7ZK3M9QX2HTDCDEFGHJKMNPQRSTVWXYZ0123456789ABV3A1"
+    private val typeState = RecoverUiState(step = RecoverStep.TYPE, accountHost = "account.vettid.org")
 
     @Composable
     private fun TIn(state: TransferInUiState) = TransferInContent(state, NoTransferIn, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
@@ -561,6 +574,15 @@ object ScreenCatalog {
         "recover.voided" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.VOIDED, wrongCodes = 5)) },
         "recover.too_early" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.TOO_EARLY)) },
         "recover.code_expired" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.EXPIRED)) },
+        "recover.type" to { Rec(typeState) },
+        "recover.type_partial" to { Rec(typeState.copy(typed = TYPED_SAMPLE.take(18))) },
+        "recover.type_complete" to { Rec(typeState.copy(typed = TYPED_SAMPLE)) },
+        "recover.type_refused" to { Rec(typeState.copy(typed = TYPED_SAMPLE.take(13), typedProblem = TypedProblem.LETTER_U, typedGroup = 4)) },
+        "recover.type_bad_check" to { Rec(typeState.copy(typed = TYPED_SAMPLE.dropLast(1) + "2", typedProblem = TypedProblem.BAD_CHECK)) },
+        "recover.type_short_code" to { Rec(typeState.copy(typed = TYPED_SAMPLE.substring(12, 44), typedProblem = TypedProblem.SHORT_CODE)) },
+        "recover.type_not_found" to { Rec(typeState.copy(typed = TYPED_SAMPLE, refusal = CodeRefusal.GONE)) },
+        "recover.type_bad_code" to { Rec(typeState.copy(typed = TYPED_SAMPLE, refusal = CodeRefusal.BAD_CODE, wrongCodes = 2)) },
+        "recover.type_rate_limited" to { Rec(typeState.copy(typed = TYPED_SAMPLE, error = FailureKind.RATE_LIMITED, retrySeconds = 754)) },
         "recover.registering" to { Rec(recState.copy(step = RecoverStep.REGISTERING)) },
         "recover.pin" to { Rec(pinState) },
         "recover.pin_offer" to { Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), approveOffer = true)) },

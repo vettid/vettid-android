@@ -4,9 +4,11 @@ import android.content.Context
 import com.vettid.core.altchan.AltChannelFlow
 import com.vettid.core.altchan.AltTrust
 import com.vettid.core.altchan.Approval
+import com.vettid.core.altchan.Claimed
 import com.vettid.core.altchan.MemberApiClient
 import com.vettid.core.altchan.MemberApiException
 import com.vettid.core.altchan.RecoveryCode
+import com.vettid.core.altchan.TypedRecoveryCode
 import com.vettid.core.altchan.UnlockOptions
 import com.vettid.core.altchan.UnlockOutcome
 import com.vettid.core.attestation.AttestationException
@@ -1039,21 +1041,47 @@ class VaultManager(
         }
     }
 
-    @Suppress("ReturnCount")
     override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = guard {
         if (!session().device.recovering) freshDeviceIfUnpaired()
-        val s = session()
         // §11.11.7 (0.15.0): the claim gives this phone's key the right to register, and names the member.
         val claimed = try {
             gateway.claimRecovery(code.vaultId, code.recoveryId)
         } catch (e: MemberApiException) {
-            return@guard when (e.code) {
-                MemberApiException.RECOVERY_NOT_AVAILABLE -> RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
-                MemberApiException.RECOVERY_UNAVAILABLE -> RecoveryRegistration.Refused(CODE_NO_BACKUP)
-                MemberApiException.NOT_FOUND -> RecoveryRegistration.Refused(CODE_NO_RECOVERY)
-                else -> throw e
-            }
+            return@guard claimRefusal(e)
         }
+        registerClaimed(code, claimed)
+    }
+
+    /**
+     * §11.11.10 (0.25.0): the claim by locator names the vault and the recovery; with them and the typed code the
+     * app holds what a scan gives, and the register below is the scanned one.
+     */
+    override suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration = guard {
+        if (!session().device.recovering) freshDeviceIfUnpaired()
+        val claimed = try {
+            gateway.claimRecoveryByLocator(typed.locator)
+        } catch (e: MemberApiException) {
+            return@guard claimRefusal(e)
+        }
+        val code = typed.recoveryCode(claimed, apiOrigin)
+        when (val r = registerClaimed(code, claimed)) {
+            is RecoveryRegistration.Refused -> r.copy(recoveryId = code.recoveryId)
+            is RecoveryRegistration.Registered -> r
+        }
+    }
+
+    /** The claim's refusals that have their own text (`409`, `404`); any other error is thrown. */
+    private fun claimRefusal(e: MemberApiException): RecoveryRegistration = when (e.code) {
+        MemberApiException.RECOVERY_NOT_AVAILABLE -> RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
+        MemberApiException.RECOVERY_UNAVAILABLE -> RecoveryRegistration.Refused(CODE_NO_BACKUP)
+        MemberApiException.NOT_FOUND -> RecoveryRegistration.Refused(CODE_NO_RECOVERY)
+        else -> throw e
+    }
+
+    /** After the claim, however the code was read: the sealed `vault.recovery.register` (§11.11.3). */
+    @Suppress("ReturnCount")
+    private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
+        val s = session()
         gateway.memberChanged(claimed.userGuid)
         io { saveLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
         val r = try {
@@ -1066,12 +1094,12 @@ class VaultManager(
             // 2.1.0: a recovery the enclave refused (no backup copy) is `unavailable`: the register is refused too.
             if (e.code == MemberApiException.RECOVERY_UNAVAILABLE) {
                 s.device.dropRecoveryRegistration()
-                return@guard RecoveryRegistration.Refused(CODE_NO_BACKUP)
+                return RecoveryRegistration.Refused(CODE_NO_BACKUP)
             }
             if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
             null
         }
-        when {
+        return when {
             r == null -> {
                 s.device.dropRecoveryRegistration()
                 RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)

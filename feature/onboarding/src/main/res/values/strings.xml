@@ -157,7 +157,7 @@
 
     <!-- Recovery on this phone (§11.11) -->
     <string name="recover_title">Recover your vault</string>
-    <string name="recover_body">Your account site shows a recovery QR code 24 hours after you start a recovery there. Open it (Vault, then Recovery, then Show the code) and scan it with this phone.</string>
+    <string name="recover_body">Your account site shows a recovery QR code 24 hours after you start a recovery there. Open it (Vault, then Recovery, then Show the code) and scan it with this phone, or type the code shown under it.</string>
     <string name="recover_need_title">You will need</string>
     <string name="recover_need_body">The recovery code from the account site, your vault PIN and your credential password. This phone then replaces your old one, which erases VettID the next time it reaches your vault.</string>
     <string name="recover_scan">Scan the code</string>
@@ -171,6 +171,22 @@
     <string name="recover_scan_other_environment">That code is from another VettID environment (%1$s), not the one this app uses.</string>
     <string name="recover_scan_no_api">That recovery code is from an older account site. Reload the recovery page on the account site and scan the new code.</string>
     <string name="recover_not_available">This recovery is not available: its code may not be ready yet (24 hours after the request), or the recovery was cancelled, used or has expired. Check the account site.</string>
+    <!-- The code typed instead of scanned (VAULT-MESSAGING 0.25.0 §11.11.10; ANDROID-PLAN 0.1.33) -->
+    <string name="recover_type">Type the code instead</string>
+    <string name="recover_scan_instead">Scan instead</string>
+    <string name="recover_scan_no_camera_title">No camera</string>
+    <string name="recover_scan_no_camera_body">This phone has no camera that VettID can use. Type the code instead.</string>
+    <string name="recover_type_title">Type your recovery code</string>
+    <string name="recover_type_body">On the account site, under the QR code, there are 12 groups of four characters. Type them all, in order.</string>
+    <string name="recover_type_label">Recovery code</string>
+    <string name="recover_type_groups">%1$d of %2$d groups</string>
+    <string name="recover_type_letter_u">The code has no letter U. Check whether it is a V.</string>
+    <string name="recover_type_other_character">The code uses only digits and letters.</string>
+    <string name="recover_type_in_group">%1$s Look at group %2$d.</string>
+    <string name="recover_type_bad_check">That code doesn\'t match. Compare it with the account site group by group, and check that the site is %1$s.</string>
+    <string name="recover_type_short_code">That is the short code of an older page. Reload the recovery page on the account site: it shows 12 groups.</string>
+    <string name="recover_type_incomplete">The code has 12 groups of four characters. Type them all.</string>
+    <string name="recover_rate_limited_wait">Too many attempts. Try again in %1$s.</string>
     <string name="recover_account_title">Recovering the vault of</string>
     <string name="recover_registering">Checking the code with your vault</string>
     <string name="recover_registering_starting">If your vault was not running, it is starting now. This can take a couple of minutes.</string>
