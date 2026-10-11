@@ -71,6 +71,18 @@ The A2 exit test:
   keystore. Without it the APK is unsigned. `checkReleaseApk` / `checkStagingApk` fail if
   an APK carries another environment's endpoints or pins, or dev-stack/debug-tools code.
 
+- Google push (ANDROID-PLAN 0.1.30, Notification modes 4; README "Google push"): `:core:push-fcm` is the only module
+  with Firebase (firebase-messaging alone; no google-services.json, no Google Services plugin). The Firebase options
+  come from the Gradle properties `vettidFcm<BuildType>{ApplicationId,ProjectId,ApiKey,SenderId}`; never commit
+  values, and use obviously fake ones in tests. Without them (the default, CI) the provider is "not available yet",
+  Firebase is never initialised and its push components are disabled in the manifest
+  (`:app:check<Variant>PushManifest`, run by `checkReleaseApk` / `checkStagingApk`). The registration
+  (`PushRegistrar`, `:core:notify`) sends the token to the member's vault only (`push.register`); a wake only
+  starts the app's usual collect (`VaultManager.collectForWake`), and the notifications come from the feed as in
+  the on-phone service mode. Screens: `settings.notifications_push_available`, `settings.notifications_push`,
+  `settings.notifications_push_again`, `settings.notifications_push_unreachable`,
+  `settings.notifications_push_fallback`, `settings.notifications_push_not_yet`.
+
 ## Device testing
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:

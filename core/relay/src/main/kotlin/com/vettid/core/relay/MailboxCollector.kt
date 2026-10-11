@@ -37,6 +37,12 @@ class MailboxCollector(
     private val clock: Clock = Clock.systemUTC(),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val random: Random = Random.Default,
+    /**
+     * Called with `true` when a collect request goes out (a long-poll round, or a stream opened) and with `false`
+     * when it ended (its messages handled and acked, or it failed). A long poll answers at once when messages wait,
+     * so a request that has been out for a while found the mailbox empty: what a push wake waits for.
+     */
+    private val onRequest: (Boolean) -> Unit = {},
 ) {
     enum class Mode { LONG_POLL, WEBSOCKET }
 
@@ -48,11 +54,7 @@ class MailboxCollector(
             currentCoroutineContext().ensureActive()
             val useSocket = mode == Mode.WEBSOCKET && Instant.now(clock).isAfter(pollUntil)
             try {
-                if (useSocket) {
-                    stream(handle)
-                } else {
-                    pollOnce(handle)
-                }
+                round(useSocket, handle)
                 failures = 0
             } catch (e: CancellationException) {
                 throw e
@@ -65,6 +67,16 @@ class MailboxCollector(
                 failures++
                 sleep(retryDelay(failures, 0))
             }
+        }
+    }
+
+    /** One collect request (a stream until it closes, or a long-poll round), announced to [onRequest]. */
+    private suspend fun round(useSocket: Boolean, handle: suspend (RelayMessage) -> Unit) {
+        onRequest(true)
+        try {
+            if (useSocket) stream(handle) else pollOnce(handle)
+        } finally {
+            onRequest(false)
         }
     }
 

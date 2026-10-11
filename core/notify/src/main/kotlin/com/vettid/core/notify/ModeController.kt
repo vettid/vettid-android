@@ -5,7 +5,6 @@ import com.vettid.core.data.vault.AppPhase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /** Starts and stops the on-phone service ([VaultConnectionService] on a phone; a fake in tests). */
@@ -17,10 +16,14 @@ interface ServiceControl {
 }
 
 /**
- * Applies the member's notification mode (ANDROID-PLAN 0.1.23, Notification modes 1): the on-phone service runs for
- * [NotificationMode.SERVICE] while the phone has a vault; Google push registers for [NotificationMode.PUSH] once it is
- * available (not yet, N2–N4); [NotificationMode.OFF] stops everything. A change stops the old path first, then starts
- * the new one. Never started on a phone without an enrolled vault, or after a wipe.
+ * Applies the member's notification mode (ANDROID-PLAN 0.1.30, Notification modes 1): the on-phone service runs for
+ * [NotificationMode.SERVICE] while the phone has a vault; Google push registers with the vault for
+ * [NotificationMode.PUSH] ([PushControl]); [NotificationMode.OFF] stops everything. A change stops the old path
+ * first, then starts the new one. Never started on a phone without an enrolled vault, or after a wipe.
+ *
+ * In the Google push mode the on-phone service keeps running until the vault holds the registration (PUSH-GATEWAY
+ * §11.1 step 1: register, then stop the service), and runs again as the fallback while push cannot deliver
+ * ([PushStatus.fallback]: `limit`, owner decision 2026-10-10; likewise `unavailable`, a refusal, gateway errors).
  */
 class ModeController(
     private val scope: CoroutineScope,
@@ -28,6 +31,7 @@ class ModeController(
     private val phase: Flow<AppPhase>,
     private val service: ServiceControl,
     private val push: PushProvider,
+    private val registration: PushControl = NoPushControl,
 ) {
     private var serviceOn = false
     private var pushOn = false
@@ -35,8 +39,7 @@ class ModeController(
 
     fun start() {
         scope.launch {
-            combine(mode, phase) { m, p -> m to p }
-                .distinctUntilChanged()
+            combine(mode, phase, registration.status) { m, p, _ -> m to p }
                 .collect { (m, p) -> enrolled(p)?.let { apply(m, it) } }
         }
     }
@@ -44,22 +47,37 @@ class ModeController(
     /** The app came to the foreground: a start Android refused in the background is tried again. */
     fun retry() {
         val (m, e) = want ?: return
-        synchronized(this) { if (m == NotificationMode.SERVICE && e && !serviceOn) serviceOn = service.start() }
+        apply(m, e)
     }
 
     /** [mode] for a phone with ([enrolled]) or without a vault: the old path stops before the new one starts. */
     @Synchronized
     fun apply(mode: NotificationMode, enrolled: Boolean) {
         want = mode to enrolled
-        val wantService = enrolled && mode == NotificationMode.SERVICE
         val wantPush = enrolled && mode == NotificationMode.PUSH && push.availability() == PushAvailability.AVAILABLE
-        if (!wantPush && pushOn) pushOn = false // push.unregister comes with VAULT-MESSAGING's push.register (N2)
+        val wantService = enrolled && (mode == NotificationMode.SERVICE || wantPush && serviceForPush())
+        if (!wantPush && pushOn) {
+            registration.disable(wiped = !enrolled) // push.unregister, then the token is deleted
+            pushOn = false
+        }
         if (!wantService && serviceOn) {
             service.stop()
             serviceOn = false
         }
         if (wantService && !serviceOn) serviceOn = service.start()
-        if (wantPush && !pushOn) pushOn = true
+        if (wantPush && !pushOn) {
+            registration.enable()
+            pushOn = true
+        }
+    }
+
+    /**
+     * In the Google push mode: the service is the fallback while push cannot deliver, and when the mode was just
+     * chosen it keeps running until the vault holds the registration.
+     */
+    private fun serviceForPush(): Boolean {
+        val reg = registration.status.value
+        return reg.fallback || serviceOn && !reg.active
     }
 
     val running: Boolean @Synchronized get() = serviceOn

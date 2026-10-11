@@ -13,6 +13,7 @@ import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -93,6 +94,53 @@ class FeedManagerTest {
     private fun sync(kind: String, id: String, seq: Long) = VaultMessage(
         Inner(id = Ulid.new(), type = "sync.event", ts = now, body = """{"kind":"$kind","item_id":"$id","seq":$seq}""".toByteArray()),
     )
+
+    // --- events held back until the vault was known to be open (a process started by a push wake) ---
+
+    @Test
+    fun aHeldBackEventArrivesAlthoughTheOpenReadAlreadyBroughtItsItem() = runTest {
+        val ops = Ops()
+        // The open's full read lists i1 and i2 (a full read notifies nothing); i2's event had been held back.
+        val m = opened(ops, item("i1", 1, status = "read"), item("i2", 2))
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.replay(event(item("i2", 2)))
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
+        // Read meanwhile on another device (the list has it as read): nothing arrives.
+        m.replay(event(item("i1", 1)))
+        // Deleted meanwhile: not in the list, nothing arrives.
+        m.replay(event(item("gone", 2)))
+        assertEquals(1, arrived.size)
+        assertEquals(1, ops.lists.size) // and no further read
+        job.cancel()
+    }
+
+    @Test
+    fun aHeldBackEventBeforeTheOpenReadIsAnArrivalLikeALiveOne() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.pages += FeedPage(listOf(item("i7", 7)), 7)
+        m.replay(event(item("i7", 7)))
+        assertEquals(listOf("i7"), arrived.map { it.itemId })
+        settle { m.load.value == ListLoad.LOADED }
+        assertEquals("the full read that follows brings no second arrival", 1, arrived.size)
+        job.cancel()
+    }
+
+    @Test
+    fun nothingHeldBackArrivesWhileTheVaultIsHeld() = runTest {
+        val ops = Ops()
+        val m = manager(ops, gated = { true })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.replay(event(item("i7", 7)))
+        advanceUntilIdle()
+        assertTrue(arrived.isEmpty())
+        assertTrue(ops.lists.isEmpty())
+        job.cancel()
+    }
 
     @Test
     fun theOpenReadIsPagedFromTheLastSeqAndDropsDeletedItems() = runTest {

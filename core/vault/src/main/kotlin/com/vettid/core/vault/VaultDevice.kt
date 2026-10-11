@@ -259,6 +259,14 @@ class VaultDevice private constructor(
     /** Whether the mailbox collector runs. */
     val collecting: Boolean get() = collector?.isActive == true
 
+    /**
+     * When the collection's current relay request went out ([System.nanoTime]), null while none is out (between
+     * rounds, during a backoff, or not collecting). A request that has been out for a while found nothing waiting.
+     */
+    @Volatile
+    var collectRequestSince: Long? = null
+        private set
+
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
 
@@ -353,7 +361,10 @@ class VaultDevice private constructor(
         val job = scope.launch {
             launch { flushOutbox() }
             try {
-                MailboxCollector(own, cfg.collectMode, cfg.pollWait, clock = clock).run { handle(it) }
+                MailboxCollector(
+                    own, cfg.collectMode, cfg.pollWait, clock = clock,
+                    onRequest = { out -> collectRequestSince = if (out) System.nanoTime() else null },
+                ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
                 // next start() collects again.
@@ -395,6 +406,7 @@ class VaultDevice private constructor(
         collectScope = null
         collector?.cancel()
         collector = null
+        collectRequestSince = null
     }
 
     /** One long-poll round (tests and the foreground-service path). */

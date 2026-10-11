@@ -19,6 +19,22 @@ val stagingSigningFile: File = file(
 val stagingSigning: Properties? = providers.fileContents(objects.fileProperty().fileValue(stagingSigningFile)).asText.orNull
     ?.let { text -> Properties().apply { load(text.reader()) } }
 
+// Google push (ANDROID-PLAN 0.1.30, Notification modes 4; README "Google push"): the Firebase options of a build type,
+// from the Gradle properties vettidFcm<BuildType>{ApplicationId,ProjectId,ApiKey,SenderId} (no google-services.json,
+// no Google Services plugin). All four or none: without them the build has no Google push ("Not available yet") and
+// Firebase's components stay disabled in its manifest. Each environment has its own Firebase project.
+val fcmOptionNames = listOf("ApplicationId", "ProjectId", "ApiKey", "SenderId")
+
+fun fcmOptions(buildType: String): Map<String, String>? {
+    val prefix = "vettidFcm" + buildType.replaceFirstChar { it.uppercase() }
+    val values = fcmOptionNames.associateWith { providers.gradleProperty(prefix + it).orNull?.trim().orEmpty() }
+    val missing = values.filterValues { it.isEmpty() }.keys
+    if (missing.size == fcmOptionNames.size) return null
+    require(missing.isEmpty()) { "Google push for '$buildType': set all four of $prefix{${fcmOptionNames.joinToString(",")}} or none (missing: $missing)" }
+    values.forEach { (k, v) -> require(Regex("[A-Za-z0-9:._-]+").matches(v)) { "$prefix$k: unexpected characters" } }
+    return values
+}
+
 android {
     namespace = "com.vettid.app"
 
@@ -84,6 +100,17 @@ android {
         }
     }
 
+    buildTypes.configureEach {
+        val fcm = fcmOptions(name)
+        buildConfigField("String", "FCM_APPLICATION_ID", "\"${fcm?.get("ApplicationId").orEmpty()}\"")
+        buildConfigField("String", "FCM_PROJECT_ID", "\"${fcm?.get("ProjectId").orEmpty()}\"")
+        buildConfigField("String", "FCM_API_KEY", "\"${fcm?.get("ApiKey").orEmpty()}\"")
+        buildConfigField("String", "FCM_SENDER_ID", "\"${fcm?.get("SenderId").orEmpty()}\"")
+        // Firebase's receiver and the messaging services exist in the manifest of every build; they are enabled
+        // only where the options are (AndroidManifest.xml).
+        manifestPlaceholders["vettidFcmEnabled"] = (fcm != null).toString()
+    }
+
     packaging {
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
@@ -138,6 +165,84 @@ abstract class ApkContentCheck : DefaultTask() {
     }
 }
 
+/**
+ * Google push adds Firebase Cloud Messaging and nothing else of Firebase or Google (ANDROID-PLAN 0.1.30, Notification
+ * modes 4). Fails if a build's merged manifest carries a Firebase start-up provider, WorkManager's start-up
+ * initialiser, a Google permission other than the one that receives pushes, an advertising-id permission, a Google
+ * component or Firebase registrar that Messaging does not need (Analytics, Crashlytics, …), automatic token creation
+ * or metrics export left on, or push components enabled in a build without the Firebase options (or disabled in one
+ * with them). `checkReleaseApk` and `checkStagingApk` run it for their builds.
+ */
+abstract class PushManifestCheck : DefaultTask() {
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    /** Whether this build carries the Firebase options. */
+    @get:Input
+    abstract val pushConfigured: Property<Boolean>
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+
+        fun all(tag: String) = doc.getElementsByTagName(tag).let { l -> (0 until l.length).map { l.item(it) as org.w3c.dom.Element } }
+
+        fun org.w3c.dom.Element.a(name: String) = getAttributeNS(ns, name)
+        val problems = mutableListOf<String>()
+        val permissions = all("uses-permission").map { it.a("name") }
+        problems += permissions.filter { it.startsWith("com.google.") && it != "com.google.android.c2dm.permission.RECEIVE" }
+            .map { "permission $it" }
+        problems += permissions.filter { it.contains("AD_ID") || it.contains("ADSERVICES") }.map { "permission $it" }
+        val components = listOf("activity", "service", "receiver", "provider").flatMap { all(it) }
+        problems += components.map { it.a("name") }.filter { it.startsWith("com.google.") && it !in GOOGLE_COMPONENTS }.map { "component $it" }
+        val meta = all("meta-data").associate { it.a("name") to it.a("value") }
+        problems += meta.keys.filter { it.startsWith("com.google.firebase.components:") && it.substringAfter(':') !in REGISTRARS }
+            .map { "Firebase registrar ${it.substringAfter(':')}" }
+        if ("androidx.work.WorkManagerInitializer" in meta) problems += "WorkManager is initialised at every start"
+        for (flag in OFF_FLAGS) if (meta[flag] != "false") problems += "$flag is not false"
+        val expected = pushConfigured.get().toString()
+        for (name in PUSH_COMPONENTS) {
+            val c = components.singleOrNull { it.a("name") == name }
+            if (c == null) problems += "$name is missing" else if (c.a("enabled") != expected) problems += "$name enabled=${c.a("enabled")}, expected $expected"
+        }
+        check(problems.isEmpty()) { "${manifest.get().asFile}: $problems" }
+        logger.lifecycle("merged manifest: Firebase Messaging only, push components enabled=$expected")
+    }
+
+    companion object {
+        /** Enabled only in a build with the Firebase options. */
+        val PUSH_COMPONENTS = listOf(
+            "com.vettid.core.push.fcm.VettIdMessagingService",
+            "com.google.firebase.messaging.FirebaseMessagingService",
+            "com.google.firebase.iid.FirebaseInstanceIdReceiver",
+        )
+
+        /** What firebase-messaging and its own dependencies declare (no FirebaseInitProvider: removed). */
+        val GOOGLE_COMPONENTS = PUSH_COMPONENTS + listOf(
+            "com.google.firebase.components.ComponentDiscoveryService",
+            "com.google.android.gms.common.api.GoogleApiActivity",
+            "com.google.android.datatransport.runtime.backends.TransportBackendDiscovery",
+            "com.google.android.datatransport.runtime.scheduling.jobscheduling.JobInfoSchedulerService",
+            "com.google.android.datatransport.runtime.scheduling.jobscheduling.AlarmManagerSchedulerBroadcastReceiver",
+        )
+        val REGISTRARS = listOf(
+            "com.google.firebase.messaging.FirebaseMessagingRegistrar",
+            "com.google.firebase.messaging.FirebaseMessagingKtxRegistrar",
+            "com.google.firebase.installations.FirebaseInstallationsRegistrar",
+            "com.google.firebase.installations.FirebaseInstallationsKtxRegistrar",
+            "com.google.firebase.FirebaseCommonKtxRegistrar",
+            "com.google.firebase.datatransport.TransportRegistrar",
+        )
+        val OFF_FLAGS = listOf(
+            "firebase_messaging_auto_init_enabled",
+            "firebase_analytics_collection_enabled",
+            "delivery_metrics_exported_to_big_query_enabled",
+        )
+    }
+}
+
 val productionPins = listOf(
     "https://account.vettid.org",
     "https://vettid.org/.well-known/vettid/pcr-manifest.json",
@@ -154,17 +259,26 @@ val stagingPins = listOf(
 val devOnly = listOf("127.0.0.1", "relay.vettid.test", "vettid.start", "vettid.screenshot", "Component gallery")
 
 androidComponents {
+    onVariants { v ->
+        tasks.register<PushManifestCheck>("check${v.name.replaceFirstChar { it.uppercase() }}PushManifest") {
+            manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+            pushConfigured.set(fcmOptions(v.buildType ?: v.name) != null)
+        }
+    }
     onVariants(selector().withBuildType("release")) { v ->
         tasks.register<ApkContentCheck>("checkReleaseApk") {
+            dependsOn("checkReleasePushManifest")
             apkDir.set(v.artifacts.get(SingleArtifact.APK))
-            forbidden.set(stagingPins + devOnly)
+            // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
+            forbidden.set(stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")))
             required.set(productionPins)
         }
     }
     onVariants(selector().withBuildType("staging")) { v ->
         tasks.register<ApkContentCheck>("checkStagingApk") {
+            dependsOn("checkStagingPushManifest")
             apkDir.set(v.artifacts.get(SingleArtifact.APK))
-            forbidden.set(productionPins + devOnly)
+            forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
             required.set(stagingPins)
         }
     }
@@ -175,6 +289,8 @@ dependencies {
     implementation(projects.core.data)
     implementation(projects.core.notify)
     implementation(projects.core.pushFcm)
+    // Configuration.Provider only (VettIdApplication): WorkManager itself is used by :core:push-fcm.
+    implementation(libs.androidx.work.runtime)
     implementation(projects.feature.messages)
     implementation(projects.feature.connections)
     implementation(projects.feature.approvals)

@@ -10,7 +10,9 @@ import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.feed.FeedRepository
 import com.vettid.core.data.prefs.NotificationMode
+import com.vettid.core.data.prefs.PushMemory
 import com.vettid.core.data.vault.BackgroundVault
+import com.vettid.core.data.vault.PushVault
 import com.vettid.core.notify.AndroidPoster
 import com.vettid.core.notify.AndroidServiceControl
 import com.vettid.core.notify.BootStart
@@ -19,14 +21,21 @@ import com.vettid.core.notify.ModeController
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.NotifySettings
 import com.vettid.core.notify.NotifyVisibility
+import com.vettid.core.notify.PushControl
+import com.vettid.core.notify.PushMemoryStore
 import com.vettid.core.notify.PushProvider
+import com.vettid.core.notify.PushRegState
+import com.vettid.core.notify.PushRegistrar
 import com.vettid.core.notify.ServiceStatus
 import com.vettid.core.notify.VaultNotifySource
+import com.vettid.core.push.fcm.FcmConfig
 import com.vettid.core.push.fcm.FcmPushProvider
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withTimeoutOrNull
+import com.vettid.app.BuildConfig
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
@@ -191,9 +200,47 @@ object AppModule {
     @Provides
     fun backgroundVault(m: VaultManager): BackgroundVault = m
 
+    /**
+     * Google push (ANDROID-PLAN 0.1.30): available only in a build that carries the Firebase options (the Gradle
+     * properties of README "Google push"); without them "Not available yet", and nothing of Firebase runs.
+     */
     @Provides
     @Singleton
-    fun pushProvider(@ApplicationContext context: Context): PushProvider = FcmPushProvider(context)
+    fun fcmPushProvider(@ApplicationContext context: Context): FcmPushProvider = FcmPushProvider(
+        context,
+        FcmConfig.of(BuildConfig.FCM_APPLICATION_ID, BuildConfig.FCM_PROJECT_ID, BuildConfig.FCM_API_KEY, BuildConfig.FCM_SENDER_ID),
+    )
+
+    @Provides
+    fun pushProvider(fcm: FcmPushProvider): PushProvider = fcm
+
+    @Provides
+    fun pushVault(m: VaultManager): PushVault = m
+
+    @Provides
+    fun pushControl(r: PushRegistrar): PushControl = r
+
+    /** The registration with the member's vault: `app_id` is this build's application id. */
+    @Provides
+    @Singleton
+    fun pushRegistrar(
+        @ApplicationContext context: Context,
+        prefs: PreferencesRepository,
+        m: VaultManager,
+        push: PushProvider,
+        @AppScope scope: CoroutineScope,
+    ): PushRegistrar = PushRegistrar(
+        scope,
+        push,
+        m,
+        appId = context.packageName,
+        memory = object : PushMemoryStore {
+            override suspend fun load(): PushMemory = prefs.preferences.first().push
+
+            override suspend fun save(m: PushMemory) = prefs.setPushMemory(m)
+        },
+        mode = { prefs.preferences.first().effectiveNotificationMode },
+    )
 
     @Provides
     @Singleton
@@ -214,15 +261,27 @@ object AppModule {
         prefs: PreferencesRepository,
         m: VaultManager,
         push: PushProvider,
+        registrar: PushRegistrar,
         @AppScope scope: CoroutineScope,
-    ): ModeController =
-        ModeController(scope, prefs.preferences.map { it.effectiveNotificationMode }, m.phase, AndroidServiceControl(context), push)
+    ): ModeController = ModeController(
+        scope, prefs.preferences.map { it.effectiveNotificationMode }, m.phase, AndroidServiceControl(context), push, registrar,
+    )
 
-    /** After a reboot or an app update: the service, if the mode is the on-phone service and the phone has a vault. */
+    /**
+     * After a reboot or an app update: the service, if the mode is the on-phone service (or Google push cannot
+     * deliver for now, which the registration says a moment later) and the phone has a vault.
+     */
     @Provides
-    fun bootStart(prefs: PreferencesRepository, m: VaultManager, modes: ModeController): BootStart = BootStart {
-        modes.apply(prefs.preferences.first().effectiveNotificationMode, m.enrolledOnThisPhone)
+    fun bootStart(prefs: PreferencesRepository, m: VaultManager, modes: ModeController, registrar: PushRegistrar): BootStart = BootStart {
+        val mode = prefs.preferences.first().effectiveNotificationMode
+        modes.apply(mode, m.enrolledOnThisPhone)
+        if (mode == NotificationMode.PUSH && m.enrolledOnThisPhone) {
+            withTimeoutOrNull(BOOT_PUSH_WAIT_MS) { registrar.status.first { it.state != PushRegState.OFF } }
+            modes.apply(mode, m.enrolledOnThisPhone)
+        }
     }
+
+    private const val BOOT_PUSH_WAIT_MS = 3_000L
 
     @Provides
     @Singleton

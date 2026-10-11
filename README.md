@@ -86,6 +86,48 @@ ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 :app:installStaging
 Without the file the staging APK is built unsigned (as in CI) and there is no
 `installStaging` task.
 
+### Google push
+
+Settings → App → Notifications offers three modes: the on-phone service (the
+default), **Google push** and Off (`docs/ANDROID-PLAN.md` §4 "Notification
+modes" in the vettid.org repository). Google push uses Firebase Cloud Messaging
+for wakes that carry no content: the app sends its push token to the member's own
+vault (`push.register`), the vault asks the VettID push gateway for a wake, and
+on a wake the app collects from its relay and decrypts on the phone as the
+on-phone service does. The app never talks to the gateway.
+
+There is no `google-services.json` and no Google Services Gradle plugin. A build
+gets Google push from four **Gradle properties per build type** (the values of
+the Firebase console's app settings; they identify the app and are not secrets,
+but they are not committed):
+
+| Gradle property (`<Type>` = `Debug`, `DevStack`, `Staging`, `Release`) | Firebase option |
+|---|---|
+| `vettidFcm<Type>ApplicationId` | the app's Firebase application id (`1:…:android:…`) |
+| `vettidFcm<Type>ProjectId` | the project id (`vettid-staging`, `vettid-prod`) |
+| `vettidFcm<Type>ApiKey` | the Android API key |
+| `vettidFcm<Type>SenderId` | the sender id (project number) |
+
+Set them in `~/.gradle/gradle.properties`, with `-P` on the command line, or in
+CI as secrets exported as `ORG_GRADLE_PROJECT_<property>` environment variables
+(for example `ORG_GRADLE_PROJECT_vettidFcmStagingProjectId`). All four of a build
+type or none: a partial set fails the build. Staging and production use separate
+Firebase projects (PUSH-GATEWAY §10.4); `checkReleaseApk` and `checkStagingApk`
+fail if an APK carries the other environment's Firebase application id.
+
+**Without the properties** (the default, and CI today) the build is as before:
+Google push is shown as "Not available yet", Firebase is never initialised, its
+push receiver and services are disabled in the manifest, and nothing contacts
+Google. With them, Google is first contacted when the member chooses Google push.
+On a phone without Google Play services (GrapheneOS without sandboxed Play) the
+choice reads "Needs Google Play services, which this phone does not have".
+
+Only `firebase-messaging` is linked (`:core:push-fcm`): no Analytics, no
+Crashlytics, no `FirebaseInitProvider`, automatic token creation and delivery
+metrics export off. `./gradlew :app:check<Variant>PushManifest` (run by
+`checkReleaseApk` and `checkStagingApk`) fails if a merged manifest carries
+anything of Firebase or Google beyond that.
+
 ## Layout
 
 | Module | Contents |

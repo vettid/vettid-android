@@ -52,6 +52,15 @@ enum class NotificationMode { SERVICE, PUSH, OFF }
 /** What notifications show (ANDROID-PLAN 0.1.23, Notification modes 8): names (the default), names and message text, nothing. */
 enum class NotificationPreviews { NAMES, NAMES_AND_TEXT, NOTHING }
 
+/**
+ * What this phone remembers of its Google push registration between process starts (ANDROID-PLAN 0.1.30, Notification
+ * modes 4). Never the token (Firebase keeps it; the vault keeps none): [registered] the vault last answered
+ * `push.register` with an active registration, so a process a wake starts need not fall back to the on-phone
+ * service while it asks again; [limitedUntilMs] `limit` was answered: no `push.register` before then (epoch ms, 24
+ * hours); [unregisterPending] the mode was left while the vault could not be told: `push.unregister` at its next open.
+ */
+data class PushMemory(val registered: Boolean = false, val limitedUntilMs: Long = 0, val unregisterPending: Boolean = false)
+
 /** Non-secret preferences of this device (DataStore). Nothing here is vault data. */
 data class AppPreferences(
     val theme: ThemePreference = ThemePreference.SYSTEM,
@@ -70,6 +79,7 @@ data class AppPreferences(
     val notificationPreviews: NotificationPreviews = NotificationPreviews.NAMES,
     /** The one-time note "VettID now notifies you in the background" was shown. */
     val notificationsNoteShown: Boolean = false,
+    val push: PushMemory = PushMemory(),
 ) {
     /** The mode in effect. */
     val effectiveNotificationMode: NotificationMode get() = notificationMode ?: NotificationMode.SERVICE
@@ -102,6 +112,8 @@ interface PreferencesRepository {
 
     suspend fun setNotificationsNoteShown()
 
+    suspend fun setPushMemory(m: PushMemory)
+
     /** Back to the defaults of a fresh install (the wipe of a replaced phone). */
     suspend fun clear()
 }
@@ -128,6 +140,7 @@ class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
             notificationPreviews = p[NOTIFICATION_PREVIEWS]?.let { runCatching { NotificationPreviews.valueOf(it) }.getOrNull() }
                 ?: NotificationPreviews.NAMES,
             notificationsNoteShown = p[NOTIFICATIONS_NOTE] ?: false,
+            push = PushMemory(p[PUSH_REGISTERED] ?: false, p[PUSH_LIMITED_UNTIL] ?: 0, p[PUSH_UNREGISTER_PENDING] ?: false),
         )
     }
 
@@ -141,6 +154,14 @@ class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
 
     override suspend fun setNotificationsNoteShown() {
         store.edit { it[NOTIFICATIONS_NOTE] = true }
+    }
+
+    override suspend fun setPushMemory(m: PushMemory) {
+        store.edit {
+            it[PUSH_REGISTERED] = m.registered
+            it[PUSH_LIMITED_UNTIL] = m.limitedUntilMs
+            it[PUSH_UNREGISTER_PENDING] = m.unregisterPending
+        }
     }
 
     override suspend fun setAppLockMethod(method: AppLockMethod) {
@@ -192,6 +213,9 @@ class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
         val NOTIFICATION_MODE = stringPreferencesKey("notification_mode")
         val NOTIFICATION_PREVIEWS = stringPreferencesKey("notification_previews")
         val NOTIFICATIONS_NOTE = booleanPreferencesKey("notifications_note_shown")
+        val PUSH_REGISTERED = booleanPreferencesKey("push_registered")
+        val PUSH_LIMITED_UNTIL = longPreferencesKey("push_limited_until_ms")
+        val PUSH_UNREGISTER_PENDING = booleanPreferencesKey("push_unregister_pending")
     }
 }
 
@@ -221,6 +245,8 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setNotificationPreviews(previews: NotificationPreviews) = state.update { it.copy(notificationPreviews = previews) }
 
     override suspend fun setNotificationsNoteShown() = state.update { it.copy(notificationsNoteShown = true) }
+
+    override suspend fun setPushMemory(m: PushMemory) = state.update { it.copy(push = m) }
 
     override suspend fun clear() {
         state.value = AppPreferences()

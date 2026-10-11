@@ -146,6 +146,55 @@ class FeedNotifierTest {
         assertTrue("Off posts nothing", poster.shown.isEmpty())
     }
 
+    /**
+     * Google push (ANDROID-PLAN 0.1.30, Notification modes 4): a wake only makes the app collect; what is then posted
+     * comes from this one notifier, so it is what the on-phone service mode posts for the same events: the same
+     * channels, texts and lock-screen texts, nothing of a locked or held vault, "Your vault is locked" and "Daily
+     * check due" with counts only.
+     */
+    @Test
+    fun googlePushPostsWhatTheOnPhoneServicePosts() {
+        fun scenario(mode: NotificationMode): Pair<List<String>, List<LocalNotification>> {
+            val src = Source()
+            val out = Posted()
+            val seen = mutableListOf<LocalNotification>()
+            runTest {
+                val settings = MutableStateFlow(NotifySettings(mode, NotificationPreviews.NAMES_AND_TEXT))
+                FeedNotifier(backgroundScope, src, settings, MutableStateFlow(null), { res }, out).start()
+                runCurrent()
+                suspend fun arrive(i: FeedItem) {
+                    src.items.value = src.items.value.filterNot { it.itemId == i.itemId } + i
+                    src.arrivals.emit(i)
+                    runCurrent()
+                    out.shown[i.itemId]?.let { seen += it }
+                }
+                arrive(item("f1"))
+                arrive(item("b", kind = "grant.request", count = 2, ref = "g1"))
+                arrive(item("a", kind = "credential.alarm", ref = "a1").copy(priority = "urgent"))
+                // Held: the item notifications go, the counts are shown, nothing new is named.
+                src.open.value = false
+                src.ownerCheck.value = OwnerCheckView(OwnerCheckState.HELD, null, 86_400, 0, hold = true, holdOffUntil = null, waiting = WaitingCounts(2, 1, 0, 0))
+                runCurrent()
+                arrive(item("f2"))
+                out.shown[FeedNotifier.TAG_CHECK]?.let { seen += it }
+                // Locked by another device: "Your vault is locked".
+                src.ownerCheck.value = null
+                src.lockedElsewhere.value = true
+                runCurrent()
+                out.shown[FeedNotifier.TAG_LOCKED]?.let { seen += it }
+            }
+            return out.log to seen
+        }
+        val service = scenario(NotificationMode.SERVICE)
+        val push = scenario(NotificationMode.PUSH)
+        assertEquals(service, push)
+        assertEquals(
+            listOf("post:f1", "post:b", "post:a", "cancel:f1", "cancel:b", "cancel:a", "post:owner_check.due", "cancel:owner_check.due", "post:vault.locked"),
+            push.first,
+        )
+        assertTrue("held: nothing names a connection", push.second.last { it.tag == FeedNotifier.TAG_CHECK }.let { !it.names && it.text == "2 messages and 1 request waiting" })
+    }
+
     @Test
     fun nothingWhileItsScreenIsInFront() = runTest {
         notifier()
