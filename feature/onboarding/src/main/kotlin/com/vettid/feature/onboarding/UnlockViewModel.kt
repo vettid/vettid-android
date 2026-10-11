@@ -97,6 +97,8 @@ data class UnlockUiState(
     val pinAllowed: Boolean
         get() {
             val p = preflight ?: return false
+            // Never a PIN while the last check of the vault's software failed (an earlier check does not count).
+            if (preflightError != null) return false
             return !p.rollback && (!p.softwareUpdated || updateAcknowledged) && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy
         }
 
@@ -176,7 +178,8 @@ class UnlockViewModel @Inject constructor(
 
     override fun retryPreflight() {
         if (state.value.serviceWaitSeconds > 0) return
-        state.update { it.copy(loading = true, preflightError = null) }
+        // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
+        state.update { it.copy(loading = true, preflightError = null, preflight = null) }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
