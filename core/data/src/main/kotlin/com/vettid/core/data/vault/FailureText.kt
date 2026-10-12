@@ -27,6 +27,9 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.ATTESTATION -> R.string.data_failure_attestation
     FailureKind.ROLLBACK -> R.string.data_failure_rollback
     FailureKind.MANIFEST -> R.string.data_failure_manifest
+    FailureKind.MANIFEST_UNAVAILABLE -> R.string.data_failure_manifest_unavailable
+    FailureKind.RELEASE_UNKNOWN -> R.string.data_failure_release_unknown
+    FailureKind.ENCLAVE -> R.string.data_failure_enclave
     FailureKind.NOT_FOUND -> R.string.data_failure_not_found
     FailureKind.CONNECTION_UNAVAILABLE -> R.string.data_failure_connection_unavailable
     FailureKind.INVITE_INVALID -> R.string.data_failure_invite_invalid

@@ -49,7 +49,7 @@ class EnclaveVerifier(private val nitro: NitroVerifier = NitroVerifier()) {
         if (!now.isBefore(ds.notAfter) || ds.notAfter.isAfter(doc.timestamp.plus(MAX_DESCRIPTOR_LIFE))) {
             throw AttestationException.Stale()
         }
-        val e = manifest.byPcr0(ms.pcr0) ?: throw AttestationException.Release("not listed")
+        val e = manifest.byPcr0(ms.pcr0) ?: throw AttestationException.Release("not listed", unknown = true)
         if (!e.measurements.matches(ms)) throw AttestationException.Pcr("manifest")
         if (enroll && e.status != ReleaseStatus.ACTIVE) throw AttestationException.Release("not active")
         return VerifiedEnclave(ds, ms, e)
