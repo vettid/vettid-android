@@ -20,6 +20,11 @@ data class MediaDiagnostics(
     val remoteLevel: Double = 0.0,
     val packetsSent: Long = 0,
     val packetsReceived: Long = 0,
+    /**
+     * How many audio streams are being received. A call has one. More means RTP on an SSRC nobody announced: the
+     * call ends as not encrypted (its frames are not played either way; this is the second lock).
+     */
+    val inboundAudioStreams: Int = 0,
     val sendCodec: String = "",
     val receiveCodec: String = "",
     val local: CandidateInfo? = null,
@@ -67,6 +72,7 @@ data class MediaDiagnostics(
                 remoteLevel = inbound.number("audioLevel"),
                 packetsSent = outbound.number("packetsSent").toLong(),
                 packetsReceived = inbound.number("packetsReceived").toLong(),
+                inboundAudioStreams = entries.count { it.type == "inbound-rtp" && it.text("kind") == "audio" },
                 sendCodec = outbound?.let { byId[it.text("codecId")] }?.text("mimeType").orEmpty(),
                 receiveCodec = inbound?.let { byId[it.text("codecId")] }?.text("mimeType").orEmpty(),
                 local = candidate("localCandidateId"),

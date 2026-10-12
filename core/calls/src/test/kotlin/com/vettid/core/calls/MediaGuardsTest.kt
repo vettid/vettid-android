@@ -78,6 +78,16 @@ class MediaGuardsTest {
     }
 
     @Test
+    fun faultsAreOffAndTheSsrcFaultOnlyRenumbers() {
+        assertFalse(MediaConfig().faults.any)
+        assertTrue(MediaFaults(keepRemoteSsrc = true).any && MediaFaults(sendUnencrypted = true).any)
+        assertEquals(
+            "v=0\r\na=ssrc:1235 cname:x\r\na=ssrc:1235 msid:a b\r\na=mid:0\r\n",
+            MediaFaultSdp.misstateSsrc("v=0\r\na=ssrc:1234 cname:x\r\na=ssrc:1234 msid:a b\r\na=mid:0\r\n"),
+        )
+    }
+
+    @Test
     fun diagnosticsFromAStatisticsReport() {
         val report = listOf(
             StatEntry("T1", "transport", mapOf("selectedCandidatePairId" to "P1", "dtlsState" to "connected", "tlsVersion" to "FEFC",
@@ -94,6 +104,9 @@ class MediaGuardsTest {
         assertEquals(0.5, d.micLevel, 0.0)
         assertEquals(0.25, d.remoteLevel, 0.0)
         assertEquals(60L, d.packetsSent)
+        assertEquals(1, d.inboundAudioStreams)
+        val second = StatEntry("I2", "inbound-rtp", mapOf("kind" to "audio", "packetsReceived" to 3L))
+        assertEquals(2, MediaDiagnostics.from(report + second).inboundAudioStreams)
         assertEquals(50L, d.packetsReceived)
         assertEquals("audio/opus", d.sendCodec)
         assertEquals(CandidateInfo("host", "udp", "wifi"), d.local)

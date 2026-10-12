@@ -14,6 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Duration
 
+@Suppress("LargeClass") // One class: every test shares the fakes and the helpers below.
 @OptIn(ExperimentalCoroutinesApi::class)
 class CallMachineTest {
     private val signalling = FakeSignalling()
@@ -500,6 +501,27 @@ class CallMachineTest {
         assertEquals(CallEnd.NOT_ENCRYPTED, callee.ended().reason)
         assertEquals(listOf("ringing($CALL_ID)", "end($CALL_ID, failed)"), other.sent)
         assertTrue("no key was ever set", strict.last.calls.none { it == "setKeys" })
+    }
+
+    /**
+     * Review N1, the second lock: audio on an SSRC nobody announced shows as a second received stream. Its frames
+     * go through the same decryption and are not played; the call ends all the same.
+     */
+    @Test
+    fun aSecondReceivedAudioStreamEndsTheCall() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(answer())
+        runCurrent()
+        val engine = engines.last
+        engine.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        advanceTimeBy(3_000)
+        assertEquals(CallPhase.ACTIVE, m.live().phase)
+        engine.streams = 2
+        advanceTimeBy(1_001)
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+        assertEquals("end($CALL_ID, failed)", signalling.sent.last())
+        assertTrue(engine.closed)
     }
 
     /**

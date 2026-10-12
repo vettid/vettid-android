@@ -70,7 +70,9 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         micOff = muted
     }
 
-    override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(packetsSent = 1)
+    var streams = 1
+
+    override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(packetsSent = 1, inboundAudioStreams = streams)
 
     override fun close() {
         closed = true

@@ -3,6 +3,7 @@ package com.vettid.core.calls
 import android.content.Context
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.call.CallFrames
+import com.vettid.core.crypto.call.CallMedia
 import com.vettid.core.crypto.call.CallWire
 import com.vettid.core.crypto.call.FrameCipher
 import com.vettid.core.crypto.call.MediaSuite
@@ -78,6 +79,7 @@ class WebRtcMediaEngine private constructor(
     private val factory: PeerConnectionFactory,
     private val audioDevice: JavaAudioDeviceModule,
     private val pqcTrial: Boolean,
+    private val faults: MediaFaults,
 ) : MediaEngine {
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "vettid-call-media") }
     private val closed = AtomicBoolean(false)
@@ -117,7 +119,13 @@ class WebRtcMediaEngine private constructor(
         val created = CompletableDeferred<SessionDescription>()
         pc.createOffer(describing(created), MediaConstraints())
         created
-    }.await().also { onWorker { pendingOffer = it } }.description
+    }.await().also { onWorker { pendingOffer = it } }.description.let(::announced)
+
+    /** The other side's SDP as the stack gets it: without `a=ssrc` lines (rule 2 of CALL-MEDIA.md §7). */
+    private fun remote(sdp: String): String = if (faults.keepRemoteSsrc) sdp else CallMedia.sdpWithoutSsrc(sdp)
+
+    /** This device's SDP as it is sent. */
+    private fun announced(sdp: String): String = if (faults.misstateOwnSsrc) MediaFaultSdp.misstateSsrc(sdp) else sdp
 
     override suspend fun startGathering(servers: List<CallWire.IceServer>) {
         on {
@@ -136,7 +144,7 @@ class WebRtcMediaEngine private constructor(
             val set = CompletableDeferred<Unit>()
             pc.setRemoteDescription(
                 Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }),
-                SessionDescription(SessionDescription.Type.ANSWER, sdp),
+                SessionDescription(SessionDescription.Type.ANSWER, remote(sdp)),
             )
             set
         }.await()
@@ -157,7 +165,7 @@ class WebRtcMediaEngine private constructor(
             val set = CompletableDeferred<Unit>()
             pc.setRemoteDescription(
                 Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }),
-                SessionDescription(SessionDescription.Type.OFFER, sdp),
+                SessionDescription(SessionDescription.Type.OFFER, remote(sdp)),
             )
             set
         }.await()
@@ -173,7 +181,7 @@ class WebRtcMediaEngine private constructor(
             pc.setLocalDescription(Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }), answer)
             set
         }.await()
-        return answer.description
+        return announced(answer.description)
     }
 
     override suspend fun setKeys(suite: MediaSuite, send: ByteArray, receive: ByteArray) {
@@ -185,6 +193,7 @@ class WebRtcMediaEngine private constructor(
                 // named another, still before the other side's SDP or any media.
                 if (installed != suite) encrypt(checkNotNull(transceiver) { "no media yet" }, suite)
                 val keys = checkNotNull(provider) { "no media yet" }
+                if (faults.wrongSendKey) for (i in send.indices) send[i] = (send[i].toInt() xor BYTE_MASK).toByte()
                 val taken = keys.setKey(SEND_ID, CallFrames.KEY_INDEX, send) && keys.setKey(RECEIVE_ID, CallFrames.KEY_INDEX, receive)
                 check(taken) { "keys refused" }
             }
@@ -297,7 +306,7 @@ class WebRtcMediaEngine private constructor(
         if (live.size != 1 || mine == null || live[0].sender.id() != mine) {
             throw MediaNotEncryptedException("${live.size} media sections")
         }
-        if (senderCryptor?.isEnabled != true || receiverCryptor?.isEnabled != true) {
+        if ((senderCryptor?.isEnabled != true && !faults.sendUnencrypted) || receiverCryptor?.isEnabled != true) {
             throw MediaNotEncryptedException("frame encryption is off")
         }
     }
@@ -326,8 +335,8 @@ class WebRtcMediaEngine private constructor(
         val aesGcm = FrameCryptorAlgorithm.AES_GCM
         senderCryptor = FrameCryptorFactory.createFrameCryptorForRtpSender(factory, t.sender, SEND_ID, aesGcm, keys).apply {
             setObserver { _, state -> cryptor(MediaDirection.SEND, state) }
-            setEnabled(true)
-            check(isEnabled) { "the sender's frame encryption is off" }
+            setEnabled(!faults.sendUnencrypted)
+            check(isEnabled || faults.sendUnencrypted) { "the sender's frame encryption is off" }
         }
         receiverCryptor = FrameCryptorFactory.createFrameCryptorForRtpReceiver(factory, t.receiver, RECEIVE_ID, aesGcm, keys).apply {
             setObserver { _, state -> cryptor(MediaDirection.RECEIVE, state) }
@@ -429,6 +438,7 @@ class WebRtcMediaEngine private constructor(
         /** Decryption failures after which the receiver reports DECRYPTION_FAILED (about a fifth of a second of audio). */
         const val FAILURE_TOLERANCE = 10
         private const val KEY_RING = 1
+        private const val BYTE_MASK = 0xFF
         private const val STREAM_ID = "vettid"
         private const val TRACK_ID = "audio0"
         private const val SEND_ID = "send"
@@ -460,7 +470,7 @@ class WebRtcMediaEngine private constructor(
             val pqc = WebRtcRuntime.start(app, config)
             val audioDevice = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
             val factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDevice).createPeerConnectionFactory()
-            WebRtcMediaEngine(factory, audioDevice, pqc)
+            WebRtcMediaEngine(factory, audioDevice, pqc, config.faults)
         }
     }
 }

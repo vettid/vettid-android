@@ -521,6 +521,9 @@ class CallMachine(
                 delay(timings.diagnosticsEvery.toMillis())
                 val media = runCatching { engine.diagnostics() }.getOrNull() ?: continue
                 diagnosticsFlow.update { it.copy(media = media) }
+                // A second audio stream is RTP on an SSRC nobody announced, in the one section the call has: its
+                // frames go through the same decryption and are dropped, and the call does not go on beside it.
+                if (media.inboundAudioStreams > 1) post(Msg.Failed(s.seq, CallEnd.NOT_ENCRYPTED))
             }
         }
     }

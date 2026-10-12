@@ -60,7 +60,8 @@ class MediaNotEncryptedException(what: String) : IllegalStateException("media no
  * - frame encryption is in place and enabled on the sender and on the receiver before any SDP is applied, and is
  *   never switched off;
  * - no media exists outside that encryption: after the other side's SDP has been applied there is exactly one
- *   media section, the one that carries the cryptors, or [MediaNotEncryptedException];
+ *   media section, the one that carries the cryptors, or [MediaNotEncryptedException]; and the other side's SDP
+ *   reaches the stack without `a=ssrc` lines, so that the receiver's decryption covers every stream of the section;
  * - a sender without a key sends nothing; a frame that does not decrypt is never played;
  * - nothing of the stack's own logging is ever switched on ([MediaLogGuard]);
  * - [setKeys] takes the keys into the stack and wipes the arrays it was given.
@@ -99,6 +100,24 @@ interface MediaEngine {
     fun close()
 }
 
+/**
+ * FAULTS ON PURPOSE, for the two-phone tests only: each makes this device break one rule of
+ * docs/calls/CALL-MEDIA.md §7, so that the other device can be seen to refuse it. All off in every build a member
+ * uses; `CallsController` refuses a configuration with any of them on unless the build was made for those tests.
+ */
+data class MediaFaults(
+    /** Receiving: leave the other side's `a=ssrc` lines in (the state before review N1's fix). */
+    val keepRemoteSsrc: Boolean = false,
+    /** Sending: announce other SSRCs than the ones used, so that this device's audio arrives unsignalled. */
+    val misstateOwnSsrc: Boolean = false,
+    /** Sending: switch this device's sender cryptor off (clear frames). */
+    val sendUnencrypted: Boolean = false,
+    /** Sending: encrypt under a key that is not the call's. */
+    val wrongSendKey: Boolean = false,
+) {
+    val any: Boolean get() = keepRemoteSsrc || misstateOwnSsrc || sendUnencrypted || wrongSendKey
+}
+
 /** How an engine is set up. */
 data class MediaConfig(
     /**
@@ -107,6 +126,8 @@ data class MediaConfig(
      * stack reads field trials once per process: the first engine of a process decides.
      */
     val dtlsPqcTrial: Boolean = false,
+    /** Test builds only: [MediaFaults]. */
+    val faults: MediaFaults = MediaFaults(),
 )
 
 fun interface MediaEngineFactory {

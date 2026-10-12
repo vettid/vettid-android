@@ -216,6 +216,18 @@ out      = header || sealed || iv || 0x0C || key_index                          
    else ends the call as not encrypted. (An offer with a second audio section would otherwise get a receiver of
    its own, with no cryptor, whose audio plays under DTLS-SRTP alone while the encrypted section stays silent and
    reports nothing.)
+   **And inside the one section, no stream without them:** a device hands the other side's SDP to its stack
+   **without the `a=ssrc:` and `a=ssrc-group:` lines**. With an SSRC announced, the stack attaches the receiver's
+   frame decryption to that one stream; RTP that arrives on any other SSRC of the section gets a default stream
+   created with the section's *default* transformer, which is then none, and is decoded and played **[S]**
+   (`pc/audio_rtp_receiver.cc` `Reconfigure`, `media/engine/webrtc_voice_engine.cc`
+   `SetDepacketizerToDecoderFrameTransformer`, `MaybeCreateDefaultReceiveStream`, `AddRecvStream`, at the pinned
+   commit). A vault able to rewrite the unsigned SDP's fingerprint and candidates could so pass the genuine
+   encrypted audio on and add clear audio of its own. With no SSRC announced, the receiver is "unsignalled": its
+   decryption is stored as the section's default and is given to the first and to every later stream **[S]**, so
+   audio on any SSRC is decrypted under the call's key or dropped. Second lock: a device that ever sees more than
+   one received audio stream in its statistics ends the call as not encrypted. **[D]** still to be shown on two
+   phones (the test builds can leave the lines in, and can announce other SSRCs than they send on).
 3. **A sender without a key sends nothing** (`MISSINGKEY`) **[S]**: the calling device, which has no key before the
    answer, therefore sends no audio until it has set its key.
 4. **Media that does not decrypt under the call's keys is never played**, and the call does not continue without
