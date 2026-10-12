@@ -40,4 +40,17 @@
     <string name="messages_delete_confirm">Delete</string>
     <string name="messages_new_title">New message</string>
     <string name="messages_new_empty_title">No connections yet</string>
+    <!-- Calls (texts approved 2026-10-12). The button, and a call's line in the conversation. -->
+    <string name="messages_call">Call</string>
+    <string name="messages_call_not_in_vault">Calls are not available for your vault yet</string>
+    <string name="messages_call_talked">Call, %1$s</string>
+    <string name="messages_call_declined">Call declined</string>
+    <string name="messages_call_declined_here">Call you declined</string>
+    <string name="messages_call_busy">Call not answered: busy</string>
+    <string name="messages_call_not_answered">Call not answered</string>
+    <string name="messages_call_missed">Missed call</string>
+    <string name="messages_call_failed">Call failed</string>
+    <string name="messages_call_duration_h_min">%1$d h %2$d min</string>
+    <string name="messages_call_duration_min_s">%1$d min %2$d s</string>
+    <string name="messages_call_duration_s">%1$d s</string>
 </resources>

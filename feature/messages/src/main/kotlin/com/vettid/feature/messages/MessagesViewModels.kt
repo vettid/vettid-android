@@ -3,6 +3,10 @@ package com.vettid.feature.messages
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.calls.CallAccess
+import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.CallHistoryEntry
+import com.vettid.core.data.calls.NoCallAccess
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.ConnectionsRepository
@@ -90,9 +94,22 @@ data class ConversationUiState(
     /** The message the member long-pressed: delete is confirmed first. */
     val deleting: MessageInfo? = null,
     val error: FailureKind? = null,
+    /** Whether this build and this vault have calls ([CallAccess]); the call button follows it. */
+    val call: CallAvailability = CallAvailability.NOT_IN_BUILD,
+    /** The calls with this connection, as the vault's history has them. */
+    val calls: List<CallHistoryEntry> = emptyList(),
+    /** The member tapped Call where the vault has no calls: say so. */
+    val callsNotAvailable: Boolean = false,
 ) {
     val canSend: Boolean get() = connection?.state == ConnectionState.ACTIVE && draft.isNotBlank() && !sending && !tooLong
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
+
+    /** A call button is shown: the connection is active and this build has calls that the vault was asked about. */
+    val callShown: Boolean
+        get() = active && (call == CallAvailability.READY || call == CallAvailability.IN_CALL || call == CallAvailability.NOT_IN_VAULT)
+
+    /** Disabled while a call is going on. */
+    val callEnabled: Boolean get() = call != CallAvailability.IN_CALL
 }
 
 /**
@@ -105,16 +122,27 @@ class ConversationViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val messages: MessagesRepository,
     private val connections: ConnectionsRepository,
+    private val calls: CallAccess = NoCallAccess,
 ) : ViewModel() {
     private val connectionId: String = checkNotNull(savedState[ConversationRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConversationUiState(connectionId))
 
     val uiState: StateFlow<ConversationUiState> =
-        combine(local, messages.messages(connectionId), connections.connections) { s, ms, cs ->
-            s.copy(messages = ms, connection = cs.firstOrNull { it.id == connectionId } ?: s.connection)
+        combine(local, messages.messages(connectionId), connections.connections, calls.availability) { s, ms, cs, call ->
+            s.copy(messages = ms, connection = cs.firstOrNull { it.id == connectionId } ?: s.connection, call = call)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
     init {
+        viewModelScope.launch {
+            // The calls of this conversation: read when the vault is known to have calls, and again after each call
+            // (the availability goes from "in a call" back to "ready").
+            calls.availability.collect { a ->
+                if (a == CallAvailability.READY) {
+                    val entries = calls.history(connectionId)
+                    local.update { it.copy(calls = entries) }
+                }
+            }
+        }
         viewModelScope.launch {
             try {
                 if (connections.connections.value.none { it.id == connectionId }) {
@@ -177,6 +205,18 @@ class ConversationViewModel @Inject constructor(
     }
 
     fun dismissError() = local.update { it.copy(error = null) }
+
+    /** The call button. The call screen follows from the call's state; here only the tap. */
+    fun call() {
+        val s = uiState.value
+        when {
+            !s.callShown || !s.callEnabled -> Unit
+            s.call == CallAvailability.NOT_IN_VAULT -> local.update { it.copy(callsNotAvailable = true) }
+            else -> calls.call(connectionId)
+        }
+    }
+
+    fun dismissCallNotice() = local.update { it.copy(callsNotAvailable = false) }
 }
 
 /** Immutable UI state of the new-message picker. */

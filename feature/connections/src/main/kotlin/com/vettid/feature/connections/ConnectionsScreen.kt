@@ -168,6 +168,7 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
             actions = DetailActions(
                 onBack = host.onBack,
                 onMessage = { host.onOpenConversation(state.connectionId) },
+                onCall = vm::call,
                 onFavorite = vm::toggleFavorite,
                 onAuthenticate = vm::requestAuthentication,
                 onAsk = vm::ask,

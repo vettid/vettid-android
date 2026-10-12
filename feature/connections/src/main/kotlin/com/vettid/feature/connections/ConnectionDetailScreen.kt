@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Star
@@ -58,6 +59,8 @@ import com.vettid.core.ui.theme.Spacing
 data class DetailActions(
     val onBack: () -> Unit = {},
     val onMessage: () -> Unit = {},
+    /** Calls the connection (builds and vaults with calls). */
+    val onCall: () -> Unit = {},
     val onFavorite: () -> Unit = {},
     val onAuthenticate: () -> Unit = {},
     val onAsk: (DetailConfirm?) -> Unit = {},
@@ -112,6 +115,8 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                             actions.onMessage,
                         )
                             .takeIf { c.state == ConnectionState.ACTIVE },
+                        PillAction(Icons.Outlined.Call, stringResource(R.string.connections_detail_call), actions.onCall)
+                            .takeIf { c.state == ConnectionState.ACTIVE && state.canCall },
                         PillAction(
                             if (c.favorite) Icons.Outlined.Star else Icons.Outlined.StarOutline,
                             stringResource(

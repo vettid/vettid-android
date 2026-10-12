@@ -159,7 +159,8 @@ private fun ColumnScope.LiveCall(call: CallState.Live, state: CallUiState, name:
     Spacer(Modifier.weight(1f))
     if (call.phase == CallPhase.INCOMING) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            RoundAction(Icons.Outlined.CallEnd, stringResource(R.string.calls_decline), actions.onDecline, "call_decline", destructive = true)
+            val decline = stringResource(R.string.calls_decline)
+            RoundAction(Icons.Outlined.CallEnd, decline, actions.onDecline, "call_decline", destructive = true)
             RoundAction(Icons.Outlined.Call, stringResource(R.string.calls_answer), actions.onAnswer, tag = "call_answer")
         }
     } else {
@@ -172,7 +173,8 @@ private fun ColumnScope.LiveCall(call: CallState.Live, state: CallUiState, name:
                 actions.onMute,
                 tag = "call_mute",
             )
-            RoundAction(Icons.Outlined.CallEnd, stringResource(R.string.calls_hang_up), actions.onHangUp, "call_hang_up", destructive = true)
+            val hangUp = stringResource(R.string.calls_hang_up)
+            RoundAction(Icons.Outlined.CallEnd, hangUp, actions.onHangUp, "call_hang_up", destructive = true)
             Toggle(
                 Icons.Outlined.VolumeUp,
                 stringResource(R.string.calls_speaker),
