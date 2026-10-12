@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- No permission and no component yet: the call service and the microphone permission come with the service
+     (C1 PR 3), still for non-production builds only. -->
+<manifest />

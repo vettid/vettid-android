@@ -115,6 +115,23 @@ The A2 exit test:
   a registration may still exist, and the registration resumes when the push service is back
   (`settings.notifications_push_not_on_phone`).
 
+- Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the proposal for the spec): `:core:crypto` `call/`
+  (`CallWire` against vettid-vault's `calls.json`, `MediaSuite`: the closed registry of media suites, `CallMedia`: the
+  suite in the SDP and the two direction keys, `CallFrames`), `:core:vault` `CallApi.kt` (the seven `call.*` types; call
+  signalling is sent with `VaultDevice.sendOnce`, never through the outbox, except `call.end`), `:core:calls`
+  (`MediaEngine` / `WebRtcMediaEngine`, `CallMachine` over `CallSignalling`). Rules that are not to be broken:
+  **never switch the media stack's logging on** (it logs key material at INFO: `MediaLogGuard`, and `MediaGuardsTest`
+  reads every source file for the calls that would); frame cryptors are created and enabled before any SDP is
+  applied and never disabled; a failed decryption ends the call (`CallEnd.NOT_ENCRYPTED`), the key is not set again;
+  the callee creates no media engine (gathers no address) before the member answers, and never sends
+  `call.end{timeout}` (the caller does); a new media suite is a `MediaSuite` entry plus the engine's `suites`, nothing
+  else. Calls are **not in production builds**: `:core:calls` is linked into debug, devStack and staging only
+  (`-PvettidCallsInRelease=true` links it into release for CI's "F-Droid APK with calls" step), the APK with calls is
+  universal (no ABI split), and `:app:check<Variant>Calls` (run by `checkReleaseApk`, `checkStagingApk`,
+  `checkFossReleaseApk`) fails a release APK with any of it and a staging APK whose native libraries are not the
+  pinned ones. The post-quantum DTLS field trial (`MediaConfig.dtlsPqcTrial`) is off; only a debug switch may set it.
+  `WebRtcMediaEngine` has no unit test (it needs the native library): two phones are its test.
+
 ## Device testing
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:

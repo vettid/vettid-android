@@ -1,0 +1,447 @@
+package com.vettid.core.calls
+
+import android.content.Context
+import com.vettid.core.crypto.Bytes
+import com.vettid.core.crypto.call.CallFrames
+import com.vettid.core.crypto.call.CallWire
+import com.vettid.core.crypto.call.FrameCipher
+import com.vettid.core.crypto.call.MediaSuite
+import com.vettid.core.vault.CallCandidate
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
+import org.webrtc.DataChannel
+import org.webrtc.FrameCryptor
+import org.webrtc.FrameCryptorAlgorithm
+import org.webrtc.FrameCryptorFactory
+import org.webrtc.FrameCryptorKeyDerivationAlgorithm
+import org.webrtc.FrameCryptorKeyProvider
+import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
+import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpTransceiver
+import org.webrtc.SdpObserver
+import org.webrtc.SessionDescription
+import org.webrtc.audio.JavaAudioDeviceModule
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * The media stack's process-wide start (`io.github.webrtc-sdk:android`, pinned in this module's build file). The
+ * native library is loaded by the first call of a process, never before. Nothing of the stack's logging is switched
+ * on, and [MediaLogGuard] is asked first.
+ */
+internal object WebRtcRuntime {
+    /** The stack's field trial for a post-quantum DTLS key exchange (X25519MLKEM768 first, DTLS 1.3). */
+    const val DTLS_PQC_TRIAL = "WebRTC-EnableDtlsPqc/Enabled/"
+
+    /** Null until the stack has been started; then whether the trial is on in this process. */
+    @Volatile
+    var dtlsPqcTrial: Boolean? = null
+        private set
+
+    @Synchronized
+    fun start(context: Context, config: MediaConfig): Boolean {
+        MediaLogGuard.check()
+        dtlsPqcTrial?.let { return it }
+        val options = PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+        // Deprecated upstream in favour of a per-factory setting this library version does not expose to Java yet.
+        @Suppress("DEPRECATION")
+        if (config.dtlsPqcTrial) options.setFieldTrials(DTLS_PQC_TRIAL)
+        PeerConnectionFactory.initialize(options.createInitializationOptions())
+        dtlsPqcTrial = config.dtlsPqcTrial
+        return config.dtlsPqcTrial
+    }
+}
+
+/**
+ * [MediaEngine] on libwebrtc with LiveKit's frame cryptor: one audio-only (Opus) peer connection whose sender and
+ * receiver each carry a frame cryptor, enabled before any SDP is applied, keyed per direction
+ * (docs/calls/CALL-MEDIA.md §4, §7).
+ *
+ * Everything of the stack is touched on one worker thread. The engine never sees an address it does not pass on
+ * and keeps no key: [setKeys] hands the keys to the stack's key provider and wipes them.
+ *
+ * NOT exercised by unit tests (it needs the native library): the two-phone tests of C1 are its test.
+ */
+@Suppress("TooManyFunctions")
+class WebRtcMediaEngine private constructor(
+    private val factory: PeerConnectionFactory,
+    private val audioDevice: JavaAudioDeviceModule,
+    private val pqcTrial: Boolean,
+) : MediaEngine {
+    private val worker: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "vettid-call-media") }
+    private val closed = AtomicBoolean(false)
+    private val channel = Channel<MediaEvent>(Channel.UNLIMITED)
+
+    override val suites: List<MediaSuite> = SUITES
+    override val events: Flow<MediaEvent> = channel.receiveAsFlow()
+
+    private var connection: PeerConnection? = null
+    private var source: AudioSource? = null
+    private var track: AudioTrack? = null
+    private var provider: FrameCryptorKeyProvider? = null
+    private var installed: MediaSuite? = null
+    private var senderCryptor: FrameCryptor? = null
+    private var receiverCryptor: FrameCryptor? = null
+    private var transceiver: RtpTransceiver? = null
+    private var pendingOffer: SessionDescription? = null
+    private var found = 0
+
+    @Volatile
+    private var moved = false
+
+    @Volatile
+    private var sendState = CryptorState.NEW
+
+    @Volatile
+    private var receiveState = CryptorState.NEW
+
+    override suspend fun createOffer(): String = on {
+        val pc = open(emptyList())
+        val t = pc.addTransceiver(
+            newTrack(),
+            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV, listOf(STREAM_ID)),
+        )
+        opusOnly(t)
+        encrypt(t, suites.first())
+        val created = CompletableDeferred<SessionDescription>()
+        pc.createOffer(describing(created), MediaConstraints())
+        created
+    }.await().also { onWorker { pendingOffer = it } }.description
+
+    override suspend fun startGathering(servers: List<CallWire.IceServer>) {
+        on {
+            val pc = checkNotNull(connection) { "no offer" }
+            val offer = checkNotNull(pendingOffer) { "no offer" }
+            if (servers.isNotEmpty()) check(pc.setConfiguration(configuration(servers))) { "servers refused" }
+            val set = CompletableDeferred<Unit>()
+            pc.setLocalDescription(Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }), offer)
+            set
+        }.await()
+    }
+
+    override suspend fun acceptAnswer(sdp: String) {
+        on {
+            val pc = checkNotNull(connection) { "no offer" }
+            val set = CompletableDeferred<Unit>()
+            pc.setRemoteDescription(
+                Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }),
+                SessionDescription(SessionDescription.Type.ANSWER, sdp),
+            )
+            set
+        }.await()
+    }
+
+    override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>): String {
+        val pc = on {
+            val pc = open(servers)
+            // A sender with its track and a receiver exist before the offer is applied (the offer's audio section
+            // takes this transceiver), so both cryptors are in place and enabled before any SDP.
+            pc.addTrack(newTrack(), listOf(STREAM_ID))
+            val t = pc.transceivers.first { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO }
+            encrypt(t, suites.first())
+            pc
+        }
+        on {
+            val set = CompletableDeferred<Unit>()
+            pc.setRemoteDescription(
+                Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }),
+                SessionDescription(SessionDescription.Type.OFFER, sdp),
+            )
+            set
+        }.await()
+        val answer = on {
+            adoptOfferedSection(pc)
+            val created = CompletableDeferred<SessionDescription>()
+            pc.createAnswer(describing(created), MediaConstraints())
+            created
+        }.await()
+        on {
+            val set = CompletableDeferred<Unit>()
+            pc.setLocalDescription(Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }), answer)
+            set
+        }.await()
+        return answer.description
+    }
+
+    override suspend fun setKeys(suite: MediaSuite, send: ByteArray, receive: ByteArray) {
+        try {
+            on {
+                MediaLogGuard.check()
+                check(suite in suites) { "suite ${suite.id} is not one this engine can do" }
+                // The cryptors were made for the preferred suite before the answer named one: remade here if it
+                // named another, still before the other side's SDP or any media.
+                if (installed != suite) encrypt(checkNotNull(transceiver) { "no media yet" }, suite)
+                val keys = checkNotNull(provider) { "no media yet" }
+                val taken = keys.setKey(SEND_ID, CallFrames.KEY_INDEX, send) && keys.setKey(RECEIVE_ID, CallFrames.KEY_INDEX, receive)
+                check(taken) { "keys refused" }
+            }
+        } finally {
+            Bytes.wipe(send, receive)
+        }
+    }
+
+    override suspend fun addRemoteCandidates(candidates: List<CallCandidate>) {
+        on {
+            val pc = connection ?: return@on
+            for (c in candidates) pc.addIceCandidate(IceCandidate(c.sdpMid ?: "", c.sdpMLineIndex ?: 0, c.candidate))
+        }
+    }
+
+    override fun setMuted(muted: Boolean) {
+        onWorker { track?.setEnabled(!muted) }
+    }
+
+    override suspend fun diagnostics(): MediaDiagnostics? {
+        val report = on {
+            val pc = connection
+            val d = CompletableDeferred<List<StatEntry>?>()
+            if (pc == null) {
+                d.complete(null)
+            } else {
+                pc.getStats { r -> d.complete(r.statsMap.values.map { StatEntry(it.id, it.type, it.members) }) }
+            }
+            d
+        }.await() ?: return null
+        return MediaDiagnostics.from(report)
+            .copy(dtlsPqcTrial = pqcTrial, sendCryptor = sendState, receiveCryptor = receiveState, cryptorsMoved = moved)
+    }
+
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        worker.execute {
+            runCatching {
+                connection?.close()
+                senderCryptor?.dispose()
+                receiverCryptor?.dispose()
+                connection?.dispose()
+                track?.dispose()
+                source?.dispose()
+                provider?.dispose()
+                factory.dispose()
+                audioDevice.release()
+            }
+            channel.close()
+        }
+        worker.shutdown()
+    }
+
+    // --- on the worker ---
+
+    private fun configuration(servers: List<CallWire.IceServer>) = PeerConnection.RTCConfiguration(
+        servers.map { s ->
+            PeerConnection.IceServer.builder(s.urls).apply {
+                if (s.username != null && s.credential != null) setUsername(s.username).setPassword(s.credential)
+            }.createIceServer()
+        },
+    ).apply {
+        sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+        rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+        continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+        // ICE over TCP between two phones is of no use; relayed candidates (TURN over TCP or TLS) are not affected.
+        tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
+    }
+
+    private fun open(servers: List<CallWire.IceServer>): PeerConnection {
+        check(connection == null) { "this engine already has a call" }
+        val pc = checkNotNull(factory.createPeerConnection(configuration(servers), Events())) { "no peer connection" }
+        connection = pc
+        return pc
+    }
+
+    private fun newTrack(): AudioTrack {
+        val audioSource = factory.createAudioSource(MediaConstraints())
+        source = audioSource
+        return factory.createAudioTrack(TRACK_ID, audioSource).also { track = it }
+    }
+
+    /**
+     * The offer's audio section should have taken the transceiver that already carries the cryptors. If the stack
+     * gave it another one, the track and the cryptors move there, still before the answer exists and before any
+     * media ([MediaDiagnostics.cryptorsMoved] says so, for the phone tests).
+     */
+    private fun adoptOfferedSection(pc: PeerConnection) {
+        val offered = pc.transceivers.firstOrNull { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO && it.mid != null }
+        checkNotNull(offered) { "the offer has no audio" }
+        if (offered.sender.id() == transceiver?.sender?.id()) return
+        val stale = transceiver
+        check(offered.sender.setTrack(track, false)) { "the audio track was refused" }
+        offered.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+        encrypt(offered, installed ?: suites.first())
+        stale?.stop()
+        moved = true
+    }
+
+    /** Offers Opus alone: nothing else can be negotiated. */
+    private fun opusOnly(t: RtpTransceiver) {
+        val opus = factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO).codecs
+            .filter { it.name.equals("opus", ignoreCase = true) }
+        check(opus.isNotEmpty() && t.setCodecPreferences(opus).isSuccess) { "Opus is not available" }
+    }
+
+    /**
+     * A frame cryptor on the sender and on the receiver of [t], both enabled at once (a new cryptor is created
+     * disabled, and a disabled cryptor passes frames through in the clear). Without a key the sender sends nothing
+     * and the receiver plays nothing.
+     */
+    private fun encrypt(t: RtpTransceiver, suite: MediaSuite) {
+        check(suite.frameCipher == FrameCipher.AES_GCM && suite in suites) { "suite ${suite.id}" }
+        senderCryptor?.dispose()
+        receiverCryptor?.dispose()
+        provider?.dispose()
+        val keys = keyProvider(suite)
+        provider = keys
+        transceiver = t
+        installed = suite
+        val aesGcm = FrameCryptorAlgorithm.AES_GCM
+        senderCryptor = FrameCryptorFactory.createFrameCryptorForRtpSender(factory, t.sender, SEND_ID, aesGcm, keys).apply {
+            setObserver { _, state -> cryptor(MediaDirection.SEND, state) }
+            setEnabled(true)
+            check(isEnabled) { "the sender's frame encryption is off" }
+        }
+        receiverCryptor = FrameCryptorFactory.createFrameCryptorForRtpReceiver(factory, t.receiver, RECEIVE_ID, aesGcm, keys).apply {
+            setObserver { _, state -> cryptor(MediaDirection.RECEIVE, state) }
+            setEnabled(true)
+            check(isEnabled) { "the receiver's frame encryption is off" }
+        }
+    }
+
+    private fun cryptor(direction: MediaDirection, state: FrameCryptor.FrameCryptionState) {
+        val mapped = when (state) {
+            FrameCryptor.FrameCryptionState.NEW -> CryptorState.NEW
+            FrameCryptor.FrameCryptionState.OK -> CryptorState.OK
+            FrameCryptor.FrameCryptionState.MISSINGKEY -> CryptorState.MISSING_KEY
+            FrameCryptor.FrameCryptionState.DECRYPTIONFAILED -> CryptorState.DECRYPTION_FAILED
+            FrameCryptor.FrameCryptionState.ENCRYPTIONFAILED -> CryptorState.ENCRYPTION_FAILED
+            FrameCryptor.FrameCryptionState.INTERNALERROR -> CryptorState.INTERNAL_ERROR
+            // No ratchet is configured: a ratcheted key is not something this call can have.
+            else -> CryptorState.UNKNOWN
+        }
+        if (direction == MediaDirection.SEND) sendState = mapped else receiveState = mapped
+        channel.trySend(MediaEvent.Cryptor(direction, mapped))
+    }
+
+    /** Runs [block] on the worker thread without blocking the caller's. */
+    private suspend fun <T> on(block: () -> T): T = suspendCancellableCoroutine { continuation ->
+        try {
+            check(!closed.get()) { "the call's media is closed" }
+            worker.execute { continuation.resumeWith(runCatching(block)) }
+        } catch (e: IllegalStateException) {
+            continuation.resumeWith(Result.failure(e))
+        } catch (e: RejectedExecutionException) {
+            continuation.resumeWith(Result.failure(IllegalStateException("the call's media is closed", e)))
+        }
+    }
+
+    private fun onWorker(block: () -> Unit) {
+        if (!closed.get()) worker.execute { runCatching(block) }
+    }
+
+    private class MediaException(what: String) : IllegalStateException(what)
+
+    private fun describing(created: CompletableDeferred<SessionDescription>) =
+        Sdp(onCreated = { created.complete(it) }, onError = { created.completeExceptionally(MediaException(it)) })
+
+    private class Sdp(
+        private val onCreated: (SessionDescription) -> Unit = {},
+        private val onSet: () -> Unit = {},
+        private val onError: (String) -> Unit,
+    ) : SdpObserver {
+        override fun onCreateSuccess(description: SessionDescription) = onCreated(description)
+        override fun onSetSuccess() = onSet()
+
+        // The stack's text may quote the SDP: only that it failed goes on.
+        override fun onCreateFailure(error: String) = onError("the description could not be made")
+        override fun onSetFailure(error: String) = onError("the description was refused")
+    }
+
+    @Suppress("TooManyFunctions") // The stack's observer interface: most of it is not used by an audio-only call.
+    private inner class Events : PeerConnection.Observer {
+        override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
+        override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) = Unit
+
+        override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
+            val mapped = when (state) {
+                PeerConnection.PeerConnectionState.NEW -> MediaConnection.NEW
+                PeerConnection.PeerConnectionState.CONNECTING -> MediaConnection.CONNECTING
+                PeerConnection.PeerConnectionState.CONNECTED -> MediaConnection.CONNECTED
+                PeerConnection.PeerConnectionState.DISCONNECTED -> MediaConnection.DISCONNECTED
+                PeerConnection.PeerConnectionState.FAILED -> MediaConnection.FAILED
+                PeerConnection.PeerConnectionState.CLOSED -> MediaConnection.CLOSED
+            }
+            channel.trySend(MediaEvent.Connection(mapped))
+        }
+
+        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+            if (state == PeerConnection.IceGatheringState.COMPLETE) channel.trySend(MediaEvent.GatheringDone(found))
+        }
+
+        override fun onIceCandidate(candidate: IceCandidate) {
+            found++
+            channel.trySend(MediaEvent.LocalCandidate(CallCandidate(candidate.sdp, candidate.sdpMid, candidate.sdpMLineIndex)))
+        }
+
+        override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+        override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) = Unit
+        override fun onAddStream(stream: MediaStream) = Unit
+        override fun onRemoveStream(stream: MediaStream) = Unit
+        override fun onDataChannel(channel: DataChannel) = Unit
+        override fun onRenegotiationNeeded() = Unit
+    }
+
+    companion object {
+        /**
+         * What this media stack can do: the 128-bit suite. The 256-bit suite joins this list when the library has
+         * the key provider's key-size option (webrtc-sdk/webrtc PR #302) and [keyProvider] passes it.
+         */
+        val SUITES: List<MediaSuite> = listOf(MediaSuite.AES_128_GCM)
+
+        /** Decryption failures after which the receiver reports DECRYPTION_FAILED (about a fifth of a second of audio). */
+        const val FAILURE_TOLERANCE = 10
+        private const val KEY_RING = 1
+        private const val STREAM_ID = "vettid"
+        private const val TRACK_ID = "audio0"
+        private const val SEND_ID = "send"
+        private const val RECEIVE_ID = "receive"
+
+        /**
+         * Per-participant keys (one per direction), HKDF with the suite's frame label as salt, no automatic
+         * ratchet, no "unencrypted" magic trailer (a frame that does not decrypt is never played), a key ring of
+         * one (docs/calls/CALL-MEDIA.md §4).
+         */
+        private fun keyProvider(suite: MediaSuite): FrameCryptorKeyProvider {
+            // This library version derives 128-bit frame keys whatever it is given: it can do no other suite.
+            check(suite == MediaSuite.AES_128_GCM) { "suite ${suite.id}" }
+            return FrameCryptorFactory.createFrameCryptorKeyProvider(
+                false,
+                suite.frameLabel.toByteArray(Charsets.US_ASCII),
+                0,
+                ByteArray(0),
+                FAILURE_TOLERANCE,
+                KEY_RING,
+                true,
+                FrameCryptorKeyDerivationAlgorithm.HKDF,
+            )
+        }
+
+        /** A factory of engines for [context]'s process. Creating an engine loads the native library if needed. */
+        fun factory(context: Context): MediaEngineFactory = MediaEngineFactory { config ->
+            val app = context.applicationContext
+            val pqc = WebRtcRuntime.start(app, config)
+            val audioDevice = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
+            val factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDevice).createPeerConnectionFactory()
+            WebRtcMediaEngine(factory, audioDevice, pqc)
+        }
+    }
+}
