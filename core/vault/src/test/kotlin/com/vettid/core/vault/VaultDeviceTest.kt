@@ -1367,6 +1367,43 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * A lock must never land late (the member may have opened the vault again): it is deposited once, with an
+     * `exp`, never from the outbox; and one that an earlier version of the app left in the outbox is dropped.
+     */
+    @Test
+    fun aLockIsSentOnceWithAnExpiryAndNeverFromTheOutbox() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val api = VaultApi(d)
+            val locking = async(Dispatchers.IO) { runCatching { api.lock(timeout = java.time.Duration.ofSeconds(5)) } }
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.lock", req.type)
+            val exp = req.exp!!
+            assertTrue(exp.isAfter(Instant.now().plusSeconds(20)) && exp.isBefore(Instant.now().plusSeconds(31)))
+            assertEquals(0, savedState(store).outbox.size)
+            d.handle(v.seal("vault.lock", "{}", re = req.id, status = Inner.STATUS_OK))
+            assertTrue(locking.await().isSuccess)
+
+            // The relay cannot be reached: the lock fails now and nothing is kept to be sent later.
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            assertTrue(runCatching { api.lock(timeout = java.time.Duration.ofMillis(500)) }.isFailure)
+            assertEquals(0, savedState(store).outbox.size)
+            // What an earlier version left there (it sent locks through the outbox) is dropped, and only that.
+            runCatching { d.send("vault.lock") }
+            runCatching { d.send("message.send", buildJsonObject { put("text", "hi") }) }
+            assertEquals(listOf("vault.lock", "message.send"), savedState(store).outbox.map { it.type })
+            assertEquals(1, d.dropFromOutbox("vault.lock"))
+            assertEquals(listOf("message.send"), savedState(store).outbox.map { it.type })
+            refuseDeposits = null
+            d.flushOutbox()
+            assertEquals("message.send", v.open(nextDeposit().second).type)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
     @Test
     fun deviceStateJsonRoundTrips() {
         val s = DeviceState("app", "phone", "https://relay.vettid.test", vaultId = "v", outbox = mutableListOf(OutboxEntry("i", "t", "u", "m", "tok", "ZW52")))

@@ -116,6 +116,16 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     /** Set by a test: the open app was sent to the unlock screen after repeated relay refusals. */
     override val refusedByVault = MutableStateFlow(false)
+    override val lockNotice = MutableStateFlow<com.vettid.core.data.vault.LockNotice>(com.vettid.core.data.vault.LockNotice.None)
+
+    override fun retryLock() {
+        calls += "retryLock"
+    }
+
+    override fun dismissLockNotice() {
+        calls += "dismissLockNotice"
+        lockNotice.value = com.vettid.core.data.vault.LockNotice.None
+    }
     override val devHint: String? = null
     override val apiOrigin: String = "https://account.vettid.org"
 

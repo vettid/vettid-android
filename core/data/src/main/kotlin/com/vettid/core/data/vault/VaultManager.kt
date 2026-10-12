@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import android.content.Context
+import com.vettid.core.altchan.Slot
 import com.vettid.core.altchan.AltChannelFlow
 import com.vettid.core.altchan.AltTrust
 import com.vettid.core.altchan.Approval
@@ -194,7 +195,7 @@ class VaultManager(
     /** Connections, messages and approvals (A4): the repositories of those features. */
     val social = SocialManager(
         scope,
-        api = { session().api },
+        api = { openApi() },
         credential = this,
         store = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
         itemNames = {
@@ -211,7 +212,7 @@ class VaultManager(
      */
     val feed = FeedManager(
         scope,
-        ops = { VaultFeedOps(session().api) },
+        ops = { VaultFeedOps(openApi()) },
         gated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
     )
 
@@ -220,7 +221,7 @@ class VaultManager(
      * name change, which counts as an owner check for its PIN and password (§3.6.4).
      */
     val profile = ProfileManager(
-        ops = { VaultProfileOps(session().api) },
+        ops = { VaultProfileOps(openApi()) },
         onRequest = { r -> io { saveLocal(local.copy(nameRequest = r.toWire())) } },
         checksLeft = {
             ownerCheck.refreshOwnerCheck()
@@ -230,26 +231,26 @@ class VaultManager(
 
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(
-        ops = { VaultAuditOps(session().api) },
+        ops = { VaultAuditOps(openApi()) },
         // The rows' and the entry page's device names (ANDROID-PLAN 0.1.27), as the export resolves them.
         devices = { VaultAuditExportOps.devicesOf(session().api.deviceList()) },
         self = { session?.device?.deviceId },
     )
 
     /** The History export (VAULT-MESSAGING 0.22.0 §10.9): `audit.export`, then `audit.list` below its `upto_seq`. */
-    val historyExport = HistoryExportManager(ops = { VaultAuditExportOps(session().api) }, audit = { VaultAuditOps(session().api) })
+    val historyExport = HistoryExportManager(ops = { VaultAuditExportOps(openApi()) }, audit = { VaultAuditOps(openApi()) })
 
     /** The member's items (VAULT-MESSAGING §10.7): the Vault screens. The list is read while the vault is open. */
-    val items = ItemsManager(scope, ops = { VaultItemsOps(session().api) })
+    val items = ItemsManager(scope, ops = { VaultItemsOps(openApi()) })
 
     /** Tags, share rules and grants (VAULT-MESSAGING §10.8, §10.12): a tag change re-reads the items' tags. */
-    val sharing = SharingManager(ops = { VaultSharingOps(session().api) }, onItemsChanged = { items.refresh() })
+    val sharing = SharingManager(ops = { VaultSharingOps(openApi()) }, onItemsChanged = { items.refresh() })
 
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
         OwnerCheckManager(
             scope,
-            ops = { VaultOwnerCheckOps(session().api) },
+            ops = { VaultOwnerCheckOps(openApi()) },
             load = { runCatching { f.load() }.getOrNull() },
             persist = { f.save(it) },
             // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
@@ -285,7 +286,9 @@ class VaultManager(
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
                 } else if (it != AppPhase.Starting) {
-                    // Locked or signed out: no item metadata and no feed item is kept outside an open vault.
+                    // Locked or signed out: no item metadata and no feed item is kept outside an open vault, and
+                    // no connection or message in memory either.
+                    social.forgetOpenVault()
                     items.clear()
                     sharing.clear()
                     feed.clear()
@@ -347,6 +350,11 @@ class VaultManager(
          * already forgotten the device keys. Read only to finish such a phone with a wipe.
          */
         val replaced: String? = null,
+        /**
+         * A lock the member asked for that the vault has not confirmed ([LockKeeper]): when it was asked (epoch
+         * ms). While it is set this phone is locked and keeps trying, across process starts.
+         */
+        val lockAskedAtMs: Long? = null,
     ) {
         fun toInfo(): AccountInfo? = when {
             snapshot != null -> snapshot.toInfo(emailHint)
@@ -384,7 +392,7 @@ class VaultManager(
      * operations here (today: the non-production calls modules). The same client the repositories use; an
      * operation on a locked vault fails as theirs do.
      */
-    suspend fun vaultApi(): VaultApi = session().api
+    suspend fun vaultApi(): VaultApi = openApi()
 
     private val clientFlow = MutableStateFlow<VaultApi?>(null)
 
@@ -397,6 +405,67 @@ class VaultManager(
 
     /** The member's lock, which always completes once asked for ([LockSequence]). */
     private val locking = LockSequence(scope)
+
+    /** Until when a `vault.lock` this phone sent over the relay may still be acted on by the vault. */
+    @Volatile
+    private var relayLockValidUntil: Instant = Instant.EPOCH
+
+    /**
+     * The member's lock, failing secure (owner decision 2026-10-12): pending, durably, until the vault has
+     * acknowledged it or its status says it is locked; tried again until then; never after a newer unlock.
+     */
+    private val lockKeeper = LockKeeper(
+        scope,
+        store = object : LockMarkerStore {
+            override fun load(): LockMarker? = local.lockAskedAtMs?.let { LockMarker(it) }
+
+            override fun save(marker: LockMarker?) = saveLocal(local.copy(lockAskedAtMs = marker?.askedAtMs))
+        },
+        attempt = { first -> lockAttempt(first) },
+        settle = { Duration.between(Instant.now(), relayLockValidUntil) },
+    )
+
+    init {
+        // A lock that was pending when the process ended: locked here from the start, and tried again at once
+        // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver).
+        lockKeeper.resume()
+        if (lockKeeper.pending) lockedHere = true
+    }
+
+    override val lockNotice: StateFlow<LockNotice> = lockKeeper.notice
+
+    override fun retryLock() = lockKeeper.retryNow()
+
+    override fun dismissLockNotice() = lockKeeper.dismissConfirmed()
+
+    /**
+     * One try to lock the vault; true only when it is known to be locked. The relay path is used by the first
+     * attempt alone (a request that expires in 30 s, never from the outbox: a retry must not leave lock requests
+     * on their way that could reach a vault opened again); every attempt asks the member API, whose lock is
+     * answered by the enclave ("done"); and a status that no longer says "unlocked" confirms too.
+     */
+    @Suppress("ReturnCount") // one return per path, in the order they are tried
+    private suspend fun lockAttempt(first: Boolean): Boolean {
+        // Only for a vault this phone is set up with: a phone that was erased meanwhile opens no session for it.
+        if (!enrolledOnThisPhone) return false
+        val s = runCatching { session() }.getOrNull() ?: return false
+        if (first) {
+            relayLockValidUntil = Instant.now().plus(VaultApi.LOCK_VALID)
+            if (runCatching { io { s.api.lock() } }.isSuccess) return true
+        }
+        val vaultId = s.device.vaultId
+        if (vaultId != null && runCatching { io { s.alt.lock(vaultId) } }.getOrNull()?.status == Slot.DONE) return true
+        return runCatching { guard { vaultStatus(s) } }.map { it == null || it.state != STATE_UNLOCKED }.getOrDefault(false)
+    }
+
+    /**
+     * The vault client for an operation on the open vault. While a lock is pending the vault counts as locked,
+     * though it may be open: nothing but the lock itself and a status read is sent to it.
+     */
+    private suspend fun openApi(): VaultApi {
+        if (lockKeeper.pending) throw VaultFailure(FailureKind.OTHER, CODE_LOCK_PENDING)
+        return session().api
+    }
 
     /**
      * Something to finish while the vault still collects, before the member's lock: for example ending a call, so
@@ -431,6 +500,7 @@ class VaultManager(
 
     /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
     private suspend fun dropSession(forget: Boolean) = mutex.withLock {
+        if (forget) lockKeeper.abandon() // the vault is no longer this phone's: nothing to lock from here
         observer?.cancel()
         observer = null
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
@@ -476,6 +546,9 @@ class VaultManager(
                     return@collect
                 }
                 onEvent(m)
+                // A lock is pending: the vault may be open and still sending, but on this phone it is locked.
+                // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
+                if (lockKeeper.pending) return@collect
                 try {
                     items.onEvent(m)
                     sharing.onEvent(m)
@@ -500,6 +573,8 @@ class VaultManager(
             "vault.held" -> windowFlow.value = null
             "vault.locking" -> {
                 windowFlow.value = null
+                // The vault says it is locking: a lock of this phone that was in doubt no longer is.
+                lockKeeper.confirmed()
                 val p = phaseFlow.value
                 if (p is AppPhase.Unlocked || p is AppPhase.Setup) {
                     phaseFlow.value = AppPhase.Locked
@@ -603,6 +678,9 @@ class VaultManager(
             // The API no longer accepts this phone's app key (another phone took the vault over, or the vault went):
             // the unlock screen says so; only the enclave's own answer erases anything.
             if (e.kind == FailureKind.UNAUTHORIZED) return@guard AppPhase.Locked
+            // A lock is pending and the vault cannot be reached: the unlock screen, with its notice (never the
+            // open app, and not "cannot connect" either: the member has to see that the lock is not confirmed).
+            if (lockKeeper.pending) return@guard AppPhase.Locked
             throw e
         }
         // The API says, explicitly, that the account has no vault (deleted, or the account was cancelled and
@@ -610,9 +688,14 @@ class VaultManager(
         // every member while no release can start (MEMBER-API "Dark launch"), so this phone's keys are not dropped
         // for it: the member is told and decides ([forgetMissingVault]; A6 audit N6). An empty or malformed answer
         // never gets here: it fails as a malformed answer (MemberApiClient.vaultStatusAnswer).
+        if (lockKeeper.pending) {
+            // A lock is pending: locked on this phone whatever the status says, and confirmed if it says so.
+            if (st == null || st.state != STATE_UNLOCKED) lockKeeper.confirmed()
+            return@guard AppPhase.Locked
+        }
         if (st == null) return@guard AppPhase.Unreachable(FailureKind.NO_VAULT)
         if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
-        if (st.state != "unlocked") AppPhase.Locked else afterUnlocked(s)
+        if (st.state != STATE_UNLOCKED) AppPhase.Locked else afterUnlocked(s)
     }
 
     @Suppress("ReturnCount")
@@ -802,18 +885,24 @@ class VaultManager(
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
         var moved = false
         val outcome = try {
-            guard {
-                val s = session()
-                var out: UnlockOutcome = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting)
-                if (out.ok && out.result.update?.result == UPDATE_MOVED) {
-                    moved = true
-                    // §11.10.6: after a move the vault is locked under the new release; unlock again, which reaches it.
-                    if (followMove) out = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), onStarting = onStarting)
+            // Never beside a lock attempt; and once the vault has opened, no older lock is ever sent (LockKeeper).
+            // On the IO dispatcher: an unlock that supersedes a pending lock removes its marker from the phone's store.
+            io {
+              lockKeeper.unlocking(opened = { it.result.ok }) {
+                guard {
+                    val s = session()
+                    var out: UnlockOutcome = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting)
+                    if (out.ok && out.result.update?.result == UPDATE_MOVED) {
+                        moved = true
+                        // §11.10.6: after a move the vault is locked under the new release; unlock again, which reaches it.
+                        if (followMove) out = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), onStarting = onStarting)
+                    }
+                    // A sealed result: the enclave knows this phone; earlier relay refusals no longer count (RefusalWatch).
+                    s.device.clearVaultRefusals()
+                    refusals.clear()
+                    out
                 }
-                // A sealed result: the enclave knows this phone; earlier relay refusals no longer count (RefusalWatch).
-                s.device.clearVaultRefusals()
-                refusals.clear()
-                out
+              }
             }
         } catch (e: VaultFailure) {
             holder.onFailure(e) // never proof (a 503, paused or not, included)
@@ -843,7 +932,12 @@ class VaultManager(
         val refused = r.update?.takeIf { it.result == "refused" }
         val gen = generation
         val s = session()
-        scope.launch { runCatching { s.device.flushOutbox() } }
+        scope.launch {
+            // Never a lock from before this unlock (LockKeeper): one left in the outbox by an earlier version of the
+            // app, which sent locks through it, is dropped before anything is flushed.
+            runCatching { s.device.dropFromOutbox(TYPE_VAULT_LOCK) }
+            runCatching { s.device.flushOutbox() }
+        }
         if (!s.device.recovering) beforeOpen()
         val p = afterUnlocked(s)
         if (gen == generation) phaseFlow.value = p
@@ -875,6 +969,8 @@ class VaultManager(
 
         override suspend fun lock() {
             this@VaultManager.lock()
+            // An update moves on only from a vault that is known to be locked.
+            if (lockKeeper.pending) throw VaultFailure(FailureKind.NO_RESPONSE, CODE_LOCK_PENDING)
             // The next unlock goes to the instance that holds the vault: wait (bounded) until its lease is gone.
             withTimeoutOrNull(LOCKED_WAIT_MS) {
                 while (runCatching { guard { vaultStatus(session()) } }.getOrNull()?.state == "unlocked") {
@@ -927,23 +1023,12 @@ class VaultManager(
      */
     override suspend fun lock() {
         lockedHere = true
-        locking.run(
-            lock = {
-                guard {
-                    val s = session()
-                    val viaRelay = try {
-                        withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
-                    } catch (_: IOException) {
-                        false
-                    }
-                    if (!viaRelay) s.device.vaultId?.let { s.alt.lock(it) }
-                }
-            },
-            after = {
-                windowFlow.value = null
-                phaseFlow.value = AppPhase.Locked
-            },
-        )
+        // This phone is locked from this moment, in every outcome: nothing of the vault is shown or done any more.
+        windowFlow.value = null
+        phaseFlow.value = AppPhase.Locked
+        // Whether the vault is locked is another matter: known only when it acknowledged or its status says so
+        // (lockNotice says which). An unconfirmed lock is not an error of the caller's: it is pending and retried.
+        locking.run(lock = { lockKeeper.ask() }, after = {})
     }
 
     override suspend fun overview(): VaultOverview = guard {
@@ -1393,6 +1478,7 @@ class VaultManager(
     private suspend fun wipeThisPhone() {
         generation++
         wiper.begin() // crash-safe: a process that dies from here on finishes the wipe at its next start
+        lockKeeper.abandon() // nothing of this phone's is left to lock a vault with
         mutex.withLock {
             observer?.cancel()
             observer = null
@@ -1582,7 +1668,11 @@ class VaultManager(
         private const val DEFAULT_TTL = 300
         const val MIN_TTL = 30
         const val MAX_TTL = 3600
-        private const val LOCK_TIMEOUT_MS = 10_000L
+        private const val STATE_UNLOCKED = "unlocked"
+        private const val TYPE_VAULT_LOCK = "vault.lock"
+
+        /** The code of a vault operation refused on this phone because a lock is pending ([openApi]). */
+        const val CODE_LOCK_PENDING = "lock_pending"
         private const val LIST_PAGE = 500
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16

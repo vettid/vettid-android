@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseNotes
@@ -77,6 +78,11 @@ data class UnlockUiState(
      * [notRecognised]. Nothing is erased without the member's confirmation.
      */
     val refused: Boolean = false,
+    /**
+     * The lock the member asked for ([VaultRepository.lockNotice]): the vault could not be told and may still be
+     * open (this phone is locked all the same and keeps trying), or it has now confirmed.
+     */
+    val lock: LockNotice = LockNotice.None,
     /** The erase confirmation dialog is open. */
     val eraseConfirm: Boolean = false,
     /** The erase runs. */
@@ -137,6 +143,12 @@ interface UnlockActions {
     /** Closes it; nothing is erased. */
     fun dismissErase()
 
+    /** Tries the unconfirmed lock again now. */
+    fun retryLock() = Unit
+
+    /** The member has read that the vault confirmed the lock. */
+    fun dismissLockNotice() = Unit
+
     /** The member confirmed: erases this phone ([AccountRepository.eraseThisPhone]), then the welcome screen. */
     fun confirmErase()
 }
@@ -170,6 +182,7 @@ class UnlockViewModel @Inject constructor(
     init {
         retryPreflight()
         viewModelScope.launch { vault.refusedByVault.collect { r -> state.update { it.copy(refused = r) } } }
+        viewModelScope.launch { vault.lockNotice.collect { n -> state.update { it.copy(lock = n) } } }
         viewModelScope.launch {
             combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> (v?.gated(Instant.now()) == true) to locked }
                 .collect { (due, locked) -> state.update { it.copy(checkDue = due || locked, lockedByOwnerCheck = locked) } }
@@ -219,6 +232,10 @@ class UnlockViewModel @Inject constructor(
     override fun askErase() = state.update { if (it.notRecognised && !it.erasing) it.copy(eraseConfirm = true) else it }
 
     override fun dismissErase() = state.update { it.copy(eraseConfirm = false) }
+
+    override fun retryLock() = vault.retryLock()
+
+    override fun dismissLockNotice() = vault.dismissLockNotice()
 
     override fun confirmErase() {
         val s = state.value

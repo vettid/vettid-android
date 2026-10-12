@@ -216,6 +216,18 @@ vettid.org repo's `local/android-ui/`).
   at most 1 hour; debug and devStack builds start with it on (the catalog is screenshotted). A screen that must stay
   protected regardless calls `SecureWindow()`. A field that holds a secret the member must see uses
   `visibleSecretKeyboard()` inside `NoKeyboardLearning { }` (S2); copy secrets with `textClip(…, sensitive = true)`.
+- The member's lock fails secure (owner decision 2026-10-12; `LockKeeper`, `LockSequence`, `VaultManager.lock()`):
+  the phone is `AppPhase.Locked` from the moment the member asks, in every outcome, and the vault is *known* locked
+  only when it acknowledged (`vault.lock` answered, or the member API's lock `done`), a status read no longer says
+  `unlocked`, or its own `vault.locking` arrived. Until then the lock is **pending**: a marker in the account record
+  (`lockAskedAtMs`, written before the first attempt, so a new process starts locked), retries (1, 2, 5, 10 s, then
+  every 30 s), `VaultRepository.lockNotice` on the unlock screen (`unlock.lock_unconfirmed`,
+  `unlock.lock_confirmed`), and no vault operation but the lock and a status read (`openApi()` refuses with
+  `lock_pending`). A vault has **no time after which it locks by itself**: never promise one. Every unlock goes
+  through `LockKeeper.unlocking` (no lock attempt beside it, none after it); `vault.lock` is sent once with an
+  `exp` of 30 s and never through the outbox (a late lock would lock a vault the member opened again). Do not set
+  the phase to `Unlocked` anywhere without thinking about a pending lock (`evaluate()` returns `Locked` while one
+  is pending, whatever the status says).
 - Every destructive action uses `ConfirmDialog`; every critical action asks for the
   credential password. No backup/export of vault data (`allowBackup=false`); the one exception is History's export of activity metadata (ANDROID-PLAN 0.1.17: the vault PIN, then "Save to…" only).
 - Commits: explicit paths only (never `git add -A`); PRs into `master`.

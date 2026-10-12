@@ -73,6 +73,7 @@ private val NEVER_PAUSED: StateFlow<Boolean> = MutableStateFlow(false)
 
 /** [VaultRepository.pendingDeletion] of a repository that does not follow it. */
 private val NO_DELETION: StateFlow<DeletionView?> = MutableStateFlow(null)
+private val NO_LOCK_NOTICE: StateFlow<LockNotice> = MutableStateFlow(LockNotice.None)
 
 /** The vault on this device: enrollment, unlock and lock, status, PIN, deletion, recovery. */
 @Suppress("TooManyFunctions")
@@ -83,6 +84,18 @@ interface VaultRepository {
      * enclave. Cleared by any sealed unlock result or message from the vault.
      */
     val refusedByVault: StateFlow<Boolean>
+
+    /**
+     * What to tell the member about the lock they asked for ([LockNotice]): that the vault could not be told and
+     * may still be open (this phone is locked all the same and keeps trying), or that it has now confirmed.
+     */
+    val lockNotice: StateFlow<LockNotice> get() = NO_LOCK_NOTICE
+
+    /** Tries the pending lock again now. */
+    fun retryLock() = Unit
+
+    /** The member has read that the vault confirmed a lock that was in doubt. */
+    fun dismissLockNotice() = Unit
 
     /** Enrolls a vault with [pin] (§11.3) and runs the first handshake. */
     suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit)

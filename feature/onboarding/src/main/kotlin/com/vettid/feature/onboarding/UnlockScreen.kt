@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
@@ -120,6 +121,24 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                 PreflightNotices(
                     p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer, state.notes,
                 )
+            }
+            // The lock the member asked for could not be confirmed: said here, wherever they locked from, until it is.
+            when (state.lock) {
+                is LockNotice.Unconfirmed -> NoticeCard(
+                    NoticeKind.URGENT,
+                    stringResource(R.string.unlock_lock_unconfirmed_title),
+                    stringResource(R.string.unlock_lock_unconfirmed_body),
+                    modifier = Modifier.testTag("unlock_lock_unconfirmed"),
+                    actions = { TextButton(onClick = actions::retryLock) { Text(stringResource(R.string.unlock_lock_try_again)) } },
+                )
+                LockNotice.ConfirmedLate -> NoticeCard(
+                    NoticeKind.SUCCESS,
+                    stringResource(R.string.unlock_lock_confirmed),
+                    "",
+                    modifier = Modifier.testTag("unlock_lock_confirmed"),
+                    actions = { TextButton(onClick = actions::dismissLockNotice) { Text(stringResource(R.string.unlock_lock_ok)) } },
+                )
+                LockNotice.None -> Unit
             }
             if (state.refused && !state.notRecognised) {
                 NoticeCard(

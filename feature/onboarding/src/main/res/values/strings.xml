@@ -100,6 +100,13 @@
     <string name="onboarding_dev_title">Development build</string>
 
     <!-- Unlock -->
+    <!-- A lock the vault has not confirmed (drafts for the owner, 2026-10-12). A vault has no time after which it
+         locks by itself, so none is promised. -->
+    <string name="unlock_lock_unconfirmed_title">Your vault may still be open</string>
+    <string name="unlock_lock_unconfirmed_body">Your vault could not be reached, so it may still be open. This phone is locked, and VettID keeps trying to lock the vault.</string>
+    <string name="unlock_lock_try_again">Try again</string>
+    <string name="unlock_lock_confirmed">Your vault is locked.</string>
+    <string name="unlock_lock_ok">OK</string>
     <string name="unlock_title">Unlock your vault</string>
     <string name="unlock_body">Enter your vault PIN.</string>
     <string name="unlock_body_account">Enter the vault PIN for %1$s.</string>
