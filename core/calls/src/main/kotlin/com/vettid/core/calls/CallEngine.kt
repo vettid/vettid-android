@@ -100,6 +100,7 @@ class CallEngine private constructor(
     /** Takes the other phone's offer and makes the answer. */
     fun acceptOffer(sdp: String) = run("answer") {
         val pc = open("callee")
+        snapshot.update { it.copy(opusOnly = "as offered") }
         pc.setRemoteDescription(
             Sdp("set remote offer", onSet = {
                 pc.addTrack(newTrack(), listOf(STREAM_ID))
