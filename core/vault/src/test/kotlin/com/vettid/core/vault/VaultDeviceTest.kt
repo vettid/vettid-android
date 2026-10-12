@@ -7,6 +7,9 @@ package com.vettid.core.vault
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Ed25519PrivateKey
 import com.vettid.core.crypto.Kid
+import com.vettid.core.crypto.call.CallMedia
+import com.vettid.core.crypto.call.CallWire
+import com.vettid.core.crypto.call.MediaSuite
 import com.vettid.core.crypto.envelope.Envelope
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Mode
@@ -1066,6 +1069,257 @@ class VaultDeviceTest {
             assertTrue(!again.signerSeen)
             assertEquals(2, att.generation)
             assertEquals(att.kept!!.map { Base64s.encodeStd(it) }, chainOf(again, again.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)))
+        }
+    }
+
+    // --- calls (§10.10; CALLS-PLAN C1) ---
+
+    /** The other member of a call: a device, its vault, and the bodies they would produce. */
+    private class CallPeer {
+        val device = Ed25519PrivateKey.generate()
+        val vault = Ed25519PrivateKey.generate()
+
+        /** The vouched signatures of a share, with `peer_ik` as this app's own vault adds it. */
+        fun vouched(b: JsonBuilder, m: ByteArray): JsonBuilder = b.base64("device_ik", device.publicKey).base64("device_sig", CallWire.signShare(device, m))
+            .base64("vault_sig", vault.sign(CallWire.LABEL_VOUCH, CallWire.vouchMessage(device.publicKey, m))).base64("peer_ik", vault.publicKey)
+    }
+
+    private val sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n"
+
+    private fun FakeVault.ice(b: JsonBuilder, callId: String, exp: Instant = Instant.now().plusSeconds(21_600)): JsonBuilder {
+        val cfg = CallWire.marshalIce(CallWire.IceConfig(callId, Instant.ofEpochSecond(exp.epochSecond), emptyList()))
+        return b.base64("ice_config", cfg).base64("ice_sig", ik.sign(CallWire.LABEL_ICE, cfg))
+    }
+
+    private fun ts(t: Instant) = com.vettid.core.crypto.envelope.Timestamps.formatMillis(t)
+
+    /** An outgoing call: `call.start` is deposited once with a signed share, the answer is verified, and both devices hold the same two keys. */
+    @Test
+    fun placingACallAndTakingTheAnswer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val api = VaultApi(d)
+            val peer = CallPeer()
+
+            val starting = async(Dispatchers.IO) { api.callStart("conn-1", sdp) }
+            val req = v.open(nextDeposit().second)
+            assertEquals("call.start", req.type)
+            assertNull(req.exp)
+            assertEquals("never in the outbox", 0, savedState(store).outbox.size)
+            val b = StrictJson.parseObject(req.body)
+            val callId = b.string("call_id")
+            assertTrue(Ulid.isValid(callId))
+            assertEquals("conn-1", b.string("connection_id"))
+            assertEquals("audio", b.string("media"))
+            assertEquals(listOf(1), CallMedia.offeredIn(b.string("sdp")))
+            val ek = b.base64("ek", 1216)
+            assertTrue(com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.shareMessage("offer", callId, "audio", ek), b.base64("ek_sig", 64)))
+            val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            d.handle(v.seal("call.start", v.ice(JsonBuilder().string("call_id", callId).string("exp", ts(exp)), callId).build(), re = req.id, status = Inner.STATUS_OK))
+            val call = starting.await()
+            assertEquals(callId, call.callId)
+            assertEquals(exp, call.exp)
+            assertTrue(call.ice.servers.isEmpty())
+
+            // The callee's device answers: enc, its choice of suite in the SDP, the vouched share.
+            val a = CallWire.answer(ek, callId)
+            val expected = CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
+            val fromCaller = CallMedia.directionKey(a.kCall, expected, CallMedia.DIRECTION_CALLER, callId)
+            val fromCallee = CallMedia.directionKey(a.kCall, expected, CallMedia.DIRECTION_CALLEE, callId)
+            val m = CallWire.shareMessage("answer", callId, "", a.enc)
+            fun answer(sdpAnswer: String = CallMedia.sdpWithChoice(sdp, MediaSuite.AES_128_GCM), enc: ByteArray = a.enc) =
+                peer.vouched(JsonBuilder().string("call_id", callId).string("sdp", sdpAnswer).base64("enc", enc), m).build()
+
+            // A share that was swapped on the way, an answer without the suite, a suite that was not offered: unusable.
+            // And an answer with a second media section: its audio would play outside the frame encryption (review F1).
+            val twoSections = CallMedia.sdpWithChoice(sdp + "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n", MediaSuite.AES_128_GCM)
+            for (bad in listOf(answer(enc = CallWire.answer(ek, callId).enc), answer(sdpAnswer = sdp), answer(sdpAnswer = CallMedia.sdpWithChoice(sdp, MediaSuite.AES_256_GCM)), answer(sdpAnswer = twoSections))) {
+                d.handle(v.seal("call.answer", bad))
+                val ev = d.awaitEvent("call.answer")
+                assertThrows(CallMessageException::class.java) { api.callAccept(call, ev) }
+            }
+            d.handle(v.seal("call.answer", answer()))
+            val accepted = api.callAccept(call, d.awaitEvent("call.answer"))
+            assertEquals("the media stack gets the SDP without VettID's attribute", sdp, accepted.sdp)
+            assertEquals(MediaSuite.AES_128_GCM, accepted.keys.suite)
+            assertTrue(accepted.keys.send().contentEquals(fromCaller))
+            assertTrue(accepted.keys.receive().contentEquals(fromCallee))
+            assertTrue("no key in a log line", !accepted.keys.toString().contains(com.vettid.core.crypto.Bytes.hex(fromCaller)))
+            accepted.keys.destroy()
+            assertThrows(IllegalStateException::class.java) { accepted.keys.send() }
+            // The ephemeral key is gone with the answer.
+            assertThrows(com.vettid.core.crypto.CryptoException::class.java) { call.key().seed() }
+
+            // A refusal is the vault's code.
+            val refused = async(Dispatchers.IO) { runCatching { api.callStart("conn-1", sdp) } }
+            val r2 = v.open(nextDeposit().second)
+            d.handle(v.msg(v.keyring.current()!!.seal(Inner(id = Ulid.new(), type = r2.type, ts = Instant.now(), re = r2.id, status = Inner.STATUS_ERROR, error = com.vettid.core.crypto.envelope.InnerError("busy")))))
+            assertEquals("busy", (refused.await().exceptionOrNull() as VaultOpException).code)
+
+            // An ICE configuration signed by anyone but this device's vault, or for another call, is refused.
+            assertNull("the vault refused: there is no call to end", deposits.poll(300, TimeUnit.MILLISECONDS))
+            val forged = async(Dispatchers.IO) { runCatching { api.callStart("conn-1", sdp) } }
+            val r3 = v.open(nextDeposit().second)
+            val id3 = StrictJson.parseObject(r3.body).string("call_id")
+            val cfg = CallWire.marshalIce(CallWire.IceConfig(id3, Instant.ofEpochSecond(Instant.now().epochSecond + 600), listOf(CallWire.IceServer(listOf("turn:evil.example:3478"), "u", "p"))))
+            d.handle(v.seal("call.start", JsonBuilder().string("call_id", id3).string("exp", ts(exp)).base64("ice_config", cfg).base64("ice_sig", peer.vault.sign(CallWire.LABEL_ICE, cfg)).build(), re = r3.id, status = Inner.STATUS_OK))
+            assertTrue(forged.await().exceptionOrNull() is CallMessageException)
+            // The vault did place that call: it is rung off, or the other phone would ring for 45 s for nobody (review F3).
+            val rungOff = v.open(nextDeposit().second)
+            assertEquals("call.end", rungOff.type)
+            assertEquals("""{"call_id":"$id3","reason":"hangup"}""", String(rungOff.body))
+
+            // The device's own SDP is held to the same shape.
+            assertTrue(runCatching { api.callStart("conn-1", sdp + "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n") }.exceptionOrNull() is CallMessageException)
+            assertNull("nothing left the phone", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** An incoming call: the offer is checked before it may ring; the answer carries a signed share and the keys match the caller's. */
+    @Test
+    fun takingAnOfferAndAnsweringIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val api = VaultApi(d)
+            val peer = CallPeer()
+            val callId = Ulid.new()
+            val offerKey = CallWire.newOfferKey()
+            val ek = offerKey.publicKey.bytes()
+            val m = CallWire.shareMessage("offer", callId, "audio", ek)
+            val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            fun offer(
+                offerSdp: String = CallMedia.sdpWithOffer(sdp, listOf(1)),
+                share: ByteArray = ek,
+                at: Instant = exp,
+                iceExp: Instant = Instant.now().plusSeconds(21_600),
+                signed: ByteArray = m,
+            ) = peer.vouched(
+                v.ice(JsonBuilder().string("call_id", callId).string("connection_id", "conn-1").string("media", "audio").string("sdp", offerSdp).base64("ek", share).string("exp", ts(at)), callId, iceExp),
+                signed,
+            ).build()
+
+            val bad = listOf(
+                offer(share = CallWire.newOfferKey().publicKey.bytes()), // a swapped key
+                offer(signed = CallWire.shareMessage("offer", callId, "video", ek)), // signed for another media
+                offer(offerSdp = sdp), // no media suites
+                offer(offerSdp = CallMedia.sdpWithOffer(sdp + "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n", listOf(1))), // a second audio section (F1)
+                offer(offerSdp = CallMedia.sdpWithOffer(sdp + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n", listOf(1))), // a data channel
+                offer(offerSdp = CallMedia.sdpWithOffer(sdp.replace("opus/48000/2", "PCMU/8000"), listOf(1))), // not Opus
+                offer(at = Instant.now().minusSeconds(1).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)), // expired
+                offer(at = Instant.now().plusSeconds(600).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)), // too far ahead
+                offer(iceExp = Instant.now().minusSeconds(5)), // an expired ICE configuration
+            )
+            for (b in bad) {
+                d.handle(v.seal("call.offer", b))
+                val ev = d.awaitEvent("call.offer")
+                assertThrows(b.take(60), CallMessageException::class.java) { api.callIncoming(ev) }
+            }
+
+            d.handle(v.seal("call.offer", offer()))
+            val call = api.callIncoming(d.awaitEvent("call.offer"))
+            assertEquals(callId, call.callId)
+            assertEquals("conn-1", call.connectionId)
+            assertEquals(exp, call.exp)
+            assertEquals(sdp, call.sdp)
+            assertEquals(listOf(1), call.offered)
+
+            api.callRinging(callId)
+            val ringing = v.open(nextDeposit().second)
+            assertEquals("call.ringing", ringing.type)
+            assertTrue("ephemeral", ringing.exp!!.isAfter(Instant.now()) && ringing.exp!!.isBefore(Instant.now().plusSeconds(31)))
+
+            val keys = api.callAnswer(call, sdp)
+            val ans = v.open(nextDeposit().second)
+            assertEquals("call.answer", ans.type)
+            assertEquals(0, savedState(store).outbox.size)
+            val b = StrictJson.parseObject(ans.body)
+            assertEquals(callId, b.string("call_id"))
+            val enc = b.base64("enc", 1120)
+            assertTrue(com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.shareMessage("answer", callId, "", enc), b.base64("enc_sig", 64)))
+            val n = CallMedia.chosenIn(b.string("sdp"), listOf(1))
+            val kCall = CallWire.accept(offerKey, enc, callId)
+            assertTrue(keys.send().contentEquals(CallMedia.directionKey(kCall, n, CallMedia.DIRECTION_CALLEE, callId)))
+            assertTrue(keys.receive().contentEquals(CallMedia.directionKey(kCall, n, CallMedia.DIRECTION_CALLER, callId)))
+
+            // Candidates: batched by the caller of callIce, at most 16 a message, ephemeral.
+            api.callIce(callId, listOf(CallCandidate("candidate:1 1 udp 2122260223 192.0.2.1 50000 typ host", "0", 0), CallCandidate("candidate:2 1 udp 1 192.0.2.2 50001 typ host")))
+            val ice = v.open(nextDeposit().second)
+            assertEquals("call.ice", ice.type)
+            assertNotNull(ice.exp)
+            assertEquals("""{"call_id":"$callId","candidates":[{"candidate":"candidate:1 1 udp 2122260223 192.0.2.1 50000 typ host","sdp_mid":"0","sdp_mline_index":0},{"candidate":"candidate:2 1 udp 1 192.0.2.2 50001 typ host"}]}""", String(ice.body))
+            assertThrows(CallMessageException::class.java) { runBlocking { api.callIce(callId, emptyList()) } }
+            assertThrows(CallMessageException::class.java) { runBlocking { api.callIce(callId, List(17) { CallCandidate("c") }) } }
+            assertThrows(CallMessageException::class.java) { runBlocking { api.callIce(callId, listOf(CallCandidate("c".repeat(1025)))) } }
+
+            // The other side's candidates and the end of the call, as events.
+            val got = async { api.callIce.first() }
+            val ended = async { api.callEnds.first() }
+            val rang = async { api.callRingings.first() }
+            kotlinx.coroutines.yield()
+            kotlinx.coroutines.delay(100)
+            d.handle(v.seal("call.ice", """{"call_id":"$callId","candidates":[{"candidate":"candidate:9","sdp_mid":"0","sdp_mline_index":0}]}"""))
+            d.handle(v.seal("call.ringing", """{"call_id":"$callId"}"""))
+            d.handle(v.seal("call.end", """{"call_id":"$callId","reason":"hangup"}"""))
+            assertEquals(CallIce(callId, listOf(CallCandidate("candidate:9", "0", 0))), got.await())
+            assertEquals(callId, rang.await())
+            assertEquals(CallEnded(callId, "hangup"), ended.await())
+        }
+    }
+
+    /**
+     * Call signalling is deposited once: a relay failure reaches the caller and nothing is kept for a later flush
+     * (a `call.start` sent again after a restart would ring for a call nobody is in). `call.end` is durable, so a
+     * hang-up still frees the vault. A `call.start` without an answer is deposited once, not three times.
+     */
+    @Test
+    fun callSignallingIsNeverSentAgainButAHangUpIs() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val api = VaultApi(d)
+            val callId = Ulid.new()
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            assertTrue(runCatching { api.callRinging(callId) }.exceptionOrNull() is RelayException)
+            assertTrue(runCatching { api.callStart("conn-1", sdp) }.exceptionOrNull() is RelayException)
+            // The relay's answers were lost, as far as the app knows: `call.start` is not kept, but a hang-up for
+            // its call is (review F3).
+            assertEquals(listOf("call.end"), savedState(store).outbox.map { it.type })
+            assertTrue(runCatching { api.callEnd(callId, CallReason.HANGUP) }.exceptionOrNull() is RelayException)
+            assertEquals(2, savedState(store).outbox.size)
+            refuseDeposits = null
+            d.flushOutbox()
+            val ends = listOf(v.open(nextDeposit().second), v.open(nextDeposit().second))
+            assertTrue(ends.all { it.type == "call.end" && it.exp == null })
+            assertEquals("""{"call_id":"$callId","reason":"hangup"}""", String(ends[1].body))
+            assertNull("only the hang-ups were sent again", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { api.callEnd(callId, "bored") } }
+
+            // No answer: one deposit.
+            val e = runCatching { d.requestOnce("call.start", timeout = java.time.Duration.ofMillis(300)) }.exceptionOrNull()
+            assertTrue(e is VaultStateException)
+            assertEquals("call.start", v.open(nextDeposit().second).type)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+
+            // `callStart` without an answer: the call may exist in the vault, so its hang-up follows (review F3).
+            val unanswered = runCatching { api.callStart("conn-1", sdp, timeout = java.time.Duration.ofMillis(300)) }.exceptionOrNull()
+            assertTrue(unanswered is VaultStateException)
+            val started = v.open(nextDeposit().second)
+            assertEquals("call.start", started.type)
+            val after = v.open(nextDeposit().second)
+            assertEquals("call.end", after.type)
+            assertEquals("""{"call_id":"${StrictJson.parseObject(started.body).string("call_id")}","reason":"hangup"}""", String(after.body))
+
+            // call.list, and the answer of a vault release without calls.
+            val list = async(Dispatchers.IO) { api.callList(10) }
+            val req = v.open(nextDeposit().second)
+            assertEquals("""{"limit":10}""", String(req.body))
+            d.handle(v.seal("call.list", """{"calls":[{"call_id":"$callId","connection_id":"conn-1","direction":"in","media":"audio","state":"ended","reason":"timeout","started_at":"2026-10-12T10:00:00.000Z","ended_at":"2026-10-12T10:00:45.000Z"}]}""", re = req.id, status = Inner.STATUS_OK))
+            assertEquals(listOf(CallRecord(callId, "conn-1", "in", "audio", "ended", "timeout", "2026-10-12T10:00:00.000Z", null, "2026-10-12T10:00:45.000Z")), list.await())
         }
     }
 
