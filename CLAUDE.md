@@ -115,7 +115,7 @@ The A2 exit test:
   a registration may still exist, and the registration resumes when the push service is back
   (`settings.notifications_push_not_on_phone`).
 
-- Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the proposal for the spec): `:core:crypto` `call/`
+- Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the app's note; VAULT-MESSAGING §10.10 is normative): `:core:crypto` `call/`
   (`CallWire` against vettid-vault's `calls.json`, `MediaSuite`: the closed registry of media suites, `CallMedia`: the
   suite in the SDP and the two direction keys, `CallFrames`), `:core:vault` `CallApi.kt` (the seven `call.*` types; call
   signalling is sent with `VaultDevice.sendOnce`, never through the outbox, except `call.end`), `:core:calls`
