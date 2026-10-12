@@ -6,6 +6,7 @@ import com.vettid.core.crypto.call.MediaSuite
 import com.vettid.core.vault.CallCandidate
 import kotlinx.coroutines.flow.Flow
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 
 /** The two frame keys of a call on their way from the signalling to the media engine, which wipes them. */
@@ -25,7 +26,7 @@ data class PlacedCall(
 )
 
 /** The vault refused `call.start` with [code] (`busy`, `not_found`, `owner_check_required`, `unsupported_type`, …). */
-class CallRefusedException(val code: String) : IOException("call refused: $code")
+class CallRefusedException(val code: String, cause: Throwable? = null) : IOException("call refused: $code", cause)
 
 /**
  * The call cannot be made secure: a key-exchange share, an ICE configuration or a media suite that does not check
@@ -35,14 +36,19 @@ class CallSecurityException(what: String, cause: Throwable? = null) : IOExceptio
 
 /** What reaches the call from the vault. Offers and answers arrive here **already verified** (signatures, suites). */
 sealed interface SignalEvent {
-    data class Offer(
+    class Offer(
         val callId: String,
         val connectionId: String,
         /** The caller's SDP offer, ready for the media engine. */
         val sdp: String,
         val exp: Instant,
+        /** How long to ring: the offer's lifetime by the vault's clock, not this phone's. */
+        val ringFor: Duration,
         val servers: List<CallWire.IceServer>,
-    ) : SignalEvent
+    ) : SignalEvent {
+        /** No SDP (it holds addresses) and no server credentials. */
+        override fun toString(): String = "Offer($callId)"
+    }
 
     /** The callee's device is ringing. */
     data class Ringing(val callId: String) : SignalEvent

@@ -193,7 +193,7 @@ out      = header || sealed || iv || 0x0C || key_index                          
   counter value: within one RTP stream until the timestamp wraps (about 24.8 hours of Opus at 48 kHz). One key per
   direction removes the cross-sender case. **A device SHOULD end a call 12 hours after it was answered**
   (`call.end{hangup}`): the vault stops counting the call as live then, and it keeps every call well inside the
-  wrap. (Not built in C1 PR 2; it comes with the service in PR 3.)
+  wrap. (`CallsController`.)
 - **No replay protection** at this layer (SRTP's replay window underneath covers the network; a TURN server holds
   no SRTP key) **[S]**.
 - **A new offer/answer inside a call** (`call.update`, C4) may keep the keys only if the RTP streams keep their
@@ -239,6 +239,17 @@ out      = header || sealed || iv || 0x0C || key_index                          
    key a call a second attempt with the same key cannot succeed where the first did not.
 5. The failure count is not consecutive: only setting a key resets it **[S]**. With a tolerance of 10 a wrong key is
    reported after about a fifth of a second of audio.
+
+6. **A call is bound to the identity the member can see.** Before a device uses an offer or an answer it checks
+   that `peer_ik` in the event is the key whose fingerprint the app shows on that connection's details
+   (VAULT-MESSAGING §10.8), then the share under it; for an answer, the connection is the one the call was placed
+   to, whatever the event says. An event for a connection the app does not know as active is not used.
+7. **The suite is fixed before the phone rings**: the callee chooses when it checks the offer, and does not ring
+   for an offer with no suite it can do (§2.1).
+8. **Ring time is the vault's.** A callee rings for `exp` minus the event's `ts` (both the vault's clock). An offer
+   that has already expired by the phone's own clock is dropped by the session layer before any of this (the
+   envelope rule of §8.4), silently for the member: a phone whose clock is more than the offer's lifetime ahead
+   never rings. The app counts such drops and shows the count in its call diagnostics.
 
 ## 8. Test vectors
 

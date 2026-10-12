@@ -271,6 +271,14 @@ class VaultDevice private constructor(
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
 
+    private val timeDrops = MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /**
+     * The types of authenticated messages from the vault that were dropped for their time by this phone's clock
+     * (expired, or from the future): nothing of a dropped message but its type.
+     */
+    val droppedForTime: SharedFlow<String> = timeDrops.asSharedFlow()
+
     /** True once device.paired arrived: the session with the vault is up. */
     val paired: StateFlow<Boolean> = pairedState.asStateFlow()
 
@@ -969,7 +977,14 @@ class VaultDevice private constructor(
             handleRekey(raw, ep, sender, t)
             return
         }
-        inner.checkTime(t, inner.exp == null)
+        try {
+            inner.checkTime(t, inner.exp == null)
+        } catch (e: CryptoException.Time) {
+            // Dropped, as any message that fails a check; but said, so that a phone whose clock is wrong can be
+            // told why it never rings (an offer lives 45 s).
+            timeDrops.tryEmit(inner.type)
+            throw e
+        }
         if (st.seenInner.containsKey(inner.id)) return
         st.seenInner[inner.id] = t.toEpochMilli()
         prune(st.seenInner, t)

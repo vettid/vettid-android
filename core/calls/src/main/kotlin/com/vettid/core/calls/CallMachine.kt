@@ -88,6 +88,7 @@ class CallMachine(
         val job: Job,
         val tappedAtMs: Long,
     ) {
+        @Volatile
         var engine: MediaEngine? = null
         var callId: String? = null
         var phase: CallPhase = CallPhase.STARTING
@@ -189,6 +190,9 @@ class CallMachine(
     private fun newSession(connectionId: String, direction: CallDirection): Session {
         val s = Session(nextSeq++, connectionId, direction, SupervisorJob(scope.coroutineContext.job), elapsedMs())
         session = s
+        // However the call's jobs end (also when the machine's scope goes away with a call live), the engine is
+        // closed: the microphone and the keys do not outlive the call.
+        s.job.invokeOnCompletion { s.engine?.close() }
         diagnosticsFlow.value = CallDiagnostics()
         val lane = CoroutineScope(scope.coroutineContext + s.job)
         lane.launch {
@@ -297,11 +301,15 @@ class CallMachine(
         s.lane.trySend {
             val sdp = engine.acceptOffer(offer.sdp, offer.servers)
             post(Msg.Gathering(s.seq))
-            val keys = signalling.answer(offer.callId, sdp, engine.suites)
-            try {
-                engine.setKeys(keys.suite, keys.send, keys.receive)
-            } finally {
-                keys.wipe()
+            // Not cancellable between the answer's return and the keys' hand-over: a hang-up at that instant must
+            // not leave the keys with nobody to wipe them.
+            withContext(NonCancellable) {
+                val keys = signalling.answer(offer.callId, sdp, engine.suites)
+                try {
+                    engine.setKeys(keys.suite, keys.send, keys.receive)
+                } finally {
+                    keys.wipe()
+                }
             }
             post(Msg.Answered(s.seq))
         }
@@ -374,8 +382,7 @@ class CallMachine(
         publish(s)
         s.launch { runCatching { signalling.ringing(offer.callId) } }
         // The caller's `call.end{timeout}` normally ends the ringing; this is for a caller that has gone.
-        val ringFor = Duration.between(now(), offer.exp).plus(timings.incomingGrace)
-            .coerceIn(timings.incomingGrace, timings.maxIncomingRing)
+        val ringFor = offer.ringFor.plus(timings.incomingGrace).coerceIn(timings.incomingGrace, timings.maxIncomingRing)
         timer(s, TimerKind.RING_IN, ringFor)
     }
 

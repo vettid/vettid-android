@@ -379,6 +379,13 @@ class VaultManager(
 
     // --- session ---
 
+    /**
+     * The typed vault client of this device, for a module that is not part of every build and so cannot have its
+     * operations here (today: the non-production calls modules). The same client the repositories use; an
+     * operation on a locked vault fails as theirs do.
+     */
+    suspend fun vaultApi(): VaultApi = session().api
+
     private suspend fun session(): Session = mutex.withLock {
         session ?: openSession().also { session = it }
     }

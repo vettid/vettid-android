@@ -102,6 +102,10 @@ class WebRtcMediaEngine private constructor(
     @Volatile
     private var moved = false
 
+    /** What the member wants, kept for a track that does not exist yet (muting while it rings must hold). */
+    @Volatile
+    private var wantMuted = false
+
     @Volatile
     private var sendState = CryptorState.NEW
 
@@ -210,7 +214,8 @@ class WebRtcMediaEngine private constructor(
     }
 
     override fun setMuted(muted: Boolean) {
-        onWorker { track?.setEnabled(!muted) }
+        wantMuted = muted
+        onWorker { track?.setEnabled(!wantMuted) }
     }
 
     override suspend fun diagnostics(): MediaDiagnostics? {
@@ -231,17 +236,19 @@ class WebRtcMediaEngine private constructor(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         worker.execute {
-            runCatching {
-                connection?.close()
-                senderCryptor?.dispose()
-                receiverCryptor?.dispose()
-                connection?.dispose()
-                track?.dispose()
-                source?.dispose()
-                provider?.dispose()
-                factory.dispose()
-                audioDevice.release()
-            }
+            // Each step on its own: one that throws must not keep the microphone or the keys from being let go.
+            val steps = listOf<() -> Unit>(
+                { connection?.close() },
+                { senderCryptor?.dispose() },
+                { receiverCryptor?.dispose() },
+                { connection?.dispose() },
+                { track?.dispose() },
+                { source?.dispose() },
+                { provider?.dispose() },
+                { factory.dispose() },
+                { audioDevice.release() },
+            )
+            for (step in steps) runCatching(step)
             channel.close()
         }
         worker.shutdown()
@@ -274,7 +281,10 @@ class WebRtcMediaEngine private constructor(
     private fun newTrack(): AudioTrack {
         val audioSource = factory.createAudioSource(MediaConstraints())
         source = audioSource
-        return factory.createAudioTrack(TRACK_ID, audioSource).also { track = it }
+        return factory.createAudioTrack(TRACK_ID, audioSource).also {
+            it.setEnabled(!wantMuted)
+            track = it
+        }
     }
 
     /**
@@ -465,12 +475,16 @@ class WebRtcMediaEngine private constructor(
         }
 
         /** A factory of engines for [context]'s process. Creating an engine loads the native library if needed. */
-        fun factory(context: Context): MediaEngineFactory = MediaEngineFactory { config ->
-            val app = context.applicationContext
-            val pqc = WebRtcRuntime.start(app, config)
-            val audioDevice = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
-            val factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDevice).createPeerConnectionFactory()
-            WebRtcMediaEngine(factory, audioDevice, pqc, config.faults)
+        fun factory(context: Context): MediaEngineFactory = object : MediaEngineFactory {
+            override val suites: List<MediaSuite> = SUITES
+
+            override fun create(config: MediaConfig): MediaEngine {
+                val app = context.applicationContext
+                val pqc = WebRtcRuntime.start(app, config)
+                val audioDevice = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
+                val factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDevice).createPeerConnectionFactory()
+                return WebRtcMediaEngine(factory, audioDevice, pqc, config.faults)
+            }
         }
     }
 }

@@ -8,9 +8,11 @@ class MediaLoggingException(what: String, cause: Throwable? = null) : IllegalSta
  * at severity INFO (docs/calls/CALL-MEDIA.md §7.1, read from the library's source; the texts are in the shipped
  * binary). They are printed only if something switches the stack's logging on, so nothing in this app ever does:
  *
- * - no code calls `Logging.enableLogToDebugOutput`, `enableLogThreads` or `enableLogTimeStamps`,
- *   `InitializationOptions.Builder.setInjectableLogger` or `setEnableInternalTracer` (`MediaLoggingSourceTest`
- *   reads every source file of the repository for them);
+ * - no code names any of the stack's ways to log, trace or record ([FORBIDDEN]; `MediaGuardsTest` reads every
+ *   source file of the repository for them). That list is every such entry point found in the pinned artifact's
+ *   classes (`javap` over the AAR, 2026-10-12), including the ones [check] cannot see: a
+ *   `CallSessionFileRotatingLogSink` adds a native file sink at any severity without touching the two switches,
+ *   and the event log, the echo-canceller dump and the sample callbacks write a call's metadata or its raw audio;
  * - [check] looks at the stack's own switches before the stack is started and again before every key is set, and
  *   refuses with [MediaLoggingException] if either is on, or if the switches cannot be read (a changed library is
  *   inspected again before it is trusted). A call without keys sends and plays nothing.
@@ -18,8 +20,14 @@ class MediaLoggingException(what: String, cause: Throwable? = null) : IllegalSta
 object MediaLogGuard {
     /** Names no source file outside this one and its tests may contain. */
     val FORBIDDEN: List<String> = listOf(
+        // Logging: debug output, an injected logger, a file sink.
         "enableLogToDebugOutput", "enableLogThreads", "enableLogTimeStamps", "setInjectableLogger", "injectLoggable",
-        "setEnableInternalTracer",
+        "CallSessionFileRotatingLogSink", "JNILogging", "Loggable",
+        // Tracing and stack dumps.
+        "setEnableInternalTracer", "initializeInternalTracer", "printStackTraces", "printInternalStackTraces",
+        // Records of a call: its packet metadata, its raw microphone and playback audio.
+        "startRtcEventLog", "startAecDump", "setSamplesReadyCallback", "setPlaybackSamplesReadyCallback",
+        "setEnableVolumeLogger",
     )
     internal const val LOGGING_CLASS = "org.webrtc.Logging"
     internal const val ENABLED_FIELD = "loggingEnabled"

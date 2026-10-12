@@ -96,6 +96,10 @@ android {
             buildConfigField("String", "DEV_STACK_GUID", "\"" + (providers.gradleProperty("devStackGuid").orNull ?: "android-devstack") + "\"")
         }
         release {
+            // A release with calls linked in (`-PvettidCallsInRelease=true`, CI's F-Droid-with-calls step) is a
+            // check build and nothing else: under this id it cannot replace or pass for the production app, and no
+            // vault accepts its key attestation (a release names its Android package, §11.10.8).
+            if (providers.gradleProperty("vettidCallsInRelease").orNull == "true") applicationIdSuffix = ".callscheck"
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -180,6 +184,11 @@ android {
         getByName("devStack").kotlin.srcDir("src/debugTools/kotlin")
         getByName("release").kotlin.srcDir("src/noDebugTools/kotlin")
         getByName("staging").kotlin.srcDir("src/noDebugTools/kotlin")
+        // Calls (CALLS-PLAN C1): `src/calls` wires :core:calls into the builds that have it, `src/noCalls` binds
+        // "no calls" in the others (CallsModule in both; `callsInRelease` further down decides for release).
+        val releaseCalls = providers.gradleProperty("vettidCallsInRelease").orNull == "true"
+        for (type in listOf("debug", "devStack", "staging")) getByName(type).kotlin.srcDir("src/calls/kotlin")
+        getByName("release").kotlin.srcDir(if (releaseCalls) "src/calls/kotlin" else "src/noCalls/kotlin")
         // Every build that is not production carries a marked launcher icon (src/nonProduction: the white band on
         // the icon's background; not part of the brand kit). Never `release`, so never the F-Droid build.
         listOf("debug", "devStack", "staging").forEach { getByName(it).res.srcDir("src/nonProduction/res") }
@@ -553,9 +562,22 @@ abstract class CallsApkCheck : DefaultTask() {
 /**
  * Calls in a release build: off. `-PvettidCallsInRelease=true` links them in, for the one CI step that keeps the
  * F-Droid distribution building with them (`:app:assembleFossRelease :app:checkFossReleaseApk`: no Google code, the
- * media stack as pinned). Never set for a build that is published before calls are promoted.
+ * media stack as pinned). Never for a build that is published before calls are promoted: such a build has the
+ * application id `com.vettid.app.callscheck` (the release build type, above), which no vault accepts and which
+ * cannot update the production app.
  */
 val callsInRelease = providers.gradleProperty("vettidCallsInRelease").orNull == "true"
+
+/**
+ * "No calls code in production" beyond the media stack: the call code of :core:crypto and :core:vault is compiled
+ * into every variant and only R8 keeps it out of a release. These strings are in that code and nowhere else, and
+ * R8 does not rename strings: a release dex that has one has call code that something reaches (for example a
+ * `call.list` probe wired outside the build-type gate).
+ */
+val callsMarkers = listOf(
+    "vettid/vms/2/call-media", "vettid/vms/2/call-frame", "vettid/vms/2/call-share", "vettid/vms/2/call-vouch", "vettid/vms/2/call-key",
+    "vettid-media-suites", "vettid-media-suite", "call.start", "call.ringing", "call.ice", "call.list",
+)
 
 val productionPins = listOf(
     "https://account.vettid.org",
@@ -603,7 +625,13 @@ androidComponents {
         if (staging || v.buildType == "release") {
             tasks.register<ApplicationIdCheck>("check${name}ApplicationId") {
                 manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
-                applicationId.set(if (staging) stagingApplicationId else releaseApplicationId)
+                applicationId.set(
+                    when {
+                        staging -> stagingApplicationId
+                        callsInRelease -> "$releaseApplicationId.callscheck"
+                        else -> releaseApplicationId
+                    },
+                )
                 requiredHosts.set(listOf(if (staging) stagingAccountHost else productionAccountHost))
                 forbiddenHosts.set(listOf(if (staging) productionAccountHost else stagingAccountHost))
             }
@@ -621,7 +649,10 @@ androidComponents {
                     dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls")
                     apkDir.set(v.artifacts.get(SingleArtifact.APK))
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
-                    forbidden.set(stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")))
+                    forbidden.set(
+                        stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")) +
+                            if (callsInRelease) emptyList() else callsMarkers,
+                    )
                     required.set(productionPins)
                 }
                 if (foss) {
