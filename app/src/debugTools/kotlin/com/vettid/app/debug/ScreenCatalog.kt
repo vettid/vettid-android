@@ -743,6 +743,27 @@ object ScreenCatalog {
         },
         "owner_check.voluntary" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.VOLUNTARY, okView), NoOwnerCheck) {} },
         "owner_check.hold_off" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.HOLD_OFF, okView), NoOwnerCheck) {} },
+        // The phase could not be read (A6 audit N4/N5, N6, P4): the connection, the clock, "no vault" and unreadable keys.
+        "root.unreachable" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NETWORK, false, {}, {}) },
+        "root.unreachable_retrying" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NETWORK, true, {}, {}) },
+        "root.clock" to { com.vettid.app.ui.UnreachableScreen(FailureKind.CLOCK, false, {}, {}) },
+        "root.no_vault" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NO_VAULT, false, {}, {}) },
+        "root.no_vault_confirm" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NO_VAULT, false, {}, {}, confirming = true) },
+        "root.local_state" to { com.vettid.app.ui.UnreachableScreen(FailureKind.LOCAL_STATE, false, {}, {}) },
+        "root.local_state_confirm" to { com.vettid.app.ui.UnreachableScreen(FailureKind.LOCAL_STATE, false, {}, {}, confirming = true) },
+        "root.preferences_reset" to {
+            com.vettid.core.ui.components.InfoBanner(
+                stringResource(com.vettid.app.R.string.root_preferences_reset),
+                actionLabel = stringResource(com.vettid.app.R.string.root_preferences_reset_ok),
+            )
+        },
+        // The scanner where no camera can be used (G1), and "wrong PIN" with the wait that follows it (A4).
+        "unlock.bad_pin_wait" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), message = com.vettid.feature.onboarding.UnlockMessage.BadPin, waitSeconds = 30),
+                NoUnlock,
+            )
+        },
         "unlock.ended" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.RELEASE_ENDED), NoUnlock) },
         "app_lock" to { AppLockScreen(onUnlock = {}) },
         // The app lock's method (owner request 2026-10-09, ANDROID-PLAN 0.1.19).

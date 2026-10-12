@@ -27,8 +27,6 @@ import androidx.navigation.compose.rememberNavController
 import com.vettid.app.R
 import com.vettid.core.data.lock.AppLockState
 import com.vettid.core.data.vault.AppPhase
-import com.vettid.core.data.vault.messageRes
-import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.FullScreenProgress
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.feature.onboarding.AppLockScreen
@@ -84,6 +82,8 @@ fun VettIdApp(
     val alarm by viewModel.alarm.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
     val paused by viewModel.servicePaused.collectAsStateWithLifecycle()
+    val prefsReset by viewModel.preferencesReset.collectAsStateWithLifecycle()
+    val retrying by viewModel.retrying.collectAsStateWithLifecycle()
     val canaryVm: CanaryManifestViewModel = hiltViewModel()
     val canaryPrompt by canaryVm.prompt.collectAsStateWithLifecycle()
     // A shared document is taken only while this activity is started (CanaryManifestViewModel.receive).
@@ -122,22 +122,27 @@ fun VettIdApp(
                 // MEMBER-API 1.2.0: the vault service is paused for maintenance. Non-blocking: every screen stays usable
                 // below it, and only the generic text is shown (never the operator's reason).
                 if (paused) InfoBanner(stringResource(R.string.root_service_paused), Modifier.testTag("service_paused_banner"))
+                // A6 audit P4: a corrupt preferences file was replaced; said once, here, until dismissed.
+                if (prefsReset) {
+                    InfoBanner(
+                        stringResource(R.string.root_preferences_reset),
+                        Modifier.testTag("preferences_reset_banner"),
+                        actionLabel = stringResource(R.string.root_preferences_reset_ok),
+                        onAction = viewModel::acknowledgePreferencesReset,
+                        statusBarPadding = !paused,
+                    )
+                }
                 Box(
                     Modifier
                         .weight(1f)
                         .fillMaxSize()
-                        .then(if (paused) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+                        .then(if (paused || prefsReset) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
                 ) {
                     NavHost(nav, startDestination = StartingDest) {
                         composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
                         composable<UnreachableDest> {
                             val kind = (phase as? AppPhase.Unreachable)?.failure
-                            FormScaffold(
-                                title = stringResource(R.string.root_unreachable_title),
-                                body = kind?.let { stringResource(it.messageRes()) },
-                                primaryLabel = stringResource(R.string.root_retry),
-                                onPrimary = viewModel::retry,
-                            ) {}
+                            UnreachableScreen(kind, retrying, viewModel::retry, viewModel::startOver)
                         }
                         composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
                         composable<UnlockDest> { UnlockRoute() }

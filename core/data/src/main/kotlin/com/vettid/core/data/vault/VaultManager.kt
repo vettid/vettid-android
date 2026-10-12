@@ -113,6 +113,9 @@ class VaultManager(
     private val mutex = Mutex()
     private var session: Session? = null
     private var observer: Job? = null
+    /** The account record could not be read or understood: nothing is assumed about it (A6 audit P4; [evaluate]). */
+    @Volatile
+    private var localUnreadable = false
     private var local: LocalAccount = loadLocal()
 
     /** Bumped by every wipe: a phase computed before it is not published after it. */
@@ -352,11 +355,19 @@ class VaultManager(
         }?.copy(nameRequest = nameRequest?.let { NameRequestView.of(it) })
     }
 
+    /**
+     * The account record. One that cannot be decrypted or parsed is not taken for "no account" (it names the vault
+     * this phone's keys belong to): [localUnreadable] makes [evaluate] say so instead of showing the welcome screen.
+     */
     private fun loadLocal(): LocalAccount = try {
-        accountFile.load()?.let { json.decodeFromString(LocalAccount.serializer(), String(it)) } ?: LocalAccount()
+        val a = accountFile.load()?.let { json.decodeFromString(LocalAccount.serializer(), String(it)) } ?: LocalAccount()
+        localUnreadable = false
+        a
     } catch (_: KeystoreException) {
+        localUnreadable = true
         LocalAccount()
     } catch (_: IllegalArgumentException) {
+        localUnreadable = true
         LocalAccount()
     }
 
@@ -524,13 +535,21 @@ class VaultManager(
         val p = try {
             evaluate()
         } catch (e: VaultFailure) {
-            AppPhase.Unreachable(e.kind)
+            // What the phone stores for the vault could not be read (the device state, a Keystore key): said as
+            // that, with the way out, rather than as "cannot connect" (A6 audit P4).
+            AppPhase.Unreachable(if (e.code == CODE_KEYSTORE) FailureKind.LOCAL_STATE else e.kind)
         }
         if (gen == generation) phaseFlow.value = p // a wipe meanwhile already said SignedOut
     }
 
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one phase per state of the device
     private suspend fun evaluate(): AppPhase = guard {
+        if (localUnreadable) {
+            // Read again (a Keystore that was not ready at start): never taken for an empty record.
+            local = io { loadLocal() }
+            if (localUnreadable) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_KEYSTORE)
+            accountFlow.value = local.toInfo()
+        }
         if (local.replaced != null) {
             // A phone the build before the wipe marked replaced (its device keys already forgotten): erase it now.
             holder.wipeNow()
@@ -556,12 +575,12 @@ class VaultManager(
             if (e.kind == FailureKind.UNAUTHORIZED) return@guard AppPhase.Locked
             throw e
         }
-        if (st == null) {
-            // The vault is gone (deleted, or the account was cancelled and restored): start over with a new code.
-            dropSession(forget = true)
-            saveLocal(LocalAccount())
-            return@guard AppPhase.SignedOut
-        }
+        // The API says, explicitly, that the account has no vault (deleted, or the account was cancelled and
+        // restored). The status is advisory and not authenticated by the vault, and the API answers the same to
+        // every member while no release can start (MEMBER-API "Dark launch"), so this phone's keys are not dropped
+        // for it: the member is told and decides ([forgetMissingVault]; A6 audit N6). An empty or malformed answer
+        // never gets here: it fails as a malformed answer (MemberApiClient.vaultStatusAnswer).
+        if (st == null) return@guard AppPhase.Unreachable(FailureKind.NO_VAULT)
         if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
         if (st.state != "unlocked") AppPhase.Locked else afterUnlocked(s)
     }
@@ -620,6 +639,19 @@ class VaultManager(
         val paired = session?.device?.deviceId != null
         if (paired) return // a vault on this phone is never dropped this way
         if (session != null) dropSession(forget = true)
+        io { saveLocal(LocalAccount()) }
+        phaseFlow.value = AppPhase.SignedOut
+    }
+
+    override suspend fun forgetMissingVault() {
+        val d = guard { session().device }
+        // Only a phone that holds a vault which the API, asked again now, explicitly says is gone.
+        val gone = d.deviceId != null && !d.recovering && guard { vaultStatus(session()) } == null
+        if (!gone) {
+            refresh()
+            return
+        }
+        dropSession(forget = true)
         io { saveLocal(LocalAccount()) }
         phaseFlow.value = AppPhase.SignedOut
     }
@@ -1500,6 +1532,9 @@ class VaultManager(
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16
         private const val CODE_NO_BACKUP = "no_backup"
+
+        /** [vaultGuard]'s code for a Keystore failure: this phone's stored state for the vault could not be read. */
+        private const val CODE_KEYSTORE = "keystore"
         private const val CODE_NOT_AVAILABLE = "not_available"
         private const val CODE_NOT_TRANSFER = "not_transfer"
         private const val CODE_EXISTS = "exists"
@@ -1533,6 +1568,7 @@ class VaultManager(
 
         fun memberFailure(e: MemberApiException): FailureKind = when (e.code) {
             MemberApiException.UNAUTHORIZED -> FailureKind.UNAUTHORIZED
+            MemberApiException.CLOCK_SKEW -> FailureKind.CLOCK
             MemberApiException.INVALID_CODE -> FailureKind.SETUP_CODE_INVALID
             MemberApiException.TERMS_REQUIRED -> FailureKind.TERMS_REQUIRED
             MemberApiException.RATE_LIMITED -> FailureKind.RATE_LIMITED

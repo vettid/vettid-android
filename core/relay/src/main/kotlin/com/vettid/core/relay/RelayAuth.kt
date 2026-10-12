@@ -10,6 +10,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import java.util.Locale
 
 /**
  * The client side of the relay's authentication (RELAY-PROTOCOL §3.2, §4.1),
@@ -24,7 +25,8 @@ object RelayAuth {
     /** hex(SHA-256("")): the body hash of bodiless requests. */
     const val EMPTY_BODY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-    private val seconds = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss").withZone(ZoneOffset.UTC)
+    // Locale.ROOT throughout: what is signed and sent is ASCII whatever the phone's language (A6 audit R2).
+    private val seconds = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss", Locale.ROOT).withZone(ZoneOffset.UTC)
 
     /** lowercase(base32(SHA-256(pub))) without padding, first 26 characters (§3.2). */
     fun mailboxId(pub: ByteArray): String = Mailbox.id(pub)
@@ -71,7 +73,9 @@ object RelayAuth {
         val base = seconds.format(ms)
         val frac = ms.nano / NANOS_PER_MILLI
         if (frac == 0) return base + "Z"
-        return base + "." + "%03d".format(frac).trimEnd('0') + "Z"
+        // Never the default locale: "%03d" writes the language's own digits (Persian, Arabic, Bengali...), which made
+        // the signed timestamp header non-ASCII and every relay request fail (A6 audit R2).
+        return base + "." + String.format(Locale.ROOT, "%03d", frac).trimEnd('0') + "Z"
     }
 
     /** The signed-request headers for one attempt; the timestamp header is signed verbatim. */

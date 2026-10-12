@@ -85,6 +85,37 @@ class AppLockTest {
         assertTrue(k.contentEquals(again.appDataKey()))
     }
 
+    /**
+     * A6 audit P4: whatever fails at start, the lock leaves "pending" (the root shows "Opening VettID" over everything
+     * while it is pending). A wrapped key that cannot be read is a lock that cannot open: off, with the notice.
+     */
+    @Test
+    fun aKeyFileThatCannotBeReadTurnsTheLockOffInsteadOfLeavingItPending() = runTest {
+        prefs.setAppLockEnabled(true)
+        keys.create(AppLockMethod.BIOMETRICS)
+        val unreadable = object : WrappedKeyFile {
+            override fun read(): ByteArray? = throw java.io.IOException("EIO")
+            override fun write(b: ByteArray) = Unit
+            override fun delete() = Unit
+        }
+        val l = AppLock(prefs, keys, unreadable) { clock }
+        l.start()
+        assertEquals(AppLockState.DISABLED, l.state.value)
+        assertTrue("the member is told that the lock turned itself off", l.invalidated.value)
+        assertFalse(prefs.current.value.appLockEnabled)
+    }
+
+    @Test
+    fun aPreferenceThatCannotBeWrittenAtStartDoesNotLeaveTheLockPending() = runTest {
+        val readOnly = object : com.vettid.core.data.prefs.PreferencesRepository by prefs {
+            override suspend fun setAppLockEnabled(enabled: Boolean) = throw java.io.IOException("read-only")
+        }
+        prefs.setAppLockEnabled(true) // on, but its key is gone: start turns it off and tries to write that down
+        val l = AppLock(readOnly, keys, file) { clock }
+        l.start()
+        assertEquals(AppLockState.DISABLED, l.state.value)
+    }
+
     @Test
     fun timeoutLocksOnlyAfterTheChosenTime() = runTest {
         val l = lock()

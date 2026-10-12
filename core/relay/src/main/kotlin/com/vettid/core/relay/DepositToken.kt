@@ -14,6 +14,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoUnit
+import java.util.Locale
 
 /** A token's optional deposit cap (RELAY-PROTOCOL §5.2). */
 data class Quota(val msgs: Long? = null, val bytes: Long? = null)
@@ -55,7 +56,7 @@ data class TokenClaims(
         const val SCOPE_DEPOSIT_OPEN = "deposit_open"
         const val OPEN_SUB = "*"
         const val MAX_JTI_LEN = 128
-        private val rfc3339 = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC)
+        private val rfc3339 = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss'Z'", Locale.ROOT).withZone(ZoneOffset.UTC)
 
         /** Decodes and structurally validates claim JSON (unknown claims are ignored). */
         @Suppress("CyclomaticComplexMethod")

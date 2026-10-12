@@ -2,19 +2,27 @@ package com.vettid.core.data.prefs
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.preferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import java.io.File
+import java.io.IOException
 
 /** The app's theme choice. */
 enum class ThemePreference { SYSTEM, LIGHT, DARK }
@@ -80,6 +88,11 @@ data class AppPreferences(
     /** The one-time note "VettID now notifies you in the background" was shown. */
     val notificationsNoteShown: Boolean = false,
     val push: PushMemory = PushMemory(),
+    /**
+     * The preferences file was corrupt and was replaced by an empty one (A6 audit P4): every preference is back at
+     * its default (the app lock is off) until the member has been told ([PreferencesRepository.acknowledgeReset]).
+     */
+    val wasReset: Boolean = false,
 ) {
     /** The mode in effect. */
     val effectiveNotificationMode: NotificationMode get() = notificationMode ?: NotificationMode.SERVICE
@@ -114,19 +127,47 @@ interface PreferencesRepository {
 
     suspend fun setPushMemory(m: PushMemory)
 
+    /** The member saw the notice that the preferences were reset ([AppPreferences.wasReset]). */
+    suspend fun acknowledgeReset() {}
+
     /** Back to the defaults of a fresh install (the wipe of a replaced phone). */
     suspend fun clear()
 }
 
-private val Context.vettIdPrefs: DataStore<Preferences> by preferencesDataStore(name = "vettid_preferences")
+/**
+ * The preferences file. Nothing in it is a key or identifies the device or the vault (theme, app lock settings,
+ * notification choices), so a file that cannot be parsed is replaced by an empty one that only remembers that it
+ * happened ([PreferencesFiles.RESET], shown as a notice): without this, every read of the preferences threw, the app lock never
+ * left "pending" and the app stayed on its start screen for good (A6 audit P4). The stores that do hold keys or the
+ * device's identity (`KeystoreFileStore` files) are never replaced this way.
+ */
+private val Context.vettIdPrefs: DataStore<Preferences> by preferencesDataStore(
+    name = "vettid_preferences",
+    corruptionHandler = PreferencesFiles.corruptionHandler,
+)
+
+/** How the preferences file is opened: the same corruption handling for the app's store and for tests of it. */
+internal object PreferencesFiles {
+    /** Set in the file that replaced a corrupt one, until the member has seen the notice. */
+    val RESET = booleanPreferencesKey("preferences_were_reset")
+    val corruptionHandler = ReplaceFileCorruptionHandler<Preferences> { preferencesOf(RESET to true) }
+
+    /** The store on [file] (`*.preferences_pb`), as the app opens its own. */
+    fun open(file: File, scope: CoroutineScope): DataStore<Preferences> =
+        PreferenceDataStoreFactory.create(corruptionHandler = corruptionHandler, scope = scope) { file }
+}
 
 /** [PreferencesRepository] on Jetpack DataStore. */
 @Suppress("TooManyFunctions")
-class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
-    private val store = context.applicationContext.vettIdPrefs
+class DataStorePreferencesRepository internal constructor(private val store: DataStore<Preferences>) : PreferencesRepository {
+    constructor(context: Context) : this(context.applicationContext.vettIdPrefs)
 
-    override val preferences: Flow<AppPreferences> = store.data.map { p ->
+    // A file that cannot be read at all (an I/O error, not a corrupt file) reads as the defaults; it is not replaced.
+    private val data: Flow<Preferences> = store.data.catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+
+    override val preferences: Flow<AppPreferences> = data.map { p ->
         AppPreferences(
+            wasReset = p[PreferencesFiles.RESET] ?: false,
             theme = p[THEME]?.let { runCatching { ThemePreference.valueOf(it) }.getOrNull() } ?: ThemePreference.SYSTEM,
             appLockEnabled = p[APP_LOCK] ?: false,
             appLockTimeout = p[APP_LOCK_TIMEOUT]?.let { AppLockTimeout.of(it) } ?: AppLockTimeout.DEFAULT,
@@ -166,6 +207,10 @@ class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
 
     override suspend fun setAppLockMethod(method: AppLockMethod) {
         store.edit { it[APP_LOCK_METHOD] = method.name }
+    }
+
+    override suspend fun acknowledgeReset() {
+        store.edit { it.remove(PreferencesFiles.RESET) }
     }
 
     override suspend fun setReleaseNoticeDismissed(d: ReleaseNoticeDismissal) {
@@ -247,6 +292,8 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setNotificationsNoteShown() = state.update { it.copy(notificationsNoteShown = true) }
 
     override suspend fun setPushMemory(m: PushMemory) = state.update { it.copy(push = m) }
+
+    override suspend fun acknowledgeReset() = state.update { it.copy(wasReset = false) }
 
     override suspend fun clear() {
         state.value = AppPreferences()

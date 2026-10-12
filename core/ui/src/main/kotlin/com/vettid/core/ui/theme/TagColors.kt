@@ -154,7 +154,8 @@ object TagColors {
         return tag to stored[if (counts[h] == least) h else counts.indexOfFirst { it == least }]
     }
 
-    private fun hex(c: Color): String = "#%06x".format(c.toArgb() and RGB)
+    /** A stored colour (`#rrggbb`): ASCII whatever the phone's language (A6 audit R2). */
+    private fun hex(c: Color): String = String.format(java.util.Locale.ROOT, "#%06x", c.toArgb() and RGB)
 
     private const val FNV_OFFSET = 0x811C9DC5L
     private const val FNV_PRIME = 0x01000193L

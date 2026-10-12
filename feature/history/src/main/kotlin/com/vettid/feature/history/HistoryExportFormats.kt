@@ -14,6 +14,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Base64
+import java.util.Locale
 
 /**
  * One entry of a History export as History shows it (VAULT-MESSAGING 0.22.0 §10.9): the vault's [record], the app's
@@ -58,8 +59,8 @@ data class ExportHeader(
 
 /** The History export's file name and `ts` text (§10.9: `vettid-history-<YYYYMMDD>-<HHMMSS>.<csv|json>`, UTC). */
 object ExportFiles {
-    private val nameTime: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC)
-    private val ts: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
+    private val nameTime: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT).withZone(ZoneOffset.UTC)
+    private val ts: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT).withZone(ZoneOffset.UTC)
 
     fun fileName(at: Instant, format: ExportFormat): String = "vettid-history-${nameTime.format(at)}.${format.extension}"
 
@@ -110,7 +111,7 @@ object HistoryCsv {
     /** A base64 hash as 64 lowercase hex digits; empty when absent or unreadable. */
     fun hex(b64: String): String {
         val b = b64.takeIf { it.isNotEmpty() }?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
-        return b?.joinToString("") { "%02x".format(it.toInt() and BYTE_MASK) }.orEmpty()
+        return b?.joinToString("") { String.format(Locale.ROOT, "%02x", it.toInt() and BYTE_MASK) }.orEmpty()
     }
 
     private const val BYTE_MASK = 0xFF
