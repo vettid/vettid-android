@@ -706,8 +706,11 @@ class VaultDevice private constructor(
     ): String = lock.withLock { sendLocked(id, type, body, null, null, null) }
 
     /**
-     * Seals a message and deposits it **once**: it is never written to the outbox and never sent again, and a relay
-     * failure is the caller's to handle. For messages that mean nothing later (call signalling, §10.10: a
+     * Seals a message and hands it to the relay client **once**: it is never written to the outbox, so it is not
+     * sent again by a later flush or after a restart, and a relay failure is the caller's to handle. (Within that
+     * one hand-over the relay client may repeat the same envelope on 429, 5xx or a transport error, as for any
+     * deposit, waiting `retry_after` where the relay gives one (RELAY-PROTOCOL 0.7.0); the vault drops a second
+     * copy by its inner id.) For messages that mean nothing later (call signalling, §10.10: a
      * `call.start` or `call.answer` re-sent after a restart would place or answer a call nobody is in; `call.ice`
      * and `call.ringing` are ephemeral and carry [exp]). Returns the inner id.
      */

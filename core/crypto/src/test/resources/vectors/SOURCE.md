@@ -14,8 +14,8 @@ TEST-ONLY.
 
 `calls.json` (VAULT-MESSAGING §10.10, CALLS-PLAN phase C1) was added later and has its own source:
 
-- Source commit: daac0d32b85c330eceff7d3b00c6aaed01fc6715 (vettid-vault PR #67, "Call test vectors"; branch
-  `vectors/calls`, not merged when copied: update this line to the merge commit when it is)
+- Source commit: 079cde77a4792f15812c5908d0fa51d68ee2313f (vettid-vault `main`, the merge of PR #67 "Call test
+  vectors"; the file is byte for byte the one copied from the PR's commit daac0d32)
 - The code it was generated through (`vms/callwire`, `vms/suite`) is identical at that commit and at the tag
   `release/staging/10` (8678752): the vectors describe what staging release 10 does.
 - Copied: 2026-10-12. Checked by `CallVectorsTest` in `:core:crypto`.

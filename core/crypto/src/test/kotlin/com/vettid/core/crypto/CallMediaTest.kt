@@ -14,6 +14,7 @@ import org.junit.Test
 class CallMediaTest {
     private val offer =
         "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n"
+    private val opus = "a=rtpmap:111 opus/48000/2\r\n"
     private val s1 = MediaSuite.AES_128_GCM
     private val s2 = MediaSuite.AES_256_GCM
     private val kCall = ByteArray(32) { (it * 7).toByte() }
@@ -171,6 +172,26 @@ class CallMediaTest {
         for (sdp in bad) assertThrows(sdp, CryptoException.Suite::class.java) { CallMedia.offeredIn(sdp) }
         assertThrows(CryptoException.Suite::class.java) { CallMedia.chosenIn(offer, listOf(1)) }
         assertThrows(CryptoException.Suite::class.java) { CallMedia.chosenIn(CallMedia.sdpWithOffer(offer, listOf(1)), listOf(1)) }
+    }
+
+    /** Review F1: media in a section the frame cryptors do not cover would play unencrypted. */
+    @Test
+    fun onlyOneAudioSectionWithOpusAloneIsACall() {
+        CallMedia.requireOneOpusAudioSection(offer + opus)
+        CallMedia.requireOneOpusAudioSection((offer + opus).replace("\r\n", "\n"))
+        CallMedia.requireOneOpusAudioSection(offer.replace(" 111\r\n", " 111 63\r\n") + opus + "a=rtpmap:63 OPUS/48000/2\r\n")
+        val bad = listOf(
+            "v=0\r\ns=-\r\n", // no media
+            offer + opus + "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\n", // a second audio section
+            offer + opus + "m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\n",
+            offer + opus + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n",
+            (offer + opus).replace("m=audio", "m=video"),
+            offer, // no rtpmap for its payload type
+            offer.replace(" 111\r\n", " 111 0\r\n") + opus, // Opus and something else
+            offer + "a=rtpmap:111 PCMU/8000\r\n",
+            "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF\r\n",
+        )
+        for (sdp in bad) assertThrows(sdp, CryptoException.Protocol::class.java) { CallMedia.requireOneOpusAudioSection(sdp) }
     }
 
     @Test

@@ -111,6 +111,31 @@ object CallMedia {
         return lines(sdp).filterNot { it.startsWith("a=$ATTR_OFFERED:") || it.startsWith("a=$ATTR_CHOSEN:") }.joinToString(eol)
     }
 
+    /**
+     * The only shape of SDP a VettID device makes or takes today: **exactly one media section, audio, Opus alone**.
+     * A device prepares frame encryption for one audio section before it applies the other side's SDP; any further
+     * section (a second audio section, video, a data channel) would be media that no frame cryptor covers, so an
+     * offer or an answer with one is refused before it reaches the media stack (an offer does not ring).
+     */
+    fun requireOneOpusAudioSection(sdp: String) {
+        val all = lines(sdp)
+        val media = all.filter { it.startsWith("m=") }
+        if (media.size != 1) throw CryptoException.Protocol("sdp: ${media.size} media sections")
+        val parts = media[0].removePrefix("m=").split(' ')
+        if (parts.size < M_LINE_MIN || parts[0] != "audio") throw CryptoException.Protocol("sdp: not one audio section")
+        val payloads = parts.drop(M_LINE_MIN - 1)
+        val opus = all.filter { it.startsWith(RTPMAP) }.mapNotNull { l ->
+            val (pt, codec) = l.removePrefix(RTPMAP).split(' ', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+            pt.takeIf { codec.substringBefore('/').equals("opus", ignoreCase = true) }
+        }.toSet()
+        if (payloads.any { it !in opus }) throw CryptoException.Protocol("sdp: a codec other than Opus")
+    }
+
+    private const val RTPMAP = "a=rtpmap:"
+
+    /** `m=<media> <port> <proto> <fmt>`: at least one format. */
+    private const val M_LINE_MIN = 4
+
     private fun number(s: String): Int {
         if (s.isEmpty() || s.length > 5 || s[0] == '0' || !s.all { it in '0'..'9' }) throw CryptoException.Suite("media suite number")
         return s.toInt()

@@ -213,31 +213,44 @@ private fun verifyPeerShare(o: JsonObject, message: ByteArray) = checked("key-ex
     )
 }
 
-private fun sdpOf(o: JsonObject): String = o.need("sdp").also {
-    if (it.isEmpty() || it.toByteArray(Charsets.UTF_8).size > CallLimits.MAX_SDP) throw CallMessageException("sdp size")
+private fun sdpOf(o: JsonObject): String = o.need("sdp").also(::checkSdp)
+
+/**
+ * The size of §10.10 and the one shape a VettID call has: exactly one media section, audio, Opus alone. Anything
+ * else would be media outside the frame encryption (CALL-MEDIA.md §7), so it never reaches the media stack.
+ */
+private fun checkSdp(sdp: String) {
+    if (sdp.isEmpty() || sdp.toByteArray(Charsets.UTF_8).size > CallLimits.MAX_SDP) throw CallMessageException("sdp size")
+    checked("sdp") { CallMedia.requireOneOpusAudioSection(sdp) }
 }
 
 /**
  * `call.start`: places a call to [connectionId] with this device's SDP offer [sdp]; [suites], what this device's
  * media engine can do, are added to it here, the preferred one first. A fresh `call_id` and ephemeral KEM key, the
- * share signed with the device's identity key. Deposited once and awaited for [CallLimits.START_TIMEOUT]. Errors
+ * share signed with the device's identity key. Deposited once and awaited for [timeout]. Errors
  * ([VaultOpException]): `busy` (this vault is already in a call), `not_found`, `connection_unavailable`,
  * `owner_check_required`, `exists`, `bad_request`, `internal`, and `unsupported_type` from a vault release without
- * calls.
+ * calls. When it fails in any other way after the request may have left (no answer in time, a lost response, an
+ * answer that does not verify), a durable `call.end{hangup}` for the same `call_id` follows, so that a call the
+ * vault did place does not ring on for nobody.
  */
 suspend fun VaultApi.callStart(
     connectionId: String,
     sdp: String,
     suites: Collection<MediaSuite> = MediaSuite.DEFAULT,
     media: String = CallWire.MEDIA_AUDIO,
+    timeout: Duration = CallLimits.START_TIMEOUT,
 ): OutgoingCall {
     val callId = device.newId()
     val offered = checked("media suites") { CallMedia.offerOf(suites) }
     val offer = CallMedia.sdpWithOffer(sdp, offered)
-    if (offer.toByteArray(Charsets.UTF_8).size > CallLimits.MAX_SDP) throw CallMessageException("sdp size")
+    checkSdp(offer)
     val key = CallWire.newOfferKey()
+    var attempted = false
     try {
         val ek = key.publicKey.bytes()
+        val share = device.signCallShare(CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek))
+        attempted = true
         val o = device.opOnce(
             "call.start",
             buildJsonObject {
@@ -246,15 +259,23 @@ suspend fun VaultApi.callStart(
                 put("media", media)
                 put("sdp", offer)
                 put("ek", Base64s.encodeStd(ek))
-                put("ek_sig", Base64s.encodeStd(device.signCallShare(CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek))))
+                put("ek_sig", Base64s.encodeStd(share))
             },
-            CallLimits.START_TIMEOUT,
+            timeout,
         )
         if (o.need("call_id") != callId) throw CallMessageException("call.start answered for another call")
         val exp = checked("exp") { Timestamps.parseMillis(o.need("exp")) }
         return OutgoingCall(callId, connectionId, media, exp, iceOf(o, callId), offered, key)
+    } catch (e: VaultOpException) {
+        // The vault's own refusal: there is no call.
+        key.destroy()
+        throw e
     } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
         key.destroy()
+        // No answer in time, an HTTP response that was lost, or an answer that does not verify: the vault may have
+        // taken the call and sent the offer on, and nothing here could end it later. The durable hang-up does (a
+        // vault that never saw the call ignores it).
+        if (attempted) runCatching { callEnd(callId, CallReason.HANGUP) }
         throw e
     }
 }
@@ -295,7 +316,7 @@ suspend fun VaultApi.callAnswer(
 ): CallKeys {
     val chosen = checked("media suites") { CallMedia.choose(call.offered, suites) }
     val answer = CallMedia.sdpWithChoice(sdp, chosen.chosen)
-    if (answer.toByteArray(Charsets.UTF_8).size > CallLimits.MAX_SDP) throw CallMessageException("sdp size")
+    checkSdp(answer)
     val a = checked("key agreement") { CallWire.answer(call.ek, call.callId) }
     val keys = CallKeys.derive(a.kCall, chosen, call.callId, caller = false)
     try {

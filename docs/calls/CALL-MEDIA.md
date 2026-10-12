@@ -16,7 +16,8 @@ Marks: **[S]** read from the media stack's source, **[I]** inferred, **[D]** con
 | Call key | `k_call`, 32 bytes, agreed between the two devices (VAULT-MESSAGING §10.10; unchanged) |
 | Media suite | a number from one closed registry (§2). **1 = AES-128-GCM frames**, the suite of every call today; **2 = AES-256-GCM frames**, registered, offered by no engine yet |
 | Negotiation | in the SDP: the caller lists its suites in order of preference, the answerer names one (§2.1) |
-| Downgrade protection | the choice and the caller's whole list are in the key derivation: a changed attribute gives no media, never a weaker suite (§2.2) |
+| Downgrade protection | the choice and the caller's whole list are in the key derivation: after a changed attribute nothing is heard, on any suite; audio may be sent under the weaker suite's keys until the failure is seen (§2.2) |
+| SDP shape | exactly one media section: audio, Opus alone; anything else is refused before the media stack sees it (§2.1, §7) |
 | Keys | two direction keys of 32 bytes from `k_call` (§3) |
 | Frame key | the suite's first 16 or 32 bytes of `HKDF-SHA-256(direction key, "vettid/vms/2/call-frame", 128 zero bytes)` (§4) |
 | Frame | `clear header ‖ ciphertext ‖ tag(16) ‖ IV(12) ‖ 0x0C ‖ 0x00` (§5) |
@@ -48,11 +49,21 @@ switch exists for measurement).
 - The **answer**'s SDP carries one session-level attribute `a=vettid-media-suite:<n>`: the first suite of the
   caller's list, **in the caller's order**, that the answerer can do. Numbers the answerer does not know are
   skipped (a newer caller may list suites an older answerer has never heard of).
-- A device MUST NOT ring for an offer, and MUST NOT use an answer, in which the attribute is missing, repeated, not
-  at session level or malformed. The caller MUST refuse an answer whose suite is not in the list **it sent** (its
-  own copy, never a list read back from anywhere) or is not in its registry. An answerer with no suite in common
-  ends the call (`call.end{failed}`). In each case the member is told that the call could not be encrypted; the
-  call never continues on another suite or without one.
+- **One audio section.** An offer or an answer has exactly one `m=` line; it is `m=audio`, and every payload type
+  on it has an `a=rtpmap` whose codec is `opus`. A device MUST refuse any other SDP before it reaches its media
+  stack: a second audio section, video or a data channel would be media that the frame encryption prepared for the
+  one audio section does not cover (§7 rule 2).
+- The attribute names are case-sensitive and lower-case as written; lines end in CRLF or LF. `offered` in the key
+  derivation (§3) is the **parsed list written again** (decimal numbers joined by one space), which for a
+  well-formed attribute is its value byte for byte; a value that is not in that form is malformed.
+- **What a callee's device does with an offer it cannot use** (attribute missing, repeated, not at session level
+  or malformed; more or other than one Opus audio section; no suite in common): it does not ring and **sends
+  nothing**, as for a share that does not verify (§10.10). Another of the member's devices may be able to take the
+  call; if none does, the caller's ring time runs out and it sends `call.end{timeout}`.
+- **What a caller's device does with an answer it cannot use** (the same faults; a suite that is not in the list
+  **it sent**, its own copy, never a list read back from anywhere; a suite not in its registry): it uses nothing
+  of the answer, sends `call.end{failed}` and tells the member that the call could not be encrypted.
+- A call never continues on another suite or without one.
 - A device hands the SDP to its media stack without these attributes (they are VettID's, not the stack's).
 - Why the SDP: at S10 the vault builds `call.offer` and `call.answer` from named members and passes `sdp` through as
   an opaque string, so this is the only place that reaches the other device without a vault change. Unknown SDP
@@ -68,17 +79,30 @@ from the list it sent and the choice it read; the answerer from the list it read
 
 | Someone on the path… | Result |
 |---|---|
-| cuts the offer's list down (`2 1` → `1`) or reorders it | the answerer picks from the changed list; the caller derives with the list it sent. Different keys on the two devices: no frame decrypts, the receivers report it and the call ends `failed` (§7). **No call on suite 1** |
+| cuts the offer's list down (`2 1` → `1`) or reorders it | the answerer picks from the changed list; the caller derives with the list it sent. Different keys on the two devices: no frame decrypts, the receivers report it and the call ends `failed` (§7). **Nothing is heard on suite 1** |
 | rewrites the answer's choice (`2` → `1`) | the answerer encrypts for 2, the caller derives for 1: different keys, the same ending |
 | rewrites the choice to a suite that was not offered, or to an unknown number, or removes an attribute | refused when it is read; no ringing, or no media |
 
-**Can an attacker who can alter the SDP force suite 1 when both devices support 2? No.** The most such an attacker
-can do is make the call fail, which a vault on the path can do in simpler ways (dropping the offer). A call that
-connects and plays audio has, on both devices, the same suite and the same view of what was offered. What it costs
-at S10: a tampered negotiation is discovered only when media fails to decrypt (within a fraction of a second of
-the first frames), not at signalling time, and the two devices cannot tell tampering from a fault. With one suite
-in use there is nothing to downgrade to; the binding is there so that the day suite 2 is offered, nothing about
-the derivation has to change.
+**Can an attacker who can alter the SDP make two devices that both support suite 2 talk on suite 1?** Not so that
+anything is **heard**: a call in which audio plays has, on both devices, the same suite and the same view of what
+was offered. But the claim is about audio played, not audio **sent**. After a cut list both devices hold suite 1
+keys (different ones) and each starts sending microphone audio encrypted under its own; the tampering is noticed
+only when a receiver fails to decrypt the other's frames. An attacker who also **drops the media packets** keeps
+both receivers from ever seeing a frame, so neither reports a failure, and both devices go on sending audio under
+suite 1 keys until someone hangs up. The attacker does not hold those keys (they come from `k_call`), so this
+gains them ciphertext under the weaker suite, not the audio; it is still more than "no call". At S10 this cannot
+matter: only suite 1 is offered. What else it costs at S10: a tampered negotiation is discovered when media fails
+to decrypt, not at signalling time, and the devices cannot tell tampering from a fault.
+
+**Required before any device offers a second suite** (not built in C1): no microphone audio under keys the other
+device has not confirmed. Either of:
+
+1. *Key confirmation in the answer.* The SDP answer carries `a=vettid-media-confirm:<base64>` =
+   HMAC-SHA-256 under a key derived from `k_call` (its own HKDF label) over `chosen || 0x00 || offered-as-seen ||
+   0x00 || call_id`. The caller checks it when it takes the answer and refuses a mismatch before it sets a key;
+   the callee keeps its microphone track disabled until its receiving cryptor first reports OK (which it does only
+   for frames under the keys it derived).
+2. *C2's signed members*, below, which make the list and the choice unalterable in the first place.
 
 **What C2's signed field changes.** Carried as signed members (in the share's signed bytes: the caller's list in
 the offer share, the choice in the answer share), the negotiation is authenticated by the two devices' identity
@@ -126,7 +150,7 @@ Key provider options, fixed for every platform **[P]**:
 | `uncryptedMagicBytes` | empty | otherwise a frame ending in them is played without decryption **[S]** |
 | `failureTolerance` | 10 | decryption failures after which the receiver reports `DECRYPTIONFAILED` (§7) |
 | `keyRingSize` | 1 | key index 0 only |
-| `discardFrameWhenCryptorNotReady` | true | |
+| `discardFrameWhenCryptorNotReady` | true | belt only: it concerns empty frames (§5), and upstream's `KeyProviderOptions` copy constructor does not copy it, so its value inside the provider is not determined **[S]**. Nothing here relies on it: "a sender without a key sends nothing" (§7 rule 3) rests on the missing-key path, which drops every non-empty frame whatever this option is |
 
 One sender cryptor (on the audio sender, participant id `send`) and one receiver cryptor (on the audio receiver,
 participant id `receive`); `setKey("send", 0, k_dir(mine))`, `setKey("receive", 0, k_dir(theirs))`. The participant
@@ -157,7 +181,8 @@ out      = header || sealed || iv || 0x0C || key_index                          
 - The receiver reads the IV and the key index from the frame. A frame that fails authentication is **dropped**: the
   decoder gets nothing, so the listener hears silence, never noise or clear audio.
 - The two trailer bytes are not authenticated (changing them only makes the frame undecryptable) **[I]**.
-- An empty frame passes through unchanged in both directions.
+- An empty frame (length 0) passes through unchanged in both directions, with or without a key: it carries
+  nothing.
 
 ## 6. Properties and limits
 
@@ -165,8 +190,10 @@ out      = header || sealed || iv || 0x0C || key_index                          
   so the frame cipher is the weakest part of a call's confidentiality. The owner accepted it for a first
   production release of calls (2026-10-12); suite 2 follows when the media stack can do it (§2).
 - **The IV is deterministic.** It is unique under a key while (SSRC, RTP timestamp) does not repeat with the same
-  counter value: within one RTP stream until the timestamp wraps (about 24.8 hours of Opus at 48 kHz). The vault
-  stops counting a call as live after 12 hours. One key per direction removes the cross-sender case.
+  counter value: within one RTP stream until the timestamp wraps (about 24.8 hours of Opus at 48 kHz). One key per
+  direction removes the cross-sender case. **A device SHOULD end a call 12 hours after it was answered**
+  (`call.end{hangup}`): the vault stops counting the call as live then, and it keeps every call well inside the
+  wrap. (Not built in C1 PR 2; it comes with the service in PR 3.)
 - **No replay protection** at this layer (SRTP's replay window underneath covers the network; a TURN server holds
   no SRTP key) **[S]**.
 - **A new offer/answer inside a call** (`call.update`, C4) may keep the keys only if the RTP streams keep their
@@ -183,12 +210,19 @@ out      = header || sealed || iv || 0x0C || key_index                          
    in `logcat` with logging off **[D]**.)
 2. **Both cryptors are created and enabled before any SDP is applied**, and never disabled during a call: a
    disabled cryptor passes clear audio in both directions **[S]**. A sender cryptor needs its track first (it
-   dereferences the sender's track) **[S]**.
+   dereferences the sender's track) **[S]**. **No media exists outside them:** the SDP is checked to be one Opus
+   audio section before it is applied (§2.1), and after the other side's SDP has been applied the device checks
+   that its peer connection has exactly one transceiver and that it is the one carrying the cryptors; anything
+   else ends the call as not encrypted. (An offer with a second audio section would otherwise get a receiver of
+   its own, with no cryptor, whose audio plays under DTLS-SRTP alone while the encrypted section stays silent and
+   reports nothing.)
 3. **A sender without a key sends nothing** (`MISSINGKEY`) **[S]**: the calling device, which has no key before the
    answer, therefore sends no audio until it has set its key.
 4. **Media that does not decrypt under the call's keys is never played**, and the call does not continue without
-   it: on `DECRYPTIONFAILED` (or a persistent `MISSINGKEY`) of the receiver the device ends the call with
-   `call.end{failed}` and says that the call could not be encrypted. It does not set the key again: a receiver that
+   it: on `DECRYPTIONFAILED` of the receiver, on any cryptor error, or on a `MISSINGKEY` report once the keys
+   have been set and media flows (the first one: with keys set it cannot be a transient state), the device ends
+   the call with `call.end{failed}` and says that the call could not be encrypted. A `MISSINGKEY` before the keys
+   are set is the expected state of rule 3 and ends nothing. It does not set the key again: a receiver that
    reported `DECRYPTIONFAILED` drops every further frame until its key is set **[S]** **[D]**, and with one fresh
    key a call a second attempt with the same key cannot succeed where the first did not.
 5. The failure count is not consecutive: only setting a key resets it **[S]**. With a tolerance of 10 a wrong key is
@@ -221,7 +255,9 @@ sealed 780a14a5d44d9ba28ccf9ad78a82e7855c69d9584297c8aef4c5bf19d8a503b6d6aae36a1
 ## 9. Edits this needs in vettid.org's documents
 
 - **VAULT-MESSAGING §10.10**: a subsection "Media suites and keys" with §2–§4 (the registry, the two SDP
-  attributes, the refusal rules, what protects the negotiation at S10, the derivation); "the callee gathers no candidates before answering"; "media that does not decrypt is never
+  attributes, one Opus audio section, the refusal rules and what each side sends, what protects the negotiation at
+  S10 and the requirement before a second suite is offered, the derivation); a device ends a call 12 h after the
+  answer; a `call.start` that fails after it may have left is followed by `call.end{hangup}`; "the callee gathers no candidates before answering"; "media that does not decrypt is never
   played, and the call ends `failed`"; the calling device sends `call.end{timeout}` at `exp` and the callee's
   devices do not; a device ends its own stale calls after unlock (until V2 and V3 are in the vault).
 - **VAULT-MESSAGING §10 (the call key)**: `k_call` is input to the direction keys, not a frame key.
