@@ -280,6 +280,8 @@ app-full-staging.apk: CALL-TEST build, signers [2fed27b72746797a931fd414ff3dac4c
   `checkStagingApk` never passes one. Without `-PvettidCallsTest=true` it prints `not a call-test build`.
 - Signed with any other key than the automation key (the staging channel's `development` signer) it fails; unsigned
   (no properties file) it passes.
+- **The switches stay as they were set**: across calls, and across a lock and unlock (they are reset only by
+  "All off" and by the end of the process). Tap "All off" between tests, on both phones.
 - In the app: a red banner on every screen ("VettID call tests (test build)…") opens the test screen. Its switches
   work only after an unlock at which the vault reported this app's signer class as `development`; until then, and
   with any other signer, they are refused. The manifest's `com.vettid.app.CALLS_TEST` meta-data is `true`.

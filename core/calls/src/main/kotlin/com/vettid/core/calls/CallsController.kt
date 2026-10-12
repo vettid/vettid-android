@@ -311,6 +311,9 @@ class CallsController(
         supported = null
         testsAllowedFlow.value = false
         machine.vaultLocking()
+        // Nothing of a call is kept for the next unlock: an ended call's line (this one's "…your vault was locked"
+        // included, which nobody can see behind the unlock screen) would show then, long after.
+        machine.dismiss()
         publish()
     }
 
@@ -361,7 +364,12 @@ class CallsController(
         const val HISTORY_LIMIT = 200
         val MAX_CALL: Duration = Duration.ofHours(12)
 
-        /** A `ringing` record older than this is not ringing any more (an offer lives 45 s, 90 at most). */
+        /**
+         * A `ringing` record older than this is not ringing any more. Two minutes: an offer lives 45 s (90 s is the
+         * most a vault accepts), and the record's time is the vault's while "now" is this phone's, so the rest is
+         * margin for their clocks and for a hang-up on its way. Erring long only shows a finished call as going on
+         * for a moment; erring short would end a call that is still ringing.
+         */
         val RING_STALE: Duration = Duration.ofMinutes(2)
         private val PROBE_RETRY: Duration = Duration.ofSeconds(2)
         private const val PROBE_ATTEMPTS = 3

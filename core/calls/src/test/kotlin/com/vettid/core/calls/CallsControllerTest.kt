@@ -272,9 +272,29 @@ class CallsControllerTest {
         // Locking the vault ends the call.
         vault.unlocked.value = false
         runCurrent()
-        assertEquals(CallEnd.LOCKED, (c.state.value as CallState.Ended).reason)
+        // Review P1 of #128: and nothing of it is kept for the next unlock (no ended line from before the lock).
+        assertEquals(CallState.Idle, c.state.value)
         assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
         assertTrue(!audio.on && !audio.ringBack)
+    }
+
+    /** Review P1 of #128: a call that had ended, its line still on the screen, when the vault locks. */
+    @Test
+    fun anEndedCallIsNotShownAgainAfterTheNextUnlock() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        c.hangUp()
+        runCurrent()
+        assertTrue(c.state.value is CallState.Ended)
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
     }
 
     @Test

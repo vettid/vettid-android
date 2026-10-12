@@ -3,6 +3,7 @@ package com.vettid.feature.calls
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.calls.AudioRoute
+import com.vettid.core.calls.CallPhase
 import com.vettid.core.calls.CallState
 import com.vettid.core.calls.CallsController
 import com.vettid.core.calls.MicrophoneRequest
@@ -50,9 +51,17 @@ class CallViewModel @Inject constructor(private val calls: CallsController) : Vi
 
     init {
         viewModelScope.launch { calls.microphoneNeeded.collect { r -> prompt.update { r } } }
+        // The prompt for answering a call goes when that call does (the caller gave up, or it ended another way).
+        viewModelScope.launch { calls.state.collect { call -> prompt.update { p -> p?.takeIf { stillWanted(it, call) } } } }
     }
 
     fun answer() = calls.answer()
+
+    companion object {
+        /** Whether a microphone prompt still has something to do: a call to place always, an answer only while it rings. */
+        fun stillWanted(request: MicrophoneRequest, call: CallState): Boolean =
+            request.call != null || (call as? CallState.Live)?.phase == CallPhase.INCOMING
+    }
 
     fun decline() = calls.decline()
 

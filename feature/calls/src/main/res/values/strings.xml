@@ -44,6 +44,10 @@
     <string name="calls_close">Close</string>
     <string name="calls_microphone_title">Allow the microphone</string>
     <string name="calls_microphone_not_now">Not now</string>
+    <!-- Android refuses the microphone without asking (drafts for the owner, 2026-10-12). -->
+    <string name="calls_microphone_blocked_title">The microphone is turned off for VettID</string>
+    <string name="calls_microphone_blocked_body">Android no longer asks. To make and answer calls, allow the microphone for VettID in the phone\'s settings.</string>
+    <string name="calls_microphone_settings">Open settings</string>
     <!-- Spoken for the two toggles when they are on. -->
     <string name="calls_muted_on">Muted</string>
     <string name="calls_speaker_on">Speaker on</string>

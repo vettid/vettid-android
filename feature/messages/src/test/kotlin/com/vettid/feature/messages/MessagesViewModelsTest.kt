@@ -12,7 +12,9 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeSocial
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -214,6 +216,27 @@ class MessagesViewModelsTest {
         calls.availability.value = CallAvailability.READY
         advanceUntilIdle()
         assertEquals(listOf("k1", "k3", "k4"), vm.uiState.value.calls.map { it.callId })
+    }
+
+    /** Review P4 of #128: read at the moment a call ends, the vault's history may not have that ending yet. */
+    @Test
+    fun theCallsAreReadOnceMoreAMomentAfterACallEnded() = runTest {
+        val t = Instant.parse("2026-10-12T10:00:00Z")
+        val calls = FakeCalls()
+        val vm = conversation(calls)
+        advanceUntilIdle()
+        calls.availability.value = CallAvailability.IN_CALL
+        advanceUntilIdle()
+        val before = calls.historyReads
+        calls.availability.value = CallAvailability.READY
+        runCurrent()
+        assertEquals(before + 1, calls.historyReads)
+        assertTrue("the vault had not taken the hang-up yet", vm.uiState.value.calls.isEmpty())
+        calls.entries = listOf(CallHistoryEntry("k9", "c2", true, CallOutcome.TALKED, t, Duration.ofSeconds(30)))
+        advanceTimeBy(2_001)
+        runCurrent()
+        assertEquals(before + 2, calls.historyReads)
+        assertEquals(listOf("k9"), vm.uiState.value.calls.map { it.callId })
     }
 
     @Test

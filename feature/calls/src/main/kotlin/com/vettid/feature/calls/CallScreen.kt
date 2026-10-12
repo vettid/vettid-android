@@ -1,6 +1,12 @@
 package com.vettid.feature.calls
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,15 +39,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -88,22 +98,55 @@ fun CallOverlay(modifier: Modifier = Modifier, content: @Composable () -> Unit) 
                 CallActions(vm::answer, vm::decline, vm::hangUp, vm::toggleMute, vm::toggleSpeaker, vm::dismiss),
             )
         }
-        if (state.microphone != null) MicrophonePrompt(state.name, vm::microphoneAnswered)
+        if (state.microphone != null) MicrophonePrompt(state.name, onAnswered = vm::microphoneAnswered)
     }
 }
 
-/** Why the microphone is asked for, then Android's own question. */
+/**
+ * Why the microphone is asked for, then Android's own question. When Android refuses without asking (the member
+ * denied it twice, or chose "Don't allow" for good), the prompt says so and offers the app's page in the phone's
+ * settings: otherwise "Allow" would do nothing, every time. [blocked] starts in that second state (the catalog).
+ */
 @Composable
-fun MicrophonePrompt(name: String?, onAnswered: (Boolean) -> Unit) {
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> onAnswered(granted) }
+fun MicrophonePrompt(name: String?, blocked: Boolean = false, onAnswered: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    var refused by remember { mutableStateOf(blocked) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        // Refused, and Android would not explain a further request: it did not ask, and will not.
+        val silent = !granted && context.activity()?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == false
+        if (silent) refused = true else onAnswered(granted)
+    }
+    if (refused) {
+        ConfirmDialog(
+            title = stringResource(R.string.calls_microphone_blocked_title),
+            text = stringResource(R.string.calls_microphone_blocked_body),
+            confirmLabel = stringResource(R.string.calls_microphone_settings),
+            onConfirm = {
+                onAnswered(false)
+                val page = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                runCatching { context.startActivity(page.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            },
+            onDismiss = { onAnswered(false) },
+            modifier = Modifier.testTag("call_microphone_blocked"),
+            dismissLabel = stringResource(R.string.calls_microphone_not_now),
+        )
+        return
+    }
     ConfirmDialog(
         title = stringResource(R.string.calls_microphone_title),
         text = stringResource(R.string.calls_microphone_body, name ?: stringResource(R.string.calls_name_unknown)),
         confirmLabel = stringResource(R.string.calls_microphone_allow),
         onConfirm = { launcher.launch(Manifest.permission.RECORD_AUDIO) },
         onDismiss = { onAnswered(false) },
+        modifier = Modifier.testTag("call_microphone"),
         dismissLabel = stringResource(R.string.calls_microphone_not_now),
     )
+}
+
+private tailrec fun Context.activity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.activity()
+    else -> null
 }
 
 /** The call, full screen: who, what is happening, and what can be done about it. */
@@ -137,12 +180,18 @@ fun CallScreen(state: CallUiState, actions: CallActions, modifier: Modifier = Mo
 @Composable
 private fun ColumnScope.LiveCall(call: CallState.Live, state: CallUiState, name: String, actions: CallActions, now: () -> Instant) {
     val line = CallTexts.phase(call.phase, call.reconnecting)
+    val clock = if (line == null) elapsed(call.activeSince, now) else null
+    val spoken = clock?.let { stringResource(R.string.calls_cd_duration, it) }
     Text(
-        text = if (line != null) stringResource(line, name) else elapsed(call.activeSince, now),
+        text = if (line != null) stringResource(line, name) else clock.orEmpty(),
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
-        modifier = Modifier.testTag("call_status"),
+        // What is happening is read out when it changes (calling, ringing, connecting, reconnecting). The ticking
+        // time is not: it would speak every second. It is read as "Call time …" when the member moves to it.
+        modifier = Modifier.semantics {
+            if (spoken != null) contentDescription = spoken else liveRegion = LiveRegionMode.Polite
+        }.testTag("call_status"),
     )
     if (call.phase == CallPhase.ACTIVE) {
         Spacer(Modifier.height(Spacing.l))
@@ -209,7 +258,7 @@ private fun ColumnScope.EndedCall(call: CallState.Ended, name: String, onDismiss
         style = MaterialTheme.typography.titleMedium,
         color = if (call.reason == CallEnd.NOT_ENCRYPTED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
-        modifier = Modifier.testTag("call_ended"),
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("call_ended"),
     )
     Spacer(Modifier.weight(1f))
     PrimaryButton(stringResource(R.string.calls_close), onDismiss, Modifier.testTag("call_close"))

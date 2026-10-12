@@ -16,9 +16,11 @@ import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -117,6 +119,9 @@ data class ConversationUiState(
  * first; incoming messages are marked read while it is open (the vault sends
  * read receipts, §10.5); send, and delete a message on this vault only.
  */
+/** After a call ended its history is read once more, this much later (the vault takes the hang-up in a moment). */
+private const val HISTORY_AGAIN_MS = 2_000L
+
 @HiltViewModel
 class ConversationViewModel @Inject constructor(
     savedState: SavedStateHandle,
@@ -136,10 +141,16 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             // The calls of this conversation: read when the vault is known to have calls, and again after each call
             // (the availability goes from "in a call" back to "ready").
-            calls.availability.collect { a ->
+            calls.availability.collectLatest { a ->
                 if (a == CallAvailability.READY) {
                     val entries = calls.history(connectionId)
                     local.update { it.copy(calls = entries) }
+                    // Read at the moment a call ends, the vault may not have taken its `call.end` yet: the call
+                    // would stay "in a call" in the list. Once more, a moment later (collectLatest: not if the
+                    // availability changed meanwhile).
+                    delay(HISTORY_AGAIN_MS)
+                    val later = calls.history(connectionId)
+                    local.update { it.copy(calls = later) }
                 }
             }
         }

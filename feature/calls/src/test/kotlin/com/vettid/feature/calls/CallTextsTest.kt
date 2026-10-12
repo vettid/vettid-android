@@ -114,4 +114,16 @@ class CallTextsTest {
             assertEquals(label, 1, CallTest.SWITCHES.count { it.second(c) })
         }
     }
+
+    /** Review P2 of #128: the microphone prompt for answering goes when the call it was for is no longer ringing. */
+    @Test
+    fun aMicrophonePromptForAnAnswerEndsWithTheRinging() {
+        val answer = com.vettid.core.calls.MicrophoneRequest(null)
+        val place = com.vettid.core.calls.MicrophoneRequest("c1")
+        val ringing = CallState.Live("c1", CallDirection.INCOMING, CallPhase.INCOMING)
+        assertTrue(CallViewModel.stillWanted(answer, ringing))
+        assertFalse("the caller gave up", CallViewModel.stillWanted(answer, CallState.Ended("c1", CallDirection.INCOMING, CallEnd.MISSED, null)))
+        assertFalse(CallViewModel.stillWanted(answer, CallState.Idle))
+        assertTrue("a call to place does not depend on another call", CallViewModel.stillWanted(place, CallState.Idle))
+    }
 }
