@@ -55,9 +55,10 @@ class ConnectionKeeper(
     @Suppress("CyclomaticComplexMethod")
     private suspend fun step(): Boolean {
         val p = vault.phase.value
+        // No vault any more: the service ends, and no last status ("connecting") is published for it to show.
+        if (ModeController.enrolled(p) == false) return false
         statusFlow.value = statusOf(p, network.value, vault.held())
         when {
-            ModeController.enrolled(p) == false -> return false
             !network.value -> {
                 backoff.onDropped()
                 network.first { it }

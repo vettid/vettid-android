@@ -659,6 +659,17 @@ object ScreenCatalog {
         "unlock.paused_preflight" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.SERVICE_PAUSED, serviceWaitSeconds = 300), NoUnlock)
         },
+        // Owner report 2026-10-11: the app's own checks of the vault's software, each with its own text (never the
+        // phone's attestation text): no PIN field, "Try again".
+        "unlock.release_unknown" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.RELEASE_UNKNOWN), NoUnlock)
+        },
+        "unlock.manifest_unavailable" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.MANIFEST_UNAVAILABLE), NoUnlock)
+        },
+        "unlock.enclave_unverified" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.ENCLAVE), NoUnlock)
+        },
         "unlock.recovery" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), recoveryPending = true), NoUnlock)
         },
@@ -842,7 +853,8 @@ object ScreenCatalog {
                 {}, {},
             )
         },
-        // "Installed from" (ANDROID-PLAN 0.1.36 §7): the vault's signer binding, per class; tapped, with the explanation.
+        // "Installed from" (ANDROID-PLAN 0.1.36 §7): the vault's signer binding, per class; tapped, with the explanation
+        // directly under the line (`settings.status_signer_details`; owner report 2026-10-11: it opened off-screen).
         "settings.status_signer_vettid" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}) },
         "settings.status_signer_google_play" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.GOOGLE_PLAY)), {}, {}) },
         "settings.status_signer_development" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.DEVELOPMENT)), {}, {}) },

@@ -15,6 +15,7 @@ import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.notify.Channels
 import com.vettid.core.notify.FeedNotifier
 import com.vettid.core.notify.ModeController
+import com.vettid.core.notify.NoVaultSweep
 import com.vettid.core.notify.PushRegistrar
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +51,9 @@ class VettIdApplication : DistributionApplication() {
     lateinit var modes: ModeController
 
     @Inject
+    lateinit var noVaultSweep: NoVaultSweep
+
+    @Inject
     lateinit var pushStartup: PushStartup
 
     @Inject
@@ -81,6 +85,8 @@ class VettIdApplication : DistributionApplication() {
         runCatching { pushStartup.start() }
         pushRegistrar.start()
         modes.start()
+        // A phone without a vault (now, or after a wipe) shows no notification of VettID.
+        noVaultSweep.start()
     }
 
     /**

@@ -47,6 +47,8 @@ class ReleaseUpdateNotifier(
     private val prefs: PreferencesRepository,
     private val scope: CoroutineScope,
     private val releaseNotes: ReleaseNotesRepository,
+    /** The phone holds no vault (the welcome screen, a wipe): nothing is posted, however late the look-up answers. */
+    private val noVault: () -> Boolean = { false },
 ) {
     fun start() {
         scope.launch {
@@ -64,8 +66,9 @@ class ReleaseUpdateNotifier(
     }
 
     private suspend fun maybeNotify(o: ReleaseUpdateOffer, lastNotified: Long) {
-        if (!ReleaseNotices.shouldNotify(o, lastNotified) || !canPost()) return
+        if (noVault() || !ReleaseNotices.shouldNotify(o, lastNotified) || !canPost()) return
         val notes = withTimeoutOrNull(NOTES_WAIT_MS) { releaseNotes.whatsNew(o.target, o.between) } as? ReleaseNotes.Available
+        if (noVault()) return
         post(o, notes?.entry?.summary)
         prefs.setReleaseNotified(o.target.number)
     }

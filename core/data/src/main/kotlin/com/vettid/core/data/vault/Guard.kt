@@ -38,7 +38,7 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
     val kind = if (e.reason == AltRefusedException.Reason.ROLLBACK_RELEASE) FailureKind.ROLLBACK else FailureKind.MANIFEST
     throw VaultFailure(kind, e.reason.name.lowercase(), cause = e)
 } catch (e: AttestationException) {
-    throw VaultFailure(FailureKind.ATTESTATION, "enclave", cause = e)
+    throw VaultFailure(enclaveFailure(e), "enclave", cause = e)
 } catch (e: AltResultException) {
     throw VaultFailure(FailureKind.OTHER, "unreadable_result", cause = e)
 } catch (e: AltChannelException) {
@@ -57,6 +57,20 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
     throw VaultFailure(FailureKind.OTHER, "keystore", cause = e)
 } catch (e: CryptoException) {
     throw VaultFailure(FailureKind.OTHER, "crypto", cause = e)
+}
+
+/**
+ * What a failed check of the vault's software means for the member (VAULT-MESSAGING §11.2, §11.10.1). None of these
+ * is [FailureKind.ATTESTATION], which is the vault refusing this PHONE's attestation: here the app refused the
+ * vault's side, before anything was sealed to it.
+ */
+internal fun enclaveFailure(e: AttestationException): FailureKind = when {
+    // The enclave's document verified; its release is in no entry of the manifest this app trusts.
+    e is AttestationException.Release && e.unknown -> FailureKind.RELEASE_UNKNOWN
+    // The manifest itself did not verify (signature, key, format, serial, hash).
+    e.manifest -> FailureKind.MANIFEST
+    // The enclave's attestation document or descriptor did not verify.
+    else -> FailureKind.ENCLAVE
 }
 
 /**

@@ -57,6 +57,7 @@ class VaultConnectionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var job: Job? = null
     private var network: NetworkWatch? = null
+    private val notice by lazy { ServiceNotice(this, serviceStatus) { notification(it) } }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,14 +68,10 @@ class VaultConnectionService : Service() {
             val net = NetworkWatch(this).also { network = it }
             val keeper = ConnectionKeeper(vault, net.validated)
             job = scope.launch {
-                launch {
-                    keeper.status.collect { s ->
-                        serviceStatus.set(s)
-                        update(s)
-                    }
-                }
+                launch { keeper.status.collect { notice.show(it) } }
                 keeper.run()
-                // No vault on this phone (signed out, wiped): nothing to keep.
+                // No vault on this phone (signed out, wiped): nothing to keep, and nothing of the service stays.
+                removeNotice()
                 stopSelf()
             }
         }
@@ -86,19 +83,25 @@ class VaultConnectionService : Service() {
         job = null
         network?.close()
         network = null
-        serviceStatus.set(null)
         scope.cancel()
+        removeNotice()
         super.onDestroy()
+    }
+
+    /**
+     * The service's notification goes with it, and stays gone: a status that arrives after this is not shown
+     * ([ServiceNotice]). Without it, a status posted while Android was already taking the service down came back as
+     * an ordinary ongoing notification that nothing removed (owner report 2026-10-11: "VettID is connecting" on a
+     * phone that had given its vault away).
+     */
+    private fun removeNotice() {
+        runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
+        notice.remove()
     }
 
     private fun foreground(s: KeeperStatus) {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(s), type)
-    }
-
-    @android.annotation.SuppressLint("MissingPermission") // without the permission Android shows it in the task manager only
-    private fun update(s: KeeperStatus) {
-        runCatching { NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(s)) }
     }
 
     private fun notification(s: KeeperStatus): Notification = NotificationCompat.Builder(this, Channels.CONNECTION)
@@ -128,6 +131,35 @@ class VaultConnectionService : Service() {
     }
 }
 
+/**
+ * The on-phone service's own notification after its first showing (`startForeground`): a status update re-posts it
+ * ([show]), and [remove] cancels it for good. Both hold one lock, so an update that races the service's end is either
+ * posted before the cancel or not at all: nothing can post notification [VaultConnectionService.NOTIFICATION_ID] after
+ * [remove]. The same goes for [ServiceStatus] (Settings → Notifications).
+ */
+class ServiceNotice(
+    private val context: Context,
+    private val status: ServiceStatus,
+    private val build: (KeeperStatus) -> Notification,
+) {
+    private var removed = false
+
+    @android.annotation.SuppressLint("MissingPermission") // without the permission Android shows it in the task manager only
+    @Synchronized
+    fun show(s: KeeperStatus) {
+        if (removed) return
+        status.set(s)
+        runCatching { NotificationManagerCompat.from(context).notify(VaultConnectionService.NOTIFICATION_ID, build(s)) }
+    }
+
+    @Synchronized
+    fun remove() {
+        removed = true
+        status.set(null)
+        runCatching { NotificationManagerCompat.from(context).cancel(VaultConnectionService.NOTIFICATION_ID) }
+    }
+}
+
 /** [ServiceControl] for [VaultConnectionService]. */
 class AndroidServiceControl(context: Context) : ServiceControl {
     private val app = context.applicationContext
@@ -142,8 +174,10 @@ class AndroidServiceControl(context: Context) : ServiceControl {
         false
     }
 
+    /** Stops it, and cancels a notification of it that outlived it (left by a build before [ServiceNotice]). */
     override fun stop() {
         app.stopService(Intent(app, VaultConnectionService::class.java))
+        runCatching { NotificationManagerCompat.from(app).cancel(VaultConnectionService.NOTIFICATION_ID) }
     }
 }
 
