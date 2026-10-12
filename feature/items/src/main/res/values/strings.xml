@@ -181,6 +181,8 @@
     <string name="items_cd_show_value">Show %1$s</string>
     <string name="items_cd_hide_value">Hide %1$s</string>
     <string name="items_cd_copy">Copy %1$s</string>
+    <string name="items_cd_copy_code">Copy the current code of %1$s</string>
+    <string name="items_cd_copy_seed">Copy the setup key of %1$s</string>
     <string name="items_otp_left">%1$d s</string>
     <string name="items_otp_unreadable">This setup key cannot make codes</string>
     <string name="items_missing_title">This item was deleted</string>

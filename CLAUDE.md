@@ -179,6 +179,11 @@ vettid.org repo's `local/android-ui/`).
 - Reuse `:core:ui` components (top bar, drawer, list row, empty state, floating
   controls, pill bar, settings groups, avatar sheet, confirm dialog) before adding new ones;
   every new component goes into the debug gallery.
+- The activity window is `FLAG_SECURE` in every build (A6 audit S1): no screenshots, screen recording or Recents
+  preview. Settings → App → "Allow screenshots" (`ScreenshotAllowance`, memory only) lifts it until the vault locks,
+  at most 1 hour; debug and devStack builds start with it on (the catalog is screenshotted). A screen that must stay
+  protected regardless calls `SecureWindow()`. A field that holds a secret the member must see uses
+  `visibleSecretKeyboard()` inside `NoKeyboardLearning { }` (S2); copy secrets with `textClip(…, sensitive = true)`.
 - Every destructive action uses `ConfirmDialog`; every critical action asks for the
   credential password. No backup/export of vault data (`allowBackup=false`); the one exception is History's export of activity metadata (ANDROID-PLAN 0.1.17: the vault PIN, then "Save to…" only).
 - Commits: explicit paths only (never `git add -A`); PRs into `master`.

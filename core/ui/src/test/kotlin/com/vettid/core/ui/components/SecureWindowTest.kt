@@ -55,4 +55,43 @@ class SecureWindowTest {
         rule.waitForIdle()
         assertTrue(secure())
     }
+
+    /** A6 audit S1: the whole app is protected by default; a screen's own hold and the app-wide switch do not fight. */
+    @Test
+    fun theAppWideProtectionAndAScreensHoldNeverClearEachOther() {
+        var typedCode by mutableStateOf(false)
+        lateinit var activity: Activity
+        rule.setContent {
+            activity = LocalActivity.current!!
+            if (typedCode) SecureWindow()
+        }
+        fun secure() = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+        rule.runOnUiThread { activity.window.protectFromCapture(true) }
+        assertTrue("the whole app", secure())
+
+        // A screen that holds the window comes and goes: the app-wide protection stays.
+        typedCode = true
+        rule.waitForIdle()
+        typedCode = false
+        rule.waitForIdle()
+        assertTrue("leaving the screen does not unprotect the app", secure())
+
+        // "Allow screenshots" on: the app is capturable...
+        rule.runOnUiThread { activity.window.protectFromCapture(false) }
+        assertFalse(secure())
+        // ...but the typed recovery code's screen stays protected regardless,
+        typedCode = true
+        rule.waitForIdle()
+        assertTrue("the screen's own hold", secure())
+        // also when the switch is turned off and on again while it shows,
+        rule.runOnUiThread { activity.window.protectFromCapture(true) }
+        rule.runOnUiThread { activity.window.protectFromCapture(false) }
+        assertTrue(secure())
+        // and leaving it gives the window back to the switch.
+        typedCode = false
+        rule.waitForIdle()
+        assertFalse(secure())
+        rule.runOnUiThread { activity.window.protectFromCapture(true) }
+        assertTrue(secure())
+    }
 }

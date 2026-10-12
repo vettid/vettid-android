@@ -7,6 +7,7 @@ import com.vettid.app.distribution.DistributionApplication
 import com.vettid.app.distribution.PushStartup
 import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.lock.AppLock
+import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.wipe.AndroidWipeTargets
@@ -28,6 +29,9 @@ class VettIdApplication : DistributionApplication() {
 
     @Inject
     lateinit var account: AccountRepository
+
+    @Inject
+    lateinit var screenshots: ScreenshotAllowance
 
     @Inject
     @AppScope
@@ -61,6 +65,8 @@ class VettIdApplication : DistributionApplication() {
             appLock.start()
             account.refresh()
         }
+        // "Allow screenshots" ends when the vault is no longer open (A6 audit S1).
+        scope.launch { account.phase.collect { if (it != AppPhase.Unlocked) screenshots.vaultClosed() } }
         registerActivityLifecycleCallbacks(Foreground { onForeground() })
         // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
         releaseNotifier.start()
@@ -86,6 +92,7 @@ class VettIdApplication : DistributionApplication() {
     private fun onForeground() {
         // Off the main thread: closing a live TLS connection is a network write (NetworkOnMainThreadException).
         connections.evict()
+        screenshots.check() // an allowance whose hour ended while the phone slept
         account.onForeground()
         modes.retry() // a service start Android refused in the background
         if (account.phase.value is AppPhase.Unreachable) scope.launch { account.refresh() }
