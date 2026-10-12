@@ -389,6 +389,24 @@ class UnlockViewModelTest {
         assertFalse("eraseThisPhone" in vault.calls)
     }
 
+    /**
+     * A6 audit N4/N5: a `401` that the phone's clock explains (the member API client reports it as its own failure
+     * after a freshly signed retry) says to check the date and time; it never offers to erase the phone.
+     */
+    @Test
+    fun aRefusalTheClockExplainsOffersNoErase() = runTest {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.CLOCK, "clock_skew")
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.notRecognised)
+        assertEquals(UnlockMessage.Failed(FailureKind.CLOCK, "clock_skew"), vm.uiState.value.message)
+        vm.askErase()
+        assertFalse(vm.uiState.value.eraseConfirm)
+    }
+
     @Test
     fun aRecognisedAnswerWithdrawsTheOffer() = runTest {
         val vm = unrecognised()

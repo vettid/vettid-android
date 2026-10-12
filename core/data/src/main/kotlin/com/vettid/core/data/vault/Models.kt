@@ -343,6 +343,25 @@ enum class FailureKind {
      * §11.7.1): not a wrong PIN, nothing counted; the app is updated, or the vault recovered with a current one.
      */
     SIGNER_REFUSED,
+
+    /**
+     * The member API refused this phone's requests (`401`) and its answer shows the phone's clock to be more than a
+     * few minutes off: the cause is the date and time, not a key the vault no longer has (A6 audit N4, N5).
+     */
+    CLOCK,
+
+    /**
+     * The member API said, explicitly, that the account has no vault (`"vault": null`; A6 audit N6): after a vault
+     * was deleted or an account closed, but also in a fault of the service (MEMBER-API "Dark launch" answers it to
+     * every member). Never acted on by itself: the member decides whether this phone starts over.
+     */
+    NO_VAULT,
+
+    /**
+     * What this phone stores for the vault (its keys and device state, the account record) cannot be read: a
+     * Keystore or file failure. Nothing is reset by itself (A6 audit P4): the member tries again or erases the phone.
+     */
+    LOCAL_STATE,
     OTHER,
 }
 

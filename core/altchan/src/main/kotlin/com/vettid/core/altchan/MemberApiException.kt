@@ -25,6 +25,16 @@ class MemberApiException(
 
     companion object {
         const val UNAUTHORIZED = "unauthorized"
+
+        /**
+         * Made by the client, never sent by the API: a `401` whose `Date` header is more than [CLOCK_SKEW_S] away
+         * from the phone's clock. The API refuses a signature whose `ts` is not within 300 s of its own time with a
+         * plain `401`, so this is the likely cause, not a key the vault no longer has (A6 audit N4, N5).
+         */
+        const val CLOCK_SKEW = "clock_skew"
+
+        /** Below the API's 300 s, so that a request signed a moment before the answer's `Date` is not missed. */
+        const val CLOCK_SKEW_S = 240L
         const val INVALID_CODE = "invalid_code"
         const val TERMS_REQUIRED = "terms_required"
         const val NOT_FOUND = "not_found"

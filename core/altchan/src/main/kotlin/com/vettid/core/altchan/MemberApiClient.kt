@@ -4,6 +4,7 @@ import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.json.JsonBool
 import com.vettid.core.crypto.json.JsonBuilder
+import com.vettid.core.crypto.json.JsonNull
 import com.vettid.core.crypto.json.JsonNumber
 import com.vettid.core.crypto.json.JsonObject
 import com.vettid.core.crypto.json.JsonString
@@ -132,6 +133,8 @@ class MemberApiClient(
     private val auth: MemberAuth,
     private val pollInterval: Duration = Duration.ofMillis(DEFAULT_POLL_MS),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    /** The phone's clock (epoch ms), compared with a `401`'s `Date` header. */
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val base = apiBase.trimEnd('/')
     private val http: OkHttpClient = http
@@ -140,10 +143,20 @@ class MemberApiClient(
     private suspend fun call(method: String, path: String, body: String? = null, vault: String? = null): JsonObject? {
         val url = (base + path).toHttpUrl()
         val bytes = body?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
-        val rb = Request.Builder().url(url)
-        auth.apply(rb, method, url, bytes, vault)
-        rb.method(method, if (body != null) bytes.toRequestBody(JSON) else if (method == "POST") bytes.toRequestBody(null) else null)
-        val (code, resp, retryAfter) = execute(rb.build())
+        fun request(): Request {
+            val rb = Request.Builder().url(url)
+            auth.apply(rb, method, url, bytes, vault)
+            rb.method(method, if (body != null) bytes.toRequestBody(JSON) else if (method == "POST") bytes.toRequestBody(null) else null)
+            return rb.build()
+        }
+        var answer = execute(request())
+        // A6 audit N4. A 401 has no detail (MEMBER-API "App request signing"); one of its causes is a nonce the API
+        // has seen, which is what a request re-sent below this client (a proxy, a connection retry) looks like. The
+        // API checks the signature before it does anything, so a refused request did nothing: ask once more with a
+        // signature made now. Only a 401 to that second request is reported.
+        if (answer.code == HTTP_UNAUTHORIZED && auth.signedPerRequest) answer = execute(request())
+        val (code, resp, retryAfter) = answer
+        if (code == HTTP_UNAUTHORIZED) throw unauthorized(answer)
         if (code / 100 != 2) throw errorOf(code, resp, retryAfter)
         val bytesIn = resp
         if (bytesIn.isEmpty()) return null
@@ -155,7 +168,7 @@ class MemberApiClient(
     }
 
     /** One HTTP exchange: status, body (at most [MAX_BODY] bytes) and the `Retry-After` header in seconds (0 if absent). */
-    private class Answer(val code: Int, val body: ByteArray, val retryAfter: Int) {
+    private class Answer(val code: Int, val body: ByteArray, val retryAfter: Int, val dateMs: Long? = null) {
         operator fun component1() = code
 
         operator fun component2() = body
@@ -170,8 +183,20 @@ class MemberApiClient(
                 s.request(MAX_BODY.toLong())
                 s.buffer.readByteArray(minOf(s.buffer.size, MAX_BODY.toLong()))
             }
-            Answer(resp.code, body, retryAfterHeader(resp.header("Retry-After")))
+            Answer(resp.code, body, retryAfterHeader(resp.header("Retry-After")), resp.headers.getDate("Date")?.time)
         }
+    }
+
+    /**
+     * A `401` after a freshly signed request. The API's causes are the header's syntax, a `ts` more than 300 s from
+     * its clock, a used nonce, a key that is not allowed for the route on that vault, and the signature. With a new
+     * nonce, what is left for a working app is the clock or the key: when the answer's `Date` shows the phone's clock
+     * to be off, it is reported as [MemberApiException.CLOCK_SKEW]; otherwise as the API's `unauthorized`.
+     */
+    private fun unauthorized(a: Answer): MemberApiException {
+        val e = errorOf(a.code, a.body, a.retryAfter)
+        val skewS = a.dateMs?.let { kotlin.math.abs(now() - it) / MS_PER_S } ?: return e
+        return if (skewS > MemberApiException.CLOCK_SKEW_S) MemberApiException(a.code, MemberApiException.CLOCK_SKEW) else e
     }
 
     private fun errorOf(code: Int, b: ByteArray, headerRetry: Int = 0): MemberApiException {
@@ -211,10 +236,24 @@ class MemberApiClient(
     suspend fun vaultStatus(): VaultStatus? = vaultStatusAnswer().vault
 
     /** `GET /api/vault/status` with the top-level `service` (MEMBER-API 1.2.0); still served while paused. */
+    /**
+     * "No vault" is only the API's explicit `"vault": null` (A6 audit N6). An empty body, a body without `vault` or
+     * with anything else there is a malformed answer and fails like one: the app used to read each of them as "this
+     * account has no vault" and forgot its keys for it.
+     */
     suspend fun vaultStatusAnswer(): VaultStatusAnswer {
-        val o = call("GET", "/api/vault/status")
-        val paused = (o?.get("service") as? JsonString)?.value == MemberApiException.SERVICE_PAUSED
-        return VaultStatusAnswer(parseVault(o?.get("vault") as? JsonObject), paused)
+        val o = call("GET", "/api/vault/status") ?: throw IOException("member API: empty status")
+        val paused = (o["service"] as? JsonString)?.value == MemberApiException.SERVICE_PAUSED
+        val vault = when (val v = o["vault"]) {
+            is JsonObject -> try {
+                parseVault(v)
+            } catch (_: CryptoException) {
+                throw IOException("member API: malformed status")
+            }
+            is JsonNull -> null
+            else -> throw IOException("member API: malformed status")
+        }
+        return VaultStatusAnswer(vault, paused)
     }
 
     private fun parseVault(v: JsonObject?): VaultStatus? {
@@ -386,6 +425,7 @@ class MemberApiClient(
         private const val REDEEM = "/api/vault/enroll/redeem"
         private const val CLAIM = "/api/vault/recovery/claim"
         private const val HTTP_OK = 200
+        private const val HTTP_UNAUTHORIZED = 401
         private const val MAX_BODY = 1 shl 20
         private const val MS_PER_S = 1000L
         private const val MAX_START_WAIT_MS = 2000L

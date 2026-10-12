@@ -19,6 +19,8 @@ import com.vettid.core.notify.NoVaultSweep
 import com.vettid.core.notify.PushRegistrar
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import com.vettid.app.net.PoolEviction
 import javax.inject.Inject
@@ -65,9 +67,15 @@ class VettIdApplication : DistributionApplication() {
         LocalWipe(AndroidWipeTargets(this)).resumeIfPending()
         super.onCreate()
         // Once per process: the app lock starts locked when it is on (D6); the vault's phase is read.
+        // The phase is read whatever became of the app lock's start: a failure there (an I/O error) used to end this
+        // coroutine before the phase was read, and the app stayed on "Opening VettID" (A6 audit P4). Still one after
+        // the other, so that nothing of the open app is composed before the lock has said whether it is on.
         scope.launch {
-            appLock.start()
-            account.refresh()
+            try {
+                appLock.start()
+            } finally {
+                withContext(NonCancellable) { account.refresh() }
+            }
         }
         // "Allow screenshots" ends when the vault is no longer open (A6 audit S1).
         scope.launch { account.phase.collect { if (it != AppPhase.Unlocked) screenshots.vaultClosed() } }

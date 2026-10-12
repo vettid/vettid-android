@@ -49,6 +49,13 @@ interface AccountRepository {
     /** "That is not my account" after a redeem, or a pending key that expired: back to the welcome screen. */
     suspend fun forgetSetupCode()
 
+    /**
+     * The member confirmed "Start over" on [FailureKind.NO_VAULT] (A6 audit N6): asks the member API once more and,
+     * only if it again says explicitly that the account has no vault, forgets this phone's keys for it; the welcome
+     * screen follows. Any other answer is the new phase ([refresh]).
+     */
+    suspend fun forgetMissingVault() {}
+
     /** Re-reads the account snapshot from the vault (`account.get`); quiet on failure. */
     suspend fun refreshAccount() {}
 

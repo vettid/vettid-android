@@ -100,7 +100,21 @@ fun SecretField(
         singleLine = true,
         enabled = enabled,
         isError = error != null,
-        supportingText = (error ?: supporting)?.let { t -> { Text(t) } },
+        // The error and the supporting line both show (A6 audit A4: "wrong PIN" used to hide the wait that follows
+        // it, so the field looked frozen). The error is a polite live region, so the result of an attempt is spoken
+        // (A1); the supporting line is not: a countdown there must not be read out every second.
+        supportingText = if (error != null || supporting != null) {
+            {
+                Column {
+                    if (error != null) {
+                        Text(error, Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("secret_field_error"))
+                    }
+                    if (supporting != null) Text(supporting, Modifier.testTag("secret_field_supporting"))
+                }
+            }
+        } else {
+            null
+        },
         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(
             keyboardType = if (isPin) KeyboardType.NumberPassword else KeyboardType.Password,

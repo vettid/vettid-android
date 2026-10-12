@@ -201,6 +201,27 @@ class HistoryExportFormatsTest {
         assertEquals("true", o["more"]!!.jsonPrimitive.content)
         assertEquals(0, o["entries"]!!.jsonArray.size)
     }
+
+    /** A6 audit R2: the export's file name, its `ts` and its hashes are ASCII whatever the phone's language. */
+    @Test
+    fun theExportIsTheSameInEveryLocale() {
+        val before = java.util.Locale.getDefault()
+        val at = Instant.parse("2026-10-04T12:34:56.789Z")
+        val hash = Base64.getEncoder().encodeToString(ByteArray(32) { (it * 9).toByte() })
+        try {
+            java.util.Locale.setDefault(java.util.Locale.ROOT)
+            val hex = HistoryCsv.hex(hash)
+            assertTrue(hex, Regex("[0-9a-f]{64}").matches(hex))
+            listOf("fa-IR", "ar-EG", "bn-BD", "ar-SA-u-nu-arab", "th-TH-u-nu-thai-ca-buddhist").forEach { tag ->
+                java.util.Locale.setDefault(java.util.Locale.forLanguageTag(tag))
+                assertEquals(tag, "vettid-history-20261004-123456.csv", ExportFiles.fileName(at, ExportFormat.CSV))
+                assertEquals(tag, "2026-10-04T12:34:56.789Z", ExportFiles.ts(at))
+                assertEquals(tag, hex, HistoryCsv.hex(hash))
+            }
+        } finally {
+            java.util.Locale.setDefault(before)
+        }
+    }
 }
 
 /** Labels without resources (the writers take them as given). */

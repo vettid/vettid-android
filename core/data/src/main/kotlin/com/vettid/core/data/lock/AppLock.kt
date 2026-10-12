@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import java.io.File
+import java.io.IOException
 import java.security.GeneralSecurityException
 import javax.crypto.Cipher
 
@@ -146,16 +147,29 @@ class AppLock(
     @Volatile
     var authenticating: Boolean = false
 
-    /** Reads the preference at start: an enabled lock starts locked. */
+    /** Reads the preference at start: an enabled lock starts locked. Always leaves [AppLockState.PENDING]. */
     suspend fun start() {
         val p = prefs.preferences.first()
         timeout = p.appLockTimeout
-        // A lock turned on before the method could be chosen was the biometric one: it stays "Biometrics".
-        if (p.appLockMethod == null && p.appLockEnabled) prefs.setAppLockMethod(AppLockMethod.BIOMETRICS)
         methodFlow.value = p.appLockMethod ?: AppLockMethod.BIOMETRICS
         prompts.newLock()
-        stateFlow.value = if (p.appLockEnabled && keys.exists() && wrapped.read() != null) AppLockState.LOCKED else AppLockState.DISABLED
-        if (p.appLockEnabled && stateFlow.value == AppLockState.DISABLED) prefs.setAppLockEnabled(false)
+        // A wrapped key that cannot be read is a lock that cannot open: off, with the notice, never "pending" for
+        // good (the start screen would stay; A6 audit P4). The lock is a convenience and locks nobody out.
+        val usable = try {
+            p.appLockEnabled && keys.exists() && wrapped.read() != null
+        } catch (_: IOException) {
+            invalidatedFlow.value = true
+            false
+        }
+        stateFlow.value = if (usable) AppLockState.LOCKED else AppLockState.DISABLED
+        // Bookkeeping last: a preference that cannot be written must not keep the lock pending.
+        try {
+            // A lock turned on before the method could be chosen was the biometric one: it stays "Biometrics".
+            if (p.appLockMethod == null && p.appLockEnabled) prefs.setAppLockMethod(AppLockMethod.BIOMETRICS)
+            if (p.appLockEnabled && !usable) prefs.setAppLockEnabled(false)
+        } catch (_: IOException) {
+            // Read again at the next start.
+        }
     }
 
     fun setTimeout(t: AppLockTimeout) {

@@ -41,4 +41,5 @@
         <item quantity="one">%1$d more tag</item>
         <item quantity="other">%1$d more tags</item>
     </plurals>
+    <string name="core_ui_scanner_no_camera">This device has no camera that VettID can use. Type or paste the code instead.</string>
 </resources>

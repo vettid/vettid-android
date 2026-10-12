@@ -6,6 +6,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.util.Locale
 
 /** ULIDs (§5.3): 26 upper-case Crockford base32 characters, the first in 0–7. */
 object Ulid {
@@ -44,8 +45,9 @@ object Ulid {
  * is strict: the string must round-trip exactly.
  */
 object Timestamps {
-    private val millis = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
-    private val seconds = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC)
+    // Locale.ROOT: wire formats are ASCII whatever the phone's language (A6 audit R2).
+    private val millis = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT).withZone(ZoneOffset.UTC)
+    private val seconds = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss'Z'", Locale.ROOT).withZone(ZoneOffset.UTC)
 
     /** Formats [t] in the inner format, truncating to milliseconds. */
     fun formatMillis(t: Instant): String = millis.format(t)

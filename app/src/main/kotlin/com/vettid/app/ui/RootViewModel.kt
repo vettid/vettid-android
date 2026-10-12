@@ -4,17 +4,24 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.AppLockState
+import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -26,6 +33,7 @@ class RootViewModel @Inject constructor(
     credential: CredentialRepository,
     appLock: AppLock,
     updates: ReleaseUpdateRepository,
+    private val prefs: PreferencesRepository,
 ) : ViewModel() {
     val phase: StateFlow<AppPhase> = accounts.phase
     val lock: StateFlow<AppLockState> = appLock.state
@@ -44,8 +52,54 @@ class RootViewModel @Inject constructor(
     /** A release update under way or its outcome (ANDROID-PLAN 0.1.19): shown over every phase until it is left. */
     val updateProgress: StateFlow<UpdateProgress?> = updates.progress
 
+    /**
+     * The preferences file was corrupt and was reset (A6 audit P4): told once, in a banner, until dismissed.
+     */
+    val preferencesReset: StateFlow<Boolean> = prefs.preferences.map { it.wasReset }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun acknowledgePreferencesReset() {
+        viewModelScope.launch { prefs.acknowledgeReset() }
+    }
+
+    /** A read of the phase is under way ("Try again" shows it; the screen used to give no sign, A6 audit E7). */
+    private val retryingFlow = MutableStateFlow(false)
+    val retrying: StateFlow<Boolean> = retryingFlow.asStateFlow()
+
     fun retry() {
-        viewModelScope.launch { accounts.refresh() }
+        if (retryingFlow.value) return
+        retryingFlow.value = true
+        viewModelScope.launch {
+            try {
+                accounts.refresh()
+            } finally {
+                retryingFlow.value = false
+            }
+        }
+    }
+
+    /**
+     * "Start over", confirmed, on the two dead ends that have one (A6 audit N6, P4): the account service says the
+     * account has no vault ([AccountRepository.forgetMissingVault], which asks it again first), or this phone's
+     * stored keys cannot be read ([AccountRepository.eraseThisPhone]). Never without the member's confirmation.
+     */
+    fun startOver() {
+        if (retryingFlow.value) return
+        val kind = (phase.value as? AppPhase.Unreachable)?.failure
+        retryingFlow.value = true
+        viewModelScope.launch {
+            try {
+                when (kind) {
+                    FailureKind.NO_VAULT -> accounts.forgetMissingVault()
+                    FailureKind.LOCAL_STATE -> accounts.eraseThisPhone()
+                    else -> Unit
+                }
+            } catch (_: VaultFailure) {
+                accounts.refresh()
+            } finally {
+                retryingFlow.value = false
+            }
+        }
     }
 
     fun lockVault() {

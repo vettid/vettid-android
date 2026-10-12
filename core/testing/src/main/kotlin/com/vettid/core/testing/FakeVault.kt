@@ -140,6 +140,11 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         phase.value = AppPhase.SignedOut
     }
 
+    override suspend fun forgetMissingVault() {
+        call("forgetMissingVault")
+        phase.value = AppPhase.SignedOut
+    }
+
     override suspend fun eraseThisPhone() {
         call("eraseThisPhone")
         account.value = null
