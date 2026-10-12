@@ -22,6 +22,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 import java.time.Instant
 
@@ -49,7 +52,16 @@ interface CallVault {
      * operation succeeded): if it is not yet known whether the vault has calls, it is asked again.
      */
     val recheck: Flow<Unit>
+
+    /**
+     * The class of the key this app is signed with, as the vault reports it (`vettid`, `google_play`,
+     * `development`); null if the vault cannot be asked or does not say.
+     */
+    suspend fun signerClass(): String?
 }
+
+/** What was held back for the microphone permission: a call to [call], or (null) the answer to the ringing call. */
+data class MicrophoneRequest(val call: String?)
 
 /** What is known beyond one call, for the diagnostics view and the phone tests. Counts only. */
 data class CallsDiagnostics(
@@ -94,31 +106,49 @@ class CallsController(
     /**
      * Whether this build was made for the phone tests: the only kind that may ask for [MediaConfig.dtlsPqcTrial]
      * or any of [MediaFaults] (owner decision 2026-10-12: known-good algorithms only; and no build a member uses
-     * can break a rule on purpose).
+     * can break a rule on purpose). Necessary, not sufficient: see [testsAllowed].
      */
     private val testBuild: Boolean = false,
     private val now: () -> Instant = Instant::now,
     timings: CallTimings = CallTimings(),
 ) : CallAccess, CallServiceHost {
+    init {
+        // What the app starts with is never a test configuration: those are switched on by hand, after the checks.
+        check(!config.dtlsPqcTrial && !config.faults.any) { "no test configuration by default" }
+    }
+
     @Volatile
-    private var mediaConfigValue = checked(config)
+    private var mediaConfigValue = config
 
-    /** How the next call's media engine is set up. */
-    val mediaConfig: MediaConfig get() = mediaConfigValue
+    private val testsAllowedFlow = MutableStateFlow(false)
 
-    private fun checked(c: MediaConfig): MediaConfig {
-        val plain = !c.dtlsPqcTrial && !c.faults.any
-        check(testBuild || plain) { "the post-quantum DTLS trial and the test faults are for test builds only" }
-        return c
-    }
+    /**
+     * Whether this build may break a rule on purpose right now: it was built for the phone tests ([testBuild])
+     * **and** the vault, asked since the last unlock, reports that this app is signed with a development key (the
+     * automation key of the tests; never the key of a build members get). False until the vault has said so and
+     * whenever it is not known.
+     */
+    val testsAllowed: StateFlow<Boolean> = testsAllowedFlow.asStateFlow()
 
-    /** Test builds only: changes how the next call's engine is set up. Throws in any other build. */
+    /** How the next call's media engine is set up: a test configuration only while [testsAllowed]. */
+    val mediaConfig: MediaConfig get() = if (testsAllowedFlow.value) mediaConfigValue else MediaConfig()
+
+    /** Changes how the next call's engine is set up. Throws unless [testsAllowed] (or [c] is the plain configuration). */
     fun setMediaConfig(c: MediaConfig) {
-        mediaConfigValue = checked(c)
+        val plain = !c.dtlsPqcTrial && !c.faults.any
+        check(plain || testsAllowedFlow.value) { "the post-quantum DTLS trial and the test faults are for the phone tests only" }
+        mediaConfigValue = c
     }
 
-    private val signalling = VaultCallSignalling(vault.gateway, vault::fingerprint, engines.suites, vault::refreshConnections)
-    private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfigValue })
+    private val signalling = VaultCallSignalling(
+        vault.gateway,
+        vault::fingerprint,
+        engines.suites,
+        vault::refreshConnections,
+        // An offer waits a moment for an unlock that is completing; none comes: it does not ring.
+        mayRing = { open || withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { vault.unlocked.first { it } } != null },
+    )
+    private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig })
 
     /** The call, for the call screens. */
     override val state: StateFlow<CallState> = machine.state
@@ -131,10 +161,10 @@ class CallsController(
     private val diagnosticsFlow = MutableStateFlow(CallsDiagnostics())
     val diagnostics: StateFlow<CallsDiagnostics> = diagnosticsFlow.asStateFlow()
 
-    private val microphoneFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val microphoneFlow = MutableSharedFlow<MicrophoneRequest>(extraBufferCapacity = 1)
 
     /** A call or an answer was held back for the microphone permission: ask for it, then call [call] or [answer] again. */
-    val microphoneNeeded: SharedFlow<Unit> = microphoneFlow.asSharedFlow()
+    val microphoneNeeded: SharedFlow<MicrophoneRequest> = microphoneFlow.asSharedFlow()
 
     /** Whether the vault's release has calls; null until it has been asked since the last unlock. */
     @Volatile
@@ -143,8 +173,8 @@ class CallsController(
     @Volatile
     private var open = false
 
-    @Volatile
-    private var probing = false
+    /** One probe at a time: the one an unlock starts and one a [CallVault.recheck] starts never run side by side. */
+    private val probing = Mutex()
     private var longCall: Job? = null
 
     init {
@@ -158,7 +188,7 @@ class CallsController(
         scope.launch { signalling.refused.collect { n -> diagnosticsFlow.update { it.copy(refused = n) } } }
         scope.launch { signalling.errors.collect { n -> diagnosticsFlow.update { it.copy(errors = n) } } }
         scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }
-        scope.launch { vault.recheck.collect { if (open && supported == null && !probing) opened() } }
+        scope.launch { vault.recheck.collect { if (open && supported == null) opened() } }
         scope.launch {
             vault.droppedForTime.collect { type ->
                 if (type.startsWith("call.")) diagnosticsFlow.update { it.copy(droppedForTime = it.droppedForTime + 1) }
@@ -175,11 +205,11 @@ class CallsController(
 
     override fun call(connectionId: String) {
         if (availabilityFlow.value != CallAvailability.READY) return
-        if (microphoneGranted()) machine.call(connectionId) else microphoneFlow.tryEmit(Unit)
+        if (microphoneGranted()) machine.call(connectionId) else microphoneFlow.tryEmit(MicrophoneRequest(connectionId))
     }
 
     fun answer() {
-        if (microphoneGranted()) machine.answer() else microphoneFlow.tryEmit(Unit)
+        if (microphoneGranted()) machine.answer() else microphoneFlow.tryEmit(MicrophoneRequest(null))
     }
 
     fun decline() = machine.decline()
@@ -197,11 +227,9 @@ class CallsController(
     // --- the vault ---
 
     private suspend fun opened() {
-        probing = true
-        try {
-            probe()
-        } finally {
-            probing = false
+        probing.withLock {
+            // Asked while another probe ran: it may have answered already.
+            if (open && supported == null) probe()
         }
     }
 
@@ -238,6 +266,7 @@ class CallsController(
             supported = true
             publish()
             endStale(records)
+            if (testBuild) testsAllowedFlow.value = runCatching { vault.signerClass() }.getOrNull() == SIGNER_DEVELOPMENT
             return
         }
     }
@@ -271,6 +300,7 @@ class CallsController(
 
     private fun locked() {
         supported = null
+        testsAllowedFlow.value = false
         machine.vaultLocking()
         publish()
     }
@@ -327,6 +357,10 @@ class CallsController(
         private val PROBE_RETRY: Duration = Duration.ofSeconds(2)
         private const val PROBE_ATTEMPTS = 3
         private const val UNSUPPORTED = "unsupported_type"
+        private const val SIGNER_DEVELOPMENT = "development"
+
+        /** How long an offer waits for an unlock that is just completing before it is dropped. */
+        val UNLOCK_WAIT: Duration = Duration.ofSeconds(10)
         private const val STATE_RINGING = "ringing"
         private const val STATE_ACTIVE = "active"
         private const val DIRECTION_OUT = "out"
