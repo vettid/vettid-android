@@ -94,7 +94,7 @@ fun CallOverlay(modifier: Modifier = Modifier, content: @Composable () -> Unit) 
 
 /** Why the microphone is asked for, then Android's own question. */
 @Composable
-private fun MicrophonePrompt(name: String?, onAnswered: (Boolean) -> Unit) {
+fun MicrophonePrompt(name: String?, onAnswered: (Boolean) -> Unit) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> onAnswered(granted) }
     ConfirmDialog(
         title = stringResource(R.string.calls_microphone_title),

@@ -125,7 +125,8 @@ fun VettIdApp(
 
     // Debug builds, and the staging build made for the two-phone call tests, expose test tags as resource ids, so
     // that adb (uiautomator) can drive two phones at once.
-    val root = if (BuildConfig.DEBUG || BuildConfig.CALLS_TEST) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
+    val tagged = BuildConfig.DEBUG || BuildConfig.CALLS_TEST
+    val root = if (tagged) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
     Box(root) {
         AppLockGate(
             locked = locked,

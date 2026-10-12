@@ -146,6 +146,22 @@ The A2 exit test:
   (`BuildConfig.CALLS_TEST`: debuggable builds, or staging built with `-PvettidCallsTest=true` for the two-phone
   tests, which need a build the staging vaults accept). `VaultManager.onBeforeLock`: a live call's hang-up reaches
   the vault before the lock (2 s at most). `CallSignalling` and `CallMachine` are internal to `:core:calls`.
+  Screens (`:feature:calls`, texts approved by the owner 2026-10-12, `CallTextsTest` holds them word for word; a
+  changed text is the owner's to approve): `CallOverlay` over the open app's shell (`CallsHost` in `app/src/calls`,
+  inside the app lock and the unlocked destination: a call rings only once the vault is open on this phone, and no
+  call screen is ever in front of a locked app), `CallScreen`, `MicrophonePrompt`; the call button and the call
+  entries of a conversation and the detail's "Call" use `CallAccess` only. Catalog: `calls.outgoing_calling`,
+  `calls.outgoing_ringing`, `calls.connecting`, `calls.incoming`, `calls.incoming_no_name`, `calls.in_call`,
+  `calls.in_call_muted_speaker`, `calls.in_call_reconnecting`, `calls.ended_hung_up`, `calls.ended_peer_hung_up`,
+  `calls.ended_declined`, `calls.ended_busy`, `calls.ended_no_answer`, `calls.ended_missed`,
+  `calls.ended_no_address`, `calls.ended_could_not_connect`, `calls.ended_connection_lost`,
+  `calls.ended_not_encrypted`, `calls.ended_owner_check`, `calls.ended_failed`, `calls.microphone`, `calls.test`,
+  `calls.test_refused`, `messages.conversation_calls`, `messages.conversation_in_call`,
+  `messages.conversation_calls_not_available`, `connections.detail_call`. The call-test build (README "Calls and
+  the call-test build"): `-PvettidCallsTest=true`, checked by `:app:checkStagingCallsTest` (marker in manifest and
+  dex agree; `-PvettidCallsTestChecked=true` to pass; signed with the automation key only), a banner, and the test
+  screen (`CallTest`: stable, untranslated labels for `uiautomator dump`), whose switches work only while the vault
+  reports this app's signer class as `development` (`CallsController.testsAllowed`).
 
 ## Device testing
 

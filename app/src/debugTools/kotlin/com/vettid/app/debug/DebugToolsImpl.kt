@@ -61,7 +61,7 @@ internal val debugTools: DebugTools = object : DebugTools {
             ?.takeIf { it.startsWith(CATALOG_PREFIX) }
             ?.removePrefix(CATALOG_PREFIX)
             ?.let {
-                ScreenCatalog.screens[it] ?: ItemsCatalog.screens[it] ?: PhotoCatalog.screens[it] ?: NotificationsCatalog.screens[it]
+                ScreenCatalog.screens[it] ?: ItemsCatalog.screens[it] ?: PhotoCatalog.screens[it] ?: CallsCatalog.screens[it] ?: NotificationsCatalog.screens[it]
                     ?: NotificationSettingsCatalog.screens[it]
             }
 

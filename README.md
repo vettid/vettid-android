@@ -250,6 +250,40 @@ metrics export off. `./gradlew :app:check<Variant>PushManifest` (run by
 `checkReleaseApk` and `checkStagingApk`) fails if a merged manifest carries
 anything of Firebase or Google beyond that.
 
+### Calls and the call-test build
+
+Voice calls between connections (CALLS-PLAN phase C1) are in the `debug`, `devStack` and `staging` builds only: a
+release APK has no call code, no media stack and no call permission (`:app:checkReleaseApk`,
+`:app:checkFossReleaseApk`). A conversation shows a call button when the vault's release has calls; the app asks
+the vault after each unlock (`call.list`). The keys and the frame format are in
+[docs/calls/CALL-MEDIA.md](docs/calls/CALL-MEDIA.md).
+
+**The call-test build** is a staging build that can break the rules of calls on purpose, so that two phones can
+show that the other side refuses it (`MediaFaults`: leave the other side's SSRC lines in, announce other SSRCs than
+the ones sent on, send unencrypted, a wrong send key; and the experimental post-quantum DTLS trial). It is never the
+staging app members get:
+
+```
+./gradlew :app:assembleStaging :app:checkStagingApk \
+    -PvettidCallsTest=true -PvettidCallsTestChecked=true \
+    -PvettidStagingSigning=$HOME/.vettid/staging-automation-signing.properties
+```
+
+writes `app/build/outputs/apk/full/staging/app-full-staging.apk` (application id `com.vettid.app.staging`, version
+name ending `-staging-callstest`), and the check prints
+
+```
+app-full-staging.apk: CALL-TEST build, signers [2fed27b72746797a931fd414ff3dac4cd969fa0c2ff36209ae05365f580014f2]
+```
+
+- Without `-PvettidCallsTestChecked=true` the same command fails ("… is a CALL-TEST build …"): an ordinary
+  `checkStagingApk` never passes one. Without `-PvettidCallsTest=true` it prints `not a call-test build`.
+- Signed with any other key than the automation key (the staging channel's `development` signer) it fails; unsigned
+  (no properties file) it passes.
+- In the app: a red banner on every screen ("VettID call tests (test build)…") opens the test screen. Its switches
+  work only after an unlock at which the vault reported this app's signer class as `development`; until then, and
+  with any other signer, they are refused. The manifest's `com.vettid.app.CALLS_TEST` meta-data is `true`.
+
 ### Recovery: typing the code
 
 A new phone that cannot scan the account site's recovery QR code takes the code
@@ -383,7 +417,7 @@ most 80 characters, `full_description.txt`, `images/icon.png`,
 | `:core:push-fcm` | Google push (Firebase Cloud Messaging): the `full` distribution only, the only module with Google code |
 | `:core:calls` | Calls (CALLS-PLAN phase C1, in progress): the media stack (`io.github.webrtc-sdk:android`, pinned by SHA-256) behind `MediaEngine`, the call state machine, the signalling on the vault (`VaultCallSignalling`), audio routing, the call service and `CallsController`. **Not in production builds**: linked into debug, devStack and staging only; `:app:check<Variant>Calls`. The keys and the frame format: [docs/calls/CALL-MEDIA.md](docs/calls/CALL-MEDIA.md) |
 | `:core:testing` | TEST ONLY: dev-stack helpers and the A2 exit scenario (test configurations and `devStack` only) |
-| `:feature:*` | onboarding, messages, connections, approvals, items, credential, settings |
+| `:feature:*` | onboarding, messages, connections, approvals, items, credential, settings; `:feature:calls` (the call screens and the test screen; like `:core:calls`, not in production builds) |
 
 Features depend only on `:core:*` modules. Shared build configuration lives in
 convention plugins under `build-logic/`; versions in `gradle/libs.versions.toml`.
