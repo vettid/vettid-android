@@ -45,6 +45,11 @@ jobs:
         run: ./gradlew :app:checkReleaseApk :app:checkStagingApk
       - name: F-Droid APK (the foss release carries no Google proprietary code)
         run: ./gradlew :app:checkFossReleaseApk
+      # Calls are not in production builds yet (CALLS-PLAN C1), so nothing above builds the F-Droid distribution
+      # with them. This step does: the same checks with the media stack linked in (no Google code in its classes or
+      # native libraries; every native library as pinned). It runs last: it replaces the fossRelease APK built above.
+      - name: F-Droid APK with calls (the media stack in the foss release, as it will be when calls are promoted)
+        run: ./gradlew :app:assembleFossRelease :app:checkFossReleaseApk -PvettidCallsInRelease=true
       - name: reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -194,6 +194,18 @@ class CallMediaTest {
         for (sdp in bad) assertThrows(sdp, CryptoException.Protocol::class.java) { CallMedia.requireOneOpusAudioSection(sdp) }
     }
 
+    /** Review N1: a signalled SSRC would leave every other SSRC of the section outside the frame decryption. */
+    @Test
+    fun theOtherSidesSdpReachesTheStackWithoutSsrcLines() {
+        val withSsrc = offer + opus + "a=msid:vettid audio0\r\na=ssrc:1234 cname:x\r\na=ssrc:1234 msid:vettid audio0\r\n" +
+            "a=ssrc-group:FID 1234 5678\r\na=ssrc:5678 cname:x\r\n"
+        assertEquals(offer + opus + "a=msid:vettid audio0\r\n", CallMedia.sdpWithoutSsrc(withSsrc))
+        assertEquals(offer + opus, CallMedia.sdpWithoutSsrc(offer + opus))
+        assertEquals("v=0\na=msid:a b\n", CallMedia.sdpWithoutSsrc("v=0\na=ssrc:1 cname:x\na=msid:a b\n"))
+        // Still one Opus audio section.
+        CallMedia.requireOneOpusAudioSection(CallMedia.sdpWithoutSsrc(withSsrc))
+    }
+
     @Test
     fun keysOfTheWrongSizeOrDirectionAreRefused() {
         val n = CallMedia.Negotiated(s1, listOf(1))

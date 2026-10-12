@@ -112,6 +112,18 @@ object CallMedia {
     }
 
     /**
+     * [sdp] without its `a=ssrc:` and `a=ssrc-group:` lines: what a device hands to its media stack as the **other
+     * side's** description. A receiver that is told an SSRC gets its frame decryption for that one stream only, and
+     * the stack then plays RTP that arrives on any other SSRC of the section through a default stream with no frame
+     * decryption at all. Told none, the receiver's frame decryption is the section's default and covers the first
+     * and every later stream (docs/calls/CALL-MEDIA.md §7 rule 2; read from the stack's source).
+     */
+    fun sdpWithoutSsrc(sdp: String): String {
+        val eol = if (sdp.contains("\r\n")) "\r\n" else "\n"
+        return lines(sdp).filterNot { it.startsWith("a=ssrc:") || it.startsWith("a=ssrc-group:") }.joinToString(eol)
+    }
+
+    /**
      * The only shape of SDP a VettID device makes or takes today: **exactly one media section, audio, Opus alone**.
      * A device prepares frame encryption for one audio section before it applies the other side's SDP; any further
      * section (a second audio section, video, a data channel) would be media that no frame cryptor covers, so an

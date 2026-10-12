@@ -3,6 +3,7 @@ import com.android.build.api.variant.BuildConfigField
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.result.ResolvedComponentResult
 import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import java.security.MessageDigest
 import java.util.Properties
 import java.util.zip.ZipFile
 
@@ -155,6 +156,10 @@ android {
     }
 
     packaging {
+        // The media stack's native libraries (:core:calls) are prebuilt and already stripped. AGP strips native
+        // libraries again only where an NDK is installed, so two machines could package different bytes: they go
+        // into the APK exactly as the pinned artifact has them (reproducible builds; `check<Variant>Calls` compares).
+        jniLibs.keepDebugSymbols += "**/libjingle_peerconnection_so.so"
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
 
@@ -406,7 +411,15 @@ abstract class NoGoogleCheck : DefaultTask() {
                     .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
                 val classes = DEX.filter { dex.contains(it) } +
                     Regex("com\\.google\\.android\\.gms[A-Za-z0-9_.$]*").findAll(dex).map { it.value }.filterNot { it in ALLOWED }.distinct()
-                check(files.isEmpty() && classes.isEmpty()) { "${apk.name}: Google proprietary code in the foss distribution: files $files, dex $classes" }
+                // Native libraries (the media stack of :core:calls is prebuilt): the same names, as JNI class paths or
+                // as text, would mean a library that reaches for Google Play services or Firebase.
+                val native = entries.filter { it.name.startsWith("lib/") && it.name.endsWith(".so") }.flatMap { e ->
+                    val text = z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) }
+                    NATIVE.filter { text.contains(it) }.map { "${e.name}: $it" }
+                }
+                check(files.isEmpty() && classes.isEmpty() && native.isEmpty()) {
+                    "${apk.name}: Google proprietary code in the foss distribution: files $files, dex $classes, native $native"
+                }
             }
             logger.lifecycle("${apk.name}: ${modules.size} modules, none proprietary; no Google class, file or push permission in the APK")
         }
@@ -434,10 +447,115 @@ abstract class NoGoogleCheck : DefaultTask() {
          */
         val ALLOWED = setOf("com.google.android.gms.org.conscrypt.", "com.google.android.gms.org.conscrypt")
 
+        /** Strings that a native library calling into those packages would carry. */
+        val NATIVE = listOf(
+            "com/google/android/gms", "com.google.android.gms", "com/google/firebase", "com.google.firebase",
+            "com/android/vending", "com.android.vending", "com/google/android/play",
+        )
+
         /** Version and marker files those libraries put into an APK. */
         val FILES = listOf("firebase-", "play-services-", "transport-", "com.google.firebase", "com.google.android.gms")
     }
 }
+
+/**
+ * Calls (CALLS-PLAN 0.1.1, phase C1) are in the debug, devStack and staging builds only until they are promoted
+ * (STAGING-DEVELOPMENT-PLAN §2.4). `check<Variant>Calls`, run by `checkReleaseApk`, `checkFossReleaseApk` and
+ * `checkStagingApk`:
+ * - **without calls** (a release build): the APK has no media stack (no `org.webrtc` class, no native library of
+ *   it), no class of `:core:calls`, and the merged manifest none of the permissions calls need and no call component;
+ * - **with calls** (staging; a release built with `-PvettidCallsInRelease=true`): the APK is universal (the media
+ *   stack's native library for all four ABIs: no ABI split or filter, owner decision 2026-10-12) and each library is
+ *   byte for byte the one in the pinned artifact (nothing stripped or rebuilt it), and the dex has the stack.
+ */
+abstract class CallsApkCheck : DefaultTask() {
+    @get:InputFiles
+    abstract val apkDir: DirectoryProperty
+
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @get:Input
+    abstract val expected: Property<Boolean>
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+
+        fun names(tag: String) = doc.getElementsByTagName(tag).let { l -> (0 until l.length).map { (l.item(it) as org.w3c.dom.Element).getAttributeNS(ns, "name") } }
+        val permissions = names("uses-permission").filter { it in PERMISSIONS }
+        val components = listOf("activity", "activity-alias", "service", "receiver", "provider").flatMap { names(it) }
+            .filter { it.contains(".calls.") }
+        val apks = apkDir.get().asFile.listFiles { f -> f.name.endsWith(".apk") }.orEmpty()
+        require(apks.isNotEmpty()) { "no APK in ${apkDir.get().asFile}" }
+        for (apk in apks) {
+            ZipFile(apk).use { z ->
+                val entries = z.entries().asSequence().toList()
+                val libs = entries.filter { it.name.endsWith("/$LIBRARY") }.associate { e ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    z.getInputStream(e).use { input ->
+                        val buffer = ByteArray(1 shl 16)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            digest.update(buffer, 0, n)
+                        }
+                    }
+                    e.name.removePrefix("lib/").substringBefore('/') to digest.digest().joinToString("") { "%02x".format(it) }
+                }
+                val dex = entries.filter { it.name.endsWith(".dex") }
+                    .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
+                val classes = DEX.filter { dex.contains(it) }
+                if (expected.get()) {
+                    check(libs == NATIVE_SHA256) { "${apk.name}: the media stack's native libraries are $libs, expected $NATIVE_SHA256 (universal, unchanged)" }
+                    check(DEX[0] in classes) { "${apk.name}: calls are expected in this build, but the media stack's classes are missing" }
+                    logger.lifecycle("${apk.name}: calls: the media stack for ${libs.keys.sorted()}, each library as pinned")
+                } else {
+                    check(libs.isEmpty() && classes.isEmpty() && permissions.isEmpty() && components.isEmpty()) {
+                        "${apk.name}: calls are not in production builds yet, but found: libraries ${libs.keys}, dex $classes, " +
+                            "permissions $permissions, components $components"
+                    }
+                    logger.lifecycle("${apk.name}: no calls: no media stack, no call permission or component")
+                }
+            }
+        }
+    }
+
+    companion object {
+        const val LIBRARY = "libjingle_peerconnection_so.so"
+
+        /** The four libraries inside `io.github.webrtc-sdk:android:150.7871.01` (AAR SHA-256 `0a1627b1…79b0`, core/calls). */
+        val NATIVE_SHA256 = mapOf(
+            "arm64-v8a" to "7b299113fcd743de7dc5559686b21fc2681b2c8598347d8dc0743d2e004995ca",
+            "armeabi-v7a" to "762f3d5e1c4c69c3f02f2383540f40e1142cb631e9d99e86bdb1602f4c277559",
+            "x86_64" to "0717afcc43da0c1aabd904f9ef0653efc8f3d37b5750f39a123697e7910b623a",
+            "x86" to "80e7b1b7e07bb5a53841a8cacabf942a6f3eb8ee9759a1731741dd912f367f19",
+        )
+
+        /** Type descriptors: the media stack's, and :core:calls' own. */
+        val DEX = listOf("Lorg/webrtc/", "Lorg/jni_zero/", "Lcom/vettid/core/calls/", "Lcom/vettid/feature/calls/")
+
+        /** What calls will ask for (CALLS-PLAN §4); no build without calls declares any of them today. */
+        val PERMISSIONS = listOf(
+            "android.permission.RECORD_AUDIO",
+            "android.permission.MODIFY_AUDIO_SETTINGS",
+            "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+            "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+            "android.permission.MANAGE_OWN_CALLS",
+            "android.permission.BLUETOOTH_CONNECT",
+            "android.permission.USE_FULL_SCREEN_INTENT",
+        )
+    }
+}
+
+/**
+ * Calls in a release build: off. `-PvettidCallsInRelease=true` links them in, for the one CI step that keeps the
+ * F-Droid distribution building with them (`:app:assembleFossRelease :app:checkFossReleaseApk`: no Google code, the
+ * media stack as pinned). Never set for a build that is published before calls are promoted.
+ */
+val callsInRelease = providers.gradleProperty("vettidCallsInRelease").orNull == "true"
 
 val productionPins = listOf(
     "https://account.vettid.org",
@@ -490,10 +608,17 @@ androidComponents {
                 forbiddenHosts.set(listOf(if (staging) productionAccountHost else stagingAccountHost))
             }
         }
+        if (staging || v.buildType == "release") {
+            tasks.register<CallsApkCheck>("check${name}Calls") {
+                apkDir.set(v.artifacts.get(SingleArtifact.APK))
+                manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+                expected.set(staging || callsInRelease)
+            }
+        }
         when (v.buildType) {
             "release" -> {
                 val contents = tasks.register<ApkContentCheck>(if (foss) "checkFossReleaseApkContents" else "checkReleaseApk") {
-                    dependsOn("check${name}PushManifest", "check${name}ApplicationId")
+                    dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls")
                     apkDir.set(v.artifacts.get(SingleArtifact.APK))
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")))
@@ -509,7 +634,7 @@ androidComponents {
                 }
             }
             "staging" -> tasks.register<ApkContentCheck>("checkStagingApk") {
-                dependsOn("check${name}PushManifest", "check${name}ApplicationId")
+                dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls")
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
                 required.set(stagingPins)
@@ -546,6 +671,9 @@ dependencies {
     implementation(projects.core.ui)
     implementation(projects.core.data)
     implementation(projects.core.notify)
+    // Calls (CALLS-PLAN 0.1.1 phase C1): not in production builds until they are promoted (CallsApkCheck above).
+    for (type in listOf("debug", "devStack", "staging")) "${type}Implementation"(projects.core.calls)
+    if (callsInRelease) "releaseImplementation"(projects.core.calls)
     // Google push: the `full` distribution only. Looked up by path, not by accessor: an F-Droid build removes the
     // module's directory, and settings.gradle.kts then does not include it (the `foss` distribution never needs it).
     findProject(":core:push-fcm")?.let { "fullImplementation"(it) }
