@@ -240,16 +240,30 @@ out      = header || sealed || iv || 0x0C || key_index                          
 5. The failure count is not consecutive: only setting a key resets it **[S]**. With a tolerance of 10 a wrong key is
    reported after about a fifth of a second of audio.
 
-6. **A call is bound to the identity the member can see.** Before a device uses an offer or an answer it checks
-   that `peer_ik` in the event is the key whose fingerprint the app shows on that connection's details
+6. **A call is bound to the identity the app shows.** Before a device uses an offer or an answer it checks that
+   `peer_ik` in the event is the key whose fingerprint the app shows on that connection's details
    (VAULT-MESSAGING §10.8), then the share under it; for an answer, the connection is the one the call was placed
    to, whatever the event says. An event for a connection the app does not know as active is not used.
+   **What this adds:** a call cannot be bound to another key than the one on the connection's details; an event
+   that names one connection and carries another's key is refused; a call from a connection that is unknown,
+   pending, stale or blocked in the app is refused. **What it does not add:** protection against the member's own
+   vault. The connection list, with each `ik`, comes from that same vault, as `peer_ik` does: a vault that lied
+   would lie in both, consistently. That residual is the one §10.10 already states (a member's own vault is
+   trusted for that member's calls). It would become a real check only if the app pinned the key itself, when the
+   connection is made or when the member compares the verification code, and refused or warned when the vault
+   later showed another. The app does not do that today (open question for the owner).
 7. **The suite is fixed before the phone rings**: the callee chooses when it checks the offer, and does not ring
    for an offer with no suite it can do (§2.1).
 8. **Ring time is the vault's.** A callee rings for `exp` minus the event's `ts` (both the vault's clock). An offer
    that has already expired by the phone's own clock is dropped by the session layer before any of this (the
    envelope rule of §8.4), silently for the member: a phone whose clock is more than the offer's lifetime ahead
    never rings. The app counts such drops and shows the count in its call diagnostics.
+9. **Until the vault ends stale calls itself (V2, V3)** a device ends, after unlock, the calls its vault still
+   holds live while the app has none. `call.list` at S10 gives neither the call's device nor its `exp`, so this is
+   judged by the phone's clock against `started_at` and is right only while one app is the member's only call
+   device: a C3 item (a device id and a vault time in the list, or the vault's own timer).
+10. **A hang-up before a lock.** A locked vault collects nothing: the device ends a live call and waits (two
+    seconds at most) for its `call.end` to be with the relay before it asks the vault to lock.
 
 ## 8. Test vectors
 

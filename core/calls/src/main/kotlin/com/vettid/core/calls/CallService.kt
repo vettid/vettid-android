@@ -23,7 +23,10 @@ import kotlinx.coroutines.launch
 interface CallServiceHost {
     val state: StateFlow<CallState>
 
-    /** The name to show for [connectionId], or null (the notification then says "VettID call"). */
+    /**
+     * The name to show for [connectionId] in the call's notification, or null (it then says "VettID call"): null
+     * too when the member's notifications show no names (the same choice the message notifications follow).
+     */
     fun displayName(connectionId: String): String?
 
     fun hangUp()
@@ -41,6 +44,7 @@ class CallService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    @Suppress("ReturnCount")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val current = host
         if (intent?.action == ACTION_HANG_UP) current?.hangUp()
@@ -51,17 +55,34 @@ class CallService : Service() {
             stop()
             return START_NOT_STICKY
         }
-        foreground(current, live)
+        if (!foreground(current, live)) {
+            // Android refused the service for this call: without it the call would lose the microphone (or the
+            // app be ended for not showing the service it promised). The call ends instead.
+            current.hangUp()
+            stop()
+            return START_NOT_STICKY
+        }
         scope.coroutineContext[kotlinx.coroutines.Job]?.children?.forEach { it.cancel() }
         scope.launch {
-            current.state.collect { s -> if (s is CallState.Live && s.phase != CallPhase.INCOMING) foreground(current, s) else stop() }
+            current.state.collect { s ->
+                val shown = s is CallState.Live && s.phase != CallPhase.INCOMING && foreground(current, s)
+                if (!shown) stop()
+            }
         }
         return START_NOT_STICKY
     }
 
-    private fun foreground(host: CallServiceHost?, live: CallState.Live?) {
-        val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(host, live), types) }
+    /**
+     * Shows the service. With both types; if Android refuses the microphone type (the permission was taken away,
+     * or the app is not in front), with `phoneCall` alone, which keeps the call's process alive. False if neither
+     * was taken.
+     */
+    private fun foreground(host: CallServiceHost?, live: CallState.Live?): Boolean {
+        val n = notification(host, live)
+        val both = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        return listOf(both, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL).any { types ->
+            runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, n, types) }.isSuccess
+        }
     }
 
     private fun stop() {
@@ -81,7 +102,7 @@ class CallService : Service() {
             Intent(this, CallService::class.java).setAction(ACTION_HANG_UP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        // On the lock screen: that a call is going on, not with whom.
+        // On the lock screen: that a call is going on, never with whom (the public version has no name).
         val public = NotificationCompat.Builder(this, Channels.CALLS)
             .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
             .setContentTitle(getString(R.string.calls_notification_public))

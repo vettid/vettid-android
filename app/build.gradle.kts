@@ -125,6 +125,13 @@ android {
     }
 
     buildTypes.configureEach {
+        // CALLS_TEST: whether this build may switch on the call faults and the experimental DTLS trial that the
+        // two-phone tests need (:core:calls MediaFaults; CallsController refuses them otherwise). Debuggable builds
+        // always may. The staging vaults accept only the staging package under a pinned signer, so the phone tests
+        // run on a staging build: `-PvettidCallsTest=true` makes one that may (signed with the automation key by
+        // the tester, never the build members get). Never a release build.
+        val callsTest = name != "release" && (isDebuggable || (name == "staging" && providers.gradleProperty("vettidCallsTest").orNull == "true"))
+        buildConfigField("boolean", "CALLS_TEST", callsTest.toString())
         // Firebase's receiver and the messaging services exist in the manifest of every `full` build; they are
         // enabled only where the options are (src/full/AndroidManifest.xml, the only manifest that reads this; set
         // on the build type so that the unit-test manifests of a variant get it too).

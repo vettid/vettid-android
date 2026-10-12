@@ -50,10 +50,12 @@ class VaultCallSignallingTest {
         var incoming: (VaultMessage) -> IncomingCall = { throw CallMessageException("not set") }
         var accept: (OutgoingCall) -> AcceptedCall = { throw CallMessageException("not set") }
         var start: () -> OutgoingCall = { throw CallMessageException("not set") }
+        var startGate: Channel<Unit>? = null
         var answerKeys: CallKeys? = null
 
         override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall {
             asked += "start($connectionId, ${suites.map { it.id }})"
+            startGate?.receive()
             return start()
         }
 
@@ -91,8 +93,14 @@ class VaultCallSignallingTest {
     private val identities = mutableMapOf("conn-1" to "aaaa bbbb", "conn-2" to "cccc dddd")
     private val out = mutableListOf<SignalEvent>()
 
+    private var refreshes = 0
+    private var onRefresh: () -> Unit = {}
+
     private fun TestScope.signalling(suites: List<MediaSuite> = listOf(s1)): VaultCallSignalling {
-        val s = VaultCallSignalling(gateway, { identities[it] }, suites)
+        val s = VaultCallSignalling(gateway, { identities[it] }, suites) {
+            refreshes++
+            onRefresh()
+        }
         backgroundScope.launch { s.events.collect { out += it } }
         runCurrent()
         return s
@@ -260,6 +268,97 @@ class VaultCallSignallingTest {
         assertTrue("an address is not printed", !candidate(1).toString().contains("192.0.2"))
         s.end(CALL_ID, "hangup")
         assertEquals("end($CALL_ID, hangup)", gateway.asked.last())
+    }
+
+    /**
+     * Review N2: one unexpected exception under a check (a vault client that cannot be had around a lock, a relay
+     * error, anything) used to end the flow, and with it all call signalling of the process.
+     */
+    @Test
+    fun whateverGoesWrongWithOneEventTheNextIsStillHandled() = runTest {
+        val s = signalling()
+        gateway.incoming = { throw IllegalStateException("no session with the vault") }
+        gateway.channel.send(offerEvent())
+        runCurrent()
+        assertTrue(out.isEmpty())
+        assertEquals(1, s.refused.value)
+        assertEquals("counted apart from a failed check", 1, s.errors.value)
+        gateway.incoming = { throw java.io.IOException("relay") }
+        gateway.channel.send(offerEvent())
+        runCurrent()
+        gateway.incoming = { incomingCall() }
+        gateway.channel.send(offerEvent())
+        gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
+        runCurrent()
+        assertEquals(2, s.errors.value)
+        assertEquals(listOf("Offer($CALL_ID)", "End(callId=$CALL_ID, reason=hangup)"), out.map { it.toString() })
+
+        // The same under an answer: the call is over, the listening is not.
+        gateway.start = { outgoingCall() }
+        s.start("conn-1", "v=0", listOf(s1))
+        gateway.accept = { throw IllegalStateException("vault client") }
+        gateway.channel.send(answerEvent())
+        gateway.channel.send(CallEvent.Ringing(CALL_ID))
+        runCurrent()
+        assertEquals(listOf(SignalEvent.AnswerRejected(CALL_ID), SignalEvent.Ringing(CALL_ID)), out.takeLast(2))
+        assertEquals(3, s.errors.value)
+    }
+
+    /**
+     * Review N3: the app's connection list is in memory and is read after the vault opens, so the offer that was
+     * waiting in the mailbox at unlock can be handled first. It is looked for once more after the list was read.
+     */
+    @Test
+    fun aConnectionNotFoundIsLookedForOnceMoreAfterTheListWasReadAgain() = runTest {
+        val s = signalling()
+        val known = identities.remove("conn-1")!!
+        onRefresh = { identities["conn-1"] = known }
+        gateway.incoming = { incomingCall() }
+        gateway.channel.send(offerEvent())
+        runCurrent()
+        assertEquals(1, refreshes)
+        assertEquals("incoming(aaaa bbbb, [1])", gateway.asked.single())
+        assertEquals(1, out.size)
+        // A connection that is not there after it either: refused, and asked about once, not in a loop.
+        onRefresh = {}
+        gateway.channel.send(offerEvent("conn-9"))
+        runCurrent()
+        assertEquals(2, refreshes)
+        assertEquals(1, out.size)
+        assertEquals(1, s.refused.value)
+        assertEquals(0, s.errors.value)
+        // A known connection costs no reading.
+        gateway.channel.send(offerEvent())
+        runCurrent()
+        assertEquals(2, refreshes)
+    }
+
+    /**
+     * Review N4: the vault can pass the answer on before its answer to `call.start` has been read here. It used to
+     * be dropped as "not a call this device placed".
+     */
+    @Test
+    fun anAnswerThatOvertakesTheAnswerToCallStartIsUsed() = runTest {
+        val s = signalling()
+        gateway.startGate = Channel(1)
+        gateway.start = { outgoingCall() }
+        gateway.accept = { AcceptedCall(CALL_ID, "v=0 answer", keys()) }
+        val starting = backgroundScope.launch { s.start("conn-1", "v=0", listOf(s1)) }
+        runCurrent()
+        gateway.channel.send(answerEvent())
+        // And one for another call, which is nobody's.
+        gateway.channel.send(answerEvent("01JB2Z6V9K3M4N5P6Q7R8S9T51"))
+        runCurrent()
+        assertTrue(out.isEmpty() && gateway.asked.none { it.startsWith("accept") })
+        gateway.startGate!!.send(Unit)
+        runCurrent()
+        assertTrue(starting.isCompleted)
+        assertEquals("v=0 answer", (out.single() as SignalEvent.Answer).sdp)
+        assertEquals(1, gateway.asked.count { it.startsWith("accept") })
+        // Outside a start, an answer for no call is dropped as before.
+        gateway.channel.send(answerEvent("01JB2Z6V9K3M4N5P6Q7R8S9T52"))
+        runCurrent()
+        assertEquals(1, out.size)
     }
 
     /** Only `CallApi` may make a verified call object: no production source outside `:core:vault` opts in. */

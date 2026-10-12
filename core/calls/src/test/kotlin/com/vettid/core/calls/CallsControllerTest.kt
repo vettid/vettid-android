@@ -54,9 +54,18 @@ class CallsControllerTest {
             return OutgoingCall(CALL_ID, connectionId, "audio", T0.plusSeconds(45), ice, listOf(1), KemPrivateKey.generate())
         }
 
-        override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall = error("unused")
+        var incoming = false
+        var endGate: Channel<Unit>? = null
 
-        override suspend fun answer(call: IncomingCall, sdp: String): CallKeys = error("unused")
+        override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall {
+            check(incoming) { "unused" }
+            val ice = CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList())
+            val n = com.vettid.core.crypto.call.CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
+            return IncomingCall(CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216))
+        }
+
+        override suspend fun answer(call: IncomingCall, sdp: String): CallKeys =
+            CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
 
         override suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall =
             AcceptedCall(call.callId, "v=0", CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 5 }, ByteArray(32) { 6 }))
@@ -66,6 +75,7 @@ class CallsControllerTest {
         override suspend fun ice(callId: String, candidates: List<CallCandidate>) = Unit
 
         override suspend fun end(callId: String, reason: String) {
+            endGate?.receive()
             sent += "end($callId, $reason)"
         }
 
@@ -79,6 +89,12 @@ class CallsControllerTest {
         override val unlocked = MutableStateFlow(false)
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        override val recheck = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+        var refreshed = 0
+
+        override suspend fun refreshConnections() {
+            refreshed++
+        }
 
         override suspend fun fingerprint(connectionId: String): String? = "aaaa bbbb"
 
@@ -119,8 +135,8 @@ class CallsControllerTest {
     private var microphone = true
     private var services = 0
 
-    private fun TestScope.controller(config: MediaConfig = MediaConfig(), debuggable: Boolean = false) = CallsController(
-        vault, engines, backgroundScope, audio, audio, { microphone }, { services++ }, config, debuggable,
+    private fun TestScope.controller(config: MediaConfig = MediaConfig(), testBuild: Boolean = false) = CallsController(
+        vault, engines, backgroundScope, audio, audio, { microphone }, { services++ }, config, testBuild,
         now = { T0.plusMillis(testScheduler.currentTime) },
     )
 
@@ -272,9 +288,113 @@ class CallsControllerTest {
 
     @Test
     fun thePostQuantumTrialCanBeAskedForInADebugBuildOnly() = runTest {
-        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(dtlsPqcTrial = true), debuggable = false) }
-        controller(MediaConfig(dtlsPqcTrial = true), debuggable = true)
-        controller(MediaConfig(), debuggable = false)
+        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(dtlsPqcTrial = true), testBuild = false) }
+        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(faults = MediaFaults(sendUnencrypted = true))) }
+        val plain = controller(MediaConfig(), testBuild = false)
+        assertThrows(IllegalStateException::class.java) { plain.setMediaConfig(MediaConfig(faults = MediaFaults(keepRemoteSsrc = true))) }
+        assertThrows(IllegalStateException::class.java) { plain.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
+        assertEquals(MediaConfig(), plain.mediaConfig)
+        val test = controller(MediaConfig(dtlsPqcTrial = true), testBuild = true)
+        test.setMediaConfig(MediaConfig(faults = MediaFaults(wrongSendKey = true)))
+        // The next call's engine gets it.
+        vault.unlocked.value = true
+        runCurrent()
+        test.call("conn-1")
+        runCurrent()
+        assertEquals(MediaConfig(faults = MediaFaults(wrongSendKey = true)), engines.config)
+    }
+
+    /** Review N5: removing the gate on Answer used to fail no test. */
+    @Test
+    fun noAnswerWithoutTheMicrophone() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        var asked = 0
+        backgroundScope.launch { c.microphoneNeeded.collect { asked++ } }
+        vault.gateway.incoming = true
+        val offer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T62", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(offer)))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
+        assertTrue("the phone rings", audio.ringtone)
+        microphone = false
+        c.answer()
+        runCurrent()
+        assertEquals(1, asked)
+        assertEquals("still ringing: nothing was answered", CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
+        assertTrue(engines.created.isEmpty())
+        microphone = true
+        c.answer()
+        runCurrent()
+        assertEquals(CallPhase.CONNECTING, (c.state.value as CallState.Live).phase)
+    }
+
+    /** Review N5: the sweep must never end the call that is going on. */
+    @Test
+    fun theSweepLeavesALiveCallAlone() = runTest {
+        var asks = 0
+        vault.gateway.list = {
+            // The first unlock finds nothing; the vault is asked again later, during a call it holds as active.
+            if (asks++ == 0) emptyList() else listOf(record(CALL_ID, "active", "out"))
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(c.state.value is CallState.Live)
+        // Asked again (the daily check was done, say) while the call is live.
+        c.forgetProbeForTest()
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(2, asks)
+        assertTrue("the live call was not swept", vault.gateway.sent.none { it.startsWith("end(") })
+        assertTrue(c.state.value is CallState.Live)
+    }
+
+    /** Review N5: a refusal that is not "no calls" is asked about again when something changes. */
+    @Test
+    fun aRefusedProbeIsRepeatedWhenTheVaultMayAnswer() = runTest {
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
+        vault.gateway.list = { emptyList() }
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(CallAvailability.READY, c.availability.value)
+        // Once known, it is not asked again for every change.
+        val asked = vault.gateway.sent.count { it.startsWith("list") }
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(asked, vault.gateway.sent.count { it.startsWith("list") })
+    }
+
+    /** Review N5: the lock waits for the hang-up to be with the relay; a locked vault would not collect it. */
+    @Test
+    fun theCallIsEndedAndItsHangUpDeliveredBeforeTheVaultLocks() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.endCallBeforeLock() // nothing live: returns at once
+        c.call("conn-1")
+        runCurrent()
+        val gate = Channel<Unit>(1)
+        vault.gateway.endGate = gate
+        var done = false
+        backgroundScope.launch {
+            c.endCallBeforeLock()
+            done = true
+        }
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, (c.state.value as CallState.Ended).reason)
+        assertTrue("the lock still waits: the hang-up is not with the relay yet", !done)
+        gate.send(Unit)
+        runCurrent()
+        assertTrue(done)
+        assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
     }
 
     @Test

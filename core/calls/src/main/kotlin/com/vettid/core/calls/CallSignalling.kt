@@ -68,8 +68,11 @@ sealed interface SignalEvent {
  * What the call state machine needs of the vault (VAULT-MESSAGING §10.10), so that it can be tested without one.
  * The implementation over `VaultApi` keeps each call's key material, verifies everything before it reaches
  * [events], and negotiates the media suite from the engine's [MediaEngine.suites].
+ *
+ * Internal: [CallMachine] trusts what this gives it, so there is one implementation outside tests,
+ * [VaultCallSignalling], and no other module can add a second.
  */
-interface CallSignalling {
+internal interface CallSignalling {
     val events: Flow<SignalEvent>
 
     /** `call.start`. Throws [CallRefusedException] with the vault's code, [CallSecurityException], or an [IOException]. */

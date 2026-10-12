@@ -141,6 +141,11 @@ The A2 exit test:
   A release APK must not contain the call strings of `callsMarkers` (app/build.gradle.kts): no code that ships in
   release may reach `CallApi`. A release built with `-PvettidCallsInRelease=true` has the application id
   `com.vettid.app.callscheck`: a check build, never published.
+  The other side's SDP reaches the media stack without `a=ssrc` lines (a signalled SSRC would leave every other
+  SSRC of the section outside the frame decryption); `MediaFaults` and the DTLS trial are for test builds only
+  (`BuildConfig.CALLS_TEST`: debuggable builds, or staging built with `-PvettidCallsTest=true` for the two-phone
+  tests, which need a build the staging vaults accept). `VaultManager.onBeforeLock`: a live call's hang-up reaches
+  the vault before the lock (2 s at most). `CallSignalling` and `CallMachine` are internal to `:core:calls`.
 
 ## Device testing
 

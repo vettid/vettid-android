@@ -3,6 +3,7 @@ package com.vettid.core.calls
 import com.vettid.core.crypto.call.MediaSuite
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -21,7 +22,7 @@ class CallMachineTest {
     private val engines = FakeEngines()
 
     private fun TestScope.machine(s: CallSignalling = signalling, e: MediaEngineFactory = engines, config: MediaConfig = MediaConfig()) =
-        CallMachine(s, e, backgroundScope, { T0.plusMillis(testScheduler.currentTime) }, { testScheduler.currentTime }, config = config)
+        CallMachine(s, e, backgroundScope, { T0.plusMillis(testScheduler.currentTime) }, { testScheduler.currentTime }, config = { config })
 
     private fun CallMachine.live() = state.value as CallState.Live
 
@@ -523,6 +524,28 @@ class CallMachineTest {
         assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
         assertEquals("end($CALL_ID, failed)", signalling.sent.last())
         assertTrue(engine.closed)
+    }
+
+    /**
+     * Review N2: whatever ends the listening to the vault's events, it starts again. (The signalling refuses and
+     * counts what goes wrong, so this is the second lock.) Before the fix the phone never rang again until restart.
+     */
+    @Test
+    fun theListeningToTheVaultStartsAgainAfterAFailure() = runTest {
+        var collections = 0
+        val flaky = object : FakeSignalling() {
+            override val events = kotlinx.coroutines.flow.flow {
+                if (collections++ == 0) error("no session with the vault")
+                channel.receiveAsFlow().collect { emit(it) }
+            }
+        }
+        val m = machine(flaky)
+        runCurrent()
+        assertEquals(1, m.listenRestarts.value)
+        advanceTimeBy(1_001)
+        flaky.deliver(offer())
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, m.live().phase)
     }
 
     /**

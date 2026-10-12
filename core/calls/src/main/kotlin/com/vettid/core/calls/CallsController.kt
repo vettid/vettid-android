@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Duration
@@ -38,6 +40,15 @@ interface CallVault {
 
     /** The types of the vault's messages this phone dropped for their time (a wrong clock shows here). */
     val droppedForTime: Flow<String>
+
+    /** Reads the app's connections again (an offer can be handled before the list has been read after an unlock). */
+    suspend fun refreshConnections()
+
+    /**
+     * Something changed that may make the vault answer where it refused before (the daily check was done, a vault
+     * operation succeeded): if it is not yet known whether the vault has calls, it is asked again.
+     */
+    val recheck: Flow<Unit>
 }
 
 /** What is known beyond one call, for the diagnostics view and the phone tests. Counts only. */
@@ -51,6 +62,10 @@ data class CallsDiagnostics(
     val droppedForTime: Int = 0,
     /** Calls left live in the vault by an earlier run of the app, ended at unlock. */
     val staleEnded: Int = 0,
+    /** Of [refused], the ones where something failed (the vault client, the relay) rather than a check. */
+    val errors: Int = 0,
+    /** How often the listening to the vault's call events had to be started again (expected: 0). */
+    val listenRestarts: Int = 0,
 )
 
 /**
@@ -76,19 +91,34 @@ class CallsController(
     private val microphoneGranted: () -> Boolean,
     private val startService: () -> Unit,
     config: MediaConfig = MediaConfig(),
-    /** Whether this is a debuggable build: the only kind that may ask for [MediaConfig.dtlsPqcTrial]. */
-    debuggable: Boolean = false,
+    /**
+     * Whether this build was made for the phone tests: the only kind that may ask for [MediaConfig.dtlsPqcTrial]
+     * or any of [MediaFaults] (owner decision 2026-10-12: known-good algorithms only; and no build a member uses
+     * can break a rule on purpose).
+     */
+    private val testBuild: Boolean = false,
     private val now: () -> Instant = Instant::now,
     timings: CallTimings = CallTimings(),
 ) : CallAccess, CallServiceHost {
-    init {
-        // Owner decision 2026-10-12: known-good algorithms only; the experimental trial is for measurement in
-        // debug builds.
-        check(!config.dtlsPqcTrial || debuggable) { "the post-quantum DTLS trial is for debug builds only" }
+    @Volatile
+    private var mediaConfigValue = checked(config)
+
+    /** How the next call's media engine is set up. */
+    val mediaConfig: MediaConfig get() = mediaConfigValue
+
+    private fun checked(c: MediaConfig): MediaConfig {
+        val plain = !c.dtlsPqcTrial && !c.faults.any
+        check(testBuild || plain) { "the post-quantum DTLS trial and the test faults are for test builds only" }
+        return c
     }
 
-    private val signalling = VaultCallSignalling(vault.gateway, vault::fingerprint, engines.suites)
-    private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = config)
+    /** Test builds only: changes how the next call's engine is set up. Throws in any other build. */
+    fun setMediaConfig(c: MediaConfig) {
+        mediaConfigValue = checked(c)
+    }
+
+    private val signalling = VaultCallSignalling(vault.gateway, vault::fingerprint, engines.suites, vault::refreshConnections)
+    private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfigValue })
 
     /** The call, for the call screens. */
     override val state: StateFlow<CallState> = machine.state
@@ -107,18 +137,38 @@ class CallsController(
     val microphoneNeeded: SharedFlow<Unit> = microphoneFlow.asSharedFlow()
 
     /** Whether the vault's release has calls; null until it has been asked since the last unlock. */
+    @Volatile
     private var supported: Boolean? = null
+
+    @Volatile
+    private var open = false
+
+    @Volatile
+    private var probing = false
     private var longCall: Job? = null
 
     init {
-        scope.launch { vault.unlocked.collectLatest { open -> if (open) opened() else locked() } }
+        scope.launch {
+            vault.unlocked.collectLatest { isOpen ->
+                open = isOpen
+                if (isOpen) opened() else locked()
+            }
+        }
         scope.launch { machine.state.collect { around(it) } }
         scope.launch { signalling.refused.collect { n -> diagnosticsFlow.update { it.copy(refused = n) } } }
+        scope.launch { signalling.errors.collect { n -> diagnosticsFlow.update { it.copy(errors = n) } } }
+        scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }
+        scope.launch { vault.recheck.collect { if (open && supported == null && !probing) opened() } }
         scope.launch {
             vault.droppedForTime.collect { type ->
                 if (type.startsWith("call.")) diagnosticsFlow.update { it.copy(droppedForTime = it.droppedForTime + 1) }
             }
         }
+    }
+
+    /** Tests: as if the vault had not been asked yet. */
+    internal fun forgetProbeForTest() {
+        supported = null
     }
 
     // --- the member ---
@@ -146,8 +196,28 @@ class CallsController(
 
     // --- the vault ---
 
-    @Suppress("ReturnCount")
     private suspend fun opened() {
+        probing = true
+        try {
+            probe()
+        } finally {
+            probing = false
+        }
+    }
+
+    /**
+     * Ends a live call and waits until its `call.end` is with the relay, before the vault is locked: a locked vault
+     * collects nothing, so a hang-up sent after the lock would wait in its mailbox while the other member listens
+     * to silence. The caller bounds the wait; the lock happens whatever becomes of this.
+     */
+    suspend fun endCallBeforeLock() {
+        if (machine.state.value !is CallState.Live) return
+        machine.vaultLocking()
+        combine(machine.state, machine.pendingEnds) { s, pending -> s !is CallState.Live && pending == 0 }.first { it }
+    }
+
+    @Suppress("ReturnCount")
+    private suspend fun probe() {
         supported = null
         publish()
         repeat(PROBE_ATTEMPTS) { attempt ->
@@ -173,6 +243,11 @@ class CallsController(
      * Calls the vault still holds live while this app has none: left by a run of the app that ended during a call.
      * Ended there, or the vault answers every call `busy` for up to 12 hours (CALLS-PLAN §6.1 V3). A ringing call
      * is left alone while it could still be ringing.
+     *
+     * FOR C3 (a second device, the app closed): `call.list` at S10 gives neither the call's device nor its `exp`,
+     * so "stale" is judged by this phone's clock against `started_at`, and a live record is taken to be this
+     * device's. Both are right only while one app is the member's only call device; with the vault's V2 and V3
+     * (CALLS-PLAN §6.1) this sweep goes away, or it must use a device id and a vault time from the list.
      */
     private suspend fun endStale(records: List<CallRecord>) {
         if (machine.state.value is CallState.Live) return

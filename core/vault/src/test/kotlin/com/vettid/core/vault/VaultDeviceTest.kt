@@ -44,6 +44,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonPrimitive
@@ -1297,17 +1299,18 @@ class VaultDeviceTest {
             assertThrows(CallMessageException::class.java) { runBlocking { api.callIce(callId, listOf(CallCandidate("c".repeat(1025)))) } }
 
             // The other side's candidates and the end of the call, as events.
-            val got = async { api.callIce.first() }
-            val ended = async { api.callEnds.first() }
-            val rang = async { api.callRingings.first() }
+            val got = async { api.callEvents.take(3).toList() }
             kotlinx.coroutines.yield()
             kotlinx.coroutines.delay(100)
             d.handle(v.seal("call.ice", """{"call_id":"$callId","candidates":[{"candidate":"candidate:9","sdp_mid":"0","sdp_mline_index":0}]}"""))
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"not a call","sent_at":"x"}"""))
             d.handle(v.seal("call.ringing", """{"call_id":"$callId"}"""))
             d.handle(v.seal("call.end", """{"call_id":"$callId","reason":"hangup"}"""))
-            assertEquals(CallIce(callId, listOf(CallCandidate("candidate:9", "0", 0))), got.await())
-            assertEquals(callId, rang.await())
-            assertEquals(CallEnded(callId, "hangup"), ended.await())
+            // One flow, in the vault's order.
+            assertEquals(
+                listOf(CallEvent.Ice(CallIce(callId, listOf(CallCandidate("candidate:9", "0", 0)))), CallEvent.Ringing(callId), CallEvent.Ended(callId, "hangup")),
+                got.await(),
+            )
         }
     }
 

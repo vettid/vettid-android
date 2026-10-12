@@ -99,7 +99,7 @@ class FakeEngines(
 /** Signalling that records what was sent and delivers what the test gives it. */
 open class FakeSignalling : CallSignalling {
     val channel = Channel<SignalEvent>(Channel.UNLIMITED)
-    override val events: Flow<SignalEvent> = channel.receiveAsFlow()
+    override val events: Flow<SignalEvent> get() = channel.receiveAsFlow()
     val sent = mutableListOf<String>()
     val ice = mutableListOf<List<CallCandidate>>()
     var startResult: () -> PlacedCall = { PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList()) }

@@ -386,8 +386,31 @@ class VaultManager(
      */
     suspend fun vaultApi(): VaultApi = session().api
 
+    private val clientFlow = MutableStateFlow<VaultApi?>(null)
+
+    /**
+     * The typed vault client in use, from the moment its session exists (before the vault is open) until it is
+     * dropped: a module that listens to the vault's events subscribes here, so that nothing collected right at an
+     * unlock is missed (the device's events are not replayed).
+     */
+    val vaultClients: StateFlow<VaultApi?> = clientFlow.asStateFlow()
+
+    private val beforeLock = java.util.concurrent.CopyOnWriteArrayList<suspend () -> Unit>()
+
+    /**
+     * Something to finish while the vault still collects, before the member's lock: for example ending a call, so
+     * that its hang-up reaches the vault. Every hook together gets [BEFORE_LOCK_MS]; the lock happens whatever
+     * becomes of them.
+     */
+    fun onBeforeLock(hook: suspend () -> Unit) {
+        beforeLock += hook
+    }
+
     private suspend fun session(): Session = mutex.withLock {
-        session ?: openSession().also { session = it }
+        session ?: openSession().also {
+            session = it
+            clientFlow.value = it.api
+        }
     }
 
     private suspend fun openSession(): Session = io {
@@ -413,6 +436,7 @@ class VaultManager(
         observer = null
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
         session = null
+        clientFlow.value = null
         refusals.clear()
         if (forget) {
             io {
@@ -898,6 +922,7 @@ class VaultManager(
 
     override suspend fun lock() = guard {
         lockedHere = true
+        withTimeoutOrNull(BEFORE_LOCK_MS) { for (hook in beforeLock) runCatching { hook() } }
         val s = session()
         val viaRelay = try {
             withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
@@ -1361,6 +1386,7 @@ class VaultManager(
             observer = null
             val d = session?.device
             session = null
+            clientFlow.value = null
             if (d != null) {
                 // Best effort, bounded: the relay forgets the mailbox; the wipe does not depend on it.
                 withTimeoutOrNull(BEST_EFFORT_MS) { runCatching { io { d.deleteMailbox() } } }
@@ -1545,6 +1571,9 @@ class VaultManager(
         const val MIN_TTL = 30
         const val MAX_TTL = 3600
         private const val LOCK_TIMEOUT_MS = 10_000L
+
+        /** What the hooks of [onBeforeLock] get together before the vault is locked. */
+        private const val BEFORE_LOCK_MS = 2_000L
         private const val LIST_PAGE = 500
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16

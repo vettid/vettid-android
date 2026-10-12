@@ -73,7 +73,7 @@ object CallReason {
  * Marks the constructors of the objects that only this file's functions should make: an [IncomingCall] or an
  * [AcceptedCall] says "every signature was checked", and nothing but [callIncoming] and [callAccept] can say that.
  * The constructors are reachable so that code built on these types can be tested with fakes; a test opts in.
- * No production source outside `:core:vault` may (`CallWiringTest` in `:core:calls` reads the sources for it).
+ * No production source outside `:core:vault` may (`VaultCallSignallingTest` in `:core:calls` reads the sources for it).
  */
 @RequiresOptIn(message = "Only CallApi makes these: a hand-made one has had nothing verified.", level = RequiresOptIn.Level.ERROR)
 @Retention(AnnotationRetention.BINARY)
@@ -505,18 +505,3 @@ val VaultApi.callEvents: Flow<CallEvent>
             else -> null
         }
     }
-
-/** `call.offer` events, unchecked: pass each to [callIncoming]. */
-val VaultApi.callOffers: Flow<VaultMessage> get() = events("call.offer")
-
-/** `call.answer` events, unchecked: pass the one of this device's call to [callAccept]. */
-val VaultApi.callAnswers: Flow<VaultMessage> get() = events("call.answer")
-
-/** `call.ringing`: the callee's device rings. */
-val VaultApi.callRingings: Flow<String> get() = events("call.ringing").mapNotNull { VaultJson.str(it.body, "call_id") }
-
-/** `call.end`: hung up, declined, busy, timed out, answered on another device, unavailable or failed. */
-val VaultApi.callEnds: Flow<CallEnded> get() = events("call.end").mapNotNull(::parseEnd)
-
-/** `call.ice`: the other device's candidates. They may arrive before the answer (caller) or before Answer is tapped (callee). */
-val VaultApi.callIce: Flow<CallIce> get() = events("call.ice").mapNotNull(::parseIce)
