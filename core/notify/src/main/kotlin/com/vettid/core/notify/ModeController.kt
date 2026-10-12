@@ -5,6 +5,7 @@ import com.vettid.core.data.vault.AppPhase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 
 /** Starts and stops the on-phone service ([VaultConnectionService] on a phone; a fake in tests). */
@@ -42,6 +43,9 @@ class ModeController(
     private val registration: PushControl = NoPushControl,
 ) {
     private var serviceOn = false
+
+    /** [ServiceControl.stop] was called for this phone without a vault. */
+    private var stoppedWithoutVault = false
     private var pushOn = false
 
     /** Google push is the mode on a phone with a vault, and the push service is not usable. */
@@ -71,15 +75,25 @@ class ModeController(
         val unavailable = pushMode && !wantPush
         val wantService = enrolled && (mode == NotificationMode.SERVICE || unavailable || wantPush && serviceForPush())
         leavePush(wantPush, unavailable, enrolled)
-        if (!wantService && serviceOn) {
-            service.stop()
-            serviceOn = false
-        }
+        if (!wantService) stopService(enrolled)
+        stoppedWithoutVault = !enrolled
         if (wantService && !serviceOn) serviceOn = service.start()
         if (wantPush && !pushOn) {
             registration.enable()
             pushOn = true
         }
+    }
+
+    /**
+     * The service is not wanted: it stops if this process started it. Without a vault it is stopped also when this
+     * process never started it (once): Android restarts the service by itself in a new process, and a build before
+     * 2026-10-11 could leave its notification behind ([ServiceControl.stop] cancels it).
+     */
+    private fun stopService(enrolled: Boolean) {
+        val leftover = !enrolled && !stoppedWithoutVault
+        if (!serviceOn && !leftover) return
+        service.stop()
+        serviceOn = false
     }
 
     /** The registration that is no longer wanted, or cannot work, is dropped before anything else starts. */
@@ -116,5 +130,18 @@ class ModeController(
             AppPhase.Unlocked, AppPhase.Locked, is AppPhase.Unreachable -> true
             else -> false
         }
+    }
+}
+
+/**
+ * A phone without a vault shows no notification of VettID: whenever the phase is [AppPhase.SignedOut] (the welcome
+ * screen: at app start with no vault, after a wipe, a deleted vault, a dropped setup code), [cancelAll] runs. This
+ * also clears what an earlier build left behind (owner report 2026-10-11: the on-phone service's notification on a
+ * phone that had given its vault away). A running foreground service keeps its notification through Android's
+ * `cancelAll`; it removes its own when it stops ([ServiceNotice]).
+ */
+class NoVaultSweep(private val scope: CoroutineScope, private val phase: Flow<AppPhase>, private val cancelAll: () -> Unit) {
+    fun start() {
+        scope.launch { phase.filter { it == AppPhase.SignedOut }.collect { runCatching { cancelAll() } } }
     }
 }

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.AppLockState
+import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.policy.DeletePhrase
 import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.prefs.AppLockMethod
@@ -52,6 +53,10 @@ data class SettingsUiState(
     val screenLockSet: Boolean = true,
     /** A release update to approve (ANDROID-PLAN 0.1.19): the "Update available" row. */
     val update: ReleaseUpdateOffer? = null,
+    /** "Allow screenshots" is on (A6 audit S1): the app is not kept out of screenshots, recordings and Recents. */
+    val screenshotsAllowed: Boolean = false,
+    /** A development build: the allowance does not end by itself (the row says so). */
+    val screenshotsStayOn: Boolean = false,
 )
 
 /** Settings (ANDROID-PLAN §4): theme (DataStore), app lock and its timeout (D6), lock vault; the account read-only. */
@@ -63,10 +68,14 @@ class SettingsViewModel @Inject constructor(
     private val appLock: AppLock,
     private val profiles: ProfileRepository,
     updates: ReleaseUpdateRepository,
+    private val screenshots: ScreenshotAllowance,
 ) : ViewModel() {
-    private val local = MutableStateFlow(SettingsUiState())
+    private val local = MutableStateFlow(
+        SettingsUiState(screenshotsAllowed = screenshots.allowed.value, screenshotsStayOn = screenshots.staysOn),
+    )
 
     init {
+        viewModelScope.launch { screenshots.allowed.collect { on -> local.update { it.copy(screenshotsAllowed = on) } } }
         viewModelScope.launch { updates.offer.collect { o -> local.update { it.copy(update = o) } } }
         viewModelScope.launch { appLock.method.collect { m -> local.update { it.copy(appLockMethod = m) } } }
         viewModelScope.launch { profiles.profile.collect { p -> local.update { it.copy(photo = p?.photo) } } }
@@ -92,6 +101,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun acknowledgeInvalidated() = appLock.acknowledgeInvalidated()
+
+    /**
+     * "Allow screenshots" (owner decision 2026-10-11): on after the screen's confirmation, until the vault locks or
+     * an hour has passed; a local, in-memory choice that is never stored or sent to the vault.
+     */
+    fun setScreenshotsAllowed(on: Boolean) = if (on) screenshots.allow() else screenshots.disallow()
 
     /** The method while the lock is off; with the lock on the activity's prompt changes it (a new key). */
     fun chooseAppLockMethod(m: AppLockMethod) {

@@ -1,5 +1,6 @@
 package com.vettid.app.di
 
+import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import com.vettid.app.env.currentEnvironment
@@ -18,6 +19,7 @@ import com.vettid.core.notify.AndroidServiceControl
 import com.vettid.core.notify.BootStart
 import com.vettid.core.notify.FeedNotifier
 import com.vettid.core.notify.ModeController
+import com.vettid.core.notify.NoVaultSweep
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.NotifySettings
 import com.vettid.core.notify.NotifyVisibility
@@ -35,6 +37,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withTimeoutOrNull
 import com.vettid.app.BuildConfig
 import com.vettid.core.data.lock.AppLock
+import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
 import com.vettid.core.data.prefs.DataStorePreferencesRepository
@@ -45,6 +48,7 @@ import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.AccountRepository
+import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.CanaryManifestInbox
 import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CredentialRepository
@@ -305,7 +309,14 @@ object AppModule {
         prefs: PreferencesRepository,
         @AppScope scope: CoroutineScope,
         notes: ReleaseNotesRepository,
-    ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope, notes)
+        m: VaultManager,
+    ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope, notes) { m.phase.value == AppPhase.SignedOut }
+
+    /** No vault on this phone: no notification of VettID stays (owner report 2026-10-11). */
+    @Provides
+    @Singleton
+    fun noVaultSweep(@ApplicationContext context: Context, m: VaultManager, @AppScope scope: CoroutineScope): NoVaultSweep =
+        NoVaultSweep(scope, m.phase) { context.getSystemService(NotificationManager::class.java)?.cancelAll() }
 
     /**
      * What's new (ANDROID-PLAN 0.1.31): the channel's release log on the pinned manifest's host, in memory only.
@@ -333,6 +344,15 @@ object AppModule {
     @Singleton
     fun appLock(@ApplicationContext context: Context, prefs: PreferencesRepository): AppLock =
         AppLock(prefs, KeystoreAppLockKeys(), FileWrappedKeyFile(File(context.noBackupFilesDir, "app-lock.bin")))
+
+    /**
+     * "Allow screenshots" (A6 audit S1): off in release and staging builds until the member turns it on; on in the
+     * development builds (debug, devStack), whose screens are screenshotted all the time.
+     */
+    @Provides
+    @Singleton
+    fun screenshotAllowance(@AppScope scope: CoroutineScope): ScreenshotAllowance =
+        ScreenshotAllowance(onByDefault = BuildConfig.DEBUG, scope = scope, now = android.os.SystemClock::elapsedRealtime)
 
     @Provides
     @Singleton

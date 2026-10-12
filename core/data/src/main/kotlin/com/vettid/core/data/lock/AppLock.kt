@@ -285,8 +285,13 @@ class AppLock(
         stateFlow.value = AppLockState.LOCKED
     }
 
-    fun onBackground() {
-        if (authenticating) return
+    /**
+     * The activity stopped. Not counted as leaving the app while a prompt shows, nor when the activity is only being
+     * recreated for a configuration change ([changingConfigurations]: rotation, fold, theme): with the timeout
+     * "Immediately" either would lock the app in the member's hands.
+     */
+    fun onBackground(changingConfigurations: Boolean = false) {
+        if (authenticating || changingConfigurations) return
         backgroundAt = now()
     }
 

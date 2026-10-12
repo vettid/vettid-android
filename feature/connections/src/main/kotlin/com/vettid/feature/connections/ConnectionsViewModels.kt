@@ -355,8 +355,13 @@ class AcceptViewModel @Inject constructor(
     val uiState: StateFlow<AcceptUiState> = state.asStateFlow()
 
     init {
-        // A scanned code arrives with the route: accept it at once. An opened link waits for the member.
-        if (state.value.input.isNotBlank() && !state.value.fromLink) accept()
+        // A scanned code arrives with the route: accept it at once. An opened link waits for the member. Once only:
+        // a ViewModel rebuilt from saved state (the activity was destroyed in the background) shows the code and
+        // waits for the member, as the invitation was sent to the vault already and is single use (A6 audit R5).
+        if (state.value.input.isNotBlank() && !state.value.fromLink && savedState.get<Boolean>(KEY_SENT) != true) {
+            savedState[KEY_SENT] = true
+            accept()
+        }
         viewModelScope.launch {
             val sources = combine(approvals.approvals, repo.connections, approvals.requestEnds) { a, c, e -> Triple(a, c, e) }
             sources.collect { (list, cs, ends) ->
@@ -450,6 +455,9 @@ class AcceptViewModel @Inject constructor(
 
     private companion object {
         val FOLLOWED = setOf(AcceptStep.WAITING, AcceptStep.COMPARE, AcceptStep.APPROVED)
+
+        /** Saved state: the route's scanned code was sent to the vault by an earlier instance of this ViewModel. */
+        const val KEY_SENT = "accept_sent"
     }
 }
 

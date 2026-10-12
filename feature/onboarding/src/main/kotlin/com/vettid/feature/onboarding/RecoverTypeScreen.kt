@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import com.vettid.core.altchan.RecoveryCodes
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.SecureWindow
+import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.theme.Spacing
 
@@ -72,34 +73,36 @@ internal fun RecoverTypeScreen(
         modifier = Modifier.testTag("recover_type"),
     ) {
         PasteOnly {
-            OutlinedTextField(
-                value = state.typed,
-                onValueChange = actions::setTyped,
-                label = { Text(stringResource(R.string.recover_type_label)) },
-                minLines = TypedCodeTransformation.ROWS,
-                enabled = !state.busy,
-                isError = problem != null,
-                supportingText = { Text(groups, Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("typed_groups")) },
-                textStyle = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
-                visualTransformation = TypedCodeTransformation,
-                // A password-class text keyboard: no autocorrect, no suggestions and no personalized learning. The
-                // characters stay visible (the transformation above only groups them).
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Characters,
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                    autoCorrectEnabled = false,
-                ),
-                keyboardActions = KeyboardActions(onDone = { actions.submitTyped() }),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .excludeFromAutofill()
-                    .semantics {
-                        stateDescription = groups
-                        if (problem != null) error(problem)
-                    }
-                    .testTag("recover_typed"),
-            )
+            NoKeyboardLearning {
+                OutlinedTextField(
+                    value = state.typed,
+                    onValueChange = actions::setTyped,
+                    label = { Text(stringResource(R.string.recover_type_label)) },
+                    minLines = TypedCodeTransformation.ROWS,
+                    enabled = !state.busy,
+                    isError = problem != null,
+                    supportingText = { Text(groups, Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("typed_groups")) },
+                    textStyle = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+                    visualTransformation = TypedCodeTransformation,
+                    // A password-class text keyboard: no autocorrect, no suggestions and no personalized learning. The
+                    // characters stay visible (the transformation above only groups them).
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Characters,
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done,
+                        autoCorrectEnabled = false,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { actions.submitTyped() }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .excludeFromAutofill()
+                        .semantics {
+                            stateDescription = groups
+                            if (problem != null) error(problem)
+                        }
+                        .testTag("recover_typed"),
+                )
+            }
         }
         if (problem != null) {
             Spacer(Modifier.height(Spacing.s))

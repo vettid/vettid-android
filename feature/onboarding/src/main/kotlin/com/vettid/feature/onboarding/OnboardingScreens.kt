@@ -56,7 +56,9 @@ import com.vettid.core.ui.components.RookLogo
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.StepList
 import com.vettid.core.ui.components.StrengthMeter
+import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
+import com.vettid.core.ui.components.visibleSecretKeyboard
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
@@ -254,26 +256,25 @@ fun SetupTypeScreen(state: OnboardingUiState, actions: OnboardingActions, onBack
             modifier = Modifier.fillMaxWidth().testTag("setup_email"),
         )
         Spacer(Modifier.height(Spacing.m))
-        OutlinedTextField(
-            value = state.codeInput,
-            onValueChange = actions::setCode,
-            label = { Text(stringResource(R.string.onboarding_setup_code_label)) },
-            placeholder = { Text("XXXX-XXXX") },
-            singleLine = true,
-            isError = state.codeInvalid,
-            supportingText = {
-                Text(stringResource(if (state.codeInvalid) R.string.onboarding_setup_code_invalid else R.string.onboarding_setup_code_hint))
-            },
-            textStyle = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Characters,
-                keyboardType = KeyboardType.Ascii,
-                imeAction = ImeAction.Done,
-                autoCorrectEnabled = false,
-            ),
-            keyboardActions = KeyboardActions(onDone = { actions.submitCode() }),
-            modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("setup_code"),
-        )
+        NoKeyboardLearning {
+            OutlinedTextField(
+                value = state.codeInput,
+                onValueChange = actions::setCode,
+                label = { Text(stringResource(R.string.onboarding_setup_code_label)) },
+                placeholder = { Text("XXXX-XXXX") },
+                singleLine = true,
+                isError = state.codeInvalid,
+                supportingText = {
+                    val hint = if (state.codeInvalid) R.string.onboarding_setup_code_invalid else R.string.onboarding_setup_code_hint
+                    Text(stringResource(hint))
+                },
+                textStyle = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+                // The setup code is typed on a keyboard that does not suggest or learn it (A6 audit S2); it stays visible.
+                keyboardOptions = visibleSecretKeyboard(KeyboardCapitalization.Characters, ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { actions.submitCode() }),
+                modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("setup_code"),
+            )
+        }
         ErrorText(state, FailureKind.SETUP_CODE_INVALID, stringResource(R.string.onboarding_setup_invalid))
         DevHint(state)
     }

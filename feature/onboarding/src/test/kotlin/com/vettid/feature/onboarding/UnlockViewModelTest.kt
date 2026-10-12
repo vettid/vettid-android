@@ -256,6 +256,60 @@ class UnlockViewModelTest {
         assertFalse(ended.uiState.value.pinAllowed)
     }
 
+    /**
+     * Owner report 2026-10-11: the vault's release is not in the app's manifest, the manifest could not be loaded,
+     * or the enclave's document did not verify. Each is its own failure (never the phone's attestation), no PIN is
+     * asked for or sent, and "Try again" checks again.
+     */
+    @Test
+    fun noPinWhileTheVaultsSoftwareIsNotVerified() = runTest {
+        val kinds = listOf(
+            FailureKind.RELEASE_UNKNOWN, FailureKind.MANIFEST_UNAVAILABLE, FailureKind.MANIFEST, FailureKind.ENCLAVE, FailureKind.NETWORK,
+        )
+        for (kind in kinds) {
+            val v = FakeVault(AppPhase.Locked)
+            v.fail["preflight"] = FakeVault.failure(kind, "enclave")
+            val vm = UnlockViewModel(v, v, v, FakeReleaseNotes())
+            advanceUntilIdle()
+            val s = vm.uiState.value
+            assertEquals(kind, s.preflightError)
+            assertNull("$kind", s.preflight)
+            assertFalse("$kind: no PIN is asked for", s.pinAllowed)
+            assertTrue("$kind: Try again is offered", s.retryAllowed)
+            vm.setPin("40281795")
+            assertFalse("$kind", vm.uiState.value.submitAllowed)
+            vm.submit()
+            vm.cancelRecoveryAndUnlock()
+            advanceUntilIdle()
+            assertTrue("$kind: no PIN was sent: ${v.calls}", v.calls.none { it.startsWith("unlock") })
+            assertEquals(AppPhase.Locked, v.phase.value)
+            // "Try again" loads the release list and checks again; once it verifies, the PIN is asked for.
+            v.fail.remove("preflight")
+            vm.retryPreflight()
+            advanceUntilIdle()
+            assertNull("$kind", vm.uiState.value.preflightError)
+            assertEquals(2, v.calls.count { it == "preflight" })
+            assertTrue("$kind", vm.uiState.value.pinAllowed)
+        }
+    }
+
+    @Test
+    fun aCheckThatFailsAfterOneThatPassedTakesThePinAway() = runTest {
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.pinAllowed)
+        vault.fail["preflight"] = FakeVault.failure(FailureKind.ENCLAVE, "enclave")
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertEquals(FailureKind.ENCLAVE, vm.uiState.value.preflightError)
+        assertNull("the earlier check does not count", vm.uiState.value.preflight)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.pinAllowed)
+        assertTrue(vault.calls.none { it.startsWith("unlock") })
+    }
+
     // --- "Erase VettID from this phone" (owner decision, 2026-10-05) ---
 
     private suspend fun TestScope.unrecognised(): UnlockViewModel {

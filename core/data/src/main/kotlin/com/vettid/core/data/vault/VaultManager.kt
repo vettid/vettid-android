@@ -1550,7 +1550,7 @@ class VaultManager(
             MemberApiException.RELEASE_STARTING -> FailureKind.VAULT_UNAVAILABLE
             MemberApiException.RELEASE_UNAVAILABLE -> FailureKind.RELEASE_ENDED
             MemberApiException.NOT_FOUND -> FailureKind.NOT_FOUND
-            MemberApiException.MANIFEST_UNAVAILABLE -> FailureKind.MANIFEST
+            MemberApiException.MANIFEST_UNAVAILABLE -> FailureKind.MANIFEST_UNAVAILABLE
             else -> FailureKind.OTHER
         }
 

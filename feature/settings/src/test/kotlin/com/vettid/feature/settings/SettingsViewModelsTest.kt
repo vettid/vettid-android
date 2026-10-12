@@ -13,6 +13,7 @@ import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,9 +43,49 @@ class SettingsViewModelsTest {
         override fun delete() = Unit
     }
 
+    private fun kotlinx.coroutines.test.TestScope.screenshots(onByDefault: Boolean = false) =
+        com.vettid.core.data.lock.ScreenshotAllowance(onByDefault, backgroundScope) { testScheduler.currentTime }
+
+    /** A6 audit S1 (owner decision 2026-10-11): off by default, on from the switch, and a local choice only. */
+    private fun viewModel(allowance: com.vettid.core.data.lock.ScreenshotAllowance, lock: AppLock = AppLock(prefs, noKeys, noFile)) =
+        SettingsViewModel(vault, vault, prefs, lock, vault, com.vettid.core.testing.FakeReleaseUpdates(), allowance)
+
+    @Test
+    fun allowScreenshotsIsOffUntilTurnedOnAndNeverStoredOrSentToTheVault() = runTest {
+        val allowance = screenshots()
+        val vm = viewModel(allowance)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.screenshotsAllowed)
+        assertFalse(vm.uiState.value.screenshotsStayOn)
+        val before = prefs.current.value
+        vm.setScreenshotsAllowed(true)
+        runCurrent()
+        assertTrue(vm.uiState.value.screenshotsAllowed)
+        assertTrue(allowance.allowed.value)
+        // Nothing is written to the preferences and nothing is asked of the vault.
+        assertEquals(before, prefs.current.value)
+        assertTrue(vault.calls.toString(), vault.calls.none { it != "refreshProfile" })
+        // The vault locks: the row shows it off again.
+        allowance.vaultClosed()
+        runCurrent()
+        assertFalse(vm.uiState.value.screenshotsAllowed)
+        vm.setScreenshotsAllowed(true)
+        vm.setScreenshotsAllowed(false)
+        runCurrent()
+        assertFalse(allowance.allowed.value)
+    }
+
+    @Test
+    fun aDevelopmentBuildShowsTheSwitchOn() = runTest {
+        val vm = viewModel(screenshots(onByDefault = true))
+        runCurrent()
+        assertTrue(vm.uiState.value.screenshotsAllowed)
+        assertTrue(vm.uiState.value.screenshotsStayOn)
+    }
+
     @Test
     fun themeIsPersistedAndLockWorks() = runTest {
-        val vm = SettingsViewModel(vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, com.vettid.core.testing.FakeReleaseUpdates())
+        val vm = viewModel(screenshots())
         vm.setTheme(ThemePreference.DARK)
         advanceUntilIdle()
         assertEquals(ThemePreference.DARK, prefs.current.value.theme)
@@ -59,7 +100,7 @@ class SettingsViewModelsTest {
     fun theAppLockMethodIsChosenWhileOff() = runTest {
         val lock = AppLock(prefs, noKeys, noFile)
         lock.start()
-        val vm = SettingsViewModel(vault, vault, prefs, lock, vault, com.vettid.core.testing.FakeReleaseUpdates())
+        val vm = viewModel(screenshots(), lock)
         advanceUntilIdle()
         assertEquals(com.vettid.core.data.prefs.AppLockMethod.BIOMETRICS, vm.uiState.value.appLockMethod)
         vm.chooseAppLockMethod(com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK)

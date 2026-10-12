@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.PhonelinkSetup
 import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Screenshot
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.SystemUpdate
@@ -165,6 +166,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 acknowledgeInvalidated = vm::acknowledgeInvalidated,
                 setTimeout = vm::setAppLockTimeout,
                 setTheme = vm::setTheme,
+                setScreenshotsAllowed = vm::setScreenshotsAllowed,
                 accountSite = host.onOpenAccountSite,
                 deleteVault = { host.navigate(DeleteVaultRoute) },
                 dismissError = vm::dismissError,
@@ -347,6 +349,8 @@ data class SettingsActions(
     val acknowledgeInvalidated: () -> Unit = {},
     val setTimeout: (AppLockTimeout) -> Unit = {},
     val setTheme: (ThemePreference) -> Unit = {},
+    /** "Allow screenshots": true only after the confirmation. */
+    val setScreenshotsAllowed: (Boolean) -> Unit = {},
     val accountSite: () -> Unit = {},
     val deleteVault: () -> Unit = {},
     val dismissError: () -> Unit = {},
@@ -395,6 +399,8 @@ fun SettingsContent(
     ownerCheck: OwnerCheckSettingsUiState = OwnerCheckSettingsUiState(),
     ownerCheckActions: OwnerCheckSettingsActions = OwnerCheckSettingsActions(),
     bell: com.vettid.core.ui.components.NotificationBell? = null,
+    /** The "Allow screenshots?" confirmation shows from the start (the debug screen catalog). */
+    askScreenshots: Boolean = false,
 ) {
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
@@ -537,6 +543,8 @@ fun SettingsContent(
                     supporting = stringResource(modeSummary(state.preferences.effectiveNotificationMode)),
                     modifier = Modifier.testTag("notifications"),
                 )
+                SettingsDivider()
+                AllowScreenshotsRow(state, actions.setScreenshotsAllowed, askScreenshots)
             }
 
             SettingsSectionHeader(stringResource(R.string.settings_section_account))
@@ -589,6 +597,40 @@ fun SettingsContent(
             label = { timeoutLabel(it) },
             onPick = { actions.setTimeout(it); timeoutPicker = false },
             onDismiss = { timeoutPicker = false },
+        )
+    }
+}
+
+/**
+ * "Allow screenshots" (A6 audit S1, owner decision 2026-10-11): the whole app is kept out of screenshots, recordings
+ * and Recents; this switch is the way out, for a while. Turning it on asks first, in a dialog that says plainly what
+ * it does; turning it off does not ask. [ask]: the dialog shows from the start (the debug screen catalog).
+ */
+@Composable
+private fun AllowScreenshotsRow(state: SettingsUiState, onSet: (Boolean) -> Unit, ask: Boolean) {
+    var confirm by rememberSaveable { mutableStateOf(ask) }
+    SettingsSwitchRow(
+        label = stringResource(R.string.settings_app_screenshots),
+        supporting = stringResource(
+            when {
+                !state.screenshotsAllowed -> R.string.settings_app_screenshots_off
+                state.screenshotsStayOn -> R.string.settings_app_screenshots_on_development
+                else -> R.string.settings_app_screenshots_on
+            },
+        ),
+        checked = state.screenshotsAllowed,
+        onCheckedChange = { on -> if (on) confirm = true else onSet(false) },
+        icon = Icons.Outlined.Screenshot,
+        modifier = Modifier.testTag("allow_screenshots"),
+    )
+    if (confirm) {
+        ConfirmDialog(
+            title = stringResource(R.string.settings_app_screenshots_confirm_title),
+            text = stringResource(R.string.settings_app_screenshots_confirm_body),
+            confirmLabel = stringResource(R.string.settings_app_screenshots_confirm),
+            onConfirm = { confirm = false; onSet(true) },
+            onDismiss = { confirm = false },
+            modifier = Modifier.testTag("allow_screenshots_dialog"),
         )
     }
 }

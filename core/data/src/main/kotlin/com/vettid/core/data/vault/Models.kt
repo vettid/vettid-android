@@ -296,9 +296,25 @@ enum class FailureKind {
     NOT_SUPPORTED,
     NO_RESPONSE,
     VAULT_EXISTS,
+    /** The vault refused this PHONE's attestation (the `attestation` result of an enrollment or an unlock). */
     ATTESTATION,
     ROLLBACK,
+
+    /** The release manifest did not verify (signature, key, format, serial), or the vault refused the app's. */
     MANIFEST,
+
+    /** The release manifest could not be loaded (the server answered, but not with the document). */
+    MANIFEST_UNAVAILABLE,
+
+    /**
+     * The vault runs a release that is not in the manifest this app trusts (VAULT-MESSAGING §11.10.1: "absent from
+     * the manifest is unknown: apps refuse to send it a PIN"): a stale or blocked manifest fetch, or a canary
+     * release whose manifest this app does not have. Every try loads the manifest again.
+     */
+    RELEASE_UNKNOWN,
+
+    /** The ENCLAVE's attestation document or descriptor did not verify: nothing was sent to it. */
+    ENCLAVE,
     NOT_FOUND,
     CONNECTION_UNAVAILABLE,
     INVITE_INVALID,
