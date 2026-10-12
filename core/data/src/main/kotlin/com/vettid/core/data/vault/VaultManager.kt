@@ -395,16 +395,15 @@ class VaultManager(
      */
     val vaultClients: StateFlow<VaultApi?> = clientFlow.asStateFlow()
 
-    private val beforeLock = java.util.concurrent.CopyOnWriteArrayList<suspend () -> Unit>()
+    /** The member's lock, which always completes once asked for ([LockSequence]). */
+    private val locking = LockSequence(scope)
 
     /**
      * Something to finish while the vault still collects, before the member's lock: for example ending a call, so
-     * that its hang-up reaches the vault. Every hook together gets [BEFORE_LOCK_MS]; the lock happens whatever
-     * becomes of them.
+     * that its hang-up reaches the vault. A hook must be quick and must not call [lock]; all hooks together get
+     * [LockSequence.HOOK_BUDGET_MS], after which they are cancelled and the lock proceeds. No hook, no wait.
      */
-    fun onBeforeLock(hook: suspend () -> Unit) {
-        beforeLock += hook
-    }
+    fun onBeforeLock(hook: suspend () -> Unit) = locking.addHook(hook)
 
     private suspend fun session(): Session = mutex.withLock {
         session ?: openSession().also {
@@ -920,18 +919,31 @@ class VaultManager(
         }
     }
 
-    override suspend fun lock() = guard {
+    /**
+     * Locks the vault. **A lock once asked for completes**: it runs in the manager's own scope, so a caller whose
+     * scope ends (the screen went away) only stops waiting ([LockSequence]). The phone's own state ends locked in
+     * every outcome, also when neither the relay nor the member API could tell the vault (the failure is then
+     * thrown to a caller that still waits; the vault locks by itself when its unlock window ends).
+     */
+    override suspend fun lock() {
         lockedHere = true
-        withTimeoutOrNull(BEFORE_LOCK_MS) { for (hook in beforeLock) runCatching { hook() } }
-        val s = session()
-        val viaRelay = try {
-            withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
-        } catch (_: IOException) {
-            false
-        }
-        if (!viaRelay) s.device.vaultId?.let { s.alt.lock(it) }
-        windowFlow.value = null
-        phaseFlow.value = AppPhase.Locked
+        locking.run(
+            lock = {
+                guard {
+                    val s = session()
+                    val viaRelay = try {
+                        withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
+                    } catch (_: IOException) {
+                        false
+                    }
+                    if (!viaRelay) s.device.vaultId?.let { s.alt.lock(it) }
+                }
+            },
+            after = {
+                windowFlow.value = null
+                phaseFlow.value = AppPhase.Locked
+            },
+        )
     }
 
     override suspend fun overview(): VaultOverview = guard {
@@ -1571,9 +1583,6 @@ class VaultManager(
         const val MIN_TTL = 30
         const val MAX_TTL = 3600
         private const val LOCK_TIMEOUT_MS = 10_000L
-
-        /** What the hooks of [onBeforeLock] get together before the vault is locked. */
-        private const val BEFORE_LOCK_MS = 2_000L
         private const val LIST_PAGE = 500
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16
