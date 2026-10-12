@@ -81,7 +81,10 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
 }
 
 /** Engines in the order the machine asked for them. */
-class FakeEngines(private val make: () -> MediaEngine = { FakeEngine() }) : MediaEngineFactory {
+class FakeEngines(
+    override val suites: List<MediaSuite> = listOf(MediaSuite.AES_128_GCM),
+    private val make: () -> MediaEngine = { FakeEngine(suites) },
+) : MediaEngineFactory {
     val created = mutableListOf<MediaEngine>()
     var config: MediaConfig? = null
 
@@ -96,7 +99,7 @@ class FakeEngines(private val make: () -> MediaEngine = { FakeEngine() }) : Medi
 /** Signalling that records what was sent and delivers what the test gives it. */
 open class FakeSignalling : CallSignalling {
     val channel = Channel<SignalEvent>(Channel.UNLIMITED)
-    override val events: Flow<SignalEvent> = channel.receiveAsFlow()
+    override val events: Flow<SignalEvent> get() = channel.receiveAsFlow()
     val sent = mutableListOf<String>()
     val ice = mutableListOf<List<CallCandidate>>()
     var startResult: () -> PlacedCall = { PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList()) }
@@ -152,7 +155,8 @@ class Exchange {
             sent += "start"
             offered = CallMedia.offerOf(suites)
             offerSdp = onOffer(CallMedia.sdpWithOffer(sdp, offered))
-            peer.deliver(SignalEvent.Offer(CALL_ID, "peer", CallMedia.sdpWithout(offerSdp), T0.plusSeconds(45), emptyList()))
+            val ringFor = java.time.Duration.ofSeconds(45)
+            peer.deliver(SignalEvent.Offer(CALL_ID, "peer", CallMedia.sdpWithout(offerSdp), T0.plusSeconds(45), ringFor, emptyList()))
             return PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList())
         }
 

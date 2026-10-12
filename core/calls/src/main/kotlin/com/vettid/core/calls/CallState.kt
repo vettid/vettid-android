@@ -141,4 +141,6 @@ data class CallTimings(
     /** `call.ice` messages this device sends for one call (a vault forwards 256, both directions together). */
     val maxIceMessages: Int = 100,
     val diagnosticsEvery: Duration = Duration.ofSeconds(1),
+    /** The pause before the vault's call events are listened to again after the listening ended. */
+    val relisten: Duration = Duration.ofSeconds(1),
 )

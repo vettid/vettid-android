@@ -47,6 +47,11 @@ tasks.named("preBuild") { dependsOn(checkWebrtcArtifact) }
 dependencies {
     // The call message types the state machine speaks (CallCandidate, CallReason, CallLimits, CallWire.IceServer).
     api(projects.core.vault)
+    // CallAccess (what every build knows of calls) and the vault manager whose client the calls use.
+    api(projects.core.data)
+    // The notification channel of calls.
+    implementation(projects.core.notify)
+    implementation(libs.androidx.core.ktx)
     // libwebrtc with the built-in frame cryptor (CALLS-PLAN D2, option A).
     implementation(libs.webrtc.sdk)
     // The artifact's POM declares no dependencies, but its classes carry androidx.annotation annotations.

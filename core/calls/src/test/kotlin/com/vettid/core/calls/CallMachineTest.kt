@@ -3,6 +3,7 @@ package com.vettid.core.calls
 import com.vettid.core.crypto.call.MediaSuite
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -21,13 +22,14 @@ class CallMachineTest {
     private val engines = FakeEngines()
 
     private fun TestScope.machine(s: CallSignalling = signalling, e: MediaEngineFactory = engines, config: MediaConfig = MediaConfig()) =
-        CallMachine(s, e, backgroundScope, { T0.plusMillis(testScheduler.currentTime) }, { testScheduler.currentTime }, config = config)
+        CallMachine(s, e, backgroundScope, { T0.plusMillis(testScheduler.currentTime) }, { testScheduler.currentTime }, config = { config })
 
     private fun CallMachine.live() = state.value as CallState.Live
 
     private fun CallMachine.ended() = state.value as CallState.Ended
 
-    private fun offer() = SignalEvent.Offer(CALL_ID, "conn-1", "v=0\r\ns=offer\r\n", T0.plusSeconds(45), emptyList())
+    private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1") =
+        SignalEvent.Offer(callId, connectionId, "v=0\r\ns=offer\r\n", T0.plusSeconds(45), Duration.ofSeconds(45), emptyList())
 
     private fun answer() =
         SignalEvent.Answer(CALL_ID, "v=0\r\ns=answer\r\n", MediaKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 5 }, ByteArray(32) { 6 }))
@@ -256,7 +258,7 @@ class CallMachineTest {
         assertEquals(listOf("ringing($CALL_ID)"), signalling.sent)
         assertTrue("no media engine, so no address gathered, before the member answers", engines.created.isEmpty())
         // A second offer while one rings is not shown (the vault answers it busy by itself).
-        signalling.deliver(offer().copy(callId = "01JB2Z6V9K3M4N5P6Q7R8S9T51", connectionId = "conn-2"))
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T51", "conn-2"))
         runCurrent()
         assertEquals("conn-1", m.live().connectionId)
         m.decline()
@@ -483,7 +485,7 @@ class CallMachineTest {
      */
     @Test
     fun mediaOutsideTheFrameEncryptionEndsTheCall() = runTest {
-        val strict = FakeEngines { FakeEngine().apply { onRemoteSdp = { throw MediaNotEncryptedException("2 media sections") } } }
+        val strict = FakeEngines(make = { FakeEngine().apply { onRemoteSdp = { throw MediaNotEncryptedException("2 media sections") } } })
         val m = machine(e = strict)
         placed(m)
         signalling.deliver(answer())
@@ -522,6 +524,28 @@ class CallMachineTest {
         assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
         assertEquals("end($CALL_ID, failed)", signalling.sent.last())
         assertTrue(engine.closed)
+    }
+
+    /**
+     * Review N2: whatever ends the listening to the vault's events, it starts again. (The signalling refuses and
+     * counts what goes wrong, so this is the second lock.) Before the fix the phone never rang again until restart.
+     */
+    @Test
+    fun theListeningToTheVaultStartsAgainAfterAFailure() = runTest {
+        var collections = 0
+        val flaky = object : FakeSignalling() {
+            override val events = kotlinx.coroutines.flow.flow {
+                if (collections++ == 0) error("no session with the vault")
+                channel.receiveAsFlow().collect { emit(it) }
+            }
+        }
+        val m = machine(flaky)
+        runCurrent()
+        assertEquals(1, m.listenRestarts.value)
+        advanceTimeBy(1_001)
+        flaky.deliver(offer())
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, m.live().phase)
     }
 
     /**
@@ -602,14 +626,14 @@ class CallMachineTest {
 
     @Test
     fun aMediaStackWhoseLoggingIsOnIsNotUsed() = runTest {
-        val m = machine(e = { throw MediaLoggingException("debug output is enabled") })
+        val m = machine(e = FakeEngines(make = { throw MediaLoggingException("debug output is enabled") }))
         m.call("conn-1")
         runCurrent()
         assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
         assertTrue("nothing left the phone", signalling.sent.isEmpty())
 
         // The engine refuses the keys (the guard runs again before every key).
-        val refusing = FakeEngines { FakeEngine().apply { onKeys = { throw MediaLoggingException("a logger is injected") } } }
+        val refusing = FakeEngines(make = { FakeEngine().apply { onKeys = { throw MediaLoggingException("a logger is injected") } } })
         val other = FakeSignalling()
         val m2 = machine(other, refusing)
         m2.call("conn-1")
@@ -666,8 +690,8 @@ class CallMachineTest {
 
     private fun TestScope.pair(callerSuites: List<MediaSuite>, calleeSuites: List<MediaSuite>): Pair {
         val x = Exchange()
-        val a = FakeEngines { FakeEngine(callerSuites) }
-        val b = FakeEngines { FakeEngine(calleeSuites) }
+        val a = FakeEngines(callerSuites)
+        val b = FakeEngines(calleeSuites)
         return Pair(x, machine(x.caller, a), machine(x.callee, b), a, b)
     }
 

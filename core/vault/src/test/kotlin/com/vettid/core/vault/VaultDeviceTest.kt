@@ -44,6 +44,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonPrimitive
@@ -1079,9 +1081,13 @@ class VaultDeviceTest {
         val device = Ed25519PrivateKey.generate()
         val vault = Ed25519PrivateKey.generate()
 
+        /** The connection's identity as the app shows it (§10.8): what a call is checked against. */
+        val pinned: String = com.vettid.core.crypto.IkFingerprint.format(vault.publicKey)
+
         /** The vouched signatures of a share, with `peer_ik` as this app's own vault adds it. */
-        fun vouched(b: JsonBuilder, m: ByteArray): JsonBuilder = b.base64("device_ik", device.publicKey).base64("device_sig", CallWire.signShare(device, m))
-            .base64("vault_sig", vault.sign(CallWire.LABEL_VOUCH, CallWire.vouchMessage(device.publicKey, m))).base64("peer_ik", vault.publicKey)
+        fun vouched(b: JsonBuilder, m: ByteArray, voucher: Ed25519PrivateKey = vault, peerIk: ByteArray = vault.publicKey): JsonBuilder =
+            b.base64("device_ik", device.publicKey).base64("device_sig", CallWire.signShare(device, m))
+                .base64("vault_sig", voucher.sign(CallWire.LABEL_VOUCH, CallWire.vouchMessage(device.publicKey, m))).base64("peer_ik", peerIk)
     }
 
     private val sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n"
@@ -1129,8 +1135,26 @@ class VaultDeviceTest {
             val fromCaller = CallMedia.directionKey(a.kCall, expected, CallMedia.DIRECTION_CALLER, callId)
             val fromCallee = CallMedia.directionKey(a.kCall, expected, CallMedia.DIRECTION_CALLEE, callId)
             val m = CallWire.shareMessage("answer", callId, "", a.enc)
-            fun answer(sdpAnswer: String = CallMedia.sdpWithChoice(sdp, MediaSuite.AES_128_GCM), enc: ByteArray = a.enc) =
-                peer.vouched(JsonBuilder().string("call_id", callId).string("sdp", sdpAnswer).base64("enc", enc), m).build()
+            val other = CallPeer()
+            fun answer(
+                sdpAnswer: String = CallMedia.sdpWithChoice(sdp, MediaSuite.AES_128_GCM),
+                enc: ByteArray = a.enc,
+                voucher: Ed25519PrivateKey = peer.vault,
+                peerIk: ByteArray = peer.vault.publicKey,
+            ) = peer.vouched(JsonBuilder().string("call_id", callId).string("sdp", sdpAnswer).base64("enc", enc), m, voucher, peerIk).build()
+
+            // Review F8: the device's signature is good, but the vouch is another vault's; or the whole answer is
+            // another vault's, consistent in itself, with its own `peer_ik`: not the connection the member called.
+            for (bad in listOf(answer(voucher = other.vault), answer(voucher = other.vault, peerIk = other.vault.publicKey))) {
+                d.handle(v.seal("call.answer", bad))
+                val ev = d.awaitEvent("call.answer")
+                assertThrows(CallMessageException::class.java) { api.callAccept(call, ev, peer.pinned) }
+            }
+            // And the right answer checked against another connection's identity, or against none.
+            d.handle(v.seal("call.answer", answer()))
+            val right = d.awaitEvent("call.answer")
+            assertThrows(CallMessageException::class.java) { api.callAccept(call, right, other.pinned) }
+            assertThrows(CallMessageException::class.java) { api.callAccept(call, right, "") }
 
             // A share that was swapped on the way, an answer without the suite, a suite that was not offered: unusable.
             // And an answer with a second media section: its audio would play outside the frame encryption (review F1).
@@ -1138,10 +1162,10 @@ class VaultDeviceTest {
             for (bad in listOf(answer(enc = CallWire.answer(ek, callId).enc), answer(sdpAnswer = sdp), answer(sdpAnswer = CallMedia.sdpWithChoice(sdp, MediaSuite.AES_256_GCM)), answer(sdpAnswer = twoSections))) {
                 d.handle(v.seal("call.answer", bad))
                 val ev = d.awaitEvent("call.answer")
-                assertThrows(CallMessageException::class.java) { api.callAccept(call, ev) }
+                assertThrows(CallMessageException::class.java) { api.callAccept(call, ev, peer.pinned) }
             }
             d.handle(v.seal("call.answer", answer()))
-            val accepted = api.callAccept(call, d.awaitEvent("call.answer"))
+            val accepted = api.callAccept(call, d.awaitEvent("call.answer"), peer.pinned)
             assertEquals("the media stack gets the SDP without VettID's attribute", sdp, accepted.sdp)
             assertEquals(MediaSuite.AES_128_GCM, accepted.keys.suite)
             assertTrue(accepted.keys.send().contentEquals(fromCaller))
@@ -1178,6 +1202,7 @@ class VaultDeviceTest {
     }
 
     /** An incoming call: the offer is checked before it may ring; the answer carries a signed share and the keys match the caller's. */
+    @Suppress("LongMethod")
     @Test
     fun takingAnOfferAndAnsweringIt() = runBlocking<Unit> {
         withTimeout(30_000) {
@@ -1197,14 +1222,22 @@ class VaultDeviceTest {
                 at: Instant = exp,
                 iceExp: Instant = Instant.now().plusSeconds(21_600),
                 signed: ByteArray = m,
+                voucher: Ed25519PrivateKey = peer.vault,
+                peerIk: ByteArray = peer.vault.publicKey,
             ) = peer.vouched(
                 v.ice(JsonBuilder().string("call_id", callId).string("connection_id", "conn-1").string("media", "audio").string("sdp", offerSdp).base64("ek", share).string("exp", ts(at)), callId, iceExp),
                 signed,
+                voucher,
+                peerIk,
             ).build()
+            val other = CallPeer()
 
             val bad = listOf(
                 offer(share = CallWire.newOfferKey().publicKey.bytes()), // a swapped key
                 offer(signed = CallWire.shareMessage("offer", callId, "video", ek)), // signed for another media
+                offer(voucher = other.vault), // review F8: a good device signature, another vault's vouch
+                offer(voucher = other.vault, peerIk = other.vault.publicKey), // another vault's offer, consistent in itself
+                offer(offerSdp = CallMedia.sdpWithOffer(sdp, listOf(2))), // no suite this device can do: refused before it rings
                 offer(offerSdp = sdp), // no media suites
                 offer(offerSdp = CallMedia.sdpWithOffer(sdp + "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n", listOf(1))), // a second audio section (F1)
                 offer(offerSdp = CallMedia.sdpWithOffer(sdp + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n", listOf(1))), // a data channel
@@ -1216,11 +1249,21 @@ class VaultDeviceTest {
             for (b in bad) {
                 d.handle(v.seal("call.offer", b))
                 val ev = d.awaitEvent("call.offer")
-                assertThrows(b.take(60), CallMessageException::class.java) { api.callIncoming(ev) }
+                assertThrows(b.take(60), CallMessageException::class.java) { api.callIncoming(ev, peer.pinned) }
             }
+            // A good offer checked against another connection's identity, or against none, does not ring either.
+            d.handle(v.seal("call.offer", offer()))
+            val good = d.awaitEvent("call.offer")
+            assertThrows(CallMessageException::class.java) { api.callIncoming(good, other.pinned) }
+            assertThrows(CallMessageException::class.java) { api.callIncoming(good, "") }
+            // A device that can do suites 2 and 1 answers a `2 1` offer with 2, fixed before it rings.
+            d.handle(v.seal("call.offer", offer(offerSdp = CallMedia.sdpWithOffer(sdp, listOf(2, 1)))))
+            val two = api.callIncoming(d.awaitEvent("call.offer"), peer.pinned, MediaSuite.entries)
+            assertEquals(CallMedia.Negotiated(MediaSuite.AES_256_GCM, listOf(2, 1)), two.negotiated)
 
             d.handle(v.seal("call.offer", offer()))
-            val call = api.callIncoming(d.awaitEvent("call.offer"))
+            val call = api.callIncoming(d.awaitEvent("call.offer"), peer.pinned)
+            assertTrue("rings for the offer's lifetime by the vault's clock", call.ringFor.seconds in 44..45)
             assertEquals(callId, call.callId)
             assertEquals("conn-1", call.connectionId)
             assertEquals(exp, call.exp)
@@ -1256,17 +1299,18 @@ class VaultDeviceTest {
             assertThrows(CallMessageException::class.java) { runBlocking { api.callIce(callId, listOf(CallCandidate("c".repeat(1025)))) } }
 
             // The other side's candidates and the end of the call, as events.
-            val got = async { api.callIce.first() }
-            val ended = async { api.callEnds.first() }
-            val rang = async { api.callRingings.first() }
+            val got = async { api.callEvents.take(3).toList() }
             kotlinx.coroutines.yield()
             kotlinx.coroutines.delay(100)
             d.handle(v.seal("call.ice", """{"call_id":"$callId","candidates":[{"candidate":"candidate:9","sdp_mid":"0","sdp_mline_index":0}]}"""))
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"not a call","sent_at":"x"}"""))
             d.handle(v.seal("call.ringing", """{"call_id":"$callId"}"""))
             d.handle(v.seal("call.end", """{"call_id":"$callId","reason":"hangup"}"""))
-            assertEquals(CallIce(callId, listOf(CallCandidate("candidate:9", "0", 0))), got.await())
-            assertEquals(callId, rang.await())
-            assertEquals(CallEnded(callId, "hangup"), ended.await())
+            // One flow, in the vault's order.
+            assertEquals(
+                listOf(CallEvent.Ice(CallIce(callId, listOf(CallCandidate("candidate:9", "0", 0)))), CallEvent.Ringing(callId), CallEvent.Ended(callId, "hangup")),
+                got.await(),
+            )
         }
     }
 

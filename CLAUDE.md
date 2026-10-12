@@ -131,6 +131,21 @@ The A2 exit test:
   `checkFossReleaseApk`) fails a release APK with any of it and a staging APK whose native libraries are not the
   pinned ones. The post-quantum DTLS field trial (`MediaConfig.dtlsPqcTrial`) is off; only a debug switch may set it.
   `WebRtcMediaEngine` has no unit test (it needs the native library): two phones are its test.
+  In the app: `CallAccess` (`:core:data`) is all that every build knows of calls (`NoCallAccess` in production,
+  `app/src/noCalls`); `app/src/calls` wires `CallsController` (`:core:calls`: the `call.list` probe after unlock,
+  which is how the app learns that a vault has calls; the stale-call sweep; microphone, audio route, tones,
+  `CallService` of types `phoneCall|microphone`; the end at lock and after 12 h) on `VaultManager.vaultApi()`.
+  `VaultCallSignalling` is where a call's checks are asked for: nothing reaches `CallMachine` that has not passed
+  `callIncoming` / `callAccept`, each against the fingerprint the connection's details show. Only `CallApi` makes
+  `IncomingCall`, `OutgoingCall`, `AcceptedCall`, `CallKeys` (`@MadeByCallApi`; tests opt in, production code never).
+  A release APK must not contain the call strings of `callsMarkers` (app/build.gradle.kts): no code that ships in
+  release may reach `CallApi`. A release built with `-PvettidCallsInRelease=true` has the application id
+  `com.vettid.app.callscheck`: a check build, never published.
+  The other side's SDP reaches the media stack without `a=ssrc` lines (a signalled SSRC would leave every other
+  SSRC of the section outside the frame decryption); `MediaFaults` and the DTLS trial are for test builds only
+  (`BuildConfig.CALLS_TEST`: debuggable builds, or staging built with `-PvettidCallsTest=true` for the two-phone
+  tests, which need a build the staging vaults accept). `VaultManager.onBeforeLock`: a live call's hang-up reaches
+  the vault before the lock (2 s at most). `CallSignalling` and `CallMachine` are internal to `:core:calls`.
 
 ## Device testing
 

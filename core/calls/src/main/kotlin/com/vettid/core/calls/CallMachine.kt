@@ -36,7 +36,7 @@ import java.time.Instant
  *   with their own reason instead of leaving it waiting.
  */
 @Suppress("TooManyFunctions", "LargeClass")
-class CallMachine(
+internal class CallMachine(
     private val signalling: CallSignalling,
     private val engines: MediaEngineFactory,
     private val scope: CoroutineScope,
@@ -44,7 +44,8 @@ class CallMachine(
     /** A clock that only moves forward, in milliseconds (for the measurements). */
     private val elapsedMs: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
     private val timings: CallTimings = CallTimings(),
-    private val config: MediaConfig = MediaConfig(),
+    /** Asked when a call's engine is made. */
+    private val config: () -> MediaConfig = { MediaConfig() },
 ) {
     private val stateFlow = MutableStateFlow<CallState>(CallState.Idle)
     val state: StateFlow<CallState> = stateFlow.asStateFlow()
@@ -53,6 +54,16 @@ class CallMachine(
 
     /** Measurements of the current (or last) call. */
     val diagnostics: StateFlow<CallDiagnostics> = diagnosticsFlow.asStateFlow()
+
+    private val restartsFlow = MutableStateFlow(0)
+
+    /** How often the listening to the vault's call events had to be started again (expected: 0). */
+    val listenRestarts: StateFlow<Int> = restartsFlow.asStateFlow()
+
+    private val pendingEndsFlow = MutableStateFlow(0)
+
+    /** `call.end` messages handed to the vault client and not yet with the relay. */
+    val pendingEnds: StateFlow<Int> = pendingEndsFlow.asStateFlow()
 
     private val inbox = Channel<Msg>(Channel.UNLIMITED)
     private var session: Session? = null
@@ -88,6 +99,7 @@ class CallMachine(
         val job: Job,
         val tappedAtMs: Long,
     ) {
+        @Volatile
         var engine: MediaEngine? = null
         var callId: String? = null
         var phase: CallPhase = CallPhase.STARTING
@@ -122,7 +134,20 @@ class CallMachine(
 
     init {
         scope.launch { for (m in inbox) handle(m) }
-        scope.launch { signalling.events.collect { inbox.send(Msg.Signal(it)) } }
+        scope.launch {
+            // The vault's events are listened to for as long as the process lives: whatever ends the collection
+            // (it should be nothing: the signalling refuses and counts what goes wrong), it starts again.
+            while (true) {
+                try {
+                    signalling.events.collect { inbox.send(Msg.Signal(it)) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                    restartsFlow.update { it + 1 }
+                }
+                delay(timings.relisten.toMillis())
+            }
+        }
     }
 
     // --- the member ---
@@ -189,6 +214,9 @@ class CallMachine(
     private fun newSession(connectionId: String, direction: CallDirection): Session {
         val s = Session(nextSeq++, connectionId, direction, SupervisorJob(scope.coroutineContext.job), elapsedMs())
         session = s
+        // However the call's jobs end (also when the machine's scope goes away with a call live), the engine is
+        // closed: the microphone and the keys do not outlive the call.
+        s.job.invokeOnCompletion { s.engine?.close() }
         diagnosticsFlow.value = CallDiagnostics()
         val lane = CoroutineScope(scope.coroutineContext + s.job)
         lane.launch {
@@ -217,7 +245,7 @@ class CallMachine(
     /** Creates the call's engine and listens to it. False (and the call ended) if the media stack cannot be used. */
     private fun openEngine(s: Session): Boolean {
         val (engine, failure) = try {
-            engines.create(config).let { it to if (it.suites.isEmpty()) CallEnd.NOT_ENCRYPTED else null }
+            engines.create(config()).let { it to if (it.suites.isEmpty()) CallEnd.NOT_ENCRYPTED else null }
         } catch (_: MediaLoggingException) {
             null to CallEnd.NOT_ENCRYPTED
         } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
@@ -297,11 +325,15 @@ class CallMachine(
         s.lane.trySend {
             val sdp = engine.acceptOffer(offer.sdp, offer.servers)
             post(Msg.Gathering(s.seq))
-            val keys = signalling.answer(offer.callId, sdp, engine.suites)
-            try {
-                engine.setKeys(keys.suite, keys.send, keys.receive)
-            } finally {
-                keys.wipe()
+            // Not cancellable between the answer's return and the keys' hand-over: a hang-up at that instant must
+            // not leave the keys with nobody to wipe them.
+            withContext(NonCancellable) {
+                val keys = signalling.answer(offer.callId, sdp, engine.suites)
+                try {
+                    engine.setKeys(keys.suite, keys.send, keys.receive)
+                } finally {
+                    keys.wipe()
+                }
             }
             post(Msg.Answered(s.seq))
         }
@@ -374,8 +406,7 @@ class CallMachine(
         publish(s)
         s.launch { runCatching { signalling.ringing(offer.callId) } }
         // The caller's `call.end{timeout}` normally ends the ringing; this is for a caller that has gone.
-        val ringFor = Duration.between(now(), offer.exp).plus(timings.incomingGrace)
-            .coerceIn(timings.incomingGrace, timings.maxIncomingRing)
+        val ringFor = offer.ringFor.plus(timings.incomingGrace).coerceIn(timings.incomingGrace, timings.maxIncomingRing)
         timer(s, TimerKind.RING_IN, ringFor)
     }
 
@@ -557,7 +588,14 @@ class CallMachine(
 
     /** `call.end` outlives the call: it is durable in the device's outbox once it has been handed over. */
     private fun sendEnd(callId: String, reason: String) {
-        scope.launch { runCatching { signalling.end(callId, reason) } }
+        pendingEndsFlow.update { it + 1 }
+        scope.launch {
+            try {
+                runCatching { signalling.end(callId, reason) }
+            } finally {
+                pendingEndsFlow.update { it - 1 }
+            }
+        }
     }
 
     private companion object {

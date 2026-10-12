@@ -3,6 +3,7 @@ package com.vettid.core.vault
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
+import com.vettid.core.crypto.IkFingerprint
 import com.vettid.core.crypto.Suite
 import com.vettid.core.crypto.call.CallMedia
 import com.vettid.core.crypto.call.CallWire
@@ -68,6 +69,17 @@ object CallReason {
     val ALL = setOf(HANGUP, DECLINE, BUSY, TIMEOUT, ANSWERED_ELSEWHERE, UNAVAILABLE, FAILED)
 }
 
+/**
+ * Marks the constructors of the objects that only this file's functions should make: an [IncomingCall] or an
+ * [AcceptedCall] says "every signature was checked", and nothing but [callIncoming] and [callAccept] can say that.
+ * The constructors are reachable so that code built on these types can be tested with fakes; a test opts in.
+ * No production source outside `:core:vault` may (`VaultCallSignallingTest` in `:core:calls` reads the sources for it).
+ */
+@RequiresOptIn(message = "Only CallApi makes these: a hand-made one has had nothing verified.", level = RequiresOptIn.Level.ERROR)
+@Retention(AnnotationRetention.BINARY)
+@Target(AnnotationTarget.CONSTRUCTOR)
+annotation class MadeByCallApi
+
 /** A call message the device cannot use: a share or an ICE configuration that does not verify, or a malformed body. */
 class CallMessageException(message: String, cause: Throwable? = null) : java.io.IOException("call: $message", cause)
 
@@ -75,7 +87,7 @@ class CallMessageException(message: String, cause: Throwable? = null) : java.io.
  * The two frame keys of a call on this device (CallMedia): [send] encrypts the frames this device sends, [receive]
  * decrypts the other device's. They exist only on the two devices of the call. [destroy] wipes them.
  */
-class CallKeys internal constructor(val suite: MediaSuite, private val sendKey: ByteArray, private val receiveKey: ByteArray) {
+class CallKeys @MadeByCallApi constructor(val suite: MediaSuite, private val sendKey: ByteArray, private val receiveKey: ByteArray) {
     @Volatile
     private var live = true
 
@@ -100,6 +112,7 @@ class CallKeys internal constructor(val suite: MediaSuite, private val sendKey: 
 
     internal companion object {
         /** Derives both direction keys from [kCall] and wipes it. */
+        @OptIn(MadeByCallApi::class)
         fun derive(kCall: ByteArray, n: CallMedia.Negotiated, callId: String, caller: Boolean): CallKeys = try {
             val fromCaller = CallMedia.directionKey(kCall, n, CallMedia.DIRECTION_CALLER, callId)
             val fromCallee = CallMedia.directionKey(kCall, n, CallMedia.DIRECTION_CALLEE, callId)
@@ -111,7 +124,7 @@ class CallKeys internal constructor(val suite: MediaSuite, private val sendKey: 
 }
 
 /** A call this device placed, while it waits for the answer. Holds the ephemeral KEM key: [destroy] when the call is over. */
-class OutgoingCall internal constructor(
+class OutgoingCall @MadeByCallApi constructor(
     val callId: String,
     val connectionId: String,
     val media: String,
@@ -130,32 +143,42 @@ class OutgoingCall internal constructor(
 }
 
 /** A verified `call.offer`: a connection is calling. Nothing of it is used before every signature has checked out. */
-class IncomingCall internal constructor(
+class IncomingCall @MadeByCallApi constructor(
     val callId: String,
     val connectionId: String,
     val media: String,
     /** The caller's SDP offer, without the media-suite attribute: ready for the media stack. */
     val sdp: String,
-    /** When the offer expires: the device stops ringing then by itself. */
+    /** When the offer expires, by the vault's clock. */
     val exp: Instant,
+    /**
+     * How long the offer had to live when the vault sent it (`exp` minus the event's `ts`, both the vault's clock):
+     * how long the device rings, whatever its own clock says.
+     */
+    val ringFor: Duration,
     val ice: CallWire.IceConfig,
-    /** The caller's media suites, as sent (numbers this build does not know included). */
-    val offered: List<Int>,
+    /** The suite this device will answer with, and the caller's list as sent: fixed before the phone rings. */
+    val negotiated: CallMedia.Negotiated,
     internal val ek: ByteArray,
 ) {
+    /** The caller's media suites, as sent (numbers this build does not know included). */
+    val offered: List<Int> get() = negotiated.offered
+
     override fun toString(): String = "IncomingCall($callId)"
 }
 
 /** The callee's verified answer on the calling device: its SDP (without the media-suite attribute) and the call's keys. */
-class AcceptedCall internal constructor(val callId: String, val sdp: String, val keys: CallKeys)
+class AcceptedCall @MadeByCallApi constructor(val callId: String, val sdp: String, val keys: CallKeys)
 
-/** One ICE candidate of `call.ice`. */
+/** One ICE candidate of `call.ice`. It holds a network address: [toString] does not print it. */
 @Serializable
 data class CallCandidate(
     val candidate: String,
     @SerialName("sdp_mid") val sdpMid: String? = null,
     @SerialName("sdp_mline_index") val sdpMLineIndex: Int? = null,
-)
+) {
+    override fun toString(): String = "CallCandidate([redacted])"
+}
 
 /** `call.ice` as received. */
 data class CallIce(val callId: String, val candidates: List<CallCandidate>)
@@ -202,10 +225,20 @@ private fun VaultApi.iceOf(o: JsonObject, callId: String): CallWire.IceConfig = 
     CallWire.verifyIce(device.vaultIdentityKey(), o.b64("ice_config"), sig, callId, device.clockNow())
 }
 
-/** The other side's share: its device's signature and its vault's, under the connection's identity key (`peer_ik`). */
-private fun verifyPeerShare(o: JsonObject, message: ByteArray) = checked("key-exchange share") {
+/**
+ * The other side's share: its device's signature and its vault's, under the connection's identity key (`peer_ik`),
+ * which must be the key the app already knows the connection by: [pinnedFingerprint] is the fingerprint the
+ * connection's details show the member (VAULT-MESSAGING §10.8). A call is thereby bound to the identity the member
+ * can see, not only to what the event says.
+ */
+private fun verifyPeerShare(o: JsonObject, message: ByteArray, pinnedFingerprint: String) = checked("key-exchange share") {
+    val peerIk = o.b64("peer_ik", Suite.ED25519_PUBLIC_SIZE)
+    val shown = IkFingerprint.format(peerIk)
+    if (pinnedFingerprint.isEmpty() || !Bytes.constantTimeEquals(shown.toByteArray(), pinnedFingerprint.toByteArray())) {
+        throw CryptoException.Signature("peer_ik is not the connection's identity key")
+    }
     CallWire.verifyShare(
-        vaultIk = o.b64("peer_ik", Suite.ED25519_PUBLIC_SIZE),
+        vaultIk = peerIk,
         deviceIk = o.b64("device_ik", Suite.ED25519_PUBLIC_SIZE),
         message = message,
         deviceSig = o.b64("device_sig", Suite.ED25519_SIGNATURE_SIZE),
@@ -234,6 +267,7 @@ private fun checkSdp(sdp: String) {
  * answer that does not verify), a durable `call.end{hangup}` for the same `call_id` follows, so that a call the
  * vault did place does not ring on for nobody.
  */
+@OptIn(MadeByCallApi::class)
 suspend fun VaultApi.callStart(
     connectionId: String,
     sdp: String,
@@ -281,11 +315,18 @@ suspend fun VaultApi.callStart(
 }
 
 /**
- * Checks a `call.offer` event: the vault-signed ICE configuration, the caller's share under the connection's
- * identity key, the media suites in the SDP, and that the offer has not expired. Throws [CallMessageException] for
- * an offer that must not ring.
+ * Checks a `call.offer` event, in this order: the shape and sizes; that the offer has not expired; the vault-signed
+ * ICE configuration; `peer_ik` against [pinnedFingerprint] (the connection's identity as the app shows it); the
+ * caller's share under `peer_ik`; the SDP's one Opus audio section; the media suites, of which one must be among
+ * [suites] (what this device's media engine can do). Throws [CallMessageException] for an offer that must not
+ * ring: nothing of it is used, and nothing is sent.
  */
-fun VaultApi.callIncoming(event: VaultMessage): IncomingCall {
+@OptIn(MadeByCallApi::class)
+fun VaultApi.callIncoming(
+    event: VaultMessage,
+    pinnedFingerprint: String,
+    suites: Collection<MediaSuite> = MediaSuite.DEFAULT,
+): IncomingCall {
     val o = event.body
     val callId = o.callId()
     val media = o.need("media")
@@ -293,28 +334,26 @@ fun VaultApi.callIncoming(event: VaultMessage): IncomingCall {
     val sdp = sdpOf(o)
     val ek = o.b64("ek", Suite.EK_SIZE)
     val exp = checked("exp") { Timestamps.parseMillis(o.need("exp")) }
-    val now = device.clockNow()
-    if (!now.isBefore(exp) || Duration.between(now, exp) > CallLimits.MAX_OFFER_AHEAD) {
+    // Both times are the vault's: a phone whose clock is behind still rings for the right time. (An offer that
+    // has expired by the phone's clock never gets here: the session layer drops it, VaultDevice.droppedForTime.)
+    val ringFor = Duration.between(event.ts, exp)
+    if (ringFor <= Duration.ZERO || ringFor > CallLimits.MAX_OFFER_AHEAD || !device.clockNow().isBefore(exp)) {
         throw CallMessageException("offer expired or too far ahead")
     }
     val ice = iceOf(o, callId)
-    verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek))
-    val offered = checked("media suites") { CallMedia.offeredIn(sdp) }
-    return IncomingCall(callId, o.need("connection_id"), media, CallMedia.sdpWithout(sdp), exp, ice, offered, ek)
+    verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek), pinnedFingerprint)
+    val negotiated = checked("media suites") { CallMedia.choose(CallMedia.offeredIn(sdp), suites) }
+    return IncomingCall(callId, o.need("connection_id"), media, CallMedia.sdpWithout(sdp), exp, ringFor, ice, negotiated, ek)
 }
 
 /**
- * `call.answer`: answers [call] with this device's SDP answer [sdp]; the media suite, the first of the caller's
- * list that is among [suites] (what this device's media engine can do), is added to it here.
+ * `call.answer`: answers [call] with this device's SDP answer [sdp]; the media suite chosen when the offer was
+ * checked ([IncomingCall.negotiated]) is added to it here.
  * Encapsulates to the caller's key, signs the share, deposits once, and returns the call's keys, which never leave
  * this device. The vault does not answer: a call that was no longer ringing comes back as `call.end{unavailable}`.
  */
-suspend fun VaultApi.callAnswer(
-    call: IncomingCall,
-    sdp: String,
-    suites: Collection<MediaSuite> = MediaSuite.DEFAULT,
-): CallKeys {
-    val chosen = checked("media suites") { CallMedia.choose(call.offered, suites) }
+suspend fun VaultApi.callAnswer(call: IncomingCall, sdp: String): CallKeys {
+    val chosen = call.negotiated
     val answer = CallMedia.sdpWithChoice(sdp, chosen.chosen)
     checkSdp(answer)
     val a = checked("key agreement") { CallWire.answer(call.ek, call.callId) }
@@ -337,15 +376,18 @@ suspend fun VaultApi.callAnswer(
 }
 
 /**
- * Checks the `call.answer` event for [call] on the calling device: the answerer's share under the connection's
- * identity key and its choice of media suite, then derives the call's keys. The ephemeral KEM key is destroyed.
+ * Checks the `call.answer` event for [call] on the calling device: `peer_ik` against [pinnedFingerprint], the
+ * answerer's share under it, the SDP's one Opus audio section and the choice of media suite; then derives the
+ * call's keys. The ephemeral KEM key is destroyed when the answer is accepted; after a [CallMessageException] the
+ * caller of this function destroys [call] (the call is over).
  */
-fun VaultApi.callAccept(call: OutgoingCall, event: VaultMessage): AcceptedCall {
+@OptIn(MadeByCallApi::class)
+fun VaultApi.callAccept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall {
     val o = event.body
     if (o.callId() != call.callId) throw CallMessageException("answer for another call")
     val sdp = sdpOf(o)
     val enc = o.b64("enc", Suite.ENC_SIZE)
-    verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_ANSWER, call.callId, "", enc))
+    verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_ANSWER, call.callId, "", enc), pinnedFingerprint)
     val chosen = checked("media suites") { CallMedia.chosenIn(sdp, call.offered) }
     val kCall = checked("key agreement") { CallWire.accept(call.key(), enc, call.callId) }
     call.destroy()
@@ -415,29 +457,51 @@ suspend fun VaultApi.callList(limit: Int = 50): List<CallRecord> {
     return VaultJson.decode(ListSerializer(CallRecord.serializer()), o["calls"] ?: JsonArray(emptyList()))
 }
 
-/** `call.offer` events, unchecked: pass each to [callIncoming]. */
-val VaultApi.callOffers: Flow<VaultMessage> get() = events("call.offer")
-
-/** `call.answer` events, unchecked: pass the one of this device's call to [callAccept]. */
-val VaultApi.callAnswers: Flow<VaultMessage> get() = events("call.answer")
-
-/** `call.ringing`: the callee's device rings. */
-val VaultApi.callRingings: Flow<String> get() = events("call.ringing").mapNotNull { VaultJson.str(it.body, "call_id") }
-
-/** `call.end`: hung up, declined, busy, timed out, answered on another device, unavailable or failed. */
-val VaultApi.callEnds: Flow<CallEnded>
-    get() = events("call.end").mapNotNull { m ->
-        val id = VaultJson.str(m.body, "call_id")
-        val reason = VaultJson.str(m.body, "reason")
-        if (id == null || reason == null) null else CallEnded(id, reason)
+/** One call event from the vault, in the order the vault's events arrived. */
+sealed interface CallEvent {
+    /** `call.offer`, **unchecked**: pass [message] to [callIncoming]. */
+    class Offer(val message: VaultMessage) : CallEvent {
+        /** The connection the event names, to look its identity up before the check; not yet verified. */
+        val connectionId: String? get() = VaultJson.str(message.body, "connection_id")
     }
 
-/** `call.ice`: the other device's candidates. They may arrive before the answer (caller) or before Answer is tapped (callee). */
-val VaultApi.callIce: Flow<CallIce>
-    get() = events("call.ice").mapNotNull { m ->
-        val id = VaultJson.str(m.body, "call_id") ?: return@mapNotNull null
-        val list = (m.body["candidates"] as? JsonArray)?.mapNotNull { e ->
-            runCatching { VaultJson.decode(CallCandidate.serializer(), e.jsonObject) }.getOrNull()
-        }.orEmpty().filter { it.candidate.length <= CallLimits.MAX_CANDIDATE }.take(CallLimits.MAX_CANDIDATES)
-        if (list.isEmpty()) null else CallIce(id, list)
+    /** `call.answer`, **unchecked**: pass [message] to [callAccept] with the call it is for. */
+    class Answer(val message: VaultMessage) : CallEvent {
+        val callId: String? get() = VaultJson.str(message.body, "call_id")
+    }
+
+    data class Ringing(val callId: String) : CallEvent
+
+    data class Ended(val callId: String, val reason: String) : CallEvent
+
+    data class Ice(val ice: CallIce) : CallEvent
+}
+
+private val CALL_EVENT_TYPES = setOf("call.offer", "call.answer", "call.ringing", "call.end", "call.ice")
+
+private fun parseIce(m: VaultMessage): CallIce? {
+    val id = VaultJson.str(m.body, "call_id") ?: return null
+    val list = (m.body["candidates"] as? JsonArray)?.mapNotNull { e ->
+        runCatching { VaultJson.decode(CallCandidate.serializer(), e.jsonObject) }.getOrNull()
+    }.orEmpty().filter { it.candidate.length <= CallLimits.MAX_CANDIDATE }.take(CallLimits.MAX_CANDIDATES)
+    return if (list.isEmpty()) null else CallIce(id, list)
+}
+
+private fun parseEnd(m: VaultMessage): CallEnded? {
+    val id = VaultJson.str(m.body, "call_id")
+    val reason = VaultJson.str(m.body, "reason")
+    return if (id == null || reason == null) null else CallEnded(id, reason)
+}
+
+/** Every `call.*` event, one flow, so that their order is the vault's (an answer before the candidates after it). */
+val VaultApi.callEvents: Flow<CallEvent>
+    get() = device.events.mapNotNull { m ->
+        when (m.type.takeIf { it in CALL_EVENT_TYPES }) {
+            "call.offer" -> CallEvent.Offer(m)
+            "call.answer" -> CallEvent.Answer(m)
+            "call.ringing" -> VaultJson.str(m.body, "call_id")?.let { CallEvent.Ringing(it) }
+            "call.end" -> parseEnd(m)?.let { CallEvent.Ended(it.callId, it.reason) }
+            "call.ice" -> parseIce(m)?.let { CallEvent.Ice(it) }
+            else -> null
+        }
     }

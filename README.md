@@ -381,7 +381,7 @@ most 80 characters, `full_description.txt`, `images/icon.png`,
 | `:core:data` | Encrypted local storage, the vault session; repositories and caches (A2–A5) |
 | `:core:notify` | The notification modes: the on-phone service, channels, the `PushProvider` interface, the registration with the vault |
 | `:core:push-fcm` | Google push (Firebase Cloud Messaging): the `full` distribution only, the only module with Google code |
-| `:core:calls` | Calls (CALLS-PLAN phase C1, in progress): the media stack (`io.github.webrtc-sdk:android`, pinned by SHA-256) behind `MediaEngine`, and the call state machine. **Not in production builds**: linked into debug, devStack and staging only; `:app:check<Variant>Calls`. The keys and the frame format: [docs/calls/CALL-MEDIA.md](docs/calls/CALL-MEDIA.md) |
+| `:core:calls` | Calls (CALLS-PLAN phase C1, in progress): the media stack (`io.github.webrtc-sdk:android`, pinned by SHA-256) behind `MediaEngine`, the call state machine, the signalling on the vault (`VaultCallSignalling`), audio routing, the call service and `CallsController`. **Not in production builds**: linked into debug, devStack and staging only; `:app:check<Variant>Calls`. The keys and the frame format: [docs/calls/CALL-MEDIA.md](docs/calls/CALL-MEDIA.md) |
 | `:core:testing` | TEST ONLY: dev-stack helpers and the A2 exit scenario (test configurations and `devStack` only) |
 | `:feature:*` | onboarding, messages, connections, approvals, items, credential, settings |
 

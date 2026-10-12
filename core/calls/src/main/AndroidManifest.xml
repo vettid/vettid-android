@@ -1,4 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- No permission and no component yet: the call service and the microphone permission come with the service
-     (C1 PR 3), still for non-production builds only. -->
-<manifest />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Calls (CALLS-PLAN 0.1.1 phase C1). This manifest is merged only into builds that link :core:calls: debug,
+         devStack and staging. `:app:check<Variant>Calls` fails a production APK that has any of this. -->
+
+    <!-- The microphone, asked for when the member first calls or answers. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Earpiece, speaker and headset routing; the communication audio mode. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- The call service: a foreground service of types phoneCall and microphone for the life of a call. Android
+         requires MANAGE_OWN_CALLS (a normal permission) for the phoneCall type of an app that is not the dialer;
+         only the microphone type keeps the microphone when the app is no longer in front. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+
+    <application>
+        <service
+            android:name=".CallService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall|microphone" />
+    </application>
+</manifest>

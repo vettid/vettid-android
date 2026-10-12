@@ -379,8 +379,37 @@ class VaultManager(
 
     // --- session ---
 
+    /**
+     * The typed vault client of this device, for a module that is not part of every build and so cannot have its
+     * operations here (today: the non-production calls modules). The same client the repositories use; an
+     * operation on a locked vault fails as theirs do.
+     */
+    suspend fun vaultApi(): VaultApi = session().api
+
+    private val clientFlow = MutableStateFlow<VaultApi?>(null)
+
+    /**
+     * The typed vault client in use, from the moment its session exists (before the vault is open) until it is
+     * dropped: a module that listens to the vault's events subscribes here, so that nothing collected right at an
+     * unlock is missed (the device's events are not replayed).
+     */
+    val vaultClients: StateFlow<VaultApi?> = clientFlow.asStateFlow()
+
+    /** The member's lock, which always completes once asked for ([LockSequence]). */
+    private val locking = LockSequence(scope)
+
+    /**
+     * Something to finish while the vault still collects, before the member's lock: for example ending a call, so
+     * that its hang-up reaches the vault. A hook must be quick and must not call [lock]; all hooks together get
+     * [LockSequence.HOOK_BUDGET_MS], after which they are cancelled and the lock proceeds. No hook, no wait.
+     */
+    fun onBeforeLock(hook: suspend () -> Unit) = locking.addHook(hook)
+
     private suspend fun session(): Session = mutex.withLock {
-        session ?: openSession().also { session = it }
+        session ?: openSession().also {
+            session = it
+            clientFlow.value = it.api
+        }
     }
 
     private suspend fun openSession(): Session = io {
@@ -406,6 +435,7 @@ class VaultManager(
         observer = null
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
         session = null
+        clientFlow.value = null
         refusals.clear()
         if (forget) {
             io {
@@ -889,17 +919,31 @@ class VaultManager(
         }
     }
 
-    override suspend fun lock() = guard {
+    /**
+     * Locks the vault. **A lock once asked for completes**: it runs in the manager's own scope, so a caller whose
+     * scope ends (the screen went away) only stops waiting ([LockSequence]). The phone's own state ends locked in
+     * every outcome, also when neither the relay nor the member API could tell the vault (the failure is then
+     * thrown to a caller that still waits; the vault locks by itself when its unlock window ends).
+     */
+    override suspend fun lock() {
         lockedHere = true
-        val s = session()
-        val viaRelay = try {
-            withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
-        } catch (_: IOException) {
-            false
-        }
-        if (!viaRelay) s.device.vaultId?.let { s.alt.lock(it) }
-        windowFlow.value = null
-        phaseFlow.value = AppPhase.Locked
+        locking.run(
+            lock = {
+                guard {
+                    val s = session()
+                    val viaRelay = try {
+                        withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
+                    } catch (_: IOException) {
+                        false
+                    }
+                    if (!viaRelay) s.device.vaultId?.let { s.alt.lock(it) }
+                }
+            },
+            after = {
+                windowFlow.value = null
+                phaseFlow.value = AppPhase.Locked
+            },
+        )
     }
 
     override suspend fun overview(): VaultOverview = guard {
@@ -1354,6 +1398,7 @@ class VaultManager(
             observer = null
             val d = session?.device
             session = null
+            clientFlow.value = null
             if (d != null) {
                 // Best effort, bounded: the relay forgets the mailbox; the wipe does not depend on it.
                 withTimeoutOrNull(BEST_EFFORT_MS) { runCatching { io { d.deleteMailbox() } } }

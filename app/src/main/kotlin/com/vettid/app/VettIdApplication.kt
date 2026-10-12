@@ -6,6 +6,7 @@ import com.vettid.app.di.AppScope
 import com.vettid.app.distribution.DistributionApplication
 import com.vettid.app.distribution.PushStartup
 import com.vettid.app.notify.ReleaseUpdateNotifier
+import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.vault.AccountRepository
@@ -60,6 +61,13 @@ class VettIdApplication : DistributionApplication() {
 
     @Inject
     lateinit var pushRegistrar: PushRegistrar
+
+    /**
+     * Injected so that it exists from the start of the process: in a build with calls it is what listens for an
+     * incoming call (CALLS-PLAN C1); in a build without, an object that does nothing.
+     */
+    @Inject
+    lateinit var calls: CallAccess
 
     override fun onCreate() {
         // Before injection, so before anything reads local state: a wipe of a replaced phone that the process did

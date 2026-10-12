@@ -130,7 +130,13 @@ data class MediaConfig(
     val faults: MediaFaults = MediaFaults(),
 )
 
-fun interface MediaEngineFactory {
+interface MediaEngineFactory {
+    /**
+     * The suites every engine of this factory can encrypt with ([MediaSuite.PREFERENCE] order). Known without an
+     * engine: an incoming offer is checked against it before the phone rings, when no engine exists yet.
+     */
+    val suites: List<MediaSuite>
+
     /** A new engine for one call. May load the media stack's native library (first call in the process). */
     fun create(config: MediaConfig): MediaEngine
 }
