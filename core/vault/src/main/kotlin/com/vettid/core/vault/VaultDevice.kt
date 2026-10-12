@@ -22,6 +22,7 @@ import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.attestation.nitro.Measurements
 import com.vettid.core.attestation.nitro.NitroVerifier
 import com.vettid.core.crypto.Base64s
+import com.vettid.core.crypto.call.CallWire
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.Ed25519
 import com.vettid.core.crypto.Ed25519PrivateKey
@@ -703,6 +704,60 @@ class VaultDevice private constructor(
         body: JsonObject = EMPTY,
         id: String? = null,
     ): String = lock.withLock { sendLocked(id, type, body, null, null, null) }
+
+    /**
+     * Seals a message and deposits it **once**: it is never written to the outbox and never sent again, and a relay
+     * failure is the caller's to handle. For messages that mean nothing later (call signalling, §10.10: a
+     * `call.start` or `call.answer` re-sent after a restart would place or answer a call nobody is in; `call.ice`
+     * and `call.ringing` are ephemeral and carry [exp]). Returns the inner id.
+     */
+    suspend fun sendOnce(type: String, body: JsonObject = EMPTY, exp: Instant? = null): String = lock.withLock {
+        sendOnceLocked(Ulid.new(now()), type, body, exp)
+    }
+
+    private suspend fun sendOnceLocked(id: String, type: String, body: JsonObject, exp: Instant?): String {
+        val v = requireVault()
+        val ep = keyring.current() ?: throw VaultStateException("no session with the vault")
+        if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+        val env = ep.seal(Inner(id = id, type = type, ts = now(), exp = exp, body = VaultJson.bytes(body)))
+        save() // the epoch's send counter
+        depositToVault(v, env)
+        return id
+    }
+
+    /**
+     * A request deposited once ([sendOnce]) and awaited for [timeout]: no second deposit, unlike [request]. Throws
+     * [VaultStateException] without an answer.
+     */
+    suspend fun requestOnce(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): VaultMessage {
+        val id = Ulid.new(now())
+        val d = CompletableDeferred<Inner>()
+        pending[id] = d
+        try {
+            lock.withLock { sendOnceLocked(id, type, body, null) }
+            return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
+                ?: throw VaultStateException("$type: no response")
+        } finally {
+            pending.remove(id)
+        }
+    }
+
+    /** [requestOnce], returning the body of an ok response or throwing [VaultOpException]. */
+    suspend fun opOnce(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): JsonObject {
+        val r = requestOnce(type, body, timeout)
+        if (r.inner.status != Inner.STATUS_OK) {
+            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
+        }
+        return r.body
+    }
+
+    /** This device's signature over a call's key-exchange share (§10.10; [CallWire.signShare]). */
+    internal fun signCallShare(message: ByteArray): ByteArray = CallWire.signShare(secrets.identity, message)
+
+    /** The vault's current identity key (followed through `identity.rotate`). */
+    internal fun vaultIdentityKey(): ByteArray = Base64s.decodeStd(requireVault().ik)
+
+    internal fun clockNow(): Instant = now()
 
     private suspend fun sendLocked(id: String?, type: String, body: JsonObject, re: String?, status: String?, exp: Instant?): String {
         val v = requireVault()

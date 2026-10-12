@@ -12,6 +12,14 @@ TEST-ONLY.
 - Last commit touching testdata/vectors: 19c03153e2ecda009f449cb26d13929f34085783 (handshake.json for the 0.10.3 SAS commitment)
 - Copied: 2026-10-05 (handshake.json; the other files are unchanged since 2026-10-04)
 
+`calls.json` (VAULT-MESSAGING §10.10, CALLS-PLAN phase C1) was added later and has its own source:
+
+- Source commit: daac0d32b85c330eceff7d3b00c6aaed01fc6715 (vettid-vault PR #67, "Call test vectors"; branch
+  `vectors/calls`, not merged when copied: update this line to the merge commit when it is)
+- The code it was generated through (`vms/callwire`, `vms/suite`) is identical at that commit and at the tag
+  `release/staging/10` (8678752): the vectors describe what staging release 10 does.
+- Copied: 2026-10-12. Checked by `CallVectorsTest` in `:core:crypto`.
+
 To refresh: copy the files again from a newer vettid-vault commit, update the
 commits above, and run `./gradlew :core:crypto:test :core:attestation:testDebugUnitTest`.
 A vector that no longer matches is a stop-and-report item, never a skip.
@@ -27,4 +35,5 @@ ba4776070f7babc465d4db23f860fe998f6d7f3accab5cac8a153ff0090d3914  altchan.json
 6d7be9ba65f8426070ee54f0ea6ed84fed1e49c54eb31e09a1e177d3d5286d2f  invite.json
 6025085eb23f7ce100de09389d2a087ce8384b638461bc9891cfd5ad6db44570  keys.json
 29060418b258c813a8304047b826f70ec87e66ae10ea1c4e4ffc10d213eebb96  release.json
+94cb55fca6b63e5983474a7b9715acd4f4d9ce8930a1a801d09efb9e73d54d01  calls.json
 ```
