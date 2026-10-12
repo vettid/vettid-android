@@ -710,8 +710,14 @@ dependencies {
     implementation(projects.core.data)
     implementation(projects.core.notify)
     // Calls (CALLS-PLAN 0.1.1 phase C1): not in production builds until they are promoted (CallsApkCheck above).
-    for (type in listOf("debug", "devStack", "staging")) "${type}Implementation"(projects.core.calls)
-    if (callsInRelease) "releaseImplementation"(projects.core.calls)
+    for (type in listOf("debug", "devStack", "staging")) {
+        "${type}Implementation"(projects.core.calls)
+        "${type}Implementation"(projects.feature.calls)
+    }
+    if (callsInRelease) {
+        "releaseImplementation"(projects.core.calls)
+        "releaseImplementation"(projects.feature.calls)
+    }
     // Google push: the `full` distribution only. Looked up by path, not by accessor: an F-Droid build removes the
     // module's directory, and settings.gradle.kts then does not include it (the `foss` distribution never needs it).
     findProject(":core:push-fcm")?.let { "fullImplementation"(it) }

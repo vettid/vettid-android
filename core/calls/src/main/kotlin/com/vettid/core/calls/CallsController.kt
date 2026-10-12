@@ -38,8 +38,14 @@ interface CallVault {
     /** The fingerprint of [connectionId]'s pinned identity key, as the connection's details show it; null if unknown. */
     suspend fun fingerprint(connectionId: String): String?
 
-    /** A name to show for [connectionId]; null if unknown. */
-    fun displayName(connectionId: String): String?
+    /** The name the app shows for [connectionId] on its screens; null if it has none. */
+    fun name(connectionId: String): String?
+
+    /**
+     * The name for [connectionId] in a notification: [name], or null when the member's notifications show no names
+     * (the choice the message notifications follow).
+     */
+    fun notificationName(connectionId: String): String?
 
     /** The types of the vault's messages this phone dropped for their time (a wrong clock shows here). */
     val droppedForTime: Flow<String>
@@ -222,7 +228,10 @@ class CallsController(
 
     fun dismiss() = machine.dismiss()
 
-    override fun displayName(connectionId: String): String? = vault.displayName(connectionId)
+    override fun displayName(connectionId: String): String? = vault.notificationName(connectionId)
+
+    /** The connection's name for the call screens. */
+    fun screenName(connectionId: String): String? = vault.name(connectionId)
 
     // --- the vault ---
 

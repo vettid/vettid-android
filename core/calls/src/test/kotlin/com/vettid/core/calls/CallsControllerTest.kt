@@ -103,7 +103,11 @@ class CallsControllerTest {
 
         override suspend fun fingerprint(connectionId: String): String? = "aaaa bbbb"
 
-        override fun displayName(connectionId: String): String? = "Ada Lovelace"
+        var showNames = true
+
+        override fun name(connectionId: String): String? = "Ada Lovelace"
+
+        override fun notificationName(connectionId: String): String? = if (showNames) name(connectionId) else null
     }
 
     private class Audio : CallAudio, CallTones {
@@ -251,6 +255,10 @@ class CallsControllerTest {
         assertTrue(services > 0)
         assertEquals(CallAvailability.IN_CALL, c.availability.value)
         assertEquals("Ada Lovelace", c.displayName("conn-1"))
+        // "Show in notifications: nothing": the notification has no name; the call screen still does.
+        vault.showNames = false
+        assertNull(c.displayName("conn-1"))
+        assertEquals("Ada Lovelace", c.screenName("conn-1"))
         vault.gateway.channel.send(CallEvent.Ringing(CALL_ID))
         runCurrent()
         assertTrue(audio.ringBack)

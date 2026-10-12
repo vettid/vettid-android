@@ -80,8 +80,12 @@ object CallsModule {
 
         override suspend fun fingerprint(connectionId: String): String? = connection(connectionId)?.keyFingerprint
 
-        override fun displayName(connectionId: String): String? =
-            if (showNames.value) connection(connectionId)?.let { it.accountName ?: it.name.ifEmpty { null } } else null
+        override fun name(connectionId: String): String? = connection(connectionId)?.let { it.accountName ?: it.name.ifEmpty { null } }
+
+        override fun notificationName(connectionId: String): String? = if (showNames.value) name(connectionId) else null
+
+        /** This app's signer as its own entry in the vault's device list says (the "Installed from" line). */
+        override suspend fun signerClass(): String? = runCatching { m.overview().signer?.signerClass?.wire }.getOrNull()
     }
 
     @Provides
