@@ -155,6 +155,10 @@ android {
     }
 
     packaging {
+        // The media stack's native libraries (:core:calls) are prebuilt and already stripped. AGP strips native
+        // libraries again only where an NDK is installed, so two machines could package different bytes: they go
+        // into the APK exactly as the pinned artifact has them (reproducible builds).
+        jniLibs.keepDebugSymbols += "**/libjingle_peerconnection_so.so"
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
 
@@ -406,7 +410,15 @@ abstract class NoGoogleCheck : DefaultTask() {
                     .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
                 val classes = DEX.filter { dex.contains(it) } +
                     Regex("com\\.google\\.android\\.gms[A-Za-z0-9_.$]*").findAll(dex).map { it.value }.filterNot { it in ALLOWED }.distinct()
-                check(files.isEmpty() && classes.isEmpty()) { "${apk.name}: Google proprietary code in the foss distribution: files $files, dex $classes" }
+                // Native libraries (the media stack of :core:calls is prebuilt): the same names, as JNI class paths or
+                // as text, would mean a library that reaches for Google Play services or Firebase.
+                val native = entries.filter { it.name.startsWith("lib/") && it.name.endsWith(".so") }.flatMap { e ->
+                    val text = z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) }
+                    NATIVE.filter { text.contains(it) }.map { "${e.name}: $it" }
+                }
+                check(files.isEmpty() && classes.isEmpty() && native.isEmpty()) {
+                    "${apk.name}: Google proprietary code in the foss distribution: files $files, dex $classes, native $native"
+                }
             }
             logger.lifecycle("${apk.name}: ${modules.size} modules, none proprietary; no Google class, file or push permission in the APK")
         }
@@ -434,8 +446,46 @@ abstract class NoGoogleCheck : DefaultTask() {
          */
         val ALLOWED = setOf("com.google.android.gms.org.conscrypt.", "com.google.android.gms.org.conscrypt")
 
+        /** Strings that a native library calling into those packages would carry. */
+        val NATIVE = listOf(
+            "com/google/android/gms", "com.google.android.gms", "com/google/firebase", "com.google.firebase",
+            "com/android/vending", "com.android.vending", "com/google/android/play",
+        )
+
         /** Version and marker files those libraries put into an APK. */
         val FILES = listOf("firebase-", "play-services-", "transport-", "com.google.firebase", "com.google.android.gms")
+    }
+}
+
+/**
+ * The C0 calls spike (CALLS-PLAN 0.1.1 §7) is in the `debug` build only: a release-like build's merged manifest must
+ * have no spike component and none of the permissions the spike adds (the microphone and its foreground service
+ * type). When calls are built for real (C1), the permissions move to :core:calls and this check keeps the components.
+ */
+abstract class NoCallsSpikeCheck : DefaultTask() {
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+
+        fun names(tag: String) = doc.getElementsByTagName(tag).let { l -> (0 until l.length).map { (l.item(it) as org.w3c.dom.Element).getAttributeNS(ns, "name") } }
+        val problems = listOf("activity", "activity-alias", "service", "receiver", "provider").flatMap { names(it) }
+            .filter { it.contains(".spike.") || it.contains("CallsSpike") }.map { "component $it" } +
+            names("uses-permission").filter { it in SPIKE_PERMISSIONS }.map { "permission $it" }
+        check(problems.isEmpty()) { "${manifest.get().asFile}: the calls spike is debug-only: $problems" }
+        logger.lifecycle("merged manifest: no calls spike component or permission")
+    }
+
+    companion object {
+        val SPIKE_PERMISSIONS = listOf(
+            "android.permission.RECORD_AUDIO",
+            "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+            "android.permission.MODIFY_AUDIO_SETTINGS",
+        )
     }
 }
 
@@ -452,7 +502,11 @@ val stagingPins = listOf(
     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEok8gqeC5VcGx4KL",
 )
 // The dev stack's addresses and the debug tools' launch extras and gallery.
-val devOnly = listOf("127.0.0.1", "relay.vettid.test", "vettid.start", "vettid.screenshot", "Component gallery")
+// The last three are the C0 calls spike (app/src/debug): its screen, its service and its launcher label.
+val devOnly = listOf(
+    "127.0.0.1", "relay.vettid.test", "vettid.start", "vettid.screenshot", "Component gallery",
+    "CallsSpike", "SpikeSession", "VettID calls spike",
+)
 
 fun String.cap() = replaceFirstChar { it.uppercase() }
 
@@ -483,6 +537,9 @@ androidComponents {
         // The application id of each release-like build (ANDROID-PLAN 0.1.35 §5), and its own account site only.
         val staging = v.buildType == "staging"
         if (staging || v.buildType == "release") {
+            tasks.register<NoCallsSpikeCheck>("check${name}NoCallsSpike") {
+                manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+            }
             tasks.register<ApplicationIdCheck>("check${name}ApplicationId") {
                 manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
                 applicationId.set(if (staging) stagingApplicationId else releaseApplicationId)
@@ -493,7 +550,7 @@ androidComponents {
         when (v.buildType) {
             "release" -> {
                 val contents = tasks.register<ApkContentCheck>(if (foss) "checkFossReleaseApkContents" else "checkReleaseApk") {
-                    dependsOn("check${name}PushManifest", "check${name}ApplicationId")
+                    dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}NoCallsSpike")
                     apkDir.set(v.artifacts.get(SingleArtifact.APK))
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")))
@@ -509,7 +566,7 @@ androidComponents {
                 }
             }
             "staging" -> tasks.register<ApkContentCheck>("checkStagingApk") {
-                dependsOn("check${name}PushManifest", "check${name}ApplicationId")
+                dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}NoCallsSpike")
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
                 required.set(stagingPins)
@@ -546,6 +603,8 @@ dependencies {
     implementation(projects.core.ui)
     implementation(projects.core.data)
     implementation(projects.core.notify)
+    // Calls (CALLS-PLAN 0.1.1 §6.4): both distributions. C0 spike: only the debug build's spike screen uses it.
+    implementation(projects.core.calls)
     // Google push: the `full` distribution only. Looked up by path, not by accessor: an F-Droid build removes the
     // module's directory, and settings.gradle.kts then does not include it (the `foss` distribution never needs it).
     findProject(":core:push-fcm")?.let { "fullImplementation"(it) }

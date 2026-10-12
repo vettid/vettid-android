@@ -380,6 +380,7 @@ most 80 characters, `full_description.txt`, `images/icon.png`,
 | `:core:vault` | Typed vault client: sessions, envelopes, outbox, credential, one function per §10 type (A2) |
 | `:core:data` | Encrypted local storage, the vault session; repositories and caches (A2–A5) |
 | `:core:notify` | The notification modes: the on-phone service, channels, the `PushProvider` interface, the registration with the vault |
+| `:core:calls` | **C0 spike, not for merge**: the media stack (`io.github.webrtc-sdk:android`, pinned by SHA-256) behind a small engine for the debug build's "VettID calls spike" screen; the stack's frame format is in [docs/calls/C0-FRAME-FORMAT.md](docs/calls/C0-FRAME-FORMAT.md) |
 | `:core:push-fcm` | Google push (Firebase Cloud Messaging): the `full` distribution only, the only module with Google code |
 | `:core:testing` | TEST ONLY: dev-stack helpers and the A2 exit scenario (test configurations and `devStack` only) |
 | `:feature:*` | onboarding, messages, connections, approvals, items, credential, settings |

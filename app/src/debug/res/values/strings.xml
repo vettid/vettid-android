@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VettID Dev</string>
+    <!-- C0 spike (debug only, not translated): the second launcher entry. -->
+    <string name="calls_spike_label" translatable="false">VettID calls spike</string>
 </resources>

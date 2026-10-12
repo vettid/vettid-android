@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- C0 SPIKE (CALLS-PLAN 0.1.1 §4, §7), the `debug` build type only: a second launcher entry, "VettID calls spike",
+     with what it needs. No release-like build carries any of this (`:app:check<Variant>NoCallsSpike`). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Keeps the microphone while the screen is off. C1 uses `phoneCall` with Telecom instead (see the PR). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <application>
+        <activity
+            android:name=".spike.CallsSpikeActivity"
+            android:exported="true"
+            android:label="@string/calls_spike_label"
+            android:taskAffinity="${applicationId}.callsspike"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".spike.CallsSpikeService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+    </application>
+</manifest>
