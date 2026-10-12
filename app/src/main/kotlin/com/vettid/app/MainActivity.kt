@@ -185,7 +185,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        appLock.onBackground()
+        // A rotation, fold or theme change recreates the activity: the member did not leave the app (A6 audit R3).
+        appLock.onBackground(changingConfigurations = isChangingConfigurations)
         super.onStop()
     }
 

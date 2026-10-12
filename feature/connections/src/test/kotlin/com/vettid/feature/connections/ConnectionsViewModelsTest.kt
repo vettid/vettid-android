@@ -166,6 +166,27 @@ class ConnectionsViewModelsTest {
         assertEquals(AcceptStep.WAITING, opened.uiState.value.step)
     }
 
+    /** A6 audit R5: a ViewModel rebuilt from saved state does not send the single-use invitation a second time. */
+    @Test
+    fun aScannedLinkIsNotSentAgainWhenTheViewModelIsRebuiltFromSavedState() = runTest {
+        social.acceptResult = AcceptedConnection("c7", "Inviter")
+        val saved = SavedStateHandle(mapOf(AcceptRoute.ARG to link()))
+        AcceptViewModel(saved, social, social)
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "acceptInvite" })
+
+        // The same saved state, as after the activity was destroyed in the background.
+        val rebuilt = AcceptViewModel(SavedStateHandle(saved.keys().associateWith { saved.get<Any?>(it) }), social, social)
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "acceptInvite" })
+        assertEquals(AcceptStep.INPUT, rebuilt.uiState.value.step)
+        assertEquals(link(), rebuilt.uiState.value.input)
+        // The member can still ask again.
+        rebuilt.accept()
+        advanceUntilIdle()
+        assertEquals(2, social.calls.count { it == "acceptInvite" })
+    }
+
     @Test
     fun acceptSaysWhenAlreadyConnectedAndWhenTheRequestEnds() = runTest {
         social.seed(listOf(FakeSocial.connection("c1", "Sam")))
