@@ -121,6 +121,8 @@
     <string name="settings_signer_installed_vettid">Installed from: F-Droid or direct (signed by VettID)</string>
     <string name="settings_signer_installed_development">Development build</string>
     <string name="settings_signer_explanation">The Google Play version is signed by Google, so it trusts Google\'s signing; the F-Droid and direct versions are signed by VettID and do not. To change version, transfer your vault to the other version on another phone, or reinstall and recover it, which takes 24 hours.</string>
+    <string name="settings_signer_details_shown">Details shown</string>
+    <string name="settings_signer_details_hidden">Details hidden</string>
     <string name="settings_signer_digest">Signing certificate (SHA-256): %1$s</string>
     <string name="settings_status_advisory">Status comes from the account service and is for information only; your vault\'s own answers decide.</string>
     <string name="settings_notice_update_available">An update is available: release %1$d. Update it from Settings → Vault → Update available.</string>

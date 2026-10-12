@@ -115,7 +115,19 @@ class ManifestTest {
         // Enrollment: active only.
         assertEquals(4L, mgr.checkEnroll(m7, "cd".repeat(48)).number)
         assertThrows(AttestationException.Release::class.java) { mgr.checkEnroll(m7, "ab".repeat(48)) }
-        assertThrows(AttestationException.Release::class.java) { mgr.checkEnroll(m7, "ef".repeat(48)) }
+        assertTrue(assertThrows(AttestationException.Release::class.java) { mgr.checkEnroll(m7, "ef".repeat(48)) }.unknown)
+        assertTrue(assertThrows(AttestationException.Release::class.java) { mgr.decideUnlock(m7, "ef".repeat(48)) }.unknown)
+        // A manifest's own failures are marked as the manifest's; an enclave document's are not.
+        val ofManifest = listOf(
+            AttestationException.Signature("manifest"), AttestationException.Format("served manifest size"),
+            AttestationException.ManifestKey(), AttestationException.ManifestSerial(), AttestationException.Hash(),
+        )
+        assertTrue(ofManifest.all { it.manifest })
+        val ofEnclave = listOf(
+            AttestationException.Signature("attestation"), AttestationException.Format("COSE_Sign1"),
+            AttestationException.Chain(), AttestationException.Pcr("manifest"), AttestationException.Stale(),
+        )
+        assertTrue(ofEnclave.none { it.manifest })
 
         // Unlock: first unlock proceeds; deprecated shows end of life.
         assertTrue(mgr.decideUnlock(m7, "cd".repeat(48)) is UnlockDecision.Proceed)
@@ -158,7 +170,20 @@ class ManifestTest {
         val nsm3 = FakeNsm(nsm.ca, pcr0 = "ab".repeat(48))
         val desc3 = com.vettid.core.crypto.altchan.Descriptor.marshal("i-test-3", etk, "ab".repeat(48), t0.plus(Duration.ofHours(24)))
         val att3 = nsm3.attest(t0, userData = com.vettid.core.crypto.altchan.AltChannel.etkUserData(desc3))
-        assertThrows(AttestationException.Release::class.java) { ev.verifyEnclave(desc3, att3, m7, enroll = true, now = t0) } // deprecated
+        // deprecated
+        val notActive = assertThrows(AttestationException.Release::class.java) {
+            ev.verifyEnclave(desc3, att3, m7, enroll = true, now = t0)
+        }
+        assertTrue("listed, only not active", !notActive.unknown && !notActive.manifest)
+        // A release that is in no entry of the manifest (a canary release without its manifest, a stale manifest):
+        // the document itself verifies, and the failure says the release is unknown.
+        val nsmU = FakeNsm(nsm.ca, pcr0 = "12".repeat(48))
+        val descU = com.vettid.core.crypto.altchan.Descriptor.marshal("i-test-4", etk, "12".repeat(48), t0.plus(Duration.ofHours(24)))
+        val attU = nsmU.attest(t0, userData = com.vettid.core.crypto.altchan.AltChannel.etkUserData(descU))
+        for (enroll in listOf(true, false)) {
+            val u = assertThrows(AttestationException.Release::class.java) { ev.verifyEnclave(descU, attU, m7, enroll, t0) }
+            assertTrue(u.unknown)
+        }
         assertEquals(3L, ev.verifyEnclave(desc3, att3, m7, enroll = false, now = t0).release.number) // unlock is fine
         val nsmX = FakeNsm(nsm.ca, pcr0 = "cd".repeat(48), pcr1 = "99".repeat(48))
         val attX = nsmX.attest(t0, userData = com.vettid.core.crypto.altchan.AltChannel.etkUserData(desc))

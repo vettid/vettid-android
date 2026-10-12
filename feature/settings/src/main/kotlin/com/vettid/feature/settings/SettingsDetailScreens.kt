@@ -37,6 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.collapse
+import androidx.compose.ui.semantics.expand
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import com.vettid.core.data.policy.messageArg
@@ -114,7 +118,7 @@ private fun SignerDetails(signer: SignerView) {
         stringResource(signer.signerClass.installedFromRes()),
         stringResource(R.string.settings_signer_explanation) + "\n\n" +
             stringResource(R.string.settings_signer_digest, signer.digest.chunked(DIGEST_GROUP).joinToString(" ")),
-        modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs).testTag("signer_details"),
+        modifier = Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s).testTag("signer_details"),
     )
 }
 
@@ -157,13 +161,33 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                         // the vault reports no signer.
                         v.signer?.let { sg ->
                             SettingsDivider()
+                            val shown = stringResource(
+                                if (signerOpen) R.string.settings_signer_details_shown else R.string.settings_signer_details_hidden,
+                            )
                             SettingsRow(
                                 label = stringResource(sg.signerClass.installedFromRes()),
                                 onClick = { signerOpen = !signerOpen },
                                 icon = Icons.Outlined.VerifiedUser,
                                 showChevron = false,
-                                modifier = Modifier.testTag("signer_line"),
+                                // TalkBack: the line says whether its details are shown, and offers expand / collapse.
+                                modifier = Modifier.testTag("signer_line").semantics {
+                                    stateDescription = shown
+                                    if (signerOpen) {
+                                        collapse {
+                                            signerOpen = false
+                                            true
+                                        }
+                                    } else {
+                                        expand {
+                                            signerOpen = true
+                                            true
+                                        }
+                                    }
+                                },
                             )
+                            // Directly under the line that was tapped (owner report 2026-10-11: below all the other
+                            // rows, at the bottom of the screen, nothing visibly happened on a phone).
+                            if (signerOpen) SignerDetails(sg)
                         }
                         SettingsDivider()
                         SettingsInfoRow(
@@ -211,7 +235,6 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                             icon = Icons.Outlined.People,
                         )
                     }
-                    v.signer?.takeIf { signerOpen }?.let { SignerDetails(it) }
                     Text(
                         stringResource(R.string.settings_status_advisory),
                         style = MaterialTheme.typography.bodySmall,

@@ -93,8 +93,21 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     Text(label, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            state.preflightError?.let { NoticeCard(if (blocked) NoticeKind.URGENT
-                else NoticeKind.WARNING, stringResource(R.string.unlock_title), stringResource(it.messageRes())) }
+            state.preflightError?.let {
+                NoticeCard(
+                    // The vault's software did not verify: alarming, unlike a list that is stale or could not be loaded.
+                    if (blocked || it == FailureKind.ENCLAVE) NoticeKind.URGENT else NoticeKind.WARNING,
+                    stringResource(
+                        when (it) {
+                            FailureKind.RELEASE_UNKNOWN -> R.string.unlock_release_unknown_title
+                            FailureKind.ENCLAVE -> R.string.unlock_enclave_title
+                            else -> R.string.unlock_title
+                        },
+                    ),
+                    stringResource(it.messageRes()),
+                    modifier = Modifier.testTag("unlock_preflight_error"),
+                )
+            }
             if (state.serviceWaitSeconds > 0) {
                 Text(
                     stringResource(R.string.unlock_service_wait, formatWait(state.serviceWaitSeconds)),
@@ -151,7 +164,9 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     },
                 )
             }
-            if (!blocked && !state.recoveryPending && p != null) {
+            // Never a PIN field while the last check of the vault's software failed.
+            val verified = p != null && state.preflightError == null
+            if (!blocked && !state.recoveryPending && verified) {
                 Spacer(Modifier.height(Spacing.s))
                 val waitText = if (state.waitSeconds > 0) stringResource(R.string.unlock_wait, formatWait(state.waitSeconds)) else null
                 SecretField(

@@ -113,8 +113,13 @@ class FeedNotifier(
             null
         }
         val n = NotificationContent.of(item, channel, previews, names, res(), text)
-        synchronized(lock) { posted += item.itemId }
-        poster.post(n)
+        // Posted under the lock the cancels hold, and only if it still may be: an item that was being prepared while
+        // the vault locked or the phone was wiped is not posted after its cancel.
+        synchronized(lock) {
+            if (!notifiable(item)) return
+            posted += item.itemId
+            poster.post(n)
+        }
     }
 
     private fun notifiable(item: FeedItem): Boolean =
@@ -130,14 +135,18 @@ class FeedNotifier(
     /** Read, archived or deleted here or on another device: its notification goes. */
     private fun onItems(items: List<FeedItem>) {
         val active = items.filter { it.status == FeedManager.STATUS_ACTIVE }.map { it.itemId }.toSet()
-        val gone = synchronized(lock) { posted.filter { it !in active }.also { posted.removeAll(it.toSet()) } }
-        gone.forEach { poster.cancel(it) }
+        synchronized(lock) {
+            val gone = posted.filter { it !in active }.also { posted.removeAll(it.toSet()) }
+            gone.forEach { poster.cancel(it) }
+        }
     }
 
     /** The vault locked or is held, the mode is Off, or the phone was wiped: no notification names anything. */
     private fun cancelItems() {
-        val all = synchronized(lock) { posted.toList().also { posted.clear() } }
-        all.forEach { poster.cancel(it) }
+        synchronized(lock) {
+            val all = posted.toList().also { posted.clear() }
+            all.forEach { poster.cancel(it) }
+        }
     }
 
     private fun cancelAll() {

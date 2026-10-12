@@ -107,6 +107,8 @@
     <string name="unlock_submit">Unlock</string>
     <string name="unlock_checking">Checking your vault\'s software</string>
     <string name="unlock_retry">Try again</string>
+    <string name="unlock_release_unknown_title">This app does not know your vault\'s release</string>
+    <string name="unlock_enclave_title">Your vault\'s software could not be verified</string>
     <string name="unlock_updated_title">Vault software was updated</string>
     <string name="unlock_updated_body">Your vault now runs release %1$d (fingerprint %2$s); this phone last used release %3$d. Another of your devices approved this update. Continue only if you expected it.</string>
     <string name="unlock_updated_ack">Continue</string>

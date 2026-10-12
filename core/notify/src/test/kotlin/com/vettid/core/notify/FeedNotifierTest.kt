@@ -60,7 +60,13 @@ class FeedNotifierTest {
 
         override fun names() = names
 
-        override suspend fun messageText(connectionId: String, messageId: String): String? = "See you at 6"
+        /** When set, [messageText] waits for it: an item notification still being prepared. */
+        var textGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+        override suspend fun messageText(connectionId: String, messageId: String): String? {
+            textGate?.await()
+            return "See you at 6"
+        }
     }
 
     private val source = Source()
@@ -193,6 +199,25 @@ class FeedNotifierTest {
             push.first,
         )
         assertTrue("held: nothing names a connection", push.second.last { it.tag == FeedNotifier.TAG_CHECK }.let { !it.names && it.text == "2 messages and 1 request waiting" })
+    }
+
+    @Test
+    fun anItemPreparedWhileThePhoneWasWipedIsNotPostedAfterwards() = runTest {
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        notifier()
+        arrive(item("early"))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.textGate = gate
+        arrive(item("late")) // waits for the message text
+        assertEquals(setOf("early"), poster.shown.keys)
+        // The wipe (or a lock): the feed is cleared and the vault is no longer open.
+        source.items.value = emptyList()
+        source.open.value = false
+        runCurrent()
+        assertTrue(poster.shown.isEmpty())
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue("nothing is posted after the cancel: ${poster.log}", poster.shown.isEmpty())
     }
 
     @Test

@@ -3,6 +3,7 @@
 
 package com.vettid.core.altchan
 
+import com.vettid.core.attestation.AttestationException
 import com.vettid.core.attestation.VerifiedEnclave
 import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.crypto.Base64s
@@ -588,6 +589,36 @@ class MemberApiTest {
         val e = assertThrows(MemberApiException::class.java) { runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
         assertTrue(e.servicePaused)
         assertEquals(listOf("GET ${MemberApiClient.MANIFEST_PATH}", "GET /api/vault/enclave"), log.drop(before))
+    }
+
+    @Test
+    fun noPinIsSealedOrSentToAnEnclaveThatDidNotVerify() = runBlocking<Unit> {
+        // Owner report 2026-10-11 (a release this app's manifest does not list): the check fails before the request
+        // with the PIN is built, at the preflight and at the unlock; nothing but the manifest and the descriptor is read.
+        val p = Party()
+        p.vaultId = flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()).vaultId
+        p.state = AltRequests.applyEnrolled(p.state, 1)
+        val refusals = listOf<() -> AttestationException>(
+            { AttestationException.Release("not listed", unknown = true) },
+            { AttestationException.Signature("attestation") },
+            { AttestationException.Chain() },
+            { AttestationException.Pcr("manifest") },
+        )
+        for (refusal in refusals) {
+            val unverified = AltChannelFlow(api(), AltTrust(emptyList(), listOf(TestSupport.manifestKey))) { _, _, _, _, _ -> throw refusal() }
+            p.pending = null
+            val before = synchronized(log) { log.size }
+            val atPreflight = assertThrows(AttestationException::class.java) { runBlocking { unverified.preflight(p.state) } }
+            val atUnlock = assertThrows(AttestationException::class.java) {
+                runBlocking { unverified.unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) }
+            }
+            assertEquals(refusal().kind, atPreflight.kind)
+            assertEquals(refusal().kind, atUnlock.kind)
+            assertTrue("no unlock request was built", p.pending == null)
+            val sent = synchronized(log) { log.drop(before) }
+            assertTrue("only reads: $sent", sent.isNotEmpty() && sent.all { it.startsWith("GET ") })
+            assertTrue("nothing to the unlock route: $sent", sent.none { it.contains("unlock") })
+        }
     }
 
     @Test
