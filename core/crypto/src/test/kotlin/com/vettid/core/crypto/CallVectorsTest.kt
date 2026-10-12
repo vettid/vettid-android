@@ -3,6 +3,7 @@ package com.vettid.core.crypto
 import com.vettid.core.crypto.call.CallFrames
 import com.vettid.core.crypto.call.CallMedia
 import com.vettid.core.crypto.call.CallWire
+import com.vettid.core.crypto.call.MediaSuite
 import com.vettid.core.crypto.hpke.KemPrivateKey
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -169,7 +170,8 @@ class CallVectorsTest {
 
     // --- the media keys (docs/calls/CALL-MEDIA.md §3, §4) ---
 
-    private val one = CallMedia.Negotiated(1, listOf(1))
+    private val s1 = MediaSuite.AES_128_GCM
+    private val one = CallMedia.Negotiated(s1, listOf(1))
 
     @Test
     fun theDirectionKeysAndFrameKeysOfTheVector() {
@@ -177,24 +179,25 @@ class CallVectorsTest {
         val callee = CallMedia.directionKey(kCall, one, CallMedia.DIRECTION_CALLEE, callId)
         assertBytes("caller", Bytes.unhex("df07dfb74e30ab8b952a864b0214911649859b9d371d50cc04daa84d5c952c08"), caller)
         assertBytes("callee", Bytes.unhex("8e8b93784e37abb2257c2d42e47a0839e5aee933610f511c218199ebb7da637e"), callee)
-        assertBytes("caller frame key", Bytes.unhex("df487affce123283952f691628c1c2de"), CallFrames.frameKey(caller))
-        assertBytes("callee frame key", Bytes.unhex("81e8788d323103611d582bd089af9be4"), CallFrames.frameKey(callee))
+        assertBytes("caller frame key", Bytes.unhex("df487affce123283952f691628c1c2de"), CallFrames.frameKey(caller, s1))
+        assertBytes("callee frame key", Bytes.unhex("81e8788d323103611d582bd089af9be4"), CallFrames.frameKey(callee, s1))
     }
 
     @Test
     fun theChoiceAndTheOfferedListAreInTheKey() {
         val k = { n: CallMedia.Negotiated -> Bytes.hex(CallMedia.directionKey(kCall, n, CallMedia.DIRECTION_CALLER, callId)) }
-        assertEquals("129e7ea015351c448613b72d821141780fbc2681c9562f2b47894d999c609617", k(CallMedia.Negotiated(2, listOf(2, 1))))
+        val two = CallMedia.Negotiated(MediaSuite.AES_256_GCM, listOf(2, 1))
+        assertEquals("129e7ea015351c448613b72d821141780fbc2681c9562f2b47894d999c609617", k(two))
         // A list cut down to the weaker suite on the way: the caller (who offered 2 and 1) and the answerer (who saw
         // only 1) derive different keys for the same choice.
-        assertEquals("eb7c3d3b7c0d8d3a42b85e908c9f9dbf5b76a56a11e91d0e9138134c7328aec0", k(CallMedia.Negotiated(1, listOf(2, 1))))
-        assertFalse(k(CallMedia.Negotiated(1, listOf(2, 1))) == k(one))
+        assertEquals("eb7c3d3b7c0d8d3a42b85e908c9f9dbf5b76a56a11e91d0e9138134c7328aec0", k(CallMedia.Negotiated(s1, listOf(2, 1))))
+        assertFalse(k(CallMedia.Negotiated(s1, listOf(2, 1))) == k(one))
         assertFalse(k(one) == Bytes.hex(CallMedia.directionKey(kCall, one, CallMedia.DIRECTION_CALLER, callId.dropLast(1) + "1")))
     }
 
     @Test
     fun aSealedAudioFrameOfTheVector() {
-        val key = CallFrames.frameKey(CallMedia.directionKey(kCall, one, CallMedia.DIRECTION_CALLER, callId))
+        val key = CallFrames.frameKey(CallMedia.directionKey(kCall, one, CallMedia.DIRECTION_CALLER, callId), s1)
         val frame = Bytes.unhex("78797a7b7c7d7e7f808182838485868788898a8b")
         val iv = CallFrames.iv(0x11223344, 960, 0)
         assertBytes("iv", Bytes.unhex("11223344000003c0000003c0"), iv)
@@ -207,7 +210,7 @@ class CallVectorsTest {
         assertEquals(frame.size + CallFrames.OVERHEAD, sealed.size)
         assertArrayEquals(frame, CallFrames.open(key, sealed, CallFrames.AUDIO_CLEAR_SIZE))
         // The other direction's key does not open it.
-        val other = CallFrames.frameKey(CallMedia.directionKey(kCall, one, CallMedia.DIRECTION_CALLEE, callId))
+        val other = CallFrames.frameKey(CallMedia.directionKey(kCall, one, CallMedia.DIRECTION_CALLEE, callId), s1)
         assertNull(CallFrames.open(other, sealed, CallFrames.AUDIO_CLEAR_SIZE))
     }
 }

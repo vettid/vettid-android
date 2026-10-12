@@ -6,36 +6,21 @@ import com.vettid.core.crypto.kdf.Hkdf
 /**
  * From `k_call` to the keys that encrypt a call's media frames (docs/calls/CALL-MEDIA.md; CALLS-PLAN 0.1.1 phase C1).
  *
- * A **media suite** names the frame cipher and its format. The caller lists the suites it can use in its SDP offer,
- * the answerer names the one it chose in its SDP answer ([sdpWithOffer], [sdpWithChoice]); the vaults pass the SDP
- * through unchanged. The SDP is not signed, so the choice and the list are bound into the key derivation instead:
- * two devices that do not agree on both derive different keys, and no media plays (a changed attribute cannot move a
- * call to a weaker suite unnoticed).
+ * The caller lists the [MediaSuite]s it can use in its SDP offer, the preferred one first; the answerer names the
+ * one it chose in its SDP answer ([sdpWithOffer], [sdpWithChoice]); the vaults pass the SDP through unchanged. The
+ * SDP is not signed, so the choice and the caller's list are bound into the key derivation instead: two devices
+ * that do not agree on both derive different keys, and no media plays. Someone who changes the attribute on the way
+ * can therefore end a call but cannot move it to a weaker suite.
  *
  * Each direction has its own key ([directionKey]), so that the frame cipher's nonce, which holds no randomness, can
  * never repeat under one key across the two senders.
  */
 object CallMedia {
-    /**
-     * Suite 1: AES-128-GCM frames in the format of the media stack's frame cryptor ([CallFrames]). The only suite
-     * today; a 256-bit suite would be a new number with a longer frame key, and nothing else here changes.
-     */
-    const val SUITE_AES_128_GCM = 1
-
-    /** The suites this build can use, the preferred one first. */
-    val SUPPORTED: List<Int> = listOf(SUITE_AES_128_GCM)
-
     /** Session-level SDP attribute of an offer: the caller's suites, decimal, separated by one space. */
     const val ATTR_OFFERED = "vettid-media-suites"
 
     /** Session-level SDP attribute of an answer: the one suite the answerer chose. */
     const val ATTR_CHOSEN = "vettid-media-suite"
-
-    /** HKDF salt of the direction keys. */
-    const val LABEL_MEDIA = "vettid/vms/2/call-media"
-
-    /** The frame cryptor's key-derivation salt (its "ratchet salt"), the same on every platform. */
-    const val LABEL_FRAME = "vettid/vms/2/call-frame"
 
     /** Frames the calling device sends. */
     const val DIRECTION_CALLER = "caller"
@@ -48,17 +33,20 @@ object CallMedia {
     const val MAX_SUITES = 8
     private const val MAX_SUITE = 65535
 
-    /** What the two devices agreed: [chosen] is one of [offered], the caller's list as it was sent. */
-    data class Negotiated(val chosen: Int, val offered: List<Int>) {
+    /**
+     * What the two devices agreed: [chosen] is one of [offered], the caller's list exactly as it was sent (numbers
+     * this build does not know included: they are part of what the keys are bound to).
+     */
+    data class Negotiated(val chosen: MediaSuite, val offered: List<Int>) {
         init {
-            if (!validList(offered) || chosen !in offered) throw CryptoException.Suite("media suites")
+            if (!validList(offered) || chosen.id !in offered) throw CryptoException.Suite("media suite not offered")
         }
     }
 
     private fun validList(l: List<Int>) = l.size in 1..MAX_SUITES && l.all { it in 1..MAX_SUITE } && l.distinct().size == l.size
 
     /**
-     * `HKDF-SHA-256(ikm = k_call, salt = "vettid/vms/2/call-media", info = chosen || 0x00 || offered || 0x00 ||
+     * `HKDF-SHA-256(ikm = k_call, salt = the suite's media label, info = chosen || 0x00 || offered || 0x00 ||
      * direction || 0x00 || call_id, L = 32)`: `chosen` in decimal, `offered` as decimal numbers joined by one
      * space, [direction] [DIRECTION_CALLER] or [DIRECTION_CALLEE] (who sends the frames). All ASCII.
      */
@@ -66,33 +54,53 @@ object CallMedia {
         if (kCall.size != CallWire.KEY_SIZE) throw CryptoException.Key("k_call size")
         if (direction != DIRECTION_CALLER && direction != DIRECTION_CALLEE) throw CryptoException.Key("direction")
         if (callId.isEmpty()) throw CryptoException.Key("call id")
-        val info = "${n.chosen}\u0000${n.offered.joinToString(" ")}\u0000$direction\u0000$callId".toByteArray(Charsets.UTF_8)
-        return Hkdf.derive(kCall, LABEL_MEDIA.toByteArray(Charsets.US_ASCII), info, DIRECTION_KEY_SIZE)
+        val info = "${n.chosen.id}\u0000${n.offered.joinToString(" ")}\u0000$direction\u0000$callId".toByteArray(Charsets.UTF_8)
+        return Hkdf.derive(kCall, n.chosen.mediaLabel.toByteArray(Charsets.US_ASCII), info, DIRECTION_KEY_SIZE)
     }
 
-    /** The answerer's choice: the first of the caller's suites, in the caller's order, that this build supports. */
-    fun choose(offered: List<Int>, supported: List<Int> = SUPPORTED): Negotiated =
-        Negotiated(offered.firstOrNull { it in supported } ?: throw CryptoException.Suite("no common media suite"), offered)
+    /** The list a caller sends: [supported] in the registry's order of preference. */
+    fun offerOf(supported: Collection<MediaSuite>): List<Int> {
+        val list = MediaSuite.ordered(supported).map { it.id }
+        if (list.isEmpty()) throw CryptoException.Suite("no media suite")
+        return list
+    }
+
+    /**
+     * The answerer's choice: the first of the caller's suites, in the caller's order, that the answerer supports.
+     * Numbers the answerer does not know are skipped. None in common: no call.
+     */
+    fun choose(offered: List<Int>, supported: Collection<MediaSuite>): Negotiated {
+        if (!validList(offered)) throw CryptoException.Suite("media suites")
+        val chosen = offered.firstNotNullOfOrNull { id -> MediaSuite.byId(id)?.takeIf { it in supported } }
+            ?: throw CryptoException.Suite("no common media suite")
+        return Negotiated(chosen, offered)
+    }
 
     /** [sdp] with the caller's suite list as a session-level attribute. */
-    fun sdpWithOffer(sdp: String, offered: List<Int> = SUPPORTED): String {
+    fun sdpWithOffer(sdp: String, offered: List<Int>): String {
         if (!validList(offered)) throw CryptoException.Suite("media suites")
         return withAttribute(sdp, ATTR_OFFERED, offered.joinToString(" "))
     }
 
     /** [sdp] with the answerer's choice as a session-level attribute. */
-    fun sdpWithChoice(sdp: String, chosen: Int): String = withAttribute(sdp, ATTR_CHOSEN, chosen.toString())
+    fun sdpWithChoice(sdp: String, chosen: MediaSuite): String = withAttribute(sdp, ATTR_CHOSEN, chosen.id.toString())
 
     /** The caller's list in an SDP offer. Missing, repeated or malformed: no call. */
     fun offeredIn(sdp: String): List<Int> {
-        val parts = attribute(sdp, ATTR_OFFERED).split(' ')
-        val list = parts.map { number(it) }
+        val list = attribute(sdp, ATTR_OFFERED).split(' ').map { number(it) }
         if (!validList(list)) throw CryptoException.Suite("media suites")
         return list
     }
 
-    /** The answerer's choice in an SDP answer, checked against what the caller [offered]. */
-    fun chosenIn(sdp: String, offered: List<Int>): Negotiated = Negotiated(number(attribute(sdp, ATTR_CHOSEN)), offered)
+    /**
+     * The answerer's choice in an SDP answer, as the caller reads it: it must be a suite the caller [offered] (its
+     * own list, as it sent it, never one read back from anywhere) and one this build knows.
+     */
+    fun chosenIn(sdp: String, offered: List<Int>): Negotiated {
+        val id = number(attribute(sdp, ATTR_CHOSEN))
+        if (id !in offered) throw CryptoException.Suite("media suite not offered")
+        return Negotiated(MediaSuite.byId(id) ?: throw CryptoException.Suite("unknown media suite"), offered)
+    }
 
     /**
      * [sdp] without either attribute: what a device hands to its media stack. The attributes are VettID's, read
@@ -114,7 +122,7 @@ object CallMedia {
     private fun attribute(sdp: String, name: String): String {
         val session = lines(sdp).takeWhile { !it.startsWith("m=") }
         val prefix = "a=$name:"
-        // An attribute of either name anywhere else, or twice, is not something this app wrote.
+        // The attribute anywhere else, or twice, is not something a VettID device wrote.
         val all = lines(sdp).count { it.startsWith(prefix) }
         val found = session.filter { it.startsWith(prefix) }
         if (found.size != 1 || all != 1) throw CryptoException.Suite("media suite attribute")

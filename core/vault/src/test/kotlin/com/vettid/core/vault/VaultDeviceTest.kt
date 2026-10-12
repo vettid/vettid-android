@@ -9,6 +9,7 @@ import com.vettid.core.crypto.Ed25519PrivateKey
 import com.vettid.core.crypto.Kid
 import com.vettid.core.crypto.call.CallMedia
 import com.vettid.core.crypto.call.CallWire
+import com.vettid.core.crypto.call.MediaSuite
 import com.vettid.core.crypto.envelope.Envelope
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Mode
@@ -1124,15 +1125,15 @@ class VaultDeviceTest {
 
             // The callee's device answers: enc, its choice of suite in the SDP, the vouched share.
             val a = CallWire.answer(ek, callId)
-            val expected = CallMedia.Negotiated(1, listOf(1))
+            val expected = CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
             val fromCaller = CallMedia.directionKey(a.kCall, expected, CallMedia.DIRECTION_CALLER, callId)
             val fromCallee = CallMedia.directionKey(a.kCall, expected, CallMedia.DIRECTION_CALLEE, callId)
             val m = CallWire.shareMessage("answer", callId, "", a.enc)
-            fun answer(sdpAnswer: String = CallMedia.sdpWithChoice(sdp, 1), enc: ByteArray = a.enc) =
+            fun answer(sdpAnswer: String = CallMedia.sdpWithChoice(sdp, MediaSuite.AES_128_GCM), enc: ByteArray = a.enc) =
                 peer.vouched(JsonBuilder().string("call_id", callId).string("sdp", sdpAnswer).base64("enc", enc), m).build()
 
             // A share that was swapped on the way, an answer without the suite, a suite that was not offered: unusable.
-            for (bad in listOf(answer(enc = CallWire.answer(ek, callId).enc), answer(sdpAnswer = sdp), answer(sdpAnswer = CallMedia.sdpWithChoice(sdp, 2)))) {
+            for (bad in listOf(answer(enc = CallWire.answer(ek, callId).enc), answer(sdpAnswer = sdp), answer(sdpAnswer = CallMedia.sdpWithChoice(sdp, MediaSuite.AES_256_GCM)))) {
                 d.handle(v.seal("call.answer", bad))
                 val ev = d.awaitEvent("call.answer")
                 assertThrows(CallMessageException::class.java) { api.callAccept(call, ev) }
@@ -1140,7 +1141,7 @@ class VaultDeviceTest {
             d.handle(v.seal("call.answer", answer()))
             val accepted = api.callAccept(call, d.awaitEvent("call.answer"))
             assertEquals("the media stack gets the SDP without VettID's attribute", sdp, accepted.sdp)
-            assertEquals(1, accepted.keys.suite)
+            assertEquals(MediaSuite.AES_128_GCM, accepted.keys.suite)
             assertTrue(accepted.keys.send().contentEquals(fromCaller))
             assertTrue(accepted.keys.receive().contentEquals(fromCallee))
             assertTrue("no key in a log line", !accepted.keys.toString().contains(com.vettid.core.crypto.Bytes.hex(fromCaller)))
@@ -1180,7 +1181,7 @@ class VaultDeviceTest {
             val m = CallWire.shareMessage("offer", callId, "audio", ek)
             val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
             fun offer(
-                offerSdp: String = CallMedia.sdpWithOffer(sdp),
+                offerSdp: String = CallMedia.sdpWithOffer(sdp, listOf(1)),
                 share: ByteArray = ek,
                 at: Instant = exp,
                 iceExp: Instant = Instant.now().plusSeconds(21_600),
@@ -1210,6 +1211,7 @@ class VaultDeviceTest {
             assertEquals("conn-1", call.connectionId)
             assertEquals(exp, call.exp)
             assertEquals(sdp, call.sdp)
+            assertEquals(listOf(1), call.offered)
 
             api.callRinging(callId)
             val ringing = v.open(nextDeposit().second)

@@ -6,6 +6,7 @@ import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.Suite
 import com.vettid.core.crypto.call.CallMedia
 import com.vettid.core.crypto.call.CallWire
+import com.vettid.core.crypto.call.MediaSuite
 import com.vettid.core.crypto.envelope.Timestamps
 import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.crypto.hpke.KemPrivateKey
@@ -74,7 +75,7 @@ class CallMessageException(message: String, cause: Throwable? = null) : java.io.
  * The two frame keys of a call on this device (CallMedia): [send] encrypts the frames this device sends, [receive]
  * decrypts the other device's. They exist only on the two devices of the call. [destroy] wipes them.
  */
-class CallKeys internal constructor(val suite: Int, private val sendKey: ByteArray, private val receiveKey: ByteArray) {
+class CallKeys internal constructor(val suite: MediaSuite, private val sendKey: ByteArray, private val receiveKey: ByteArray) {
     @Volatile
     private var live = true
 
@@ -95,7 +96,7 @@ class CallKeys internal constructor(val suite: Int, private val sendKey: ByteArr
         Bytes.wipe(sendKey, receiveKey)
     }
 
-    override fun toString(): String = "CallKeys(suite=$suite, [redacted])"
+    override fun toString(): String = "CallKeys(suite=${suite.id}, [redacted])"
 
     internal companion object {
         /** Derives both direction keys from [kCall] and wipes it. */
@@ -138,7 +139,8 @@ class IncomingCall internal constructor(
     /** When the offer expires: the device stops ringing then by itself. */
     val exp: Instant,
     val ice: CallWire.IceConfig,
-    internal val offered: List<Int>,
+    /** The caller's media suites, as sent (numbers this build does not know included). */
+    val offered: List<Int>,
     internal val ek: ByteArray,
 ) {
     override fun toString(): String = "IncomingCall($callId)"
@@ -216,15 +218,21 @@ private fun sdpOf(o: JsonObject): String = o.need("sdp").also {
 }
 
 /**
- * `call.start`: places a call to [connectionId] with this device's SDP offer [sdp] (the media suites are added to
- * it here). A fresh `call_id` and ephemeral KEM key, the share signed with the device's identity key. Deposited once
- * and awaited for [CallLimits.START_TIMEOUT]. Errors ([VaultOpException]): `busy` (this vault is already in a call),
- * `not_found`, `connection_unavailable`, `owner_check_required`, `exists`, `bad_request`, `internal`, and
- * `unsupported_type` from a vault release without calls.
+ * `call.start`: places a call to [connectionId] with this device's SDP offer [sdp]; [suites], what this device's
+ * media engine can do, are added to it here, the preferred one first. A fresh `call_id` and ephemeral KEM key, the
+ * share signed with the device's identity key. Deposited once and awaited for [CallLimits.START_TIMEOUT]. Errors
+ * ([VaultOpException]): `busy` (this vault is already in a call), `not_found`, `connection_unavailable`,
+ * `owner_check_required`, `exists`, `bad_request`, `internal`, and `unsupported_type` from a vault release without
+ * calls.
  */
-suspend fun VaultApi.callStart(connectionId: String, sdp: String, media: String = CallWire.MEDIA_AUDIO): OutgoingCall {
+suspend fun VaultApi.callStart(
+    connectionId: String,
+    sdp: String,
+    suites: Collection<MediaSuite> = MediaSuite.DEFAULT,
+    media: String = CallWire.MEDIA_AUDIO,
+): OutgoingCall {
     val callId = device.newId()
-    val offered = CallMedia.SUPPORTED
+    val offered = checked("media suites") { CallMedia.offerOf(suites) }
     val offer = CallMedia.sdpWithOffer(sdp, offered)
     if (offer.toByteArray(Charsets.UTF_8).size > CallLimits.MAX_SDP) throw CallMessageException("sdp size")
     val key = CallWire.newOfferKey()
@@ -275,12 +283,17 @@ fun VaultApi.callIncoming(event: VaultMessage): IncomingCall {
 }
 
 /**
- * `call.answer`: answers [call] with this device's SDP answer [sdp] (the chosen media suite is added to it here).
+ * `call.answer`: answers [call] with this device's SDP answer [sdp]; the media suite, the first of the caller's
+ * list that is among [suites] (what this device's media engine can do), is added to it here.
  * Encapsulates to the caller's key, signs the share, deposits once, and returns the call's keys, which never leave
  * this device. The vault does not answer: a call that was no longer ringing comes back as `call.end{unavailable}`.
  */
-suspend fun VaultApi.callAnswer(call: IncomingCall, sdp: String): CallKeys {
-    val chosen = checked("media suites") { CallMedia.choose(call.offered) }
+suspend fun VaultApi.callAnswer(
+    call: IncomingCall,
+    sdp: String,
+    suites: Collection<MediaSuite> = MediaSuite.DEFAULT,
+): CallKeys {
+    val chosen = checked("media suites") { CallMedia.choose(call.offered, suites) }
     val answer = CallMedia.sdpWithChoice(sdp, chosen.chosen)
     if (answer.toByteArray(Charsets.UTF_8).size > CallLimits.MAX_SDP) throw CallMessageException("sdp size")
     val a = checked("key agreement") { CallWire.answer(call.ek, call.callId) }

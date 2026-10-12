@@ -10,16 +10,14 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Media suite 1's frame encryption, written out in Kotlin (docs/calls/CALL-MEDIA.md; read from webrtc-sdk/webrtc
- * `api/crypto/frame_crypto_transformer.{h,cc}` at commit 73cb8180, the source of
+ * The frame encryption of the AES-GCM media suites ([MediaSuite]), written out in Kotlin (docs/calls/CALL-MEDIA.md;
+ * read from webrtc-sdk/webrtc `api/crypto/frame_crypto_transformer.{h,cc}` at commit 73cb8180, the source of
  * `io.github.webrtc-sdk:android:150.7871.01`). The app never encrypts media with this: the media stack's native
  * frame cryptor does. It exists so that the format has an executable description with test vectors that another
  * platform can reproduce, and so that a build can check on a phone that the native library does what the document
  * says.
  */
 object CallFrames {
-    /** The AES key of suite 1: always 128 bits, whatever the length of the key material. */
-    const val FRAME_KEY_SIZE = 16
     const val TAG_SIZE = 16
     const val IV_SIZE = 12
 
@@ -35,14 +33,15 @@ object CallFrames {
     /** The key index VettID uses: a key ring of one. */
     const val KEY_INDEX = 0
     private const val INFO_SIZE = 128
+    private val KEY_SIZES = MediaSuite.entries.map { it.frameKeySize }.toSet()
     private const val COUNTER_MODULUS = 0xFFFF
 
     /**
-     * The AES-128-GCM key the frame cryptor derives from a direction key: the first 16 bytes of
-     * `HKDF-SHA-256(ikm = material, salt = "vettid/vms/2/call-frame", info = 128 zero bytes)`.
+     * The AES-GCM key the frame cryptor derives from a direction key: the first [MediaSuite.frameKeySize] bytes of
+     * `HKDF-SHA-256(ikm = material, salt = the suite's frame label, info = 128 zero bytes)`.
      */
-    fun frameKey(material: ByteArray, salt: ByteArray = CallMedia.LABEL_FRAME.toByteArray(Charsets.US_ASCII)): ByteArray =
-        Hkdf.derive(material, salt, ByteArray(INFO_SIZE), FRAME_KEY_SIZE)
+    fun frameKey(material: ByteArray, suite: MediaSuite): ByteArray =
+        Hkdf.derive(material, suite.frameLabel.toByteArray(Charsets.US_ASCII), ByteArray(INFO_SIZE), suite.frameKeySize)
 
     /**
      * The sender's IV: SSRC, RTP timestamp, and the timestamp minus a per-SSRC frame counter (modulo 65535), each
@@ -56,7 +55,7 @@ object CallFrames {
      * [clearBytes] of [frame]) is the AEAD's associated data.
      */
     fun seal(frameKey: ByteArray, frame: ByteArray, clearBytes: Int, iv: ByteArray, keyIndex: Int = KEY_INDEX): ByteArray {
-        if (frameKey.size != FRAME_KEY_SIZE || iv.size != IV_SIZE || clearBytes !in 0..frame.size) throw CryptoException.Key("frame sizes")
+        if (frameKey.size !in KEY_SIZES || iv.size != IV_SIZE || clearBytes !in 0..frame.size) throw CryptoException.Key("frame sizes")
         val header = frame.copyOfRange(0, clearBytes)
         val sealed = gcm(Cipher.ENCRYPT_MODE, frameKey, iv, header).doFinal(frame, clearBytes, frame.size - clearBytes)
         return Bytes.concat(header, sealed, iv, byteArrayOf(IV_SIZE.toByte(), keyIndex.toByte()))
@@ -65,7 +64,8 @@ object CallFrames {
     /** The frame inside [sealed], or null if it is not a frame encrypted under [frameKey]. */
     fun open(frameKey: ByteArray, sealed: ByteArray, clearBytes: Int): ByteArray? {
         val bodyEnd = sealed.size - TRAILER_SIZE - IV_SIZE
-        if (clearBytes < 0 || bodyEnd - clearBytes < TAG_SIZE || sealed[sealed.size - TRAILER_SIZE].toInt() != IV_SIZE) return null
+        val shaped = frameKey.size in KEY_SIZES && clearBytes >= 0 && bodyEnd - clearBytes >= TAG_SIZE
+        if (!shaped || sealed[sealed.size - TRAILER_SIZE].toInt() != IV_SIZE) return null
         val iv = sealed.copyOfRange(bodyEnd, bodyEnd + IV_SIZE)
         val header = sealed.copyOfRange(0, clearBytes)
         return try {
