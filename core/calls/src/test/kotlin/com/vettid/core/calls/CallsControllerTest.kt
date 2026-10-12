@@ -397,6 +397,32 @@ class CallsControllerTest {
         assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
     }
 
+    /** Review L8 of #127: hung up, then locked at once. The call is over here, its hang-up is not with the relay yet. */
+    @Test
+    fun aHangUpStillOnItsWayIsWaitedForBeforeTheVaultLocks() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        val gate = Channel<Unit>(1)
+        vault.gateway.endGate = gate
+        c.hangUp()
+        runCurrent()
+        assertTrue("the call is over on this phone", c.state.value !is CallState.Live)
+        var done = false
+        backgroundScope.launch {
+            c.endCallBeforeLock()
+            done = true
+        }
+        runCurrent()
+        assertTrue("the lock waits for the hang-up that is still being sent", !done)
+        gate.send(Unit)
+        runCurrent()
+        assertTrue(done)
+        assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
+    }
+
     @Test
     fun aWrongClockShowsInTheDiagnostics() = runTest {
         val c = controller()

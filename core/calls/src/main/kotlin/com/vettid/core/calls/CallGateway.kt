@@ -13,7 +13,7 @@ import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.callAccept
 import com.vettid.core.vault.callAnswer
 import com.vettid.core.vault.callEnd
-import com.vettid.core.vault.callEvents
+import com.vettid.core.vault.callEventsIn
 import com.vettid.core.vault.callIce
 import com.vettid.core.vault.callIncoming
 import com.vettid.core.vault.callList
@@ -52,12 +52,17 @@ interface CallGateway {
 }
 
 /**
- * [CallGateway] on the vault: nothing but the calls. [api] is asked each time; [clients] is the vault client in
- * use (a new one after the device was set up again), whose events are followed.
+ * [CallGateway] on the vault: nothing but the calls. [api] is asked each time, and refuses while the vault is
+ * locked on this phone; [sendEnd] is the one way a `call.end` still goes out then (the hang-up of the call a lock
+ * ends); [events] are the vault device's events (a new flow after the device was set up again).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class VaultCallGateway(private val api: suspend () -> VaultApi, clients: Flow<VaultApi>) : CallGateway {
-    override val events: Flow<CallEvent> = clients.flatMapLatest { it.callEvents }
+class VaultCallGateway(
+    private val api: suspend () -> VaultApi,
+    events: Flow<Flow<VaultMessage>>,
+    private val sendEnd: suspend (callId: String, reason: String) -> Unit = { id, reason -> api().callEnd(id, reason) },
+) : CallGateway {
+    override val events: Flow<CallEvent> = events.flatMapLatest { callEventsIn(it) }
 
     override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall =
         api().callStart(connectionId, sdp, suites)
@@ -74,7 +79,7 @@ class VaultCallGateway(private val api: suspend () -> VaultApi, clients: Flow<Va
 
     override suspend fun ice(callId: String, candidates: List<CallCandidate>) = api().callIce(callId, candidates)
 
-    override suspend fun end(callId: String, reason: String) = api().callEnd(callId, reason)
+    override suspend fun end(callId: String, reason: String) = sendEnd(callId, reason)
 
     override suspend fun list(limit: Int): List<CallRecord> = api().callList(limit)
 }

@@ -740,12 +740,18 @@ class VaultDevice private constructor(
      * A request deposited once ([sendOnce]) and awaited for [timeout]: no second deposit, unlike [request]. Throws
      * [VaultStateException] without an answer.
      */
-    suspend fun requestOnce(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): VaultMessage {
+    suspend fun requestOnce(
+        type: String,
+        body: JsonObject = EMPTY,
+        timeout: Duration = cfg.requestTimeout,
+        /** The vault drops the request after this (§5.3 `exp`): for a request that must not be acted on late. */
+        exp: Instant? = null,
+    ): VaultMessage {
         val id = Ulid.new(now())
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendOnceLocked(id, type, body, null) }
+            lock.withLock { sendOnceLocked(id, type, body, exp) }
             return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
                 ?: throw VaultStateException("$type: no response")
         } finally {
@@ -754,8 +760,8 @@ class VaultDevice private constructor(
     }
 
     /** [requestOnce], returning the body of an ok response or throwing [VaultOpException]. */
-    suspend fun opOnce(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): JsonObject {
-        val r = requestOnce(type, body, timeout)
+    suspend fun opOnce(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout, exp: Instant? = null): JsonObject {
+        val r = requestOnce(type, body, timeout, exp)
         if (r.inner.status != Inner.STATUS_OK) {
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
@@ -826,6 +832,18 @@ class VaultDevice private constructor(
             countRefusal(x, v.mailbox, v.token)
             throw x
         }
+    }
+
+    /**
+     * Removes undelivered messages of [type] from the outbox; returns how many. For a message that must not be
+     * delivered late: a `vault.lock` kept by an earlier version of the app (which sent it through the outbox) would
+     * otherwise lock the vault at the first flush after the member's next unlock.
+     */
+    suspend fun dropFromOutbox(type: String): Int = lock.withLock {
+        val before = st.outbox.size
+        st.outbox.removeAll { it.type == type }
+        if (st.outbox.size != before) save()
+        before - st.outbox.size
     }
 
     /** Re-deposits what the outbox still holds (after a restart or a transport failure). */

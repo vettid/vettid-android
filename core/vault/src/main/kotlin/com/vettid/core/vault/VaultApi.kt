@@ -76,9 +76,14 @@ class VaultApi(val device: VaultDevice) {
     /** `account.get` (§10.2, §11.13, 0.15.0): the member's account snapshot from the member API, display only. */
     suspend fun accountGet(): AccountView = op("account.get").decode(AccountView.serializer())
 
-    /** Locks the vault (it answers, then sends vault.locking). */
-    suspend fun lock() {
-        op("vault.lock")
+    /**
+     * Locks the vault (it answers, then sends vault.locking). Deposited **once** and with an `exp`: never from the
+     * outbox, so a lock that could not be delivered is not delivered by a later flush, and the vault drops one that
+     * reaches it more than [validFor] after it was asked. A lock must never land on a vault the member has opened
+     * again since. Throws without an answer within [timeout]; the caller decides what follows.
+     */
+    suspend fun lock(timeout: Duration = LOCK_ANSWER, validFor: Duration = LOCK_VALID) {
+        device.opOnce("vault.lock", timeout = timeout, exp = device.clockNow().plus(validFor))
     }
 
     /**
@@ -892,6 +897,12 @@ class VaultApi(val device: VaultDevice) {
         device.awaitEvent(type, timeout, match).body
 
     companion object {
+        /** How long the app waits for the vault's answer to `vault.lock`. */
+        val LOCK_ANSWER: Duration = Duration.ofSeconds(10)
+
+        /** How long after it was asked a `vault.lock` may still be acted on. */
+        val LOCK_VALID: Duration = Duration.ofSeconds(30)
+
         const val INVITE_TTL_DEFAULT = 3600
 
         /**

@@ -21,7 +21,6 @@ import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.VaultManager
-import com.vettid.core.vault.VaultApi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -54,10 +53,11 @@ object CallsModule {
         override val unlocked: Flow<Boolean> = m.phase.map { it == AppPhase.Unlocked }.distinctUntilChanged()
 
         /**
-         * The vault client in use, from the moment its session exists (before the vault is open): the call that was
-         * waiting in the mailbox at an unlock is collected right then, and the device's events are not replayed.
+         * The events of the vault device in use, from the moment its session exists (before the vault is open): the
+         * call that was waiting in the mailbox at an unlock is collected right then, and the device's events are not
+         * replayed.
          */
-        private val clients: Flow<VaultApi> = m.vaultClients.filterNotNull()
+        private val sources: Flow<VaultManager.VaultEvents> = m.vaultEvents.filterNotNull()
 
         /** "Show in notifications": names unless the member chose that notifications show nothing. */
         private val showNames: StateFlow<Boolean> = prefs.preferences.map { it.notificationPreviews != NotificationPreviews.NOTHING }
@@ -70,9 +70,10 @@ object CallsModule {
         /** The daily check was done, or the connections were read: the vault answers now, if it did not before. */
         override val recheck: Flow<Unit> = merge(m.ownerCheck.ownerCheck.map { }, m.social.connections.map { })
 
-        override val gateway: CallGateway = VaultCallGateway(api = { m.vaultApi() }, clients = clients)
+        override val gateway: CallGateway =
+            VaultCallGateway(api = { m.vaultApi() }, events = sources.map { it.events }, sendEnd = m::sendCallEnd)
 
-        override val droppedForTime: Flow<String> = clients.flatMapLatest { it.device.droppedForTime }
+        override val droppedForTime: Flow<String> = sources.flatMapLatest { it.droppedForTime }
 
         /** Only an active connection has an identity a call can be checked against. */
         private fun connection(id: String) = m.social.connections.value.firstOrNull { it.id == id && it.state == ConnectionState.ACTIVE }

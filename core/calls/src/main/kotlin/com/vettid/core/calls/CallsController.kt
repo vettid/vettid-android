@@ -211,8 +211,11 @@ class CallsController(
      * to silence. The caller bounds the wait; the lock happens whatever becomes of this.
      */
     suspend fun endCallBeforeLock() {
-        if (machine.state.value !is CallState.Live) return
-        machine.vaultLocking()
+        val live = machine.state.value is CallState.Live
+        // Nothing to end and no hang-up on its way: no wait. A hang-up still being sent is waited for also when the
+        // call itself is already over on this phone (the member hung up and locked at once).
+        if (!live && machine.pendingEnds.value == 0) return
+        if (live) machine.vaultLocking()
         combine(machine.state, machine.pendingEnds) { s, pending -> s !is CallState.Live && pending == 0 }.first { it }
     }
 

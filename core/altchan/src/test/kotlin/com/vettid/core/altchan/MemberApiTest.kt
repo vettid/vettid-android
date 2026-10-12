@@ -26,6 +26,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
@@ -500,6 +501,23 @@ class MemberApiTest {
         val a = MemberApiClient(server.url("/").toString(), "", OkHttpClient(), MemberAuth.Bearer("g"), sleep = { waits.add(it) })
         assertEquals("i", a.enclaveWait().instanceId)
         assertEquals(listOf(2000L, 2000L), waits)
+    }
+
+    @Test
+    fun aBoundedPollGivesTheSlotBackStillQueued() = runBlocking<Unit> {
+        var looks = 0
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                looks++
+                return resp(200, """{"status":"queued"}""")
+            }
+        }
+        val waits = mutableListOf<Long>()
+        val a = MemberApiClient(server.url("/").toString(), "", OkHttpClient(), MemberAuth.Bearer("g"), sleep = { waits.add(it) })
+        // A lock whose slot nobody answers: the wait ends, where the unbounded poll would go on for as long as the slot lives.
+        assertEquals(Slot.QUEUED, a.poll("01JABCDEFGHJKMNPQRSTVWXYZ0", atMost = Duration.ofSeconds(12)).status)
+        assertEquals(12_000L, waits.sum())
+        assertEquals(waits.size + 1, looks)
     }
 
     private val pausedBody = """{"error":"vault_unavailable","code":"vault_unavailable","message":"The vault service is paused","service":"paused","retry_after":300}"""

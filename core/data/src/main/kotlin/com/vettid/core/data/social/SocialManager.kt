@@ -155,6 +155,19 @@ class SocialManager(
         }
     }
 
+    /**
+     * The vault is no longer open on this phone (locked, or a lock was asked for): the connections, messages and
+     * requests read from it are dropped from memory. What the app keeps on the phone by design (the approvals it
+     * was sent, encrypted at rest) stays; an unlock reads the lists again.
+     */
+    fun forgetOpenVault() {
+        connectionsFlow.value = emptyList()
+        authFlow.value = emptyMap()
+        messagesFlow.value = emptyMap()
+        listedFlow.value = emptyList()
+        requestsFlow.value = emptyList()
+    }
+
     /** Forgets everything (sign-out with a new vault, or a deleted vault). */
     fun clear() {
         local = Local()

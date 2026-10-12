@@ -543,4 +543,24 @@ class UnlockViewModelTest {
         assertTrue(vm.uiState.value.pinAllowed)
         assertFalse(vm.uiState.value.notRecognised)
     }
+
+    /** A lock the vault has not confirmed is said on the unlock screen, with "Try again", until it is confirmed. */
+    @Test
+    fun anUnconfirmedLockIsShownUntilTheVaultConfirms() = runTest {
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.vault.LockNotice.None, vm.uiState.value.lock)
+        val pending = com.vettid.core.data.vault.LockNotice.Unconfirmed(java.time.Instant.parse("2026-10-12T10:00:00Z"), 2)
+        vault.lockNotice.value = pending
+        advanceUntilIdle()
+        assertEquals(pending, vm.uiState.value.lock)
+        vm.retryLock()
+        assertTrue("retryLock" in vault.calls)
+        vault.lockNotice.value = com.vettid.core.data.vault.LockNotice.ConfirmedLate
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.vault.LockNotice.ConfirmedLate, vm.uiState.value.lock)
+        vm.dismissLockNotice()
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.vault.LockNotice.None, vm.uiState.value.lock)
+    }
 }
