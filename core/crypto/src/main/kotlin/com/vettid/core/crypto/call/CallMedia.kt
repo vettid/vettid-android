@@ -94,6 +94,15 @@ object CallMedia {
     /** The answerer's choice in an SDP answer, checked against what the caller [offered]. */
     fun chosenIn(sdp: String, offered: List<Int>): Negotiated = Negotiated(number(attribute(sdp, ATTR_CHOSEN)), offered)
 
+    /**
+     * [sdp] without either attribute: what a device hands to its media stack. The attributes are VettID's, read
+     * before this; no media stack needs to see them.
+     */
+    fun sdpWithout(sdp: String): String {
+        val eol = if (sdp.contains("\r\n")) "\r\n" else "\n"
+        return lines(sdp).filterNot { it.startsWith("a=$ATTR_OFFERED:") || it.startsWith("a=$ATTR_CHOSEN:") }.joinToString(eol)
+    }
+
     private fun number(s: String): Int {
         if (s.isEmpty() || s.length > 5 || s[0] == '0' || !s.all { it in '0'..'9' }) throw CryptoException.Suite("media suite number")
         return s.toInt()

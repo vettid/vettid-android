@@ -133,7 +133,7 @@ class IncomingCall internal constructor(
     val callId: String,
     val connectionId: String,
     val media: String,
-    /** The caller's SDP offer. */
+    /** The caller's SDP offer, without the media-suite attribute: ready for the media stack. */
     val sdp: String,
     /** When the offer expires: the device stops ringing then by itself. */
     val exp: Instant,
@@ -144,7 +144,7 @@ class IncomingCall internal constructor(
     override fun toString(): String = "IncomingCall($callId)"
 }
 
-/** The callee's verified answer on the calling device: its SDP and the call's keys. */
+/** The callee's verified answer on the calling device: its SDP (without the media-suite attribute) and the call's keys. */
 class AcceptedCall internal constructor(val callId: String, val sdp: String, val keys: CallKeys)
 
 /** One ICE candidate of `call.ice`. */
@@ -271,7 +271,7 @@ fun VaultApi.callIncoming(event: VaultMessage): IncomingCall {
     val ice = iceOf(o, callId)
     verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek))
     val offered = checked("media suites") { CallMedia.offeredIn(sdp) }
-    return IncomingCall(callId, o.need("connection_id"), media, sdp, exp, ice, offered, ek)
+    return IncomingCall(callId, o.need("connection_id"), media, CallMedia.sdpWithout(sdp), exp, ice, offered, ek)
 }
 
 /**
@@ -315,7 +315,7 @@ fun VaultApi.callAccept(call: OutgoingCall, event: VaultMessage): AcceptedCall {
     val chosen = checked("media suites") { CallMedia.chosenIn(sdp, call.offered) }
     val kCall = checked("key agreement") { CallWire.accept(call.key(), enc, call.callId) }
     call.destroy()
-    return AcceptedCall(call.callId, sdp, CallKeys.derive(kCall, chosen, call.callId, caller = true))
+    return AcceptedCall(call.callId, CallMedia.sdpWithout(sdp), CallKeys.derive(kCall, chosen, call.callId, caller = true))
 }
 
 /** `call.ringing` (ephemeral): this device is ringing; the caller hears a ring-back tone. Forwarded once per call. */

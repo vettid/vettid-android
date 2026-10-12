@@ -22,6 +22,9 @@ class CallMediaTest {
         )
         assertEquals(listOf(1), CallMedia.offeredIn(sdp))
         assertEquals(listOf(2, 1), CallMedia.offeredIn(CallMedia.sdpWithOffer(offer, listOf(2, 1))))
+        assertEquals(offer, CallMedia.sdpWithout(sdp))
+        assertEquals(offer, CallMedia.sdpWithout(CallMedia.sdpWithChoice(offer, 1)))
+        assertEquals(offer, CallMedia.sdpWithout(offer))
         // Written twice: once.
         assertEquals(sdp, CallMedia.sdpWithOffer(sdp))
         // Line feeds alone, and no media section.

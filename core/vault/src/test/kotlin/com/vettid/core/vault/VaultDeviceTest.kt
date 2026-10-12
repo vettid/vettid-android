@@ -1139,7 +1139,7 @@ class VaultDeviceTest {
             }
             d.handle(v.seal("call.answer", answer()))
             val accepted = api.callAccept(call, d.awaitEvent("call.answer"))
-            assertEquals(CallMedia.sdpWithChoice(sdp, 1), accepted.sdp)
+            assertEquals("the media stack gets the SDP without VettID's attribute", sdp, accepted.sdp)
             assertEquals(1, accepted.keys.suite)
             assertTrue(accepted.keys.send().contentEquals(fromCaller))
             assertTrue(accepted.keys.receive().contentEquals(fromCallee))
@@ -1209,6 +1209,7 @@ class VaultDeviceTest {
             assertEquals(callId, call.callId)
             assertEquals("conn-1", call.connectionId)
             assertEquals(exp, call.exp)
+            assertEquals(sdp, call.sdp)
 
             api.callRinging(callId)
             val ringing = v.open(nextDeposit().second)
