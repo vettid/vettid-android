@@ -1,9 +1,7 @@
 package com.vettid.feature.items
 
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.os.PersistableBundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,6 +67,7 @@ import com.vettid.core.ui.components.FloatingPillActionBar
 import com.vettid.core.ui.components.LargeTitle
 import com.vettid.core.ui.components.LocalUserPresence
 import com.vettid.core.ui.components.NoticeCard
+import com.vettid.core.ui.components.textClip
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PillAction
 import com.vettid.core.ui.components.TagChip
@@ -245,7 +244,7 @@ private fun DetailBody(item: ItemDetail, state: ItemDetailUiState, actions: Item
             }
             item.fields.forEachIndexed { i, f ->
                 if (i > 0) HorizontalDivider(Modifier.padding(vertical = Spacing.s), color = MaterialTheme.colorScheme.outlineVariant)
-                FieldRow(f, item.revealed, f.fieldId != null && f.fieldId in state.shown, actions)
+                FieldRow(f, item.sensitivity, item.revealed, f.fieldId != null && f.fieldId in state.shown, actions)
             }
         }
         if (item.hasNotes || !item.notes.isNullOrEmpty()) {
@@ -312,10 +311,13 @@ private fun Gate(item: ItemDetail, state: ItemDetailUiState, actions: ItemDetail
 
 @Composable
 @Suppress("CyclomaticComplexMethod")
-private fun FieldRow(f: ItemFieldView, revealed: Boolean, shown: Boolean, actions: ItemDetailActions) {
+private fun FieldRow(f: ItemFieldView, protection: Sensitivity, revealed: Boolean, shown: Boolean, actions: ItemDetailActions) {
     val context = LocalContext.current
     val v = f.value
     val masked = FieldKinds.masked(f.kind)
+    val otp = f.kind == FieldKinds.OTP
+    // Every value of a secret or critical item, and a password or a seed of any item (A6 audit S4).
+    val sensitive = ItemClips.sensitive(f.kind, protection)
     val region = phoneRegion()
     val text = when (v) {
         null -> null
@@ -357,18 +359,33 @@ private fun FieldRow(f: ItemFieldView, revealed: Boolean, shown: Boolean, action
                         )
                     }
                 }
-                IconButton(onClick = { copy(context, f.label, text, sensitive = masked) }) {
-                    Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.items_cd_copy, f.label))
+                // A one-time code's value is its seed (the setup key): it is copied only where the member chose to
+                // see it. What is copied otherwise is the current code, next to it below (A6 audit S3).
+                if (!otp || shown) {
+                    IconButton(
+                        onClick = { ItemClips.copy(context, f.label, text, sensitive) },
+                        modifier = Modifier.testTag("item_copy_${f.fieldId}"),
+                    ) {
+                        Icon(
+                            Icons.Outlined.ContentCopy,
+                            contentDescription = stringResource(if (otp) R.string.items_cd_copy_seed else R.string.items_cd_copy, f.label),
+                        )
+                    }
                 }
             }
         }
-        if (f.kind == FieldKinds.OTP && revealed && !text.isNullOrEmpty()) OtpCode(text)
+        if (otp && revealed && !text.isNullOrEmpty()) {
+            OtpCode(text, f.label) { code -> ItemClips.copy(context, f.label, code, sensitive = true) }
+        }
     }
 }
 
-/** The current one-time code of an `otp` seed (§10.7: apps show codes), with the seconds it has left. */
+/**
+ * The current one-time code of an `otp` seed (§10.7: apps show codes), with the seconds it has left and a button that
+ * copies the code current at that moment ([onCopy]; never the seed).
+ */
 @Composable
-private fun OtpCode(seed: String) {
+private fun OtpCode(seed: String, label: String, onCopy: (String) -> Unit) {
     val totp = remember(seed) { Totp.parse(seed) }
     if (totp == null) {
         Text(
@@ -398,7 +415,11 @@ private fun OtpCode(seed: String) {
             stringResource(R.string.items_otp_left, totp.secondsLeft(now)),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
         )
+        IconButton(onClick = { onCopy(totp.code(System.currentTimeMillis() / 1000)) }, modifier = Modifier.testTag("item_otp_copy")) {
+            Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.items_cd_copy_code, label))
+        }
     }
 }
 
@@ -466,16 +487,18 @@ internal fun SensitivityChoice(s: Sensitivity, selected: Boolean, enabled: Boole
     }
 }
 
-/** Copies a value; a masked one is flagged sensitive so that the system does not show it in the clipboard preview. */
-private fun copy(context: Context, label: String, text: String, sensitive: Boolean) {
-    val cm = context.getSystemService(ClipboardManager::class.java) ?: return
-    val clip = ClipData.newPlainText(label, text)
-    if (sensitive) {
-        clip.description.extras = PersistableBundle().apply { putBoolean(EXTRA_IS_SENSITIVE, true) }
+/** What the item screens put on the clipboard. */
+internal object ItemClips {
+    /**
+     * Whether a copied value carries Android's sensitive flag (A6 audit S4): by the item's protection (every value of
+     * a secret or critical item: a card number, a recovery phrase), and a password or a one-time-code seed in any item.
+     */
+    fun sensitive(kind: String, protection: Sensitivity): Boolean = protection != Sensitivity.DATA || FieldKinds.masked(kind)
+
+    fun copy(context: Context, label: String, text: String, sensitive: Boolean) {
+        val cm = context.getSystemService(ClipboardManager::class.java) ?: return
+        cm.setPrimaryClip(textClip(label, text, sensitive))
     }
-    cm.setPrimaryClip(clip)
 }
 
-/** `ClipDescription.EXTRA_IS_SENSITIVE` (API 33), by name so that API 31–32 phones get it too. */
-private const val EXTRA_IS_SENSITIVE = "android.content.extra.IS_SENSITIVE"
 private const val OTP_TICK_MS = 1_000L

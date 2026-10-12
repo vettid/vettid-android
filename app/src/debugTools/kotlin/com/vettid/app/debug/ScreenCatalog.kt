@@ -767,6 +767,16 @@ object ScreenCatalog {
                 SettingsActions(),
             )
         },
+        // "Allow screenshots" (A6 audit S1, owner decision 2026-10-11): on, and the confirmation that turns it on.
+        "settings.screenshots_on" to {
+            SettingsContent(SettingsUiState(account = sampleAccount, screenshotsAllowed = true), SettingsActions())
+        },
+        "settings.screenshots_on_development" to {
+            SettingsContent(SettingsUiState(account = sampleAccount, screenshotsAllowed = true, screenshotsStayOn = true), SettingsActions())
+        },
+        "settings.screenshots_confirm" to {
+            SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), askScreenshots = true)
+        },
         "settings.app_lock_method" to {
             com.vettid.feature.settings.AppLockMethodDialog(com.vettid.core.data.prefs.AppLockMethod.BIOMETRICS, true, {}, {}, {})
         },

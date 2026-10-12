@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withTimeoutOrNull
 import com.vettid.app.BuildConfig
 import com.vettid.core.data.lock.AppLock
+import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
 import com.vettid.core.data.prefs.DataStorePreferencesRepository
@@ -343,6 +344,15 @@ object AppModule {
     @Singleton
     fun appLock(@ApplicationContext context: Context, prefs: PreferencesRepository): AppLock =
         AppLock(prefs, KeystoreAppLockKeys(), FileWrappedKeyFile(File(context.noBackupFilesDir, "app-lock.bin")))
+
+    /**
+     * "Allow screenshots" (A6 audit S1): off in release and staging builds until the member turns it on; on in the
+     * development builds (debug, devStack), whose screens are screenshotted all the time.
+     */
+    @Provides
+    @Singleton
+    fun screenshotAllowance(@AppScope scope: CoroutineScope): ScreenshotAllowance =
+        ScreenshotAllowance(onByDefault = BuildConfig.DEBUG, scope = scope, now = android.os.SystemClock::elapsedRealtime)
 
     @Provides
     @Singleton

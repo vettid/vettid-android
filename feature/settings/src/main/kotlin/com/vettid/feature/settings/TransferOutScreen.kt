@@ -1,6 +1,5 @@
 package com.vettid.feature.settings
 
-import android.content.ClipData
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -42,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.textClip
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -265,7 +265,7 @@ private fun ShowCode(state: TransferOutUiState, leave: () -> Unit) {
         Spacer(Modifier.height(Spacing.s))
         OutlinedButton(
             onClick = {
-                scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(clipLabel, offer.link))) }
+                scope.launch { clipboard.setClipEntry(ClipEntry(textClip(clipLabel, offer.link, sensitive = true))) }
                 copied = true
             },
             shape = VettIdShape.pill,
