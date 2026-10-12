@@ -46,12 +46,21 @@ sealed interface MediaEvent {
 }
 
 /**
+ * The engine found media that the call's frame encryption does not cover (a media section other than the one
+ * audio section that carries the cryptors), or could not put the encryption in place. The call ends as not
+ * encrypted; nothing is played.
+ */
+class MediaNotEncryptedException(what: String) : IllegalStateException("media not encrypted: $what")
+
+/**
  * The media of one call, behind an interface so that the call state machine has no media stack in it (and its tests
  * run on a JVM). One engine is one call: it is created for it and [close]d with it.
  *
  * The rules an implementation keeps (docs/calls/CALL-MEDIA.md §7):
  * - frame encryption is in place and enabled on the sender and on the receiver before any SDP is applied, and is
  *   never switched off;
+ * - no media exists outside that encryption: after the other side's SDP has been applied there is exactly one
+ *   media section, the one that carries the cryptors, or [MediaNotEncryptedException];
  * - a sender without a key sends nothing; a frame that does not decrypt is never played;
  * - nothing of the stack's own logging is ever switched on ([MediaLogGuard]);
  * - [setKeys] takes the keys into the stack and wipes the arrays it was given.

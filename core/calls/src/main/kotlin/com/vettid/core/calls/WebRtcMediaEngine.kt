@@ -140,6 +140,7 @@ class WebRtcMediaEngine private constructor(
             )
             set
         }.await()
+        on { requireAllMediaEncrypted(checkNotNull(connection) { "no offer" }) }
     }
 
     override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>): String {
@@ -162,6 +163,7 @@ class WebRtcMediaEngine private constructor(
         }.await()
         val answer = on {
             adoptOfferedSection(pc)
+            requireAllMediaEncrypted(pc)
             val created = CompletableDeferred<SessionDescription>()
             pc.createAnswer(describing(created), MediaConstraints())
             created
@@ -281,6 +283,23 @@ class WebRtcMediaEngine private constructor(
         encrypt(offered, installed ?: suites.first())
         stale?.stop()
         moved = true
+    }
+
+    /**
+     * After the other side's SDP has been applied: the connection has exactly one live transceiver, and it is the
+     * one whose sender and receiver carry the frame cryptors, both enabled. An SDP with another media section (the
+     * signalling refuses those before they get here: this is the second lock) would have given the stack a receiver
+     * with no cryptor, whose audio would play under DTLS-SRTP alone.
+     */
+    private fun requireAllMediaEncrypted(pc: PeerConnection) {
+        val live = pc.transceivers.filterNot { it.isStopped }
+        val mine = transceiver?.sender?.id()
+        if (live.size != 1 || mine == null || live[0].sender.id() != mine) {
+            throw MediaNotEncryptedException("${live.size} media sections")
+        }
+        if (senderCryptor?.isEnabled != true || receiverCryptor?.isEnabled != true) {
+            throw MediaNotEncryptedException("frame encryption is off")
+        }
     }
 
     /** Offers Opus alone: nothing else can be negotiated. */

@@ -27,6 +27,9 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
     var micOff = false
     var onKeys: () -> Unit = {}
 
+    /** What applying the other side's SDP does (an engine that finds media outside the frame encryption throws). */
+    var onRemoteSdp: () -> Unit = {}
+
     fun emit(e: MediaEvent) {
         channel.trySend(e)
     }
@@ -39,10 +42,12 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
 
     override suspend fun acceptAnswer(sdp: String) {
         calls += "acceptAnswer"
+        onRemoteSdp()
     }
 
     override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>): String {
         calls += "acceptOffer"
+        onRemoteSdp()
         return "v=0\r\ns=answer\r\nm=audio 9 X 111\r\n"
     }
 

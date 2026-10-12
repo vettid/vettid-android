@@ -475,6 +475,88 @@ class CallMachineTest {
         }
     }
 
+    /**
+     * Review F1: an SDP with a media section the frame cryptors do not cover. The signalling refuses such SDP
+     * before it gets here; an engine that still finds one says so, and the call ends: on the caller with the
+     * answer, on the callee with the offer, before any answer is sent.
+     */
+    @Test
+    fun mediaOutsideTheFrameEncryptionEndsTheCall() = runTest {
+        val strict = FakeEngines { FakeEngine().apply { onRemoteSdp = { throw MediaNotEncryptedException("2 media sections") } } }
+        val m = machine(e = strict)
+        placed(m)
+        signalling.deliver(answer())
+        runCurrent()
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+        assertEquals("end($CALL_ID, failed)", signalling.sent.last())
+        assertTrue(strict.last.closed)
+
+        val other = FakeSignalling()
+        val callee = machine(other, strict)
+        other.deliver(offer())
+        runCurrent()
+        callee.answer()
+        runCurrent()
+        assertEquals(CallEnd.NOT_ENCRYPTED, callee.ended().reason)
+        assertEquals(listOf("ringing($CALL_ID)", "end($CALL_ID, failed)"), other.sent)
+        assertTrue("no key was ever set", strict.last.calls.none { it == "setKeys" })
+    }
+
+    /**
+     * Review F4: the vault's answer to `call.start` and the events it passes on reach the machine through two
+     * queues, so an event of the call can be handled before the call has its id. It is held, not dropped.
+     */
+    @Test
+    fun whatArrivesBeforeTheVaultsAnswerToCallStartIsNotLost() = runTest {
+        // Busy: before the fix the call stayed "calling" and ended "no answer" 45 s later.
+        val m = machine()
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        signalling.deliver(SignalEvent.End(CALL_ID, "busy"))
+        runCurrent()
+        assertEquals(CallPhase.STARTING, m.live().phase)
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CallEnd.BUSY, m.ended().reason)
+        assertEquals(CALL_ID, m.ended().callId)
+        assertTrue(signalling.sent.none { it.startsWith("end") })
+
+        // Ringing, candidates and the answer, all early, in order: before the fix the keys were wiped and the call
+        // could never connect.
+        val s2 = FakeSignalling().apply { startGate = Channel(1) }
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        val a = answer()
+        s2.deliver(SignalEvent.Ringing(CALL_ID))
+        s2.deliver(SignalEvent.Ice(CALL_ID, listOf(candidate(7))))
+        s2.deliver(a)
+        runCurrent()
+        s2.startGate!!.send(Unit)
+        runCurrent()
+        val engine = engines.last
+        assertEquals(CallPhase.CONNECTING, m2.live().phase)
+        assertEquals(listOf("createOffer", "startGathering(0)", "setKeys", "acceptAnswer", "addRemoteCandidates(1)"), engine.calls)
+        assertTrue(engine.sendKey!!.all { it == 5.toByte() })
+        assertTrue(m2.diagnostics.value.tapToRingingMs != null)
+
+        // An early event of another call is not this call's; an early answer's keys do not outlive a hang-up or a
+        // refused start.
+        val s3 = FakeSignalling().apply { startGate = Channel(1) }
+        val m3 = machine(s3)
+        m3.call("conn-1")
+        runCurrent()
+        val stray = answer()
+        s3.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T51", "busy"))
+        s3.deliver(stray)
+        runCurrent()
+        m3.hangUp()
+        runCurrent()
+        assertEquals(CallEnd.HUNG_UP, m3.ended().reason)
+        assertTrue(stray.keys.send.all { it == 0.toByte() } && stray.keys.receive.all { it == 0.toByte() })
+    }
+
     @Test
     fun anAnswerThatDoesNotVerifyEndsTheCall() = runTest {
         val m = machine()

@@ -105,6 +105,13 @@ class CallMachine(
 
         /** The answer's keys until the engine has them (it wipes them); wiped here if the call ends first. */
         var keys: MediaKeys? = null
+
+        /**
+         * What the vault passed on for this call before its answer to `call.start` was handled here (the answer and
+         * the events come through two queues: a `call.end{busy}` or even a `call.answer` can be first). Held while
+         * the call has no id, and handled in order once it has.
+         */
+        val early = mutableListOf<SignalEvent>()
         val pendingRemote = mutableListOf<CallCandidate>()
         val pendingLocal = ArrayDeque<CallCandidate>()
         val timers = mutableMapOf<TimerKind, Job>()
@@ -160,7 +167,7 @@ class CallMachine(
                 publish(s)
             }
             Msg.Dismiss -> if (s == null) stateFlow.value = CallState.Idle
-            is Msg.Signal -> onSignal(s, m.event)
+            is Msg.Signal -> if (!heldEarly(s, m.event)) onSignal(s, m.event)
             is Msg.Placed -> onPlaced(s, m)
             is Msg.Media -> if (s != null && s.seq == m.seq) onMedia(s, m.event)
             is Msg.Answered -> if (s != null && s.seq == m.seq) onAnswered(s)
@@ -169,6 +176,14 @@ class CallMachine(
             is Msg.Failed -> if (s != null && s.seq == m.seq) finish(s, m.reason, CallReason.FAILED)
             is Msg.Timer -> if (s != null && s.seq == m.seq) onTimer(s, m.kind)
         }
+    }
+
+    /** Keeps [e] for a call that has no id yet (see [Session.early]); true if it was kept. */
+    private fun heldEarly(s: Session?, e: SignalEvent): Boolean {
+        val waiting = s != null && s.callId == null && s.early.size < MAX_EARLY
+        if (!waiting || e is SignalEvent.Offer) return false
+        s?.early?.add(e)
+        return true
     }
 
     private fun newSession(connectionId: String, direction: CallDirection): Session {
@@ -185,6 +200,8 @@ class CallMachine(
                 } catch (_: CallSecurityException) {
                     post(Msg.Failed(s.seq, CallEnd.NOT_ENCRYPTED))
                 } catch (_: MediaLoggingException) {
+                    post(Msg.Failed(s.seq, CallEnd.NOT_ENCRYPTED))
+                } catch (_: MediaNotEncryptedException) {
                     post(Msg.Failed(s.seq, CallEnd.NOT_ENCRYPTED))
                 } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
                     // The engine or the relay failed; what failed is in the diagnostics of the engine, never in a log.
@@ -248,6 +265,8 @@ class CallMachine(
             if (abandoned.remove(m.seq)) sendEnd(m.call.callId, CallReason.HANGUP)
             return
         }
+        val early = s.early.toList()
+        s.early.clear()
         s.callId = m.call.callId
         s.phase = CallPhase.CALLING
         s.canSendIce = true
@@ -258,6 +277,8 @@ class CallMachine(
         val ring = Duration.between(now(), m.call.exp).coerceIn(timings.minRing, timings.maxRing)
         timer(s, TimerKind.RING_OUT, ring)
         publish(s)
+        // What arrived before this, in its order; each is checked against the call's id as usual.
+        for (e in early) if (session === s) onSignal(s, e) else (e as? SignalEvent.Answer)?.keys?.wipe()
     }
 
     @Suppress("ReturnCount")
@@ -516,6 +537,8 @@ class CallMachine(
         s.job.cancel()
         s.engine?.close()
         s.keys?.wipe()
+        s.early.forEach { (it as? SignalEvent.Answer)?.keys?.wipe() }
+        s.early.clear()
         s.pendingRemote.clear()
         s.pendingLocal.clear()
         val callId = s.callId
@@ -538,6 +561,7 @@ class CallMachine(
         const val NANOS_PER_MILLI = 1_000_000L
         const val MAX_PENDING_CANDIDATES = 256
         const val MAX_ABANDONED = 8
+        const val MAX_EARLY = 64
 
         /** `call.end` reasons while an incoming call rings here; anything else is a missed call. */
         val RINGING_HERE = mapOf(CallReason.ANSWERED_ELSEWHERE to CallEnd.ANSWERED_ELSEWHERE, CallReason.DECLINE to CallEnd.DECLINED_HERE)
