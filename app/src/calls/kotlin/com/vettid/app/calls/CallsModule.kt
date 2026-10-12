@@ -97,7 +97,7 @@ object CallsModule {
         @AppScope scope: CoroutineScope,
     ): CallsController = CallsController(
         vault = ManagerVault(manager, prefs, scope),
-        engines = WebRtcMediaEngine.factory(context),
+        engines = WebRtcMediaEngine.factory(context, testBuild = BuildConfig.CALLS_TEST),
         scope = scope,
         audio = AndroidCallAudio(context),
         tones = AndroidCallTones(context),
