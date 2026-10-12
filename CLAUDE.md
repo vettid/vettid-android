@@ -229,7 +229,7 @@ vettid.org repo's `local/android-ui/`).
   live in `LockGuard` and are tested there: what confirms; locked whatever the status says; nothing sent to the
   vault but the lock and a pending `call.end`; nothing it sends taken in. In `VaultManager` the vault client is a
   private member of `Session`, reachable only as `openApi` (refuses with `lock_pending`) and
-  `lockTimeApi(LockTimeUse)`: do not add a third way (`VaultClientAccessTest`). A vault has **no time after which
+  `lockTimeApi(LockTimeUse)`: do not add a third way, and send nothing through `device` directly (`VaultClientAccessTest`). A vault has **no time after which
   it locks by itself**: never promise one. Every unlock goes through `LockKeeper.unlocking` (no lock attempt beside
   it, none of an older lock after it, and first the wait for an unanswered relay lock: `relayLockUntilMs`);
   `vault.lock` is sent once with an `exp` of 30 s and never through the outbox (a late lock would lock a vault the

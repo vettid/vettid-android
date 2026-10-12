@@ -44,6 +44,7 @@ import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultDevice
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
+import com.vettid.core.vault.callEnd
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.vault.pushRegister
@@ -445,11 +446,12 @@ class VaultManager(
     suspend fun vaultApi(): VaultApi = openApi()
 
     /**
-     * The vault client for one thing only: the `call.end` of a call that the member's lock ends. It is sent after
-     * the lock was asked for, when [vaultApi] already refuses (the phone is locked from that moment), and before
-     * the vault is told to lock, so that the other member is not left listening to silence.
+     * Sends one `call.end`: the hang-up of a call that the member's lock ends. It is sent after the lock was asked
+     * for, when [vaultApi] already refuses (the phone is locked from that moment), and before the vault is told to
+     * lock, so that the other member is not left listening to silence. Nothing else can be sent this way: the
+     * client itself is not handed out.
      */
-    suspend fun vaultApiForCallEnd(): VaultApi = session().lockTimeApi(LockTimeUse.CALL_END)
+    suspend fun sendCallEnd(callId: String, reason: String) = session().lockTimeApi(LockTimeUse.CALL_END).callEnd(callId, reason)
 
     /** What a module may hear of the vault's device, without a way to send anything through it. */
     class VaultEvents(val events: Flow<VaultMessage>, val droppedForTime: Flow<String>)
@@ -964,6 +966,8 @@ class VaultManager(
     ): StepOutcome {
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
+        // Read before the unlock: a lock asked for while it is on its way bumps it, and this unlock then publishes no phase.
+        val gen = generation
         var moved = false
         val outcome = try {
             // Never beside a lock attempt; and once the vault has opened, no older lock is ever sent (LockKeeper).
@@ -981,6 +985,9 @@ class VaultManager(
                     // A sealed result: the enclave knows this phone; earlier relay refusals no longer count (RefusalWatch).
                     s.device.clearVaultRefusals()
                     refusals.clear()
+                    // Before the keeper takes a superseded lock back: a pause of the relay that was put off until
+                    // that lock's confirmation must not happen now that the vault opens.
+                    if (out.ok) pauseWanted = false
                     out
                 }
               }
@@ -1013,17 +1020,28 @@ class VaultManager(
         // Kept on the phone too: after a process start a notice from before this unlock is still stale.
         r.at?.let { at -> io { saveLocal(local.copy(lastOpenedAtMs = maxOf(local.lastOpenedAtMs ?: 0, at.toEpochMilli()))) } }
         val refused = r.update?.takeIf { it.result == "refused" }
-        val gen = generation
         val s = session()
+        // A lock asked for while this unlock was on its way is the newer wish (LockKeeper): still pending, or
+        // already confirmed by its attempt, which followed the unlock at once. This phone stays locked, nothing is
+        // opened or flushed.
+        val lockedSince = lockGuard.lockedWhatever(unlocked = true)
+        val overtaken = lockedSince || gen != generation
         scope.launch {
             // Never a lock from before this unlock (LockKeeper): one left in the outbox by an earlier version of the
             // app, which sent locks through it, is dropped before anything is flushed.
             runCatching { s.device.dropFromOutbox(TYPE_VAULT_LOCK) }
-            runCatching { s.device.flushOutbox() }
+            // Nothing but the lock while one is pending: what the member wrote earlier waits for the next unlock.
+            if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox() }
         }
-        if (!s.device.recovering) beforeOpen()
-        val p = afterUnlocked(s)
-        if (gen == generation) phaseFlow.value = p
+        if (overtaken) {
+            // (Not after a wipe, which also bumps the generation and has said SignedOut.)
+            if (lockedSince) phaseFlow.value = AppPhase.Locked
+        } else {
+            if (!s.device.recovering) beforeOpen()
+            val p = afterUnlocked(s)
+            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
+            if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
+        }
         val attempt = if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
         return StepOutcome(attempt, abandoned = r.update?.result == UPDATE_ABANDONED)
     }

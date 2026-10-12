@@ -53,14 +53,14 @@ interface CallGateway {
 
 /**
  * [CallGateway] on the vault: nothing but the calls. [api] is asked each time, and refuses while the vault is
- * locked on this phone; [endApi] is the one way a `call.end` still goes out then (the hang-up of the call a lock
+ * locked on this phone; [sendEnd] is the one way a `call.end` still goes out then (the hang-up of the call a lock
  * ends); [events] are the vault device's events (a new flow after the device was set up again).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class VaultCallGateway(
     private val api: suspend () -> VaultApi,
     events: Flow<Flow<VaultMessage>>,
-    private val endApi: suspend () -> VaultApi = api,
+    private val sendEnd: suspend (callId: String, reason: String) -> Unit = { id, reason -> api().callEnd(id, reason) },
 ) : CallGateway {
     override val events: Flow<CallEvent> = events.flatMapLatest { callEventsIn(it) }
 
@@ -79,7 +79,7 @@ class VaultCallGateway(
 
     override suspend fun ice(callId: String, candidates: List<CallCandidate>) = api().callIce(callId, candidates)
 
-    override suspend fun end(callId: String, reason: String) = endApi().callEnd(callId, reason)
+    override suspend fun end(callId: String, reason: String) = sendEnd(callId, reason)
 
     override suspend fun list(limit: Int): List<CallRecord> = api().callList(limit)
 }

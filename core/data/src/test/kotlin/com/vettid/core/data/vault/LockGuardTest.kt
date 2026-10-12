@@ -1,6 +1,8 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -36,7 +38,14 @@ class LockGuardTest {
         var unlocked: Boolean? = true
         override val relayValidFor: Duration = Duration.ofSeconds(30)
 
-        override suspend fun relayLock(): Boolean = relay.also { asked += "relay" }
+        /** When set, the relay lock waits for it: the vault's answer is on its way. */
+        var relayGate: CompletableDeferred<Unit>? = null
+
+        override suspend fun relayLock(): Boolean {
+            asked += "relay"
+            relayGate?.await()
+            return relay
+        }
 
         override suspend fun memberLock(): MemberLock = member.also { asked += "member" }
 
@@ -132,6 +141,41 @@ class LockGuardTest {
         assertFalse(g.takesEvents())
         ports.relay = true
         assertTrue(g.keeper.ask(mine))
+        assertFalse(g.pending)
+    }
+
+    /**
+     * Confirmation pass C1 of #127: a lock asked for while an unlock is on its way. The unlock succeeds; the lock is
+     * the newer wish and stays pending; so the phase after that unlock is Locked (the manager asks exactly this),
+     * nothing is admitted, and the lock's attempt follows and confirms.
+     */
+    @Test
+    fun anUnlockThatALockOvertookDoesNotOpenThisPhone() = runTest {
+        val g = guard()
+        val unlockMayFinish = CompletableDeferred<Unit>()
+        val unlock = async {
+            g.keeper.unlocking(opened = { it }) {
+                unlockMayFinish.await()
+                true
+            }
+        }
+        runCurrent()
+        val mine = g.keeper.begin() // the member locks while the unlock is on its way
+        ports.relay = true
+        val answer = CompletableDeferred<Unit>()
+        ports.relayGate = answer
+        val asking = async { g.keeper.ask(mine) }
+        runCurrent()
+        assertEquals("the lock waits for the unlock", emptyList<String>(), ports.asked)
+        unlockMayFinish.complete(Unit)
+        assertTrue("the unlock itself succeeded", unlock.await())
+        // What VaultManager.unlockStep asks before it publishes a phase: the status says unlocked, a lock is pending.
+        assertTrue(g.lockedWhatever(unlocked = true))
+        assertFalse(g.admits())
+        assertFalse(g.takesEvents())
+        answer.complete(Unit)
+        assertTrue(asking.await())
+        assertEquals("the lock went out after the unlock", listOf("relay"), ports.asked)
         assertFalse(g.pending)
     }
 
