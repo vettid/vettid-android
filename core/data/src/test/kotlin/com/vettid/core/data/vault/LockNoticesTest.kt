@@ -41,6 +41,25 @@ class LockNoticesTest {
         assertFalse(notices.stale(msg("vault.locking", t0.plusSeconds(54))))
     }
 
+    /**
+     * Review L9 of #127: the last unlock's time is kept on the phone, so a new process still knows it. A notice the
+     * vault sent before that unlock and that was never collected is stale after the restart too, and is no evidence
+     * for a lock asked for since; one from after it is.
+     */
+    @Test
+    fun aNewProcessKnowsTheLastUnlockAndOnlyALaterNoticeIsEvidenceForALock() {
+        val restarted = LockNotices(opened = t0)
+        val old = msg("vault.locking", t0.minusSeconds(3600))
+        assertTrue(restarted.stale(old))
+        assertFalse(restarted.sinceLastOpened(old))
+        val later = msg("vault.locking", t0.plusSeconds(1))
+        assertFalse(restarted.stale(later))
+        assertTrue(restarted.sinceLastOpened(later))
+        assertFalse("only the vault's lock notice", restarted.sinceLastOpened(msg("feed.event", t0.plusSeconds(1))))
+        // Without a known unlock time a notice cannot be placed: it confirms nothing (the status read does).
+        assertFalse(notices.sinceLastOpened(later))
+    }
+
     @Test
     fun onlyLockNoticesAreFiltered() {
         notices.opened(t0)

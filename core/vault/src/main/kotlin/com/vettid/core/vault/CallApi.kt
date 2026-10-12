@@ -495,7 +495,11 @@ private fun parseEnd(m: VaultMessage): CallEnded? {
 
 /** Every `call.*` event, one flow, so that their order is the vault's (an answer before the candidates after it). */
 val VaultApi.callEvents: Flow<CallEvent>
-    get() = device.events.mapNotNull { m ->
+    get() = callEventsIn(device.events)
+
+/** [callEvents] of a flow of the vault device's events (for a listener that holds the events and not the client). */
+fun callEventsIn(events: Flow<VaultMessage>): Flow<CallEvent> =
+    events.mapNotNull { m ->
         when (m.type.takeIf { it in CALL_EVENT_TYPES }) {
             "call.offer" -> CallEvent.Offer(m)
             "call.answer" -> CallEvent.Answer(m)

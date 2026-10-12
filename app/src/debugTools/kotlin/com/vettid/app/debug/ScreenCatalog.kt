@@ -681,6 +681,9 @@ object ScreenCatalog {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), recoveryPending = true), NoUnlock)
         },
         // A lock the vault has not confirmed (owner decision 2026-10-12: fail secure), and the confirmation after it.
+        "unlock.lock_locking" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), lock = com.vettid.core.data.vault.LockNotice.Unconfirmed(java.time.Instant.parse("2026-10-12T10:00:00Z"), 0)), NoUnlock)
+        },
         "unlock.lock_unconfirmed" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), lock = com.vettid.core.data.vault.LockNotice.Unconfirmed(java.time.Instant.parse("2026-10-12T10:00:00Z"), 3)), NoUnlock)
         },

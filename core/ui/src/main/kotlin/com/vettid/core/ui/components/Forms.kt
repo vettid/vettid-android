@@ -321,6 +321,8 @@ fun NoticeCard(
     title: String,
     body: String,
     modifier: Modifier = Modifier,
+    /** For a notice that appears by itself (not on the member's tap): read out by a screen reader when it does. */
+    announce: LiveRegionMode? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -341,9 +343,12 @@ fun NoticeCard(
             Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(Spacing.m))
             Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(Spacing.xs))
-                Text(body, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                // Title and body as one node, so that an announced notice is read whole.
+                Column(Modifier.semantics(mergeDescendants = announce != null) { announce?.let { liveRegion = it } }) {
+                    Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(Spacing.xs))
+                    Text(body, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                }
                 if (actions != null) {
                     Spacer(Modifier.height(Spacing.s))
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s), content = actions)

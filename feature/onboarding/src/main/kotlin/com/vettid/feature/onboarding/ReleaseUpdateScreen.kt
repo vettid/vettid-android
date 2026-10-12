@@ -243,7 +243,12 @@ fun ReleaseUpdateFlowContent(state: ReleaseUpdateFlowUiState, actions: ReleaseUp
         UpdateStep.BAD_PIN, UpdateStep.FAILED -> FormScaffold(
             title = stringResource(if (badPin) R.string.release_update_title else R.string.release_update_failed_title),
             body = stringResource(
-                if (p.vaultOpen) R.string.release_update_failed_body_open else R.string.release_update_failed_body_locked,
+                when {
+                    // The update's own lock is not confirmed: the vault is neither known open nor known locked.
+                    p.failureCode == ReleaseUpdateManager.CODE_LOCK_PENDING -> R.string.release_update_failed_body_lock_pending
+                    p.vaultOpen -> R.string.release_update_failed_body_open
+                    else -> R.string.release_update_failed_body_locked
+                },
                 from,
             ),
             primaryLabel = stringResource(if (badPin) R.string.release_update_approve else R.string.release_update_retry),

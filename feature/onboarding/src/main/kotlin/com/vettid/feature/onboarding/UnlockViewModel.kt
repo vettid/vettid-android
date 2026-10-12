@@ -79,8 +79,9 @@ data class UnlockUiState(
      */
     val refused: Boolean = false,
     /**
-     * The lock the member asked for ([VaultRepository.lockNotice]): the vault could not be told and may still be
-     * open (this phone is locked all the same and keeps trying), or it has now confirmed.
+     * The lock the member asked for ([VaultRepository.lockNotice]): on its way (nothing failed yet), or the vault
+     * could not be told and may still be open (this phone is locked all the same and keeps trying), or it has now
+     * confirmed.
      */
     val lock: LockNotice = LockNotice.None,
     /** The erase confirmation dialog is open. */

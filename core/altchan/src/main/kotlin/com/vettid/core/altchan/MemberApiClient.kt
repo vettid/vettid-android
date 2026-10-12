@@ -358,12 +358,17 @@ class MemberApiClient(
         return Slot(o.string("status"), env, o.optString("code"))
     }
 
-    /** Polls a slot until it is no longer queued (the API allows 2 polls per second). */
-    suspend fun poll(requestId: String): Slot {
+    /**
+     * Polls a slot until it is no longer queued (the API allows 2 polls per second), or, with [atMost], until that
+     * much time was spent waiting between polls: the slot is then returned still queued.
+     */
+    suspend fun poll(requestId: String, atMost: Duration? = null): Slot {
+        var waited = 0L
         while (true) {
             val s = slot(requestId)
-            if (s.status != Slot.QUEUED) return s
+            if (s.status != Slot.QUEUED || (atMost != null && waited >= atMost.toMillis())) return s
             sleep(pollInterval.toMillis())
+            waited += pollInterval.toMillis()
         }
     }
 

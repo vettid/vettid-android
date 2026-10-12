@@ -23,7 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -122,20 +124,33 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer, state.notes,
                 )
             }
-            // The lock the member asked for could not be confirmed: said here, wherever they locked from, until it is.
-            when (state.lock) {
-                is LockNotice.Unconfirmed -> NoticeCard(
-                    NoticeKind.URGENT,
-                    stringResource(R.string.unlock_lock_unconfirmed_title),
-                    stringResource(R.string.unlock_lock_unconfirmed_body),
-                    modifier = Modifier.testTag("unlock_lock_unconfirmed"),
-                    actions = { TextButton(onClick = actions::retryLock) { Text(stringResource(R.string.unlock_lock_try_again)) } },
-                )
+            // The lock the member asked for, until the vault has confirmed it: said here, wherever they locked from.
+            // These appear and change by themselves, so each is announced to a screen reader when it does.
+            when (val lock = state.lock) {
+                // Nothing has failed yet: no warning, only that the lock is on its way.
+                is LockNotice.Unconfirmed -> if (!lock.inDoubt) {
+                    Text(
+                        stringResource(R.string.unlock_lock_locking),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("unlock_lock_locking"),
+                    )
+                } else {
+                    NoticeCard(
+                        NoticeKind.URGENT,
+                        stringResource(R.string.unlock_lock_unconfirmed_title),
+                        stringResource(R.string.unlock_lock_unconfirmed_body),
+                        modifier = Modifier.testTag("unlock_lock_unconfirmed"),
+                        announce = LiveRegionMode.Assertive,
+                        actions = { TextButton(onClick = actions::retryLock) { Text(stringResource(R.string.unlock_lock_try_again)) } },
+                    )
+                }
                 LockNotice.ConfirmedLate -> NoticeCard(
                     NoticeKind.SUCCESS,
                     stringResource(R.string.unlock_lock_confirmed),
                     "",
                     modifier = Modifier.testTag("unlock_lock_confirmed"),
+                    announce = LiveRegionMode.Polite,
                     actions = { TextButton(onClick = actions::dismissLockNotice) { Text(stringResource(R.string.unlock_lock_ok)) } },
                 )
                 LockNotice.None -> Unit

@@ -216,18 +216,25 @@ vettid.org repo's `local/android-ui/`).
   at most 1 hour; debug and devStack builds start with it on (the catalog is screenshotted). A screen that must stay
   protected regardless calls `SecureWindow()`. A field that holds a secret the member must see uses
   `visibleSecretKeyboard()` inside `NoKeyboardLearning { }` (S2); copy secrets with `textClip(…, sensitive = true)`.
-- The member's lock fails secure (owner decision 2026-10-12; `LockKeeper`, `LockSequence`, `VaultManager.lock()`):
-  the phone is `AppPhase.Locked` from the moment the member asks, in every outcome, and the vault is *known* locked
-  only when it acknowledged (`vault.lock` answered, or the member API's lock `done`), a status read no longer says
-  `unlocked`, or its own `vault.locking` arrived. Until then the lock is **pending**: a marker in the account record
-  (`lockAskedAtMs`, written before the first attempt, so a new process starts locked), retries (1, 2, 5, 10 s, then
-  every 30 s), `VaultRepository.lockNotice` on the unlock screen (`unlock.lock_unconfirmed`,
-  `unlock.lock_confirmed`), and no vault operation but the lock and a status read (`openApi()` refuses with
-  `lock_pending`). A vault has **no time after which it locks by itself**: never promise one. Every unlock goes
-  through `LockKeeper.unlocking` (no lock attempt beside it, none after it); `vault.lock` is sent once with an
-  `exp` of 30 s and never through the outbox (a late lock would lock a vault the member opened again). Do not set
-  the phase to `Unlocked` anywhere without thinking about a pending lock (`evaluate()` returns `Locked` while one
-  is pending, whatever the status says).
+- The member's lock fails secure (owner decision 2026-10-12; `LockGuard`, `LockKeeper`, `LockSequence`,
+  `VaultManager.lock()`): the phone is `AppPhase.Locked` from the moment the member asks, in every outcome, and the
+  vault is *known* locked only when it answered the relay `vault.lock`, a status read no longer says `unlocked`, or
+  its own `vault.locking` from after the last unlock arrived. **The member API's answer to a lock request is never
+  proof** (the enclave answers `done` whatever became of its lock). Until then the lock is **pending**: a record in
+  the account record (`lockAskedAtMs`, written by `LockKeeper.begin()` before the lock's hooks and its first
+  attempt, so a new process starts locked), retries (1, 2, 5, 10 s, four times 30 s, then every 60 s: under the
+  member API's 30 locks in 15 minutes; **in this process only**: they stop when it dies until something starts the
+  app), `VaultRepository.lockNotice` on the unlock screen (`unlock.lock_locking` while nothing has failed,
+  `unlock.lock_unconfirmed` from the first failed try, `unlock.lock_confirmed`). The four rules of a pending lock
+  live in `LockGuard` and are tested there: what confirms; locked whatever the status says; nothing sent to the
+  vault but the lock and a pending `call.end`; nothing it sends taken in. In `VaultManager` the vault client is a
+  private member of `Session`, reachable only as `openApi` (refuses with `lock_pending`) and
+  `lockTimeApi(LockTimeUse)`: do not add a third way (`VaultClientAccessTest`). A vault has **no time after which
+  it locks by itself**: never promise one. Every unlock goes through `LockKeeper.unlocking` (no lock attempt beside
+  it, none of an older lock after it, and first the wait for an unanswered relay lock: `relayLockUntilMs`);
+  `vault.lock` is sent once with an `exp` of 30 s and never through the outbox (a late lock would lock a vault the
+  member opened again). Do not set the phase to `Unlocked` anywhere without thinking about a pending lock
+  (`evaluate()` asks `LockGuard.lockedWhatever`; `lock()` bumps `generation`).
 - Every destructive action uses `ConfirmDialog`; every critical action asks for the
   credential password. No backup/export of vault data (`allowBackup=false`); the one exception is History's export of activity metadata (ANDROID-PLAN 0.1.17: the vault PIN, then "Save to…" only).
 - Commits: explicit paths only (never `git add -A`); PRs into `master`.

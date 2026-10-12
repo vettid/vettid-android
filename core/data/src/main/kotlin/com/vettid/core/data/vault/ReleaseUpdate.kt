@@ -410,6 +410,9 @@ class ReleaseUpdateManager(
         /** The member API's `503 release_starting` (§11.10.5). */
         const val CODE_RELEASE_STARTING = "release_starting"
 
+        /** The update's lock was asked for and is not confirmed ([LockKeeper]): the update does not move on. */
+        const val CODE_LOCK_PENDING = "lock_pending"
+
         /** [UpdateProgress.refusal] when the vault opened without saying anything of the update. */
         const val CODE_NOT_MOVED = "not_moved"
 

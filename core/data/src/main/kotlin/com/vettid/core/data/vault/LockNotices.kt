@@ -16,9 +16,10 @@ import java.time.Instant
  * notice that is later (the vault locked after this unlock) is kept, as is every notice before the first unlock
  * this process saw.
  */
-class LockNotices {
+class LockNotices(opened: Instant? = null) {
+    /** The last unlock's time; the one kept on the phone at a process start ([opened]), so that a restart forgets nothing. */
     @Volatile
-    private var openedAt: Instant? = null
+    private var openedAt: Instant? = opened
 
     /** A successful unlock answered at [at] (the result's inner `ts`; null: unknown, nothing changes). */
     fun opened(at: Instant?) {
@@ -31,6 +32,15 @@ class LockNotices {
     fun stale(m: VaultMessage): Boolean {
         val at = openedAt
         return m.type == TYPE && at != null && !m.ts.isAfter(at)
+    }
+
+    /**
+     * Whether [m] is a `vault.locking` from **after** the vault last opened here, with that time known: only such a
+     * notice is evidence for a lock asked for since (an older one, left uncollected, says nothing about it).
+     */
+    fun sinceLastOpened(m: VaultMessage): Boolean {
+        val at = openedAt
+        return m.type == TYPE && at != null && m.ts.isAfter(at)
     }
 
     companion object {

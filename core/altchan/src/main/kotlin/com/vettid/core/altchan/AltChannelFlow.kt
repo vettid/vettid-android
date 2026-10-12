@@ -14,6 +14,7 @@ import com.vettid.core.crypto.envelope.Ulid
 import java.io.IOException
 import java.security.cert.X509Certificate
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -239,11 +240,16 @@ class AltChannelFlow(
         return UnlockPreflight.of(state, e.release, m)
     }
 
-    /** Asks the leaseholder to lock the vault and waits for the slot. */
-    suspend fun lock(vaultId: String): Slot {
+    /**
+     * Asks the leaseholder to lock the vault and waits for the slot: until it is no longer queued, or for [atMost]
+     * (then the slot is returned as it is, still [Slot.QUEUED]: the request may be carried out later, or never).
+     * An answered slot says that the request was handled, **not** that the vault locked: the enclave answers "done"
+     * whatever became of its lock. Only the vault's status says whether it is locked.
+     */
+    suspend fun lock(vaultId: String, atMost: Duration? = null): Slot {
         val rid = Ulid.new(Instant.now(clock))
         api.lock(vaultId, rid)
-        return api.poll(rid)
+        return api.poll(rid, atMost)
     }
 
     /**
