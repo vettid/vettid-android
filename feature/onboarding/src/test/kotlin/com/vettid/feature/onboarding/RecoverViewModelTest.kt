@@ -122,18 +122,160 @@ class RecoverViewModelTest {
         assertEquals(CodeRefusal.NOT_AVAILABLE, vm.uiState.value.refusal)
     }
 
-    @Test
-    fun aCancelledRecoveryAtThePinSaysSo() = runTest {
+    private suspend fun kotlinx.coroutines.test.TestScope.atThePin(): RecoverViewModel {
         vault.recoveryStageValue = RecoveryStage.PIN
-        vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.OTHER, "unknown_device"))
+        vault.phase.value = AppPhase.Setup(SetupStage.RECOVERING)
         val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        return vm
+    }
+
+    /**
+     * A6 audit E1. §11.4: the enclave answers a key it does not hold (the registered key was removed: the recovery
+     * was cancelled, expired, replaced) with bytes the app cannot read; an older vault's sealed `unknown_device`
+     * means the same; §11.11.7: the member API takes a recovering key only until its recovery ends (401).
+     */
+    @Test
+    fun aRecoveryTheVaultNoLongerTakesLeavesThePinStepByItself() = runTest {
+        listOf(
+            UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE),
+            UnlockAttempt.Failed(FailureKind.OTHER, "unknown_device"),
+            UnlockAttempt.Failed(FailureKind.UNAUTHORIZED, "unauthorized"),
+        ).forEach { answer ->
+            vault.calls.clear()
+            vault.recoveryUnlockResults.add(answer)
+            val vm = atThePin()
+            vm.setPin("975310")
+            vm.submitPin()
+            advanceUntilIdle()
+            assertEquals(answer.toString(), RecoverStep.ENDED, vm.uiState.value.step)
+            assertEquals("", vm.uiState.value.pin)
+            assertNull(vm.uiState.value.error)
+            // Not proof: nothing is forgotten until the member says so.
+            assertFalse("abandonRecovery" in vault.calls)
+            assertEquals(AppPhase.Setup(SetupStage.RECOVERING), vault.phase.value)
+        }
+    }
+
+    @Test
+    fun otherFailuresAtThePinStayAtThePin() = runTest {
+        vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.NETWORK, null))
+        val vm = atThePin()
         vm.setPin("975310")
         vm.submitPin()
         advanceUntilIdle()
-        assertEquals(RecoverViewModel.CODE_UNKNOWN_DEVICE, vm.uiState.value.errorCode)
         assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
+    }
+
+    @Test
+    fun theReleaseCheckRefusedForARecoveringKeyEndsTheStepToo() = runTest {
+        vault.fail["recoveryPreflight"] = com.vettid.core.data.vault.VaultFailure(FailureKind.UNAUTHORIZED, "unauthorized")
+        vault.recoveryStageValue = RecoveryStage.PIN
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertEquals(RecoverStep.ENDED, vm.uiState.value.step)
+        assertFalse("abandonRecovery" in vault.calls)
+    }
+
+    @Test
+    fun theEndedStepOffersAnotherTryOfThePin() = runTest {
+        vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE))
+        val vm = atThePin()
+        vm.setPin("975310")
+        vm.submitPin()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.ENDED, vm.uiState.value.step)
+        vm.tryPinAgain()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.pinAllowed)
+        // The recovery was open after all.
+        vm.setPin("975310")
+        vm.submitPin()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
+    }
+
+    @Test
+    fun startOverAtThePinAsksFirstAndThenForgetsTheRecoveryOnThisPhone() = runTest {
+        val vm = atThePin()
+        vm.setPin("975310")
+        vm.askStartOver()
+        assertTrue(vm.uiState.value.confirmStartOver)
+        assertFalse("nothing happens before the confirmation", "abandonRecovery" in vault.calls)
+        vm.dismissStartOver()
+        assertFalse(vm.uiState.value.confirmStartOver)
+        assertEquals("the PIN typed so far is kept on Cancel", "975310", vm.uiState.value.pin)
+        vm.confirmStartOver() // not asked for: nothing
+        advanceUntilIdle()
+        assertFalse("abandonRecovery" in vault.calls)
+
+        vm.askStartOver()
+        vm.confirmStartOver()
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "abandonRecovery" })
+        // Back at the start of the flow, with nothing of the old recovery: a new code can be scanned or typed.
+        val s = vm.uiState.value
+        assertEquals(RecoverStep.INTRO, s.step)
+        assertEquals("", s.pin)
+        assertEquals("", s.emailHint)
+        assertFalse(s.busy)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
+        assertFalse("leaving the flow is Back again", vm.back())
+        // The app has no call that cancels the recovery itself (VAULT-MESSAGING §11.11.4): none was made.
+        assertEquals(listOf("abandonRecovery"), vault.calls.filter { it != "recoveryPreflight" && it != "recoveryStage" })
+        vm.scan()
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+    }
+
+    @Test
+    fun startOverAtThePasswordStep() = runTest {
+        vault.recoveryStageValue = RecoveryStage.PASSWORD
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
+        vm.setPassword("half typed")
+        vm.askStartOver()
+        vm.confirmStartOver()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.INTRO, vm.uiState.value.step)
+        assertEquals("", vm.uiState.value.password)
+        assertTrue("abandonRecovery" in vault.calls)
+    }
+
+    @Test
+    fun startOverFromTheEndedStepAndOnlyFromStepsThatHoldARegistration() = runTest {
+        val fresh = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        fresh.askStartOver() // the intro: nothing registered, nothing to forget
+        assertFalse(fresh.uiState.value.confirmStartOver)
+
+        vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE))
+        val vm = atThePin()
+        vm.setPin("975310")
+        vm.submitPin()
+        advanceUntilIdle()
+        vm.askStartOver()
+        vm.confirmStartOver()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.INTRO, vm.uiState.value.step)
+        assertTrue("abandonRecovery" in vault.calls)
+    }
+
+    @Test
+    fun aStartOverThatFailsSaysSoAndStaysWhereItWas() = runTest {
+        val vm = atThePin()
+        vault.fail["abandonRecovery"] = com.vettid.core.data.vault.VaultFailure(FailureKind.OTHER, "keystore")
+        vm.askStartOver()
+        vm.confirmStartOver()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        assertEquals(FailureKind.OTHER, vm.uiState.value.error)
+        assertFalse(vm.uiState.value.busy)
     }
 
     @Test
