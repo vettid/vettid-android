@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- C0 spike: no permission and no component here. What the debug-only spike screen needs (RECORD_AUDIO, the
+     microphone foreground service) is declared in app/src/debug/AndroidManifest.xml, so that no release build
+     carries it (`:app:check<Variant>NoCallsSpike`). -->
+<manifest />

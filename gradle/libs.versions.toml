@@ -45,7 +45,14 @@ camerax = "1.6.2"
 # A wake's collect that outlasts the 20 s of a push message continues as expedited work (:core:push-fcm).
 work = "2.11.2"
 
+# Calls (CALLS-PLAN 0.1.1 D2): libwebrtc with LiveKit's frame cryptor, prebuilt (BSD-3-Clause / Apache-2.0). The exact
+# file is pinned by its SHA-256 in core/calls/build.gradle.kts; a new version means a new inspection of the artifact.
+webrtcSdk = "150.7871.01"
+androidxAnnotation = "1.10.0"
+
 [libraries]
+webrtc-sdk = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtcSdk" }
+androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "androidxAnnotation" }
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime", version.ref = "work" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
