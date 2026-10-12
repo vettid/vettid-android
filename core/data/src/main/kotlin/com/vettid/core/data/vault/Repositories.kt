@@ -200,8 +200,10 @@ interface MoveRepository {
     suspend fun recoveryCredentialBackup(): Boolean?
 
     /**
-     * The vault cannot be recovered (`no_backup`, VAULT-MESSAGING 0.16.0): forgets this phone's recovery registration
-     * and device state, so that a new setup code starts afresh.
+     * Forgets this phone's recovery registration and device state, so that a new recovery code, a setup code or a
+     * transfer starts afresh: when the vault cannot be recovered (`no_backup`, VAULT-MESSAGING 0.16.0), and when the
+     * member starts over from the PIN or password step (A6 audit E1). The recovery itself is not cancelled by this:
+     * the app has no such call (§11.11.4).
      */
     suspend fun abandonRecovery() {}
 

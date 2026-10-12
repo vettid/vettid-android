@@ -1165,8 +1165,18 @@ class VaultManager(
 
     override suspend fun recoveryCredentialBackup(): Boolean? = guard { session().device.recoveryCredentialBackup }
 
+    /**
+     * Forgets this phone's recovery registration: the device keys and the app key are made anew, the claimed account
+     * is dropped, and the phone is back at the welcome screen (also at the next start: before, the registration was
+     * dropped but the claimed account stayed, A6 audit E1). Nothing is sent: a recovering app cannot cancel the
+     * recovery (§11.11.4). Only ever a recovering device: a phone that holds the vault is not touched.
+     */
     override suspend fun abandonRecovery() {
-        if (session?.device?.recovering == true) dropSession(forget = true)
+        val recovering = guard { session().device.recovering }
+        if (!recovering) return
+        dropSession(forget = true)
+        io { saveLocal(LocalAccount()) }
+        phaseFlow.value = AppPhase.SignedOut
     }
 
     override suspend fun recoverCredential(password: String): RecoverOutcome = guard {

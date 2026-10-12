@@ -242,6 +242,10 @@ private object NoRecover : RecoverActions {
     override fun submitPin() = Unit
     override fun setPassword(v: String) = Unit
     override fun submitPassword() = Unit
+    override fun askStartOver() = Unit
+    override fun dismissStartOver() = Unit
+    override fun confirmStartOver() = Unit
+    override fun tryPinAgain() = Unit
     override fun finish() = Unit
 }
 
@@ -607,7 +611,10 @@ object ScreenCatalog {
         "recover.pin_offer" to { Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), approveOffer = true)) },
         "recover.pin_backoff" to { Rec(pinState.copy(pin = "", pinWrong = true, waitSeconds = 75)) },
         "recover.pin_ended" to { Rec(pinState.copy(preflight = null, preflightError = FailureKind.RELEASE_ENDED)) },
-        "recover.pin_cancelled" to { Rec(pinState.copy(pin = "", error = FailureKind.OTHER, errorCode = "unknown_device")) },
+        // A6 audit E1: a registered recovery can be left ("Start over", confirmed), and one the vault no longer takes ends by itself.
+        "recover.pin_start_over" to { Rec(pinState.copy(confirmStartOver = true)) },
+        "recover.ended" to { Rec(recState.copy(step = RecoverStep.ENDED)) },
+        "recover.ended_start_over" to { Rec(recState.copy(step = RecoverStep.ENDED, confirmStartOver = true)) },
         "recover.password" to { Rec(recState.copy(step = RecoverStep.PASSWORD, password = "correct horse battery")) },
         "recover.password_wrong" to { Rec(recState.copy(step = RecoverStep.PASSWORD, error = FailureKind.BAD_PASSWORD)) },
         "recover.no_backup" to { Rec(recState.copy(step = RecoverStep.NO_BACKUP)) },

@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.CameraPermission
+import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -171,6 +172,18 @@ fun RecoverContent(
     val canBack = leaveable || state.step == RecoverStep.SCAN || state.step == RecoverStep.TYPE
     BackHandler(enabled = canBack) { back() }
     val onBack: (() -> Unit)? = if (canBack) back else null
+    if (state.confirmStartOver) {
+        // A6 audit E1: what "Start over" does, said plainly. The app cannot cancel the recovery itself (§11.11.4).
+        ConfirmDialog(
+            title = stringResource(R.string.recover_start_over_title),
+            text = stringResource(R.string.recover_start_over_body),
+            confirmLabel = stringResource(R.string.recover_start_over),
+            onConfirm = actions::confirmStartOver,
+            onDismiss = actions::dismissStartOver,
+            modifier = Modifier.testTag("recover_start_over_dialog"),
+            destructive = true,
+        )
+    }
     when (state.step) {
         RecoverStep.LOADING, RecoverStep.INTRO -> RecoverIntro(state, actions, onBack, onOpenAccountSite)
         RecoverStep.SCAN -> RecoverScan(state, actions, onBack, camera)
@@ -195,6 +208,9 @@ fun RecoverContent(
             onPrimary = actions::submitPassword,
             primaryEnabled = state.password.isNotEmpty() && state.waitSeconds == 0L,
             busy = state.busy,
+            secondaryLabel = stringResource(R.string.recover_start_over),
+            onSecondary = actions::askStartOver,
+            modifier = Modifier.testTag("recover_password_step"),
         ) {
             SecretField(
                 value = state.password,
@@ -232,6 +248,30 @@ fun RecoverContent(
                     stringResource(R.string.recover_no_backup_notice),
                 )
             }
+        }
+        RecoverStep.ENDED -> FormScaffold(
+            title = stringResource(R.string.recover_ended_title),
+            primaryLabel = stringResource(R.string.recover_start_over),
+            onPrimary = actions::askStartOver,
+            busy = state.busy,
+            secondaryLabel = stringResource(R.string.recover_ended_retry),
+            onSecondary = actions::tryPinAgain,
+            modifier = Modifier.testTag("recover_ended"),
+        ) {
+            // The step is reached by itself (the PIN step's answer): announced, as the code's refusals are.
+            Text(
+                stringResource(R.string.recover_ended_body),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_ended_body"),
+            )
+            Spacer(Modifier.height(Spacing.l))
+            NoticeCard(
+                NoticeKind.INFO,
+                stringResource(R.string.recover_ended_next_title),
+                stringResource(R.string.recover_ended_next),
+            )
+            if (state.error != null) Failure(state.error)
         }
         RecoverStep.DONE -> MovedScreen(
             body = stringResource(R.string.onboarding_moved_recovered_body),
@@ -350,6 +390,9 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
         onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submitPin,
         primaryEnabled = state.preflightError != null || (state.pinAllowed && state.pin.length >= MIN_PIN),
         busy = state.busy,
+        // A registered recovery can be left (A6 audit E1): also when the release check fails or blocks the PIN.
+        secondaryLabel = stringResource(R.string.recover_start_over),
+        onSecondary = actions::askStartOver,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             if (state.emailHint.isNotEmpty()) {
@@ -380,11 +423,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                     modifier = Modifier.testTag("recover_pin"),
                 )
             }
-            when {
-                state.errorCode == RecoverViewModel.CODE_UNKNOWN_DEVICE ->
-                    Failure(null, stringResource(R.string.recover_pin_cancelled), Modifier.testTag("recovery_cancelled_at_pin"))
-                state.error != null -> Failure(state.error)
-            }
+            if (state.error != null) Failure(state.error)
         }
     }
 }

@@ -55,6 +55,13 @@ enum class RecoverStep {
      */
     NO_BACKUP,
 
+    /**
+     * The vault no longer takes this phone for the recovery it registered (A6 audit E1): the recovery was cancelled,
+     * expired, was completed elsewhere or replaced by a newer one (§11.11.4), or the vault is gone. Reached from the
+     * PIN step by itself; offers "Start over" and another try.
+     */
+    ENDED,
+
     /** The vault is connected to the credential on this phone now. */
     DONE,
 }
@@ -134,6 +141,8 @@ data class RecoverUiState(
     val password: String = "",
     /** The account site's "Delete my vault and start over" page (MEMBER-API 2.1.0), for [RecoverStep.NO_BACKUP]. */
     val startOverUrl: String = "",
+    /** "Start over" was asked for on the PIN, password or ended step: the confirmation shows. */
+    val confirmStartOver: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
@@ -176,6 +185,16 @@ interface RecoverActions {
     fun submitPin()
     fun setPassword(v: String)
     fun submitPassword()
+
+    /** "Start over" on the PIN, password and ended steps: asks first ([confirmStartOver]). */
+    fun askStartOver()
+    fun dismissStartOver()
+
+    /** Confirmed: this phone forgets the recovery it registered (the recovery itself is not cancelled by that). */
+    fun confirmStartOver()
+
+    /** The ended step: back to the PIN for another try (what ended it there is not proof). */
+    fun tryPinAgain()
     fun finish()
 }
 
@@ -194,6 +213,14 @@ interface RecoverActions {
  * recovered at all (0.16.0, `no_backup`): the app says so and links to the
  * account site's start-over. Resumes where it stopped after a restart
  * ([MoveRepository.recoveryStage]).
+ *
+ * A registered recovery can be left (A6 audit E1): "Start over" on the PIN and password steps, after a confirmation,
+ * makes this phone forget its registration ([MoveRepository.abandonRecovery]). The app has no call that cancels the
+ * recovery itself: the spec gives that to the account site, the email link and an owner app's unlock (§11.11.4), so
+ * the recovery stays registered until one of them or its expiry ends it. When the vault no longer takes this phone
+ * for the recovery (an unlock result that cannot be read, which is how the enclave answers a key it does not hold,
+ * §11.4; or the member API's `401` for a recovering key whose recovery ended, §11.11.7), the PIN step is left for
+ * [RecoverStep.ENDED] by itself. Neither answer is authenticated, so nothing is forgotten until the member confirms.
  */
 @Suppress("TooManyFunctions")
 @HiltViewModel
@@ -396,10 +423,22 @@ class RecoverViewModel @Inject constructor(
                     state.update { if (it.preflight?.offer == offer) it.copy(notes = n) else it }
                 }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, preflightError = e.kind) }
+                // §11.11.7: the member API takes a recovering key only until its recovery ends.
+                if (e.kind == FailureKind.UNAUTHORIZED) ended() else state.update { it.copy(busy = false, preflightError = e.kind) }
             }
         }
     }
+
+    /** The vault or the member API no longer takes this phone for the recovery: say so, and offer the way out. */
+    private fun ended() {
+        ticker?.cancel()
+        state.update {
+            it.copy(step = RecoverStep.ENDED, busy = false, pin = "", pinWrong = false, waitSeconds = 0, error = null, errorCode = null)
+        }
+    }
+
+    private fun UnlockAttempt.Failed.recoveryEnded(): Boolean =
+        kind == FailureKind.UNAUTHORIZED || code == UnlockViewModel.CODE_UNREADABLE || code == CODE_UNKNOWN_DEVICE
 
     override fun setApproveOffer(approve: Boolean) = state.update { it.copy(approveOffer = approve) }
 
@@ -427,12 +466,14 @@ class RecoverViewModel @Inject constructor(
                     startBackoff(r.retryAfterSeconds)
                 }
                 // 0.16.0: a vault without a backup copy refuses the registered app's unlock.
-                is UnlockAttempt.Failed -> if (r.code == CODE_NO_BACKUP) {
-                    state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, pin = "") }
-                    noBackup()
-                } else {
-                    // The registered key was removed: the recovery was cancelled or voided (§11.11.4).
-                    state.update { it.copy(busy = false, pin = "", error = r.kind, errorCode = r.code) }
+                is UnlockAttempt.Failed -> when {
+                    r.code == CODE_NO_BACKUP -> {
+                        state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, pin = "") }
+                        noBackup()
+                    }
+                    // The registered key was removed: the recovery was cancelled, expired or replaced (§11.11.4).
+                    r.recoveryEnded() -> ended()
+                    else -> state.update { it.copy(busy = false, pin = "", error = r.kind, errorCode = r.code) }
                 }
                 is UnlockAttempt.UpdateRefused -> state.update {
                     it.copy(busy = false, pin = "", error = FailureKind.OTHER, errorCode = r.code)
@@ -505,6 +546,43 @@ class RecoverViewModel @Inject constructor(
         viewModelScope.launch { runCatching { move.abandonRecovery() } }
     }
 
+    // --- leaving a registered recovery (A6 audit E1) ---
+
+    override fun askStartOver() {
+        val s = state.value
+        if (s.busy || s.step !in LEAVABLE) return
+        state.update { it.copy(confirmStartOver = true) }
+    }
+
+    override fun dismissStartOver() = state.update { it.copy(confirmStartOver = false) }
+
+    /**
+     * This phone forgets the recovery (its registration, its keys for it, the PIN or password typed so far) and is
+     * back at the start of the flow. Nothing is sent: only the account site, the email link, an owner app's unlock
+     * or the expiry end the recovery itself (§11.11.4).
+     */
+    override fun confirmStartOver() {
+        val s = state.value
+        if (s.busy || !s.confirmStartOver) return
+        ticker?.cancel()
+        state.update { it.copy(busy = true, confirmStartOver = false, pin = "", password = "", error = null, errorCode = null) }
+        viewModelScope.launch {
+            try {
+                move.abandonRecovery()
+                countedFor = null
+                state.value = RecoverUiState(step = RecoverStep.INTRO, startOverUrl = s.startOverUrl, accountHost = s.accountHost)
+            } catch (e: VaultFailure) {
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+            }
+        }
+    }
+
+    override fun tryPinAgain() {
+        val s = state.value
+        if (s.busy || s.step != RecoverStep.ENDED) return
+        toPin()
+    }
+
     override fun finish() {
         viewModelScope.launch { vault.finishSetup() }
     }
@@ -521,6 +599,9 @@ class RecoverViewModel @Inject constructor(
         const val CODE_REQUIRED = "credential_required"
         const val CODE_NO_BACKUP = "no_backup"
         private const val SIGNER_REFUSED = "signer_refused"
+
+        /** The steps a registered recovery can be left from. */
+        private val LEAVABLE = setOf(RecoverStep.PIN, RecoverStep.PASSWORD, RecoverStep.ENDED)
 
         /** MEMBER-API 2.1.0: the account site's "Delete my vault and start over". */
         const val START_OVER_PATH = "/account/vault/deletion/"

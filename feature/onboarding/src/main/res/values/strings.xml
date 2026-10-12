@@ -208,7 +208,14 @@
     <string name="recover_pin_title">Enter your vault PIN</string>
     <string name="recover_pin_body">The code was accepted. Unlock your vault with your PIN. Wrong PINs are slowed down, as on your old phone.</string>
     <string name="recover_pin_submit">Unlock</string>
-    <string name="recover_pin_cancelled">The recovery was cancelled before this phone finished it. Start a new recovery on the account site.</string>
+    <string name="recover_start_over">Start over</string>
+    <string name="recover_start_over_title">Start over on this phone?</string>
+    <string name="recover_start_over_body">This phone forgets the recovery it registered and goes back to the start. There you can recover again, use a setup code or move VettID from your old phone.\n\nThe recovery itself is not cancelled by this: it stays open until you cancel it on the account site or it expires, and its code cannot be used a second time. To recover with this phone later, cancel it there and start a new recovery. Your vault is not changed.</string>
+    <string name="recover_ended_title">This recovery has ended</string>
+    <string name="recover_ended_body">Your vault did not recognise this phone. That is what happens when a recovery was cancelled (on the account site, with the link in the email, or by an unlock on your old phone), when it expired, when a newer recovery replaced it, or when the vault was deleted.</string>
+    <string name="recover_ended_next_title">What you can do</string>
+    <string name="recover_ended_next">Start over on this phone, then start a new recovery on the account site if you still need one. If you think the recovery is still open, try the PIN again.</string>
+    <string name="recover_ended_retry">Try the PIN again</string>
     <string name="recover_no_backup_title">This vault cannot be recovered</string>
     <string name="recover_no_backup_body">Its credential backup was off, so VettID offers no way back into it: nothing in it can be released to a phone without the credential.</string>
     <string name="recover_no_backup_notice">This vault cannot be recovered: its credential backup was off. Delete it on the account site and start over with a new setup code.</string>
