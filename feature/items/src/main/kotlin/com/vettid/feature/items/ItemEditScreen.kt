@@ -85,7 +85,9 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.RemovableTagChip
+import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.visibleSecretKeyboard
 import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.theme.Spacing
 
@@ -287,34 +289,39 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                     modifier = Modifier.testTag("item_edit_no_fields"),
                 )
             }
+            // A secret or critical item's values and notes are typed on a keyboard that does not learn (A6 audit S2).
+            val secret = d.sensitivity != Sensitivity.DATA
             d.fields.forEachIndexed { i, f ->
                 val problems = if (show) state.check.fieldProblems[i].orEmpty() else emptySet()
                 val slot = FieldSlot(i, d.fields.size, focus = state.focusField == i, ime = ime.fields[i], requester = ime.focus[i])
-                FieldEditor(slot, f, problems, actions)
+                FieldEditor(slot, f, problems, actions, secret = secret)
             }
             AddFieldButton(enabled = d.fields.size < ItemChecks.MAX_FIELDS, onAdd = actions.onAskAddField)
-            OutlinedTextField(
-                value = d.notes,
-                onValueChange = actions.onNotes,
-                label = { Text(stringResource(R.string.items_notes)) },
-                placeholder = if (d.keepNotes) {
-                    { Text(stringResource(R.string.items_notes_kept_placeholder)) }
-                } else {
-                    null
-                },
-                minLines = 3,
-                isError = show && DraftProblem.NOTES_TOO_LONG in problems,
-                supportingText = when {
-                    show && DraftProblem.NOTES_TOO_LONG in problems -> {
-                        { Text(ItemsText.problem(DraftProblem.NOTES_TOO_LONG)) }
-                    }
-                    d.keepNotes -> {
-                        { Text(stringResource(R.string.items_notes_kept)) }
-                    }
-                    else -> null
-                },
-                modifier = Modifier.fillMaxWidth().testTag("item_edit_notes"),
-            )
+            NoKeyboardLearning(enabled = secret) {
+                OutlinedTextField(
+                    value = d.notes,
+                    onValueChange = actions.onNotes,
+                    label = { Text(stringResource(R.string.items_notes)) },
+                    placeholder = if (d.keepNotes) {
+                        { Text(stringResource(R.string.items_notes_kept_placeholder)) }
+                    } else {
+                        null
+                    },
+                    minLines = 3,
+                    keyboardOptions = if (secret) visibleSecretKeyboard() else KeyboardOptions.Default,
+                    isError = show && DraftProblem.NOTES_TOO_LONG in problems,
+                    supportingText = when {
+                        show && DraftProblem.NOTES_TOO_LONG in problems -> {
+                            { Text(ItemsText.problem(DraftProblem.NOTES_TOO_LONG)) }
+                        }
+                        d.keepNotes -> {
+                            { Text(stringResource(R.string.items_notes_kept)) }
+                        }
+                        else -> null
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("item_edit_notes"),
+                )
+            }
             if (d.keepNotes) {
                 TextButton(
                     onClick = actions.onRemoveNotes,
@@ -584,7 +591,7 @@ private fun rememberImeChain(fields: List<DraftField>): ImeChain {
  */
 @Composable
 @Suppress("CyclomaticComplexMethod")
-private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProblem>, actions: ItemEditActions) {
+private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProblem>, actions: ItemEditActions, secret: Boolean) {
     val i = slot.index
     val kindName = if (f.kind == FieldKinds.DATE && f.monthYear) {
         stringResource(R.string.items_kind_month_year)
@@ -619,7 +626,7 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
             val input = Modifier.focusRequester(focus)
             if (f.kind == FieldKinds.ADDRESS) {
                 Text(caption, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = Spacing.m))
-                AddressEditor(f.address, input, slot.ime) { actions.onFieldAddress(i, it) }
+                AddressEditor(f.address, input, slot.ime, secret) { actions.onFieldAddress(i, it) }
                 Text(
                     error ?: hint,
                     style = MaterialTheme.typography.bodySmall,
@@ -629,7 +636,7 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
                         .testTag(if (f.kept) "item_edit_field_kept_$i" else "item_edit_field_hint_$i"),
                 )
             } else {
-                ValueEditor(i, f, caption, error ?: hint, error != null, input, slot.ime) { actions.onFieldText(i, it) }
+                ValueEditor(i, f, caption, error ?: hint, error != null, input, slot.ime, secret) { actions.onFieldText(i, it) }
             }
         }
         FieldMenu(slot, f, caption, actions)
@@ -711,6 +718,7 @@ private fun ValueEditor(
     isError: Boolean,
     input: Modifier,
     ime: ImeStep,
+    secret: Boolean,
     onValue: (String) -> Unit,
 ) {
     val tag = input.fillMaxWidth().testTag("item_edit_field_value_$i")
@@ -745,36 +753,49 @@ private fun ValueEditor(
     }
     val multi = f.kind == FieldKinds.MULTILINE
     val free = f.kind == FieldKinds.TEXT || multi
+    // A6 audit S2: a one-time-code seed always, and every value of a secret or critical item that a text keyboard
+    // would take (free text, a recovery phrase's lines, an email address, a link), is typed on the password class of
+    // keyboard with the characters visible: nothing is suggested, corrected or learned. Numbers, phone numbers and
+    // dates keep their digit keyboards, which have no suggestions to begin with.
+    val guarded = f.kind == FieldKinds.OTP || (secret && (free || f.kind == FieldKinds.EMAIL || f.kind == FieldKinds.URL))
     // A phone number holds its dialable characters and is drawn as typed for the region (owner request 2026-10-09).
     val phone = f.kind == FieldKinds.PHONE
     val region = phoneRegion()
-    OutlinedTextField(
-        value = if (phone) PhoneInput.raw(f.text) else f.text,
-        onValueChange = { v -> onValue(if (phone) PhoneInput.raw(v) else FieldInput.accept(f.kind, v)) },
-        visualTransformation = if (phone) PhoneInput.Mask(region) else VisualTransformation.None,
-        label = { Text(caption) },
-        placeholder = (if (f.kept) stringResource(R.string.items_field_kept_placeholder) else placeholder)?.let { p -> { Text(p) } },
-        singleLine = !multi,
-        minLines = if (multi) 3 else 1,
-        isError = isError,
-        supportingText = { Text(supporting) },
-        textStyle = MaterialTheme.typography.bodyLarge.let {
-            if (f.kind == FieldKinds.OTP) it.copy(fontFamily = FontFamily.Monospace) else it
-        },
-        keyboardOptions = KeyboardOptions(
-            keyboardType = keyboard,
-            autoCorrectEnabled = free,
-            capitalization = when {
-                free -> KeyboardCapitalization.Sentences
-                f.kind == FieldKinds.OTP -> KeyboardCapitalization.Characters
-                else -> KeyboardCapitalization.None
+    NoKeyboardLearning(enabled = guarded) {
+        OutlinedTextField(
+            value = if (phone) PhoneInput.raw(f.text) else f.text,
+            onValueChange = { v -> onValue(if (phone) PhoneInput.raw(v) else FieldInput.accept(f.kind, v)) },
+            visualTransformation = if (phone) PhoneInput.Mask(region) else VisualTransformation.None,
+            label = { Text(caption) },
+            placeholder = (if (f.kept) stringResource(R.string.items_field_kept_placeholder) else placeholder)?.let { p -> { Text(p) } },
+            singleLine = !multi,
+            minLines = if (multi) 3 else 1,
+            isError = isError,
+            supportingText = { Text(supporting) },
+            textStyle = MaterialTheme.typography.bodyLarge.let {
+                if (f.kind == FieldKinds.OTP) it.copy(fontFamily = FontFamily.Monospace) else it
             },
-            // A multi-line value's Enter is a new line; every other input moves on or closes the keyboard.
-            imeAction = if (multi) ImeAction.Default else ime.action,
-        ),
-        keyboardActions = if (multi) KeyboardActions.Default else ime.keyboardActions,
-        modifier = tag,
-    )
+            keyboardOptions = if (guarded) {
+                visibleSecretKeyboard(
+                    capitalization = if (f.kind == FieldKinds.OTP) KeyboardCapitalization.Characters else KeyboardCapitalization.None,
+                    imeAction = if (multi) ImeAction.Default else ime.action,
+                )
+            } else {
+                KeyboardOptions(
+                    keyboardType = keyboard,
+                    autoCorrectEnabled = free,
+                    capitalization = when {
+                        free -> KeyboardCapitalization.Sentences
+                        else -> KeyboardCapitalization.None
+                    },
+                    // A multi-line value's Enter is a new line; every other input moves on or closes the keyboard.
+                    imeAction = if (multi) ImeAction.Default else ime.action,
+                )
+            },
+            keyboardActions = if (multi) KeyboardActions.Default else ime.keyboardActions,
+            modifier = tag,
+        )
+    }
 }
 
 /**
@@ -918,15 +939,17 @@ private const val MONTHS = 12
 private const val MAX_YEAR = 9999
 
 @Composable
-private fun AddressEditor(a: AddressValue, first: Modifier, ime: ImeStep, onValue: (AddressValue) -> Unit) {
+private fun AddressEditor(a: AddressValue, first: Modifier, ime: ImeStep, secret: Boolean, onValue: (AddressValue) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-        AddressPart(a.street, R.string.items_address_street, modifier = first) { onValue(a.copy(street = it)) }
-        AddressPart(a.street2, R.string.items_address_street2) { onValue(a.copy(street2 = it)) }
-        AddressPart(a.postalCode, R.string.items_address_postal_code) { onValue(a.copy(postalCode = it)) }
-        AddressPart(a.city, R.string.items_address_city) { onValue(a.copy(city = it)) }
-        AddressPart(a.region, R.string.items_address_region) { onValue(a.copy(region = it)) }
+        AddressPart(a.street, R.string.items_address_street, secret, modifier = first) { onValue(a.copy(street = it)) }
+        AddressPart(a.street2, R.string.items_address_street2, secret) { onValue(a.copy(street2 = it)) }
+        AddressPart(a.postalCode, R.string.items_address_postal_code, secret) { onValue(a.copy(postalCode = it)) }
+        AddressPart(a.city, R.string.items_address_city, secret) { onValue(a.copy(city = it)) }
+        AddressPart(a.region, R.string.items_address_region, secret) { onValue(a.copy(region = it)) }
         // ISO 3166-1 alpha-2, upper case (§10.7).
-        AddressPart(a.country, R.string.items_address_country, caps = true, ime = ime) { onValue(a.copy(country = FieldInput.country(it))) }
+        AddressPart(a.country, R.string.items_address_country, secret, caps = true, ime = ime) {
+            onValue(a.copy(country = FieldInput.country(it)))
+        }
     }
 }
 
@@ -935,24 +958,29 @@ private fun AddressEditor(a: AddressValue, first: Modifier, ime: ImeStep, onValu
 private fun AddressPart(
     value: String,
     label: Int,
+    secret: Boolean,
     caps: Boolean = false,
     modifier: Modifier = Modifier,
     ime: ImeStep? = null,
     onValue: (String) -> Unit,
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { onValue(it.replace("\n", "")) },
-        label = { Text(stringResource(label)) },
-        singleLine = true,
-        // Next moves to the address's next part (the default action); the country takes the field's step.
-        keyboardOptions = KeyboardOptions(
-            capitalization = if (caps) KeyboardCapitalization.Characters else KeyboardCapitalization.Words,
-            imeAction = ime?.action ?: ImeAction.Next,
-        ),
-        keyboardActions = ime?.keyboardActions ?: KeyboardActions.Default,
-        modifier = modifier.fillMaxWidth(),
-    )
+    val capitalization = if (caps) KeyboardCapitalization.Characters else KeyboardCapitalization.Words
+    NoKeyboardLearning(enabled = secret) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = { onValue(it.replace("\n", "")) },
+            label = { Text(stringResource(label)) },
+            singleLine = true,
+            // Next moves to the address's next part (the default action); the country takes the field's step.
+            keyboardOptions = if (secret) {
+                visibleSecretKeyboard(capitalization, ime?.action ?: ImeAction.Next)
+            } else {
+                KeyboardOptions(capitalization = capitalization, imeAction = ime?.action ?: ImeAction.Next)
+            },
+            keyboardActions = ime?.keyboardActions ?: KeyboardActions.Default,
+            modifier = modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable

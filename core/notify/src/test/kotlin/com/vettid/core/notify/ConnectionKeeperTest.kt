@@ -100,6 +100,26 @@ class ConnectionKeeperTest {
     }
 
     @Test
+    fun aPhoneThatGaveItsVaultAwayPublishesNoLastStatus() = runTest {
+        // Owner report 2026-10-11: the wipe's SignedOut used to publish CONNECTING as the service was stopping,
+        // and the service re-posted its notification with it ("VettID is connecting").
+        for (before in listOf(AppPhase.Unlocked, AppPhase.Locked)) {
+            val v = Vault().apply { phase.value = before }
+            val k = ConnectionKeeper(v, network, ReconnectBackoff(random = Random(1)))
+            val seen = mutableListOf<KeeperStatus>()
+            val watch = launch { k.status.collect { seen += it } }
+            val job = launch { k.run() }
+            runCurrent()
+            seen.clear()
+            v.phase.value = AppPhase.SignedOut // transferred away, wiped, deleted
+            runCurrent()
+            assertTrue("$before: run ended", job.isCompleted)
+            assertTrue("$before: nothing published after the vault went: $seen", seen.isEmpty())
+            watch.cancel()
+        }
+    }
+
+    @Test
     fun statusLine() {
         assertEquals(KeeperStatus.CHECK_DUE, ConnectionKeeper.statusOf(AppPhase.Unlocked, network = true, held = true))
         assertEquals(KeeperStatus.WAITING_FOR_NETWORK, ConnectionKeeper.statusOf(AppPhase.Locked, network = false, held = false))

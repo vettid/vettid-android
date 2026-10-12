@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -36,13 +35,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.CameraPermission
+import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -50,7 +49,9 @@ import com.vettid.core.ui.components.QrScanner
 import com.vettid.core.ui.components.RookLogo
 import com.vettid.core.ui.components.SafetyCode
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
+import com.vettid.core.ui.components.visibleSecretKeyboard
 import com.vettid.core.ui.components.rememberCameraPermission
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -171,6 +172,18 @@ fun RecoverContent(
     val canBack = leaveable || state.step == RecoverStep.SCAN || state.step == RecoverStep.TYPE
     BackHandler(enabled = canBack) { back() }
     val onBack: (() -> Unit)? = if (canBack) back else null
+    if (state.confirmStartOver) {
+        // A6 audit E1: what "Start over" does, said plainly. The app cannot cancel the recovery itself (§11.11.4).
+        ConfirmDialog(
+            title = stringResource(R.string.recover_start_over_title),
+            text = stringResource(R.string.recover_start_over_body),
+            confirmLabel = stringResource(R.string.recover_start_over),
+            onConfirm = actions::confirmStartOver,
+            onDismiss = actions::dismissStartOver,
+            modifier = Modifier.testTag("recover_start_over_dialog"),
+            destructive = true,
+        )
+    }
     when (state.step) {
         RecoverStep.LOADING, RecoverStep.INTRO -> RecoverIntro(state, actions, onBack, onOpenAccountSite)
         RecoverStep.SCAN -> RecoverScan(state, actions, onBack, camera)
@@ -195,6 +208,9 @@ fun RecoverContent(
             onPrimary = actions::submitPassword,
             primaryEnabled = state.password.isNotEmpty() && state.waitSeconds == 0L,
             busy = state.busy,
+            secondaryLabel = stringResource(R.string.recover_start_over),
+            onSecondary = actions::askStartOver,
+            modifier = Modifier.testTag("recover_password_step"),
         ) {
             SecretField(
                 value = state.password,
@@ -232,6 +248,30 @@ fun RecoverContent(
                     stringResource(R.string.recover_no_backup_notice),
                 )
             }
+        }
+        RecoverStep.ENDED -> FormScaffold(
+            title = stringResource(R.string.recover_ended_title),
+            primaryLabel = stringResource(R.string.recover_start_over),
+            onPrimary = actions::askStartOver,
+            busy = state.busy,
+            secondaryLabel = stringResource(R.string.recover_ended_retry),
+            onSecondary = actions::tryPinAgain,
+            modifier = Modifier.testTag("recover_ended"),
+        ) {
+            // The step is reached by itself (the PIN step's answer): announced, as the code's refusals are.
+            Text(
+                stringResource(R.string.recover_ended_body),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_ended_body"),
+            )
+            Spacer(Modifier.height(Spacing.l))
+            NoticeCard(
+                NoticeKind.INFO,
+                stringResource(R.string.recover_ended_next_title),
+                stringResource(R.string.recover_ended_next),
+            )
+            if (state.error != null) Failure(state.error)
         }
         RecoverStep.DONE -> MovedScreen(
             body = stringResource(R.string.onboarding_moved_recovered_body),
@@ -350,6 +390,9 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
         onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submitPin,
         primaryEnabled = state.preflightError != null || (state.pinAllowed && state.pin.length >= MIN_PIN),
         busy = state.busy,
+        // A registered recovery can be left (A6 audit E1): also when the release check fails or blocks the PIN.
+        secondaryLabel = stringResource(R.string.recover_start_over),
+        onSecondary = actions::askStartOver,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             if (state.emailHint.isNotEmpty()) {
@@ -380,11 +423,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                     modifier = Modifier.testTag("recover_pin"),
                 )
             }
-            when {
-                state.errorCode == RecoverViewModel.CODE_UNKNOWN_DEVICE ->
-                    Failure(null, stringResource(R.string.recover_pin_cancelled), Modifier.testTag("recovery_cancelled_at_pin"))
-                state.error != null -> Failure(state.error)
-            }
+            if (state.error != null) Failure(state.error)
         }
     }
 }
@@ -461,16 +500,19 @@ fun TransferInContent(
             busy = state.busy,
             onBack = back,
         ) {
-            OutlinedTextField(
-                value = state.input,
-                onValueChange = actions::setInput,
-                label = { Text(stringResource(R.string.transfer_in_paste_label)) },
-                minLines = 3,
-                isError = state.inputProblem != null,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done, autoCorrectEnabled = false),
-                keyboardActions = KeyboardActions(onDone = { actions.submitInput() }),
-                modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("transfer_code"),
-            )
+            NoKeyboardLearning {
+                OutlinedTextField(
+                    value = state.input,
+                    onValueChange = actions::setInput,
+                    label = { Text(stringResource(R.string.transfer_in_paste_label)) },
+                    minLines = 3,
+                    isError = state.inputProblem != null,
+                    // The transfer code is typed or pasted on a keyboard that does not suggest or learn it (A6 audit S2).
+                    keyboardOptions = visibleSecretKeyboard(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { actions.submitInput() }),
+                    modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("transfer_code"),
+                )
+            }
             InputProblem(state.inputProblem)
             Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)
         }

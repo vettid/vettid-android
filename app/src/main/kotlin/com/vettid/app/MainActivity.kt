@@ -6,6 +6,7 @@ import android.net.Uri
 import android.graphics.Color
 import android.hardware.biometrics.BiometricManager.Authenticators
 import android.hardware.biometrics.BiometricPrompt
+import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.widget.Toast
@@ -31,6 +32,8 @@ import com.vettid.core.data.vault.ReleaseUpdateInbox
 import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.lock.AppLock
+import com.vettid.core.data.lock.AppLockState
+import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.lock.PromptOutcome
 import com.vettid.core.data.lock.authenticators
 import com.vettid.core.data.prefs.AppLockMethod
@@ -40,6 +43,7 @@ import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.ui.components.LocalUserPresence
 import com.vettid.core.ui.components.UserPresence
+import com.vettid.core.ui.components.protectFromCapture
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -57,6 +61,9 @@ import com.vettid.feature.onboarding.R as OnboardingR
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var appLock: AppLock
+
+    @Inject
+    lateinit var screenshots: ScreenshotAllowance
 
     @Inject
     lateinit var prefs: PreferencesRepository
@@ -85,6 +92,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        protectWindow()
         debugTools.onLaunch(this, intent)
         if (savedInstanceState == null) receiveLink(intent)
         val launchTheme = debugTools.themeOverride(intent)
@@ -118,6 +126,24 @@ class MainActivity : ComponentActivity() {
                         VettIdApp(onUnlockApp = ::promptUnlock, onEnableAppLock = ::promptEnable, launchRoute = launchRoute)
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * The whole app is kept out of screenshots, screen recordings and the recent-apps preview (`FLAG_SECURE`; owner
+     * decision 2026-10-11, A6 audit S1), from before the first frame, unless the member allowed screenshots for a
+     * while ([ScreenshotAllowance]; on in development builds). With the app lock on, the recent-apps preview stays
+     * hidden even then (API 33+): the lock engages on return, so without this the card would show the last screen.
+     */
+    private fun protectWindow() {
+        window.protectFromCapture(!screenshots.allowed.value)
+        lifecycleScope.launch {
+            screenshots.allowed.collect { window.protectFromCapture(!it) }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            lifecycleScope.launch {
+                appLock.state.collect { setRecentsScreenshotEnabled(it == AppLockState.DISABLED) }
             }
         }
     }
@@ -185,7 +211,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        appLock.onBackground()
+        // A rotation, fold or theme change recreates the activity: the member did not leave the app (A6 audit R3).
+        appLock.onBackground(changingConfigurations = isChangingConfigurations)
         super.onStop()
     }
 

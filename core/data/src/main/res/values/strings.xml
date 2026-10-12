@@ -19,6 +19,9 @@
     <string name="data_failure_attestation">This phone could not be verified. VettID needs a phone with hardware key attestation and a locked, verified boot.</string>
     <string name="data_failure_rollback">The vault is served by an older software release than this phone last used. VettID did not send your PIN.</string>
     <string name="data_failure_manifest">The vault software list could not be verified. Try again later.</string>
+    <string name="data_failure_manifest_unavailable">The list of vault releases could not be loaded, so your vault\'s software could not be checked. Nothing was sent to your vault. Check your connection and try again.</string>
+    <string name="data_failure_release_unknown">Your vault runs a release that is not in this app\'s list of vault releases, so VettID did not ask for your PIN and sent nothing. The app loads the list again each time you try. Try again; if this keeps happening, update VettID.</string>
+    <string name="data_failure_enclave">Your vault\'s software could not be verified. Nothing was sent to it: not your PIN, nor anything else. Try again; if this keeps happening, do not enter your PIN anywhere else and contact VettID support.</string>
     <string name="data_failure_not_found">Nothing was found.</string>
     <string name="data_failure_connection_unavailable">This connection cannot be reached right now. Try again later.</string>
     <string name="data_failure_invite_invalid">That is not a VettID invitation. Check the link or code and try again.</string>

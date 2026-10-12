@@ -329,7 +329,10 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return recoveryUnlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
     }
 
-    override suspend fun abandonRecovery() = call("abandonRecovery")
+    override suspend fun abandonRecovery() {
+        call("abandonRecovery")
+        phase.value = AppPhase.SignedOut
+    }
 
     override suspend fun recoverCredential(password: String): RecoverOutcome {
         call("recoverCredential")

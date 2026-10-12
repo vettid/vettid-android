@@ -128,7 +128,7 @@ Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start sc
 `transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
 did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
 repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`; the vault service paused for maintenance
-(MEMBER-API 1.2.0), `unlock.paused`, `unlock.paused_preflight`; the canary manifest (VAULT-RELEASES §10.1 step 9),
+(MEMBER-API 1.2.0), `unlock.paused`, `unlock.paused_preflight`; the app's own checks of the vault's software failing (owner report 2026-10-11: `FailureKind.RELEASE_UNKNOWN`, `MANIFEST_UNAVAILABLE`, `ENCLAVE`, never the phone's `ATTESTATION` text; `enclaveFailure` in `Guard.kt`), `unlock.release_unknown`, `unlock.manifest_unavailable`, `unlock.enclave_unverified`; the canary manifest (VAULT-RELEASES §10.1 step 9),
 `canary.confirm`, `canary.refused`, `settings.attestation_canary`; the daily owner check (VAULT-MESSAGING 0.13.0 §3.6),
 `owner_check.held`, `owner_check.due`, `owner_check.unknown`, `owner_check.bad_password`, `owner_check.backoff`, `owner_check.voluntary`,
 `owner_check.hold_off`, `unlock.owner_check`, `unlock.owner_check_locked`, `settings.owner_check_hold_off`,
@@ -179,6 +179,11 @@ vettid.org repo's `local/android-ui/`).
 - Reuse `:core:ui` components (top bar, drawer, list row, empty state, floating
   controls, pill bar, settings groups, avatar sheet, confirm dialog) before adding new ones;
   every new component goes into the debug gallery.
+- The activity window is `FLAG_SECURE` in every build (A6 audit S1): no screenshots, screen recording or Recents
+  preview. Settings → App → "Allow screenshots" (`ScreenshotAllowance`, memory only) lifts it until the vault locks,
+  at most 1 hour; debug and devStack builds start with it on (the catalog is screenshotted). A screen that must stay
+  protected regardless calls `SecureWindow()`. A field that holds a secret the member must see uses
+  `visibleSecretKeyboard()` inside `NoKeyboardLearning { }` (S2); copy secrets with `textClip(…, sensitive = true)`.
 - Every destructive action uses `ConfirmDialog`; every critical action asks for the
   credential password. No backup/export of vault data (`allowBackup=false`); the one exception is History's export of activity metadata (ANDROID-PLAN 0.1.17: the vault PIN, then "Save to…" only).
 - Commits: explicit paths only (never `git add -A`); PRs into `master`.

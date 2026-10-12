@@ -132,6 +132,23 @@ class AppLockTest {
         assertEquals(AppLockState.LOCKED, l.state.value)
     }
 
+    /** A6 audit R3: a rotation, fold or theme change recreates the activity; with "Immediately" that locked the app. */
+    @Test
+    fun aConfigurationChangeDoesNotCountAsLeavingTheApp() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.setTimeout(AppLockTimeout.IMMEDIATELY)
+        l.onBackground(changingConfigurations = true)
+        clock += 5_000
+        l.onForeground()
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+        // Really leaving still locks.
+        l.onBackground(changingConfigurations = false)
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
     @Test
     fun promptsDoNotCountAsLeavingTheApp() = runTest {
         val l = lock()

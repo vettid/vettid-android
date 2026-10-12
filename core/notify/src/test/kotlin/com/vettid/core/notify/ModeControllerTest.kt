@@ -61,6 +61,33 @@ class ModeControllerTest {
     }
 
     @Test
+    fun aPhoneWithoutAVaultStopsAServiceThisProcessNeverStartedOnce() = runTest {
+        // Android restarted the service in a new process, or an earlier build left its notification behind (owner
+        // report 2026-10-11): the first look at a phone without a vault stops it, which also cancels the notification.
+        val mode = MutableStateFlow(NotificationMode.SERVICE)
+        val phase = MutableStateFlow<AppPhase>(AppPhase.Starting)
+        val s = Service()
+        val c = ModeController(backgroundScope, mode, phase, s, NoPushProvider)
+        c.start()
+        runCurrent()
+        assertTrue(s.calls.isEmpty())
+        phase.value = AppPhase.SignedOut
+        runCurrent()
+        assertEquals(listOf("stop"), s.calls)
+        mode.value = NotificationMode.OFF
+        phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        runCurrent()
+        assertEquals("once", listOf("stop"), s.calls)
+        mode.value = NotificationMode.SERVICE
+        phase.value = AppPhase.Unlocked
+        runCurrent()
+        phase.value = AppPhase.SignedOut // the vault moved to another phone: this one erased itself
+        runCurrent()
+        assertEquals(listOf("stop", "start", "stop"), s.calls)
+        assertFalse(c.running)
+    }
+
+    @Test
     fun googlePushInABuildWithoutItKeepsTheServiceRunning() {
         // ANDROID-PLAN 0.1.32 (owner decision 2026-10-11): the mode is Google push, the build has none ("Not
         // available yet", or a build without Google code): the on-phone service is the fallback.
@@ -354,7 +381,7 @@ class ModeControllerTest {
         val c = ModeController(backgroundScope, MutableStateFlow(NotificationMode.PUSH), MutableStateFlow(AppPhase.SignedOut), s, FakePush(), reg)
         c.start()
         runCurrent()
-        assertTrue(s.calls.isEmpty())
+        assertEquals("no push; a service left from before is stopped", listOf("stop"), s.calls)
         // GrapheneOS without Google Play services: no registration is started (the service is the fallback, 0.1.32).
         val missing = ModeController(backgroundScope, MutableStateFlow(NotificationMode.PUSH), MutableStateFlow(AppPhase.Unlocked), s, FakePush(PushAvailability.MISSING_SERVICES), reg)
         missing.start()

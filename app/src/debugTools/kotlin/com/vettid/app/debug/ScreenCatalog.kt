@@ -242,6 +242,10 @@ private object NoRecover : RecoverActions {
     override fun submitPin() = Unit
     override fun setPassword(v: String) = Unit
     override fun submitPassword() = Unit
+    override fun askStartOver() = Unit
+    override fun dismissStartOver() = Unit
+    override fun confirmStartOver() = Unit
+    override fun tryPinAgain() = Unit
     override fun finish() = Unit
 }
 
@@ -607,7 +611,10 @@ object ScreenCatalog {
         "recover.pin_offer" to { Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), approveOffer = true)) },
         "recover.pin_backoff" to { Rec(pinState.copy(pin = "", pinWrong = true, waitSeconds = 75)) },
         "recover.pin_ended" to { Rec(pinState.copy(preflight = null, preflightError = FailureKind.RELEASE_ENDED)) },
-        "recover.pin_cancelled" to { Rec(pinState.copy(pin = "", error = FailureKind.OTHER, errorCode = "unknown_device")) },
+        // A6 audit E1: a registered recovery can be left ("Start over", confirmed), and one the vault no longer takes ends by itself.
+        "recover.pin_start_over" to { Rec(pinState.copy(confirmStartOver = true)) },
+        "recover.ended" to { Rec(recState.copy(step = RecoverStep.ENDED)) },
+        "recover.ended_start_over" to { Rec(recState.copy(step = RecoverStep.ENDED, confirmStartOver = true)) },
         "recover.password" to { Rec(recState.copy(step = RecoverStep.PASSWORD, password = "correct horse battery")) },
         "recover.password_wrong" to { Rec(recState.copy(step = RecoverStep.PASSWORD, error = FailureKind.BAD_PASSWORD)) },
         "recover.no_backup" to { Rec(recState.copy(step = RecoverStep.NO_BACKUP)) },
@@ -658,6 +665,17 @@ object ScreenCatalog {
         },
         "unlock.paused_preflight" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.SERVICE_PAUSED, serviceWaitSeconds = 300), NoUnlock)
+        },
+        // Owner report 2026-10-11: the app's own checks of the vault's software, each with its own text (never the
+        // phone's attestation text): no PIN field, "Try again".
+        "unlock.release_unknown" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.RELEASE_UNKNOWN), NoUnlock)
+        },
+        "unlock.manifest_unavailable" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.MANIFEST_UNAVAILABLE), NoUnlock)
+        },
+        "unlock.enclave_unverified" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.ENCLAVE), NoUnlock)
         },
         "unlock.recovery" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), recoveryPending = true), NoUnlock)
@@ -777,6 +795,16 @@ object ScreenCatalog {
                 SettingsActions(),
             )
         },
+        // "Allow screenshots" (A6 audit S1, owner decision 2026-10-11): on, and the confirmation that turns it on.
+        "settings.screenshots_on" to {
+            SettingsContent(SettingsUiState(account = sampleAccount, screenshotsAllowed = true), SettingsActions())
+        },
+        "settings.screenshots_on_development" to {
+            SettingsContent(SettingsUiState(account = sampleAccount, screenshotsAllowed = true, screenshotsStayOn = true), SettingsActions())
+        },
+        "settings.screenshots_confirm" to {
+            SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), askScreenshots = true)
+        },
         "settings.app_lock_method" to {
             com.vettid.feature.settings.AppLockMethodDialog(com.vettid.core.data.prefs.AppLockMethod.BIOMETRICS, true, {}, {}, {})
         },
@@ -853,7 +881,8 @@ object ScreenCatalog {
                 {}, {},
             )
         },
-        // "Installed from" (ANDROID-PLAN 0.1.36 §7): the vault's signer binding, per class; tapped, with the explanation.
+        // "Installed from" (ANDROID-PLAN 0.1.36 §7): the vault's signer binding, per class; tapped, with the explanation
+        // directly under the line (`settings.status_signer_details`; owner report 2026-10-11: it opened off-screen).
         "settings.status_signer_vettid" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}) },
         "settings.status_signer_google_play" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.GOOGLE_PLAY)), {}, {}) },
         "settings.status_signer_development" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.DEVELOPMENT)), {}, {}) },

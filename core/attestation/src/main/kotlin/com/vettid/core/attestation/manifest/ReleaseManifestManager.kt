@@ -92,7 +92,7 @@ class ReleaseManifestManager(
 
     /** Enrollment goes only to an `active` release (§11.2 step 2, §11.10.1). */
     fun checkEnroll(m: ReleaseManifest, pcr0: String): Release {
-        val r = m.byPcr0(pcr0) ?: throw AttestationException.Release("not listed")
+        val r = m.byPcr0(pcr0) ?: throw AttestationException.Release("not listed", unknown = true)
         if (r.status != ReleaseStatus.ACTIVE) throw AttestationException.Release("not active")
         return r
     }
@@ -104,7 +104,7 @@ class ReleaseManifestManager(
      */
     @Synchronized
     fun decideUnlock(m: ReleaseManifest, pcr0: String): UnlockDecision {
-        val r = m.byPcr0(pcr0) ?: throw AttestationException.Release("not listed")
+        val r = m.byPcr0(pcr0) ?: throw AttestationException.Release("not listed", unknown = true)
         val last = store.lastRelease
         if (last != null && r.number < last.second) throw AttestationException.Release("rollback")
         return when {

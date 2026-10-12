@@ -21,6 +21,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.NavDestination.Companion.hasRoute
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -63,6 +65,26 @@ private fun destinationOf(phase: AppPhase): Any = when (phase) {
 }
 
 /**
+ * Makes [target] the only root destination, when it is not the one showing already. The effect runs again in every
+ * new composition (rotation, fold, theme or font change: the activity is recreated) and each time the app lock opens;
+ * the destination of the phase is then still on the back stack (restored, or kept by the controller while the lock
+ * showed), and navigating to it again would destroy it with its ViewModels: the screen the member was on, what they
+ * typed, a running enrolment or the wait for a transfer (A6 audit R1). While the app lock shows, nothing of the app
+ * (the NavHost included) is composed; a phase that changed under the lock is followed on unlock.
+ */
+@Composable
+internal fun RootDestinationEffect(nav: NavHostController, target: Any, locked: Boolean) {
+    LaunchedEffect(nav, target, locked) {
+        if (locked) return@LaunchedEffect
+        if (nav.currentBackStackEntry?.destination?.hasRoute(target::class) == true) return@LaunchedEffect
+        nav.navigate(target) {
+            popUpTo(0) { inclusive = true }
+            launchSingleTop = true
+        }
+    }
+}
+
+/**
  * The root of the UI: one destination per vault phase (onboarding, unlock,
  * the app), each with its own ViewModels, so that leaving a phase forgets its
  * state (PINs and passwords included). The app lock (D6) replaces
@@ -98,14 +120,7 @@ fun VettIdApp(
     val target = if (update != null) UpdateDest else destinationOf(phase)
 
     val locked = lock == AppLockState.LOCKED
-    // While the app lock shows, nothing of the app (the NavHost included) is composed; it navigates on unlock.
-    LaunchedEffect(target, locked) {
-        if (locked) return@LaunchedEffect
-        nav.navigate(target) {
-            popUpTo(0) { inclusive = true }
-            launchSingleTop = true
-        }
-    }
+    RootDestinationEffect(nav, target, locked)
 
     // Debug builds expose test tags as resource ids, so that adb (uiautomator) can drive two phones at once.
     val root = if (BuildConfig.DEBUG) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
