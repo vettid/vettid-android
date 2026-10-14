@@ -230,6 +230,8 @@ object AppModule {
             override suspend fun save(m: PushMemory) = prefs.setPushMemory(m)
         },
         mode = { prefs.preferences.first().effectiveNotificationMode },
+        // Steps only: the registrar never passes a token or a challenge code here.
+        log = { android.util.Log.i("PushRegistrar", it) },
     )
 
     @Provides

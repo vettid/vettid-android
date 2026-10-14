@@ -29,14 +29,18 @@ private fun provider(context: Context): FcmPushProvider =
 
 /**
  * Receives Google push wakes (PUSH-GATEWAY 0.4.1 §6, §11.1). The gateway's message is fixed (`{"w": "1"}`, high
- * priority, no `notification` block) and means only "collect": nothing of it is read here, so nothing a push could
+ * priority, no `notification` block) and means only "collect": nothing else of it is read, so nothing a push could
  * carry is ever shown or trusted. Notifications come from what the app then collects from its own relay mailbox and
  * decrypts on the phone, through the same channels, Mapping and Content rules as the on-phone service's.
+ *
+ * The one other message (PUSH-GATEWAY 0.5.0 §6) is a registration's challenge, `{"c": "<code>"}` without `w`: its code
+ * goes to the vault (`push.confirm`) and nothing is collected or shown ([FcmPushProvider.received]). It is never
+ * logged or stored.
  */
 class VettIdMessagingService : FirebaseMessagingService() {
     /** On Firebase's worker thread, which holds the wake lock for the message's 20 s. */
     override fun onMessageReceived(message: RemoteMessage) {
-        runBlocking { provider(this@VettIdMessagingService).wake() }
+        runBlocking { provider(this@VettIdMessagingService).received(message.data) }
     }
 
     /** Google dropped pending messages (the phone was offline for long): a collect, as for a wake. */

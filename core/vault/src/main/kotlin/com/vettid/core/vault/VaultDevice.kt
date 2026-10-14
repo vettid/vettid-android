@@ -158,7 +158,10 @@ class VaultMessage(val inner: Inner) {
  * with `{connection_id}` for `connection.invite.accept`, 0.10.2).
  */
 class VaultOpException(val type: String, val code: String, message: String = "", val body: JsonObject? = null) :
-    IOException("vault: $type: $code${if (message.isEmpty()) "" else " ($message)"}")
+    IOException("vault: $type: $code${if (message.isEmpty()) "" else " ($message)"}") {
+    /** The error's `message` ("" without one): `push.confirm` names the cause of a `gateway_error` there (§14.1). */
+    val detail: String = message
+}
 
 /** The device is not (yet) paired with a vault, or the vault sent something it should not have. */
 class VaultStateException(message: String) : IOException("vault client: $message")

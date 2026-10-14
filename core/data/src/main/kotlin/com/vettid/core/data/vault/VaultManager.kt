@@ -47,6 +47,7 @@ import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.callEnd
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.data.items.ListLoad
+import com.vettid.core.vault.pushConfirm
 import com.vettid.core.vault.pushRegister
 import com.vettid.core.vault.pushUnregister
 import kotlinx.coroutines.CancellationException
@@ -1662,6 +1663,17 @@ class VaultManager(
             PushWire.state(o["push"] as? JsonObject)?.let { PushRegisterOutcome.Registered(it) } ?: PushRegisterOutcome.NoAnswer
         } catch (e: VaultFailure) {
             PushWire.outcome(e)
+        }
+    }
+
+    override suspend fun pushConfirm(code: String): PushConfirmOutcome {
+        // Like push.register: DEK state, so only an open (or held) vault answers.
+        if (phaseFlow.value != AppPhase.Unlocked) return PushConfirmOutcome.NoAnswer
+        return try {
+            val o = guard { session().openApi.pushConfirm(code) }
+            PushWire.state(o["push"] as? JsonObject)?.let { PushConfirmOutcome.Confirmed(it) } ?: PushConfirmOutcome.NoAnswer
+        } catch (e: VaultFailure) {
+            PushWire.confirmOutcome(e)
         }
     }
 
