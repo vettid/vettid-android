@@ -121,7 +121,7 @@ class PushRegistrarTest {
     private var mode = NotificationMode.PUSH
 
     private fun TestScope.registrar(v: FakePushVault = vault) =
-        PushRegistrar(backgroundScope, push, v, APP_ID, memory, mode = { mode }, nowMs = { testScheduler.currentTime }).also {
+        PushRegistrar(backgroundScope, push, v, APP_ID, memory, mode = { mode }, nowMs = { testScheduler.currentTime }, elapsedMs = { testScheduler.currentTime }).also {
             it.start()
             runCurrent()
         }

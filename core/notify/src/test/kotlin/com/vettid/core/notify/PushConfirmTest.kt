@@ -32,7 +32,7 @@ class PushConfirmTest {
     private val lines = mutableListOf<String>()
 
     private fun TestScope.registrar() =
-        PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { NotificationMode.PUSH }, nowMs = { testScheduler.currentTime }, log = { lines += it }).also {
+        PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { NotificationMode.PUSH }, nowMs = { testScheduler.currentTime }, elapsedMs = { testScheduler.currentTime }, log = { lines += it }).also {
             it.start()
             runCurrent()
         }
@@ -57,7 +57,7 @@ class PushConfirmTest {
         runCurrent()
         assertEquals(listOf("register fcm tok-1 $APP_ID", "confirm Q2hhbGxlbmdlLWNvZGUtMQ"), log)
         assertEquals(PushStatus(PushRegState.ACTIVE), r.status.value)
-        assertEquals(PushMemory(registered = true), memory.value)
+        assertEquals("confirmPending cleared", PushMemory(registered = true), memory.value)
         assertEquals("a challenge is not a wake: nothing is collected", 0, vault.collected)
         // The window's end no longer does anything.
         advanceTimeBy(HOUR)
@@ -114,13 +114,12 @@ class PushConfirmTest {
     @Test
     fun noSecondRegisterStartsWhileOneIsPending() = runTest {
         val r = pendingRegistrar()
-        // An open, a rotated token: the vault would answer the same pending registration without a new code.
+        // An open: the vault would answer the same pending registration without a new code. (A rotated token is
+        // registered at once: aRotatedTokenWhilePendingIsRegisteredAtOnce.)
         vault.phase.value = AppPhase.Locked
         runCurrent()
         assertEquals("locked, it still waits (the vault keeps its pending registration)", PushRegState.VERIFYING, r.status.value.state)
         vault.phase.value = AppPhase.Unlocked
-        runCurrent()
-        push.onNewToken!!.invoke()
         runCurrent()
         assertEquals(listOf("register fcm tok-1 $APP_ID"), log)
         r.onChallenge("the-code")
@@ -158,20 +157,80 @@ class PushConfirmTest {
     }
 
     @Test
-    fun aCodeWhileTheVaultIsLockedIsDroppedAndTheNextOpenRegisters() = runTest {
+    fun aCodeWhileTheVaultIsLockedIsKeptAndConfirmedWhenItOpens() = runTest {
         val r = pendingRegistrar()
         vault.phase.value = AppPhase.Locked
         runCurrent()
         r.onChallenge("locked-code")
         runCurrent()
-        assertEquals(1, log.size)
+        assertEquals("nothing is sent to a locked vault", 1, log.size)
+        assertEquals(PushRegState.VERIFYING, r.status.value.state)
+        advanceTimeBy(5 * MINUTE)
+        vault.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals("the kept code, not a second registration", listOf("register fcm tok-1 $APP_ID", "confirm locked-code"), log)
+        assertTrue(r.status.value.active)
+    }
+
+    @Test
+    fun aKeptCodeEndsWithTheWindowAndTheNextOpenRegisters() = runTest {
+        val r = pendingRegistrar()
+        vault.phase.value = AppPhase.Locked
+        runCurrent()
+        r.onChallenge("locked-code")
+        runCurrent()
         advanceTimeBy(PushRegistrar.CHALLENGE_WINDOW_MS + MINUTE)
         runCurrent()
-        assertEquals("nothing is sent to a locked vault", 1, log.size)
+        assertEquals(1, log.size)
+        assertTrue("never confirmed: still the fallback while locked", r.status.value.fallback)
         vault.phase.value = AppPhase.Unlocked
         runCurrent()
         assertEquals(listOf("register fcm tok-1 $APP_ID", "register fcm tok-1 $APP_ID"), log)
         assertTrue(r.status.value.active)
+    }
+
+    @Test
+    fun aRotatedTokenWhilePendingIsRegisteredAtOnce() = runTest {
+        val r = pendingRegistrar()
+        vault.answers += PushRegisterOutcome.Registered(FakePushVault.pending())
+        vault.confirms += PushConfirmOutcome.ChallengeFailed
+        push.generation = 2 // Firebase's onNewToken
+        push.onNewToken!!.invoke()
+        runCurrent()
+        assertEquals(listOf("register fcm tok-1 $APP_ID", "register fcm tok-2 $APP_ID"), log)
+        assertEquals(PushRegState.VERIFYING, r.status.value.state)
+        // The old token's code: the vault replaced that pending registration, so the gateway refuses it.
+        r.onChallenge("old-token-code")
+        runCurrent()
+        assertEquals(PushRegState.RETRYING, r.status.value.state)
+        assertFalse(memory.value.registered)
+        advanceTimeBy(MINUTE)
+        runCurrent()
+        assertEquals("register fcm tok-2 $APP_ID", log.last())
+        assertTrue(r.status.value.active)
+    }
+
+    @Test
+    fun aNewProcessAfterAnUnconfirmedRegistrationFallsBackUntilItIsActive() = runTest {
+        // The process died (or the app was updated) during the window: only the memory is left.
+        pendingRegistrar()
+        assertEquals(PushMemory(confirmPending = true), memory.value)
+        vault.phase.value = AppPhase.Locked
+        val log2 = mutableListOf<String>()
+        val v2 = FakePushVault(AppPhase.Locked, log2)
+        val r = PushRegistrar(backgroundScope, FakePush(), v2, APP_ID, memory, mode = { NotificationMode.PUSH }, nowMs = { testScheduler.currentTime }, elapsedMs = { testScheduler.currentTime })
+        r.start()
+        r.enable()
+        runCurrent()
+        assertEquals(PushRegState.VERIFYING, r.status.value.state)
+        assertTrue("the on-phone service runs", r.status.value.fallback)
+        assertTrue(log2.isEmpty())
+        // The open registers (no window in this process); the vault's answer decides.
+        v2.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals(listOf("register fcm tok-1 $APP_ID"), log2)
+        assertTrue(r.status.value.active)
+        assertEquals(PushMemory(registered = true), memory.value)
     }
 
     @Test
