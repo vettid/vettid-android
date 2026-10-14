@@ -7,6 +7,7 @@ import com.vettid.core.data.prefs.NotificationMode
 import com.vettid.core.data.prefs.PushMemory
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.PushConfirmOutcome
 import com.vettid.core.data.vault.PushRegisterOutcome
 import com.vettid.core.data.vault.PushStateView
 import com.vettid.core.data.vault.PushVault
@@ -40,6 +41,7 @@ internal class FakePush(var available: PushAvailability = PushAvailability.AVAIL
 
     override var onWake: (suspend () -> Boolean)? = null
     override var onNewToken: (() -> Unit)? = null
+    override var onChallenge: ((String) -> Unit)? = null
 }
 
 /** The vault's side of §14 without a vault: answers from [answers] (then "registered"), every call in [log]. */
@@ -47,6 +49,12 @@ internal class FakePushVault(start: AppPhase = AppPhase.Unlocked, private val lo
     override val phase = MutableStateFlow(start)
     override val pushTokenNeeded = MutableSharedFlow<String>(replay = 1)
     val answers = ArrayDeque<PushRegisterOutcome>()
+
+    /** The answers to `push.confirm` (then "active"). */
+    val confirms = ArrayDeque<PushConfirmOutcome>()
+
+    /** Runs inside `push.register`, before its answer: a challenge that arrives before `pending` does. */
+    var duringRegister: (() -> Unit)? = null
     val calls: List<String> get() = log
     var listed: PushStateView? = active()
     var listFails = false
@@ -56,7 +64,14 @@ internal class FakePushVault(start: AppPhase = AppPhase.Unlocked, private val lo
     override suspend fun pushRegister(platform: String, token: String, appId: String): PushRegisterOutcome {
         if (phase.value != AppPhase.Unlocked) return PushRegisterOutcome.NoAnswer
         log += "register $platform $token $appId"
+        duringRegister?.invoke()
         return answers.removeFirstOrNull() ?: PushRegisterOutcome.Registered(active())
+    }
+
+    override suspend fun pushConfirm(code: String): PushConfirmOutcome {
+        if (phase.value != AppPhase.Unlocked) return PushConfirmOutcome.NoAnswer
+        log += "confirm $code"
+        return confirms.removeFirstOrNull() ?: PushConfirmOutcome.Confirmed(active())
     }
 
     override suspend fun pushUnregister(): Boolean {
@@ -78,6 +93,8 @@ internal class FakePushVault(start: AppPhase = AppPhase.Unlocked, private val lo
 
     companion object {
         fun active(lastResult: String? = null) = PushStateView("fcm", APP_ID, "active", lastResult)
+
+        fun pending() = PushStateView("fcm", APP_ID, "pending")
     }
 }
 
@@ -104,7 +121,7 @@ class PushRegistrarTest {
     private var mode = NotificationMode.PUSH
 
     private fun TestScope.registrar(v: FakePushVault = vault) =
-        PushRegistrar(backgroundScope, push, v, APP_ID, memory, mode = { mode }, nowMs = { testScheduler.currentTime }).also {
+        PushRegistrar(backgroundScope, push, v, APP_ID, memory, mode = { mode }, nowMs = { testScheduler.currentTime }, elapsedMs = { testScheduler.currentTime }).also {
             it.start()
             runCurrent()
         }

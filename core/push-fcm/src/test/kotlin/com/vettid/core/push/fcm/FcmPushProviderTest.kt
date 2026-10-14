@@ -180,6 +180,59 @@ class FcmPushProviderTest {
         assertTrue(later.log.isEmpty())
     }
 
+    // --- a registration's challenge (PUSH-GATEWAY 0.5.0 §6) ---
+
+    @Test
+    fun aChallengeGoesToTheRegistrationAndIsNotAWake() = runTest {
+        val p = provider()
+        var wakes = 0
+        val codes = mutableListOf<String>()
+        p.onWake = {
+            wakes++
+            true
+        }
+        p.onChallenge = { codes += it }
+        assertTrue(p.received(mapOf("c" to "AAAAAAAAAAAAAAAAAAAAAA")))
+        assertEquals(listOf("AAAAAAAAAAAAAAAAAAAAAA"), codes)
+        assertEquals("nothing is collected for a challenge", 0, wakes)
+        assertTrue("nor continued", later.log.isEmpty())
+        assertFalse("and Google is asked for nothing", "token" in firebase.log)
+    }
+
+    @Test
+    fun theWakeAndEveryOtherMessageAreWakes() = runTest {
+        val p = provider()
+        var wakes = 0
+        val codes = mutableListOf<String>()
+        p.onWake = {
+            wakes++
+            true
+        }
+        p.onChallenge = { codes += it }
+        assertTrue(p.received(mapOf("w" to "1")))
+        assertTrue("`c` with `w` is a wake", p.received(mapOf("c" to "abc", "w" to "1")))
+        assertTrue(p.received(emptyMap()))
+        assertEquals(3, wakes)
+        assertTrue(codes.isEmpty())
+    }
+
+    @Test
+    fun aChallengeThatIsNotACodeIsDropped() = runTest {
+        val p = provider()
+        var wakes = 0
+        val codes = mutableListOf<String>()
+        p.onWake = {
+            wakes++
+            true
+        }
+        p.onChallenge = { codes += it }
+        for (bad in listOf("", "has space", "pad==", "x".repeat(65), "Ünïcode")) assertTrue(p.received(mapOf("c" to bad)))
+        assertEquals("neither a wake", 0, wakes)
+        assertTrue("nor a challenge", codes.isEmpty())
+        // Before anything listens, a challenge is dropped.
+        assertTrue(provider().received(mapOf("c" to "abc")))
+    }
+
     @Test
     fun aRotatedTokenIsAnnouncedWithoutItsValue() {
         val p = provider()

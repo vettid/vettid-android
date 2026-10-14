@@ -3,6 +3,7 @@ package com.vettid.core.notify
 import com.vettid.core.data.prefs.NotificationMode
 import com.vettid.core.data.prefs.PushMemory
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.PushConfirmOutcome
 import com.vettid.core.data.vault.PushRegisterOutcome
 import com.vettid.core.data.vault.PushStateView
 import com.vettid.core.data.vault.PushVault
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicReference
 
 /** Where the Google push registration of this phone stands (ANDROID-PLAN 0.1.30, Notification modes 4). */
 enum class PushRegState {
@@ -28,6 +30,12 @@ enum class PushRegState {
 
     /** The vault holds a registration (`push.state` `active`). */
     ACTIVE,
+
+    /**
+     * `push.register` answered `pending` (VAULT-MESSAGING 0.30.0): the gateway pushed a challenge code to the token,
+     * and the app returns it with `push.confirm` within 10 minutes. Not active: the on-phone service runs meanwhile.
+     */
+    VERIFYING,
 
     /** After `push.token-needed`: a fresh token is being registered. */
     REGISTERING_AGAIN,
@@ -55,7 +63,7 @@ data class PushStatus(val state: PushRegState = PushRegState.OFF, val lastResult
      */
     val fallback: Boolean
         get() = state == PushRegState.UNAVAILABLE || state == PushRegState.LIMITED || state == PushRegState.REFUSED ||
-            state == PushRegState.RETRYING
+            state == PushRegState.RETRYING || state == PushRegState.VERIFYING
 
     /** The vault's last wake did not reach the gateway (`last_result` `gateway_error`). */
     val gatewayUnreachable: Boolean get() = active && lastResult == PushStateView.RESULT_GATEWAY_ERROR
@@ -131,6 +139,15 @@ class PushRetryBackoff {
  *   Google push): [disable] as when leaving, so a registration the vault may still hold is dropped at its next open,
  *   and only then (a phone that never registered sends nothing). [enable] again when the push service is back.
  * - **A wake** ([onWake]) collects only in the mode; a wake for a registration this phone no longer wants drops it.
+ * - **Two steps** (VAULT-MESSAGING 0.30.0 §14.1, PUSH-GATEWAY 0.5.0 §5.1): `push.register` may answer `pending`; the
+ *   gateway then pushes a challenge code to the token ([onChallenge]), and the app sends `push.confirm{code}` to its
+ *   vault within 10 minutes ([PushRegState.VERIFYING], the on-phone service runs meanwhile). Only the newest code is
+ *   sent; a code that arrives when none is expected, or while the vault is not open, is dropped. No second
+ *   `push.register` starts while one is pending (the vault would answer the same pending registration without a new
+ *   code). A `gateway_error` the vault keeps its pending registration for is confirmed again with the same code
+ *   (1 minute doubling, or `retry_after`) inside the window; a failed challenge, no pending registration at the vault,
+ *   or no code within the window registers again with the registration's backoff. The code is kept in memory only and
+ *   never logged.
  */
 @Suppress("TooManyFunctions")
 class PushRegistrar(
@@ -141,8 +158,13 @@ class PushRegistrar(
     private val appId: String,
     private val memory: PushMemoryStore,
     private val mode: suspend () -> NotificationMode,
+    /** Wall clock: the persisted `limit` pause. */
     private val nowMs: () -> Long = System::currentTimeMillis,
+    /** Monotonic clock: the challenge window (not moved by a change of the phone's time). */
+    private val elapsedMs: () -> Long = android.os.SystemClock::elapsedRealtime,
     private val backoff: PushRetryBackoff = PushRetryBackoff(),
+    /** One line per step of the registration; never a token or a code. */
+    private val log: (String) -> Unit = {},
 ) : PushControl {
     private val mutex = Mutex()
     private val flow = MutableStateFlow(PushStatus())
@@ -151,9 +173,21 @@ class PushRegistrar(
     private var enabled = false
     private var retry: Job? = null
 
+    // The pending registration (VERIFYING), under [mutex]: until when a code is expected, the code being confirmed
+    // (memory only), the confirmation's retry and the window's end.
+    private var verifyUntilMs = 0L
+    private var code: String? = null
+    private var confirmRetry: Job? = null
+    private var verifyEnd: Job? = null
+    private val confirmBackoff = PushRetryBackoff()
+
+    /** The newest code received and not taken yet: an older one still waiting for [mutex] finds it taken. */
+    private val newestCode = AtomicReference<String?>(null)
+
     fun start() {
         provider.onWake = { onWake() }
-        provider.onNewToken = { scope.launch { mutex.withLock { if (enabled) register() } } }
+        provider.onChallenge = { onChallenge(it) }
+        provider.onNewToken = { scope.launch { mutex.withLock { onTokenRotated() } } }
         scope.launch { vault.phase.collect { if (it == AppPhase.Unlocked) mutex.withLock { onOpen() } } }
         scope.launch { vault.pushTokenNeeded.collect { reason -> mutex.withLock { onTokenNeeded(reason) } } }
     }
@@ -166,7 +200,7 @@ class PushRegistrar(
                 val m = memory.load()
                 // Leaving and coming back before the vault was told: there is nothing to drop any more.
                 if (m.unregisterPending) memory.save(m.copy(unregisterPending = false))
-                set(if (m.registered) PushRegState.ACTIVE else PushRegState.WAITING)
+                set(idleState(m))
                 register()
             }
         }
@@ -204,8 +238,163 @@ class PushRegistrar(
         return vault.collectForWake()
     }
 
+    /**
+     * A registration's challenge arrived ([PushProvider.onChallenge]): not a wake, so nothing is collected or shown.
+     * The newest code wins; it is confirmed under [mutex], once the answer `pending` is known.
+     */
+    fun onChallenge(code: String) {
+        if (!PushChallenge.valid(code)) {
+            log("challenge dropped: not a code")
+            return
+        }
+        newestCode.set(code)
+        scope.launch { mutex.withLock { takeChallenge() } }
+    }
+
+    private suspend fun takeChallenge() {
+        // An older code that waited for the lock: the newest was taken, or will be, by its own call.
+        val c = newestCode.getAndSet(null) ?: return
+        when {
+            !verifying() -> log("challenge dropped: none expected")
+            vault.phase.value != AppPhase.Unlocked -> {
+                // Kept in memory until the vault opens (inside the window): [onOpen] confirms it.
+                log("challenge kept until the vault opens")
+                code = c
+            }
+            else -> {
+                log("challenge received")
+                code = c
+                confirmBackoff.reset()
+                confirm()
+            }
+        }
+    }
+
+    /** `push.confirm` with the code received, under [mutex]. */
+    private suspend fun confirm() {
+        confirmRetry?.cancel()
+        confirmRetry = null
+        val c = code ?: return
+        if (!enabled || !verifying()) return
+        when (val o = vault.pushConfirm(c)) {
+            is PushConfirmOutcome.Confirmed -> {
+                endVerify()
+                if (o.push.active) {
+                    log("registration confirmed")
+                    backoff.reset()
+                    remember { it.copy(registered = true, limitedUntilMs = 0, confirmPending = false) }
+                    flow.value = PushStatus(PushRegState.ACTIVE, o.push.lastResult)
+                } else {
+                    registerAgain("confirmation answered ${o.push.state}")
+                }
+            }
+            PushConfirmOutcome.ChallengeFailed -> registerAgain("challenge refused or expired")
+            PushConfirmOutcome.NoPending -> registerAgain("no pending registration at the vault")
+            // The vault keeps its pending registration: the same code again, inside the window.
+            is PushConfirmOutcome.GatewayError -> confirmAgain("gateway error", o.retryAfterSeconds)
+            PushConfirmOutcome.NoAnswer -> confirmAgain("no answer", null)
+            PushConfirmOutcome.Unavailable -> {
+                endVerify()
+                log("confirmation: unavailable")
+                remember { it.copy(registered = false, confirmPending = false) }
+                set(PushRegState.UNAVAILABLE)
+            }
+            is PushConfirmOutcome.Refused -> {
+                endVerify()
+                log("confirmation refused: ${o.code}")
+                remember { it.copy(confirmPending = false) }
+                set(PushRegState.REFUSED)
+            }
+        }
+    }
+
+    private fun confirmAgain(why: String, retryAfterSeconds: Long?) {
+        val wait = confirmBackoff.nextDelayMs(retryAfterSeconds)
+        if (elapsedMs() + wait >= verifyUntilMs) {
+            // Too late for this code: the window's end registers again.
+            log("confirmation: $why; waiting for the window's end")
+            return
+        }
+        log("confirmation: $why; again in ${wait / MS_PER_S} s")
+        confirmRetry = scope.launch {
+            delay(wait)
+            mutex.withLock {
+                confirmRetry = null // this job: confirm() must not cancel it
+                confirm()
+            }
+        }
+    }
+
+    /** The pending registration failed: `push.register` again, with the registration's backoff. */
+    private fun registerAgain(why: String) {
+        endVerify()
+        val wait = backoff.nextDelayMs()
+        log("registration not confirmed ($why); registering again in ${wait / MS_PER_S} s")
+        set(PushRegState.RETRYING)
+        retryIn(wait)
+    }
+
+    /** `push.register` answered `pending`: a code is expected for [CHALLENGE_WINDOW_MS]. */
+    private fun startVerify(now: Long) {
+        // A code that arrived while `push.register` was out is this registration's (the gateway pushes it before it
+        // answers): kept.
+        endVerify(keepNewest = true)
+        verifyUntilMs = now + CHALLENGE_WINDOW_MS
+        set(PushRegState.VERIFYING)
+        log("registration pending: waiting for the challenge")
+        verifyEnd = scope.launch {
+            delay(CHALLENGE_WINDOW_MS)
+            mutex.withLock {
+                verifyEnd = null // this job: endVerify() must not cancel it
+                if (flow.value.state == PushRegState.VERIFYING) registerAgain("no challenge in time")
+            }
+        }
+    }
+
+    private fun verifying(): Boolean = flow.value.state == PushRegState.VERIFYING && elapsedMs() < verifyUntilMs
+
+    /**
+     * The state while nothing can be sent (the vault not open): [PushRegState.ACTIVE] with a registration in force;
+     * [PushRegState.VERIFYING] (no window, so the on-phone service runs) after a `pending` answer that was never
+     * confirmed, e.g. in a new process; else [PushRegState.WAITING].
+     */
+    private fun idleState(m: PushMemory): PushRegState = when {
+        m.registered -> PushRegState.ACTIVE
+        m.confirmPending -> PushRegState.VERIFYING
+        else -> PushRegState.WAITING
+    }
+
+    /**
+     * The push service rotated the token. A registration pending for the old token is given up (its code would
+     * confirm a token that no longer wakes this phone) and the new token is registered at once: the vault replaces a
+     * pending registration of another token with a new challenge.
+     */
+    private suspend fun onTokenRotated() {
+        if (!enabled) return
+        if (flow.value.state == PushRegState.VERIFYING) {
+            log("token rotated while a registration was pending: registering the new token")
+            endVerify()
+        }
+        register()
+    }
+
+    /** Forgets the pending registration (the code too; a code received and not taken yet too, unless [keepNewest]). */
+    private fun endVerify(keepNewest: Boolean = false) {
+        verifyEnd?.cancel()
+        verifyEnd = null
+        confirmRetry?.cancel()
+        confirmRetry = null
+        code = null
+        if (!keepNewest) newestCode.set(null)
+        verifyUntilMs = 0
+    }
+
     private suspend fun onOpen() {
-        if (enabled) {
+        if (enabled && verifying() && code != null) {
+            // A challenge that arrived while the vault was locked.
+            confirmBackoff.reset()
+            confirm()
+        } else if (enabled) {
             register()
         } else if (memory.load().unregisterPending) {
             drop(wiped = false)
@@ -217,8 +406,11 @@ class PushRegistrar(
         // The vault holds no registration any more: nothing is left to drop, whatever the mode.
         memory.save(m.copy(registered = false, unregisterPending = false))
         if (!enabled) return
+        // An expired or invalid blob leaves the pending registration alone (§14.2): its code still completes it.
+        if (reason == PushWire.REASON_BLOB_INVALID && verifying()) return
         // A dead token is replaced; with `blob_invalid` the token is fine and only the gateway's blob is renewed.
         if (reason != PushWire.REASON_BLOB_INVALID) provider.deleteToken()
+        endVerify()
         set(PushRegState.REGISTERING_AGAIN)
         register()
     }
@@ -229,6 +421,8 @@ class PushRegistrar(
         retry?.cancel()
         retry = null
         if (!enabled) return
+        // One registration at a time: a pending one is answered by its code or ends with its window.
+        if (verifying()) return
         val m = memory.load()
         val now = nowMs()
         if (now < m.limitedUntilMs) {
@@ -239,7 +433,7 @@ class PushRegistrar(
         }
         val again = flow.value.state == PushRegState.REGISTERING_AGAIN
         if (vault.phase.value != AppPhase.Unlocked) {
-            if (!again) set(if (m.registered) PushRegState.ACTIVE else PushRegState.WAITING)
+            if (!again) set(idleState(m))
             return
         }
         if (!again && !flow.value.active) set(PushRegState.REGISTERING)
@@ -254,13 +448,17 @@ class PushRegistrar(
             return
         }
         when (val o = vault.pushRegister(provider.platform, token, appId)) {
-            is PushRegisterOutcome.Registered -> {
+            is PushRegisterOutcome.Registered -> if (o.push.pending) {
+                // The previous registration, if any, stays in force at the vault until the confirmation.
+                remember { it.copy(limitedUntilMs = 0, confirmPending = true) }
+                startVerify(elapsedMs())
+            } else {
                 backoff.reset()
-                remember { it.copy(registered = o.push.active, limitedUntilMs = 0) }
+                remember { it.copy(registered = o.push.active, limitedUntilMs = 0, confirmPending = false) }
                 flow.value = PushStatus(if (o.push.active) PushRegState.ACTIVE else PushRegState.REFUSED, o.push.lastResult)
             }
             PushRegisterOutcome.Unavailable -> {
-                remember { it.copy(registered = false) }
+                remember { it.copy(registered = false, confirmPending = false) }
                 set(PushRegState.UNAVAILABLE)
             }
             is PushRegisterOutcome.GatewayError -> {
@@ -269,14 +467,14 @@ class PushRegistrar(
                 retryIn(backoff.nextDelayMs(o.retryAfterSeconds))
             }
             PushRegisterOutcome.Limit -> {
-                remember { it.copy(registered = false, limitedUntilMs = now + LIMIT_PAUSE_MS) }
+                remember { it.copy(registered = false, limitedUntilMs = now + LIMIT_PAUSE_MS, confirmPending = false) }
                 set(PushRegState.LIMITED)
                 retryIn(LIMIT_PAUSE_MS)
             }
             is PushRegisterOutcome.Refused -> {
                 // The gateway refused the token itself (`bad_request`): the next attempt brings a new one.
                 if (o.code == "bad_request") provider.deleteToken()
-                remember { it.copy(registered = false) }
+                remember { it.copy(registered = false, confirmPending = false) }
                 set(PushRegState.REFUSED)
             }
             // No answer: a failed request changes nothing at the vault (§14.1), so what was registered still is.
@@ -294,11 +492,12 @@ class PushRegistrar(
     private suspend fun drop(wiped: Boolean, force: Boolean = false) {
         retry?.cancel()
         retry = null
+        endVerify()
         backoff.reset()
         val was = enabled
         enabled = false
         val m = memory.load()
-        val had = was || force || m.registered || m.unregisterPending
+        val had = was || force || m.registered || m.unregisterPending || m.confirmPending
         if (wiped) {
             // No vault on this phone any more: the vault erased the registration when it removed the app
             // (VAULT-MESSAGING §14.1) or was deleted with it (§12.5). Only the token is left to delete.
@@ -306,7 +505,7 @@ class PushRegistrar(
             if (had) provider.deleteToken()
         } else if (had) {
             val told = vault.pushUnregister()
-            memory.save(m.copy(registered = false, unregisterPending = !told))
+            memory.save(m.copy(registered = false, unregisterPending = !told, confirmPending = false))
             provider.deleteToken()
         }
         set(PushRegState.OFF)
@@ -335,5 +534,9 @@ class PushRegistrar(
     companion object {
         /** After `limit`: no `push.register` for 24 hours (VAULT-MESSAGING §14.1 check 5; owner decision 2026-10-10). */
         const val LIMIT_PAUSE_MS = 24L * 60 * 60 * 1000
+
+        /** A pending registration expects its code for 10 minutes (VAULT-MESSAGING 0.30.0 §14.1). */
+        const val CHALLENGE_WINDOW_MS = 10L * 60 * 1000
+        private const val MS_PER_S = 1000L
     }
 }

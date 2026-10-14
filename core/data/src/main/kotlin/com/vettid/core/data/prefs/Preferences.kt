@@ -65,9 +65,16 @@ enum class NotificationPreviews { NAMES, NAMES_AND_TEXT, NOTHING }
  * modes 4). Never the token (Firebase keeps it; the vault keeps none): [registered] the vault last answered
  * `push.register` with an active registration, so a process a wake starts need not fall back to the on-phone
  * service while it asks again; [limitedUntilMs] `limit` was answered: no `push.register` before then (epoch ms, 24
- * hours); [unregisterPending] the mode was left while the vault could not be told: `push.unregister` at its next open.
+ * hours); [unregisterPending] the mode was left while the vault could not be told: `push.unregister` at its next open;
+ * [confirmPending] `push.register` answered `pending` (VAULT-MESSAGING 0.30.0) and no confirmation or other final
+ * answer followed yet, so a new process falls back to the on-phone service until the registration is active.
  */
-data class PushMemory(val registered: Boolean = false, val limitedUntilMs: Long = 0, val unregisterPending: Boolean = false)
+data class PushMemory(
+    val registered: Boolean = false,
+    val limitedUntilMs: Long = 0,
+    val unregisterPending: Boolean = false,
+    val confirmPending: Boolean = false,
+)
 
 /** Non-secret preferences of this device (DataStore). Nothing here is vault data. */
 data class AppPreferences(
@@ -181,7 +188,12 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
             notificationPreviews = p[NOTIFICATION_PREVIEWS]?.let { runCatching { NotificationPreviews.valueOf(it) }.getOrNull() }
                 ?: NotificationPreviews.NAMES,
             notificationsNoteShown = p[NOTIFICATIONS_NOTE] ?: false,
-            push = PushMemory(p[PUSH_REGISTERED] ?: false, p[PUSH_LIMITED_UNTIL] ?: 0, p[PUSH_UNREGISTER_PENDING] ?: false),
+            push = PushMemory(
+                p[PUSH_REGISTERED] ?: false,
+                p[PUSH_LIMITED_UNTIL] ?: 0,
+                p[PUSH_UNREGISTER_PENDING] ?: false,
+                p[PUSH_CONFIRM_PENDING] ?: false,
+            ),
         )
     }
 
@@ -202,6 +214,7 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
             it[PUSH_REGISTERED] = m.registered
             it[PUSH_LIMITED_UNTIL] = m.limitedUntilMs
             it[PUSH_UNREGISTER_PENDING] = m.unregisterPending
+            it[PUSH_CONFIRM_PENDING] = m.confirmPending
         }
     }
 
@@ -261,6 +274,7 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         val PUSH_REGISTERED = booleanPreferencesKey("push_registered")
         val PUSH_LIMITED_UNTIL = longPreferencesKey("push_limited_until_ms")
         val PUSH_UNREGISTER_PENDING = booleanPreferencesKey("push_unregister_pending")
+        val PUSH_CONFIRM_PENDING = booleanPreferencesKey("push_confirm_pending")
     }
 }
 

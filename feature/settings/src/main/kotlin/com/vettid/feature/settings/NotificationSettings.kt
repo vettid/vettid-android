@@ -123,6 +123,8 @@ data class NotificationSettingsUiState(
         get() = when {
             push != PushAvailability.AVAILABLE -> NotifyStatusLine.PUSH_NOT_ON_PHONE
             registration.state == PushRegState.RETRYING || registration.gatewayUnreachable -> NotifyStatusLine.PUSH_UNREACHABLE
+            // The registration waits for its challenge (VAULT-MESSAGING 0.30.0): still connecting.
+            registration.state == PushRegState.VERIFYING -> NotifyStatusLine.CONNECTING
             registration.fallback -> NotifyStatusLine.PUSH_FALLBACK
             registration.state == PushRegState.REGISTERING_AGAIN -> NotifyStatusLine.PUSH_REGISTERING_AGAIN
             registration.active -> NotifyStatusLine.CONNECTED

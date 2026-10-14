@@ -140,6 +140,8 @@ class NotificationSettingsTest {
         assertEquals(NotifyStatusLine.PUSH_FALLBACK, line(PushRegState.REFUSED, service = KeeperStatus.CONNECTING))
         assertEquals(NotifyStatusLine.CONNECTING, line(PushRegState.REGISTERING))
         assertEquals(NotifyStatusLine.CONNECTING, line(PushRegState.WAITING))
+        // Waiting for the registration's challenge (VAULT-MESSAGING 0.30.0): the fallback service runs, still connecting.
+        assertEquals(NotifyStatusLine.CONNECTING, line(PushRegState.VERIFYING, service = KeeperStatus.CONNECTED))
         // What matters more comes first, as in the other modes; battery optimisation does not delay a push.
         assertEquals(NotifyStatusLine.BLOCKED, line(PushRegState.ACTIVE, phone = PhoneNotifyState(allowed = false)))
         assertEquals(NotifyStatusLine.CONNECTED, line(PushRegState.ACTIVE, phone = PhoneNotifyState(background = false)))

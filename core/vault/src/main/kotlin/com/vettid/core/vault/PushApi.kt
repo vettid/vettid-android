@@ -22,6 +22,18 @@ suspend fun VaultApi.pushRegister(platform: String, token: String, appId: String
     },
 )
 
+/**
+ * `push.confirm` (VAULT-MESSAGING 0.30.0 §14.1; PUSH-GATEWAY 0.5.0 §5.1): returns the challenge code the gateway
+ * pushed to this app's token, so that the vault can complete its pending registration. The body is exactly
+ * `{code}`. The answer is `{push: <push state>}` (`active`); errors are `bad_request` (message
+ * `no_pending_registration`), `forbidden`, `unavailable` and `gateway_error` (message `challenge_expired` or
+ * `challenge_invalid`, or body `{retry_after?}`). The code is never logged.
+ */
+suspend fun VaultApi.pushConfirm(code: String): JsonObject = device.op(
+    "push.confirm",
+    buildJsonObject { put("code", code) },
+)
+
 /** `push.unregister` (§14.1): the body is `{}` and nothing else; answered `{}` without a registration too. */
 suspend fun VaultApi.pushUnregister() {
     device.op("push.unregister")

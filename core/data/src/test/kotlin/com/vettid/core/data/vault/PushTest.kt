@@ -7,6 +7,7 @@ import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
+import com.vettid.core.vault.VaultOpException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -64,6 +65,40 @@ class PushTest {
         assertEquals(PushRegisterOutcome.Refused("credential_required"), PushWire.outcome(VaultFailure(FailureKind.OTHER, "credential_required")))
         assertEquals(PushRegisterOutcome.NoAnswer, PushWire.outcome(VaultFailure(FailureKind.NETWORK)))
         assertEquals(PushRegisterOutcome.NoAnswer, PushWire.outcome(VaultFailure(FailureKind.NO_RESPONSE)))
+    }
+
+    // --- two-step registration (VAULT-MESSAGING 0.30.0 §14.1) ---
+
+    @Test
+    fun aPendingRegistrationIsNotActive() {
+        val pending = VaultJson.parseObject("""{"platform":"fcm","app_id":"com.vettid.app","state":"pending","registered_at":"2026-10-14T08:00:00.000Z"}""".toByteArray())
+        val s = PushWire.state(pending)!!
+        assertTrue(s.pending)
+        assertFalse(s.active)
+        assertFalse(PushWire.state(VaultJson.parseObject("""{"platform":"fcm","app_id":"a","state":"active"}""".toByteArray()))!!.pending)
+    }
+
+    private fun opFailure(code: String, message: String = "", retryAfter: Long = 0, kind: FailureKind = FailureKind.OTHER) =
+        VaultFailure(kind, code, retryAfter, VaultOpException("push.confirm", code, message))
+
+    @Test
+    fun theAnswersOfPushConfirm() {
+        // The vault dropped its pending registration: register again.
+        assertEquals(PushConfirmOutcome.ChallengeFailed, PushWire.confirmOutcome(opFailure("gateway_error", "challenge_expired")))
+        assertEquals(PushConfirmOutcome.ChallengeFailed, PushWire.confirmOutcome(opFailure("gateway_error", "challenge_invalid")))
+        // The gateway could not be reached; the pending registration is kept: the same code again.
+        assertEquals(PushConfirmOutcome.GatewayError(30), PushWire.confirmOutcome(opFailure("gateway_error", retryAfter = 30)))
+        assertEquals(PushConfirmOutcome.GatewayError(null), PushWire.confirmOutcome(opFailure("gateway_error")))
+        assertEquals(PushConfirmOutcome.NoPending, PushWire.confirmOutcome(opFailure("bad_request", "no_pending_registration")))
+        assertEquals(PushConfirmOutcome.Refused("bad_request"), PushWire.confirmOutcome(opFailure("bad_request")))
+        assertEquals(PushConfirmOutcome.Refused("forbidden"), PushWire.confirmOutcome(opFailure("forbidden")))
+        assertEquals(PushConfirmOutcome.Refused("credential_required"), PushWire.confirmOutcome(opFailure("credential_required")))
+        assertEquals(PushConfirmOutcome.Unavailable, PushWire.confirmOutcome(opFailure("unavailable")))
+        assertEquals("a vault release from before 0.30.0", PushConfirmOutcome.Unavailable, PushWire.confirmOutcome(opFailure("unsupported_type", kind = FailureKind.NOT_SUPPORTED)))
+        assertEquals(PushConfirmOutcome.NoAnswer, PushWire.confirmOutcome(VaultFailure(FailureKind.NETWORK)))
+        assertEquals(PushConfirmOutcome.NoAnswer, PushWire.confirmOutcome(VaultFailure(FailureKind.NO_RESPONSE)))
+        // Without the op's exception (no message known): a gateway error is retried with the same code.
+        assertEquals(PushConfirmOutcome.GatewayError(null), PushWire.confirmOutcome(VaultFailure(FailureKind.OTHER, "gateway_error")))
     }
 
     @Test

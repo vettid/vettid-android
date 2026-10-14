@@ -206,7 +206,7 @@ class ModeControllerTest {
         val memory = FakeMemory(PushMemory(registered = true))
         val push = FakePush(PushAvailability.NOT_AVAILABLE_YET) // an update to a build without Google push
         val mode = MutableStateFlow(NotificationMode.PUSH)
-        val registrar = PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { mode.value }, nowMs = { testScheduler.currentTime })
+        val registrar = PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { mode.value }, nowMs = { testScheduler.currentTime }, elapsedMs = { testScheduler.currentTime })
         registrar.start()
         val s = Service()
         val c = ModeController(backgroundScope, mode, vault.phase, s, push, registrar)
@@ -246,7 +246,7 @@ class ModeControllerTest {
         val memory = FakeMemory()
         val push = FakePush(PushAvailability.MISSING_SERVICES)
         val mode = MutableStateFlow(NotificationMode.PUSH)
-        val registrar = PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { mode.value }, nowMs = { testScheduler.currentTime })
+        val registrar = PushRegistrar(backgroundScope, push, vault, APP_ID, memory, mode = { mode.value }, nowMs = { testScheduler.currentTime }, elapsedMs = { testScheduler.currentTime })
         registrar.start()
         val s = Service()
         ModeController(backgroundScope, mode, vault.phase, s, push, registrar).start()

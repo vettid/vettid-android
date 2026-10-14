@@ -27,8 +27,10 @@ class NoGooglePushProviderTest {
     fun keepsNoCallbacks() {
         NoGooglePushProvider.onWake = { true }
         NoGooglePushProvider.onNewToken = { error("never called") }
+        NoGooglePushProvider.onChallenge = { error("never called") }
         assertNull("nothing can wake this build", NoGooglePushProvider.onWake)
         assertNull(NoGooglePushProvider.onNewToken)
+        assertNull("no registration, so no challenge (PUSH-GATEWAY 0.5.0)", NoGooglePushProvider.onChallenge)
     }
 
     @Test
