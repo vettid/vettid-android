@@ -475,10 +475,14 @@ class WebRtcMediaEngine private constructor(
         }
 
         /** A factory of engines for [context]'s process. Creating an engine loads the native library if needed. */
-        fun factory(context: Context): MediaEngineFactory = object : MediaEngineFactory {
+        fun factory(context: Context, testBuild: Boolean = false): MediaEngineFactory = object : MediaEngineFactory {
             override val suites: List<MediaSuite> = SUITES
 
             override fun create(config: MediaConfig): MediaEngine {
+                // The check next to the dangerous code: whatever asked, a build that was not made for the phone
+                // tests makes no engine that breaks a rule on purpose or uses the experimental DTLS trial.
+                val plain = !config.faults.any && !config.dtlsPqcTrial
+                check(testBuild || plain) { "a test configuration in a build that is not a test build" }
                 val app = context.applicationContext
                 val pqc = WebRtcRuntime.start(app, config)
                 val audioDevice = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()

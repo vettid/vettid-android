@@ -97,10 +97,15 @@ class VaultCallSignallingTest {
     private var onRefresh: () -> Unit = {}
 
     private fun TestScope.signalling(suites: List<MediaSuite> = listOf(s1)): VaultCallSignalling {
-        val s = VaultCallSignalling(gateway, { identities[it] }, suites) {
-            refreshes++
-            onRefresh()
-        }
+        val s = VaultCallSignalling(
+            gateway,
+            { identities[it] },
+            suites,
+            refreshConnections = {
+                refreshes++
+                onRefresh()
+            },
+        )
         backgroundScope.launch { s.events.collect { out += it } }
         runCurrent()
         return s

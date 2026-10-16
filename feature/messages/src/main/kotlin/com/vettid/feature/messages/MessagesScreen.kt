@@ -20,6 +20,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.automirrored.outlined.CallMade
+import androidx.compose.material.icons.automirrored.outlined.CallReceived
+import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
@@ -70,6 +73,7 @@ import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.rememberTopBarSearch
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
+import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
@@ -130,6 +134,8 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
                 onConfirmDelete = vm::confirmDelete,
                 onDismissError = vm::dismissError,
                 onDetails = { host.onOpenConnection(state.connectionId) },
+                onCall = vm::call,
+                onDismissCallNotice = vm::dismissCallNotice,
             ),
         )
     }
@@ -264,6 +270,9 @@ data class ConversationActions(
     val onConfirmDelete: () -> Unit = {},
     val onDismissError: () -> Unit = {},
     val onDetails: () -> Unit = {},
+    /** The call button (builds and vaults with calls). */
+    val onCall: () -> Unit = {},
+    val onDismissCallNotice: () -> Unit = {},
 )
 
 /** A conversation (ANDROID-PLAN §4): bubbles by day, the reply field at the bottom. */
@@ -279,6 +288,11 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
         onBackClick = actions.onBack,
         modifier = modifier.imePadding(),
         actions = {
+            if (state.callShown) {
+                IconButton(onClick = actions.onCall, enabled = state.callEnabled, modifier = Modifier.testTag("conversation_call")) {
+                    Icon(Icons.Outlined.Call, contentDescription = stringResource(R.string.messages_call))
+                }
+            }
             IconButton(onClick = actions.onDetails) {
                 Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.messages_cd_details, name))
             }
@@ -289,13 +303,22 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading && state.messages.isEmpty() -> Loading()
-                    state.messages.isEmpty() -> EmptyState(
+                    state.messages.isEmpty() && state.calls.isEmpty() -> EmptyState(
                         icon = Icons.Outlined.ChatBubbleOutline,
                         title = stringResource(R.string.messages_conversation_empty_title),
                         body = stringResource(R.string.messages_conversation_empty_body, name),
                     )
-                    else -> MessageList(state.messages, name, listState, actions.onLongPress)
+                    else -> MessageList(CallEntries.rows(state.messages, state.calls), name, listState, actions.onLongPress)
                 }
+            }
+            if (state.callsNotAvailable) {
+                NoticeCard(
+                    kind = NoticeKind.INFO,
+                    title = stringResource(R.string.messages_call),
+                    body = stringResource(R.string.messages_call_not_in_vault),
+                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_call_notice"),
+                    actions = { TextButton(onClick = actions.onDismissCallNotice) { Text(stringResource(R.string.messages_ok)) } },
+                )
             }
             val error = state.error
             if (error != null) {
@@ -323,12 +346,17 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
 }
 
 @Composable
-private fun MessageList(messages: List<MessageInfo>, name: String, listState: LazyListState, onLongPress: (MessageInfo?) -> Unit) {
-    val byDay = messages.groupBy { Times.day(it.sentAt) }
+private fun MessageList(rows: List<ConversationRow>, name: String, listState: LazyListState, onLongPress: (MessageInfo?) -> Unit) {
+    val byDay = rows.groupBy { Times.day(it.at) }
     LazyColumn(Modifier.fillMaxSize().testTag("messages"), state = listState, contentPadding = PaddingValues(vertical = Spacing.s)) {
         byDay.forEach { (day, list) ->
             item(key = "day-$day") { DayDivider(Times.dayLabel(day)) }
-            items(list, key = { it.messageId }) { m ->
+            items(list, key = { it.key }) { row ->
+                if (row is ConversationRow.Call) {
+                    CallEntry(row.call)
+                    return@items
+                }
+                val m = (row as ConversationRow.Message).message
                 val time = Times.time(m.sentAt)
                 val status = when {
                     !m.outgoing -> null
@@ -350,6 +378,38 @@ private fun MessageList(messages: List<MessageInfo>, name: String, listState: La
                 )
             }
         }
+    }
+}
+
+/** A call in the conversation: what became of it, and when (the vault's history; no content). */
+@Composable
+private fun CallEntry(call: CallHistoryEntry) {
+    val text = CallEntries.text(call.outcome) ?: return
+    val duration = call.duration?.let { d ->
+        val p = CallEntries.parts(d)
+        when {
+            p.hours > 0 -> stringResource(CallEntries.durationFormat(p), p.hours, p.minutes)
+            p.minutes > 0 -> stringResource(CallEntries.durationFormat(p), p.minutes, p.seconds)
+            else -> stringResource(CallEntries.durationFormat(p), p.seconds)
+        }
+    }.orEmpty()
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_call_entry"),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (call.outgoing) Icons.AutoMirrored.Outlined.CallMade else Icons.AutoMirrored.Outlined.CallReceived,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.size(Spacing.xs))
+        Text(
+            "${stringResource(text, duration)} · ${Times.time(call.startedAt)}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

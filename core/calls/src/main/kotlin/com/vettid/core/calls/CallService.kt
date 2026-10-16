@@ -92,7 +92,7 @@ class CallService : Service() {
 
     private fun notification(host: CallServiceHost?, live: CallState.Live?): Notification {
         Channels.ensure(this)
-        val name = live?.let { host?.displayName(it.connectionId) } ?: getString(R.string.calls_notification_unnamed)
+        val name = live?.let { host?.displayName(it.connectionId) } ?: getString(R.string.core_calls_notification_unnamed)
         val open = packageManager.getLaunchIntentForPackage(packageName)?.let {
             PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
@@ -105,12 +105,12 @@ class CallService : Service() {
         // On the lock screen: that a call is going on, never with whom (the public version has no name).
         val public = NotificationCompat.Builder(this, Channels.CALLS)
             .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
-            .setContentTitle(getString(R.string.calls_notification_public))
-            .setContentText(getString(R.string.calls_notification_ongoing))
+            .setContentTitle(getString(R.string.core_calls_notification_public))
+            .setContentText(getString(R.string.core_calls_notification_ongoing))
             .build()
         return NotificationCompat.Builder(this, Channels.CALLS)
             .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
-            .setContentText(getString(R.string.calls_notification_ongoing))
+            .setContentText(getString(R.string.core_calls_notification_ongoing))
             .setStyle(NotificationCompat.CallStyle.forOngoingCall(Person.Builder().setName(name).build(), hangUp))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)

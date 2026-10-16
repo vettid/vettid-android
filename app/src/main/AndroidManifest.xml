@@ -25,6 +25,13 @@
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="33">
 
+        <!-- Whether this build may break the rules of calls on purpose (the two-phone tests; app/build.gradle.kts
+             CALLS_TEST). "false" in every build members get; `:app:checkStagingApk` reads it. -->
+        <meta-data
+            android:name="com.vettid.app.CALLS_TEST"
+            android:value="${vettidCallsTest}" />
+
+
         <!-- singleTask: the share sheet starts its target with FLAG_ACTIVITY_NEW_DOCUMENT and MULTIPLE_TASK, which
              would open a second MainActivity (in a task of its own, or in the sharing app's) while the first one
              lives on in the background. One activity, one UI: a shared file or a link reaches the running one
