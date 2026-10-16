@@ -95,9 +95,8 @@ object KeptTransfer {
      * list names it ([deviceId]) as an `app`; anything else erases.
      */
     fun stillTheApp(deviceList: kotlinx.serialization.json.JsonObject?, deviceId: String?): Boolean {
-        if (deviceList == null || deviceId == null) return false
-        val devices = deviceList["devices"] as? kotlinx.serialization.json.JsonArray ?: return false
-        return devices.any { e ->
+        val devices = deviceList?.get("devices") as? kotlinx.serialization.json.JsonArray
+        return deviceId != null && devices != null && devices.any { e ->
             val d = e as? kotlinx.serialization.json.JsonObject
             d != null && com.vettid.core.vault.VaultJson.str(d, "id") == deviceId && com.vettid.core.vault.VaultJson.str(d, "kind") == "app"
         }

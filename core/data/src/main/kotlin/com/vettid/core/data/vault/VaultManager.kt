@@ -1986,9 +1986,10 @@ class VaultManager(
             val s = session()
             KeptTransfer.stillTheApp(guard { s.openApi.deviceList() }, s.device.deviceId)
         }
-    } catch (e: CancellationException) {
-        if (e !is TimeoutCancellationException) throw e
+    } catch (_: TimeoutCancellationException) {
         false
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         android.util.Log.i("VaultManager", "the end-of-keep check failed: ${e.javaClass.simpleName}")
         false
