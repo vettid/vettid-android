@@ -17,6 +17,8 @@ android {
 dependencies {
     api(projects.core.vault)
     api(projects.core.keystore)
+    // Photo attachments: names sanitized, types sniffed, the memory-only cache (ANDROID-PLAN 0.1.39).
+    api(projects.core.media)
     api(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.serialization.json)

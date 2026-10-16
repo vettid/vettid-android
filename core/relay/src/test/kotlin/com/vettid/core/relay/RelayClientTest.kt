@@ -163,6 +163,15 @@ class RelayClientTest {
     }
 
     @Test
+    fun aBlobLargerThanTheBoundIsRefused() = runBlocking<Unit> {
+        server.enqueue(mockwebserver3.MockResponse.Builder().code(200).body(okio.Buffer().write(ByteArray(100))).build())
+        val e = assertThrows(RelayException::class.java) { runBlocking { client.getBlob("b1", maxBytes = 50) } }
+        assertEquals(RelayException.PAYLOAD_TOO_LARGE, e.code)
+        server.enqueue(mockwebserver3.MockResponse.Builder().code(200).body(okio.Buffer().write(ByteArray(50))).build())
+        assertEquals(50, client.getBlob("b2", maxBytes = 50).size)
+    }
+
+    @Test
     fun claimGetIsUnsignedAndNeverRetried() = runBlocking<Unit> {
         server.enqueue(json(500, """{"code":"internal","message":""}"""))
         assertThrows(RelayException::class.java) { runBlocking { client.getClaim("abc") } }

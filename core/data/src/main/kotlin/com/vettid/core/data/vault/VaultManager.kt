@@ -238,6 +238,15 @@ class VaultManager(
     )
 
     /**
+     * Photo attachments (VAULT-MESSAGING 0.32.0 §10.5.1, ANDROID-PLAN 0.1.39): thumbnails, photos and pending uploads
+     * in memory only, cleared whenever the vault is not open, held or due, and at a wipe.
+     */
+    val attachments = com.vettid.core.data.social.AttachmentManager(
+        com.vettid.core.data.social.VaultAttachmentOps { openApi() },
+        onSent = { social.addSent(it) },
+    )
+
+    /**
      * The vault's feed (ANDROID-PLAN 0.1.23, VAULT-MESSAGING §10.9): the Notifications screen and the bell. Read
      * while the vault is open and not held; in memory only.
      */
@@ -310,6 +319,7 @@ class VaultManager(
                     lockedElsewhereFlow.value = false
                     resumeRelay() // after an unlock the notification service's connection comes back
                     social.refreshAllQuietly()
+                    launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
                     items.refreshQuietly()
                     feed.open()
                     launch { refreshAccount() }
@@ -320,6 +330,7 @@ class VaultManager(
                     // Locked or signed out: no item metadata and no feed item is kept outside an open vault, and
                     // no connection or message in memory either.
                     social.forgetOpenVault()
+                    attachments.clear()
                     items.clear()
                     sharing.clear()
                     feed.clear()
@@ -333,7 +344,10 @@ class VaultManager(
             var held = false
             ownerCheck.ownerCheck.collect { v ->
                 val now = v != null && v.state != OwnerCheckState.OK
-                if (now && !held) feed.clear()
+                if (now && !held) {
+                    feed.clear()
+                    attachments.clear() // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
+                }
                 if (!now && held && phaseFlow.value == AppPhase.Unlocked) feed.open()
                 held = now
             }
@@ -600,6 +614,7 @@ class VaultManager(
             alarmFlow.value = null
             windowFlow.value = null
             social.clear()
+            attachments.reset()
             items.clear()
             feed.clear()
             ownerCheck.clear()
@@ -636,6 +651,7 @@ class VaultManager(
                     items.onEvent(m)
                     sharing.onEvent(m)
                     social.onEvent(m)
+                    attachments.onEvent(m.type, m.body)
                     // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
                     if (!heldBack.hold(m, phaseFlow.value)) feed.onEvent(m)
                 } catch (e: CancellationException) {
@@ -1598,6 +1614,7 @@ class VaultManager(
             }
         }
         social.clear()
+        attachments.reset()
         ownerCheck.clear()
         profile.clear()
         history.clear()

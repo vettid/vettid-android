@@ -438,6 +438,10 @@ class SocialManager(
                 patch(conn, id) { it.copy(delivered = true, read = it.read || read) }
             }
             "message.read" -> patch(s("connection_id") ?: return, s("message_id") ?: return) { it.copy(read = true) }
+            // §10.5.1: each change of an attachment's state; the message itself is unchanged.
+            "message.attachment" -> patch(s("connection_id") ?: return, s("message_id") ?: return) { m ->
+                m.attachment?.let { a -> m.copy(attachment = a.copy(state = AttachmentState.of(s("state")), reason = s("reason"))) } ?: m
+            }
             "connection.changed", "block.added", "block.removed" -> runCatching { refresh() }
             "connection.request" -> onRequestSync(b)
             "connection.authenticate.decided" -> s("request_id")?.let { dropApproval("auth:$it") }
@@ -666,6 +670,9 @@ class SocialManager(
             }
         }
     }
+
+    /** A message this app sent another way (a photo, [AttachmentManager]) joins its conversation. */
+    internal fun addSent(m: MessageInfo) = upsert(m)
 
     /**
      * A page asked for with [PAGE] messages and, when the answer could not be sealed (`response_too_large`, §8.1),

@@ -172,7 +172,51 @@ data class Message(
     @SerialName("sent_at") val sentAt: String,
     val delivered: Boolean = false,
     val read: Boolean = false,
+    /** (0.32.0, release A) The device view of the message's attachment (§10.5.1); `thumb` only in `message.new`. */
+    val attachment: AttachmentView? = null,
 )
+
+/**
+ * The device view of an attachment (§10.5.1): never a blob key or id. [mime] is the type the vault sniffed, present
+ * once stored; [name] the sender's, as stored (shown only after sanitizing); [state] and [reason] as §10.5.1's table;
+ * [thumb] base64, in `message.new` and `message.attachment.get{part: "thumb"}` only.
+ */
+@Serializable
+data class AttachmentView(
+    @SerialName("att_id") val attId: String,
+    val kind: String = "photo",
+    val mime: String? = null,
+    val size: Long = 0,
+    val width: Int = 0,
+    val height: Int = 0,
+    val name: String? = null,
+    val state: String = "",
+    val reason: String? = null,
+    val thumb: String? = null,
+)
+
+/** A §5.5 blob reference: [key] and [sha256] base64; [size] the content's length; [mime] and [name] the sender's claims. */
+@Serializable
+data class BlobRef(
+    val id: String,
+    val key: String,
+    val sha256: String,
+    val size: Long,
+    val mime: String = "",
+    val name: String? = null,
+)
+
+/** `message.send` with an attachment (0.32.0): answered once the vault's checks passed. */
+@Serializable
+data class SentAttachment(
+    @SerialName("message_id") val messageId: String,
+    @SerialName("sent_at") val sentAt: String,
+    @SerialName("att_id") val attId: String,
+)
+
+/** `message.attachment.get{part: "content"}`: a fresh blob the vault uploaded to this device's mailbox. */
+@Serializable
+data class FetchedAttachment(val blob: BlobRef, @SerialName("expires_at") val expiresAt: String? = null)
 
 /**
  * One page of `message.list` (§10.5.2): [messages] oldest first; [nextBefore] the `message_id` of the page's oldest

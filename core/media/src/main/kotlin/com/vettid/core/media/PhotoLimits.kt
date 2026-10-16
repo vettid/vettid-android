@@ -17,6 +17,9 @@ object PhotoLimits {
     /** `attachment_max_bytes` at vettid.org: the largest content whose blob fits the relay's 8 MiB. */
     const val ATTACHMENT_MAX_BYTES = 8_257_532
 
+    /** The relay's `max_blob_bytes`: a fetched blob larger than this is refused before it is hashed. */
+    const val MAX_BLOB_BYTES = 8_388_608
+
     /** The JPEG quality a photo starts at, lowered in steps until it fits. */
     const val SEND_QUALITY = 85
     const val MIN_QUALITY = 40
