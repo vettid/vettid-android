@@ -206,23 +206,30 @@ class Initiator private constructor(
                     sasCommit = nI?.let { Schedule.sasCommit(it) },
                     unlockSecret = cfg.unlockSecret,
                 )
-                val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = body.marshal())
-                return if (rekey) {
-                    // §6.2: a rekey hs.init travels in session mode under the
-                    // current epoch, and K_s is that epoch's rk.
-                    val cur = cfg.current!!
-                    val ks = cur.rkCopy()
-                    Initiator(cfg, body, eph, cur.seal(inner), ks, nI)
-                } else {
-                    val padded = Inner.encode(inner, Mode.SEALED)
-                    try {
-                        val senderKid = if (cfg.anonymousSender) Kid.ANONYMOUS else cfg.staticKem.kid
-                        val sealer = Sealer(cfg.responderEk!!, senderKid)
-                        val env = sealer.seal(padded)
-                        Initiator(cfg, body, eph, env, sealer.export(Labels.HS_KS, Suite.KEY_SIZE), nI)
-                    } finally {
-                        Bytes.wipe(padded)
+                val bodyBytes = body.marshal()
+                // (Release R) A transfer's unlock secret: the message's copy and the marshalled body are zeroed once sealed.
+                body.wipeUnlockSecret()
+                val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = bodyBytes)
+                try {
+                    return if (rekey) {
+                        // §6.2: a rekey hs.init travels in session mode under the
+                        // current epoch, and K_s is that epoch's rk.
+                        val cur = cfg.current!!
+                        val ks = cur.rkCopy()
+                        Initiator(cfg, body, eph, cur.seal(inner), ks, nI)
+                    } else {
+                        val padded = Inner.encode(inner, Mode.SEALED)
+                        try {
+                            val senderKid = if (cfg.anonymousSender) Kid.ANONYMOUS else cfg.staticKem.kid
+                            val sealer = Sealer(cfg.responderEk!!, senderKid)
+                            val env = sealer.seal(padded)
+                            Initiator(cfg, body, eph, env, sealer.export(Labels.HS_KS, Suite.KEY_SIZE), nI)
+                        } finally {
+                            Bytes.wipe(padded)
+                        }
                     }
+                } finally {
+                    if (cfg.unlockSecret != null) Bytes.wipe(bodyBytes)
                 }
             } catch (e: CryptoException) {
                 eph.destroy()

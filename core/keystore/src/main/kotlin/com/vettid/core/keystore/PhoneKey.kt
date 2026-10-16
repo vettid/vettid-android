@@ -36,8 +36,9 @@ class PhoneKey(vaultId: String) : PhoneKeyHandle {
 
     /**
      * Makes a new key under the alias (an existing one is replaced: enrollment, a transfer to this phone, a
-     * recovery). Refuses a key the Keystore reports at [KeyLevel.SOFTWARE]: the app then does not enroll, receive a
-     * transfer or recover ("This phone cannot keep your vault's keys in its secure hardware").
+     * recovery). Refuses a key the Keystore does not report in the trusted execution environment or StrongBox
+     * ([holdsPhoneKey]): the app then does not enroll, receive a transfer or recover ("This phone cannot keep your
+     * vault's keys in its secure hardware").
      */
     override fun create(): KeyLevel = create(preferStrongBox = true)
 
@@ -51,9 +52,9 @@ class PhoneKey(vaultId: String) : PhoneKeyHandle {
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, AndroidKeys.PROVIDER).apply { init(spec) }.generateKey()
         }
         val level = AndroidKeys.secretKeyLevel(key)
-        if (level == KeyLevel.SOFTWARE) {
+        if (!holdsPhoneKey(level)) {
             AndroidKeys.delete(alias)
-            throw KeystoreException("phone key in software")
+            throw KeystoreException("phone key not in secure hardware ($level)")
         }
         return level
     }
@@ -74,5 +75,11 @@ class PhoneKey(vaultId: String) : PhoneKeyHandle {
 
     companion object {
         const val ALIAS_PREFIX = "vault-unlock-"
+
+        /**
+         * §11.14.1: the phone key MUST be in the trusted execution environment or StrongBox. A key in software, or
+         * one whose level the Keystore does not report ([KeyLevel.UNKNOWN]), is refused.
+         */
+        fun holdsPhoneKey(level: KeyLevel): Boolean = level == KeyLevel.TEE || level == KeyLevel.STRONG_BOX
     }
 }

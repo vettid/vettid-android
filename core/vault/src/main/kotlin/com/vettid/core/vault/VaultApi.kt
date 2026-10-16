@@ -27,8 +27,12 @@ import java.time.Duration
  * password and run as credential operations (§3.5.3).
  */
 @Suppress("TooManyFunctions")
-class VaultApi(val device: VaultDevice) {
-    private val cred = CredentialOps(device)
+class VaultApi(
+    val device: VaultDevice,
+    /** (Release R, §11.14.7) Whether the vault normalizes passwords to NFC; false for a vault before release R. */
+    normalizePasswords: () -> Boolean = { false },
+) {
+    private val cred = CredentialOps(device, normalizePasswords)
 
     /** The credential operations, for the extension files of later releases ([pinChange], [secretRenew]). */
     internal val credentialOps: CredentialOps get() = cred

@@ -291,6 +291,12 @@ class VaultDevice private constructor(
     val recovering: Boolean get() = st.recovery != null
 
     /**
+     * (Release R, §11.14.6) The vault is pinned from a recovery's result but this phone's first handshake has not
+     * completed: for a phone with a phone secret, the vault answered `ok` and made this phone its app.
+     */
+    val recoveryOpenedNotPaired: Boolean get() = st.vault != null && st.recovery != null && st.deviceId == null
+
+    /**
      * While recovering: the vault's `credential_backup` from this app's unlock result (0.10.6, §11.11.5 step 1);
      * null before that unlock, or when the vault did not say (an older vault).
      */
@@ -768,8 +774,9 @@ class VaultDevice private constructor(
                     v.token = r.token
                     v.tokenExpMs = heldFromVault(r.token)?.toEpochMilli() ?: 0
                 }
-                val a = alt()
-                setAlt(a.copy(stateSeq = maxOf(a.stateSeq, r.stateSeq)))
+                // As after an unlock: the state floor, and the release with its header_seq for the next unlock's
+                // rollback check (min_header_seq).
+                setAlt(AltRequests.applyRecoveryOpen(alt(), r.stateSeq, r.headerSeq, r.release, r.releaseNumber))
                 save()
             }
             r

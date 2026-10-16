@@ -113,11 +113,20 @@ object AltRequests {
         val challenge = AltChannel.devattChallenge(rid, "", Timestamps.formatMillis(t))
         val attest = attester.attest(challenge)
         val nonce = Randomness.bytes(NONCE_SIZE)
-        val body = EnrollRequest(
+        val request = EnrollRequest(
             userGuid, rid, nonce, pin, app.ik(), app.kem, app.relay, openToken, app.name, attest, manifest.sha256Hex, manifest.serial,
             app.apiKey(), unlockSecret,
-        ).marshal()
-        val env = AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_ENROLL, rid, t, body)
+        )
+        val body = try {
+            request.marshal()
+        } finally {
+            request.wipe()
+        }
+        val env = try {
+            AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_ENROLL, rid, t, body)
+        } finally {
+            if (unlockSecret != null) body.fill(0) // (release R) the secret's copy in the plaintext
+        }
         val next = state.copy(enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number)
         return BuiltEnroll(SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex), next)
     }
@@ -176,11 +185,20 @@ object AltRequests {
         val sig = ik.signRaw(signing.toByteArray())
 
         fun seal(a: DeviceAssertion): ByteArray {
-            val body = UnlockRequest(
+            val request = UnlockRequest(
                 userGuid, vaultId, rid, ik.publicKey, pin, state.stateSeq, minHeader, token, a, manifest.sha256Hex, manifest.serial,
                 update, options.cancelRecovery, sig, options.unlockSecret,
-            ).marshal()
-            return AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_UNLOCK, rid, t, body)
+            )
+            val body = try {
+                request.marshal()
+            } finally {
+                request.wipe()
+            }
+            return try {
+                AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_UNLOCK, rid, t, body)
+            } finally {
+                if (options.unlockSecret != null) body.fill(0) // (release R) the secret's copy in the plaintext
+            }
         }
         val env = sealFitting(assertion, ::seal)
         return BuiltUnlock(
@@ -215,6 +233,20 @@ object AltRequests {
         }
         if (r.headerSeq > (hs[release] ?: 0)) hs[release] = r.headerSeq
         return s.copy(headerSeq = hs, release = release, releaseNumber = if (number != 0L) number else s.releaseNumber)
+    }
+
+    /**
+     * Applies an `ok` `vault.recovery.open.result` (VAULT-MESSAGING 0.33.0 §11.14.6, release R) to the app state, as an
+     * unlock result is applied: floors only move up, and the result's `release` with its `header_seq` becomes the
+     * release the next unlock names (with its `min_header_seq`). A result without a well-formed release moves only the
+     * state floor.
+     */
+    fun applyRecoveryOpen(state: AltState, stateSeq: Long, headerSeq: Long, release: String, releaseNumber: Long): AltState {
+        val s = state.copy(stateSeq = maxOf(state.stateSeq, stateSeq))
+        if (release.length != PCR_HEX || releaseNumber <= 0) return s
+        val hs = s.headerSeq.toMutableMap()
+        if (headerSeq > (hs[release] ?: 0)) hs[release] = headerSeq
+        return s.copy(headerSeq = hs, release = release, releaseNumber = releaseNumber)
     }
 
     /**

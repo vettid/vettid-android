@@ -231,6 +231,11 @@ class HsInit(
 
     fun unlockSecret(): ByteArray? = unlockSecret?.copyOf()
 
+    /** Zeroes this message's copy of the unlock secret (the initiator, after [marshal]). */
+    fun wipeUnlockSecret() {
+        unlockSecret?.fill(0)
+    }
+
     fun sasCommit(): ByteArray? = sasCommit?.copyOf()
 
     fun apiKey(): ByteArray? = apiKey?.copyOf()

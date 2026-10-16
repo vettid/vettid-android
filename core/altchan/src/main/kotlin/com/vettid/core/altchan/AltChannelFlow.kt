@@ -297,16 +297,20 @@ class AltChannelFlow(
      * Opens a registered recovery (VAULT-MESSAGING 0.33.0 §11.14.6, release R) through `POST /api/vault/recovery/open`,
      * routed like an unlock. [build] seals `vault.recovery.open` to the verified enclave; [open] opens
      * `vault.recovery.open.result`. Never retried here: every open may use an attempt, so the member sends again.
+     * [onSent] runs once the member API has taken the request: from then on it may reach the vault and use an attempt
+     * even if no answer comes back.
      */
     suspend fun recoveryOpen(
         vaultId: String,
         build: suspend (VerifiedEnclave, ReleaseManifest) -> SealedRequest,
         open: suspend (ByteArray, String) -> com.vettid.core.crypto.altchan.RecoveryOpen.Result,
+        onSent: suspend () -> Unit = {},
     ): com.vettid.core.crypto.altchan.RecoveryOpen.Result {
         val m = manifest(0)
         val (info, e) = enclaveFor(null, m, enroll = false)
         val req = build(e, m)
         api.recoveryOpen(vaultId, info.instanceId, req)
+        onSent()
         val s = api.poll(req.requestId)
         val env = s.envelope()
         if (s.status != Slot.DONE || env == null) throw AltChannelException("recovery open not answered (${s.status} ${s.code ?: ""})")

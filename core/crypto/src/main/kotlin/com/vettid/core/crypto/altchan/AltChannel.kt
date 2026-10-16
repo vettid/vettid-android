@@ -166,6 +166,11 @@ class EnrollRequest(
     private val ik = ik.copyOf()
     private val apiKey = apiKey?.copyOf()
 
+    /** Zeroes this request's copy of the unlock secret (after [marshal]). */
+    fun wipe() {
+        unlockSecret?.fill(0)
+    }
+
     fun marshal(): ByteArray {
         if (nonce.size != 32 || !AltChannel.isValidPin(pin) || !Bytes.isLowerHex(manifestSha256, 64) || manifestSerial < 1) {
             throw CryptoException.Format("enroll request")
@@ -214,6 +219,11 @@ class UnlockRequest(
     private val unlockSecret = unlockSecret?.copyOf()
     private val deviceIk = deviceIk.copyOf()
     private val sig = sig.copyOf()
+
+    /** Zeroes this request's copy of the unlock secret (after [marshal]). */
+    fun wipe() {
+        unlockSecret?.fill(0)
+    }
 
     /** `release_update` (§11.10.3). */
     class ReleaseUpdate(val to: String, val toRelease: Long, val approval: DeviceAssertion)

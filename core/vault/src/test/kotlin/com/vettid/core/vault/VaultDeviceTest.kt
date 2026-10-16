@@ -58,6 +58,7 @@ import mockwebserver3.RecordedRequest
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -609,6 +610,60 @@ class VaultDeviceTest {
             again.handle(v.seal("vault.status", "{}", re = req.id, status = Inner.STATUS_OK))
             r.await()
             assertNull(VaultDevice.load(config(InMemoryDeviceStateStore()), secrets))
+        }
+    }
+
+    /** Sends one credential operation and returns its opened sealed payload; the operation is then left unanswered. */
+    private suspend fun CoroutineScope.sealedPayloadOf(
+        d: VaultDevice,
+        v: FakeVault,
+        utkId: String,
+        op: suspend () -> Unit,
+    ): com.vettid.core.crypto.json.JsonObject {
+        val utk = KemPrivateKey.generate()
+        val job = async(Dispatchers.IO) { runCatching { op() } }
+        val get = v.open(nextDeposit().second)
+        assertEquals("credential.utk.get", get.type)
+        val utkJson = """{"utk_id":"$utkId","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
+        d.handle(v.seal(get.type, """{"utks":[$utkJson]}""", re = get.id, status = Inner.STATUS_OK))
+        val req = v.open(nextDeposit().second)
+        val body = StrictJson.parseObject(req.body)
+        val payload = com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, utkId, req.type, req.id, body.base64("sealed"))
+        job.cancel()
+        return StrictJson.parseObject(payload)
+    }
+
+    /**
+     * Release R (VAULT-MESSAGING 0.33.0 §11.14.7, §11.14.9): `credential.create` and `credential.password.change` carry
+     * the PIN when given, and passwords are normalized to NFC only for a vault of release R; a vault before it gets
+     * every password exactly as typed.
+     */
+    @Test
+    fun releaseRCredentialPayloadsCarryThePinAndNormalizeOnlyForReleaseR() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val nfd = "Cafe\u0301 au lait now"
+            val nfc = "Caf\u00e9 au lait now"
+            assertTrue(nfd != nfc)
+            // Before release R: as typed, and no PIN.
+            val before = VaultApi(d)
+            val p0 = sealedPayloadOf(d, v, "00112233445566a1") { before.credentialCreate(nfd) }
+            assertEquals(nfd, p0.string("password"))
+            assertFalse(p0.has("pin"))
+            // Release R: the PIN, and NFC.
+            val r = VaultApi(d) { true }
+            val p1 = sealedPayloadOf(d, v, "00112233445566a2") { r.credentialCreate(nfd, "975310") }
+            assertEquals(nfc, p1.string("password"))
+            assertEquals("975310", p1.string("pin"))
+            d.keepCredential("QkxPQg==", 3)
+            val p2 = sealedPayloadOf(d, v, "00112233445566a3") { before.credentialChangePassword(nfd, nfd + "!") }
+            assertEquals(nfd, p2.string("password"))
+            assertEquals("$nfd!", p2.string("new_password"))
+            assertFalse(p2.has("pin"))
+            val p3 = sealedPayloadOf(d, v, "00112233445566a4") { r.credentialChangePassword(nfd, nfd + "!", "975310") }
+            assertEquals(nfc, p3.string("password"))
+            assertEquals("$nfc!", p3.string("new_password"))
+            assertEquals("975310", p3.string("pin"))
         }
     }
 
