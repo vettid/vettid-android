@@ -197,7 +197,49 @@ data class MessageInfo(
     val sentAt: Instant,
     val delivered: Boolean,
     val read: Boolean,
+    /** (VAULT-MESSAGING 0.32.0, release A) The message's photo, if it has one; [text] is then its caption. */
+    val attachment: AttachmentInfo? = null,
 )
+
+/**
+ * Where a message's attachment stands (VAULT-MESSAGING 0.32.0 §10.5.1 "state"): outgoing [PREPARING], [SENDING],
+ * [DELIVERED]; incoming [FETCHING], [STORED]; either way [FAILED] with a reason. [UNKNOWN] for a state a newer vault
+ * may add.
+ */
+enum class AttachmentState(val wire: String) {
+    PREPARING("preparing"),
+    SENDING("sending"),
+    DELIVERED("delivered"),
+    FETCHING("fetching"),
+    STORED("stored"),
+    FAILED("failed"),
+    UNKNOWN(""),
+    ;
+
+    companion object {
+        fun of(wire: String?): AttachmentState = entries.firstOrNull { it.wire == wire && it != UNKNOWN } ?: UNKNOWN
+    }
+}
+
+/**
+ * A message's photo as the vault describes it (the device view: never a blob key or id). [mime] is the type the
+ * vault sniffed, once stored; [name] the sender's, sanitized for showing and never used as a file name; [width]
+ * and [height] the sender's claim, for a placeholder only. The thumbnail and the photo live in memory only
+ * ([AttachmentsRepository]), never here.
+ */
+data class AttachmentInfo(
+    val attId: String,
+    val state: AttachmentState,
+    val reason: String? = null,
+    val mime: String? = null,
+    val size: Long = 0,
+    val width: Int = 0,
+    val height: Int = 0,
+    val name: String? = null,
+) {
+    /** Whether the photo can be fetched (`message.attachment.get` serves only a stored attachment). */
+    val viewable: Boolean get() = state == AttachmentState.STORED || state == AttachmentState.SENDING || state == AttachmentState.DELIVERED
+}
 
 /** One row of the Messages screen: a connection with its latest message. */
 data class ConversationSummary(

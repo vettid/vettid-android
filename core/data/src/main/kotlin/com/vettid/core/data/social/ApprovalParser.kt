@@ -221,6 +221,19 @@ object ApprovalParser {
         sentAt = instant(m.sentAt) ?: Instant.EPOCH,
         delivered = m.delivered,
         read = m.read,
+        attachment = m.attachment?.let(::attachment),
+    )
+
+    /** The device view of an attachment (§10.5.1); the thumbnail is not kept here. */
+    fun attachment(a: com.vettid.core.vault.AttachmentView): AttachmentInfo = AttachmentInfo(
+        attId = a.attId,
+        state = AttachmentState.of(a.state),
+        reason = a.reason,
+        mime = a.mime,
+        size = a.size,
+        width = a.width,
+        height = a.height,
+        name = com.vettid.core.media.AttachmentNames.sanitize(a.name),
     )
 
     /** `connection.authenticate.list` states and `.result` events. */

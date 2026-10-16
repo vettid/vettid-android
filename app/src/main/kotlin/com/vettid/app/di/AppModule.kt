@@ -336,6 +336,9 @@ object AppModule {
     fun messagesRepository(m: VaultManager): MessagesRepository = m.social
 
     @Provides
+    fun attachmentsRepository(m: VaultManager): com.vettid.core.data.social.AttachmentsRepository = m.attachments
+
+    @Provides
     fun approvalsRepository(m: VaultManager): ApprovalsRepository = m.social
 
     @Provides

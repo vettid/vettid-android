@@ -399,6 +399,35 @@ class VaultDevice private constructor(
      */
     suspend fun relayLimits(): RelayLimits = own.register().limits
 
+    /** A fresh inner id (a ULID by this device's clock), for a request the member may retry as the same one. */
+    fun newRequestId(): String = Ulid.new(now())
+
+    // --- blobs (RELAY-PROTOCOL §6.8, VAULT-MESSAGING 0.32.0 §10.5.1) ---
+
+    /**
+     * Uploads [blob] to the vault's mailbox under the standing token the vault issued this device (an
+     * `owner_device` token since release A: the relay keeps one blob's room for the owner's devices). Once: the
+     * caller never uploads the same photo again after a lost answer (every abandoned upload fills the mailbox's
+     * shared storage). Returns the relay's `blob_id`.
+     */
+    suspend fun uploadBlobToVault(blob: ByteArray): String {
+        val v = requireVault()
+        if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+        val ref = try {
+            relayFor(v.relayUrl).putBlob(v.mailbox, v.token, blob)
+        } catch (x: RelayException) {
+            countRefusal(x, v.mailbox, v.token)
+            throw x
+        }
+        return ref.id
+    }
+
+    /** Fetches a blob the vault uploaded to this device's own mailbox (`blob_unknown` for any other). */
+    suspend fun fetchOwnBlob(blobId: String): ByteArray = own.getBlob(blobId)
+
+    /** Deletes a blob in this device's own mailbox (idempotent): every fetched blob is deleted, good or bad. */
+    suspend fun deleteOwnBlob(blobId: String) = own.deleteBlob(blobId)
+
     /**
      * Starts the collection again in the scope of the last [start] if it is not running (it ended, or never ran),
      * and flushes the outbox; nothing after [stop]. Returns whether it started one. For the app's return to the
@@ -866,8 +895,17 @@ class VaultDevice private constructor(
      * within the request timeout, the same envelope id is re-sent at most
      * twice (§8.6); the vault answers a duplicate from its response cache.
      */
-    suspend fun request(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): VaultMessage {
-        val id = Ulid.new(now())
+    suspend fun request(
+        type: String,
+        body: JsonObject = EMPTY,
+        timeout: Duration = cfg.requestTimeout,
+        /**
+         * The inner id, for a request the member retries as the same request (§8.2: the vault answers it from its
+         * cache or handles it once; a photo's `message.send`, §10.5.1 "Retry"). A fresh one by default.
+         */
+        innerId: String? = null,
+    ): VaultMessage {
+        val id = innerId ?: Ulid.new(now())
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
@@ -885,8 +923,8 @@ class VaultDevice private constructor(
     }
 
     /** [request], returning the body of an ok response or throwing [VaultOpException]. */
-    suspend fun op(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): JsonObject {
-        val r = request(type, body, timeout)
+    suspend fun op(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout, innerId: String? = null): JsonObject {
+        val r = request(type, body, timeout, innerId)
         if (r.inner.status != Inner.STATUS_OK) {
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }

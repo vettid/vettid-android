@@ -330,7 +330,18 @@ class RelayClient(
     }
 
     /** Fetches a blob deposited to this mailbox (§6.8). */
-    suspend fun getBlob(blobId: String): ByteArray = execute(Call("GET", "/v1/blob/$blobId")) { it.body.bytes() }
+    suspend fun getBlob(blobId: String, maxBytes: Long = MAX_BLOB_READ): ByteArray = execute(Call("GET", "/v1/blob/$blobId")) { resp ->
+        // At most [maxBytes] are ever held: a declared length over it is refused before reading, and so is a body
+        // that grows beyond it.
+        val declared = resp.header("Content-Length")?.toLongOrNull()
+        if (declared != null && declared > maxBytes) throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+        val b = resp.body.bytesAtMost(maxBytes + 1)
+        if (b.size > maxBytes) {
+            b.fill(0)
+            throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+        }
+        b
+    }
 
     /** Deletes a blob (idempotent). */
     suspend fun deleteBlob(blobId: String) {
@@ -393,6 +404,9 @@ class RelayClient(
         private const val ERROR_BODY_LIMIT = 4096
         private const val MAX_MESSAGE = 256
         private const val MAX_CLAIM_READ = 1 shl 20
+
+        /** The reference relay's `max_blob_bytes` (RELAY-PROTOCOL §6.8): no blob a relay keeps is larger. */
+        const val MAX_BLOB_READ = 8_388_608L
         private const val JSON = "application/json"
         private const val OCTET = "application/octet-stream"
     }
