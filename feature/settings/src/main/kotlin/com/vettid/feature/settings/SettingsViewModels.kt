@@ -240,14 +240,20 @@ data class ChangePinUiState(
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val done: Boolean = false,
+    /**
+     * (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) `pin.change` is a credential operation: the password too, and the
+     * phone's next secret. Its answer gives the recovery 10 new attempts.
+     */
+    val withPassword: Boolean = false,
+    val password: String = "",
 ) {
-    override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done)"
+    override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done, withPassword=$withPassword)"
 }
 
 /** `pin.change` (§10.6). */
 @HiltViewModel
 class ChangePinViewModel @Inject constructor(private val vault: VaultRepository) : ViewModel() {
-    private val state = MutableStateFlow(ChangePinUiState())
+    private val state = MutableStateFlow(ChangePinUiState(withPassword = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePinUiState> = state.asStateFlow()
 
     fun setCurrent(v: String) = state.update { it.copy(current = v.filter(Char::isDigit).take(PinPolicy.MAX_LENGTH), error = null) }
@@ -256,11 +262,14 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
 
     fun setConfirm(v: String) = state.update { it.copy(confirm = v.filter(Char::isDigit).take(PinPolicy.MAX_LENGTH), mismatch = false) }
 
+    fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
+
     fun submit() {
         val s = state.value
         val p = PinPolicy.check(s.pin)
         when {
             s.current.isEmpty() -> return
+            s.withPassword && s.password.isEmpty() -> return
             p != null -> state.update { it.copy(problem = p) }
             s.pin == s.current -> state.update { it.copy(same = true) }
             s.pin != s.confirm -> state.update { it.copy(mismatch = true, confirm = "") }
@@ -268,10 +277,10 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
                 state.update { it.copy(busy = true, error = null) }
                 viewModelScope.launch {
                     try {
-                        vault.changePin(s.current, s.pin)
-                        state.update { ChangePinUiState(done = true) }
+                        if (s.withPassword) vault.changePin(s.current, s.pin, s.password) else vault.changePin(s.current, s.pin)
+                        state.update { ChangePinUiState(done = true, withPassword = s.withPassword) }
                     } catch (e: VaultFailure) {
-                        state.update { it.copy(busy = false, error = e.kind, current = "") }
+                        state.update { it.copy(busy = false, error = e.kind, current = "", password = "") }
                     }
                 }
             }

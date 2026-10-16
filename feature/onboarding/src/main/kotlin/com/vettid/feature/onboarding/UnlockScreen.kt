@@ -96,6 +96,15 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     Text(label, style = MaterialTheme.typography.bodyMedium)
                 }
             }
+            if (state.keptTransfer) {
+                // Release R (§11.14.10): the old phone after a transfer's approval.
+                NoticeCard(
+                    NoticeKind.INFO,
+                    stringResource(R.string.onboarding_move_didnt_finish),
+                    stringResource(R.string.onboarding_kept_transfer) + "\n\n" + stringResource(R.string.onboarding_move_didnt_finish_body),
+                    modifier = Modifier.testTag("kept_transfer"),
+                )
+            }
             state.preflightError?.let {
                 NoticeCard(
                     // The vault's software did not verify: alarming, unlike a list that is stale or could not be loaded.
@@ -227,6 +236,13 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     )
                 }
                 when (val m = state.message) {
+                    // Release R (§11.14.10): the old phone's "The move didn't finish" could not open the vault.
+                    UnlockMessage.MoveBackFailed -> NoticeCard(
+                        NoticeKind.URGENT,
+                        stringResource(R.string.onboarding_move_didnt_finish),
+                        stringResource(R.string.onboarding_move_back_failed),
+                        modifier = Modifier.testTag("move_back_failed"),
+                    )
                     is UnlockMessage.UpdateRefused -> NoticeCard(
                         NoticeKind.WARNING,
                         stringResource(R.string.unlock_title),

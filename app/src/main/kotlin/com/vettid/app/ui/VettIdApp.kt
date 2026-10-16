@@ -9,6 +9,12 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -32,6 +38,8 @@ import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.ui.components.FullScreenProgress
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.feature.onboarding.AppLockScreen
+import com.vettid.feature.onboarding.FinishMovePane
+import com.vettid.feature.onboarding.FinishMoveViewModel
 import com.vettid.feature.onboarding.OnboardingFlow
 import com.vettid.feature.onboarding.ReleaseUpdateFlowRoute
 import com.vettid.feature.onboarding.UnlockRoute
@@ -147,11 +155,14 @@ fun VettIdApp(
                         statusBarPadding = !paused,
                     )
                 }
+                // Release R (§11.14.10): "Finish the move" and "This phone is your vault's phone again".
+                val topBanner = paused || prefsReset
+                val moveNotice = MoveNotices(viewModel, phase == AppPhase.Unlocked, appLocked = locked, statusBarPadding = !topBanner)
                 Box(
                     Modifier
                         .weight(1f)
                         .fillMaxSize()
-                        .then(if (paused || prefsReset) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+                        .then(if (topBanner || moveNotice) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
                 ) {
                     NavHost(nav, startDestination = StartingDest) {
                         composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
@@ -182,9 +193,63 @@ fun VettIdApp(
             }
         }
         if (lock == AppLockState.PENDING) FullScreenProgress(stringResource(R.string.root_starting))
+
         // A canary manifest shared to the app (VAULT-RELEASES §10.1 step 9): asked about only while the app is open.
         if (!locked && lock != AppLockState.PENDING) {
             canaryPrompt?.let { CanaryManifestDialog(it, canaryVm::confirm, canaryVm::dismiss) }
         }
     }
+}
+
+/**
+ * Release R (§11.14.10) banners; true when one is shown. A move to this phone that is not finished is asked about at
+ * every start in the open app ([unlocked]; on the unlock screen the unlock itself finishes it), with "Finish the move" in
+ * a dialog. The old phone that took the vault back ("The move didn't finish" succeeded) is told once.
+ */
+@Composable
+private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: Boolean, statusBarPadding: Boolean): Boolean {
+    val finishMove by viewModel.finishMovePending.collectAsStateWithLifecycle()
+    val movedBack by viewModel.movedBack.collectAsStateWithLifecycle()
+    val moveNotDone by viewModel.moveNotDone.collectAsStateWithLifecycle()
+    var finishMoveOpen by rememberSaveable { mutableStateOf(false) }
+    val askFinishMove = finishMove && unlocked
+    if (askFinishMove) {
+        InfoBanner(
+            stringResource(R.string.root_finish_move),
+            Modifier.testTag("finish_move_banner"),
+            actionLabel = stringResource(R.string.root_finish_move_action),
+            onAction = { finishMoveOpen = true },
+            statusBarPadding = statusBarPadding,
+        )
+    }
+    if (movedBack) {
+        InfoBanner(
+            stringResource(R.string.root_moved_back),
+            Modifier.testTag("moved_back_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeMovedBack,
+            statusBarPadding = statusBarPadding && !askFinishMove,
+        )
+    }
+    // The vault confirmed at the end of the 7 days that this phone is still its app: the move did not happen.
+    if (moveNotDone) {
+        InfoBanner(
+            stringResource(R.string.root_move_not_done),
+            Modifier.testTag("move_not_done_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeMoveNotDone,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack,
+        )
+    }
+    // Kept open through the lock and unlock it sends; never over the app lock.
+    if (finishMoveOpen && finishMove && !appLocked) {
+        Dialog(onDismissRequest = { finishMoveOpen = false }) {
+            Surface(shape = MaterialTheme.shapes.large) {
+                val finishVm: FinishMoveViewModel = hiltViewModel()
+                val finishState by finishVm.uiState.collectAsStateWithLifecycle()
+                FinishMovePane(finishState, finishVm, onDone = { finishMoveOpen = false })
+            }
+        }
+    }
+    return askFinishMove || movedBack || moveNotDone
 }

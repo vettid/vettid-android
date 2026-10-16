@@ -187,7 +187,11 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         ) {}
         TransferOutStep.MOVED -> FormScaffold(
             title = stringResource(R.string.settings_transfer_moved_title),
-            body = stringResource(R.string.settings_transfer_moved_body, state.pending?.name ?: ""),
+            body = if (state.keptKeys) {
+                stringResource(R.string.settings_transfer_moved_kept_body)
+            } else {
+                stringResource(R.string.settings_transfer_moved_body, state.pending?.name ?: "")
+            },
             primaryLabel = stringResource(R.string.settings_done),
             onPrimary = leave,
             onBack = leave,

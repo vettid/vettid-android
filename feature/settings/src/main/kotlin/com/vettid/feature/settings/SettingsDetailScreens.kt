@@ -213,7 +213,8 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                         SettingsDivider()
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_recovery),
-                            v.recoveryState ?: stringResource(R.string.settings_status_recovery_none),
+                            v.recovery?.let { r -> statusLine(recoveryStatusText(r)) }
+                                ?: v.recoveryState ?: stringResource(R.string.settings_status_recovery_none),
                             icon = Icons.Outlined.Restore,
                         )
                         SettingsDivider()
@@ -247,6 +248,10 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
     }
 }
 
+/** A [StatusText] in words. */
+@Composable
+private fun statusLine(t: StatusText): String = t.arg?.let { stringResource(t.res, it) } ?: stringResource(t.res)
+
 /** The vault PIN change (stateless). */
 @Suppress("CyclomaticComplexMethod")
 @Composable
@@ -257,10 +262,15 @@ fun ChangePinContent(
     onConfirm: (String) -> Unit,
     onSubmit: () -> Unit,
     onBack: () -> Unit,
+    onPassword: (String) -> Unit = {},
 ) {
     FormScaffold(
         title = stringResource(if (state.done) R.string.settings_pin_done else R.string.settings_pin_title),
-        body = if (state.done) null else stringResource(R.string.settings_pin_body),
+        body = when {
+            state.done && state.withPassword -> stringResource(R.string.settings_pin_done_recovery)
+            state.done -> null
+            else -> stringResource(R.string.settings_pin_body)
+        },
         primaryLabel = stringResource(if (state.done) R.string.settings_done else R.string.settings_pin_submit),
         onPrimary = if (state.done) onBack else onSubmit,
         primaryEnabled = state.done || (state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
@@ -282,9 +292,16 @@ fun ChangePinContent(
         )
         Spacer(Modifier.height(Spacing.l))
         SecretField(
-            state.confirm, onConfirm, stringResource(R.string.settings_pin_confirm), isPin = true, onImeAction = onSubmit,
+            state.confirm, onConfirm, stringResource(R.string.settings_pin_confirm), isPin = true,
+            imeAction = if (state.withPassword) ImeAction.Next else ImeAction.Done,
+            onImeAction = if (state.withPassword) ({}) else onSubmit,
             error = if (state.mismatch) stringResource(R.string.settings_pin_mismatch) else null,
         )
+        if (state.withPassword) {
+            // Release R (§11.14.9): the credential password goes with the change.
+            Spacer(Modifier.height(Spacing.l))
+            SecretField(state.password, onPassword, stringResource(R.string.settings_pin_password), onImeAction = onSubmit)
+        }
         state.error?.let {
             Spacer(Modifier.height(Spacing.l))
             NoticeCard(

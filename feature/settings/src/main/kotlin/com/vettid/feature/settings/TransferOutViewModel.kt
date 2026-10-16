@@ -7,6 +7,7 @@ import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -72,6 +73,11 @@ data class TransferOutUiState(
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /**
+     * (Release R, §11.14.10) After the approval this phone keeps its keys until the new phone has finished the move, for
+     * at most 7 days ([TransferOutStep.MOVED] says so); false: it erases itself once the vault confirms.
+     */
+    val keptKeys: Boolean = false,
 ) {
     val canApprove: Boolean get() = pin.length >= MIN_PIN && password.isNotEmpty() && waitSeconds == 0L && !busy
 
@@ -109,7 +115,10 @@ interface TransferOutActions {
  * 2026-10-05). A mismatch rejects it.
  */
 @HiltViewModel
-class TransferOutViewModel @Inject constructor(private val move: MoveRepository) : ViewModel(), TransferOutActions {
+class TransferOutViewModel @Inject constructor(
+    private val move: MoveRepository,
+    private val vault: VaultRepository,
+) : ViewModel(), TransferOutActions {
     private val state = MutableStateFlow(TransferOutUiState())
     val uiState: StateFlow<TransferOutUiState> = state.asStateFlow()
     private var waiter: Job? = null
@@ -224,8 +233,12 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
                 val signer = s.pending?.signer?.takeIf { s.signerConfirmed }
                 val wiped = move.transferApprove(id, s.pin, s.password, signer)
                 ticker?.cancel()
+                val kept = vault.transferKeptSince.value != null
                 state.update {
-                    it.copy(step = if (wiped) it.step else TransferOutStep.MOVED, busy = false, pin = "", password = "", offer = null)
+                    it.copy(
+                        step = if (wiped) it.step else TransferOutStep.MOVED, busy = false, pin = "", password = "", offer = null,
+                        keptKeys = kept,
+                    )
                 }
             } catch (e: VaultFailure) {
                 if (e.code == CODE_SIGNER_UNCONFIRMED) {

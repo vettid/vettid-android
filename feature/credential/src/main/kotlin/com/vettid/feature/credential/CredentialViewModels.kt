@@ -8,6 +8,7 @@ import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.CredentialStatus
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -117,6 +118,12 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
 
 /** Immutable UI state of the password change. */
 data class ChangePasswordUiState(
+    /**
+     * (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) The vault has a phone secret: `credential.password.change` carries the
+     * PIN, which the vault verifies, so the screen asks for it.
+     */
+    val askPin: Boolean = false,
+    val pin: String = "",
     val current: String = "",
     val password: String = "",
     val confirm: String = "",
@@ -128,14 +135,32 @@ data class ChangePasswordUiState(
     val error: FailureKind? = null,
     val done: Boolean = false,
 ) {
-    override fun toString(): String = "ChangePasswordUiState(busy=$busy, error=$error, done=$done)"
+    /** The PIN, when it is asked ([askPin]): digits, at least 6. */
+    val pinReady: Boolean get() = !askPin || pin.length >= MIN_PIN && pin.all { it.isDigit() }
+
+    /** Every field the change needs is filled in. */
+    val canSubmit: Boolean get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady
+
+    override fun toString(): String = "ChangePasswordUiState(askPin=$askPin, busy=$busy, error=$error, done=$done)"
+
+    private companion object {
+        const val MIN_PIN = 6
+        const val MAX_PIN = 32
+    }
+
+    internal fun withPin(v: String) = copy(pin = v.filter { it.isDigit() }.take(MAX_PIN), error = null)
 }
 
-/** `credential.password.change` (§10.6): the current password, a new one with the strength rules. */
+/**
+ * `credential.password.change` (§10.6): the current password, a new one with the strength rules; on a vault of release R
+ * also the PIN (§11.14.9).
+ */
 @HiltViewModel
-class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRepository) : ViewModel() {
-    private val state = MutableStateFlow(ChangePasswordUiState())
+class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRepository, vault: VaultRepository) : ViewModel() {
+    private val state = MutableStateFlow(ChangePasswordUiState(askPin = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePasswordUiState> = state.asStateFlow()
+
+    fun setPin(v: String) = state.update { it.withPin(v) }
 
     fun setCurrent(v: String) = state.update { it.copy(current = v, error = null) }
 
@@ -148,7 +173,7 @@ class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRe
         val s = state.value
         val p = PasswordPolicy.check(s.password)
         when {
-            s.current.isEmpty() -> return
+            s.current.isEmpty() || !s.pinReady -> return
             p != null -> state.update { it.copy(problem = p) }
             s.password == s.current -> state.update { it.copy(same = true) }
             s.confirm != s.password -> state.update { it.copy(mismatch = true) }
@@ -156,10 +181,10 @@ class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRe
                 state.update { it.copy(busy = true, error = null) }
                 viewModelScope.launch {
                     try {
-                        repo.changePassword(s.current, s.password)
-                        state.update { ChangePasswordUiState(done = true) }
+                        repo.changePassword(s.current, s.password, s.pin.takeIf { s.askPin })
+                        state.update { ChangePasswordUiState(askPin = it.askPin, done = true) }
                     } catch (e: VaultFailure) {
-                        state.update { it.copy(busy = false, error = e.kind, current = "") }
+                        state.update { it.copy(busy = false, error = e.kind, current = "", pin = "") }
                     }
                 }
             }
