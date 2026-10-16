@@ -688,7 +688,9 @@ class SocialManager(
         val next = if (list.any { it.messageId == m.messageId }) {
             list.map { if (it.messageId == m.messageId) m.copy(delivered = it.delivered || m.delivered, read = it.read || m.read) else it }
         } else {
-            (list + m).sortedWith(ORDER)
+            // A new message joins at the end, in the order it reached this phone (the vault's order), never by
+            // `sent_at`, the sender's clock: the pages join by that order (MessagePages).
+            list + m
         }
         map + (m.connectionId to next)
     }
@@ -1010,7 +1012,6 @@ class SocialManager(
 
         /** Longer than any request lives (§6.4: an approved incoming one, 16 days). */
         private val NAME_RETENTION: Duration = Duration.ofDays(17)
-        private val ORDER = compareBy<MessageInfo>({ it.sentAt }, { it.messageId })
         private val json = Json { ignoreUnknownKeys = true }
     }
 }
