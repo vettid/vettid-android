@@ -55,9 +55,10 @@ android {
     defaultConfig {
         // Same application id as the v1 app (keeps the Play listing and signing key, D1).
         applicationId = releaseApplicationId
-        // v1 ended at versionCode 7 / 1.0.55; the rewrite starts at 100 / 2.0.0.
-        versionCode = 100
-        versionName = "2.0.0-a0"
+        // v1 ended at versionCode 7 / 1.0.55; the rewrite starts at 100 / 2.0.0. 101 / 2.0.0-a1 is the first build
+        // that implements release R (VAULT-MESSAGING 0.33 §11.14); the staging channel requires it.
+        versionCode = 101
+        versionName = "2.0.0-a1"
     }
 
     signingConfigs {
