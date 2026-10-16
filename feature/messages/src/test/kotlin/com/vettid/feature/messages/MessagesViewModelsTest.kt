@@ -140,4 +140,35 @@ class MessagesViewModelsTest {
         advanceUntilIdle()
         assertEquals(listOf("c1", "c2"), vm.uiState.value.connections.map { it.id })
     }
+    @Test
+    fun scrollingToTheTopLoadsOlderPagesUntilNoneRemain() = runTest {
+        // VAULT-MESSAGING 0.32.0 §10.5.2: older pages one at a time, while the vault announces more.
+        social.setOlder("c1", listOf(listOf(FakeSocial.message("c1", "m0", "older", outgoing = true, minute = 0))))
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.olderAvailable)
+        vm.loadOlder()
+        advanceUntilIdle()
+        assertEquals(listOf("m0", "m1"), vm.uiState.value.messages.map { it.messageId })
+        assertFalse(vm.uiState.value.olderAvailable)
+        assertFalse(vm.uiState.value.loadingOlder)
+        vm.loadOlder() // nothing older: no request
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "loadOlder" })
+    }
+
+    @Test
+    fun anOlderPageTooLargeIsShownAndKeepsTheList() = runTest {
+        // §8.1: an answer that could not be sealed is `response_too_large`, never silence.
+        social.setOlder("c1", listOf(listOf(FakeSocial.message("c1", "m0", "older", outgoing = true, minute = 0))))
+        social.fail["loadOlder"] = VaultFailure(FailureKind.RESPONSE_TOO_LARGE, "response_too_large")
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social)
+        advanceUntilIdle()
+        vm.loadOlder()
+        advanceUntilIdle()
+        assertEquals(FailureKind.RESPONSE_TOO_LARGE, vm.uiState.value.error)
+        assertEquals(listOf("m1"), vm.uiState.value.messages.map { it.messageId })
+        assertTrue(vm.uiState.value.olderAvailable)
+        assertFalse(vm.uiState.value.loadingOlder)
+    }
 }

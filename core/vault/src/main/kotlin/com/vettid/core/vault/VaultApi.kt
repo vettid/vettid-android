@@ -650,14 +650,25 @@ class VaultApi(val device: VaultDevice) {
         put("text", text)
     }.decode(SentMessage.serializer())
 
-    /** History, oldest first ([limit] 1–500). */
-    suspend fun messageList(connectionId: String, limit: Int? = null): List<Message> = VaultJson.decode(
-        ListSerializer(Message.serializer()),
-        op("message.list") {
+    /** The newest page of the history, oldest first ([limit] 1–500); [messagePage] for the older ones. */
+    suspend fun messageList(connectionId: String, limit: Int? = null): List<Message> = messagePage(connectionId, limit).messages
+
+    /**
+     * One page of `message.list` (VAULT-MESSAGING 0.32.0 §10.5.2): without [before] the page ends with the newest
+     * message, with it the messages the vault stored before that `message_id` (exclusive). Oldest first, at most
+     * [limit] (1–500) and 131,072 bytes; [MessagePage.nextBefore] continues to older ones. A [before] the vault does
+     * not hold is `not_found` (the app starts again from the newest); an answer the vault could not seal is
+     * `response_too_large` (§8.1).
+     */
+    suspend fun messagePage(connectionId: String, limit: Int? = null, before: String? = null): MessagePage {
+        val o = op("message.list") {
             put("connection_id", connectionId)
             limit?.let { put("limit", it) }
-        }["messages"] ?: JsonArray(emptyList()),
-    )
+            before?.let { put("before", it) }
+        }
+        val list = VaultJson.decode(ListSerializer(Message.serializer()), o["messages"] ?: JsonArray(emptyList()))
+        return MessagePage(list, VaultJson.str(o, "next_before")?.takeIf { it.isNotEmpty() })
+    }
 
     suspend fun messageGet(connectionId: String, messageId: String): Message = op("message.get") {
         put("connection_id", connectionId)

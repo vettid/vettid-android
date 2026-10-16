@@ -1869,6 +1869,7 @@ class VaultManager(
             "ttl_not_allowed" -> FailureKind.NOT_SUPPORTED
             "stale_credential", "utk_invalid" -> FailureKind.NO_RESPONSE
             "owner_check_required" -> FailureKind.OWNER_CHECK_REQUIRED
+            "response_too_large" -> FailureKind.RESPONSE_TOO_LARGE
             else -> FailureKind.OTHER
         }
     }

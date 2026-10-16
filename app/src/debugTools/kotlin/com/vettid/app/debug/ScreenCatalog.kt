@@ -967,6 +967,21 @@ object ScreenCatalog {
         "messages.empty" to { MessagesScreen(MessagesUiState(loading = false), chrome) },
         "messages.unread" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations.filter { it.unread > 0 }, unreadOnly = true, noConnections = false, searchable = true), chrome) },
         "messages.conversation" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, draft = "See you there"), ConversationActions()) },
+        "messages.conversation_older" to {
+            ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, olderAvailable = true), ConversationActions())
+        },
+        "messages.conversation_older_loading" to {
+            ConversationScreen(
+                ConversationUiState("c1", sam, thread, loading = false, olderAvailable = true, loadingOlder = true),
+                ConversationActions(),
+            )
+        },
+        "messages.conversation_too_large" to {
+            ConversationScreen(
+                ConversationUiState("c1", sam, thread, loading = false, olderAvailable = true, error = FailureKind.RESPONSE_TOO_LARGE),
+                ConversationActions(),
+            )
+        },
         "messages.conversation_empty" to { ConversationScreen(ConversationUiState("c2", alex, emptyList(), loading = false), ConversationActions()) },
         "messages.conversation_stale" to { ConversationScreen(ConversationUiState("c3", jo, emptyList(), loading = false), ConversationActions()) },
         "messages.delete" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, deleting = thread[1]), ConversationActions()) },

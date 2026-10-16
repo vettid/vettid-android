@@ -63,8 +63,17 @@ interface MessagesRepository {
     /** Reloads every conversation (`message.list` per connection). */
     suspend fun refreshConversations()
 
-    /** Reloads one conversation. */
+    /** Reloads one conversation's newest page (VAULT-MESSAGING 0.32.0 §10.5.2), keeping older pages already loaded. */
     suspend fun load(connectionId: String)
+
+    /** Whether older messages than those loaded remain in the vault (`next_before`, §10.5.2). */
+    fun olderAvailable(connectionId: String): Flow<Boolean>
+
+    /**
+     * Loads the next older page of the conversation (the member scrolled to its top). A position the vault no
+     * longer holds starts again from the newest page; `response_too_large` (§8.1) is a [com.vettid.core.data.vault.VaultFailure].
+     */
+    suspend fun loadOlder(connectionId: String)
 
     /** Sends [text] (1 byte to 16 KiB in UTF-8). */
     suspend fun send(connectionId: String, text: String): MessageInfo
