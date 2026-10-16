@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -78,6 +79,7 @@ import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 
@@ -341,8 +343,9 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
     val older by rememberUpdatedState(state.olderAvailable)
     val onLoadOlder by rememberUpdatedState(actions.onLoadOlder)
     LaunchedEffect(listState) {
-        // Armed by the member's first scroll: a short conversation that shows its top at once does not load by itself.
-        snapshotFlow { listState.isScrollInProgress }.first { it }
+        // Armed by the member's first drag (not the scroll to the end on opening): a short conversation that shows
+        // its top at once does not load by itself.
+        listState.interactionSource.interactions.filterIsInstance<DragInteraction.Start>().first()
         // "Load older" on reaching the top (§10.5.2): the first item visible while the vault announced older messages.
         snapshotFlow { listState.firstVisibleItemIndex == 0 && listState.layoutInfo.totalItemsCount > 0 }
             .distinctUntilChanged()

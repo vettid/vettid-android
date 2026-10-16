@@ -86,7 +86,8 @@ class MessagePagesTest {
 
     @Test
     fun pagesJoinByTheVaultsOrderNotTheSendersClock() {
-        // Message 30 arrived last but its sender's clock was behind: it stays after the page, where it arrived.
+        // Message 30 arrived last but its sender's clock was behind: upsert appended it (arrival order), and it stays
+        // after the page, where it arrived.
         val late = m(30).copy(sentAt = Instant.ofEpochSecond(1))
         val current = (6..10).map(::m) + late
         val r = MessagePages.newest((6..10).map(::m), "m06", current, MessagePaging())
