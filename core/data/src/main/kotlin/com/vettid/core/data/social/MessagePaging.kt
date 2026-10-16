@@ -20,30 +20,35 @@ internal data class PagedMessages(val messages: List<MessageInfo>, val paging: M
  * them and continues from the page's own `next_before`, so that the list never has a hole.
  */
 internal object MessagePages {
-    private val ORDER = compareBy<MessageInfo>({ it.sentAt }, { it.messageId })
-
-    /** The newest page ([page] oldest first, [nextBefore] as the vault answered) over [current] and its [paging]. */
+    /**
+     * The newest page ([page] oldest first, [nextBefore] as the vault answered) over [current] and its [paging]. Pages
+     * are joined by the vault's order (a message's position), never by `sent_at`, which is the sender's clock: what
+     * [current] holds before the page's first message is older, what it holds after the page's last one arrived since.
+     */
     fun newest(page: List<MessageInfo>, nextBefore: String?, current: List<MessageInfo>, paging: MessagePaging): PagedMessages {
         val ids = page.mapTo(HashSet()) { it.messageId }
-        val newestAt = page.maxOfOrNull { it.sentAt }
-        val arrived = current.filter { it.messageId !in ids && (newestAt == null || it.sentAt > newestAt) }
-        val sorted = current.sortedWith(ORDER)
-        val join = page.firstOrNull()?.let { first -> sorted.indexOfFirst { it.messageId == first.messageId } } ?: -1
+        val firstAt = page.firstOrNull()?.let { f -> current.indexOfFirst { it.messageId == f.messageId } } ?: -1
+        // The last position in [current] of any message of the page (one deleted meanwhile is simply not in it).
+        val lastAt = current.indexOfLast { it.messageId in ids }
+        val arrived = when {
+            page.isEmpty() -> current
+            lastAt >= 0 -> current.subList(lastAt + 1, current.size)
+            else -> emptyList()
+        }
         return when {
-            page.isEmpty() -> PagedMessages(arrived.sortedWith(ORDER), MessagePaging())
-            nextBefore == null -> PagedMessages((page + arrived).sortedWith(ORDER), MessagePaging(null, paging.olderLoaded))
-            !paging.olderLoaded || join < 0 -> PagedMessages((page + arrived).sortedWith(ORDER), MessagePaging(nextBefore))
+            page.isEmpty() -> PagedMessages(arrived, MessagePaging())
+            nextBefore == null -> PagedMessages(page + arrived, MessagePaging(null, paging.olderLoaded))
+            !paging.olderLoaded || firstAt < 0 -> PagedMessages(page + arrived, MessagePaging(nextBefore))
             else -> {
-                val older = sorted.subList(0, join).filter { it.messageId !in ids }
-                PagedMessages((older + page + arrived).sortedWith(ORDER), paging)
+                val older = current.subList(0, firstAt).filter { it.messageId !in ids }
+                PagedMessages(older + page + arrived, paging)
             }
         }
     }
 
-    /** An older page ([page] oldest first, answered for `before` = [MessagePaging.nextBefore]) added to [current]. */
+    /** An older page ([page] oldest first, answered for `before` = [MessagePaging.nextBefore]) put before [current]. */
     fun older(page: List<MessageInfo>, nextBefore: String?, current: List<MessageInfo>): PagedMessages {
         val have = current.mapTo(HashSet()) { it.messageId }
-        val merged = (page.filter { it.messageId !in have } + current).sortedWith(ORDER)
-        return PagedMessages(merged, MessagePaging(nextBefore, olderLoaded = true))
+        return PagedMessages(page.filter { it.messageId !in have } + current, MessagePaging(nextBefore, olderLoaded = true))
     }
 }

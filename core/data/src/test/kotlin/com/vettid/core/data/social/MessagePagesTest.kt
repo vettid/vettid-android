@@ -83,4 +83,13 @@ class MessagePagesTest {
         val r = MessagePages.older((4..6).map(::m), "m04", (6..8).map(::m))
         assertEquals((4..8).toList(), ids(r.messages))
     }
+
+    @Test
+    fun pagesJoinByTheVaultsOrderNotTheSendersClock() {
+        // Message 30 arrived last but its sender's clock was behind: it stays after the page, where it arrived.
+        val late = m(30).copy(sentAt = Instant.ofEpochSecond(1))
+        val current = (6..10).map(::m) + late
+        val r = MessagePages.newest((6..10).map(::m), "m06", current, MessagePaging())
+        assertEquals(listOf(6, 7, 8, 9, 10, 30), ids(r.messages))
+    }
 }

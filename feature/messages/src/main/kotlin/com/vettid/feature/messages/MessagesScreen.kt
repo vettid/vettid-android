@@ -78,6 +78,7 @@ import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 
 /** Type-safe navigation route of the Messages screen. */
@@ -340,6 +341,8 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
     val older by rememberUpdatedState(state.olderAvailable)
     val onLoadOlder by rememberUpdatedState(actions.onLoadOlder)
     LaunchedEffect(listState) {
+        // Armed by the member's first scroll: a short conversation that shows its top at once does not load by itself.
+        snapshotFlow { listState.isScrollInProgress }.first { it }
         // "Load older" on reaching the top (§10.5.2): the first item visible while the vault announced older messages.
         snapshotFlow { listState.firstVisibleItemIndex == 0 && listState.layoutInfo.totalItemsCount > 0 }
             .distinctUntilChanged()
