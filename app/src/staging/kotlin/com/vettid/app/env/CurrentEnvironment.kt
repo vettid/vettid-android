@@ -21,7 +21,6 @@ import okhttp3.OkHttpClient
 internal val currentEnvironment: AppEnvironment = object : AppEnvironment {
     override val name = "staging"
     override val endpoints = Endpoints.STAGING
-    override val releaseR = com.vettid.app.BuildConfig.RELEASE_R
 
     override fun http(base: OkHttpClient): OkHttpClient = base
 

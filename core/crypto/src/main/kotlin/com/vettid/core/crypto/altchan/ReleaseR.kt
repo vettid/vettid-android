@@ -150,6 +150,11 @@ object RecoveryOpen {
         val counted: Boolean,
         val used: Int,
         val retryAt: Instant?,
+        /**
+         * (0.34.0) Whether THIS request used an attempt (the spend happened), as the vault says; null from a vault
+         * that does not send it. The app never infers it from the code, `attempts` or `retry_at`.
+         */
+        val attemptUsed: Boolean? = null,
     ) {
         private val bundle = vaultBundle?.copyOf()
 
@@ -163,15 +168,16 @@ object RecoveryOpen {
                 val attempts = o.optObj("attempts")
                 val used = attempts?.uint("used", 0, ATTEMPTS.toLong())?.toInt() ?: 0
                 val retry = o.optString("retry_at")?.let { runCatching { Instant.parse(it) }.getOrNull() }
+                val attemptUsed = if (o.has("attempt_used")) o.bool("attempt_used") else null
                 return if (ok) {
                     Result(
                         true, "", o.uint("state_seq", 0, StrictJson.MAX_SAFE_INTEGER), o.uint("header_seq", 0, StrictJson.MAX_SAFE_INTEGER),
                         o.string("token"), Base64s.decodeStd(o.string("vault_bundle")), o.optString("release") ?: "",
                         o.optUint("release_number", 0, StrictJson.MAX_SAFE_INTEGER) ?: 0, o.optString("unlock_id"),
-                        attempts != null, used, retry,
+                        attempts != null, used, retry, attemptUsed,
                     )
                 } else {
-                    Result(false, o.string("code"), 0, 0, "", null, "", 0, null, attempts != null, used, retry)
+                    Result(false, o.string("code"), 0, 0, "", null, "", 0, null, attempts != null, used, retry, attemptUsed)
                 }
             }
 

@@ -243,6 +243,11 @@ data class VaultOverview(
     val signer: SignerView? = null,
     /** (Release R, VAULT-MESSAGING 0.33.0 §11.14.11) `vault.status`'s `recovery`; null from an earlier release. */
     val recovery: RecoveryStatusView? = null,
+    /**
+     * (0.34.0, §11.10.9) Whether the vault's release offers recovery: false for a release with `recovery_r` and without
+     * `recovery_offered` (recovery is hidden: "This vault's release does not offer recovery").
+     */
+    val recoveryOffered: Boolean = true,
 )
 
 /** `vault.status`'s `recovery` for the status screen: never shown as "0 of 10" when [state] is `unknown`. */
@@ -304,6 +309,12 @@ enum class FailureKind {
     /** The vault refused this PHONE's attestation (the `attestation` result of an enrollment or an unlock). */
     ATTESTATION,
     ROLLBACK,
+
+    /**
+     * (0.34.0, §11.10.9) The vault's instance lacks `recovery_r` although this phone has seen release R for the vault:
+     * refused like a rollback, nothing sent.
+     */
+    CAPABILITY_ROLLBACK,
 
     /** The release manifest did not verify (signature, key, format, serial), or the vault refused the app's. */
     MANIFEST,

@@ -151,7 +151,9 @@ class AltChannelFlow(
 
     /**
      * Enrolls this app (§11.3) into [vaultId], the vault the setup code's redeem named (§11.12.1). Success also
-     * arrives as vault.enrolled over the relay.
+     * arrives as vault.enrolled over the relay. (0.34.0, release R) [unlockSecretFor] is given the verified instance's
+     * capabilities (§11.10.9) before each request is built: it returns the phone's unlock secret for release R's shape,
+     * null for the earlier one, or throws, and then nothing is sent. The secret is zeroed once the request is sealed.
      */
     suspend fun enroll(
         party: AltParty,
@@ -159,14 +161,19 @@ class AltChannelFlow(
         userGuid: String,
         pin: String,
         attester: Attester,
-        unlockSecret: ByteArray? = null,
+        unlockSecretFor: suspend (capabilities: List<String>) -> ByteArray? = { null },
     ): EnrollOutcome {
         var m = manifest(party.manifestSerialSeen())
         var refetched = false
         var attempt = 1
         while (true) {
             val (info, e) = enclaveFor(null, m, enroll = true)
-            val req = party.prepareEnroll(userGuid, pin, e, m, attester, unlockSecret)
+            val secret = unlockSecretFor(e.descriptor.capabilities)
+            val req = try {
+                party.prepareEnroll(userGuid, pin, e, m, attester, secret)
+            } finally {
+                secret?.fill(0)
+            }
             var err: MemberApiException? = null
             var slot: Slot? = null
             var vid = ""
@@ -204,6 +211,8 @@ class AltChannelFlow(
         options: UnlockOptions = UnlockOptions(),
         release: String? = null,
         onStarting: ((Long) -> Unit)? = null,
+        /** (0.34.0, release R) As for [enroll]: the request's shape from the routed instance's capabilities. */
+        unlockSecretFor: suspend (capabilities: List<String>) -> ByteArray? = { options.unlockSecret?.copyOf() },
     ): UnlockOutcome {
         val vaultId = party.vaultId() ?: throw AltRefusedException(AltRefusedException.Reason.NOT_PAIRED)
         var m = manifest(party.manifestSerialSeen())
@@ -211,7 +220,12 @@ class AltChannelFlow(
         var attempt = 1
         while (true) {
             val (info, e) = enclaveFor(release, m, enroll = false, onStarting)
-            val built = party.prepareUnlock(userGuid, pin, e, m, attester, options)
+            val secret = unlockSecretFor(e.descriptor.capabilities)
+            val built = try {
+                party.prepareUnlock(userGuid, pin, e, m, attester, options.copy(unlockSecret = secret))
+            } finally {
+                secret?.fill(0)
+            }
             var err: MemberApiException? = null
             var slot: Slot? = null
             try {

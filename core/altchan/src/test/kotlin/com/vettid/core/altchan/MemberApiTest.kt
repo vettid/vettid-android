@@ -336,6 +336,47 @@ class MemberApiTest {
         assertEquals(2, log.count { it == "POST /api/vault/recovery/register" })
     }
 
+    /**
+     * VAULT-MESSAGING 0.34.0 §11.10.9: the request's shape is chosen from the verified instance's capabilities before
+     * anything is built; a refusal there (a vault known to have release R, an instance without it) sends nothing.
+     */
+    @Test
+    fun theInstancesCapabilitiesChooseTheShapeAndARefusalSendsNothing() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", capabilities = listOf("attachments", "recovery_offered", "recovery_r")))
+        val p = Party()
+        var seen: List<String>? = null
+        val out = flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) {
+            seen = it
+            ByteArray(32) { 0x42 }
+        }
+        assertTrue(out.ok)
+        assertEquals(listOf("attachments", "recovery_offered", "recovery_r"), seen)
+        p.vaultId = out.vaultId
+        p.state = AltRequests.applyEnrolled(p.state, 1)
+        // An instance without recovery_r for a vault known to have it: refused before the request is built.
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a"))
+        val enrolls = log.count { it == "POST /api/vault/enroll" }
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { caps -> check("recovery_r" in caps) { "rollback" }; null } }
+        }
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) { caps ->
+                    check("recovery_r" in caps) { "rollback" }
+                    null
+                }
+            }
+        }
+        assertEquals(enrolls, log.count { it == "POST /api/vault/enroll" })
+        // A release before R (no list): the earlier shape, as before.
+        var plain: List<String>? = null
+        assertTrue(flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { caps -> plain = caps; null }.ok)
+        assertEquals(emptyList<String>(), plain)
+    }
+
     @Test
     fun reSealsAfterInstanceMoved() = runBlocking<Unit> {
         enclaves.add(TestSupport.Enclave("inst-b"))

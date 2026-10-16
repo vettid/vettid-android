@@ -68,9 +68,15 @@ object TestSupport {
     }
 
     /** An enclave instance whose ETK private key the test holds. */
-    class Enclave(val instanceId: String = "inst-a", val number: Long = 3, val pcr0: String = TestSupport.pcr0) {
+    class Enclave(
+        val instanceId: String = "inst-a",
+        val number: Long = 3,
+        val pcr0: String = TestSupport.pcr0,
+        /** (0.34.0) The release's capabilities in the descriptor; null: none (a release before R). */
+        capabilities: List<String>? = null,
+    ) {
         val etk: KemPrivateKey = KemPrivateKey.generate()
-        val descriptor: ByteArray = Descriptor.marshal(instanceId, etk.publicKey, pcr0, Instant.now().plusSeconds(3600))
+        val descriptor: ByteArray = Descriptor.marshal(instanceId, etk.publicKey, pcr0, Instant.now().plusSeconds(3600), capabilities)
 
         fun verified(m: ReleaseManifest): VerifiedEnclave =
             VerifiedEnclave(Descriptor.parse(descriptor), Measurements(pcr0, pcr1, pcr2), m.byPcr0(pcr0) ?: error("not in manifest"))

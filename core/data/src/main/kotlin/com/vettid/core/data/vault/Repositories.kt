@@ -29,6 +29,8 @@ data class RecoveryOpenOutcome(
      * is then the answer of this phone's own unlock (`bad_pin`, `backoff`, …), and nothing of the recovery was used.
      */
     val opened: Boolean = false,
+    /** (0.34.0) Whether THIS request used an attempt, as the vault says; null from a vault that does not say. */
+    val attemptUsed: Boolean? = null,
 ) {
     val ok: Boolean get() = code == "ok"
     val left: Int? get() = used?.let { (ATTEMPTS - it).coerceAtLeast(0) }
@@ -159,6 +161,12 @@ interface VaultRepository {
 
     /** (Release R) Whether this phone holds a phone secret for its vault (a vault of release R). */
     val usesPhoneSecret: Boolean get() = false
+
+    /**
+     * (0.34.0, §11.10.9) Whether the vault's release offers recovery: true for a release before R (its earlier
+     * recovery), and from release R only when its capabilities list `recovery_offered`.
+     */
+    val recoveryOffered: Boolean get() = true
 
     /**
      * (Release R, §11.14.10) When this phone approved a transfer it still keeps the keys for (until the new phone's
@@ -365,6 +373,13 @@ interface MoveRepository {
 
     /** (Release R) The attempts used of the registered recovery as last reported (also after a restart); null before. */
     val recoveryAttemptsUsed: Int? get() = null
+
+    /**
+     * (Release R, 0.34.0 §11.14.6 "A lost ok") The open's answer never arrived or could not be read: an unlock with the
+     * PIN and this phone's secret; when its result carries the vault's bundle the recovery completed and is finished
+     * here (handshake again, credential). No attempt is used.
+     */
+    suspend fun resumeLostOk(pin: String): RecoveryOpenOutcome = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 
     /** (Release R) After an `ok` [recoveryOpen] the member has read: the app opens. */
     suspend fun finishRecoveryOpen() {}

@@ -93,6 +93,11 @@ data class RecoveryOpenUiState(
     val failureCode: String? = null,
     /** The member asked to erase VettID from this phone ([canErase]); the confirmation is shown. */
     val confirmErase: Boolean = false,
+    /**
+     * (0.34.0 §11.14.6 "A lost ok") [OpenStep.FINISH] after an open whose answer never arrived or could not be read: the
+     * PIN unlocks with this phone's secret, and a result with the vault's bundle finishes the recovery.
+     */
+    val lostOk: Boolean = false,
     /** Attempts used, as last known (null before the counter ever answered for this recovery, also after a restart). */
     val used: Int? = null,
     /**
@@ -104,16 +109,12 @@ data class RecoveryOpenUiState(
     val canContinue: Boolean get() = pinValid && password.isNotEmpty()
 
     /**
-     * While finishing an `ok` recovery, the vault settled that it no longer has this phone (its own key refused twice,
-     * an answer only a vault without this phone gives, the member API refusing its app key, no vault): the way out is to
-     * erase VettID from this phone.
+     * While finishing an `ok` recovery, the enclave itself answered that this phone's key no longer opens the vault
+     * (`device_secret` at both epochs, a sealed answer nobody else can make): the way out is to erase VettID from this
+     * phone. Answers the host or the member API can produce (random bytes, a 401) never offer it.
      */
     val canErase: Boolean
-        get() {
-            val ownKeyRefused = outcome?.opened == true && outcome.code == CODE_DEVICE_SECRET
-            val vaultGone = failureCode == CODE_UNREADABLE || failure in GONE
-            return step == OpenStep.FINISH && (ownKeyRefused || vaultGone)
-        }
+        get() = step == OpenStep.FINISH && !lostOk && outcome?.opened == true && outcome.code == CODE_DEVICE_SECRET
 
     /** The PIN alone, for [OpenStep.FINISH]. */
     val pinValid: Boolean get() = pin.length in PIN_MIN..PIN_MAX && pin.all { it.isDigit() }
@@ -133,8 +134,7 @@ data class RecoveryOpenUiState(
         private const val PIN_MAX = 32
         private const val LOW = 3
         private const val CODE_DEVICE_SECRET = "device_secret"
-        private const val CODE_UNREADABLE = "unreadable_result"
-        private val GONE = setOf(FailureKind.UNAUTHORIZED, FailureKind.NO_VAULT)
+        const val CODE_UNREADABLE = "unreadable_result"
     }
 }
 
@@ -188,7 +188,7 @@ class RecoveryOpenViewModel @Inject constructor(
         state.update { it.copy(step = OpenStep.SENDING, failure = null, failureCode = null) }
         viewModelScope.launch {
             val out = try {
-                move.recoveryOpen(s.pin, s.password)
+                if (finishing && s.lostOk) move.resumeLostOk(s.pin) else move.recoveryOpen(s.pin, s.password)
             } catch (e: VaultFailure) {
                 // No answer, or the vault said `ok` and the rest failed: then the PIN finishes it, nothing is opened again.
                 val opened = runCatching { move.recoveryOpened() }.getOrDefault(finishing)
@@ -208,7 +208,12 @@ class RecoveryOpenViewModel @Inject constructor(
         when {
             out.ok -> state.update { RecoveryOpenUiState(step = OpenStep.DONE, outcome = out, used = out.used ?: it.used) }
             // This phone's own unlock while finishing an `ok` recovery (a wrong PIN, a wait): nothing of the recovery used.
-            out.opened -> state.update { it.copy(step = OpenStep.FINISH, outcome = out, failure = null, pin = "") }
+            out.opened -> state.update {
+                // Resuming a lost `ok`, the vault's `device_secret`: this phone is not in its unlock keys, the recovery
+                // did not complete onto it (as without a bundle): said so, with the way back.
+                val shown = if (it.lostOk && out.code == CODE_DEVICE_SECRET_ANSWER) out.copy(code = CODE_NO_BUNDLE_ANSWER) else out
+                it.copy(step = OpenStep.FINISH, outcome = shown, failure = null, pin = "")
+            }
             else -> state.update {
                 it.copy(
                     step = OpenStep.ANSWERED,
@@ -223,7 +228,15 @@ class RecoveryOpenViewModel @Inject constructor(
     }
 
     /** From an answer: back to the fields for another try (the PIN kept). */
-    fun again() = state.update { it.copy(step = OpenStep.ENTER, outcome = null, failure = null) }
+    fun again() = state.update { it.copy(step = OpenStep.ENTER, outcome = null, failure = null, failureCode = null, lostOk = false) }
+
+    /**
+     * (0.34.0) The open's answer was lost or unreadable, or the recovery ended after such an open: the PIN may finish a
+     * recovery that completed on the way (an unlock with this phone's secret; no attempt is used).
+     */
+    fun finishLostOk() = state.update {
+        it.copy(step = OpenStep.FINISH, lostOk = true, outcome = null, failure = null, failureCode = null, password = "")
+    }
 
     fun askErase() = state.update { if (it.canErase) it.copy(confirmErase = true) else it }
 
@@ -254,24 +267,23 @@ class RecoveryOpenViewModel @Inject constructor(
         const val CODE_WRONG_AGAIN = "wrong_again"
         const val CODE_LOST = "attempt_lost"
         const val CODE_WAIT = "wait"
+        private const val CODE_DEVICE_SECRET_ANSWER = "device_secret"
+        private const val CODE_NO_BUNDLE_ANSWER = "no_bundle"
     }
 }
 
 /**
- * The text of an answer (ANDROID-PLAN 0.1.40's table): a string and its arguments, then, when set, the date the app was
- * last used ([withPresentDate]: `retry_at` less the quiet period) and `retry_at` ([withRetryAt]). [attemptsLeft]: a
- * line under it with the attempts left, for the answers whose text does not say whether this request used one.
+ * The text of an answer (ANDROID-PLAN 0.1.41's table): a string and its arguments, then, when set, `retry_at`
+ * ([withRetryAt]). The date the app was last used is not shown: nothing the app reads carries the vault's quiet period.
+ * [attemptsLeft]: a line under it with the attempts left, for the answers whose text does not say whether this request
+ * used one.
  */
 data class OpenAnswerText(
     @StringRes val res: Int,
     val args: List<Any> = emptyList(),
     val withRetryAt: Boolean = false,
-    val withPresentDate: Boolean = false,
     val attemptsLeft: Int? = null,
 )
-
-/** The quiet period before a recovery (§11.14.5, 72 hours in production): `quiet`'s `retry_at` is the presence plus it. */
-val QUIET_PERIOD: java.time.Duration = java.time.Duration.ofHours(72)
 
 /**
  * Every answer of the plan's table; [left] is 10 less the attempts used, when known. [rightButIncomplete]: the open
@@ -298,19 +310,17 @@ private fun tableText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText {
         }
         "wrong_again" -> OpenAnswerText(R.string.onboarding_open_wrong_again)
         "attempt_lost" -> OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(left))
-        "quiet" -> if (o.retryAt != null) {
-            OpenAnswerText(R.string.onboarding_open_quiet, withRetryAt = true, withPresentDate = true, attemptsLeft = o.left)
-        } else {
-            OpenAnswerText(R.string.onboarding_open_quiet_nodate, attemptsLeft = o.left)
-        }
-        "wait" -> if (o.retryAt != null) {
-            OpenAnswerText(R.string.onboarding_open_wait, withRetryAt = true, attemptsLeft = o.left)
-        } else {
-            OpenAnswerText(R.string.onboarding_open_wait_nodate, attemptsLeft = o.left)
-        }
+        "quiet" -> quietText(o, left)
+        "wait" -> waitText(o, left)
         "busy" -> OpenAnswerText(R.string.onboarding_open_busy)
-        "retry" -> OpenAnswerText(R.string.onboarding_open_retry)
-        "stored_mismatch" -> if (o.used != null) {
+        // (0.34.0) A retry after the spend used an attempt (the entry may have been right).
+        "retry" -> if (o.attemptUsed == true) {
+            OpenAnswerText(R.string.onboarding_open_retry_used, listOf(left))
+        } else {
+            OpenAnswerText(R.string.onboarding_open_retry)
+        }
+        // Before the spend nothing was used; after it, the right attempt was (attempt_used; an older vault: attempts).
+        "stored_mismatch", "vault_missing" -> if (o.attemptUsed ?: (o.used != null)) {
             OpenAnswerText(R.string.onboarding_open_stored_mismatch_right)
         } else {
             OpenAnswerText(R.string.onboarding_open_stored_mismatch)
@@ -336,11 +346,31 @@ private fun tableText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText {
     }
 }
 
+/**
+ * `quiet` (§11.14.6, ANDROID-PLAN 0.1.41): whether this request used an attempt comes only from `attempt_used`; a vault
+ * that does not say gets the neutral text with the attempts left.
+ */
+private fun quietText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText = when {
+    o.attemptUsed == true -> OpenAnswerText(R.string.onboarding_open_quiet_used, listOf(left))
+    o.retryAt == null -> OpenAnswerText(R.string.onboarding_open_quiet_nodate, attemptsLeft = o.left.takeIf { o.attemptUsed == null })
+    o.attemptUsed == false -> OpenAnswerText(R.string.onboarding_open_quiet_nothing, withRetryAt = true)
+    else -> OpenAnswerText(R.string.onboarding_open_quiet, withRetryAt = true, attemptsLeft = o.left)
+}
+
+/** `wait`: with an attempt used, as `attempt_lost`; with none, "Nothing was used"; unknown, neutral. */
+private fun waitText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText = when {
+    o.attemptUsed == true -> OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(left))
+    o.retryAt == null -> OpenAnswerText(R.string.onboarding_open_wait_nodate, attemptsLeft = o.left.takeIf { o.attemptUsed == null })
+    o.attemptUsed == false -> OpenAnswerText(R.string.onboarding_open_wait_nothing, withRetryAt = true)
+    else -> OpenAnswerText(R.string.onboarding_open_wait, withRetryAt = true, attemptsLeft = o.left)
+}
+
 /** This phone's own unlock while it finishes a recovery the vault answered `ok` (nothing of the recovery is used). */
 @StringRes
 private fun openedText(code: String): Int = when (code) {
     "bad_pin" -> R.string.onboarding_open_finish_bad_pin
     "backoff" -> R.string.onboarding_open_finish_backoff
+    CODE_NO_BUNDLE -> R.string.onboarding_open_lost_not_here
     else -> R.string.onboarding_open_finish_failed
 }
 
@@ -357,13 +387,11 @@ fun openCanTryAgain(code: String?): Boolean = code !in ENDED
 fun openNeedsNewRecovery(code: String?): Boolean = code in NEW_RECOVERY
 
 private val whenFormat: DateTimeFormatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
-private val dateFormat: DateTimeFormatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
 
 /** The arguments of [t] for [o]: its own, then the date the app was last used, then `retry_at`, in the phone's zone. */
 internal fun openAnswerArgs(t: OpenAnswerText, o: RecoveryOpenOutcome, zone: ZoneId = ZoneId.systemDefault()): List<Any> {
     val retryAt = o.retryAt
     var args = t.args
-    if (t.withPresentDate && retryAt != null) args = args + retryAt.minus(QUIET_PERIOD).atZone(zone).format(dateFormat)
     if (t.withRetryAt) args = args + (retryAt?.atZone(zone)?.format(whenFormat).orEmpty())
     return args
 }
@@ -400,8 +428,14 @@ fun RecoveryOpenPane(
 /** The vault answered `ok` earlier: the PIN alone finishes opening it. No new open, no start over. */
 @Composable
 private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
-    Text(stringResource(R.string.onboarding_open_finish_title), style = MaterialTheme.typography.titleLarge)
-    Text(stringResource(R.string.onboarding_open_finish_body), style = MaterialTheme.typography.bodyLarge)
+    Text(
+        stringResource(if (state.lostOk) R.string.onboarding_open_lost_title else R.string.onboarding_open_finish_title),
+        style = MaterialTheme.typography.titleLarge,
+    )
+    Text(
+        stringResource(if (state.lostOk) R.string.onboarding_open_lost_body else R.string.onboarding_open_finish_body),
+        style = MaterialTheme.typography.bodyLarge,
+    )
     OutlinedTextField(
         value = state.pin,
         onValueChange = vm::setPin,
@@ -423,6 +457,12 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
         Text(stringResource(R.string.onboarding_open_finish_go))
     }
     if (state.canErase) OpenFinishErase(state.confirmErase, vm)
+    // A lost `ok` that may not have happened: back to the open (only an `ok` the vault confirmed has no way back).
+    if (state.lostOk) {
+        TextButton(onClick = vm::again, modifier = Modifier.testTag("open_lost_back")) {
+            Text(stringResource(R.string.onboarding_open_back))
+        }
+    }
 }
 
 /** The vault no longer has this phone: "Erase VettID from this phone", after a confirmation. */
@@ -518,15 +558,8 @@ private fun OpenCheck(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
 @Suppress("SpreadOperator") // a string's arguments
 private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onStartOver: (() -> Unit)?) {
     val o = state.outcome
-    val failure = state.failure
     if (o == null) {
-        NoticeCard(
-            kind = NoticeKind.WARNING,
-            title = stringResource(R.string.onboarding_open_answer_title),
-            body = stringResource((failure ?: FailureKind.OTHER).messageRes()),
-        )
-        TextButton(onClick = vm::again) { Text(stringResource(R.string.onboarding_open_try_again)) }
-        onStartOver?.let { TextButton(onClick = it) { Text(stringResource(R.string.recover_start_over)) } }
+        OpenNoAnswer(state, vm, onStartOver)
         return
     }
     val t = openAnswerText(o, state.rightButIncomplete)
@@ -552,7 +585,32 @@ private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, on
             style = MaterialTheme.typography.bodyMedium,
         )
     }
+    if (o.code == "no_recovery" && o.afterUnanswered) {
+        Button(onClick = vm::finishLostOk, modifier = Modifier.testTag("open_lost_ok")) {
+            Text(stringResource(R.string.onboarding_open_lost_title))
+        }
+    }
     OpenAnswerActions(o.code, waiting = retryAt != null && now < retryAt.toEpochMilli(), vm, onStartOver)
+}
+
+/** No readable answer (a failure before the vault answered, or random bytes): the text, and the ways on. */
+@Composable
+private fun OpenNoAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onStartOver: (() -> Unit)?) {
+    val failure = state.failure
+    val unreadable = state.failureCode == RecoveryOpenUiState.CODE_UNREADABLE
+    NoticeCard(
+        kind = NoticeKind.WARNING,
+        title = stringResource(R.string.onboarding_open_answer_title),
+        body = stringResource(if (unreadable) R.string.onboarding_open_unreadable else (failure ?: FailureKind.OTHER).messageRes()),
+    )
+    // The answer may have been a lost `ok` (§11.14.6): the PIN finishes it, without an attempt.
+    if (unreadable || failure == FailureKind.NO_RESPONSE) {
+        OutlinedButton(onClick = vm::finishLostOk, modifier = Modifier.testTag("open_lost_ok")) {
+            Text(stringResource(R.string.onboarding_open_lost_title))
+        }
+    }
+    TextButton(onClick = vm::again) { Text(stringResource(R.string.onboarding_open_try_again)) }
+    onStartOver?.let { TextButton(onClick = it) { Text(stringResource(R.string.recover_start_over)) } }
 }
 
 /** Try again (when it can help and no wait runs), and Start over or "Start a new recovery". */
@@ -585,3 +643,6 @@ private const val TICK_MS = 1_000L
 private const val DAY = 86_400L
 private const val HOUR = 3_600L
 private const val MINUTE = 60L
+
+/** The resume of a lost `ok` found no recovery completed onto this phone (the unlock carried no `vault_bundle`). */
+private const val CODE_NO_BUNDLE = "no_bundle"

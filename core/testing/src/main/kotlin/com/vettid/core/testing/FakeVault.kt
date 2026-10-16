@@ -206,6 +206,19 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     override suspend fun recoveryOpened(): Boolean = recoveryOpenedValue
 
+    /** What [resumeLostOk] answers, in order; an empty queue answers `ok`. */
+    val lostOkOutcomes = ArrayDeque<com.vettid.core.data.vault.RecoveryOpenOutcome>()
+
+    override suspend fun resumeLostOk(pin: String): com.vettid.core.data.vault.RecoveryOpenOutcome {
+        call("resumeLostOk")
+        lastPin = pin
+        return lostOkOutcomes.removeFirstOrNull() ?: com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 2, attemptUsed = false)
+    }
+
+    /** (0.34.0) Whether the vault's release offers recovery. */
+    var recoveryOfferedValue = true
+    override val recoveryOffered: Boolean get() = recoveryOfferedValue
+
     override suspend fun finishRecoveryOpen() {
         call("finishRecoveryOpen")
         phase.value = AppPhase.Unlocked

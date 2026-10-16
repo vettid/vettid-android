@@ -120,6 +120,11 @@ class RecoverViewModelTest {
         vm.scanned(qr)
         advanceUntilIdle()
         assertEquals(CodeRefusal.NOT_AVAILABLE, vm.uiState.value.refusal)
+        // 0.34.0: a release with recovery_r and without recovery_offered (nothing sent, or the vault's not_offered).
+        vault.registrations.add(RecoveryRegistration.Refused("not_offered"))
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(CodeRefusal.NOT_OFFERED, vm.uiState.value.refusal)
     }
 
     private suspend fun kotlinx.coroutines.test.TestScope.atThePin(): RecoverViewModel {

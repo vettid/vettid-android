@@ -697,8 +697,12 @@ class VaultDevice private constructor(
     suspend fun startTransfer(
         link: String,
         attester: Attester,
-        /** (0.33.0, release R §11.14.10) The new phone key's secret of epoch 1, sent in the `hs.init`. */
-        unlockSecret: ByteArray? = null,
+        /**
+         * (0.34.0, release R §11.14.10, §11.10.9) Given the bundle's capabilities (empty when it has none), the new phone
+         * key's secret of epoch 1 for release R's `hs.init`, null for the earlier one; it may throw, and then nothing is
+         * sent. The secret is zeroed once the `hs.init` is sealed.
+         */
+        unlockSecretFor: suspend (capabilities: List<String>) -> ByteArray? = { null },
     ) {
         val q = try {
             InviteQr.parseLink(link)
@@ -719,6 +723,7 @@ class VaultDevice private constructor(
                 throw NotATransferCodeException(expired = true).also { it.initCause(e) }
             }
             if (b.kind != InviteKind.APP) throw NotATransferCodeException()
+            val unlockSecret = unlockSecretFor(b.capabilities.orEmpty())
             setVault(b.vault)
             st.vaultId = null
             sasState.value = null
@@ -728,7 +733,11 @@ class VaultDevice private constructor(
             st.signerSeen = false // a new attestation is a new key (§11.7.1)
             val profile = JsonBuilder().string("name", st.name).bytes()
             // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
-            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey, unlockSecret = unlockSecret)
+            try {
+                startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey, unlockSecret = unlockSecret)
+            } finally {
+                unlockSecret?.fill(0)
+            }
             save()
         }
     }

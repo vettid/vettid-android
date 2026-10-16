@@ -191,6 +191,8 @@ data class RecoveryUiState(
     val loading: Boolean = true,
     val recovery: RecoveryView? = null,
     val backupOff: Boolean = false,
+    /** (0.34.0) The vault's release offers recovery (§11.10.9); false: recovery is hidden for this vault. */
+    val offered: Boolean = true,
     val busy: Boolean = false,
     val error: FailureKind? = null,
 )
@@ -204,7 +206,7 @@ class RecoveryViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val credential: CredentialRepository,
 ) : ViewModel() {
-    private val state = MutableStateFlow(RecoveryUiState())
+    private val state = MutableStateFlow(RecoveryUiState(offered = vault.recoveryOffered))
     val uiState: StateFlow<RecoveryUiState> = state.asStateFlow()
 
     init {

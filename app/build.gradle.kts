@@ -133,9 +133,6 @@ android {
         // the tester, never the build members get). Never a release build.
         val callsTest = name != "release" && (isDebuggable || (name == "staging" && providers.gradleProperty("vettidCallsTest").orNull == "true"))
         buildConfigField("boolean", "CALLS_TEST", callsTest.toString())
-        // Release R (VAULT-MESSAGING 0.33.0 §11.14; ANDROID-PLAN 0.1.40): the phone key and the recovery open, for an
-        // environment whose vaults are of release R. Off until that environment's channel ships it.
-        buildConfigField("boolean", "RELEASE_R", (providers.gradleProperty("vettidReleaseR").orNull == "true").toString())
         // Firebase's receiver and the messaging services exist in the manifest of every `full` build; they are
         // enabled only where the options are (src/full/AndroidManifest.xml, the only manifest that reads this; set
         // on the build type so that the unit-test manifests of a variant get it too).
