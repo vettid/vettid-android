@@ -24,16 +24,6 @@ interface AppEnvironment {
     /** True only in the debug-only `devStack` build (development hints in the UI). */
     val isDevStack: Boolean get() = false
 
-    /**
-     * Whether this environment's vaults are of release R (VAULT-MESSAGING 0.33.0 §11.14): enrollment, a transfer to
-     * this phone and a recovery then make the phone key and send its unlock secret, and a recovery opens with
-     * `vault.recovery.open`. Nothing in the protocol tells an app a release's constants, and a vault from before
-     * release R cannot move into it (its staging vaults are enrolled again, §11.14.14), so it is a build switch
-     * (`-PvettidReleaseR=true`, BuildConfig.RELEASE_R), off until the environment's channel ships release R. A vault
-     * this phone enrolled, received or recovered with a phone key keeps using it whatever the switch says.
-     */
-    val releaseR: Boolean get() = false
-
     /** Adds the environment's transport settings (the dev stack's address mapping) to [base]. */
     fun http(base: OkHttpClient): OkHttpClient
 

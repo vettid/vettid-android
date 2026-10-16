@@ -29,7 +29,6 @@ internal val currentEnvironment: AppEnvironment = object : AppEnvironment {
     override val name = "devStack"
     override val endpoints = Endpoints(stack.apiBase, stack.manifestUrl, stack.relayUrl)
     override val isDevStack = true
-    override val releaseR = BuildConfig.RELEASE_R
 
     override fun http(base: OkHttpClient): OkHttpClient =
         base.newBuilder().addInterceptor(OriginMapInterceptor(mapOf(stack.relayUrl to BuildConfig.DEV_STACK_RELAY))).build()

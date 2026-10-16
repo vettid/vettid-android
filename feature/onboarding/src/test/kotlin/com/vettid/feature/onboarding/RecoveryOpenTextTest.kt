@@ -23,11 +23,11 @@ class RecoveryOpenTextTest {
         assertEquals(OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(7)), openAnswerText(RecoveryOpenOutcome("attempt_lost", 3, null), false))
         // quiet and wait say how many attempts are left, never whether this request used one (the result does not tell).
         assertEquals(
-            OpenAnswerText(R.string.onboarding_open_quiet, emptyList(), withRetryAt = true, withPresentDate = true, attemptsLeft = null),
+            OpenAnswerText(R.string.onboarding_open_quiet, emptyList(), withRetryAt = true, attemptsLeft = null),
             openAnswerText(RecoveryOpenOutcome("quiet", null, at), false),
         )
         assertEquals(
-            OpenAnswerText(R.string.onboarding_open_quiet, emptyList(), withRetryAt = true, withPresentDate = true, attemptsLeft = 6),
+            OpenAnswerText(R.string.onboarding_open_quiet, emptyList(), withRetryAt = true, attemptsLeft = 6),
             openAnswerText(RecoveryOpenOutcome("quiet", 4, at), false),
         )
         assertEquals(OpenAnswerText(R.string.onboarding_open_quiet_nodate, attemptsLeft = 6), openAnswerText(RecoveryOpenOutcome("quiet", 4, null), false))
@@ -58,6 +58,29 @@ class RecoveryOpenTextTest {
         assertEquals(OpenAnswerText(R.string.onboarding_open_right_incomplete, listOf(7), true), openAnswerText(RecoveryOpenOutcome("wait", 3, at), true))
     }
 
+    /** (0.34.0) Whether this request used an attempt comes only from attempt_used (ANDROID-PLAN 0.1.41's table). */
+    @Test
+    fun theAttemptTextsFollowAttemptUsed() {
+        // quiet: nothing used (with the date), one used, unknown (neutral).
+        assertEquals(
+            OpenAnswerText(R.string.onboarding_open_quiet_nothing, withRetryAt = true),
+            openAnswerText(RecoveryOpenOutcome("quiet", 3, at, attemptUsed = false), false),
+        )
+        assertEquals(OpenAnswerText(R.string.onboarding_open_quiet_used, listOf(6)), openAnswerText(RecoveryOpenOutcome("quiet", 4, at, attemptUsed = true), false))
+        assertEquals(R.string.onboarding_open_quiet, openAnswerText(RecoveryOpenOutcome("quiet", 4, at), false).res)
+        // wait: nothing used; one used is shown as attempt_lost.
+        assertEquals(OpenAnswerText(R.string.onboarding_open_wait_nothing, withRetryAt = true), openAnswerText(RecoveryOpenOutcome("wait", 2, at, attemptUsed = false), false))
+        assertEquals(OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(7)), openAnswerText(RecoveryOpenOutcome("wait", 3, at, attemptUsed = true), false))
+        // retry after the spend.
+        assertEquals(OpenAnswerText(R.string.onboarding_open_retry_used, listOf(5)), openAnswerText(RecoveryOpenOutcome("retry", 5, null, attemptUsed = true), false))
+        assertEquals(R.string.onboarding_open_retry, openAnswerText(RecoveryOpenOutcome("retry", 5, null, attemptUsed = false), false).res)
+        // stored_mismatch and vault_missing: before or after the spend, by attempt_used, not by attempts.
+        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 3, null, attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_stored_mismatch_right, openAnswerText(RecoveryOpenOutcome("vault_missing", 4, null, attemptUsed = true), false).res)
+        // The resume of a lost ok that found no recovery here.
+        assertEquals(R.string.onboarding_open_lost_not_here, openAnswerText(RecoveryOpenOutcome("no_bundle", opened = true), false).res)
+    }
+
     @Test
     fun whichAnswersEndTheRecovery() {
         assertTrue(openCanTryAgain("wrong"))
@@ -71,14 +94,13 @@ class RecoveryOpenTextTest {
         assertFalse(openNeedsNewRecovery("exhausted"))
     }
 
-    /** The quiet text's date the app was last used: retry_at less the 72 hours, as a date; then retry_at. */
+    /** The quiet text names only retry_at: the vault's quiet period is not known to the app, so no "last used" date. */
     @Test
-    fun theQuietTextNamesTheDateTheAppWasUsed() {
-        val o = RecoveryOpenOutcome("quiet", 2, Instant.parse("2026-10-20T09:30:00Z"))
+    fun theQuietTextNamesOnlyTheEarliestRecovery() {
+        val o = RecoveryOpenOutcome("quiet", 2, Instant.parse("2026-10-20T09:30:00Z"), attemptUsed = false)
         val args = openAnswerArgs(openAnswerText(o, false), o, java.time.ZoneOffset.UTC)
-        assertEquals(2, args.size)
-        assertTrue(args[0].toString(), args[0].toString().contains("17"))
-        assertTrue(args[1].toString(), args[1].toString().contains("20"))
+        assertEquals(1, args.size)
+        assertTrue(args[0].toString(), args[0].toString().contains("20"))
     }
 
     @Test

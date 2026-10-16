@@ -371,6 +371,7 @@ private fun CodeRefusalNotice(state: RecoverUiState) {
         CodeRefusal.OTHER_ENVIRONMENT -> stringResource(R.string.recover_scan_other_environment, state.otherApi ?: "")
         CodeRefusal.NO_API -> stringResource(R.string.recover_scan_no_api)
         CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available)
+        CodeRefusal.NOT_OFFERED -> stringResource(R.string.recover_not_offered)
     }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(

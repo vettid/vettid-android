@@ -170,4 +170,12 @@ class SettingsViewModelsTest {
         advanceUntilIdle()
         assertEquals("pending", vm.uiState.value.recovery?.state)
     }
+
+    /** 0.34.0 §11.10.9: a release with recovery_r and without recovery_offered: recovery is hidden for the vault. */
+    @Test
+    fun recoveryIsHiddenWhenTheReleaseDoesNotOfferIt() = runTest {
+        assertTrue(RecoveryViewModel(vault, vault).uiState.value.offered)
+        vault.recoveryOfferedValue = false
+        assertFalse(RecoveryViewModel(vault, vault).uiState.value.offered)
+    }
 }

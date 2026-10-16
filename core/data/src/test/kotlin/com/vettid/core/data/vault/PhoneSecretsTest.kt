@@ -173,4 +173,44 @@ class PhoneSecretsTest {
         assertFalse(KeptTransfer.stillTheApp(list("dev-old" to "app"), null))
         assertFalse(KeptTransfer.stillTheApp(kotlinx.serialization.json.JsonObject(emptyMap()), "dev-old"))
     }
+
+    /** §11.10.9: the path from the verified capabilities, and the mark that never lets a vault go back. */
+    @Test
+    fun theCapabilitiesChooseThePathAndAMarkedVaultNeverGoesBack() {
+        // A vault whose release lists nothing: the earlier path, exactly as before.
+        assertEquals(ReleasePath.Path.EARLIER, ReleasePath.choose(emptyList(), releaseRKnown = false))
+        assertEquals(ReleasePath.Path.EARLIER, ReleasePath.choose(listOf("attachments"), releaseRKnown = false))
+        // recovery_r: release R's requests.
+        assertEquals(ReleasePath.Path.R, ReleasePath.choose(listOf("recovery_r"), releaseRKnown = false))
+        assertEquals(ReleasePath.Path.R, ReleasePath.choose(listOf("recovery_offered", "recovery_r"), releaseRKnown = true))
+        // Seen release R, then an instance without it: refused like a rollback (nothing is built or sent).
+        val e = assertThrows(VaultFailure::class.java) { ReleasePath.choose(listOf("attachments"), releaseRKnown = true) }
+        assertEquals(FailureKind.CAPABILITY_ROLLBACK, e.kind)
+        assertEquals(ReleasePath.CODE_CAPABILITY_ROLLBACK, e.code)
+        assertThrows(VaultFailure::class.java) { ReleasePath.choose(emptyList(), releaseRKnown = true) }
+    }
+
+    /** Recovery is shown for a release before R (its earlier recovery), and from release R only with recovery_offered. */
+    @Test
+    fun recoveryIsOfferedOnlyWhenTheReleaseSaysSo() {
+        assertTrue(ReleasePath.recoveryOffered(emptyList()))
+        assertTrue(ReleasePath.recoveryOffered(listOf("recovery_offered", "recovery_r")))
+        assertFalse(ReleasePath.recoveryOffered(listOf("attachments", "recovery_r")))
+    }
+
+    /**
+     * The mark: set by an R path that makes the phone key (enrollment, a transfer to this phone, a register) or on a phone
+     * that holds a phone secret; an unlock of a phone without one that meets an R instance never sets it.
+     */
+    @Test
+    fun anUnlockWithoutAPhoneSecretNeverMarksTheVault() {
+        val r = ReleasePath.Path.R
+        assertFalse(ReleasePath.marks(wasMarked = false, path = r, makesPhoneKey = false, holdsPhoneSecret = false))
+        assertTrue(ReleasePath.marks(wasMarked = false, path = r, makesPhoneKey = true, holdsPhoneSecret = false))
+        assertTrue(ReleasePath.marks(wasMarked = false, path = r, makesPhoneKey = false, holdsPhoneSecret = true))
+        assertFalse(ReleasePath.marks(wasMarked = false, path = ReleasePath.Path.EARLIER, makesPhoneKey = true, holdsPhoneSecret = true))
+        assertTrue(ReleasePath.marks(wasMarked = true, path = ReleasePath.Path.EARLIER, makesPhoneKey = false, holdsPhoneSecret = false))
+        // So after such an unlock the phone still reaches its own earlier vault.
+        assertEquals(ReleasePath.Path.EARLIER, ReleasePath.choose(emptyList(), releaseRKnown = false))
+    }
 }

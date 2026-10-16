@@ -100,9 +100,15 @@ class InviteBundle(
     /** Whole seconds. */
     val exp: Instant,
     val hintName: String? = null,
+    /**
+     * (0.34.0, release R) A transfer bundle's (`app`) release capabilities (§6.4, §11.10.9), bound by the QR's `h`; null
+     * when absent (a release before R). No other kind carries it.
+     */
+    val capabilities: List<String>? = null,
 ) {
     private fun validate() {
         if (remote && kind != InviteKind.CONNECTION) throw CryptoException.Format("bundle remote")
+        if (capabilities != null && kind != InviteKind.APP) throw CryptoException.Format("bundle capabilities")
         if (!Ulid.isValid(inviteId) || !Relay.isValidToken(token) || exp.nano != 0) throw CryptoException.Format("bundle")
         if (hintName != null && hintName.toByteArray().size > MAX_HINT_NAME) throw CryptoException.Format("bundle hint")
         if (vault.ik().size != Suite.ED25519_PUBLIC_SIZE) throw CryptoException.Format("bundle")
@@ -120,6 +126,7 @@ class InviteBundle(
             .raw("vault", vault.marshal())
             .string("token", token)
             .string("exp", Timestamps.formatSeconds(exp))
+        capabilities?.let { com.vettid.core.crypto.altchan.Capabilities.write(b, it) }
         if (!hintName.isNullOrEmpty()) b.raw("hint", JsonBuilder().string("name", hintName).build())
         return b.bytes()
     }
@@ -141,6 +148,11 @@ class InviteBundle(
                 token = o.string("token"),
                 exp = Timestamps.parseSeconds(o.string("exp")),
                 hintName = o.optObj("hint")?.optString("name"),
+                capabilities = if (o.has(com.vettid.core.crypto.altchan.Capabilities.MEMBER)) {
+                    com.vettid.core.crypto.altchan.Capabilities.parse(o)
+                } else {
+                    null
+                },
             )
             b.validate()
             return b

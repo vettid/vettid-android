@@ -31,6 +31,7 @@
     <string name="data_failure_counter_unavailable">We cannot check the attempt record now. Nothing was used or changed. Try again later.</string>
     <string name="data_failure_stored_mismatch">The vault\'s stored data could not be opened. Contact VettID.</string>
     <string name="data_failure_weak_password">This password is not strong enough.</string>
+    <string name="data_failure_capability_rollback">This vault\'s software is older than the software this phone last used with it. Contact VettID.</string>
     <string name="data_failure_hardware_keys">This phone cannot keep your vault\'s keys in its secure hardware.</string>
     <string name="data_failure_response_too_large">Your vault\'s answer was too large to send to this phone. Nothing was changed. Try again later.</string>
     <string name="data_failure_connection_unavailable">This connection cannot be reached right now. Try again later.</string>

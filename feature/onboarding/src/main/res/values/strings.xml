@@ -330,6 +330,7 @@
     <string name="release_update_abandoned_title">Back on release %1$d</string>
     <string name="release_update_abandoned_body">Your vault runs release %1$d again and is open. You can update to release %2$d later.</string>
     <!-- Release R (ANDROID-PLAN 0.1.40, VAULT-MESSAGING 0.33.0 §11.14.6): draft texts for the owner's wording. -->
+    <string name="recover_not_offered">This vault\'s release does not offer recovery.</string>
     <string name="onboarding_open_title">Your PIN and your password</string>
     <string name="onboarding_open_pin">Vault PIN</string>
     <string name="onboarding_open_password">Credential password</string>
@@ -351,9 +352,18 @@
     <string name="onboarding_open_wrong_wait">PIN or password is wrong. The vault does not tell us which. %1$d of 10 attempts left. Your next attempt is possible on %2$s.</string>
     <string name="onboarding_open_wrong_again">That is the same PIN and password as your last attempt, and they are still wrong. This was not counted. Change one of them before you try again.</string>
     <string name="onboarding_open_attempt_lost">Something went wrong on the way and one attempt was used without being tested. %1$d of 10 left. Your PIN and password were not judged wrong. A slow or interrupted service can cause this.</string>
-    <string name="onboarding_open_quiet">This vault\'s app was used with its PIN and password on %1$s. A vault can be recovered three days after that at the earliest: from %2$s.</string>
+    <string name="onboarding_open_quiet">This vault\'s app was used with its PIN and password recently. A vault can be recovered only some time after that: from %1$s at the earliest.</string>
     <string name="onboarding_open_quiet_nodate">This vault cannot be recovered yet: it has no record of when its app was last used with its PIN and password. Try again later.</string>
     <string name="onboarding_open_wait">You can try again on %1$s.</string>
+    <string name="onboarding_open_quiet_nothing">This vault\'s app was used with its PIN and password recently. A vault can be recovered only some time after that: from %1$s at the earliest. Nothing was used.</string>
+    <string name="onboarding_open_quiet_used">The vault\'s app was used with its PIN and password while this attempt was on its way, or the service recorded that it was. One attempt was used without being tested. %1$d left.</string>
+    <string name="onboarding_open_wait_nothing">You can try again on %1$s. Nothing was used.</string>
+    <string name="onboarding_open_retry_used">Something went wrong on the way. One attempt was used, and your PIN and password were not judged wrong. %1$d of 10 left. Try again.</string>
+    <string name="onboarding_open_unreadable">We could not read the vault\'s answer. This attempt may have been used. If it recovered your vault, your PIN finishes it.</string>
+    <string name="onboarding_open_lost_title">Finish with your PIN</string>
+    <string name="onboarding_open_lost_body">If your last attempt recovered your vault but its answer was lost, your PIN finishes the recovery on this phone. This does not use any of your attempts.</string>
+    <string name="onboarding_open_lost_not_here">Your vault was not recovered onto this phone by the last attempt. Go back and try again.</string>
+    <string name="onboarding_open_back">Back to the recovery</string>
     <string name="onboarding_open_wait_nodate">You cannot try again yet. Try again later.</string>
     <string name="onboarding_open_attempts_left">Attempts left: %1$d of 10.</string>
     <string name="onboarding_open_busy">The service is busy right now. Nothing was used. Try again in a minute.</string>
@@ -368,7 +378,7 @@
     <string name="onboarding_open_other">The vault answered %1$s.</string>
     <string name="onboarding_open_ok_plain">The vault is recovered. The attempts you used do not come back. Change your PIN or your password now to get 10 new ones.</string>
     <string name="onboarding_open_no_recovery">This recovery has ended: it was cancelled, it expired or it was completed. Nothing was used. To go on, start a new recovery on the account site.</string>
-    <string name="onboarding_open_no_recovery_unanswered">This recovery has ended. Your last attempt got no answer, and it may have recovered your vault on the way. Contact VettID before you start a new recovery.</string>
+    <string name="onboarding_open_no_recovery_unanswered">This recovery has ended. Your last attempt got no answer, and it may have recovered your vault on the way: your PIN finishes it on this phone. Do this before you start a new recovery.</string>
     <string name="onboarding_open_expired">This recovery has expired. Nothing was used. To go on, start a new recovery on the account site.</string>
     <string name="onboarding_open_attestation">The vault did not accept this phone\'s app. Nothing was used. Update VettID to continue.</string>
     <string name="onboarding_open_manifest">The vault\'s list of releases could not be checked. Nothing was used. Try again later.</string>

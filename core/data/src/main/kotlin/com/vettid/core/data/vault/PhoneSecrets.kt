@@ -139,3 +139,43 @@ object CredentialCreate {
      */
     fun fetchInstead(releaseR: Boolean, code: String?): Boolean = releaseR && code == "exists"
 }
+
+/** Which requests a vault gets, from its release's capabilities (VAULT-MESSAGING 0.34.0 §11.10.9). */
+object ReleasePath {
+    enum class Path {
+        /** Release R's requests (§11.14): the phone's unlock secret, the recovery open. */
+        R,
+
+        /** The earlier release's requests, unchanged, with its earlier recovery. */
+        EARLIER,
+    }
+
+    /** The refusal of an instance without `recovery_r` for a vault known to have it. */
+    const val CODE_CAPABILITY_ROLLBACK = "capability_rollback"
+
+    /**
+     * [capabilities] of the instance (or transfer bundle) just verified; [releaseRKnown]: this phone has seen
+     * `recovery_r` for the vault, or holds a phone secret for it. With `recovery_r`: [Path.R]. Without it: [Path.EARLIER],
+     * unless release R is known, which is refused like a rollback ([FailureKind.CAPABILITY_ROLLBACK]) before anything is
+     * sent. Never one path and then the other after a refusal.
+     */
+    fun choose(capabilities: List<String>, releaseRKnown: Boolean): Path = when {
+        com.vettid.core.crypto.altchan.Capabilities.RECOVERY_R in capabilities -> Path.R
+        releaseRKnown -> throw VaultFailure(FailureKind.CAPABILITY_ROLLBACK, CODE_CAPABILITY_ROLLBACK)
+        else -> Path.EARLIER
+    }
+
+    /**
+     * Whether this phone now marks the vault as release R ([wasMarked] before): only an R path on a phone that holds a
+     * phone secret, or one that makes the phone key now ([makesPhoneKey]: enrollment, a transfer to this phone, a
+     * recovery's register). An unlock of a phone without a phone secret that meets an R instance never marks it, so one
+     * misrouting cannot leave the phone refused for its own (earlier) vault for good.
+     */
+    fun marks(wasMarked: Boolean, path: Path, makesPhoneKey: Boolean, holdsPhoneSecret: Boolean): Boolean =
+        wasMarked || path == Path.R && (makesPhoneKey || holdsPhoneSecret)
+
+    /** Whether recovery is offered: always for a release before R (its earlier recovery), else only with `recovery_offered`. */
+    fun recoveryOffered(capabilities: List<String>): Boolean =
+        com.vettid.core.crypto.altchan.Capabilities.RECOVERY_R !in capabilities ||
+            com.vettid.core.crypto.altchan.Capabilities.RECOVERY_OFFERED in capabilities
+}

@@ -452,8 +452,18 @@ class VaultManager(
          * its own secret ("Finish the move"): asked again at every start until an unlock succeeds.
          */
         val finishMovePending: Boolean = false,
+        /**
+         * (0.34.0, §11.10.6, §11.10.9) This phone has seen `recovery_r` for its vault (a verified descriptor, a transfer
+         * bundle, or a request of release R's shape that succeeded): it never takes an earlier path for it again.
+         */
+        val recoveryRSeen: Boolean = false,
+        /** (0.34.0) The capabilities of the vault's instance this phone last verified (`recovery_offered` for the status). */
+        val capabilities: List<String> = emptyList(),
     ) {
         val phone: PhoneSecretState get() = PhoneSecretState(phoneKeyVault, phoneEpoch)
+
+        /** Release R is known for this vault: the mark, or a phone secret for it. */
+        val releaseRKnown: Boolean get() = recoveryRSeen || phone.inUse
         fun toInfo(): AccountInfo? = when {
             snapshot != null -> snapshot.toInfo(emailHint)
             emailHint.isNotEmpty() -> AccountInfo(emailHint)
@@ -674,7 +684,7 @@ class VaultManager(
             saveLocal(
                 local.copy(
                     setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
-                    finishMovePending = false,
+                    finishMovePending = false, recoveryRSeen = false, capabilities = emptyList(),
                 ),
             )
             finishMoveFlow.value = false
@@ -960,15 +970,11 @@ class VaultManager(
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
         val s = session()
         onStep(EnrollStep.ENROLL)
-        // Release R (§11.14.1): a phone key and its secret of epoch 1 in the request. The state is stored before the
-        // request is sent, and a retry of this enrollment (a lost answer, a crash) reuses the key: the vault may already
-        // hold its secret.
-        val phone = if (env.releaseR) io { keepPhoneKey(local.vaultId) } else null
-        val secret = phone?.let { phoneSecrets.secret(it) }
-        val out = try {
-            s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester(), secret)
-        } finally {
-            secret?.fill(0)
+        // §11.10.9: the instance's capabilities choose the shape. Release R (§11.14.1): a phone key and its secret of
+        // epoch 1 in the request; the state is stored before the request is sent, and a retry of this enrollment (a lost
+        // answer, a crash) reuses the key: the vault may already hold its secret. Without `recovery_r`: as before.
+        val out = s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester()) { caps ->
+            if (choosePath(caps, makesPhoneKey = true) == ReleasePath.Path.R) phoneSecrets.secret(keepPhoneKey(local.vaultId)) else null
         }
         if (!out.ok) throw VaultFailure(enrollFailure(out.code), out.code)
         if (out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) io { saveLocal(local.copy(vaultId = out.vaultId)) }
@@ -1177,22 +1183,34 @@ class VaultManager(
         onStarting: ((Long) -> Unit)?,
     ): UnlockOutcome {
         val phone = local.phone
-        if (!phone.inUse) return s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting)
-        val first = phoneSecrets.secret(phone)
-        val out = try {
-            s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts.copy(unlockSecret = first), release, onStarting)
-        } finally {
-            first.fill(0)
+        // §11.10.9: the routed instance's capabilities choose the shape; an instance without `recovery_r` for a vault
+        // known to have it is refused before anything is sent.
+        var r = false
+        val out = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { caps ->
+            // An unlock never sets the mark on a phone without a phone secret (it then fails without one, unmarked).
+            r = choosePath(caps, makesPhoneKey = false) == ReleasePath.Path.R
+            if (r) phoneSecrets.secret(phone) else null
         }
-        if (out.ok || out.result.code != "device_secret") return out
-        val next = phoneSecrets.secret(phone, ahead = 1)
-        val again = try {
-            s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts.copy(unlockSecret = next), release, onStarting)
-        } finally {
-            next.fill(0)
+        if (!r || out.ok || out.result.code != "device_secret") return out
+        val again = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { caps ->
+            choosePath(caps, makesPhoneKey = false)
+            phoneSecrets.secret(phone, ahead = 1)
         }
         if (UnlockEpoch.confirmsNext(again.ok, again.result.code)) io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
         return again
+    }
+
+    /**
+     * §11.10.9: the request's shape from the capabilities of the instance just verified ([ReleasePath.choose]); the
+     * mark and the last capabilities are stored. A vault known to have release R and an instance without it: refused.
+     */
+    private fun choosePath(capabilities: List<String>, makesPhoneKey: Boolean): ReleasePath.Path {
+        val path = ReleasePath.choose(capabilities, local.releaseRKnown)
+        val seen = ReleasePath.marks(local.recoveryRSeen, path, makesPhoneKey = makesPhoneKey, holdsPhoneSecret = local.phone.inUse)
+        if (seen != local.recoveryRSeen || capabilities != local.capabilities) {
+            saveLocal(local.copy(recoveryRSeen = seen, capabilities = capabilities))
+        }
+        return path
     }
 
     /**
@@ -1330,6 +1348,7 @@ class VaultManager(
             connections = vs?.connections,
             signer = signer,
             recovery = vs?.recovery?.let { RecoveryStatusView(it.state, it.attempts?.used, it.counter == "unavailable") },
+            recoveryOffered = ReleasePath.recoveryOffered(local.capabilities),
         )
     }
 
@@ -1477,6 +1496,8 @@ class VaultManager(
 
     override val usesPhoneSecret: Boolean get() = local.phone.inUse
 
+    override val recoveryOffered: Boolean get() = ReleasePath.recoveryOffered(local.capabilities)
+
     override suspend fun rotate(password: String) = guard {
         val s = session()
         s.openApi.credentialRotate(password)
@@ -1575,22 +1596,16 @@ class VaultManager(
     private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
         val s = session()
         gateway.memberChanged(claimed.userGuid)
-        // Release R (§11.14.6, ANDROID-PLAN 0.1.40): the phone key is made before the register.
-        val phone = if (env.releaseR) io { phoneSecrets.create(code.vaultId) } else PhoneSecretState()
-        io {
-            saveLocal(
-                LocalAccount(
-                    userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint,
-                    phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch,
-                ),
-            )
-        }
+        io { saveLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
         val r = try {
             s.alt.recoveryRegister(
                 code.vaultId,
-                build = { e -> s.device.prepareRecoveryRegister(local.userGuid, code, e, env.attester()) },
+                build = { e -> buildRegister(s, code, e) },
                 open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
             )
+        } catch (e: VaultFailure) {
+            if (e.code != CODE_NOT_OFFERED) throw e
+            return RecoveryRegistration.Refused(CODE_NOT_OFFERED)
         } catch (e: MemberApiException) {
             // 2.1.0: a recovery the enclave refused (no backup copy) is `unavailable`: the register is refused too.
             if (e.code == MemberApiException.RECOVERY_UNAVAILABLE) {
@@ -1616,6 +1631,25 @@ class VaultManager(
         }
     }
 
+    /**
+     * The register's request. §11.10.9: release R's recovery only when the instance lists `recovery_r` (the phone key is
+     * made before the register); with it and without `recovery_offered` nothing is sent. Otherwise the release's earlier
+     * recovery.
+     */
+    private suspend fun buildRegister(
+        s: Session,
+        code: RecoveryCode,
+        e: com.vettid.core.attestation.VerifiedEnclave,
+    ): com.vettid.core.altchan.SealedRequest {
+        val caps = e.descriptor.capabilities
+        if (choosePath(caps, makesPhoneKey = true) == ReleasePath.Path.R) {
+            if (!ReleasePath.recoveryOffered(caps)) throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_NOT_OFFERED)
+            val phone = phoneSecrets.create(code.vaultId)
+            saveLocal(local.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch))
+        }
+        return s.device.prepareRecoveryRegister(local.userGuid, code, e, env.attester())
+    }
+
     override suspend fun recoveryPreflight(): PreflightInfo = preflight()
 
     /**
@@ -1634,7 +1668,11 @@ class VaultManager(
         val r = try {
             s.alt.recoveryOpen(
                 local.vaultId,
-                build = { e, m -> s.device.prepareRecoveryOpen(local.userGuid, pin, password, secret, e, m, env.attester()) },
+                build = { e, m ->
+                    // §11.10.9: this phone registered with release R; an instance without it is refused, nothing sent.
+                    choosePath(e.descriptor.capabilities, makesPhoneKey = false)
+                    s.device.prepareRecoveryOpen(local.userGuid, pin, password, secret, e, m, env.attester())
+                },
                 open = { raw, rid -> s.device.openRecoveryOpenResult(raw, rid) },
                 onSent = { if (!local.recoveryOpenUnanswered) io { saveLocal(local.copy(recoveryOpenUnanswered = true)) } },
             )
@@ -1643,8 +1681,32 @@ class VaultManager(
         }
         val used = if (r.counted) r.used else null
         io { saveLocal(local.copy(recoveryOpenUnanswered = false, recoveryAttemptsUsed = used ?: local.recoveryAttemptsUsed)) }
-        if (!r.ok) return@guard RecoveryOpenOutcome(r.code, used, r.retryAt, afterUnanswered = afterUnanswered)
-        finishOpened(s, pin, used, resuming = false)
+        if (!r.ok) {
+            return@guard RecoveryOpenOutcome(r.code, used, r.retryAt, afterUnanswered = afterUnanswered, attemptUsed = r.attemptUsed)
+        }
+        finishOpened(s, pin, used, resuming = false).copy(attemptUsed = r.attemptUsed)
+    }
+
+    /**
+     * A lost `ok` (VAULT-MESSAGING 0.34.0 §11.14.6): the open's answer never arrived or could not be read, and the vault
+     * may have completed the recovery and removed its record. An ordinary `vault.unlock` with this phone's secret and
+     * the PIN: its result carries `vault_bundle` and a token only for the phone the completed recovery made the app,
+     * before its first handshake; the bundle pins the vault, and the handshake is sent again (the unlock dropped any that
+     * was under way), then `credential.get`. No attempt is used. Without a bundle the recovery did not complete here.
+     */
+    override suspend fun resumeLostOk(pin: String): RecoveryOpenOutcome = guard {
+        val s = session()
+        val d = s.device
+        if (!local.phone.inUse || !d.recovering) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_recovery")
+        if (d.recoveryOpenedNotFinished) return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
+        val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
+        when {
+            !u.ok -> RecoveryOpenOutcome(u.result.code ?: "retry", local.recoveryAttemptsUsed, opened = true, attemptUsed = false)
+            // A result without `vault_bundle`: this phone is not the one a completed recovery made the app.
+            !d.recoveryOpenedNotFinished ->
+                RecoveryOpenOutcome(CODE_NO_BUNDLE, local.recoveryAttemptsUsed, opened = true, attemptUsed = false)
+            else -> finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = false).copy(attemptUsed = false)
+        }
     }
 
     /**
@@ -1783,13 +1845,9 @@ class VaultManager(
         if (!local.transferIn) io { saveLocal(local.copy(transferIn = true)) }
         // Release R (§11.14.10): this phone's key and its secret of epoch 1 go in the hs.init. The vault id is not
         // known yet: the key and the secret are made for "" (as vettid-vault's reference client does).
-        // Stored before the hs.init is sent; a retry reuses the key.
-        val phone = if (env.releaseR) io { keepPhoneKey("") } else null
-        val secret = phone?.let { phoneSecrets.secret(it) }
-        try {
-            d.startTransfer(link, env.attester(), secret)
-        } finally {
-            secret?.fill(0)
+        // Stored before the hs.init is sent; a retry reuses the key. §11.10.9: only when the bundle lists `recovery_r`.
+        d.startTransfer(link, env.attester()) { caps ->
+            if (choosePath(caps, makesPhoneKey = true) == ReleasePath.Path.R) phoneSecrets.secret(keepPhoneKey("")) else null
         }
         transferStartedAt = Instant.now()
         try {
@@ -2247,6 +2305,12 @@ class VaultManager(
         private const val CODE_NOT_AVAILABLE = "not_available"
         private const val CODE_NOT_TRANSFER = "not_transfer"
         private const val CODE_EXISTS = "exists"
+
+        /** (0.34.0) The resume of a lost `ok`: the unlock opened the vault but carried no `vault_bundle` for this phone. */
+        const val CODE_NO_BUNDLE = "no_bundle"
+
+        /** (0.34.0) A release with `recovery_r` and without `recovery_offered` (§11.10.9). */
+        const val CODE_NOT_OFFERED = "not_offered"
 
         /** The pairing window: 10 minutes after `hs.init` (§6.7, 0.10.4). */
         private val PAIRING_WINDOW: Duration = Duration.ofMinutes(10)

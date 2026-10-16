@@ -85,6 +85,12 @@ enum class CodeRefusal {
 
     /** The member API's `409 recovery_not_available` at the claim or the register. */
     NOT_AVAILABLE,
+
+    /**
+     * (VAULT-MESSAGING 0.34.0 §11.10.9) The vault's release implements release R without `recovery_offered`: nothing is
+     * sent ("This vault's release does not offer recovery").
+     */
+    NOT_OFFERED,
 }
 
 /**
@@ -385,6 +391,7 @@ class RecoverViewModel @Inject constructor(
             CODE_ATTESTATION -> CodeRefusal.ATTESTATION
             CODE_NONE, CODE_USED -> CodeRefusal.GONE
             CODE_NOT_AVAILABLE -> CodeRefusal.NOT_AVAILABLE
+            CODE_NOT_OFFERED -> CodeRefusal.NOT_OFFERED
             CODE_NO_BACKUP -> {
                 state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, refusal = null, typed = "", typedProblem = null) }
                 noBackup()
@@ -597,6 +604,9 @@ class RecoverViewModel @Inject constructor(
         const val CODE_NONE = "no_recovery"
         const val CODE_USED = "used"
         const val CODE_NOT_AVAILABLE = "not_available"
+
+        /** (0.34.0) The release does not offer recovery (§11.10.9, §11.14.13). */
+        const val CODE_NOT_OFFERED = "not_offered"
         const val CODE_UNKNOWN_DEVICE = "unknown_device"
         const val CODE_REQUIRED = "credential_required"
         const val CODE_NO_BACKUP = "no_backup"

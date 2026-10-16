@@ -108,14 +108,67 @@ class RecoveryOpenViewModelTest {
         advanceUntilIdle()
         assertTrue("eraseThisPhone" in vault.calls)
         assertEquals(AppPhase.SignedOut, vault.phase.value)
-        // An answer only a vault without this phone gives also offers it.
-        val again = RecoveryOpenViewModel(vault, vault)
-        advanceUntilIdle()
+        // Answers the host or the member API can produce never offer it: random bytes, a 401, no vault.
+        for (f in listOf(
+            VaultFailure(FailureKind.OTHER, "unreadable_result"),
+            VaultFailure(FailureKind.UNAUTHORIZED),
+            VaultFailure(FailureKind.NO_VAULT),
+        )) {
+            val again = RecoveryOpenViewModel(vault, vault)
+            advanceUntilIdle()
+            vault.fail["recoveryOpen"] = f
+            again.setPin("975310")
+            again.send()
+            advanceUntilIdle()
+            assertEquals(OpenStep.FINISH, again.uiState.value.step)
+            assertFalse(f.toString(), again.uiState.value.canErase)
+        }
+    }
+
+    /**
+     * A lost ok (0.34.0 §11.14.6): after an open with no readable answer the PIN unlocks with this phone's secret; a
+     * result with the vault's bundle finishes the recovery, one without it leads back to the open.
+     */
+    @Test
+    fun aLostOkIsResumedWithThePin() = runTest {
         vault.fail["recoveryOpen"] = VaultFailure(FailureKind.OTHER, "unreadable_result")
-        again.setPin("975310")
-        again.send()
+        val vm = RecoveryOpenViewModel(vault, vault)
         advanceUntilIdle()
-        assertTrue(again.uiState.value.canErase)
+        vm.enterAndSend()
+        advanceUntilIdle()
+        assertEquals(OpenStep.ANSWERED, vm.uiState.value.step)
+        assertEquals("unreadable_result", vm.uiState.value.failureCode)
+        vm.finishLostOk()
+        assertEquals(OpenStep.FINISH, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.lostOk)
+        assertEquals("", vm.uiState.value.password)
+        assertFalse(vm.uiState.value.canErase)
+        // No bundle for this phone: said so, and back to the open.
+        vault.lostOkOutcomes.add(RecoveryOpenOutcome("no_bundle", 2, opened = true, attemptUsed = false))
+        vm.setPin("975310")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(OpenStep.FINISH, vm.uiState.value.step)
+        assertEquals("no_bundle", vm.uiState.value.outcome?.code)
+        assertFalse("recoveryOpen" in vault.calls.drop(1))
+        // The vault's device_secret to the resume: this phone is not in its unlock keys, said like no bundle, with the
+        // way back (never "try again").
+        vault.lostOkOutcomes.add(RecoveryOpenOutcome("device_secret", 2, opened = true, attemptUsed = false))
+        vm.setPin("975310")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals("no_bundle", vm.uiState.value.outcome?.code)
+        assertEquals(R.string.onboarding_open_lost_not_here, openAnswerText(vm.uiState.value.outcome!!, false).res)
+        assertFalse(vm.uiState.value.canErase)
+        // The bundle came: the recovery is finished on this phone, without a new open.
+        vm.setPin("975310")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(OpenStep.DONE, vm.uiState.value.step)
+        assertEquals(3, vault.calls.count { it == "resumeLostOk" })
+        assertEquals(1, vault.calls.count { it == "recoveryOpen" })
+        vm.again()
+        assertFalse(vm.uiState.value.lostOk)
     }
 
     /** "The last attempt was right but could not be completed": only after an open that got no answer. */

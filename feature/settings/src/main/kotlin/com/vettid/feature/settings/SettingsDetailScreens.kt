@@ -213,8 +213,12 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                         SettingsDivider()
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_recovery),
-                            v.recovery?.let { r -> statusLine(recoveryStatusText(r)) }
-                                ?: v.recoveryState ?: stringResource(R.string.settings_status_recovery_none),
+                            if (!v.recoveryOffered) {
+                                stringResource(R.string.settings_recovery_not_offered)
+                            } else {
+                                v.recovery?.let { r -> statusLine(recoveryStatusText(r)) }
+                                    ?: v.recoveryState ?: stringResource(R.string.settings_status_recovery_none)
+                            },
                             icon = Icons.Outlined.Restore,
                         )
                         SettingsDivider()
@@ -325,6 +329,18 @@ fun RecoveryContent(
 ) {
     val r = state.recovery
     val active = r != null && r.state in setOf("pending", "available", "registered")
+    if (!state.offered) {
+        // (0.34.0, §11.10.9) A release with recovery_r and without recovery_offered: no recovery to start.
+        FormScaffold(
+            title = stringResource(R.string.settings_recovery_title),
+            body = stringResource(R.string.settings_recovery_not_offered),
+            primaryLabel = stringResource(R.string.settings_recovery_transfer),
+            onPrimary = onTransfer,
+            onBack = onBack,
+            modifier = Modifier.testTag("recovery_not_offered"),
+        ) {}
+        return
+    }
     FormScaffold(
         title = stringResource(R.string.settings_recovery_title),
         body = stringResource(R.string.settings_recovery_body),

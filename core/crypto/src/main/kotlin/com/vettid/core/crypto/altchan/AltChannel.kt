@@ -267,6 +267,8 @@ class Descriptor private constructor(
     val release: String,
     val notAfter: Instant,
     private val raw: ByteArray,
+    /** (0.34.0, release R) The release's capabilities (§11.10.9); empty for a release before R. */
+    val capabilities: List<String> = emptyList(),
 ) {
     fun bytes(): ByteArray = raw.copyOf()
 
@@ -293,11 +295,17 @@ class Descriptor private constructor(
             val release = o.string("release")
             if (!isValidPcr(release)) throw CryptoException.Format("descriptor release")
             val notAfter = Timestamps.parseSeconds(o.string("not_after"))
-            return Descriptor(instanceId, kid, etk, release, notAfter, b.copyOf())
+            return Descriptor(instanceId, kid, etk, release, notAfter, b.copyOf(), Capabilities.parse(o))
         }
 
-        /** Writes a descriptor in §11.2 member order (tests and tooling). */
-        fun marshal(instanceId: String, etk: KemPublicKey, release: String, notAfter: Instant): ByteArray = JsonBuilder()
+        /** Writes a descriptor in §11.2 member order (tests and tooling); [capabilities] only when given (release R). */
+        fun marshal(
+            instanceId: String,
+            etk: KemPublicKey,
+            release: String,
+            notAfter: Instant,
+            capabilities: List<String>? = null,
+        ): ByteArray = JsonBuilder()
             .uint("v", 1)
             .uint("suite", Suite.SUITE_2.toLong())
             .string("instance_id", instanceId)
@@ -305,6 +313,7 @@ class Descriptor private constructor(
             .string("etk", Base64s.encodeStd(etk.bytes()))
             .string("release", release)
             .string("not_after", Timestamps.formatSeconds(notAfter))
+            .also { b -> capabilities?.let { Capabilities.write(b, it) } }
             .bytes()
     }
 }
