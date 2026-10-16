@@ -18,7 +18,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /** [NotifySource] over the app's [VaultManager]: the feed, the phase and the owner check, names from the caches. */
-class VaultNotifySource(private val vault: VaultManager, scope: CoroutineScope) : NotifySource {
+class VaultNotifySource(
+    private val vault: VaultManager,
+    scope: CoroutineScope,
+    /** The resources for a photo's text ("Photo", "Photo: <caption>"). */
+    private val res: () -> android.content.res.Resources? = { null },
+) : NotifySource {
     override val arrivals: Flow<FeedItem> = vault.feed.arrivals
     override val items: StateFlow<List<FeedItem>> = vault.feed.items
     override val open: StateFlow<Boolean> = combine(vault.phase, vault.ownerCheck.ownerCheck) { p, v ->
@@ -34,8 +39,18 @@ class VaultNotifySource(private val vault: VaultManager, scope: CoroutineScope) 
         approvals = vault.social.approvals.value.associateBy { it.key },
     )
 
-    override suspend fun messageText(connectionId: String, messageId: String): String? =
-        vault.social.messages(connectionId).first().firstOrNull { it.messageId == messageId && !it.outgoing }?.text
+    /** A photo's notification says "Photo" and, with previews on, its caption; never the image or the thumbnail. */
+    override suspend fun messageText(connectionId: String, messageId: String): String? {
+        val m = vault.social.messages(connectionId).first().firstOrNull { it.messageId == messageId && !it.outgoing }
+        val r = res()
+        return when {
+            m == null -> null
+            m.attachment == null -> m.text
+            r == null -> m.text.ifEmpty { null }
+            m.text.isEmpty() -> r.getString(R.string.notify_photo)
+            else -> r.getString(R.string.notify_photo_caption, m.text)
+        }
+    }
 }
 
 /** A notification's tap, handed from the launcher activity to the shell: an item to open, or Settings → Notifications. */

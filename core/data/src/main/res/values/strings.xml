@@ -32,6 +32,7 @@
     <string name="data_failure_stored_mismatch">The vault\'s stored data could not be opened. Contact VettID.</string>
     <string name="data_failure_weak_password">This password is not strong enough.</string>
     <string name="data_failure_hardware_keys">This phone cannot keep your vault\'s keys in its secure hardware.</string>
+    <string name="data_failure_response_too_large">Your vault\'s answer was too large to send to this phone. Nothing was changed. Try again later.</string>
     <string name="data_failure_connection_unavailable">This connection cannot be reached right now. Try again later.</string>
     <string name="data_failure_invite_invalid">That is not a VettID invitation. Check the link or code and try again.</string>
     <string name="data_failure_invite_expired">This invitation has expired. Ask for a new one.</string>
@@ -111,6 +112,8 @@
     <string name="data_feed_authenticate">%1$s asks you to confirm it is you</string>
     <string name="data_feed_message">New message from %1$s</string>
     <string name="data_feed_call_missed">Missed call from %1$s</string>
+    <string name="data_feed_photo_failed">Photo to %1$s not delivered</string>
+    <string name="data_feed_photo_refused">Photo from %1$s refused: your vault is full</string>
     <string name="data_feed_grant_request">%1$s asks for %2$s</string>
     <string name="data_feed_grant_request_any">%1$s asks for an item</string>
     <plurals name="data_feed_grant_request_batch">

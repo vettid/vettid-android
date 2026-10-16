@@ -285,7 +285,7 @@ object AppModule {
         @AppScope scope: CoroutineScope,
     ): FeedNotifier = FeedNotifier(
         scope,
-        VaultNotifySource(m, scope),
+        VaultNotifySource(m, scope) { context.resources },
         prefs.preferences.map { NotifySettings(it.effectiveNotificationMode, it.notificationPreviews) }
             .stateIn(scope, SharingStarted.Eagerly, NotifySettings(NotificationMode.OFF)), // until the preferences are read
         visibility.visible,
@@ -334,6 +334,9 @@ object AppModule {
 
     @Provides
     fun messagesRepository(m: VaultManager): MessagesRepository = m.social
+
+    @Provides
+    fun attachmentsRepository(m: VaultManager): com.vettid.core.data.social.AttachmentsRepository = m.attachments
 
     @Provides
     fun approvalsRepository(m: VaultManager): ApprovalsRepository = m.social

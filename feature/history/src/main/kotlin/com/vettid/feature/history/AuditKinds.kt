@@ -195,6 +195,10 @@ object AuditKinds {
         "wallet.signed" to R.string.history_kind_wallet_signed,
         "message.sent" to R.string.history_kind_message_sent,
         "message.received" to R.string.history_kind_message_received,
+        "message.attachment_sent" to R.string.history_kind_photo_sent,
+        "message.attachment_received" to R.string.history_kind_photo_received,
+        "message.attachment_failed" to R.string.history_kind_photo_failed,
+        "message.attachment_refused" to R.string.history_kind_photo_refused,
         "call.outgoing" to R.string.history_kind_call_outgoing,
         "call.incoming" to R.string.history_kind_call_incoming,
         "call.answered" to R.string.history_kind_call_answered,
@@ -239,6 +243,8 @@ object AuditKinds {
         "drop.ask_cooldown" to R.string.history_kind_drop_ask_cooldown,
         "drop.ask_pending" to R.string.history_kind_drop_ask_pending,
         "drop.ask_rate" to R.string.history_kind_drop_ask_rate,
+        "drop.attachment_rate" to R.string.history_kind_drop_attachment_rate,
+        "drop.attachment_malformed" to R.string.history_kind_drop_attachment_malformed,
         "drop.grant_rate_limited" to R.string.history_kind_drop_grant_rate_limited,
     )
 }

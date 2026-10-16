@@ -290,6 +290,43 @@ abstract class ApplicationIdCheck : DefaultTask() {
 }
 
 /**
+ * Photo attachments need no media or storage permission (ANDROID-PLAN 0.1.39 "Choosing a photo"): photos come from
+ * the Photo Picker, which hands over only what the member picks, or from the app's own camera; Save writes through
+ * MediaStore without one. Fails if a build's merged manifest asks for one. Every variant's build runs it.
+ */
+abstract class MediaPermissionCheck : DefaultTask() {
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+        val tags = listOf("uses-permission", "uses-permission-sdk-23")
+        val asked = tags.flatMap { t ->
+            doc.getElementsByTagName(t).let { l -> (0 until l.length).map { (l.item(it) as org.w3c.dom.Element).getAttributeNS(ns, "name") } }
+        }
+        val found = asked.filter { it in FORBIDDEN }
+        check(found.isEmpty()) { "${manifest.get().asFile}: media or storage permissions $found (ANDROID-PLAN 0.1.39)" }
+        logger.lifecycle("merged manifest: no media or storage permission")
+    }
+
+    companion object {
+        val FORBIDDEN = setOf(
+            "android.permission.READ_MEDIA_IMAGES",
+            "android.permission.READ_MEDIA_VIDEO",
+            "android.permission.READ_MEDIA_AUDIO",
+            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+            "android.permission.READ_EXTERNAL_STORAGE",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
+            "android.permission.MANAGE_EXTERNAL_STORAGE",
+            "android.permission.ACCESS_MEDIA_LOCATION",
+        )
+    }
+}
+
+/**
  * Google push adds Firebase Cloud Messaging and nothing else of Firebase or Google (ANDROID-PLAN 0.1.30, Notification
  * modes 4). Fails if a build's merged manifest carries a Firebase start-up provider, WorkManager's start-up
  * initialiser, a Google permission other than the one that receives pushes, an advertising-id permission, a Google
@@ -626,6 +663,14 @@ androidComponents {
         // checkReleasePushManifest, checkReleaseApplicationId, checkReleaseApk, checkStagingApk. `foss`:
         // checkFossReleasePushManifest, checkFossReleaseApplicationId, checkFossReleaseApk.
         val name = if (foss) v.name.cap() else v.buildType!!.cap()
+        val media = tasks.register<MediaPermissionCheck>("check${v.name.cap()}MediaPermissions") {
+            manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+        }
+        // Every build of every variant (debug, devStack, staging, release; both distributions) runs it: APKs,
+        // bundles and unit tests (not pre*Build, which the merged manifest itself depends on).
+        tasks.matching { t ->
+            t.name in setOf("assemble${v.name.cap()}", "bundle${v.name.cap()}", "test${v.name.cap()}UnitTest")
+        }.configureEach { dependsOn(media) }
         tasks.register<PushManifestCheck>("check${name}PushManifest") {
             manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
             pushConfigured.set(!foss && fcmOptions(v.buildType!!) != null)

@@ -55,6 +55,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.STORED_MISMATCH -> R.string.data_failure_stored_mismatch
     FailureKind.WEAK_PASSWORD -> R.string.data_failure_weak_password
     FailureKind.HARDWARE_KEYS -> R.string.data_failure_hardware_keys
+    FailureKind.RESPONSE_TOO_LARGE -> R.string.data_failure_response_too_large
     FailureKind.OTHER -> R.string.data_failure_other
 }
 

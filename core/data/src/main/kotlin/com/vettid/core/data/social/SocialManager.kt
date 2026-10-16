@@ -69,6 +69,10 @@ class SocialManager(
     private val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
     private val authFlow = MutableStateFlow<Map<String, AuthenticationState>>(emptyMap())
     private val messagesFlow = MutableStateFlow<Map<String, List<MessageInfo>>>(emptyMap())
+
+    /** Per conversation, where its loaded history stands (§10.5.2); dropped with its messages. */
+    private val pagingFlow = MutableStateFlow<Map<String, MessagePaging>>(emptyMap())
+    private val pages = Mutex()
     private val storedFlow = MutableStateFlow(local.events)
     private val listedFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
@@ -164,6 +168,7 @@ class SocialManager(
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
+        pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
     }
@@ -176,6 +181,7 @@ class SocialManager(
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
+        pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
@@ -379,6 +385,7 @@ class SocialManager(
             }
             "removed" -> {
                 messagesFlow.update { it - conn }
+                pagingFlow.update { it - conn }
                 authFlow.update { it - conn }
             }
         }
@@ -431,6 +438,10 @@ class SocialManager(
                 patch(conn, id) { it.copy(delivered = true, read = it.read || read) }
             }
             "message.read" -> patch(s("connection_id") ?: return, s("message_id") ?: return) { it.copy(read = true) }
+            // §10.5.1: each change of an attachment's state; the message itself is unchanged.
+            "message.attachment" -> patch(s("connection_id") ?: return, s("message_id") ?: return) { m ->
+                m.attachment?.let { a -> m.copy(attachment = a.copy(state = AttachmentState.of(s("state")), reason = s("reason"))) } ?: m
+            }
             "connection.changed", "block.added", "block.removed" -> runCatching { refresh() }
             "connection.request" -> onRequestSync(b)
             "connection.authenticate.decided" -> s("request_id")?.let { dropApproval("auth:$it") }
@@ -572,6 +583,7 @@ class SocialManager(
     private fun forget(id: String) {
         connectionsFlow.update { l -> l.filterNot { it.id == id } }
         messagesFlow.update { it - id }
+        pagingFlow.update { it - id }
         authFlow.update { it - id }
     }
 
@@ -611,16 +623,71 @@ class SocialManager(
         connectionsFlow.value.filter { it.state == ConnectionState.ACTIVE }.forEach { load(it.id) }
     }
 
-    override suspend fun load(connectionId: String) = vaultGuard {
-        val list = api().messageList(connectionId, HISTORY).map(ApprovalParser::message)
-        messagesFlow.update { m -> m + (connectionId to mergeMessages(list, m[connectionId].orEmpty())) }
+    override fun olderAvailable(connectionId: String): Flow<Boolean> =
+        pagingFlow.map { it[connectionId]?.hasOlder == true }.distinctUntilChanged()
+
+    /**
+     * The newest page (§10.5.2). Older pages the member already scrolled to stay when the new page joins them
+     * ([MessagePages.newest]); [fresh] drops them first (a position the vault no longer holds).
+     */
+    override suspend fun load(connectionId: String) = load(connectionId, fresh = false)
+
+    private suspend fun load(connectionId: String, fresh: Boolean) = vaultGuard {
+        val page = pageFitting { limit -> api().messagePage(connectionId, limit) }
+        val list = page.messages.map(ApprovalParser::message)
+        pages.withLock {
+            val current = messagesFlow.value[connectionId].orEmpty()
+            val paging = if (fresh) MessagePaging() else pagingFlow.value[connectionId] ?: MessagePaging()
+            val merged = MessagePages.newest(list, page.nextBefore, current, paging)
+            messagesFlow.update { it + (connectionId to merged.messages) }
+            pagingFlow.update { it + (connectionId to merged.paging) }
+        }
     }
 
-    /** The vault's list wins; messages that arrived meanwhile (newer than its last) are kept. */
-    private fun mergeMessages(fromVault: List<MessageInfo>, current: List<MessageInfo>): List<MessageInfo> {
-        val ids = fromVault.map { it.messageId }.toSet()
-        val newest = fromVault.maxOfOrNull { it.sentAt } ?: Instant.EPOCH
-        return (fromVault + current.filter { it.messageId !in ids && it.sentAt > newest }).sortedWith(ORDER)
+    /**
+     * The next older page, before the oldest loaded one (§10.5.2). A position the vault no longer holds
+     * (`not_found`: the message was deleted meanwhile, on another device) starts again from the newest page.
+     */
+    override suspend fun loadOlder(connectionId: String) {
+        val before = pagingFlow.value[connectionId]?.nextBefore ?: return
+        val page = try {
+            vaultGuard { pageFitting { limit -> api().messagePage(connectionId, limit, before) } }
+        } catch (e: VaultFailure) {
+            if (e.kind != FailureKind.NOT_FOUND) throw e
+            null
+        }
+        if (page == null) {
+            load(connectionId, fresh = true)
+        } else {
+            val list = page.messages.map(ApprovalParser::message)
+            pages.withLock {
+                // A reload may have replaced the position meanwhile: then this page is not the next one.
+                if (pagingFlow.value[connectionId]?.nextBefore == before) {
+                    val merged = MessagePages.older(list, page.nextBefore, messagesFlow.value[connectionId].orEmpty())
+                    messagesFlow.update { it + (connectionId to merged.messages) }
+                    pagingFlow.update { it + (connectionId to merged.paging) }
+                }
+            }
+        }
+    }
+
+    /** A message this app sent another way (a photo, [AttachmentManager]) joins its conversation. */
+    internal fun addSent(m: MessageInfo) = upsert(m)
+
+    /**
+     * A page asked for with [PAGE] messages and, when the answer could not be sealed (`response_too_large`, §8.1),
+     * asked for again with half as many, down to one: a page of long messages still arrives.
+     */
+    private suspend fun pageFitting(ask: suspend (Int) -> com.vettid.core.vault.MessagePage): com.vettid.core.vault.MessagePage {
+        var limit = PAGE
+        while (true) {
+            try {
+                return ask(limit)
+            } catch (e: com.vettid.core.vault.VaultOpException) {
+                if (e.code != CODE_TOO_LARGE || limit == 1) throw e
+                limit /= 2
+            }
+        }
     }
 
     private fun upsert(m: MessageInfo) = messagesFlow.update { map ->
@@ -628,7 +695,9 @@ class SocialManager(
         val next = if (list.any { it.messageId == m.messageId }) {
             list.map { if (it.messageId == m.messageId) m.copy(delivered = it.delivered || m.delivered, read = it.read || m.read) else it }
         } else {
-            (list + m).sortedWith(ORDER)
+            // A new message joins at the end, in the order it reached this phone (the vault's order), never by
+            // `sent_at`, the sender's clock: the pages join by that order (MessagePages).
+            list + m
         }
         map + (m.connectionId to next)
     }
@@ -943,12 +1012,13 @@ class SocialManager(
             .sortedByDescending { it.last?.sentAt ?: it.connection.createdAt ?: Instant.EPOCH }
 
     companion object {
-        private const val HISTORY = 200
+        /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
+        private const val PAGE = 100
+        private const val CODE_TOO_LARGE = "response_too_large"
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
 
         /** Longer than any request lives (§6.4: an approved incoming one, 16 days). */
         private val NAME_RETENTION: Duration = Duration.ofDays(17)
-        private val ORDER = compareBy<MessageInfo>({ it.sentAt }, { it.messageId })
         private val json = Json { ignoreUnknownKeys = true }
     }
 }

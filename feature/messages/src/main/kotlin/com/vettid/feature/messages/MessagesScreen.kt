@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -37,9 +38,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -72,6 +77,10 @@ import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 
 /** Type-safe navigation route of the Messages screen. */
@@ -130,8 +139,27 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
                 onConfirmDelete = vm::confirmDelete,
                 onDismissError = vm::dismissError,
                 onDetails = { host.onOpenConnection(state.connectionId) },
+                onLoadOlder = vm::loadOlder,
+                photos = PhotoActions(
+                    onTakePhoto = vm::startCapture,
+                    onPicked = vm::onPicked,
+                    onShot = vm::onShot,
+                    onCloseCamera = vm::stopCapture,
+                    onCaption = vm::setPhotoCaption,
+                    onSend = vm::sendPhotos,
+                    onCancel = vm::cancelPhotos,
+                    onDismissProblem = vm::dismissPhotoProblem,
+                    onOpen = { host.navigate(PhotoViewerRoute(state.connectionId, it)) },
+                    thumbnail = vm::thumbnail,
+                    generation = state.photoGeneration,
+                ),
             ),
         )
+    }
+    composable<PhotoViewerRoute> {
+        val vm: PhotoViewerViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        PhotoViewerScreen(state, onBack = host.onBack, onRetry = vm::load)
     }
     composable<NewMessageRoute> {
         val vm: NewMessageViewModel = hiltViewModel()
@@ -264,6 +292,10 @@ data class ConversationActions(
     val onConfirmDelete: () -> Unit = {},
     val onDismissError: () -> Unit = {},
     val onDetails: () -> Unit = {},
+    /** The list reached its top while older messages remain (§10.5.2). */
+    val onLoadOlder: () -> Unit = {},
+    /** Photo attachments (ANDROID-PLAN 0.1.39). */
+    val photos: PhotoActions = PhotoActions(),
 )
 
 /** A conversation (ANDROID-PLAN §4): bubbles by day, the reply field at the bottom. */
@@ -271,7 +303,9 @@ data class ConversationActions(
 fun ConversationScreen(state: ConversationUiState, actions: ConversationActions, modifier: Modifier = Modifier) {
     val name = state.connection?.displayName?.ifBlank { null } ?: stringResource(R.string.messages_name_not_shared)
     val listState = rememberLazyListState()
-    LaunchedEffect(state.messages.size) {
+    // To the newest message when one is added at the end, not when an older page is added at the top (§10.5.2):
+    // the list keeps its place then, by the items' keys.
+    LaunchedEffect(state.messages.lastOrNull()?.messageId) {
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last > 0) listState.animateScrollToItem(last)
     }
@@ -281,6 +315,14 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
         actions = {
             IconButton(onClick = actions.onDetails) {
                 Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.messages_cd_details, name))
+            }
+        },
+        overlay = {
+            // Photos picked or taken, then the camera (ANDROID-PLAN 0.1.39): over the whole conversation.
+            val draft = state.photoDraft
+            when {
+                draft != null -> PhotoDraftOverlay(draft, name, actions.photos)
+                state.capturing -> PhotoCaptureOverlay(actions.photos)
             }
         },
     ) {
@@ -294,7 +336,7 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
                         title = stringResource(R.string.messages_conversation_empty_title),
                         body = stringResource(R.string.messages_conversation_empty_body, name),
                     )
-                    else -> MessageList(state.messages, name, listState, actions.onLongPress)
+                    else -> MessageList(state, name, listState, actions)
                 }
             }
             val error = state.error
@@ -323,12 +365,32 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
 }
 
 @Composable
-private fun MessageList(messages: List<MessageInfo>, name: String, listState: LazyListState, onLongPress: (MessageInfo?) -> Unit) {
-    val byDay = messages.groupBy { Times.day(it.sentAt) }
+private fun MessageList(state: ConversationUiState, name: String, listState: LazyListState, actions: ConversationActions) {
+    val onLongPress = actions.onLongPress
+    val byDay = state.messages.groupBy { Times.day(it.sentAt) }
+    val older by rememberUpdatedState(state.olderAvailable)
+    val onLoadOlder by rememberUpdatedState(actions.onLoadOlder)
+    LaunchedEffect(listState) {
+        // Armed by the member's first drag (not the scroll to the end on opening): a short conversation that shows
+        // its top at once does not load by itself.
+        listState.interactionSource.interactions.filterIsInstance<DragInteraction.Start>().first()
+        // "Load older" on reaching the top (§10.5.2): the first item visible while the vault announced older messages.
+        snapshotFlow { listState.firstVisibleItemIndex == 0 && listState.layoutInfo.totalItemsCount > 0 }
+            .distinctUntilChanged()
+            .filter { it && older }
+            .collect { onLoadOlder() }
+    }
     LazyColumn(Modifier.fillMaxSize().testTag("messages"), state = listState, contentPadding = PaddingValues(vertical = Spacing.s)) {
+        if (state.olderAvailable) {
+            item(key = "older") { OlderRow(state.loadingOlder, actions.onLoadOlder) }
+        }
         byDay.forEach { (day, list) ->
             item(key = "day-$day") { DayDivider(Times.dayLabel(day)) }
             items(list, key = { it.messageId }) { m ->
+                if (m.attachment != null) {
+                    PhotoBubble(m, name, actions.photos, onLongPress)
+                    return@items
+                }
                 val time = Times.time(m.sentAt)
                 val status = when {
                     !m.outgoing -> null
@@ -349,6 +411,23 @@ private fun MessageList(messages: List<MessageInfo>, name: String, listState: La
                     onLongClick = { onLongPress(m) },
                 )
             }
+        }
+    }
+}
+
+/** The top of a conversation with older messages in the vault: loading, or a button to load them. */
+@Composable
+private fun OlderRow(loading: Boolean, onLoad: () -> Unit) {
+    val loadingLabel = stringResource(R.string.messages_loading_older)
+    Box(Modifier.fillMaxWidth().padding(Spacing.s).testTag("older"), contentAlignment = Alignment.Center) {
+        if (loading) {
+            CircularProgressIndicator(
+                Modifier.size(24.dp).semantics { contentDescription = loadingLabel },
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            TextButton(onClick = onLoad) { Text(stringResource(R.string.messages_load_older)) }
         }
     }
 }
@@ -382,6 +461,8 @@ private fun Composer(state: ConversationUiState, name: String, actions: Conversa
             maxLines = COMPOSER_LINES,
             modifier = Modifier.weight(1f).testTag("composer"),
         )
+        // The photo button only for a vault of release A (§10.5.1 "Compatibility").
+        if (state.photosAvailable) PhotoButton(actions.photos, enabled = state.photoDraft == null)
         Spacer(Modifier.width(Spacing.s))
         FilledIconButton(
             onClick = actions.onSend,
