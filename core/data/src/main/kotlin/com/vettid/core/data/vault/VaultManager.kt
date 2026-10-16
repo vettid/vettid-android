@@ -138,6 +138,16 @@ class VaultManager(
     val holder = HolderWatch(scope) { wipeThisPhone() }
 
     private val phaseFlow = MutableStateFlow<AppPhase>(AppPhase.Starting)
+
+    /** (Release R, §11.14.10) When this old phone approved a transfer it still keeps the keys for. */
+    private val transferKeptFlow = MutableStateFlow<Instant?>(null)
+
+    /** (Release R) The erase at the end of a kept transfer's 7 days, while the process lives that long. */
+    @Volatile
+    private var keptTransferTimer: Job? = null
+
+    /** (Release R, §11.14.10) This new phone has a move to finish. */
+    private val finishMoveFlow = MutableStateFlow(local.finishMovePending)
     private val accountFlow = MutableStateFlow(local.toInfo())
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val windowFlow = MutableStateFlow<Instant?>(null)
@@ -419,6 +429,19 @@ class VaultManager(
          * ms): it keeps its keys until `device.unlinked{transferred}` or for 7 days, and says so at every start.
          */
         val transferApprovedAtMs: Long? = null,
+        /**
+         * (Release R, §11.14.6) A `vault.recovery.open` the member API took got no answer (the relay, a timeout, the
+         * app stopped): the next answer may be that of a right entry that could not be completed. Cleared by the
+         * next answer; a new registration starts without it.
+         */
+        val recoveryOpenUnanswered: Boolean = false,
+        /** (Release R) The attempts used of the registered recovery, as the vault's counter last reported them. */
+        val recoveryAttemptsUsed: Int? = null,
+        /**
+         * (Release R, §11.14.10) This new phone received a transfer and has not yet opened the vault from storage with
+         * its own secret ("Finish the move"): asked again at every start until an unlock succeeds.
+         */
+        val finishMovePending: Boolean = false,
     ) {
         val phone: PhoneSecretState get() = PhoneSecretState(phoneKeyVault, phoneEpoch)
         fun toInfo(): AccountInfo? = when {
@@ -548,8 +571,6 @@ class VaultManager(
     private val phoneSecrets = PhoneSecrets { com.vettid.core.keystore.PhoneKey(it) }
 
     init {
-        // Release R (§11.14.10): a transfer this phone approved ends here 7 days after the approval.
-        scope.launch { runCatching { checkKeptTransfer() } }
         // A lock that was pending when the process ended: locked here from the start, and tried again at once
         // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver).
         lockKeeper.resume()
@@ -605,7 +626,10 @@ class VaultManager(
         val cfg = DeviceConfig(name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust)
         val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
         val member = gateway.member()
-        val s = Session(device, VaultApi(device), member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
+        // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
+        // before it compares the bytes as typed.
+        val api = VaultApi(device) { local.phone.inUse }
+        val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
         device.start(scope)
         observe(s)
         s
@@ -637,7 +661,13 @@ class VaultManager(
             feed.clear()
             ownerCheck.clear()
             phoneSecrets.delete(local.phone)
-            saveLocal(local.copy(setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null))
+            saveLocal(
+                local.copy(
+                    setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
+                    finishMovePending = false,
+                ),
+            )
+            finishMoveFlow.value = false
         }
     }
 
@@ -743,6 +773,8 @@ class VaultManager(
      * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
      */
     override fun onForeground() {
+        // Release R (§11.14.10): the 7 days of a kept transfer are also checked on return, not only at a start.
+        if (local.transferApprovedAtMs != null) scope.launch { runCatching { checkKeptTransfer() } }
         val d = session?.device ?: return
         if (d.ensureCollecting()) android.util.Log.i("VaultManager", "mailbox collector restarted on return to the foreground")
         // Not while a lock is pending: nothing but the lock is sent to a vault that counts as locked.
@@ -918,8 +950,10 @@ class VaultManager(
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
         val s = session()
         onStep(EnrollStep.ENROLL)
-        // Release R (§11.14.1): a new phone key, its secret of epoch 1 in the request.
-        val phone = if (env.releaseR) io { phoneSecrets.create(local.vaultId) } else null
+        // Release R (§11.14.1): a phone key and its secret of epoch 1 in the request. The state is stored before the
+        // request is sent, and a retry of this enrollment (a lost answer, a crash) reuses the key: the vault may already
+        // hold its secret.
+        val phone = if (env.releaseR) io { keepPhoneKey(local.vaultId) } else null
         val secret = phone?.let { phoneSecrets.secret(it) }
         val out = try {
             s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester(), secret)
@@ -927,7 +961,6 @@ class VaultManager(
             secret?.fill(0)
         }
         if (!out.ok) throw VaultFailure(enrollFailure(out.code), out.code)
-        if (phone != null) io { saveLocal(local.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch)) }
         if (out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) io { saveLocal(local.copy(vaultId = out.vaultId)) }
         onStep(EnrollStep.WAIT_FOR_VAULT)
         s.device.awaitEnrolled()
@@ -1097,6 +1130,11 @@ class VaultManager(
         // "The move didn't finish" (release R, §11.14.10): this phone opened the vault with its own keys after it
         // approved a transfer, so it is the vault's phone again.
         if (!overtaken) clearKeptTransfer()
+        // "Finish the move" (release R, §11.14.10): this new phone opened the vault from storage with its own secret.
+        if (local.finishMovePending) {
+            io { saveLocal(local.copy(finishMovePending = false)) }
+            finishMoveFlow.value = false
+        }
         val attempt = if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
         return StepOutcome(attempt, abandoned = r.update?.result == UPDATE_ABANDONED)
     }
@@ -1129,8 +1167,19 @@ class VaultManager(
         } finally {
             next.fill(0)
         }
-        if (again.ok) io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
+        if (UnlockEpoch.confirmsNext(again.ok, again.result.code)) io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
         return again
+    }
+
+    /**
+     * (Release R) The phone key for [keyVault] at epoch 1, stored before any request carries its secret: the one
+     * this phone already holds for it when the earlier try never got that far ([PhoneSecrets.reuseOrCreate]), a new
+     * one otherwise.
+     */
+    private fun keepPhoneKey(keyVault: String): PhoneSecretState {
+        val phone = phoneSecrets.reuseOrCreate(local.phone, keyVault)
+        if (phone != local.phone) saveLocal(local.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch))
+        return phone
     }
 
     // --- the proactive release update (owner decision 2026-10-09) ---
@@ -1543,27 +1592,66 @@ class VaultManager(
 
     override suspend fun recoveryPreflight(): PreflightInfo = preflight()
 
+    /**
+     * `vault.recovery.open` (§11.14.6). Once the vault answered `ok` it has made this phone its app and removed the
+     * recovery record: a phone in that state ([recoveryOpened]) never sends another open (which could only be answered
+     * `no_recovery`) but finishes the one that succeeded ([finishOpened]). An open the member API took that got no
+     * answer is remembered across a restart ([LocalAccount.recoveryOpenUnanswered]) and reported with the next answer.
+     */
     override suspend fun recoveryOpen(pin: String, password: String): RecoveryOpenOutcome = guard {
         val s = session()
         val phone = local.phone
         if (!phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
+        if (s.device.recoveryOpenedNotPaired) return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
+        val afterUnanswered = local.recoveryOpenUnanswered
         val secret = phoneSecrets.secret(phone)
         val r = try {
             s.alt.recoveryOpen(
                 local.vaultId,
                 build = { e, m -> s.device.prepareRecoveryOpen(local.userGuid, pin, password, secret, e, m, env.attester()) },
                 open = { raw, rid -> s.device.openRecoveryOpenResult(raw, rid) },
+                onSent = { if (!local.recoveryOpenUnanswered) io { saveLocal(local.copy(recoveryOpenUnanswered = true)) } },
             )
         } finally {
             secret.fill(0)
         }
-        if (!r.ok) return@guard RecoveryOpenOutcome(r.code, r.used.takeIf { r.counted }, r.retryAt)
-        // §11.14.6 after `ok`: hs.init with ctx = recovery_id, then credential.get as the holder (no credential.recover).
-        s.device.completeRecoveryOpen()
+        val used = if (r.counted) r.used else null
+        io { saveLocal(local.copy(recoveryOpenUnanswered = false, recoveryAttemptsUsed = used ?: local.recoveryAttemptsUsed)) }
+        if (!r.ok) return@guard RecoveryOpenOutcome(r.code, used, r.retryAt, afterUnanswered = afterUnanswered)
+        finishOpened(s, pin, used, resuming = false)
+    }
+
+    /**
+     * After `ok` (§11.14.6): `hs.init` with `ctx` = `recovery_id`, then `credential.get` as the holder (no
+     * `credential.recover`). The app is opened by [finishRecoveryOpen], after the member has read the result. When the
+     * handshake is not answered (the vault locked meanwhile, or the relay lost it), the phone unlocks the vault with
+     * its own key, which the vault made its app's, and runs the handshake again.
+     */
+    private suspend fun finishOpened(s: Session, pin: String, used: Int?, resuming: Boolean): RecoveryOpenOutcome {
+        val d = s.device
+        try {
+            d.completeRecoveryOpen(if (resuming) RESUME_HANDSHAKE_WAIT else Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
+        } catch (e: TimeoutCancellationException) {
+            android.util.Log.i("VaultManager", "the recovered phone's handshake was not answered: unlocking with its own key")
+            val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
+            if (!u.ok) {
+                val code = u.result.code ?: throw VaultFailure(FailureKind.NO_RESPONSE, "recovery_handshake", cause = e)
+                return RecoveryOpenOutcome(code, used, opened = true)
+            }
+            d.completeRecoveryOpen()
+        }
         s.openApi.credentialFetch()
+        return RecoveryOpenOutcome("ok", used)
+    }
+
+    override suspend fun recoveryOpened(): Boolean = guard { local.phone.inUse && session().device.recoveryOpenedNotPaired }
+
+    override val recoveryAttemptsUsed: Int? get() = local.recoveryAttemptsUsed
+
+    override suspend fun finishRecoveryOpen() = guard {
+        val s = session()
         val p = afterUnlocked(s)
         phaseFlow.value = p
-        RecoveryOpenOutcome("ok", r.used.takeIf { r.counted }, null)
     }
 
     override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
@@ -1591,8 +1679,10 @@ class VaultManager(
      * recovery (§11.11.4). Only ever a recovering device: a phone that holds the vault is not touched.
      */
     override suspend fun abandonRecovery() {
-        val recovering = guard { session().device.recovering }
-        if (!recovering) return
+        val d = guard { session().device }
+        if (!d.recovering) return
+        // Release R (§11.14.6): after `ok` the vault's only unlock key is this phone's; it is never deleted here.
+        if (local.phone.inUse && d.recoveryOpenedNotPaired) throw VaultFailure(FailureKind.OTHER, MoveRepository.CODE_RECOVERY_OPENED)
         dropSession(forget = true)
         io { saveLocal(LocalAccount()) }
         phaseFlow.value = AppPhase.SignedOut
@@ -1639,14 +1729,14 @@ class VaultManager(
         if (!local.transferIn) io { saveLocal(local.copy(transferIn = true)) }
         // Release R (§11.14.10): this phone's key and its secret of epoch 1 go in the hs.init. The vault id is not
         // known yet: the key and the secret are made for "" (as vettid-vault's reference client does).
-        val phone = if (env.releaseR) io { phoneSecrets.create("") } else null
+        // Stored before the hs.init is sent; a retry reuses the key.
+        val phone = if (env.releaseR) io { keepPhoneKey("") } else null
         val secret = phone?.let { phoneSecrets.secret(it) }
         try {
             d.startTransfer(link, env.attester(), secret)
         } finally {
             secret?.fill(0)
         }
-        if (phone != null) io { saveLocal(local.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch)) }
         transferStartedAt = Instant.now()
         try {
             // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
@@ -1674,6 +1764,11 @@ class VaultManager(
         if (guid != null) {
             gateway.memberChanged(guid)
             io { saveLocal(local.copy(userGuid = guid, vaultId = s.device.vaultId ?: local.vaultId)) }
+        }
+        // Release R (§11.14.10): "Finish the move" is asked until an unlock from storage with this phone's secret.
+        if (local.phone.inUse) {
+            io { saveLocal(local.copy(finishMovePending = true)) }
+            finishMoveFlow.value = true
         }
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.openApi.credentialTakeOver()
@@ -1731,33 +1826,45 @@ class VaultManager(
         // `device.unlinked{transferred}` (after the new phone's first unlock from storage) or for 7 days.
         if (keep) {
             io { saveLocal(local.copy(transferApprovedAtMs = System.currentTimeMillis())) }
-            transferKeptFlow.value = Instant.now()
+            checkKeptTransfer()
         }
         return moved
     }
 
-    private val transferKeptFlow = MutableStateFlow<Instant?>(null)
+    override val finishMovePending: StateFlow<Boolean> = finishMoveFlow.asStateFlow()
 
     /** (Release R) When this phone approved a transfer it still keeps the keys for; null otherwise. */
     override val transferKeptSince: StateFlow<Instant?> = transferKeptFlow.asStateFlow()
 
     /**
-     * At every start: a transfer approved 7 days ago or more ends here (the old phone's keys go, §11.14.10); before
-     * that, [transferKeptSince] tells the shell to say "Finish the move on your new phone".
+     * At every start, on every return to the foreground, and when the 7 days run out while the process lives: a
+     * transfer approved 7 days ago or more ends here (the old phone's keys go, §11.14.10); before that,
+     * [transferKeptSince] tells the shell to say "Finish the move on your new phone", and a timer runs to the end.
      */
     private suspend fun checkKeptTransfer() {
         val at = local.transferApprovedAtMs ?: return
-        if (System.currentTimeMillis() - at >= TRANSFER_KEEP_MS) {
-            android.util.Log.i("VaultManager", "a transfer approved 7 days ago: this phone's keys are removed")
-            eraseThisPhone()
-        } else {
-            transferKeptFlow.value = Instant.ofEpochMilli(at)
+        when (val k = KeptTransfer.decide(at, System.currentTimeMillis())) {
+            KeptTransfer.Decision.Erase -> {
+                keptTransferTimer?.cancel()
+                android.util.Log.i("VaultManager", "a transfer approved 7 days ago: this phone's keys are removed")
+                eraseThisPhone()
+            }
+            is KeptTransfer.Decision.Keep -> {
+                transferKeptFlow.value = Instant.ofEpochMilli(at)
+                keptTransferTimer?.cancel()
+                keptTransferTimer = scope.launch {
+                    delay(k.remainingMs)
+                    keptTransferTimer = null // not cancelled by the check it runs
+                    runCatching { checkKeptTransfer() }
+                }
+            }
         }
     }
 
     /** "The move didn't finish" succeeded: this phone is the vault's phone again. */
     private suspend fun clearKeptTransfer() {
         if (local.transferApprovedAtMs == null) return
+        keptTransferTimer?.cancel()
         io { saveLocal(local.copy(transferApprovedAtMs = null)) }
         transferKeptFlow.value = null
     }
@@ -1812,6 +1919,7 @@ class VaultManager(
         wiper.resetMemory()
         io { if (wiper.erase()) wiper.finish() }
         local = LocalAccount()
+        finishMoveFlow.value = false
         accountFlow.value = null
         generation++
         phaseFlow.value = AppPhase.SignedOut
@@ -1967,6 +2075,13 @@ class VaultManager(
         cancelled
     }
 
+    // Last in the class, after every property is initialized: what starts work on the scope at once, which runs on
+    // another thread and may read any property.
+    init {
+        // Release R (§11.14.10): a transfer this phone approved ends here 7 days after the approval.
+        scope.launch { runCatching { checkKeptTransfer() } }
+    }
+
     companion object {
         private const val DEVICE_FILE = "vault-device.bin"
         private const val SOCIAL_FILE = "social.bin"
@@ -2012,8 +2127,11 @@ class VaultManager(
         /** How long the old phone's approval waits for `device.unlinked{transferred}` (§6.7.1 step 4). */
         private const val UNLINK_WAIT_MS = 30_000L
 
-        /** §11.14.10: the old phone keeps its keys at most this long after a transfer's approval. */
-        private const val TRANSFER_KEEP_MS = 7L * 24 * 60 * 60 * 1000
+        /** The recovered phone's handshake right after `ok` (§11.14.6). */
+        private const val OPENED_HANDSHAKE_WAIT_S = 90L
+
+        /** The handshake of a recovery whose `ok` came earlier (a restart, a lost answer): then an unlock. */
+        private val RESUME_HANDSHAKE_WAIT: Duration = Duration.ofSeconds(30)
 
         /** The bound of the best-effort network calls of a wipe (relay mailbox, member sign-out). */
         private const val BEST_EFFORT_MS = 5_000L

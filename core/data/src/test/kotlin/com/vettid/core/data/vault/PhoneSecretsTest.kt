@@ -61,4 +61,57 @@ class PhoneSecretsTest {
         val soft = PhoneSecrets { SoftKey(KeyLevel.SOFTWARE) }
         assertEquals(FailureKind.HARDWARE_KEYS, assertThrows(VaultFailure::class.java) { soft.create("v1") }.kind)
     }
+
+    /** A retry of an enrollment or a transfer reuses the key the vault may already hold the secret of. */
+    @Test
+    fun aRetryReusesTheKeyOfEpochOne() {
+        val first = secrets.create("v1")
+        val before = secrets.secret(first)
+        val again = secrets.reuseOrCreate(first, "v1")
+        assertEquals(first, again)
+        assertArrayEquals(before, secrets.secret(again))
+        // Another vault, a later epoch, or a key that is gone: a new key.
+        assertEquals(PhoneSecretState("v2", 1), secrets.reuseOrCreate(first, "v2"))
+        val k = keys.getValue("v1")
+        val later = secrets.reuseOrCreate(first.copy(epoch = 2), "v1")
+        assertEquals(PhoneSecretState("v1", 1), later)
+        k.delete()
+        assertTrue(secrets.reuseOrCreate(later, "v1").inUse)
+        assertTrue(k.exists())
+        // Nothing yet: a new key.
+        assertEquals(PhoneSecretState("v3", 1), secrets.reuseOrCreate(PhoneSecretState(), "v3"))
+    }
+
+    /** Only answers the vault gives after the secret matched move the phone to the next epoch. */
+    @Test
+    fun theNextEpochIsKeptOnlyWhenTheSecretWasAccepted() {
+        assertTrue(UnlockEpoch.confirmsNext(ok = true, code = null))
+        assertTrue(UnlockEpoch.confirmsNext(ok = false, code = "bad_pin"))
+        assertTrue(UnlockEpoch.confirmsNext(ok = false, code = "transfer_incomplete"))
+        for (c in listOf("device_secret", "backoff", "manifest", "retry", "attestation", "recovery_pending", null)) {
+            assertFalse(c ?: "null", UnlockEpoch.confirmsNext(ok = false, code = c))
+        }
+    }
+
+    /** The old phone's 7 days after a transfer it approved. */
+    @Test
+    fun aKeptTransferEndsAfterSevenDays() {
+        val day = 24L * 60 * 60 * 1000
+        val at = 1_000_000_000_000L
+        assertEquals(KeptTransfer.Decision.Keep(7 * day), KeptTransfer.decide(at, at))
+        assertEquals(KeptTransfer.Decision.Keep(day), KeptTransfer.decide(at, at + 6 * day))
+        assertEquals(KeptTransfer.Decision.Erase, KeptTransfer.decide(at, at + 7 * day))
+        assertEquals(KeptTransfer.Decision.Erase, KeptTransfer.decide(at, at + 30 * day))
+        // A clock set back before the approval never gives more than 7 days from now.
+        assertEquals(KeptTransfer.Decision.Keep(7 * day), KeptTransfer.decide(at, at - 3 * day))
+    }
+
+    /** §11.14.1: only the trusted execution environment and StrongBox hold a phone key. */
+    @Test
+    fun onlySecureHardwareHoldsThePhoneKey() {
+        assertTrue(com.vettid.core.keystore.PhoneKey.holdsPhoneKey(KeyLevel.TEE))
+        assertTrue(com.vettid.core.keystore.PhoneKey.holdsPhoneKey(KeyLevel.STRONG_BOX))
+        assertFalse(com.vettid.core.keystore.PhoneKey.holdsPhoneKey(KeyLevel.SOFTWARE))
+        assertFalse(com.vettid.core.keystore.PhoneKey.holdsPhoneKey(KeyLevel.UNKNOWN))
+    }
 }

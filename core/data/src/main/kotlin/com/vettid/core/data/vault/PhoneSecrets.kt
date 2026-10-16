@@ -29,6 +29,14 @@ class PhoneSecrets(private val keys: (String) -> PhoneKeyHandle) {
         return PhoneSecretState(keyVault, 1)
     }
 
+    /**
+     * The key for [keyVault] at epoch 1: [current] when it is exactly that and its key still exists (a retry of an
+     * enrollment or a transfer whose request may have reached the vault already, which then holds its secret), a new
+     * key otherwise ([create]).
+     */
+    fun reuseOrCreate(current: PhoneSecretState, keyVault: String): PhoneSecretState =
+        if (current.epoch == 1L && current.keyVault == keyVault && keys(keyVault).exists()) current else create(keyVault)
+
     /** The secret of [s]'s epoch plus [ahead]; [FailureKind.DEVICE_SECRET] when the key is gone (data cleared). */
     @Suppress("ThrowsCount")
     fun secret(s: PhoneSecretState, ahead: Long = 0): ByteArray {
@@ -46,5 +54,45 @@ class PhoneSecrets(private val keys: (String) -> PhoneKeyHandle) {
     /** Removes the key (a wipe, the end of a transfer's keep period). */
     fun delete(s: PhoneSecretState) {
         runCatching { keys(s.keyVault).delete() }
+    }
+}
+
+/** Which unlock answers prove the phone's next epoch (release R, §11.14.1, §11.14.2). */
+object UnlockEpoch {
+    /**
+     * After `device_secret` at the stored epoch, the next epoch's try: it is the vault's secret when the answer is one
+     * the vault gives only after the secret matched (`ok`, `bad_pin`, `transfer_incomplete`). Answers decided before
+     * the secret check (`backoff`, `manifest`, `retry`, …) prove nothing and leave the epoch as it is; a second
+     * `device_secret` means neither epoch is the vault's.
+     */
+    fun confirmsNext(ok: Boolean, code: String?): Boolean = ok || code in AFTER_SECRET
+
+    private val AFTER_SECRET = setOf("bad_pin", "transfer_incomplete")
+}
+
+/** The old phone's keys after a transfer it approved (release R, §11.14.10; owner decision 2026-10-15). */
+object KeptTransfer {
+    /** At most this long after the approval. */
+    const val KEEP_MS = 7L * 24 * 60 * 60 * 1000
+
+    sealed interface Decision {
+        /** The 7 days are over: this phone's keys go. */
+        data object Erase : Decision
+
+        /** Still kept, for [remainingMs]. */
+        data class Keep(val remainingMs: Long) : Decision
+    }
+
+    /**
+     * [approvedAtMs] and [nowMs] are wall-clock times. A clock set before the approval counts from now, so that it never
+     * lengthens the keep beyond 7 days from the moment it is noticed.
+     */
+    fun decide(approvedAtMs: Long, nowMs: Long): Decision {
+        val elapsed = nowMs - approvedAtMs
+        return when {
+            elapsed >= KEEP_MS -> Decision.Erase
+            elapsed < 0 -> Decision.Keep(KEEP_MS)
+            else -> Decision.Keep(KEEP_MS - elapsed)
+        }
     }
 }

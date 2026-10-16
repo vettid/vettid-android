@@ -9,13 +9,27 @@ import java.time.Instant
 /** No transfer kept ([VaultRepository.transferKeptSince]'s default). */
 val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
 
+/** No move to finish ([VaultRepository.finishMovePending]'s default). */
+val NO_MOVE_TO_FINISH: StateFlow<Boolean> = MutableStateFlow(false)
+
 /**
  * The answer to `vault.recovery.open` (§11.14.6): [code] `ok` or one of the result codes (`wrong`, `wrong_again`,
  * `attempt_lost`, `quiet`, `wait`, `busy`, `retry`, `stored_mismatch`, `exhausted`, `closed`, `not_armed`,
  * `counter_unavailable`, …); [used] of 10 attempts when the counter answered; [retryAt] with `quiet`, `wait`, and a
  * wrong or lost attempt that began a wait.
  */
-data class RecoveryOpenOutcome(val code: String, val used: Int? = null, val retryAt: Instant? = null) {
+data class RecoveryOpenOutcome(
+    val code: String,
+    val used: Int? = null,
+    val retryAt: Instant? = null,
+    /** The open before this one was taken by the member API and got no answer (§11.14.6 "A right entry…"). */
+    val afterUnanswered: Boolean = false,
+    /**
+     * The vault had already answered `ok` and made this phone its app, but the phone could not finish opening it: [code]
+     * is then the answer of this phone's own unlock (`bad_pin`, `backoff`, …), and nothing of the recovery was used.
+     */
+    val opened: Boolean = false,
+) {
     val ok: Boolean get() = code == "ok"
     val left: Int? get() = used?.let { (ATTEMPTS - it).coerceAtLeast(0) }
 
@@ -151,6 +165,12 @@ interface VaultRepository {
      * first unlock, at most 7 days); null otherwise. The shell shows "Finish the move on your new phone".
      */
     val transferKeptSince: StateFlow<Instant?> get() = NO_KEPT_TRANSFER
+
+    /**
+     * (Release R, §11.14.10) This new phone received a transfer and has not yet finished the move (an unlock from
+     * storage with its own secret): the app asks again at every start until it is done.
+     */
+    val finishMovePending: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
 
     /** Leaves onboarding for the app. */
     suspend fun finishSetup()
@@ -320,7 +340,23 @@ interface MoveRepository {
      */
     suspend fun recoveryOpen(pin: String, password: String): RecoveryOpenOutcome = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 
+    /**
+     * (Release R) The vault answered `ok` to this phone's open, which has not finished opening it yet (the handshake or
+     * the credential did not complete, or the app stopped): [recoveryOpen] then finishes that recovery with the PIN and
+     * sends no new open, and [abandonRecovery] is refused ([CODE_RECOVERY_OPENED]).
+     */
+    suspend fun recoveryOpened(): Boolean = false
+
+    /** (Release R) The attempts used of the registered recovery as last reported (also after a restart); null before. */
+    val recoveryAttemptsUsed: Int? get() = null
+
+    /** (Release R) After an `ok` [recoveryOpen] the member has read: the app opens. */
+    suspend fun finishRecoveryOpen() {}
+
     companion object {
+        /** (Release R) [abandonRecovery] after the vault made this phone its app: never; the phone key stays. */
+        const val CODE_RECOVERY_OPENED = "recovery_opened"
+
         /**
          * How long the new phone waits for the vault's `hs.resp` after its transfer `hs.init` (§6.7.1 step 2,
          * 0.10.6, a SHOULD): the vault answers at once, but never a dropped `hs.init` (a spent or expired code,
