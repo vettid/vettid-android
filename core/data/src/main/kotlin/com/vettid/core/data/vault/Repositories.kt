@@ -172,6 +172,14 @@ interface VaultRepository {
      */
     val finishMovePending: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
 
+    /**
+     * (Release R, §11.14.10) This old phone opened the vault with its own keys after approving a transfer ("The move
+     * didn't finish"): it is the vault's phone again. Told once, until [acknowledgeMovedBack].
+     */
+    val movedBack: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    fun acknowledgeMovedBack() {}
+
     /** Leaves onboarding for the app. */
     suspend fun finishSetup()
 

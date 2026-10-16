@@ -148,6 +148,9 @@ class VaultManager(
 
     /** (Release R, §11.14.10) This new phone has a move to finish. */
     private val finishMoveFlow = MutableStateFlow(local.finishMovePending)
+
+    /** (Release R, §11.14.10) This old phone took the vault back after a transfer that did not finish. */
+    private val movedBackFlow = MutableStateFlow(false)
     private val accountFlow = MutableStateFlow(local.toInfo())
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val windowFlow = MutableStateFlow<Instant?>(null)
@@ -1867,6 +1870,13 @@ class VaultManager(
         keptTransferTimer?.cancel()
         io { saveLocal(local.copy(transferApprovedAtMs = null)) }
         transferKeptFlow.value = null
+        movedBackFlow.value = true
+    }
+
+    override val movedBack: StateFlow<Boolean> = movedBackFlow.asStateFlow()
+
+    override fun acknowledgeMovedBack() {
+        movedBackFlow.value = false
     }
 
     override suspend fun transferReject(transferId: String) = guard {
