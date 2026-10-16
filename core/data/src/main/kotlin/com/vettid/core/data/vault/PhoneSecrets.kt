@@ -84,6 +84,18 @@ object KeptTransfer {
     }
 
     /**
+     * When the 7 days count from: the approval, or now when the clock is behind it (stored, so that a clock kept behind
+     * cannot extend them at every check).
+     */
+    fun start(approvedAtMs: Long, nowMs: Long): Long = minOf(approvedAtMs, nowMs)
+
+    /**
+     * Whether an approval that failed with [kind] may still have reached the vault: no answer came. Any other failure (a
+     * refusal, the network before sending) means the transfer was not approved.
+     */
+    fun mayHaveReached(kind: FailureKind): Boolean = kind == FailureKind.NO_RESPONSE
+
+    /**
      * [approvedAtMs] and [nowMs] are wall-clock times. A clock set before the approval counts from now, so that it never
      * lengthens the keep beyond 7 days from the moment it is noticed.
      */
@@ -95,4 +107,22 @@ object KeptTransfer {
             else -> Decision.Keep(KEEP_MS - elapsed)
         }
     }
+}
+
+/** What ends "Finish the move" on the new phone (release R, §11.14.10). */
+object FinishMoveProof {
+    /**
+     * An unlock the vault answered `ok` (every `ok` comes from reading the stored header and state with this phone's
+     * own secret) whose result this phone took: not [overtaken] by a lock or a wipe meanwhile.
+     */
+    fun provedBy(resultOk: Boolean, overtaken: Boolean): Boolean = resultOk && !overtaken
+}
+
+/** `credential.create` on a vault of release R (§11.14.9). */
+object CredentialCreate {
+    /**
+     * `exists`: the vault already holds this phone's credential (a create whose answer was lost, a recovered vault), so
+     * the phone fetches it instead of asking the member for a new one. Before release R the answer stays an error.
+     */
+    fun fetchInstead(releaseR: Boolean, code: String?): Boolean = releaseR && code == "exists"
 }

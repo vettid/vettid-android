@@ -46,6 +46,7 @@ import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.callEnd
 import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.VaultStateException
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.vault.pinChange
 import com.vettid.core.vault.pushConfirm
@@ -982,12 +983,26 @@ class VaultManager(
             s.device.completeEnrollment()
         }
         onStep(EnrollStep.CREATE_CREDENTIAL)
-        if (s.device.credentialVersion == null) s.openApi.credentialCreate(password, pin?.takeIf { local.phone.inUse })
+        if (s.device.credentialVersion == null) createOrFetch(s, password, pin)
         onStep(EnrollStep.BACKUP)
         setSetting(s, KEY_BACKUP, JsonPrimitive(backup))
         onStep(EnrollStep.CONFIRM)
         s.openApi.enrollConfirm()
         phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+    }
+
+    /**
+     * `credential.create`. (Release R) A vault that answers `exists` already holds this phone's credential (a create
+     * whose answer was lost, a recovered vault): it is fetched instead of a new one being asked for.
+     */
+    private suspend fun createOrFetch(s: Session, password: String, pin: String?) {
+        val r = local.phone.inUse
+        try {
+            s.openApi.credentialCreate(password, pin?.takeIf { r })
+        } catch (e: VaultOpException) {
+            if (!CredentialCreate.fetchInstead(r, e.code)) throw e
+            s.openApi.credentialFetch()
+        }
     }
 
     override suspend fun finishSetup() {
@@ -1134,7 +1149,7 @@ class VaultManager(
         // approved a transfer, so it is the vault's phone again.
         if (!overtaken) clearKeptTransfer()
         // "Finish the move" (release R, §11.14.10): this new phone opened the vault from storage with its own secret.
-        if (local.finishMovePending) {
+        if (local.finishMovePending && FinishMoveProof.provedBy(r.ok, overtaken)) {
             io { saveLocal(local.copy(finishMovePending = false)) }
             finishMoveFlow.value = false
         }
@@ -1504,7 +1519,8 @@ class VaultManager(
         val d = s.device
         when {
             !d.recovering -> RecoveryStage.CODE
-            d.deviceId == null -> RecoveryStage.PIN
+            // Release R (§11.14.6): a phone the vault answered `ok` finishes on the open's screen, paired or not.
+            d.deviceId == null || local.phone.inUse -> RecoveryStage.PIN
             vaultStatus(s)?.state == "unlocked" -> RecoveryStage.PASSWORD
             else -> RecoveryStage.PIN
         }
@@ -1605,7 +1621,7 @@ class VaultManager(
         val s = session()
         val phone = local.phone
         if (!phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
-        if (s.device.recoveryOpenedNotPaired) return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
+        if (s.device.recoveryOpenedNotFinished) return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
         val afterUnanswered = local.recoveryOpenUnanswered
         val secret = phoneSecrets.secret(phone)
         val r = try {
@@ -1632,22 +1648,50 @@ class VaultManager(
      */
     private suspend fun finishOpened(s: Session, pin: String, used: Int?, resuming: Boolean): RecoveryOpenOutcome {
         val d = s.device
-        try {
-            d.completeRecoveryOpen(if (resuming) RESUME_HANDSHAKE_WAIT else Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
-        } catch (e: TimeoutCancellationException) {
-            android.util.Log.i("VaultManager", "the recovered phone's handshake was not answered: unlocking with its own key")
-            val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
-            if (!u.ok) {
-                val code = u.result.code ?: throw VaultFailure(FailureKind.NO_RESPONSE, "recovery_handshake", cause = e)
-                return RecoveryOpenOutcome(code, used, opened = true)
-            }
-            d.completeRecoveryOpen()
-        }
-        s.openApi.credentialFetch()
+        // The handshake only when it has not completed yet: a phone paired earlier fetches the credential straight away.
+        var refused = if (d.deviceId == null) pairRecovered(s, pin, resuming) else null
+        if (refused == null) refused = fetchRecovered(s, pin, unlockFirst = resuming)
+        if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
+        // Only now, with the credential on this phone, is the recovery over (until then the phone resumes it).
+        d.finishRecoveryOpen()
         return RecoveryOpenOutcome("ok", used)
     }
 
-    override suspend fun recoveryOpened(): Boolean = guard { local.phone.inUse && session().device.recoveryOpenedNotPaired }
+    /** The recovered phone's handshake; unanswered, an unlock with its own key and the handshake again. The unlock's refusal code. */
+    private suspend fun pairRecovered(s: Session, pin: String, resuming: Boolean): String? = try {
+        s.device.completeRecoveryOpen(if (resuming) RESUME_HANDSHAKE_WAIT else Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
+        null
+    } catch (e: TimeoutCancellationException) {
+        android.util.Log.i("VaultManager", "the recovered phone's handshake was not answered: unlocking with its own key")
+        unlockOwn(s, pin, e) ?: run {
+            s.device.completeRecoveryOpen()
+            null
+        }
+    }
+
+    /**
+     * `credential.get` as the holder; when resuming ([unlockFirst]) and it is not answered (the vault locked since the
+     * pairing), an unlock with this phone's own key and `credential.get` again. The unlock's refusal code.
+     */
+    private suspend fun fetchRecovered(s: Session, pin: String, unlockFirst: Boolean): String? = try {
+        s.openApi.credentialFetch()
+        null
+    } catch (e: VaultStateException) {
+        if (!unlockFirst) throw e
+        android.util.Log.i("VaultManager", "the recovered phone's credential.get was not answered: unlocking with its own key")
+        unlockOwn(s, pin, e) ?: run {
+            s.openApi.credentialFetch()
+            null
+        }
+    }
+
+    /** An unlock with this phone's own key (the vault made it its app): null when it opened, else the vault's code. */
+    private suspend fun unlockOwn(s: Session, pin: String, cause: Throwable): String? {
+        val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
+        return if (u.ok) null else u.result.code ?: throw VaultFailure(FailureKind.NO_RESPONSE, "recovery_unlock", cause = cause)
+    }
+
+    override suspend fun recoveryOpened(): Boolean = guard { local.phone.inUse && session().device.recoveryOpenedNotFinished }
 
     override val recoveryAttemptsUsed: Int? get() = local.recoveryAttemptsUsed
 
@@ -1685,7 +1729,7 @@ class VaultManager(
         val d = guard { session().device }
         if (!d.recovering) return
         // Release R (§11.14.6): after `ok` the vault's only unlock key is this phone's; it is never deleted here.
-        if (local.phone.inUse && d.recoveryOpenedNotPaired) throw VaultFailure(FailureKind.OTHER, MoveRepository.CODE_RECOVERY_OPENED)
+        if (local.phone.inUse && d.recoveryOpenedNotFinished) throw VaultFailure(FailureKind.OTHER, MoveRepository.CODE_RECOVERY_OPENED)
         dropSession(forget = true)
         io { saveLocal(LocalAccount()) }
         phaseFlow.value = AppPhase.SignedOut
@@ -1821,15 +1865,26 @@ class VaultManager(
      */
     override suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String?): Boolean {
         var keep = false
-        val moved = holder.approveTransfer(if (local.phone.inUse) 0 else UNLINK_WAIT_MS) {
-            keep = guard { session().openApi.transferApprove(transferId, pin, password, signer) }.keepUntilNewUnlock
-            openTransferId = null
-        }
+        val r = local.phone.inUse
         // Release R (§11.14.10, owner decision 2026-10-15): this phone keeps its keys until the vault's
-        // `device.unlinked{transferred}` (after the new phone's first unlock from storage) or for 7 days.
+        // `device.unlinked{transferred}` (after the new phone's first unlock from storage) or for 7 days. The time is
+        // stored before the approval is sent, so that an approval whose answer is lost is bounded too; a refusal, or an
+        // answer that does not keep the keys, removes it again.
+        val before = local.transferApprovedAtMs
+        if (r) io { saveLocal(local.copy(transferApprovedAtMs = System.currentTimeMillis())) }
+        val moved = try {
+            holder.approveTransfer(if (r) 0 else UNLINK_WAIT_MS) {
+                keep = guard { session().openApi.transferApprove(transferId, pin, password, signer) }.keepUntilNewUnlock
+                openTransferId = null
+            }
+        } catch (e: VaultFailure) {
+            if (r && !KeptTransfer.mayHaveReached(e.kind)) io { saveLocal(local.copy(transferApprovedAtMs = before)) }
+            throw e
+        }
         if (keep) {
-            io { saveLocal(local.copy(transferApprovedAtMs = System.currentTimeMillis())) }
             checkKeptTransfer()
+        } else if (r) {
+            io { saveLocal(local.copy(transferApprovedAtMs = before)) }
         }
         return moved
     }
@@ -1845,8 +1900,12 @@ class VaultManager(
      * [transferKeptSince] tells the shell to say "Finish the move on your new phone", and a timer runs to the end.
      */
     private suspend fun checkKeptTransfer() {
-        val at = local.transferApprovedAtMs ?: return
-        when (val k = KeptTransfer.decide(at, System.currentTimeMillis())) {
+        val stored = local.transferApprovedAtMs ?: return
+        val now = System.currentTimeMillis()
+        // A clock behind the approval: the 7 days run from now, stored, so that later checks do not extend them again.
+        val at = KeptTransfer.start(stored, now)
+        if (at != stored) io { saveLocal(local.copy(transferApprovedAtMs = at)) }
+        when (val k = KeptTransfer.decide(at, now)) {
             KeptTransfer.Decision.Erase -> {
                 keptTransferTimer?.cancel()
                 android.util.Log.i("VaultManager", "a transfer approved 7 days ago: this phone's keys are removed")

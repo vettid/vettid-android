@@ -291,10 +291,11 @@ class VaultDevice private constructor(
     val recovering: Boolean get() = st.recovery != null
 
     /**
-     * (Release R, §11.14.6) The vault is pinned from a recovery's result but this phone's first handshake has not
-     * completed: for a phone with a phone secret, the vault answered `ok` and made this phone its app.
+     * (Release R, §11.14.6) The vault is pinned from a recovery's result but the recovery is not finished (the first
+     * handshake or `credential.get` has not completed): for a phone with a phone secret, the vault answered `ok` and
+     * made this phone its app. Ends with [finishRecoveryOpen].
      */
-    val recoveryOpenedNotPaired: Boolean get() = st.vault != null && st.recovery != null && st.deviceId == null
+    val recoveryOpenedNotFinished: Boolean get() = st.vault != null && st.recovery != null
 
     /**
      * While recovering: the vault's `credential_backup` from this app's unlock result (0.10.6, §11.11.5 step 1);
@@ -787,18 +788,22 @@ class VaultDevice private constructor(
      * first app's), deposited with the token from the result.
      */
     suspend fun completeRecoveryOpen(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
-        val ctx = lock.withLock {
+        lock.withLock {
             val v = requireVault()
             val rec = st.recovery ?: throw VaultStateException("no recovery registered")
             if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
             startInit(Purpose.APP, rec.recoveryId, v.token, null)
-            rec.recoveryId
-        }
-        awaitPaired(timeout)
-        lock.withLock {
-            if (st.recovery?.recoveryId == ctx) st.recovery = null
             save()
         }
+        // The recovery stays registered until the credential is here too (finishRecoveryOpen).
+        awaitPaired(timeout)
+    }
+
+    /** (Release R) The recovered phone holds the credential: the recovery is over ([recoveryOpenedNotFinished] false). */
+    suspend fun finishRecoveryOpen() = lock.withLock {
+        if (st.deviceId == null) throw VaultStateException("not paired")
+        st.recovery = null
+        save()
     }
 
     /**

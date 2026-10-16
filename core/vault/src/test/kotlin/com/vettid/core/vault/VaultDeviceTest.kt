@@ -638,6 +638,14 @@ class VaultDeviceTest {
      * the PIN when given, and passwords are normalized to NFC only for a vault of release R; a vault before it gets
      * every password exactly as typed.
      */
+    /** Release R: a recovery is finished only on a paired phone (after its credential.get), never before. */
+    @Test
+    fun aRecoveryIsFinishedOnlyOnAPairedPhone() = runBlocking<Unit> {
+        val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+        assertFalse(d.recoveryOpenedNotFinished)
+        assertThrows(VaultStateException::class.java) { runBlocking { d.finishRecoveryOpen() } }
+    }
+
     @Test
     fun releaseRCredentialPayloadsCarryThePinAndNormalizeOnlyForReleaseR() = runBlocking<Unit> {
         withTimeout(30_000) {

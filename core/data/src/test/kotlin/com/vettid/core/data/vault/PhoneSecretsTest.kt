@@ -114,4 +114,42 @@ class PhoneSecretsTest {
         assertFalse(com.vettid.core.keystore.PhoneKey.holdsPhoneKey(KeyLevel.SOFTWARE))
         assertFalse(com.vettid.core.keystore.PhoneKey.holdsPhoneKey(KeyLevel.UNKNOWN))
     }
+
+    /** A clock behind the approval: the 7 days count from when that is noticed, and that time is kept. */
+    @Test
+    fun aClockBehindTheApprovalRestartsTheSevenDaysOnce() {
+        val day = 24L * 60 * 60 * 1000
+        val at = 1_000_000_000_000L
+        assertEquals(at, KeptTransfer.start(at, at + day))
+        val noticed = at - 3 * day
+        assertEquals(noticed, KeptTransfer.start(at, noticed))
+        // Later checks with the clock still behind the first approval count from the stored, noticed time.
+        assertEquals(KeptTransfer.Decision.Keep(6 * day), KeptTransfer.decide(KeptTransfer.start(noticed, noticed + day), noticed + day))
+        assertEquals(KeptTransfer.Decision.Erase, KeptTransfer.decide(KeptTransfer.start(noticed, noticed + 7 * day), noticed + 7 * day))
+    }
+
+    /** Only an approval that got no answer may have reached the vault; any other failure removes the stored time. */
+    @Test
+    fun onlyAnUnansweredApprovalKeepsItsStoredTime() {
+        assertTrue(KeptTransfer.mayHaveReached(FailureKind.NO_RESPONSE))
+        for (k in listOf(FailureKind.BAD_PIN, FailureKind.BAD_PASSWORD, FailureKind.BUSY, FailureKind.NETWORK, FailureKind.OTHER)) {
+            assertFalse(k.name, KeptTransfer.mayHaveReached(k))
+        }
+    }
+
+    /** "Finish the move" ends only with an unlock the vault answered ok and whose result this phone took. */
+    @Test
+    fun onlyAnUnlockThatOpenedTheVaultFinishesTheMove() {
+        assertTrue(FinishMoveProof.provedBy(resultOk = true, overtaken = false))
+        assertFalse(FinishMoveProof.provedBy(resultOk = true, overtaken = true))
+        assertFalse(FinishMoveProof.provedBy(resultOk = false, overtaken = false))
+    }
+
+    /** Release R: `exists` on credential.create fetches the credential the vault holds; before release R it stays an error. */
+    @Test
+    fun anExistingCredentialIsFetchedOnlyForReleaseR() {
+        assertTrue(CredentialCreate.fetchInstead(releaseR = true, code = "exists"))
+        assertFalse(CredentialCreate.fetchInstead(releaseR = false, code = "exists"))
+        assertFalse(CredentialCreate.fetchInstead(releaseR = true, code = "weak_password"))
+    }
 }
