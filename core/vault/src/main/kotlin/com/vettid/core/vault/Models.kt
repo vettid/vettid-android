@@ -174,6 +174,12 @@ data class Message(
     val read: Boolean = false,
 )
 
+/**
+ * One page of `message.list` (§10.5.2): [messages] oldest first; [nextBefore] the `message_id` of the page's oldest
+ * message when older ones remain (the next page's `before`), null at the start of the conversation.
+ */
+data class MessagePage(val messages: List<Message>, val nextBefore: String?)
+
 /** `message.send` response. */
 @Serializable
 data class SentMessage(@SerialName("message_id") val messageId: String, @SerialName("sent_at") val sentAt: String)

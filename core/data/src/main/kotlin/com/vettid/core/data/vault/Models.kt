@@ -362,6 +362,12 @@ enum class FailureKind {
      * Keystore or file failure. Nothing is reset by itself (A6 audit P4): the member tries again or erases the phone.
      */
     LOCAL_STATE,
+
+    /**
+     * The vault's answer was too large to send to this phone (`response_too_large`, VAULT-MESSAGING 0.32.0 §8.1): an
+     * answer is never silence. Nothing changed; a list asked for again in smaller pages may fit.
+     */
+    RESPONSE_TOO_LARGE,
     OTHER,
 }
 

@@ -23,6 +23,8 @@
     <string name="messages_error_title">Could not load messages</string>
     <string name="messages_retry">Try again</string>
     <string name="messages_ok">OK</string>
+    <string name="messages_load_older">Show older messages</string>
+    <string name="messages_loading_older">Loading older messages</string>
     <string name="messages_cd_details">About %1$s</string>
     <string name="messages_conversation_empty_title">Say hello</string>
     <string name="messages_conversation_empty_body">Messages with %1$s go through your vaults, end to end encrypted</string>

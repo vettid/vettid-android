@@ -23,6 +23,7 @@
     <string name="data_failure_release_unknown">Your vault runs a release that is not in this app\'s list of vault releases, so VettID did not ask for your PIN and sent nothing. The app loads the list again each time you try. Try again; if this keeps happening, update VettID.</string>
     <string name="data_failure_enclave">Your vault\'s software could not be verified. Nothing was sent to it: not your PIN, nor anything else. Try again; if this keeps happening, do not enter your PIN anywhere else and contact VettID support.</string>
     <string name="data_failure_not_found">Nothing was found.</string>
+    <string name="data_failure_response_too_large">Your vault\'s answer was too large to send to this phone. Nothing was changed. Try again later.</string>
     <string name="data_failure_connection_unavailable">This connection cannot be reached right now. Try again later.</string>
     <string name="data_failure_invite_invalid">That is not a VettID invitation. Check the link or code and try again.</string>
     <string name="data_failure_invite_expired">This invitation has expired. Ask for a new one.</string>

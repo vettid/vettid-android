@@ -90,6 +90,10 @@ data class ConversationUiState(
     /** The message the member long-pressed: delete is confirmed first. */
     val deleting: MessageInfo? = null,
     val error: FailureKind? = null,
+    /** Older messages remain in the vault (VAULT-MESSAGING 0.32.0 §10.5.2): scrolling to the top loads them. */
+    val olderAvailable: Boolean = false,
+    /** An older page is being read. */
+    val loadingOlder: Boolean = false,
 ) {
     val canSend: Boolean get() = connection?.state == ConnectionState.ACTIVE && draft.isNotBlank() && !sending && !tooLong
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
@@ -110,8 +114,13 @@ class ConversationViewModel @Inject constructor(
     private val local = MutableStateFlow(ConversationUiState(connectionId))
 
     val uiState: StateFlow<ConversationUiState> =
-        combine(local, messages.messages(connectionId), connections.connections) { s, ms, cs ->
-            s.copy(messages = ms, connection = cs.firstOrNull { it.id == connectionId } ?: s.connection)
+        combine(
+            local,
+            messages.messages(connectionId),
+            connections.connections,
+            messages.olderAvailable(connectionId),
+        ) { s, ms, cs, older ->
+            s.copy(messages = ms, connection = cs.firstOrNull { it.id == connectionId } ?: s.connection, olderAvailable = older)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
     init {
@@ -158,6 +167,23 @@ class ConversationViewModel @Inject constructor(
             } catch (e: VaultFailure) {
                 // The draft stays so that the member can retry.
                 local.update { it.copy(sending = false, error = e.kind) }
+            }
+        }
+    }
+
+    /**
+     * The member scrolled to the top: the next older page (§10.5.2), one at a time. `response_too_large` (§8.1) and
+     * every other failure are shown; the list keeps what it has, and the next scroll to the top tries again.
+     */
+    fun loadOlder() {
+        if (local.value.loadingOlder || !uiState.value.olderAvailable) return
+        local.update { it.copy(loadingOlder = true) }
+        viewModelScope.launch {
+            try {
+                messages.loadOlder(connectionId)
+                local.update { it.copy(loadingOlder = false) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(loadingOlder = false, error = e.kind) }
             }
         }
     }
