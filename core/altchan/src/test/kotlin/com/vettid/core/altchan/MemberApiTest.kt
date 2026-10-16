@@ -235,8 +235,9 @@ class MemberApiTest {
             enclave: VerifiedEnclave,
             manifest: ReleaseManifest,
             attester: Attester,
+            unlockSecret: ByteArray?,
         ): SealedRequest {
-            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, app, "v4.public.open", state, Instant.now())
+            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, app, "v4.public.open", state, Instant.now(), unlockSecret)
             state = b.state
             return b.request
         }

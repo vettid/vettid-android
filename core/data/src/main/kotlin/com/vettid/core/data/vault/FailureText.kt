@@ -47,6 +47,14 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.CLOCK -> R.string.data_failure_clock
     FailureKind.NO_VAULT -> R.string.data_failure_no_vault
     FailureKind.LOCAL_STATE -> R.string.data_failure_local_state
+    FailureKind.DEVICE_SECRET -> R.string.data_failure_device_secret
+    FailureKind.TRANSFER_INCOMPLETE -> R.string.data_failure_transfer_incomplete
+    FailureKind.BUSY -> R.string.data_failure_busy
+    FailureKind.RETRY -> R.string.data_failure_retry
+    FailureKind.COUNTER_UNAVAILABLE -> R.string.data_failure_counter_unavailable
+    FailureKind.STORED_MISMATCH -> R.string.data_failure_stored_mismatch
+    FailureKind.WEAK_PASSWORD -> R.string.data_failure_weak_password
+    FailureKind.HARDWARE_KEYS -> R.string.data_failure_hardware_keys
     FailureKind.RESPONSE_TOO_LARGE -> R.string.data_failure_response_too_large
     FailureKind.OTHER -> R.string.data_failure_other
 }

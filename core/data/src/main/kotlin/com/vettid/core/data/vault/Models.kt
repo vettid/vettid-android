@@ -363,6 +363,31 @@ enum class FailureKind {
      */
     LOCAL_STATE,
 
+    // --- release R (VAULT-MESSAGING 0.33.0 §11.14; ANDROID-PLAN 0.1.40) ---
+
+    /** This phone no longer holds the vault's keys: `device_secret` at the next epoch too, or the phone key is gone. */
+    DEVICE_SECRET,
+
+    /** The move to this phone did not finish (`transfer_incomplete`): the old phone approves it again. */
+    TRANSFER_INCOMPLETE,
+
+    /** The service is busy (`busy`, the heavy-derivation permit): nothing was used or changed; try again in a minute. */
+    BUSY,
+
+    /** The service was too slow (`retry`): nothing was used or changed; try again. */
+    RETRY,
+
+    /** The attempt record cannot be reached (`counter_unavailable`): nothing was used or changed. */
+    COUNTER_UNAVAILABLE,
+
+    /** The vault's stored data could not be opened (`stored_mismatch`): contact VettID. */
+    STORED_MISMATCH,
+
+    /** The new password breaks a rule (`weak_password`); the reason is [VaultFailure.weakPasswordReason]. */
+    WEAK_PASSWORD,
+
+    /** The phone keeps its keys in software only: no enrollment, transfer to it or recovery. */
+    HARDWARE_KEYS,
     /**
      * The vault's answer was too large to send to this phone (`response_too_large`, VAULT-MESSAGING 0.32.0 §8.1): an
      * answer is never silence. Nothing changed; a list asked for again in smaller pages may fit.
@@ -381,7 +406,11 @@ class VaultFailure(
     val retryAfterSeconds: Long = 0,
     cause: Throwable? = null,
     val limit: VaultLimit? = null,
-) : Exception("$kind${code?.let { " ($it)" } ?: ""}${limit?.let { " [${it.name}]" } ?: ""}", cause)
+) : Exception("$kind${code?.let { " ($it)" } ?: ""}${limit?.let { " [${it.name}]" } ?: ""}", cause) {
+    /** `weak_password`'s `reason` (§11.14.7): `short`, `repeated`, `common`, `same_as_pin` or `guessable`. */
+    val weakPasswordReason: String?
+        get() = (cause as? com.vettid.core.vault.VaultOpException)?.body?.let { com.vettid.core.vault.VaultJson.str(it, "reason") }
+}
 
 /**
  * The limit a `limit` error names (VAULT-MESSAGING 0.21.0 §10.1: `{limit, max, size?}`): [name] one of the spec's

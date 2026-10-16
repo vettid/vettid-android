@@ -291,6 +291,13 @@ class VaultDevice private constructor(
     val recovering: Boolean get() = st.recovery != null
 
     /**
+     * (Release R, §11.14.6) The vault is pinned from a recovery's result but the recovery is not finished (the first
+     * handshake or `credential.get` has not completed): for a phone with a phone secret, the vault answered `ok` and
+     * made this phone its app. Ends with [finishRecoveryOpen].
+     */
+    val recoveryOpenedNotFinished: Boolean get() = st.vault != null && st.recovery != null
+
+    /**
      * While recovering: the vault's `credential_backup` from this app's unlock result (0.10.6, §11.11.5 step 1);
      * null before that unlock, or when the vault did not say (an older vault).
      */
@@ -502,11 +509,12 @@ class VaultDevice private constructor(
         enclave: VerifiedEnclave,
         manifest: ReleaseManifest,
         attester: Attester,
+        unlockSecret: ByteArray?,
     ): SealedRequest =
         lock.withLock {
             // §7.1: the app's open token for the vault's first deposit, ≤ 10 min.
             val open = own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES))
-            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, appIdentity(), open, alt(), now())
+            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, appIdentity(), open, alt(), now(), unlockSecret)
             st.signerSeen = false // a new attestation is a new key (§11.7.1)
             setAlt(b.state)
             save()
@@ -657,13 +665,15 @@ class VaultDevice private constructor(
         id: String? = null,
         at: Instant = now(),
         apiKey: ByteArray? = null,
+        unlockSecret: ByteArray? = null,
     ) {
         val v = requireVault()
         val tok = mintForVault()
         val i = Initiator.create(
             InitiatorConfig(
                 purpose = purpose, ctx = ctx, identity = secrets.identity, staticKem = secrets.kem.publicKey, relay = relayAddr,
-                token = tok, profile = profile, deviceAttest = deviceAttest, apiKey = apiKey, responderIk = Base64s.decodeStd(v.ik),
+                token = tok, profile = profile, deviceAttest = deviceAttest, apiKey = apiKey, unlockSecret = unlockSecret,
+                responderIk = Base64s.decodeStd(v.ik),
                 responderEk = KemPublicKey.parse(Base64s.decodeStd(v.kem)),
                 responderRelayKey = Base64s.decodeStd(v.relayPk), policy = Policy.VAULT_TO_DEVICE, id = id, now = at,
             ),
@@ -684,7 +694,12 @@ class VaultDevice private constructor(
      * and its `ts`). The vault answers with `hs.resp` at once; this device sends
      * `hs.fin`, and the SAS appears in [pairingSas]. Returns when `hs.init` is sent.
      */
-    suspend fun startTransfer(link: String, attester: Attester) {
+    suspend fun startTransfer(
+        link: String,
+        attester: Attester,
+        /** (0.33.0, release R §11.14.10) The new phone key's secret of epoch 1, sent in the `hs.init`. */
+        unlockSecret: ByteArray? = null,
+    ) {
         val q = try {
             InviteQr.parseLink(link)
         } catch (_: CryptoException) {
@@ -713,9 +728,82 @@ class VaultDevice private constructor(
             st.signerSeen = false // a new attestation is a new key (§11.7.1)
             val profile = JsonBuilder().string("name", st.name).bytes()
             // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
-            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey)
+            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey, unlockSecret = unlockSecret)
             save()
         }
+    }
+
+    // --- the recovery open (VAULT-MESSAGING 0.33.0 §11.14.6, release R) ---
+
+    private var pendingRecoveryOpen: String? = null
+
+    /**
+     * `vault.recovery.open`: the registered phone's PIN, password and unlock secret, with an open token for its own
+     * mailbox (the vault's relay key is not known yet), signed by its identity key.
+     */
+    suspend fun prepareRecoveryOpen(
+        userGuid: String,
+        pin: String,
+        password: String,
+        unlockSecret: ByteArray,
+        enclave: VerifiedEnclave,
+        manifest: ReleaseManifest,
+        attester: Attester,
+    ): SealedRequest = lock.withLock {
+        val vid = st.vaultId ?: throw VaultStateException("no vault id")
+        val rec = st.recovery ?: throw VaultStateException("no recovery registered")
+        val tok = own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES))
+        val req = AltRequests.buildRecoveryOpen(
+            userGuid, vid, rec.recoveryId, pin, password, unlockSecret, enclave, manifest, attester, secrets.identity, tok, now(),
+        )
+        pendingRecoveryOpen = req.requestId
+        req
+    }
+
+    /**
+     * Opens `vault.recovery.open.result`; on `ok` pins the vault from the bundle and keeps the token, so that the
+     * phone's first handshake follows (`hs.init` with `ctx` = `recovery_id`, then `credential.get`).
+     */
+    suspend fun openRecoveryOpenResult(raw: ByteArray, requestId: String): com.vettid.core.crypto.altchan.RecoveryOpen.Result =
+        lock.withLock {
+            val body = AltResults.open(raw, secrets.kem, com.vettid.core.crypto.altchan.RecoveryOpen.TYPE_RESULT, requestId)
+            val r = com.vettid.core.crypto.altchan.RecoveryOpen.Result.parse(body)
+            pendingRecoveryOpen = null
+            if (r.ok) {
+                r.vaultBundle()?.let { adoptBundle(it) }
+                st.vault?.let { v ->
+                    v.token = r.token
+                    v.tokenExpMs = heldFromVault(r.token)?.toEpochMilli() ?: 0
+                }
+                // As after an unlock: the state floor, and the release with its header_seq for the next unlock's
+                // rollback check (min_header_seq).
+                setAlt(AltRequests.applyRecoveryOpen(alt(), r.stateSeq, r.headerSeq, r.release, r.releaseNumber))
+                save()
+            }
+            r
+        }
+
+    /**
+     * After an `ok` open: `hs.init` with purpose `app` and `ctx` = `recovery_id` (accepted without approval, as the
+     * first app's), deposited with the token from the result.
+     */
+    suspend fun completeRecoveryOpen(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
+        lock.withLock {
+            val v = requireVault()
+            val rec = st.recovery ?: throw VaultStateException("no recovery registered")
+            if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+            startInit(Purpose.APP, rec.recoveryId, v.token, null)
+            save()
+        }
+        // The recovery stays registered until the credential is here too (finishRecoveryOpen).
+        awaitPaired(timeout)
+    }
+
+    /** (Release R) The recovered phone holds the credential: the recovery is over ([recoveryOpenedNotFinished] false). */
+    suspend fun finishRecoveryOpen() = lock.withLock {
+        if (st.deviceId == null) throw VaultStateException("not paired")
+        st.recovery = null
+        save()
     }
 
     /**

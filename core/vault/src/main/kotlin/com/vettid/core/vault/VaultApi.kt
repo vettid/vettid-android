@@ -27,8 +27,15 @@ import java.time.Duration
  * password and run as credential operations (§3.5.3).
  */
 @Suppress("TooManyFunctions")
-class VaultApi(val device: VaultDevice) {
-    private val cred = CredentialOps(device)
+class VaultApi(
+    val device: VaultDevice,
+    /** (Release R, §11.14.7) Whether the vault normalizes passwords to NFC; false for a vault before release R. */
+    normalizePasswords: () -> Boolean = { false },
+) {
+    private val cred = CredentialOps(device, normalizePasswords)
+
+    /** The credential operations, for the extension files of later releases ([pinChange], [secretRenew]). */
+    internal val credentialOps: CredentialOps get() = cred
 
     private fun <T> JsonObject.decode(s: KSerializer<T>): T = VaultJson.decode(s, this)
 
@@ -132,9 +139,15 @@ class VaultApi(val device: VaultDevice) {
 
     // --- credential (§10.6) ---
 
-    /** Creates the Protean Credential under [password] and keeps the blob (enrollment, §3.5.7). */
-    suspend fun credentialCreate(password: String) {
-        cred.sealedOp("credential.create", { put("password", password) })
+    /**
+     * Creates the Protean Credential under [password] and keeps the blob (enrollment, §3.5.7). (0.33.0, release R)
+     * With [pin] the vault verifies it against its unlock key and arms recovery; a weak password is `weak_password`.
+     */
+    suspend fun credentialCreate(password: String, pin: String? = null) {
+        cred.sealedOp("credential.create", {
+            pin?.let { put("pin", it) }
+            put("password", password)
+        })
     }
 
     suspend fun credentialFetch() = cred.fetch()
@@ -154,8 +167,10 @@ class VaultApi(val device: VaultDevice) {
         cred.credOp("credential.rotate", { put("password", password) })
     }
 
-    suspend fun credentialChangePassword(password: String, newPassword: String) {
+    suspend fun credentialChangePassword(password: String, newPassword: String, pin: String? = null) {
         cred.credOp("credential.password.change", {
+            // (0.33.0, release R) The PIN is verified; the change closes the recovery generation and arms the next.
+            pin?.let { put("pin", it) }
             put("password", password)
             put("new_password", newPassword)
         })
@@ -212,24 +227,6 @@ class VaultApi(val device: VaultDevice) {
     suspend fun awaitTransferPending(transferId: String, timeout: Duration): TransferPending =
         device.awaitEvent("device.transfer.pending", timeout) { VaultJson.str(it, "transfer_id") == transferId }
             .let { TransferPending.of(transferId, it.body) }
-
-    /**
-     * `device.transfer.approve` with the blob and, sealed to a UTK, the PIN and the
-     * password. `{}` means the transfer is complete: this app has been removed.
-     * [signer] (0.27.0, §6.7.1 step 3): the new app's signer class, the holder's explicit confirmation, sent when
-     * the pending said `signer_changed`; null sends no member. Without it the vault answers `signer_unconfirmed`
-     * before it spends the UTK or tries the PIN, and the transfer stays open.
-     */
-    suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String? = null) {
-        cred.credOp(
-            "device.transfer.approve",
-            {
-                put("password", password)
-                put("pin", pin)
-            },
-            extra = TransferPending.approval(transferId, signer),
-        )
-    }
 
     /** `device.transfer.reject`: cancels the transfer before or after the scan. */
     suspend fun transferReject(transferId: String) {

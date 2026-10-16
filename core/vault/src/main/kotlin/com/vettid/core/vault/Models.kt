@@ -23,6 +23,8 @@ data class VaultStatusInfo(
     val connections: Int = 0,
     /** The daily owner check (§3.6, 0.13.0); absent from a vault older than 0.13.0. */
     @SerialName("owner_check") val ownerCheck: OwnerCheckStatus? = null,
+    /** (0.33.0, release R) Recovery's state and attempts (§11.14.11); absent before release R. */
+    val recovery: RecoveryStatus? = null,
 )
 
 /**
@@ -48,7 +50,16 @@ data class OwnerCheckPassed(
     @SerialName("interval_seconds") val intervalSeconds: Long? = null,
     val hold: Boolean = true,
     @SerialName("hold_off_until") val holdOffUntil: String? = null,
+    /**
+     * (0.33.0, release R) `recovery{state, present_recorded}` (§11.14.5): [OwnerCheckRecovery.presentRecorded] false
+     * means the vault could not record that the member was here (the presence notice).
+     */
+    val recovery: OwnerCheckRecovery? = null,
 )
+
+/** The owner check answer's `recovery` (VAULT-MESSAGING 0.33.0 §11.14.5). */
+@Serializable
+data class OwnerCheckRecovery(val state: String? = null, @SerialName("present_recorded") val presentRecorded: Boolean? = null)
 
 /** `vault.held` (§3.6.3): content-free counts of what waits since the deadline. */
 @Serializable
@@ -394,6 +405,33 @@ data class AuditExportFilters(
 
 /** `sync.event` (§10.1): [kind] and its members; devices fetch what changed. */
 data class SyncEvent(val kind: String, val body: JsonObject)
+
+/**
+ * The old phone's approval answer (VAULT-MESSAGING 0.33.0 §11.14.10): [keepUntilNewUnlock] when the vault said
+ * `{"unlink": "after_new_unlock"}` (release R): this phone keeps its keys until `device.unlinked{transferred}` or for
+ * 7 days; `{}` from an earlier release, where the transfer is complete and this phone is removed at once.
+ */
+data class TransferApproved(val keepUntilNewUnlock: Boolean) {
+    companion object {
+        fun of(o: JsonObject): TransferApproved = TransferApproved(VaultJson.str(o, "unlink") == "after_new_unlock")
+    }
+}
+
+/**
+ * `vault.status`'s `recovery` (VAULT-MESSAGING 0.33.0 §11.14.11, release R): [state] `armed`, `off`, `needs_check`,
+ * `change_required` or `unknown`; [used] of 10 attempts (never shown as 0 when [state] is `unknown`); [counter] `ok` or
+ * `unavailable`.
+ */
+@Serializable
+data class RecoveryStatus(
+    val state: String = "",
+    val attempts: RecoveryAttempts? = null,
+    @SerialName("present_recorded_at") val presentRecordedAt: String? = null,
+    val counter: String? = null,
+)
+
+@Serializable
+data class RecoveryAttempts(val used: Int = 0, val of: Int = 10)
 
 /** `device.transfer.create`'s answer (§10.3): [link] is the pairing link the new phone scans (QR `t: "p"`). */
 data class TransferOffer(val transferId: String, val link: String, val exp: String?)

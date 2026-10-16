@@ -23,6 +23,15 @@
     <string name="data_failure_release_unknown">Your vault runs a release that is not in this app\'s list of vault releases, so VettID did not ask for your PIN and sent nothing. The app loads the list again each time you try. Try again; if this keeps happening, update VettID.</string>
     <string name="data_failure_enclave">Your vault\'s software could not be verified. Nothing was sent to it: not your PIN, nor anything else. Try again; if this keeps happening, do not enter your PIN anywhere else and contact VettID support.</string>
     <string name="data_failure_not_found">Nothing was found.</string>
+    <!-- Release R (ANDROID-PLAN 0.1.40), draft texts for the owner's wording. -->
+    <string name="data_failure_device_secret">This phone no longer holds the keys of your vault. That happens when the app\'s data was cleared or the phone was set up again from a backup. Nothing was disclosed. Whether you can get back into the vault depends on one of its settings. If its credential backup was on (the usual case), you can recover it: start a recovery on the account site. It takes one to three days, and you need your PIN and your password. If you had turned credential backup off, this vault cannot be brought back; you can delete it on the account site and start a new one. If you still have a phone on which VettID works, use \'Move to a new phone\' there instead. The account site tells you which of these applies.</string>
+    <string name="data_failure_transfer_incomplete">The move to this phone did not finish. Approve it again on your old phone.</string>
+    <string name="data_failure_busy">The service is busy right now. Nothing was used or changed. Try again in a minute.</string>
+    <string name="data_failure_retry">The service was too slow just now. Nothing was used or changed. Try again.</string>
+    <string name="data_failure_counter_unavailable">We cannot check the attempt record now. Nothing was used or changed. Try again later.</string>
+    <string name="data_failure_stored_mismatch">The vault\'s stored data could not be opened. Contact VettID.</string>
+    <string name="data_failure_weak_password">This password is not strong enough.</string>
+    <string name="data_failure_hardware_keys">This phone cannot keep your vault\'s keys in its secure hardware.</string>
     <string name="data_failure_response_too_large">Your vault\'s answer was too large to send to this phone. Nothing was changed. Try again later.</string>
     <string name="data_failure_connection_unavailable">This connection cannot be reached right now. Try again later.</string>
     <string name="data_failure_invite_invalid">That is not a VettID invitation. Check the link or code and try again.</string>

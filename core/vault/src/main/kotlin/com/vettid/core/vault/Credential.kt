@@ -36,7 +36,29 @@ class Revealed(val response: JsonObject, plaintext: ByteArray) {
  * it with `credential.ack`; critical values come back sealed to a one-time
  * reply key. `stale_credential` fetches the latest blob once and retries.
  */
-internal class CredentialOps(private val d: VaultDevice) {
+/**
+ * (VAULT-MESSAGING 0.33.0 §11.14.7) For a vault of release R every password is normalized to NFC before it is used or
+ * sent, as that vault does: a new phone whose keyboard writes the same letters in another form must not spend the
+ * member's attempts. A vault before release R compares the bytes as they are, so its payloads are never normalized.
+ */
+internal fun nfcPasswords(o: JsonObject): JsonObject = JsonObject(
+    o.mapValues { (k, v) ->
+        val p = v as? kotlinx.serialization.json.JsonPrimitive
+        if (k in PASSWORD_KEYS && p != null && p.isString) {
+            kotlinx.serialization.json.JsonPrimitive(com.vettid.core.crypto.altchan.Passwords.nfc(p.content))
+        } else {
+            v
+        }
+    },
+)
+
+private val PASSWORD_KEYS = setOf("password", "new_password")
+
+/**
+ * [normalizePasswords]: whether the vault is of release R (§11.14.7), asked at each operation; false sends every
+ * password exactly as typed, as before release R.
+ */
+internal class CredentialOps(private val d: VaultDevice, private val normalizePasswords: () -> Boolean = { false }) {
     /** Stores the UTKs and the blob a response carries, and confirms the blob (`credential.ack`, §3.5.3). */
     suspend fun keep(o: JsonObject) {
         (o["utks"] as? JsonArray)?.let { arr ->
@@ -77,12 +99,11 @@ internal class CredentialOps(private val d: VaultDevice) {
         extra: JsonObjectBuilder.() -> Unit,
     ): Triple<JsonObject, KemPrivateKey?, String> {
         val rk = if (reply) KemPrivateKey.generate() else null
-        val pt = VaultJson.bytes(
-            buildJsonObject {
-                payload()
-                rk?.let { put("reply_key", Base64s.encodeStd(it.publicKey.bytes())) }
-            },
-        )
+        val obj = buildJsonObject {
+            payload()
+            rk?.let { put("reply_key", Base64s.encodeStd(it.publicKey.bytes())) }
+        }
+        val pt = VaultJson.bytes(if (normalizePasswords()) nfcPasswords(obj) else obj)
         val vid = d.vaultId ?: throw VaultStateException("no vault id")
         val id = d.newId()
         val sealed = try {

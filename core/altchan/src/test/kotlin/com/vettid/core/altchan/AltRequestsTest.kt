@@ -201,6 +201,40 @@ class AltRequestsTest {
         }
     }
 
+    /**
+     * Release R (VAULT-MESSAGING 0.33.0 §11.14.6): an `ok` recovery-open result moves the floors like an unlock
+     * result, and its release with its header_seq becomes what the next unlock names (`min_header_seq`).
+     */
+    @Test
+    fun applyRecoveryOpenRecordsTheReleaseAndItsHeaderSeq() {
+        val rel = "d5".repeat(48)
+        val s0 = AltState(release = TestSupport.pcr0, releaseNumber = 3, stateSeq = 9, headerSeq = mapOf(TestSupport.pcr0 to 4L))
+        val s1 = AltRequests.applyRecoveryOpen(s0, stateSeq = 12, headerSeq = 21, release = rel, releaseNumber = 13)
+        assertEquals(12, s1.stateSeq)
+        assertEquals(rel, s1.release)
+        assertEquals(13, s1.releaseNumber)
+        assertEquals(21L, s1.headerSeq[rel])
+        assertEquals(4L, s1.headerSeq[TestSupport.pcr0])
+        // Floors never move down.
+        val s2 = AltRequests.applyRecoveryOpen(s1, stateSeq = 5, headerSeq = 2, release = rel, releaseNumber = 13)
+        assertEquals(12, s2.stateSeq)
+        assertEquals(21L, s2.headerSeq[rel])
+        // Without a well-formed release, only the state floor moves.
+        val s3 = AltRequests.applyRecoveryOpen(s0, stateSeq = 15, headerSeq = 30, release = "", releaseNumber = 0)
+        assertEquals(15, s3.stateSeq)
+        assertEquals(TestSupport.pcr0, s3.release)
+        assertEquals(s0.headerSeq, s3.headerSeq)
+    }
+
+    /** Release R: the unlock secret goes into the sealed unlock, and the caller's array is left for the caller to zero. */
+    @Test
+    fun unlockCarriesTheSecretAndLeavesTheCallersCopy() {
+        val secret = ByteArray(32) { 0x42 }
+        val (_, o) = unlockBody(TestSupport.SoftAttester(), UnlockOptions(unlockSecret = secret))
+        assertArrayEquals(ByteArray(32) { 0x42 }, o.base64("unlock_secret"))
+        assertArrayEquals(ByteArray(32) { 0x42 }, secret)
+    }
+
     @Test
     fun resultsOpenOnlyForTheirRequest() {
         val rid = Ulid.new()
