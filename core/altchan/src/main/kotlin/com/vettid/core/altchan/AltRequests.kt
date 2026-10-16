@@ -117,7 +117,8 @@ object AltRequests {
             userGuid, rid, nonce, pin, app.ik(), app.kem, app.relay, openToken, app.name, attest, manifest.sha256Hex, manifest.serial,
             app.apiKey(), unlockSecret,
         )
-        val body = request.marshal().also { request.wipe() }
+        val body = request.marshal()
+        request.wipe()
         val env = sealWiping(enclave, AltChannel.TYPE_ENROLL, rid, t, body, wipe = unlockSecret != null)
         val next = state.copy(enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number)
         return BuiltEnroll(SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex), next)
@@ -181,7 +182,8 @@ object AltRequests {
                 userGuid, vaultId, rid, ik.publicKey, pin, state.stateSeq, minHeader, token, a, manifest.sha256Hex, manifest.serial,
                 update, options.cancelRecovery, sig, options.unlockSecret,
             )
-            val body = request.marshal().also { request.wipe() }
+            val body = request.marshal()
+            request.wipe()
             return sealWiping(enclave, AltChannel.TYPE_UNLOCK, rid, t, body, wipe = options.unlockSecret != null)
         }
         val env = sealFitting(assertion, ::seal)
