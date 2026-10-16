@@ -26,4 +26,15 @@ regexes = [
   # The SHA-256 of VettID's Android signing CERTIFICATE (public; pinned by production vault releases), in
   # the draft F-Droid recipe's AllowedAPKSigningKeys (docs/fdroid/com.vettid.app.yml).
   '''31a19613aa10f209e08945f947f94f7ce3e6e5ac342457ff9969a67986928e65''',
+  # Release R (VAULT-MESSAGING 0.33.0 §11.14) test vectors, allowlisted in vettid-vault's .gitleaks.toml too: unlock.json's
+  # derived unlock keys and secret checks, recovery.json's browser key (public) and secrets hash, and two passwords of
+  # the shared verdict file (testdata/passwords/verdicts.json). All are fixed, public and TEST ONLY.
+  '''f01975109b4575d994ade44aeae5d667eb56f14b610d1004694a707e9702e624''',
+  '''89f9fa1389f2e7ecfd0521ab27b39207d867a8acd3f99cd23ba19b3c357ccfde''',
+  '''dd657b8c27f970d60c271e531e9477aeef25da911a5e5041be3fc7b886044802''',
+  '''c12589e53da8326b90b0e362e09f83d1ec315e22936c6069decaa686d7a01ef3''',
+  '''6286862e0e08397dc6b79b2b39f3e37ea03fd8a21ca6c1d09bf33fe9d89e5452''',
+  '''042464a2f8813e007299b9c0beef9c8d6d8d17470b32bba0329c145f0cfc60b683f831a3''',
+  '''QWERTY123456''',
+  '''violet-Kestrel-91-moss''',
 ]
