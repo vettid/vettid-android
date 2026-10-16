@@ -84,7 +84,7 @@ class AttachmentManagerTest {
 
     private val ops = FakeOps()
     private val sent = mutableListOf<MessageInfo>()
-    private val m = AttachmentManager(ops) { sent += it }
+    private val m = AttachmentManager(ops, onSent = { sent += it })
 
     @Test
     fun theProbeReadsReleaseAFromTheAnswer() = runTest {

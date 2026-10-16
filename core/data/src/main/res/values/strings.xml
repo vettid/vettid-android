@@ -103,6 +103,8 @@
     <string name="data_feed_authenticate">%1$s asks you to confirm it is you</string>
     <string name="data_feed_message">New message from %1$s</string>
     <string name="data_feed_call_missed">Missed call from %1$s</string>
+    <string name="data_feed_photo_failed">Photo to %1$s not delivered</string>
+    <string name="data_feed_photo_refused">Photo from %1$s refused: your vault is full</string>
     <string name="data_feed_grant_request">%1$s asks for %2$s</string>
     <string name="data_feed_grant_request_any">%1$s asks for an item</string>
     <plurals name="data_feed_grant_request_batch">

@@ -97,6 +97,12 @@
     <string name="history_kind_wallet_signed">Transaction signed</string>
     <string name="history_kind_message_sent">Message sent</string>
     <string name="history_kind_message_received">Message received</string>
+    <string name="history_kind_photo_sent">Photo sent</string>
+    <string name="history_kind_photo_received">Photo received</string>
+    <string name="history_kind_photo_failed">Photo not delivered or not received</string>
+    <string name="history_kind_photo_refused">Photo refused (vault full)</string>
+    <string name="history_kind_drop_attachment_rate">Photos refused (too many today)</string>
+    <string name="history_kind_drop_attachment_malformed">Photo refused: it was malformed</string>
     <string name="history_kind_call_outgoing">Outgoing call</string>
     <string name="history_kind_call_incoming">Incoming call</string>
     <string name="history_kind_call_answered">Call answered</string>
