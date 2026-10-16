@@ -71,6 +71,8 @@ object AltChannel {
         /** The release_update target, "" without one. */
         val toPcr0: String = "",
         val cancelRecovery: Boolean = false,
+        /** (0.33.0, release R) The phone's unlock secret: the string ends with hex(SHA-256(unlock_secret)). */
+        val unlockSecret: ByteArray? = null,
     )
 
     /**
@@ -104,6 +106,10 @@ object AltChannel {
             f.toPcr0,
         )
         if (f.cancelRecovery) lines.add("cancel_recovery")
+        f.unlockSecret?.let {
+            if (it.size != UnlockSecret.SIZE) throw CryptoException.Format("unlock field")
+            lines.add(Bytes.hex(Bytes.sha256(it)))
+        }
         return lines.joinToString("\n")
     }
 
@@ -152,7 +158,10 @@ class EnrollRequest(
     val manifestSerial: Long,
     /** The app key (§11.3, §11.12, 0.15.0): SPKI DER of a P-256 key; REQUIRED since 0.15.0, null only for older vectors. */
     apiKey: ByteArray? = null,
+    /** (0.33.0, release R) The phone's unlock secret (epoch 1), right after `pin`; null for a vault before release R. */
+    unlockSecret: ByteArray? = null,
 ) {
+    private val unlockSecret = unlockSecret?.copyOf()
     private val nonce = nonce.copyOf()
     private val ik = ik.copyOf()
     private val apiKey = apiKey?.copyOf()
@@ -175,6 +184,7 @@ class EnrollRequest(
             .string("request_id", requestId)
             .base64("nonce", nonce)
             .string("pin", pin)
+            .also { b -> unlockSecret?.let { b.base64("unlock_secret", it) } }
             .raw("app", app)
             .string("manifest_sha256", manifestSha256)
             .uint("manifest_serial", manifestSerial)
@@ -198,7 +208,10 @@ class UnlockRequest(
     val update: ReleaseUpdate? = null,
     val cancelRecovery: Boolean = false,
     sig: ByteArray,
+    /** (0.33.0, release R) The phone's unlock secret, right after `pin`; null for a vault before release R. */
+    unlockSecret: ByteArray? = null,
 ) {
+    private val unlockSecret = unlockSecret?.copyOf()
     private val deviceIk = deviceIk.copyOf()
     private val sig = sig.copyOf()
 
@@ -217,6 +230,7 @@ class UnlockRequest(
             .string("request_id", requestId)
             .base64("device_ik", deviceIk)
             .string("pin", pin)
+            .also { b -> unlockSecret?.let { b.base64("unlock_secret", it) } }
             .uint("min_state_seq", minStateSeq)
             .uint("min_header_seq", minHeaderSeq)
             .string("token", token)

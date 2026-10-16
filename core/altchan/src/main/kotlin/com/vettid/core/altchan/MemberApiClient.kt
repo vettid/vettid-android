@@ -418,6 +418,11 @@ class MemberApiClient(
         call("POST", "/api/vault/recovery/register", posted(r, "vault_id" to vaultId, "instance_id" to instanceId), vault = vaultId)
     }
 
+    /** `vault.recovery.open` (VAULT-MESSAGING 0.33.0 §11.14.6, release R): routed to the vault's leased instance. */
+    suspend fun recoveryOpen(vaultId: String, instanceId: String, r: SealedRequest) {
+        call("POST", "/api/vault/recovery/open", posted(r, "vault_id" to vaultId, "instance_id" to instanceId), vault = vaultId)
+    }
+
     companion object {
         const val DEFAULT_POLL_MS = 600L
         const val PRODUCTION_API = "https://account.vettid.org"

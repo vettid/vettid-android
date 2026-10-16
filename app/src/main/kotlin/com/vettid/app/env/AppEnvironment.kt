@@ -16,6 +16,7 @@ import okhttp3.OkHttpClient
 object ProductionEnvironment : AppEnvironment {
     override val name = "production"
     override val endpoints = Endpoints.PRODUCTION
+    override val releaseR = com.vettid.app.BuildConfig.RELEASE_R
 
     override fun http(base: OkHttpClient): OkHttpClient = base
 

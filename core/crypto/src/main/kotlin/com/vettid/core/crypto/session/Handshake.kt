@@ -39,6 +39,8 @@ class InitiatorConfig(
     val deviceAttest: DeviceAttest? = null,
     /** A transfer's app key (§6.2, 0.15.0): SPKI DER, only with purpose app. */
     val apiKey: ByteArray? = null,
+    /** (0.33.0, release R) A transfer's unlock secret (§6.2, §11.14.10): 32 bytes, only with [apiKey]. */
+    val unlockSecret: ByteArray? = null,
     /** hs.init sender_kid all-zero instead of kid(staticKem). */
     val anonymousSender: Boolean = false,
     /** The pinned ik_R (or the stored ik for rekey/reconnect). */
@@ -202,6 +204,7 @@ class Initiator private constructor(
                     deviceAttest = cfg.deviceAttest,
                     apiKey = cfg.apiKey,
                     sasCommit = nI?.let { Schedule.sasCommit(it) },
+                    unlockSecret = cfg.unlockSecret,
                 )
                 val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = body.marshal())
                 return if (rekey) {

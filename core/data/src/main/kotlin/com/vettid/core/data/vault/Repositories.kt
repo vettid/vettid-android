@@ -6,6 +6,24 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
 
+/** No transfer kept ([VaultRepository.transferKeptSince]'s default). */
+val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
+
+/**
+ * The answer to `vault.recovery.open` (§11.14.6): [code] `ok` or one of the result codes (`wrong`, `wrong_again`,
+ * `attempt_lost`, `quiet`, `wait`, `busy`, `retry`, `stored_mismatch`, `exhausted`, `closed`, `not_armed`,
+ * `counter_unavailable`, …); [used] of 10 attempts when the counter answered; [retryAt] with `quiet`, `wait`, and a
+ * wrong or lost attempt that began a wait.
+ */
+data class RecoveryOpenOutcome(val code: String, val used: Int? = null, val retryAt: Instant? = null) {
+    val ok: Boolean get() = code == "ok"
+    val left: Int? get() = used?.let { (ATTEMPTS - it).coerceAtLeast(0) }
+
+    companion object {
+        const val ATTEMPTS = 10
+    }
+}
+
 /**
  * The member's account on this device: the phase the app is in, the setup code that starts a vault here
  * (VAULT-MESSAGING 0.15.0 §11.12: the app never signs in), and the account as the vault reports it (§11.13).
@@ -112,6 +130,28 @@ interface VaultRepository {
     /** Creates the Protean Credential (§3.5.5), sets the backup (§3.5.6) and confirms the vault. */
     suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit)
 
+    /** (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) The same, with the PIN, which the vault verifies and arms recovery with. */
+    suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit, pin: String?) =
+        createCredential(password, backup, onStep)
+
+    /**
+     * (Release R) `pin.change` with the password and the phone's next secret (§11.14.9). Refused for a vault without a
+     * phone secret ([changePin] of two arguments is the earlier operation).
+     */
+    suspend fun changePin(pin: String, newPin: String, password: String): Unit = throw VaultFailure(FailureKind.NOT_SUPPORTED)
+
+    /** (Release R) `vault.secret.renew`: a new phone secret with the PIN unchanged (Settings → Security). */
+    suspend fun renewPhoneSecret(pin: String, password: String): Unit = throw VaultFailure(FailureKind.NOT_SUPPORTED)
+
+    /** (Release R) Whether this phone holds a phone secret for its vault (a vault of release R). */
+    val usesPhoneSecret: Boolean get() = false
+
+    /**
+     * (Release R, §11.14.10) When this phone approved a transfer it still keeps the keys for (until the new phone's
+     * first unlock, at most 7 days); null otherwise. The shell shows "Finish the move on your new phone".
+     */
+    val transferKeptSince: StateFlow<Instant?> get() = NO_KEPT_TRANSFER
+
     /** Leaves onboarding for the app. */
     suspend fun finishSetup()
 
@@ -164,6 +204,9 @@ interface CredentialRepository {
     suspend fun closeUnlockWindow()
 
     suspend fun changePassword(password: String, newPassword: String)
+
+    /** (Release R, §11.14.9) With the PIN, which the vault verifies; the change closes the recovery generation. */
+    suspend fun changePassword(password: String, newPassword: String, pin: String?) = changePassword(password, newPassword)
 
     suspend fun rotate(password: String)
 
@@ -269,6 +312,13 @@ interface MoveRepository {
     suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String? = null): Boolean
 
     suspend fun transferReject(transferId: String)
+
+    /**
+     * (Release R, VAULT-MESSAGING 0.33.0 §11.14.6) Opens the registered recovery with the PIN and the password together
+     * and this phone's unlock secret. On `ok` the phone becomes the vault's app (its first handshake and the
+     * credential follow) and the app opens; every other answer is the table of ANDROID-PLAN 0.1.40.
+     */
+    suspend fun recoveryOpen(pin: String, password: String): RecoveryOpenOutcome = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 
     companion object {
         /**

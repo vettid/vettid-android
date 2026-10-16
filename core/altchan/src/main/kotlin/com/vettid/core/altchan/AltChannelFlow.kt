@@ -50,6 +50,8 @@ interface AltParty {
         enclave: VerifiedEnclave,
         manifest: ReleaseManifest,
         attester: Attester,
+        /** (0.33.0, release R) The new phone key's secret of epoch 1; null for a release before R. */
+        unlockSecret: ByteArray? = null,
     ): SealedRequest
 
     suspend fun openEnrollResult(raw: ByteArray, requestId: String): EnrollResult
@@ -151,13 +153,20 @@ class AltChannelFlow(
      * Enrolls this app (§11.3) into [vaultId], the vault the setup code's redeem named (§11.12.1). Success also
      * arrives as vault.enrolled over the relay.
      */
-    suspend fun enroll(party: AltParty, vaultId: String, userGuid: String, pin: String, attester: Attester): EnrollOutcome {
+    suspend fun enroll(
+        party: AltParty,
+        vaultId: String,
+        userGuid: String,
+        pin: String,
+        attester: Attester,
+        unlockSecret: ByteArray? = null,
+    ): EnrollOutcome {
         var m = manifest(party.manifestSerialSeen())
         var refetched = false
         var attempt = 1
         while (true) {
             val (info, e) = enclaveFor(null, m, enroll = true)
-            val req = party.prepareEnroll(userGuid, pin, e, m, attester)
+            val req = party.prepareEnroll(userGuid, pin, e, m, attester, unlockSecret)
             var err: MemberApiException? = null
             var slot: Slot? = null
             var vid = ""
@@ -282,6 +291,26 @@ class AltChannelFlow(
             if (s.status != Slot.DONE || env == null) throw AltChannelException("recovery not answered (${s.status} ${s.code ?: ""})")
             return open(env, req.requestId)
         }
+    }
+
+    /**
+     * Opens a registered recovery (VAULT-MESSAGING 0.33.0 §11.14.6, release R) through `POST /api/vault/recovery/open`,
+     * routed like an unlock. [build] seals `vault.recovery.open` to the verified enclave; [open] opens
+     * `vault.recovery.open.result`. Never retried here: every open may use an attempt, so the member sends again.
+     */
+    suspend fun recoveryOpen(
+        vaultId: String,
+        build: suspend (VerifiedEnclave, ReleaseManifest) -> SealedRequest,
+        open: suspend (ByteArray, String) -> com.vettid.core.crypto.altchan.RecoveryOpen.Result,
+    ): com.vettid.core.crypto.altchan.RecoveryOpen.Result {
+        val m = manifest(0)
+        val (info, e) = enclaveFor(null, m, enroll = false)
+        val req = build(e, m)
+        api.recoveryOpen(vaultId, info.instanceId, req)
+        val s = api.poll(req.requestId)
+        val env = s.envelope()
+        if (s.status != Slot.DONE || env == null) throw AltChannelException("recovery open not answered (${s.status} ${s.code ?: ""})")
+        return open(env, req.requestId)
     }
 
     companion object {

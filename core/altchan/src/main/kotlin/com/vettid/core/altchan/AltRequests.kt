@@ -9,6 +9,8 @@ import com.vettid.core.crypto.altchan.AltChannel
 import com.vettid.core.crypto.altchan.DeviceAssertion
 import com.vettid.core.crypto.altchan.DeviceAttest
 import com.vettid.core.crypto.altchan.EnrollRequest
+import com.vettid.core.crypto.altchan.Passwords
+import com.vettid.core.crypto.altchan.RecoveryOpen
 import com.vettid.core.crypto.altchan.UnlockRequest
 import com.vettid.core.crypto.envelope.Timestamps
 import com.vettid.core.crypto.envelope.Ulid
@@ -66,7 +68,15 @@ data class UnlockOptions(
     val abandon: Boolean = false,
     val cancelRecovery: Boolean = false,
     val sendChain: Boolean = false,
-)
+    /**
+     * (VAULT-MESSAGING 0.33.0 §11.14.1, release R) The phone's unlock secret at its epoch: sent right after `pin`, and
+     * the signing string ends with its hash. Null for a vault before release R. Never logged.
+     */
+    val unlockSecret: ByteArray? = null,
+) {
+    override fun toString(): String = "UnlockOptions(approve=$approve, abandon=$abandon, cancelRecovery=$cancelRecovery, " +
+        "sendChain=$sendChain, unlockSecret=${if (unlockSecret != null) "set" else "none"})"
+}
 
 /**
  * Builds the sealed requests of the alternate channel, as vettid-vault's
@@ -95,6 +105,8 @@ object AltRequests {
         openToken: String,
         state: AltState,
         now: Instant,
+        /** (0.33.0, release R) The new phone key's secret of epoch 1; null for a release before R. */
+        unlockSecret: ByteArray? = null,
     ): BuiltEnroll {
         val t = ts(now)
         val rid = Ulid.new(t)
@@ -103,7 +115,7 @@ object AltRequests {
         val nonce = Randomness.bytes(NONCE_SIZE)
         val body = EnrollRequest(
             userGuid, rid, nonce, pin, app.ik(), app.kem, app.relay, openToken, app.name, attest, manifest.sha256Hex, manifest.serial,
-            app.apiKey(),
+            app.apiKey(), unlockSecret,
         ).marshal()
         val env = AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_ENROLL, rid, t, body)
         val next = state.copy(enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number)
@@ -158,6 +170,7 @@ object AltRequests {
                 userGuid = userGuid, vaultId = vaultId, requestId = rid, ts = tss, etkKid = enclave.descriptor.kid,
                 minStateSeq = state.stateSeq, minHeaderSeq = minHeader, pin = pin, token = token,
                 manifestSha256 = manifest.sha256Hex, toPcr0 = upd?.toPcr0 ?: "", cancelRecovery = options.cancelRecovery,
+                unlockSecret = options.unlockSecret,
             ),
         )
         val sig = ik.signRaw(signing.toByteArray())
@@ -165,7 +178,7 @@ object AltRequests {
         fun seal(a: DeviceAssertion): ByteArray {
             val body = UnlockRequest(
                 userGuid, vaultId, rid, ik.publicKey, pin, state.stateSeq, minHeader, token, a, manifest.sha256Hex, manifest.serial,
-                update, options.cancelRecovery, sig,
+                update, options.cancelRecovery, sig, options.unlockSecret,
             ).marshal()
             return AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_UNLOCK, rid, t, body)
         }
@@ -239,6 +252,53 @@ object AltRequests {
             .string("recovery_id", code.recoveryId).string("code", code.code).raw("app", appObj).bytes()
         val env = AltChannel.sealRequest(enclave.descriptor.etk, TYPE_RECOVERY_REGISTER, rid, t, body)
         return SealedRequest(rid, enclave.descriptor.kid.toString(), env, null)
+    }
+
+    /**
+     * `vault.recovery.open` (VAULT-MESSAGING 0.33.0 §11.14.6, release R): the registered phone's PIN, password (NFC)
+     * and unlock secret, an open token for its own mailbox, the device assertion over the challenge, the verified
+     * manifest, and the signature by its identity key [ik].
+     */
+    @Suppress("LongParameterList")
+    fun buildRecoveryOpen(
+        userGuid: String,
+        vaultId: String,
+        recoveryId: String,
+        pin: String,
+        password: String,
+        unlockSecret: ByteArray,
+        enclave: VerifiedEnclave,
+        manifest: ReleaseManifest,
+        attester: Attester,
+        ik: Ed25519PrivateKey,
+        token: String,
+        now: Instant,
+    ): SealedRequest {
+        val t = ts(now)
+        val tss = Timestamps.formatMillis(t)
+        val rid = Ulid.new(t)
+        val assertion = attester.assert(AltChannel.devattChallenge(rid, vaultId, tss))
+        val secrets = Passwords.recoverySecrets(pin, password)
+        val signing = try {
+            RecoveryOpen.signingString(
+                RecoveryOpen.Fields(
+                    userGuid, vaultId, rid, recoveryId, tss, enclave.descriptor.kid, secrets, token, manifest.sha256Hex, unlockSecret,
+                ),
+            )
+        } finally {
+            secrets.fill(0)
+        }
+        val sig = ik.signRaw(signing.toByteArray())
+        val body = RecoveryOpen.marshal(
+            userGuid, vaultId, rid, recoveryId, ik.publicKey, pin, password, unlockSecret, token, assertion, manifest.sha256Hex,
+            manifest.serial, sig,
+        )
+        val env = try {
+            AltChannel.sealRequest(enclave.descriptor.etk, RecoveryOpen.TYPE, rid, t, body)
+        } finally {
+            body.fill(0)
+        }
+        return SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex)
     }
 
     /** The unlock's assertion over [challenge], with the device key's chain when [withChain] and there is a usable one. */

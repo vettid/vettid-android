@@ -20,6 +20,16 @@ TEST-ONLY.
   `release/staging/10` (8678752): the vectors describe what staging release 10 does.
 - Copied: 2026-10-12. Checked by `CallVectorsTest` in `:core:crypto`.
 
+`unlock.json`, `recovery.json` and `verdicts.json` (VAULT-MESSAGING 0.33.0 §11.14, release R; `verdicts.json` is
+vettid-vault's `testdata/passwords/verdicts.json`) come from the **draft** vettid-vault PR #101 (release R 3/3), not
+yet merged; copy them again from `main` once it is:
+
+- Source commit: f80e968d5429c9d8165cdecdd2878460be5dc01b (branch `rel-r/3-unlock`)
+- Copied: 2026-10-15. Checked by `ReleaseRVectorsTest` (the phone's unlock secret per epoch, the recovery `secrets`
+  string, the recovery open's signing string) and `PasswordRulesTest` (every verdict, at the vault's floor and at the
+  app's) in `:core:crypto`. The estimator's word lists in `src/main/resources/passwords/` are vettid-vault's
+  `vms/recovery/common-passwords.txt` and `estimator-words.txt` at the same commit (last changed in 49525df).
+
 To refresh: copy the files again from a newer vettid-vault commit, update the
 commits above, and run `./gradlew :core:crypto:test :core:attestation:testDebugUnitTest`.
 A vector that no longer matches is a stop-and-report item, never a skip.
@@ -36,4 +46,7 @@ ba4776070f7babc465d4db23f860fe998f6d7f3accab5cac8a153ff0090d3914  altchan.json
 6025085eb23f7ce100de09389d2a087ce8384b638461bc9891cfd5ad6db44570  keys.json
 29060418b258c813a8304047b826f70ec87e66ae10ea1c4e4ffc10d213eebb96  release.json
 94cb55fca6b63e5983474a7b9715acd4f4d9ce8930a1a801d09efb9e73d54d01  calls.json
+0073c578252ba87960b74f6a1825b6dbb06f8762c77b7f8003d380b48c373905  unlock.json
+157f89fb392ffb74f5cc76671f19b011cf8edd048faecc2ebf3a3d4b948d5eb4  recovery.json
+09540a0c78b03fb03cfdee762066a9f1171419d2958798b5b4cf054f7dda66a5  verdicts.json
 ```
