@@ -629,7 +629,7 @@ class SocialManager(
     override suspend fun load(connectionId: String) = load(connectionId, fresh = false)
 
     private suspend fun load(connectionId: String, fresh: Boolean) = vaultGuard {
-        val page = api().messagePage(connectionId, PAGE)
+        val page = pageFitting { limit -> api().messagePage(connectionId, limit) }
         val list = page.messages.map(ApprovalParser::message)
         pages.withLock {
             val current = messagesFlow.value[connectionId].orEmpty()
@@ -647,7 +647,7 @@ class SocialManager(
     override suspend fun loadOlder(connectionId: String) {
         val before = pagingFlow.value[connectionId]?.nextBefore ?: return
         val page = try {
-            vaultGuard { api().messagePage(connectionId, PAGE, before) }
+            vaultGuard { pageFitting { limit -> api().messagePage(connectionId, limit, before) } }
         } catch (e: VaultFailure) {
             if (e.kind != FailureKind.NOT_FOUND) throw e
             null
@@ -663,6 +663,22 @@ class SocialManager(
                     messagesFlow.update { it + (connectionId to merged.messages) }
                     pagingFlow.update { it + (connectionId to merged.paging) }
                 }
+            }
+        }
+    }
+
+    /**
+     * A page asked for with [PAGE] messages and, when the answer could not be sealed (`response_too_large`, §8.1),
+     * asked for again with half as many, down to one: a page of long messages still arrives.
+     */
+    private suspend fun pageFitting(ask: suspend (Int) -> com.vettid.core.vault.MessagePage): com.vettid.core.vault.MessagePage {
+        var limit = PAGE
+        while (true) {
+            try {
+                return ask(limit)
+            } catch (e: com.vettid.core.vault.VaultOpException) {
+                if (e.code != CODE_TOO_LARGE || limit == 1) throw e
+                limit /= 2
             }
         }
     }
@@ -989,6 +1005,7 @@ class SocialManager(
     companion object {
         /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
         private const val PAGE = 100
+        private const val CODE_TOO_LARGE = "response_too_large"
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
 
         /** Longer than any request lives (§6.4: an approved incoming one, 16 days). */
