@@ -94,4 +94,13 @@ class ImageFormatsTest {
         assertTrue(evicted.any { it.startsWith("b") })
         assertTrue(evicted.any { it.startsWith("a") } && evicted.any { it.startsWith("c") })
     }
+    @Test
+    fun theSameObjectPutAgainIsNotZeroed() {
+        val c = MemoryCache<String, ByteArray>(100, { it.size.toLong() }) { it.fill(0) }
+        val v = ByteArray(10) { 7 }
+        c.put("a", v)
+        c.put("a", v)
+        assertTrue(v.all { it == 7.toByte() })
+        assertEquals(10, c.usedBytes)
+    }
 }

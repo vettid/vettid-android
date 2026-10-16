@@ -96,7 +96,11 @@ class MemoryCache<K : Any, V : Any>(val maxBytes: Long, private val sizeOf: (V) 
     @Synchronized
     fun put(key: K, value: V) {
         val n = sizeOf(value)
-        map.remove(key)?.let { bytes -= sizeOf(it); onEvict(it) }
+        // The same object put again is not evicted (its bytes would be zeroed under the caller).
+        map.remove(key)?.let {
+            bytes -= sizeOf(it)
+            if (it !== value) onEvict(it)
+        }
         if (n > maxBytes) return
         map[key] = value
         bytes += n

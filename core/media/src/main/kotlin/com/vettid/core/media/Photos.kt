@@ -52,8 +52,14 @@ object Photos {
         } catch (_: SecurityException) {
             null
         } ?: throw PhotoException(PhotoFailure.UNREADABLE)
+        // The size the provider declares, when it does, refuses a picture too large before any byte is read.
+        val declared = declaredSize(resolver, uri)
+        if (declared != null && declared > maxBytes) {
+            input.close()
+            throw PhotoException(PhotoFailure.TOO_LARGE)
+        }
         return input.use { s ->
-            val out = ByteArrayOutputStream()
+            val out = ByteArrayOutputStream(declared?.toInt()?.coerceIn(BUFFER, maxBytes.toInt()) ?: BUFFER)
             val buf = ByteArray(BUFFER)
             var total = 0L
             while (true) {
@@ -71,6 +77,12 @@ object Photos {
             out.toByteArray()
         }
     }
+
+    private fun declaredSize(resolver: ContentResolver, uri: Uri): Long? = runCatching {
+        resolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
+    }.getOrNull()
 
     /**
      * Prepares [source] (a picked file's bytes, or a camera shot encoded in memory) for sending: bounds from the
@@ -95,6 +107,17 @@ object Photos {
 
     /** Prepares a picture already in memory (a camera shot, upright); the caller recycles [bitmap]. */
     fun prepare(bitmap: Bitmap): PreparedPhoto {
+        // An Ultra HDR photo's gain map (API 34+) would be carried by the scaling and written back by the encoder
+        // with its XMP and an MPF segment: the pixels are drawn into a plain bitmap first, which has none.
+        val plain = withoutGainmap(bitmap)
+        try {
+            return preparePlain(plain)
+        } finally {
+            if (plain !== bitmap) plain.recycle()
+        }
+    }
+
+    private fun preparePlain(bitmap: Bitmap): PreparedPhoto {
         val photo = scaled(bitmap, PhotoLimits.SEND_LONG_EDGE)
         try {
             val jpeg = encodeUnder(photo, PhotoLimits.ATTACHMENT_MAX_BYTES.toLong(), PhotoLimits.SEND_QUALITY, PhotoLimits.MIN_QUALITY)
@@ -122,7 +145,12 @@ object Photos {
         maxSide: Int = PhotoLimits.VIEW_MAX_SIDE,
         maxPixels: Long = PhotoLimits.VIEW_MAX_PIXELS,
     ): Bitmap {
-        ImageType.sniff(bytes) ?: throw PhotoException(PhotoFailure.UNSUPPORTED)
+        val type = ImageType.sniff(bytes) ?: throw PhotoException(PhotoFailure.UNSUPPORTED)
+        // A JPEG with a second image (an Ultra HDR gain map, MPF) is refused before decoding: the platform would
+        // decode the gain map too, whose size the primary's header does not bound.
+        if (type == ImageType.JPEG && (JpegSegments.hasMpf(bytes) || JpegSegments.hasSecondImage(bytes))) {
+            throw PhotoException(PhotoFailure.UNSUPPORTED)
+        }
         val declared = ImageHeader.dimensions(bytes) ?: throw PhotoException(PhotoFailure.UNREADABLE)
         if (!declared.within(maxSide, maxPixels)) throw PhotoException(PhotoFailure.TOO_LARGE)
         return decode(bytes, maxSide, maxPixels, targetLongEdge, PhotoFailure.UNREADABLE)
@@ -163,6 +191,14 @@ object Photos {
         } catch (_: IllegalArgumentException) {
             throw PhotoException(PhotoFailure.UNREADABLE)
         }
+    }
+
+    /** [bitmap] as a plain ARGB_8888 bitmap when it carries a gain map (API 34+); [bitmap] itself otherwise. */
+    private fun withoutGainmap(bitmap: Bitmap): Bitmap {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE || !bitmap.hasGainmap()) return bitmap
+        val out = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(out).drawBitmap(bitmap, 0f, 0f, null)
+        return out
     }
 
     /** [bitmap] scaled so that its long edge is at most [longEdge] (the same bitmap when it already is). */

@@ -148,8 +148,37 @@ object JpegSegments {
         return out
     }
 
+    /** Whether [b] has an APP2 segment holding a Multi-Picture Format index (`MPF\0`: an Ultra HDR gain map). */
+    @Suppress("ReturnCount", "ComplexCondition")
+    fun hasMpf(b: ByteArray): Boolean {
+        if (ImageType.sniff(b) != ImageType.JPEG) return false
+        var i = 2
+        while (i + 3 < b.size && b[i] == 0xFF.toByte()) {
+            val m = b[i + 1].toInt() and 0xFF
+            i += 2
+            if (m == 0x01 || m in 0xD0..0xD7) continue
+            if (m == 0xDA || m == 0xD9) return false
+            val len = b.u16be(i)
+            if (m == APP2 && b.ascii(i + 2, "MPF") && i + 5 < b.size && b[i + 5] == 0.toByte()) return true
+            i += len
+        }
+        return false
+    }
+
+    /**
+     * Whether another JPEG follows the first one's end: after the first scan, entropy-coded data holds `FF` only as
+     * `FF 00` or a restart marker, so the first `FF D9` is the end of the image, and an `FF D8 FF` after it is a
+     * second image.
+     */
+    @Suppress("ReturnCount")
+    fun hasSecondImage(b: ByteArray): Boolean {
+        val sos = (2 until b.size - 1).firstOrNull { b[it] == 0xFF.toByte() && b[it + 1] == 0xDA.toByte() } ?: return false
+        val eoi = (sos + 2 until b.size - 1).firstOrNull { b[it] == 0xFF.toByte() && b[it + 1] == 0xD9.toByte() } ?: return false
+        return (eoi + 2 until b.size - 2).any { b[it] == 0xFF.toByte() && b[it + 1] == 0xD8.toByte() && b[it + 2] == 0xFF.toByte() }
+    }
+
     /** Whether [b] carries a metadata segment: APP1 (EXIF, XMP, so GPS and camera data) or APP13 (IPTC). */
-    fun hasMetadata(b: ByteArray): Boolean = markers(b).any { it == APP1 || it == APP13 }
+    fun hasMetadata(b: ByteArray): Boolean = markers(b).any { it == APP1 || it == APP13 } || hasMpf(b)
 }
 
 internal fun ByteArray.ascii(at: Int, s: String): Boolean =

@@ -1,3 +1,6 @@
+// Expected failures stay on one line each.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.core.media
 
 import android.graphics.Bitmap
@@ -125,5 +128,41 @@ class PhotosTest {
         assertFalse(JpegSegments.hasMetadata(p.jpeg))
         p.wipe()
         assertTrue(p.jpeg.all { it == 0.toByte() } && p.thumb.all { it == 0.toByte() })
+    }
+    /** [jpeg] with an APP2 segment holding an MPF index inserted after SOI (as an Ultra HDR photo has). */
+    private fun withMpf(jpeg: ByteArray): ByteArray {
+        val payload = "MPF".toByteArray() + byteArrayOf(0) + ByteArray(16)
+        val len = payload.size + 2
+        return jpeg.copyOfRange(0, 2) + byteArrayOf(0xFF.toByte(), 0xE2.toByte(), (len ushr 8).toByte(), len.toByte()) + payload +
+            jpeg.copyOfRange(2, jpeg.size)
+    }
+
+    @Test
+    fun aReceivedJpegWithAGainMapOrASecondImageIsRefusedBeforeDecoding() {
+        val jpeg = Photos.jpeg(halves(64, 64), 90)
+        assertTrue(JpegSegments.hasMpf(withMpf(jpeg)))
+        assertEquals(PhotoFailure.UNSUPPORTED, assertThrows(PhotoException::class.java) { Photos.decodeReceived(withMpf(jpeg), 64) }.failure)
+        val two = jpeg + Photos.jpeg(halves(8_000, 8), 50)
+        assertTrue(JpegSegments.hasSecondImage(two))
+        assertEquals(PhotoFailure.UNSUPPORTED, assertThrows(PhotoException::class.java) { Photos.decodeReceived(two, 64) }.failure)
+        assertEquals(PhotoFailure.UNSUPPORTED, assertThrows(PhotoException::class.java) { Photos.decodeThumbnail(two) }.failure)
+        assertFalse(JpegSegments.hasSecondImage(jpeg))
+        assertFalse(JpegSegments.hasMpf(jpeg))
+    }
+
+    @Test
+    fun aPhotoWithAGainMapIsSentWithoutIt() {
+        val b = halves(400, 300)
+        val gm = try {
+            android.graphics.Gainmap(Bitmap.createBitmap(100, 75, Bitmap.Config.ALPHA_8)).also { b.gainmap = it }
+        } catch (_: Throwable) {
+            null
+        }
+        org.junit.Assume.assumeTrue("no gain map support in this runtime", gm != null && b.hasGainmap())
+        val p = Photos.prepare(b)
+        assertFalse(JpegSegments.hasMetadata(p.jpeg))
+        assertFalse(JpegSegments.hasMpf(p.jpeg))
+        assertFalse(JpegSegments.hasSecondImage(p.jpeg))
+        assertTrue(b.hasGainmap()) // the caller's bitmap is untouched
     }
 }
