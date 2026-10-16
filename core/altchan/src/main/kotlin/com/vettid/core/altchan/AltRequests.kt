@@ -117,16 +117,8 @@ object AltRequests {
             userGuid, rid, nonce, pin, app.ik(), app.kem, app.relay, openToken, app.name, attest, manifest.sha256Hex, manifest.serial,
             app.apiKey(), unlockSecret,
         )
-        val body = try {
-            request.marshal()
-        } finally {
-            request.wipe()
-        }
-        val env = try {
-            AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_ENROLL, rid, t, body)
-        } finally {
-            if (unlockSecret != null) body.fill(0) // (release R) the secret's copy in the plaintext
-        }
+        val body = request.marshal().also { request.wipe() }
+        val env = sealWiping(enclave, AltChannel.TYPE_ENROLL, rid, t, body, wipe = unlockSecret != null)
         val next = state.copy(enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number)
         return BuiltEnroll(SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex), next)
     }
@@ -189,16 +181,8 @@ object AltRequests {
                 userGuid, vaultId, rid, ik.publicKey, pin, state.stateSeq, minHeader, token, a, manifest.sha256Hex, manifest.serial,
                 update, options.cancelRecovery, sig, options.unlockSecret,
             )
-            val body = try {
-                request.marshal()
-            } finally {
-                request.wipe()
-            }
-            return try {
-                AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_UNLOCK, rid, t, body)
-            } finally {
-                if (options.unlockSecret != null) body.fill(0) // (release R) the secret's copy in the plaintext
-            }
+            val body = request.marshal().also { request.wipe() }
+            return sealWiping(enclave, AltChannel.TYPE_UNLOCK, rid, t, body, wipe = options.unlockSecret != null)
         }
         val env = sealFitting(assertion, ::seal)
         return BuiltUnlock(
@@ -234,6 +218,14 @@ object AltRequests {
         if (r.headerSeq > (hs[release] ?: 0)) hs[release] = r.headerSeq
         return s.copy(headerSeq = hs, release = release, releaseNumber = if (number != 0L) number else s.releaseNumber)
     }
+
+    /** Seals [body] to the enclave; with [wipe] (a body that carries the release R unlock secret) zeroes it after. */
+    private fun sealWiping(enclave: VerifiedEnclave, type: String, rid: String, t: Instant, body: ByteArray, wipe: Boolean): ByteArray =
+        try {
+            AltChannel.sealRequest(enclave.descriptor.etk, type, rid, t, body)
+        } finally {
+            if (wipe) body.fill(0)
+        }
 
     /**
      * Applies an `ok` `vault.recovery.open.result` (VAULT-MESSAGING 0.33.0 §11.14.6, release R) to the app state, as an
