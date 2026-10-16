@@ -62,7 +62,7 @@ class CredentialViewModelsTest {
 
     @Test
     fun passwordChangeChecksTheRules() = runTest {
-        val vm = ChangePasswordViewModel(vault)
+        val vm = ChangePasswordViewModel(vault, vault)
         vm.setCurrent("old password 1")
         vm.setPassword("weak")
         vm.setConfirm("weak")
@@ -78,6 +78,38 @@ class CredentialViewModelsTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.done)
         assertEquals("a much better passphrase here", vault.lastPassword)
+    }
+
+    /** Release R (VAULT-MESSAGING 0.33.0 §11.14.9): the password change asks for the PIN and carries it. */
+    @Test
+    fun releaseRPasswordChangeCarriesThePin() = runTest {
+        vault.phoneSecret = true
+        val vm = ChangePasswordViewModel(vault, vault)
+        assertTrue(vm.uiState.value.askPin)
+        vm.setCurrent("old password 1")
+        vm.setPassword("a much better passphrase here")
+        vm.setConfirm("a much better passphrase here")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse("without the PIN nothing is sent", "changePassword" in vault.calls)
+        vm.setPin("975310")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertEquals("975310", vault.lastPasswordChangePin)
+    }
+
+    @Test
+    fun passwordChangeBeforeReleaseRAsksNoPin() = runTest {
+        val vm = ChangePasswordViewModel(vault, vault)
+        assertFalse(vm.uiState.value.askPin)
+        vm.setCurrent("old password 1")
+        vm.setPassword("a much better passphrase here")
+        vm.setConfirm("a much better passphrase here")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertEquals(null, vault.lastPasswordChangePin)
     }
 
     @Test

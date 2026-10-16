@@ -31,11 +31,35 @@ sealed interface UnlockMessage {
     data class UpdateRefused(val code: String) : UnlockMessage
 
     data class Failed(val kind: FailureKind, val code: String?) : UnlockMessage
+
+    /**
+     * (Release R, §11.14.10) "The move didn't finish" failed: this old phone could not open the vault with its own keys
+     * after approving a transfer. "Contact VettID within a day of the failed move: it may be repairable."
+     */
+    data object MoveBackFailed : UnlockMessage
 }
+
+/** Failures that say nothing about this phone's keys (the network, the service): never "the move back failed". */
+private val TRANSIENT_FAILURES = setOf(
+    FailureKind.NETWORK, FailureKind.SERVICE_PAUSED, FailureKind.VAULT_UNAVAILABLE, FailureKind.NO_RESPONSE,
+    FailureKind.RATE_LIMITED, FailureKind.BUSY, FailureKind.RETRY, FailureKind.CLOCK, FailureKind.MANIFEST_UNAVAILABLE,
+)
+
+/**
+ * The message of a failed unlock: on an old phone that keeps its keys after approving a transfer ([keptTransfer]) any
+ * failure that is not temporary means its own keys no longer open the vault (`device_secret`, an unreadable answer, …).
+ */
+internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean): UnlockMessage =
+    if (keptTransfer && r.kind !in TRANSIENT_FAILURES) UnlockMessage.MoveBackFailed else UnlockMessage.Failed(r.kind, r.code)
 
 /** Immutable UI state of the unlock screen. */
 data class UnlockUiState(
     val loading: Boolean = true,
+    /**
+     * (Release R, §11.14.10) This phone approved a transfer and keeps the keys until the new phone has finished the
+     * move: the screen says so, and its unlock is "The move didn't finish".
+     */
+    val keptTransfer: Boolean = false,
     val email: String? = null,
     val preflight: PreflightInfo? = null,
     val preflightError: FailureKind? = null,
@@ -184,6 +208,7 @@ class UnlockViewModel @Inject constructor(
         retryPreflight()
         viewModelScope.launch { vault.refusedByVault.collect { r -> state.update { it.copy(refused = r) } } }
         viewModelScope.launch { vault.lockNotice.collect { n -> state.update { it.copy(lock = n) } } }
+        viewModelScope.launch { vault.transferKeptSince.collect { k -> state.update { it.copy(keptTransfer = k != null) } } }
         viewModelScope.launch {
             combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> (v?.gated(Instant.now()) == true) to locked }
                 .collect { (due, locked) -> state.update { it.copy(checkDue = due || locked, lockedByOwnerCheck = locked) } }
@@ -282,7 +307,7 @@ class UnlockViewModel @Inject constructor(
                 is UnlockAttempt.UpdateRefused -> state.update { it.copy(busy = false, pin = "", message =
                     UnlockMessage.UpdateRefused(r.code)) }
                 is UnlockAttempt.Failed -> {
-                    state.update { it.copy(busy = false, pin = "", message = UnlockMessage.Failed(r.kind, r.code)) }
+                    state.update { it.copy(busy = false, pin = "", message = unlockFailedMessage(r, s.keptTransfer)) }
                     // A paused service (503, never proof of anything, never a wipe): wait as it asked, no automatic retry.
                     if (r.kind == FailureKind.SERVICE_PAUSED) startServiceWait(r.retryAfterSeconds)
                 }

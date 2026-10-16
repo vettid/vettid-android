@@ -64,6 +64,11 @@
     <string name="root_erase_body">Everything VettID keeps on this phone is erased, including its keys for your vault, and VettID goes back to the start. Your vault itself is not changed.\n\nTo get back into it you then need a recovery from the account site (it takes 24 hours and needs your PIN and credential password, and the credential backup must be on), or a move from another phone that still holds your vault.</string>
     <string name="root_preferences_reset">VettID\'s settings on this phone could not be read and were reset: the theme, the app lock (now off) and notifications. Your vault is not affected.</string>
     <string name="root_preferences_reset_ok">OK</string>
+    <!-- Release R (ANDROID-PLAN 0.1.40, §11.14.10): draft texts. -->
+    <string name="root_finish_move">Finish moving your vault to this phone: enter your PIN on this phone.</string>
+    <string name="root_finish_move_action">Finish the move</string>
+    <string name="root_move_not_done">Your vault did not move to your new phone: it still works with this phone, which keeps its keys. Start the move again when you are ready.</string>
+    <string name="root_moved_back">This phone is your vault\'s phone again. Start the move again when you are ready.</string>
     <string name="root_service_paused">The vault service is paused for maintenance. Try again later.</string>
     <string name="app_lock_enable_failed">The app lock cannot be used on this phone (it needs a fingerprint, face or screen lock).</string>
     <string name="canary_confirm_title">Use a test release manifest?</string>

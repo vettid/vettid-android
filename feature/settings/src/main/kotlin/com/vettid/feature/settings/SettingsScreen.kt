@@ -265,7 +265,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<ChangePinRoute> {
         val vm: ChangePinViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        ChangePinContent(state, vm::setCurrent, vm::setPin, vm::setConfirm, vm::submit, host.onBack)
+        ChangePinContent(state, vm::setCurrent, vm::setPin, vm::setConfirm, vm::submit, host.onBack, vm::setPassword)
     }
     composable<RecoveryRoute> {
         val vm: RecoveryViewModel = hiltViewModel()

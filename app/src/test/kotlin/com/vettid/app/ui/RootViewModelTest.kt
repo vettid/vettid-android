@@ -66,6 +66,19 @@ class RootViewModelTest {
         assertFalse(vm.retrying.value)
     }
 
+    /** Release R: the vault confirmed this phone is still its app after 7 days: told once, until acknowledged. */
+    @Test
+    fun aMoveThatDidNotHappenIsToldUntilAcknowledged() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unlocked)
+        val vm = root(vault)
+        assertFalse(vm.moveNotDone.value)
+        vault.moveNotDone.value = true
+        assertTrue(vm.moveNotDone.value)
+        vm.acknowledgeMoveNotDone()
+        assertFalse(vm.moveNotDone.value)
+        assertTrue("acknowledgeMoveNotDone" in vault.calls)
+    }
+
     @Test
     fun startOverWithUnreadableKeysErasesThisPhone() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.LOCAL_STATE))

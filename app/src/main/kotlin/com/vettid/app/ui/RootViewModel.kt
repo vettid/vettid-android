@@ -49,6 +49,22 @@ class RootViewModel @Inject constructor(
     /** The vault service is paused for maintenance (MEMBER-API 1.2.0): a banner, nothing blocked. */
     val servicePaused: StateFlow<Boolean> = accounts.servicePaused
 
+    /**
+     * (Release R, §11.14.10) This new phone received a transfer and has not finished the move yet: asked at every start,
+     * in a banner, until an unlock from storage with its own secret ("Finish the move").
+     */
+    val finishMovePending: StateFlow<Boolean> = vault.finishMovePending
+
+    /** (Release R) This old phone took the vault back after a move that did not finish: said once, until dismissed. */
+    val movedBack: StateFlow<Boolean> = vault.movedBack
+
+    fun acknowledgeMovedBack() = vault.acknowledgeMovedBack()
+
+    /** (Release R) 7 days after a transfer's approval the vault confirmed this phone is still its app: told once. */
+    val moveNotDone: StateFlow<Boolean> = vault.moveNotDone
+
+    fun acknowledgeMoveNotDone() = vault.acknowledgeMoveNotDone()
+
     /** A release update under way or its outcome (ANDROID-PLAN 0.1.19): shown over every phase until it is left. */
     val updateProgress: StateFlow<UpdateProgress?> = updates.progress
 

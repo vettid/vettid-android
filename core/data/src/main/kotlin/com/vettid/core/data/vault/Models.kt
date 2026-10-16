@@ -241,7 +241,12 @@ data class VaultOverview(
      * "Installed from" line; null when the vault reports none or is not open.
      */
     val signer: SignerView? = null,
+    /** (Release R, VAULT-MESSAGING 0.33.0 §11.14.11) `vault.status`'s `recovery`; null from an earlier release. */
+    val recovery: RecoveryStatusView? = null,
 )
+
+/** `vault.status`'s `recovery` for the status screen: never shown as "0 of 10" when [state] is `unknown`. */
+data class RecoveryStatusView(val state: String, val used: Int?, val counterUnavailable: Boolean)
 
 /** MEMBER-API `ReleaseInfo` (advisory; the manifest decides). */
 data class ReleaseInfoView(

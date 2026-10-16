@@ -167,6 +167,60 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         listOf(EnrollStep.ENROLL, EnrollStep.WAIT_FOR_VAULT, EnrollStep.HANDSHAKE).forEach(onStep)
     }
 
+    // --- release R ---
+
+    /** This phone holds a phone secret (a vault of release R). */
+    var phoneSecret = false
+    override val usesPhoneSecret: Boolean get() = phoneSecret
+
+    /** The PIN the last `credential.create` and `credential.password.change` carried (release R). */
+    var lastCredentialPin: String? = null
+    var lastPasswordChangePin: String? = null
+
+    /** What [recoveryOpen] answers, in order; an empty queue answers `ok`. */
+    val recoveryOpenOutcomes = ArrayDeque<com.vettid.core.data.vault.RecoveryOpenOutcome>()
+    var recoveryOpenedValue = false
+    override var recoveryAttemptsUsed: Int? = null
+    override val transferKeptSince = MutableStateFlow<Instant?>(null)
+    override val finishMovePending = MutableStateFlow(false)
+    override val movedBack = MutableStateFlow(false)
+
+    override val moveNotDone = MutableStateFlow(false)
+
+    override fun acknowledgeMoveNotDone() {
+        calls += "acknowledgeMoveNotDone"
+        moveNotDone.value = false
+    }
+
+    override fun acknowledgeMovedBack() {
+        calls += "acknowledgeMovedBack"
+        movedBack.value = false
+    }
+
+    override suspend fun recoveryOpen(pin: String, password: String): com.vettid.core.data.vault.RecoveryOpenOutcome {
+        call("recoveryOpen")
+        lastPin = pin
+        lastPassword = password
+        return recoveryOpenOutcomes.removeFirstOrNull() ?: com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 1)
+    }
+
+    override suspend fun recoveryOpened(): Boolean = recoveryOpenedValue
+
+    override suspend fun finishRecoveryOpen() {
+        call("finishRecoveryOpen")
+        phase.value = AppPhase.Unlocked
+    }
+
+    override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit, pin: String?) {
+        lastCredentialPin = pin?.takeIf { phoneSecret }
+        createCredential(password, backup, onStep)
+    }
+
+    override suspend fun changePassword(password: String, newPassword: String, pin: String?) {
+        lastPasswordChangePin = pin?.takeIf { phoneSecret }
+        changePassword(password, newPassword)
+    }
+
     override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit) {
         call("createCredential")
         lastPassword = password

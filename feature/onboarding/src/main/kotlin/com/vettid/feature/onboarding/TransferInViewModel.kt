@@ -54,6 +54,8 @@ enum class TransferInStep {
 /** Immutable UI state of the transfer on the new phone. */
 data class TransferInUiState(
     val step: TransferInStep = TransferInStep.INTRO,
+    /** (Release R) This phone made a phone key for the transfer: "Finish the move" follows the approval. */
+    val phoneSecret: Boolean = false,
     val input: String = "",
     /** Why the scanned or pasted text is not used: [FailureKind.INVITE_INVALID] or [FailureKind.INVITE_EXPIRED]. */
     val inputProblem: FailureKind? = null,
@@ -170,7 +172,8 @@ class TransferInViewModel @Inject constructor(
             try {
                 val canUnlock = move.awaitTransferIn()
                 ticker?.cancel()
-                state.update { it.copy(step = TransferInStep.DONE, sas = null, canUnlockLater = canUnlock) }
+                val phoneSecret = vault.usesPhoneSecret
+                state.update { it.copy(step = TransferInStep.DONE, sas = null, canUnlockLater = canUnlock, phoneSecret = phoneSecret) }
             } catch (e: VaultFailure) {
                 ticker?.cancel()
                 state.update {

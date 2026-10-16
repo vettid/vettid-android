@@ -90,6 +90,11 @@ data class OnboardingUiState(
     val backupOffAcknowledged: Boolean = false,
     /** Resuming after enrollment: only the credential steps remain (§3.5.7). */
     val credentialOnly: Boolean = false,
+    /**
+     * (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) The credential is created after a restart, without the PIN of this
+     * flow in memory: `credential.create` carries the PIN, which the vault verifies, so the password step asks for it.
+     */
+    val askPin: Boolean = false,
     val progress: List<Pair<EnrollStep, StepState>> = emptyList(),
     val busy: Boolean = false,
     val error: FailureKind? = null,
@@ -99,8 +104,13 @@ data class OnboardingUiState(
     val canContinueBackup: Boolean get() = backup || backupOffAcknowledged
     val progressFailed: Boolean get() = progress.any { it.second == StepState.FAILED }
 
+    /** (Release R) The PIN the password step asks for ([askPin]) is entered: digits only, the policy was met at setup. */
+    val credentialPinReady: Boolean get() = !askPin || pin.length >= MIN_EXISTING_PIN && pin.all { it.isDigit() }
+
     override fun toString(): String = "OnboardingUiState(step=$step, busy=$busy, error=$error)"
 }
+
+private const val MIN_EXISTING_PIN = 6
 
 /**
  * Drives onboarding (VAULT-MESSAGING 0.15.0 §11.12; the app never signs in): the setup code from the account
@@ -164,7 +174,10 @@ class OnboardingViewModel @Inject constructor(
                 }
                 SetupStage.NEEDS_CREDENTIAL -> if (s.step != OnboardingStep.PROGRESS && s.step != OnboardingStep.BACKUP) {
                     enrolled = true
-                    state.update { it.copy(step = OnboardingStep.PASSWORD, credentialOnly = true, busy = false) }
+                    val askPin = vault.usesPhoneSecret
+                    state.update {
+                        it.copy(step = OnboardingStep.PASSWORD, credentialOnly = true, busy = false, askPin = askPin && it.pin.isEmpty())
+                    }
                 }
                 // A recovery or a transfer shows its own "your vault is connected to this phone now".
                 SetupStage.FINISHING -> if (!moving) go(OnboardingStep.DONE)
@@ -347,6 +360,7 @@ class OnboardingViewModel @Inject constructor(
         val s = state.value
         val p = PasswordPolicy.check(s.password, pin = s.pin.ifEmpty { null })
         when {
+            !s.credentialPinReady -> return
             p != null -> state.update { it.copy(passwordProblem = p) }
             s.passwordConfirm != s.password -> state.update { it.copy(passwordMismatch = true) }
             else -> state.update { it.copy(step = OnboardingStep.BACKUP) }
@@ -390,7 +404,8 @@ class OnboardingViewModel @Inject constructor(
                     vault.enroll(s.pin) { mark(it) }
                     enrolled = true
                 }
-                vault.createCredential(s.password, s.backup) { mark(it) }
+                // Release R (§11.14.9): the PIN goes with credential.create (sent only to a vault with a phone secret).
+                vault.createCredential(s.password, s.backup, onStep = { mark(it) }, pin = s.pin.ifEmpty { null })
                 state.update {
                     it.copy(
                         busy = false, pin = "", pinConfirm = "", password = "", passwordConfirm = "",

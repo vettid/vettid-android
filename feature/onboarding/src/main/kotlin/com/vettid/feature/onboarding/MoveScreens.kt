@@ -200,7 +200,14 @@ fun RecoverContent(
                 modifier = Modifier.testTag("registering_starting"),
             )
         }
-        RecoverStep.PIN -> RecoverPin(state, actions)
+        // Release R (ANDROID-PLAN 0.1.40): the PIN and the password on one screen, checked before they are sent.
+        RecoverStep.PIN -> if (state.phoneSecret) {
+            val open: RecoveryOpenViewModel = hiltViewModel()
+            val openState by open.uiState.collectAsStateWithLifecycle()
+            RecoveryOpenPane(openState, open, onStartOver = actions::askStartOver)
+        } else {
+            RecoverPin(state, actions)
+        }
         RecoverStep.PASSWORD -> FormScaffold(
             title = stringResource(R.string.recover_password_title),
             body = stringResource(R.string.recover_password_body),
@@ -537,16 +544,23 @@ fun TransferInContent(
             Spacer(Modifier.height(Spacing.l))
             Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
         }
-        TransferInStep.DONE -> MovedScreen(
-            stringResource(
-                if (state.canUnlockLater) {
-                    R.string.onboarding_moved_transferred_body
-                } else {
-                    R.string.onboarding_moved_transferred_no_guid_body
-                },
-            ),
-            actions::finish,
-        )
+        // Release R (§11.14.10): the new phone finishes the move with its own secret before anything else.
+        TransferInStep.DONE -> if (state.phoneSecret) {
+            val finish: FinishMoveViewModel = hiltViewModel()
+            val finishState by finish.uiState.collectAsStateWithLifecycle()
+            FinishMovePane(finishState, finish, actions::finish)
+        } else {
+            MovedScreen(
+                stringResource(
+                    if (state.canUnlockLater) {
+                        R.string.onboarding_moved_transferred_body
+                    } else {
+                        R.string.onboarding_moved_transferred_no_guid_body
+                    },
+                ),
+                actions::finish,
+            )
+        }
         TransferInStep.REJECTED -> FormScaffold(
             title = stringResource(R.string.transfer_in_rejected_title),
             body = stringResource(R.string.transfer_in_rejected_body),

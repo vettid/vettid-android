@@ -111,6 +111,8 @@ enum class TypedProblem {
 /** Immutable UI state of the recovery flow. The PIN and passwords live here only while the flow needs them. */
 data class RecoverUiState(
     val step: RecoverStep = RecoverStep.LOADING,
+    /** (Release R) This phone holds a phone secret for the vault: the recovery opens with `vault.recovery.open`. */
+    val phoneSecret: Boolean = false,
     val refusal: CodeRefusal? = null,
     /** The other environment's `api` of a refused QR. */
     val otherApi: String? = null,
@@ -408,7 +410,7 @@ class RecoverViewModel @Inject constructor(
     // --- the PIN (§11.11.5 step 1) ---
 
     private fun toPin() {
-        state.update { it.copy(step = RecoverStep.PIN, preflight = null, preflightError = null) }
+        state.update { it.copy(step = RecoverStep.PIN, preflight = null, preflightError = null, phoneSecret = vault.usesPhoneSecret) }
         retryPreflight()
     }
 

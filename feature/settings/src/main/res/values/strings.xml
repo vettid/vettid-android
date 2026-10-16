@@ -265,4 +265,15 @@
     <string name="settings_canary_remove">Stop using the test manifest</string>
     <string name="settings_canary_remove_title">Stop using the test manifest?</string>
     <string name="settings_canary_remove_body">VettID\'s published release list is used again. A vault on a release that is not published yet cannot be unlocked from this phone until VettID publishes it.</string>
+    <!-- Release R (ANDROID-PLAN 0.1.40), draft texts. -->
+    <string name="settings_pin_password">Credential password</string>
+    <string name="settings_pin_done_recovery">Your PIN was changed. Your vault\'s recovery now has 10 new attempts for the new PIN and your password.</string>
+    <string name="settings_recovery_status_armed">Recovery: on. Attempts used: %1$d of 10.</string>
+    <string name="settings_recovery_status_used">Recovery attempts used: %1$d of 10. If that was not you, change your password now, and your PIN as well. That gives you 10 new attempts and ends the old ones.</string>
+    <string name="settings_recovery_status_exhausted">All 10 recovery attempts were used. Recovery is off until you change your PIN or your password.</string>
+    <string name="settings_recovery_status_needs_check">Recovery: set up at your next check.</string>
+    <string name="settings_recovery_status_off">Recovery: off (credential backup is off).</string>
+    <string name="settings_recovery_status_unknown">Recovery: cannot be checked right now.</string>
+    <string name="settings_transfer_moved_kept_body">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most 7 days. Before you give this phone away, remove VettID from it or reset it.</string>
+    <string name="settings_recovery_status_change_required">Recovery is off until you choose a new password that meets the rules.</string>
 </resources>

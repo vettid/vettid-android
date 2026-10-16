@@ -445,9 +445,21 @@ fun PasswordScreen(state: OnboardingUiState, actions: OnboardingActions, onBack:
         body = stringResource(R.string.onboarding_password_body),
         primaryLabel = stringResource(R.string.onboarding_continue),
         onPrimary = actions::submitPassword,
-        primaryEnabled = state.password.isNotEmpty() && state.passwordConfirm.isNotEmpty(),
+        primaryEnabled = state.password.isNotEmpty() && state.passwordConfirm.isNotEmpty() && state.credentialPinReady,
         onBack = onBack,
     ) {
+        if (state.askPin) {
+            // Release R (§11.14.9): the vault verifies its PIN when the credential is created.
+            SecretField(
+                value = state.pin,
+                onValueChange = actions::setPin,
+                label = stringResource(R.string.unlock_pin_label),
+                isPin = true,
+                imeAction = ImeAction.Next,
+                modifier = Modifier.testTag("credential_pin"),
+            )
+            Spacer(Modifier.height(Spacing.m))
+        }
         NewPasswordFields(
             state.password, state.passwordConfirm, state.passwordStrength, state.passwordProblem, state.passwordMismatch,
             actions::setPassword, actions::setPasswordConfirm, actions::submitPassword,

@@ -226,6 +226,56 @@ class OnboardingViewModelTest {
         assertFalse(vm.back())
     }
 
+    /** Release R (VAULT-MESSAGING 0.33.0 §11.14.9): credential.create carries the enrollment's PIN. */
+    @Test
+    fun releaseRCredentialCreateCarriesThePin() = runTest {
+        vault.phoneSecret = true
+        vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        val vm = vm()
+        advanceUntilIdle()
+        vm.confirmAccount()
+        vm.setPin("40281795"); vm.submitPin(); vm.setPinConfirm("40281795"); vm.submitPinConfirm()
+        vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
+        vm.submitBackup()
+        advanceUntilIdle()
+        assertTrue("createCredential" in vault.calls)
+        assertEquals("40281795", vault.lastCredentialPin)
+    }
+
+    /** Release R: after a restart the PIN is not in memory; the password step asks for it and credential.create carries it. */
+    @Test
+    fun releaseRNeedsCredentialAsksForThePin() = runTest {
+        vault.phoneSecret = true
+        vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        val vm = vm()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.askPin)
+        vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple")
+        assertFalse(vm.uiState.value.credentialPinReady)
+        vm.submitPassword()
+        assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
+        vm.setPin("40281795")
+        vm.submitPassword()
+        assertEquals(OnboardingStep.BACKUP, vm.uiState.value.step)
+        vm.submitBackup()
+        advanceUntilIdle()
+        assertEquals("40281795", vault.lastCredentialPin)
+    }
+
+    /** Before release R nothing asks for the PIN again and none is sent. */
+    @Test
+    fun beforeReleaseRNeedsCredentialAsksNoPin() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        val vm = vm()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.askPin)
+        vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
+        vm.submitBackup()
+        advanceUntilIdle()
+        assertTrue("createCredential" in vault.calls)
+        assertEquals(null, vault.lastCredentialPin)
+    }
+
     @Test
     fun recoverFromTheWelcomeScreenNeedsNoSignIn() = runTest {
         val vm = vm()

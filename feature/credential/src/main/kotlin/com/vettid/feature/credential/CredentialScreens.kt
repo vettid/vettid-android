@@ -130,7 +130,7 @@ fun NavGraphBuilder.credentialDestination(
     composable<CredentialPasswordRoute> {
         val vm: ChangePasswordViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        ChangePasswordContent(state, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::submit, onBack)
+        ChangePasswordContent(state, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::submit, onBack, vm::setPin)
     }
     composable<CredentialRotateRoute> {
         val vm: RotateViewModel = hiltViewModel()
@@ -501,17 +501,19 @@ fun ChangePasswordContent(
     onConfirm: (String) -> Unit,
     onSubmit: () -> Unit,
     onBack: () -> Unit,
+    onPin: (String) -> Unit = {},
 ) {
     FormScaffold(
         title = stringResource(if (state.done) R.string.credential_change_done else R.string.credential_change_title),
         body = if (state.done) null else stringResource(R.string.credential_change_body),
         primaryLabel = stringResource(if (state.done) R.string.credential_done else R.string.credential_change_submit),
         onPrimary = if (state.done) onBack else onSubmit,
-        primaryEnabled = state.done || (state.current.isNotEmpty() && state.password.isNotEmpty() && state.confirm.isNotEmpty()),
+        primaryEnabled = state.done || state.canSubmit,
         busy = state.busy,
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        if (state.askPin) ChangePasswordPin(state.pin, onPin)
         SecretField(
             state.current,
             onCurrent,
@@ -535,6 +537,16 @@ fun ChangePasswordContent(
         )
         ErrorCard(state.error)
     }
+}
+
+/** Release R (§11.14.9): the vault verifies its PIN with the password change. */
+@Composable
+private fun ChangePasswordPin(pin: String, onPin: (String) -> Unit) {
+    SecretField(
+        pin, onPin, stringResource(R.string.credential_change_pin), isPin = true,
+        imeAction = androidx.compose.ui.text.input.ImeAction.Next, modifier = Modifier.testTag("change_password_pin"),
+    )
+    Spacer(Modifier.height(Spacing.l))
 }
 
 /** The credential rotation (stateless). */

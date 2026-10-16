@@ -47,7 +47,7 @@ class TransferOutViewModelTest {
         override fun withZone(zone: ZoneId): Clock = this
     }
 
-    private fun TestScope.viewModel() = TransferOutViewModel(vault).also { it.clock = VirtualClock(start, testScheduler) }
+    private fun TestScope.viewModel() = TransferOutViewModel(vault, vault).also { it.clock = VirtualClock(start, testScheduler) }
 
     @Test
     fun showCompareApproveMovesTheVault() = runTest {
@@ -79,6 +79,25 @@ class TransferOutViewModelTest {
         assertEquals("", vm.uiState.value.pin)
         assertEquals("", vm.uiState.value.password)
         vm.leave()
+    }
+
+    /** Release R (§11.14.10): after the approval this phone keeps its keys for up to 7 days, and the step says so. */
+    @Test
+    fun aReleaseRApprovalSaysThisPhoneKeepsItsKeys() = runTest {
+        vault.transferConfirmed = false
+        val vm = viewModel()
+        vm.create()
+        advanceTimeBy(100)
+        vault.pendingTransfer.complete(pending)
+        advanceTimeBy(100)
+        vm.codesMatch()
+        vm.setPin("975310")
+        vm.setPassword("correct horse battery")
+        vault.transferKeptSince.value = java.time.Instant.parse("2026-10-16T10:00:00Z")
+        vm.approve()
+        advanceTimeBy(100)
+        assertEquals(TransferOutStep.MOVED, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.keptKeys)
     }
 
     @Test

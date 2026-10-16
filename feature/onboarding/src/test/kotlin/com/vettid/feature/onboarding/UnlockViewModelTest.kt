@@ -45,6 +45,34 @@ class UnlockViewModelTest {
         assertNull(vault.lastApproved)
     }
 
+    /**
+     * Release R (§11.14.10): on the old phone after a transfer's approval, an unlock its own keys cannot make is "The move
+     * didn't finish" failing ("Contact VettID within a day"), never the "start a recovery" text; a network failure is
+     * said as that.
+     */
+    @Test
+    fun theMoveBackFailingSaysContactVettId() = runTest {
+        vault.transferKeptSince.value = Instant.parse("2026-10-16T10:00:00Z")
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.keptTransfer)
+        vault.unlockResults.add(UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret"))
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(UnlockMessage.MoveBackFailed, vm.uiState.value.message)
+        vault.unlockResults.add(UnlockAttempt.Failed(FailureKind.NETWORK, null))
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(UnlockMessage.Failed(FailureKind.NETWORK, null), vm.uiState.value.message)
+        // Without a kept transfer the failure is the usual one.
+        assertEquals(
+            UnlockMessage.Failed(FailureKind.DEVICE_SECRET, "device_secret"),
+            unlockFailedMessage(UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret"), keptTransfer = false),
+        )
+    }
+
     private fun view(state: OwnerCheckState, deadline: Instant) =
         OwnerCheckView(state, deadline, 86_400, 0, hold = true, holdOffUntil = null)
 

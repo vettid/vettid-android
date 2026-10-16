@@ -1329,6 +1329,7 @@ class VaultManager(
             devices = vs?.devices,
             connections = vs?.connections,
             signer = signer,
+            recovery = vs?.recovery?.let { RecoveryStatusView(it.state, it.attempts?.used, it.counter == "unavailable") },
         )
     }
 
