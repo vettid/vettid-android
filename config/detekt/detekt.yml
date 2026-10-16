@@ -42,10 +42,10 @@ style:
     ignoreCompanionObjectPropertyDeclaration: true
     ignoreAnnotated: ['Composable']
     excludes: ['**/test/**', '**/androidTest/**', '**/theme/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**',
-               '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**', '**/core/testing/**']
+               '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**', '**/core/testing/**', '**/core/media/**']
   ThrowsCount:
     excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/relay/**', '**/core/altchan/**',
-               '**/core/vault/**']
+               '**/core/vault/**', '**/core/media/**']
   ReturnCount:
     excludes: ['**/test/**', '**/androidTest/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/relay/**', '**/core/altchan/**',
                '**/core/vault/**']

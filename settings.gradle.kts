@@ -32,6 +32,7 @@ include(":core:data")
 include(":core:testing")
 include(":core:notify")
 include(":core:calls")
+include(":core:media")
 // Google push (Firebase): the `full` distribution only. An F-Droid build removes the directory before building
 // (docs/fdroid/com.vettid.app.yml, `rm`), so that no Google coordinate is left in the tree it builds from; the `foss`
 // distribution never depends on the module (README "F-Droid build").

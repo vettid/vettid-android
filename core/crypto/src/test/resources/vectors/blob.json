@@ -1,0 +1,107 @@
+{
+  "description": "VAULT-MESSAGING 0.32.0 §5.5 claim-check blob, version 0x01, Padmé padding (TEST ONLY)",
+  "label": "vettid/vms/2/blob",
+  "version": 1,
+  "key_hex": "4141414141414141414141414141414141414141414141414141414141414141",
+  "nonce_hex": "424242424242424242424242424242424242424242424242",
+  "content_hex": "ffd8ffe0566574744944206174746163686d656e7420766563746f7221",
+  "size": 29,
+  "padme": 36,
+  "framed_hex": "0000001dffd8ffe0566574744944206174746163686d656e7420766563746f7221000000",
+  "aad_hex": "7665747469642f766d732f322f626c6f620001",
+  "blob_hex": "014242424242424242424242424242424242424242424242428bc717db7fb8a445febbaabd807a58775e41934164fe8ddcfe8093c4c77c2064248d7c6ef71c3ec55301e7618822969b753ca385",
+  "blob_len": 77,
+  "sha256_hex": "c156a871b2f92daf27207407440629c2d0f3c2190508ef17ab799e8d5a923920",
+  "sha256_b64": "wVaocbL5La8nIHQHRAYpwtDzwhkFCO8Xq3mejVqSOSA=",
+  "reference": {
+    "max_blob_bytes": 8388608,
+    "attachment_max_bytes": 8257532,
+    "largest_blob_len": 8257577,
+    "thumb_max_bytes": 32768,
+    "largest_thumb_object_len": 34857
+  },
+  "padme_samples": [
+    {
+      "l": 5,
+      "padme": 5
+    },
+    {
+      "l": 33,
+      "padme": 36
+    },
+    {
+      "l": 100,
+      "padme": 104
+    },
+    {
+      "l": 1000,
+      "padme": 1024
+    },
+    {
+      "l": 32772,
+      "padme": 34816
+    },
+    {
+      "l": 1048576,
+      "padme": 1048576
+    },
+    {
+      "l": 8257536,
+      "padme": 8257536
+    },
+    {
+      "l": 8257537,
+      "padme": 8388608
+    }
+  ],
+  "must_fail": [
+    {
+      "name": "flipped_byte",
+      "why": "one byte of the blob flipped: refused by the sha256 check, before decryption",
+      "blob_hex": "014242424242424242424242424242424242424242424242428bc717db7fb8a445febbaabd807b58775e41934164fe8ddcfe8093c4c77c2064248d7c6ef71c3ec55301e7618822969b753ca385",
+      "sha256_hex": "c156a871b2f92daf27207407440629c2d0f3c2190508ef17ab799e8d5a923920",
+      "size": 29,
+      "error": "sha256"
+    },
+    {
+      "name": "unknown_version",
+      "why": "version byte 0x02 (also in the AAD): refused before decryption",
+      "blob_hex": "024242424242424242424242424242424242424242424242428bc717db7fb8a445febbaabd807a58775e41934164fe8ddcfe8093c4c77c2064248d7c6e5568061ab5611b63b3b5224d28c591c7",
+      "sha256_hex": "e7d68f7a10d302da58676459e0c410370b38a94e514b46fe18cca663a28159b5",
+      "size": 29,
+      "error": "version"
+    },
+    {
+      "name": "over_padded",
+      "why": "framed plaintext of 40 bytes where Padme(4 + 29) = 36",
+      "blob_hex": "014242424242424242424242424242424242424242424242428bc717db7fb8a445febbaabd807a58775e41934164fe8ddcfe8093c4c77c2064248d7c6e0932af8afc138e291964f305bb6b1b4cba820249",
+      "sha256_hex": "fd7d4ed640134fd22d458ee93b207e63dc0794b8efdba3bba8726994dcbf23a0",
+      "size": 29,
+      "error": "framing"
+    },
+    {
+      "name": "nonzero_padding",
+      "why": "the last padding byte is 0x01",
+      "blob_hex": "014242424242424242424242424242424242424242424242428bc717db7fb8a445febbaabd807a58775e41934164fe8ddcfe8093c4c77c2064248d7c6fdcb6c09fd6f512c69985bd9c9e0a7d29",
+      "sha256_hex": "87ca66acb5396843181f7097123304720fae2400637e8032875132c60eb2e3cc",
+      "size": 29,
+      "error": "framing"
+    },
+    {
+      "name": "len_beyond_framed",
+      "why": "len = 33, more than the framed length less 4 (32)",
+      "blob_hex": "014242424242424242424242424242424242424242424242428bc717e77fb8a445febbaabd807a58775e41934164fe8ddcfe8093c4c77c2064248d7c6edd623caac39632c2055dbd2fa44af344",
+      "sha256_hex": "14d0a6fd375c9305bfc63f6ad2ae7f249be4fb34b78f5ecdecf5b6fedd1ac769",
+      "size": 29,
+      "error": "framing"
+    },
+    {
+      "name": "size_mismatch",
+      "why": "a well-formed blob whose content is 29 bytes, received with size 30",
+      "blob_hex": "014242424242424242424242424242424242424242424242428bc717db7fb8a445febbaabd807a58775e41934164fe8ddcfe8093c4c77c2064248d7c6ef71c3ec55301e7618822969b753ca385",
+      "sha256_hex": "c156a871b2f92daf27207407440629c2d0f3c2190508ef17ab799e8d5a923920",
+      "size": 30,
+      "error": "size"
+    }
+  ]
+}
