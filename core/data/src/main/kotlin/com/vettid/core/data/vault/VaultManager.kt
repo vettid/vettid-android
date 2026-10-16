@@ -152,6 +152,12 @@ class VaultManager(
 
     /** (Release R, §11.14.10) This old phone took the vault back after a transfer that did not finish. */
     private val movedBackFlow = MutableStateFlow(false)
+
+    /** (Release R) At the end of the 7 days the vault confirmed this phone is still its app: the move did not happen. */
+    private val moveNotDoneFlow = MutableStateFlow(false)
+
+    /** One end-of-keep check at a time (a start, a return to the foreground and the timer may meet). */
+    private val keptEndLock = Mutex()
     private val accountFlow = MutableStateFlow(local.toInfo())
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val windowFlow = MutableStateFlow<Instant?>(null)
@@ -1908,8 +1914,7 @@ class VaultManager(
         when (val k = KeptTransfer.decide(at, now)) {
             KeptTransfer.Decision.Erase -> {
                 keptTransferTimer?.cancel()
-                android.util.Log.i("VaultManager", "a transfer approved 7 days ago: this phone's keys are removed")
-                eraseThisPhone()
+                endKeptTransfer()
             }
             is KeptTransfer.Decision.Keep -> {
                 transferKeptFlow.value = Instant.ofEpochMilli(at)
@@ -1936,6 +1941,57 @@ class VaultManager(
 
     override fun acknowledgeMovedBack() {
         movedBackFlow.value = false
+    }
+
+    override val moveNotDone: StateFlow<Boolean> = moveNotDoneFlow.asStateFlow()
+
+    override fun acknowledgeMoveNotDone() {
+        moveNotDoneFlow.value = false
+    }
+
+    /**
+     * The 7 days are over (owner decision 2026-10-16): before erasing, ONE check with the vault over this phone's own
+     * session ([stillTheVaultsApp]). Confirmed: the transfer never took effect, this phone keeps its keys, the kept
+     * state goes and the member is told. Anything else (the vault no longer lists this phone, a refusal, no answer within
+     * [KEPT_END_CHECK_MS], any failure): this phone's keys are removed, as before. Never retried: the bound stays 7 days.
+     */
+    private suspend fun endKeptTransfer() {
+        if (!keptEndLock.tryLock()) return
+        try {
+            if (local.transferApprovedAtMs == null) return
+            if (stillTheVaultsApp()) {
+                android.util.Log.i("VaultManager", "7 days after the approval the vault still has this phone as its app: kept")
+                keptTransferTimer?.cancel()
+                io { saveLocal(local.copy(transferApprovedAtMs = null)) }
+                transferKeptFlow.value = null
+                moveNotDoneFlow.value = true
+            } else {
+                android.util.Log.i("VaultManager", "a transfer approved 7 days ago: this phone's keys are removed")
+                eraseThisPhone()
+            }
+        } finally {
+            keptEndLock.unlock()
+        }
+    }
+
+    /**
+     * `device.list` sent over this phone's end-to-end session with the vault, answered within [KEPT_END_CHECK_MS]: true
+     * only when the answer lists this phone as the vault's app ([KeptTransfer.stillTheApp]). The answer must be sealed
+     * under the session's keys (held only by the enclave and this phone) and carry `re` = this request's fresh id; the
+     * vault removes the old app and its session at a completed approval, so it cannot answer it any more.
+     */
+    @Suppress("TooGenericExceptionCaught") // any failure is "not confirmed"
+    private suspend fun stillTheVaultsApp(): Boolean = try {
+        withTimeout(KEPT_END_CHECK_MS) {
+            val s = session()
+            KeptTransfer.stillTheApp(guard { s.openApi.deviceList() }, s.device.deviceId)
+        }
+    } catch (e: CancellationException) {
+        if (e !is TimeoutCancellationException) throw e
+        false
+    } catch (e: Exception) {
+        android.util.Log.i("VaultManager", "the end-of-keep check failed: ${e.javaClass.simpleName}")
+        false
     }
 
     override suspend fun transferReject(transferId: String) = guard {
@@ -2195,6 +2251,9 @@ class VaultManager(
 
         /** How long the old phone's approval waits for `device.unlinked{transferred}` (§6.7.1 step 4). */
         private const val UNLINK_WAIT_MS = 30_000L
+
+        /** The one check with the vault at the end of a kept transfer's 7 days. */
+        private const val KEPT_END_CHECK_MS = 60_000L
 
         /** The recovered phone's handshake right after `ok` (§11.14.6). */
         private const val OPENED_HANDSHAKE_WAIT_S = 90L

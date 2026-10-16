@@ -152,4 +152,25 @@ class PhoneSecretsTest {
         assertFalse(CredentialCreate.fetchInstead(releaseR = false, code = "exists"))
         assertFalse(CredentialCreate.fetchInstead(releaseR = true, code = "weak_password"))
     }
+
+    /**
+     * The one check at the end of the 7 days: kept only when the vault's device.list over this phone's session lists it
+     * as the app; unlinked (not listed), any other answer, no answer or a failure (null) erase.
+     */
+    @Test
+    fun theEndOfKeepCheckKeepsOnlyWhenTheVaultListsThisPhoneAsItsApp() {
+        fun list(vararg d: Pair<String, String>) = kotlinx.serialization.json.Json.parseToJsonElement(
+            d.joinToString(",", "{\"devices\":[", "]}") { (id, kind) -> "{\"id\":\"$id\",\"kind\":\"$kind\",\"name\":\"x\"}" },
+        ) as kotlinx.serialization.json.JsonObject
+        // Confirmed: kept.
+        assertTrue(KeptTransfer.stillTheApp(list("dev-old" to "app", "desk-1" to "desktop"), "dev-old"))
+        // Unlinked: the vault's app is another phone.
+        assertFalse(KeptTransfer.stillTheApp(list("dev-new" to "app", "desk-1" to "desktop"), "dev-old"))
+        // Listed, but not as the app.
+        assertFalse(KeptTransfer.stillTheApp(list("dev-old" to "desktop"), "dev-old"))
+        // No answer, a refusal, a failure, or a phone without a device id.
+        assertFalse(KeptTransfer.stillTheApp(null, "dev-old"))
+        assertFalse(KeptTransfer.stillTheApp(list("dev-old" to "app"), null))
+        assertFalse(KeptTransfer.stillTheApp(kotlinx.serialization.json.JsonObject(emptyMap()), "dev-old"))
+    }
 }

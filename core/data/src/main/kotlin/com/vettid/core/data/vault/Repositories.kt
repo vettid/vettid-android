@@ -180,6 +180,14 @@ interface VaultRepository {
 
     fun acknowledgeMovedBack() {}
 
+    /**
+     * (Release R, owner decision 2026-10-16) At the end of the 7 days after approving a transfer, the vault confirmed
+     * that this phone is still its app: the move did not happen and the phone keeps its keys. Told once.
+     */
+    val moveNotDone: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    fun acknowledgeMoveNotDone() {}
+
     /** Leaves onboarding for the app. */
     suspend fun finishSetup()
 

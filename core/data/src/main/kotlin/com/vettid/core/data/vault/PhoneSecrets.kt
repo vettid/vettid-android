@@ -90,6 +90,20 @@ object KeptTransfer {
     fun start(approvedAtMs: Long, nowMs: Long): Long = minOf(approvedAtMs, nowMs)
 
     /**
+     * The end-of-keep check's verdict (owner decision 2026-10-16): [deviceList] is the vault's `device.list` answer over
+     * this phone's session (null: no answer, a refusal, any failure). This phone is still the vault's app only when the
+     * list names it ([deviceId]) as an `app`; anything else erases.
+     */
+    fun stillTheApp(deviceList: kotlinx.serialization.json.JsonObject?, deviceId: String?): Boolean {
+        if (deviceList == null || deviceId == null) return false
+        val devices = deviceList["devices"] as? kotlinx.serialization.json.JsonArray ?: return false
+        return devices.any { e ->
+            val d = e as? kotlinx.serialization.json.JsonObject
+            d != null && com.vettid.core.vault.VaultJson.str(d, "id") == deviceId && com.vettid.core.vault.VaultJson.str(d, "kind") == "app"
+        }
+    }
+
+    /**
      * Whether an approval that failed with [kind] may still have reached the vault: no answer came. Any other failure (a
      * refusal, the network before sending) means the transfer was not approved.
      */

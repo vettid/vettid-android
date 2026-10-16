@@ -638,6 +638,33 @@ class VaultDeviceTest {
      * the PIN when given, and passwords are normalized to NFC only for a vault of release R; a vault before it gets
      * every password exactly as typed.
      */
+    /**
+     * The end-of-keep check (release R): device.list over the session is accepted only as the answer to this request.
+     * An earlier answer delivered again (a host replaying it) is not taken for a new request, which then gets no answer.
+     */
+    @Test
+    fun aReplayedAnswerIsNotTakenForANewRequest() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            val first = async(Dispatchers.IO) { api.deviceList() }
+            val r1 = v.open(nextDeposit().second)
+            assertEquals("device.list", r1.type)
+            val answer = v.seal("device.list", """{"devices":[{"id":"dev-1","kind":"app","name":"phone"}]}""", re = r1.id, status = Inner.STATUS_OK)
+            d.handle(answer)
+            val listed = first.await()["devices"] as kotlinx.serialization.json.JsonArray
+            assertEquals("dev-1", ((listed[0] as kotlinx.serialization.json.JsonObject)["id"] as JsonPrimitive).content)
+            // A new request, answered only by the old answer again: no answer.
+            val second = async(Dispatchers.IO) { runCatching { api.deviceList() } }
+            val r2 = v.open(nextDeposit().second)
+            assertTrue(r2.id != r1.id)
+            runCatching { d.handle(answer) } // dropped however the device treats a duplicate
+            val out = second.await()
+            assertTrue(out.isFailure)
+            assertTrue(out.exceptionOrNull() is VaultStateException)
+        }
+    }
+
     /** Release R: a recovery is finished only on a paired phone (after its credential.get), never before. */
     @Test
     fun aRecoveryIsFinishedOnlyOnAPairedPhone() = runBlocking<Unit> {
