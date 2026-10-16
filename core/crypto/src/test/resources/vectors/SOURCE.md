@@ -20,6 +20,12 @@ TEST-ONLY.
   `release/staging/10` (8678752): the vectors describe what staging release 10 does.
 - Copied: 2026-10-12. Checked by `CallVectorsTest` in `:core:crypto`.
 
+`blob.json` and `attachment.json` (VAULT-MESSAGING 0.32.0 §5.5 and §10.5.1, photo attachments) have their own source:
+
+- Source commit: 28efb96bbc6ebf16d6808be30358b207af10b4e3 (vettid-vault `main`)
+- Last commit touching them: d95fb2fe65c81638b8f0bff6d05e5002549cf92d ("Attachments 1/3", vettid-vault #92)
+- Copied: 2026-10-15. Checked by `BlobVectorsTest` in `:core:crypto`.
+
 To refresh: copy the files again from a newer vettid-vault commit, update the
 commits above, and run `./gradlew :core:crypto:test :core:attestation:testDebugUnitTest`.
 A vector that no longer matches is a stop-and-report item, never a skip.
@@ -36,4 +42,6 @@ ba4776070f7babc465d4db23f860fe998f6d7f3accab5cac8a153ff0090d3914  altchan.json
 6025085eb23f7ce100de09389d2a087ce8384b638461bc9891cfd5ad6db44570  keys.json
 29060418b258c813a8304047b826f70ec87e66ae10ea1c4e4ffc10d213eebb96  release.json
 94cb55fca6b63e5983474a7b9715acd4f4d9ce8930a1a801d09efb9e73d54d01  calls.json
+a890582a80e24cea9e10523f01f2f0040924aa47cd66cd8c442c0a1577e284b3  blob.json
+a8d86c76b9469f26526f8238d41bd07a6b74fcce3da6035879fc5910c5f36427  attachment.json
 ```
