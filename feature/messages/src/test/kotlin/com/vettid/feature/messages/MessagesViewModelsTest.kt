@@ -1,3 +1,6 @@
+// Expected call lists stay on one line each.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.feature.messages
 
 import androidx.lifecycle.SavedStateHandle
@@ -19,6 +22,8 @@ import org.junit.Test
 class MessagesViewModelsTest {
     @get:Rule
     val main = MainDispatcherRule()
+
+    private val attachments = com.vettid.core.testing.FakeAttachments()
 
     private val social = FakeSocial().apply {
         seed(
@@ -75,7 +80,7 @@ class MessagesViewModelsTest {
 
     @Test
     fun conversationMarksReadSendsAndDeletes() = runTest {
-        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social)
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
         advanceUntilIdle()
         assertEquals("Alex", vm.uiState.value.connection?.name)
         // Open: the unread incoming message is marked read.
@@ -102,7 +107,7 @@ class MessagesViewModelsTest {
 
     @Test
     fun aFailedSendKeepsTheDraftAndTooLongTextCannotBeSent() = runTest {
-        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social)
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social, attachments)
         advanceUntilIdle()
         social.fail["send"] = VaultFailure(FailureKind.CONNECTION_UNAVAILABLE, "connection_unavailable")
         vm.setDraft("hello")
@@ -119,7 +124,7 @@ class MessagesViewModelsTest {
     @Test
     fun aStaleConnectionCannotBeWrittenTo() = runTest {
         social.seed(listOf(FakeSocial.connection("c3", "Jo", state = ConnectionState.STALE)))
-        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c3")), social, social)
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c3")), social, social, attachments)
         advanceUntilIdle()
         vm.setDraft("hi")
         advanceUntilIdle()
@@ -144,7 +149,7 @@ class MessagesViewModelsTest {
     fun scrollingToTheTopLoadsOlderPagesUntilNoneRemain() = runTest {
         // VAULT-MESSAGING 0.32.0 §10.5.2: older pages one at a time, while the vault announces more.
         social.setOlder("c1", listOf(listOf(FakeSocial.message("c1", "m0", "older", outgoing = true, minute = 0))))
-        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social)
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social, attachments)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.olderAvailable)
         vm.loadOlder()
@@ -162,7 +167,7 @@ class MessagesViewModelsTest {
         // §8.1: an answer that could not be sealed is `response_too_large`, never silence.
         social.setOlder("c1", listOf(listOf(FakeSocial.message("c1", "m0", "older", outgoing = true, minute = 0))))
         social.fail["loadOlder"] = VaultFailure(FailureKind.RESPONSE_TOO_LARGE, "response_too_large")
-        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social)
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social, attachments)
         advanceUntilIdle()
         vm.loadOlder()
         advanceUntilIdle()
@@ -170,5 +175,185 @@ class MessagesViewModelsTest {
         assertEquals(listOf("m1"), vm.uiState.value.messages.map { it.messageId })
         assertTrue(vm.uiState.value.olderAvailable)
         assertFalse(vm.uiState.value.loadingOlder)
+    }
+    private fun conversation() = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social, attachments)
+
+    @Test
+    fun pickedPhotosAreSentOneByOneWithTheCaptionOnTheFirst() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.photosAvailable)
+        vm.onPicked(picks(byteArrayOf(1), byteArrayOf(2)))
+        advanceUntilIdle()
+        assertEquals(2, vm.uiState.value.photoDraft!!.photos.size)
+        vm.setPhotoCaption("  look  ")
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals(listOf("begin:look", "send:REQ1", "begin:", "send:REQ2"), attachments.calls.filter { it.startsWith("begin") || it.startsWith("send") })
+    }
+
+    @Test
+    fun retryAfterALostAnswerReSendsTheSameRequest() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1)))
+        advanceUntilIdle()
+        attachments.fail["send"] = VaultFailure(FailureKind.NO_RESPONSE)
+        vm.sendPhotos()
+        advanceUntilIdle()
+        val d = vm.uiState.value.photoDraft!!
+        assertTrue(d.retry)
+        assertEquals(PhotoProblem.NO_ANSWER, d.problem)
+        vm.sendPhotos() // Retry
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals(listOf("send:REQ1", "send:REQ1"), attachments.calls.filter { it.startsWith("send") })
+        assertEquals(1, attachments.calls.count { it.startsWith("begin") })
+    }
+
+    @Test
+    fun cancelAfterALostAnswerCancelsTheUpload() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1)))
+        advanceUntilIdle()
+        attachments.fail["send"] = VaultFailure(FailureKind.NO_RESPONSE)
+        vm.sendPhotos()
+        advanceUntilIdle()
+        vm.cancelPhotos()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals("abandon:REQ1", attachments.calls.last()) // the discard runs outside the screen's scope
+    }
+
+    @Test
+    fun aFullVaultAndAFullMailboxAreSaidApart() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1)))
+        advanceUntilIdle()
+        attachments.fail["send"] = VaultFailure(FailureKind.LIMIT, com.vettid.core.data.social.AttachmentManager.CODE_QUOTA)
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertEquals(PhotoProblem.MAILBOX_FULL, vm.uiState.value.photoDraft!!.problem)
+        assertEquals("the photo stays for Send again", 1, vm.uiState.value.photoDraft!!.photos.size)
+        attachments.fail["send"] = VaultFailure(FailureKind.LIMIT, "limit")
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertEquals(PhotoProblem.VAULT_FULL, vm.uiState.value.photoDraft!!.problem)
+    }
+
+    @Test
+    fun anUnreadablePictureIsSaid() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(ByteArray(0)))
+        advanceUntilIdle()
+        assertEquals(PhotoProblem.UNREADABLE, vm.uiState.value.photoDraft!!.problem)
+        assertFalse(vm.uiState.value.photoDraft!!.canSend)
+    }
+
+    @Test
+    fun withoutReleaseAThereIsNoPhotoButton() = runTest {
+        attachments.availableFlow.value = false
+        val vm = conversation()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.photosAvailable)
+    }
+
+    private fun picks(vararg b: ByteArray): List<suspend () -> ByteArray?> = b.map { x -> suspend { x } }
+
+    @Test
+    fun cancelWaitsWhileARequestIsOnItsWayAndNoFurtherPhotoIsBegun() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1), byteArrayOf(2)))
+        advanceUntilIdle()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        attachments.sendGate = gate
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.photoDraft!!.inFlight)
+        vm.cancelPhotos() // refused while the request is on its way
+        assertTrue(vm.uiState.value.photoDraft != null)
+        attachments.sendGate = null
+        gate.complete(Unit)
+        advanceUntilIdle()
+        // The first photo was answered; the loop went on to the second (no cancel happened).
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals(2, attachments.calls.count { it.startsWith("begin") })
+    }
+
+    @Test
+    fun aCancelBetweenPhotosStopsTheLoop() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3)))
+        advanceUntilIdle()
+        attachments.fail["send"] = VaultFailure(FailureKind.LIMIT, "limit") // the first is refused for good
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertEquals(2, vm.uiState.value.photoDraft!!.photos.size)
+        val left = vm.uiState.value.photoDraft!!.photos
+        vm.cancelPhotos()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals(1, attachments.calls.count { it.startsWith("begin") })
+        assertTrue(left.all { p -> p.jpeg.all { it == 0.toByte() } })
+    }
+
+    @Test
+    fun aClearDropsTheDraftAndTheCamera() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(5)))
+        advanceUntilIdle()
+        val draft = vm.uiState.value.photoDraft!!.photos
+        attachments.clear() // a lock, the hold or due state
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals(1L, vm.uiState.value.photoGeneration)
+        assertTrue(draft.all { p -> p.jpeg.all { it == 0.toByte() } })
+    }
+
+    @Test
+    fun picksThatFailAreCountedAndTheOthersKept() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(listOf(suspend { byteArrayOf(1) }, suspend { null }, suspend { ByteArray(0) }))
+        advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.photoDraft!!.photos.size)
+        assertEquals(2, vm.uiState.value.photoDraft!!.failedPicks)
+    }
+
+    @Test
+    fun theViewerDropsItsPhotoAtAClearAndWipedBytesCannotLeave() = runTest {
+        val vm = PhotoViewerViewModel(
+            SavedStateHandle(mapOf(PhotoViewerRoute.ARG_CONNECTION to "c1", PhotoViewerRoute.ARG_MESSAGE to "m1")),
+            attachments,
+            social,
+        )
+        advanceUntilIdle()
+        val photo = vm.uiState.value.photo!!
+        assertTrue(PhotoExport.intact(photo.bytes, photo.type))
+        attachments.clear()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photo)
+        assertFalse(PhotoExport.intact(photo.bytes, photo.type))
+    }
+
+    @Test
+    fun aCancelWhilePicksArePreparedWipesWhatWasReady() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        val never = kotlinx.coroutines.CompletableDeferred<ByteArray?>()
+        vm.onPicked(listOf(suspend { byteArrayOf(7, 7) }, suspend { never.await() }))
+        advanceUntilIdle()
+        assertEquals(1, attachments.prepared.size)
+        vm.cancelPhotos()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertTrue(attachments.prepared.single().jpeg.all { it == 0.toByte() })
     }
 }

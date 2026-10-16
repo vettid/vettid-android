@@ -11,7 +11,8 @@ import com.vettid.core.vault.FeedItem
  * priority `normal` up.
  */
 object NotificationMapping {
-    private val MESSAGES = setOf("message.received")
+    /** (VAULT-MESSAGING 0.32.0 §10.5.1) A photo that failed or was refused is about a message too. */
+    private val MESSAGES = setOf("message.received", "message.attachment_failed", "message.attachment_refused")
     private val REQUESTS = setOf(
         "connection.request", "connection.authenticate.requested", "grant.request", "share.pending",
         "critical-secret.use.request", "device.pair.pending", "device.session.pending", "approval.pending",

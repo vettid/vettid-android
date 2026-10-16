@@ -20,6 +20,9 @@
     <string name="notify_public_activity">New activity in VettID</string>
     <string name="notify_public_attention">VettID needs your attention</string>
     <string name="notify_newer_app">Open VettID on a newer version</string>
+    <!-- A photo message (ANDROID-PLAN 0.1.39): never the image or the thumbnail. -->
+    <string name="notify_photo">Photo</string>
+    <string name="notify_photo_caption">Photo: %1$s</string>
 
     <!-- The vault's state. -->
     <string name="notify_locked_title">Your vault is locked</string>

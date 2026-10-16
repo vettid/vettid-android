@@ -140,8 +140,26 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
                 onDismissError = vm::dismissError,
                 onDetails = { host.onOpenConnection(state.connectionId) },
                 onLoadOlder = vm::loadOlder,
+                photos = PhotoActions(
+                    onTakePhoto = vm::startCapture,
+                    onPicked = vm::onPicked,
+                    onShot = vm::onShot,
+                    onCloseCamera = vm::stopCapture,
+                    onCaption = vm::setPhotoCaption,
+                    onSend = vm::sendPhotos,
+                    onCancel = vm::cancelPhotos,
+                    onDismissProblem = vm::dismissPhotoProblem,
+                    onOpen = { host.navigate(PhotoViewerRoute(state.connectionId, it)) },
+                    thumbnail = vm::thumbnail,
+                    generation = state.photoGeneration,
+                ),
             ),
         )
+    }
+    composable<PhotoViewerRoute> {
+        val vm: PhotoViewerViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        PhotoViewerScreen(state, onBack = host.onBack, onRetry = vm::load)
     }
     composable<NewMessageRoute> {
         val vm: NewMessageViewModel = hiltViewModel()
@@ -276,6 +294,8 @@ data class ConversationActions(
     val onDetails: () -> Unit = {},
     /** The list reached its top while older messages remain (§10.5.2). */
     val onLoadOlder: () -> Unit = {},
+    /** Photo attachments (ANDROID-PLAN 0.1.39). */
+    val photos: PhotoActions = PhotoActions(),
 )
 
 /** A conversation (ANDROID-PLAN §4): bubbles by day, the reply field at the bottom. */
@@ -295,6 +315,14 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
         actions = {
             IconButton(onClick = actions.onDetails) {
                 Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.messages_cd_details, name))
+            }
+        },
+        overlay = {
+            // Photos picked or taken, then the camera (ANDROID-PLAN 0.1.39): over the whole conversation.
+            val draft = state.photoDraft
+            when {
+                draft != null -> PhotoDraftOverlay(draft, name, actions.photos)
+                state.capturing -> PhotoCaptureOverlay(actions.photos)
             }
         },
     ) {
@@ -359,6 +387,10 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
         byDay.forEach { (day, list) ->
             item(key = "day-$day") { DayDivider(Times.dayLabel(day)) }
             items(list, key = { it.messageId }) { m ->
+                if (m.attachment != null) {
+                    PhotoBubble(m, name, actions.photos, onLongPress)
+                    return@items
+                }
                 val time = Times.time(m.sentAt)
                 val status = when {
                     !m.outgoing -> null
@@ -429,6 +461,8 @@ private fun Composer(state: ConversationUiState, name: String, actions: Conversa
             maxLines = COMPOSER_LINES,
             modifier = Modifier.weight(1f).testTag("composer"),
         )
+        // The photo button only for a vault of release A (§10.5.1 "Compatibility").
+        if (state.photosAvailable) PhotoButton(actions.photos, enabled = state.photoDraft == null)
         Spacer(Modifier.width(Spacing.s))
         FilledIconButton(
             onClick = actions.onSend,

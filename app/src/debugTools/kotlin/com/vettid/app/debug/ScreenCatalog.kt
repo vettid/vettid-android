@@ -982,6 +982,56 @@ object ScreenCatalog {
                 ConversationActions(),
             )
         },
+        "messages.conversation_photos" to {
+            val photos = thread + listOf(
+                com.vettid.core.data.social.AttachmentState.SENDING to null,
+                com.vettid.core.data.social.AttachmentState.DELIVERED to null,
+                com.vettid.core.data.social.AttachmentState.FAILED to "unsupported",
+                com.vettid.core.data.social.AttachmentState.FETCHING to null,
+                com.vettid.core.data.social.AttachmentState.FAILED to "rate",
+            ).mapIndexed { i, (st, reason) ->
+                thread.last().copy(
+                    messageId = "p$i",
+                    outgoing = i < 3,
+                    text = if (i == 0) "The view from here" else "",
+                    sentAt = thread.last().sentAt.plusSeconds(60L * (i + 1)),
+                    attachment = com.vettid.core.data.social.AttachmentInfo("a$i", st, reason, width = 2_560, height = 1_920),
+                )
+            }
+            ConversationScreen(ConversationUiState("c1", sam, photos, loading = false, photosAvailable = true), ConversationActions())
+        },
+        "messages.photo_draft" to {
+            ConversationScreen(
+                ConversationUiState(
+                    "c1", sam, thread, loading = false, photosAvailable = true,
+                    photoDraft = com.vettid.feature.messages.PhotoDraft(
+                        photos = listOf(com.vettid.core.media.PreparedPhoto(ByteArray(4), ByteArray(4), 2_560, 1_920)),
+                        caption = "The view from here",
+                    ),
+                ),
+                ConversationActions(),
+            )
+        },
+        "messages.photo_draft_retry" to {
+            ConversationScreen(
+                ConversationUiState(
+                    "c1", sam, thread, loading = false, photosAvailable = true,
+                    photoDraft = com.vettid.feature.messages.PhotoDraft(
+                        photos = listOf(com.vettid.core.media.PreparedPhoto(ByteArray(4), ByteArray(4), 2_560, 1_920)),
+                        problem = com.vettid.feature.messages.PhotoProblem.NO_ANSWER,
+                        retry = true,
+                    ),
+                ),
+                ConversationActions(),
+            )
+        },
+        "messages.photo_viewer_failed" to {
+            com.vettid.feature.messages.PhotoViewerScreen(
+                com.vettid.feature.messages.PhotoViewerUiState(loading = false, error = FailureKind.OTHER, problemText = null),
+                {},
+                {},
+            )
+        },
         "messages.conversation_empty" to { ConversationScreen(ConversationUiState("c2", alex, emptyList(), loading = false), ConversationActions()) },
         "messages.conversation_stale" to { ConversationScreen(ConversationUiState("c3", jo, emptyList(), loading = false), ConversationActions()) },
         "messages.delete" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, deleting = thread[1]), ConversationActions()) },

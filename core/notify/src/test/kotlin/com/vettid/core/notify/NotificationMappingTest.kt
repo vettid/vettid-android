@@ -14,7 +14,7 @@ class NotificationMappingTest {
     private fun item(kind: String, priority: String = "normal") = FeedItem("i", 1, kind, "2026-10-09T12:00:00Z", "active", priority)
 
     private val expected = mapOf(
-        Channels.MESSAGES to listOf("message.received"),
+        Channels.MESSAGES to listOf("message.received", "message.attachment_failed", "message.attachment_refused"),
         Channels.REQUESTS to listOf(
             "connection.request", "connection.authenticate.requested", "grant.request", "share.pending", "critical-secret.use.request",
             "device.pair.pending", "device.session.pending", "approval.pending", "action.request", "intro.request", "location.request",

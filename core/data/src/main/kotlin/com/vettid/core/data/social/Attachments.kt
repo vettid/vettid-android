@@ -24,6 +24,7 @@ import com.vettid.core.vault.messageAttachmentDiscard
 import com.vettid.core.vault.messageSendPhoto
 import com.vettid.core.vault.uploadBlob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Semaphore
@@ -73,6 +74,12 @@ class PendingPhoto internal constructor(
     }
 }
 
+/** TEST hook: a [PendingPhoto] made outside [AttachmentManager] (fakes in `:core:testing`). */
+object AttachmentAccess {
+    fun pending(connectionId: String, caption: String, photo: PreparedPhoto, requestId: String) =
+        PendingPhoto(connectionId, caption, photo, requestId)
+}
+
 /** A received photo, fetched and checked: the encoded bytes (decoded only for showing) and their sniffed type. */
 class FetchedPhoto(val bytes: ByteArray, val type: ImageType)
 
@@ -81,12 +88,23 @@ class FetchedPhoto(val bytes: ByteArray, val type: ImageType)
  * thumbnails, photos and prepared uploads, wiped by [clear] at a lock, on entering the hold or the due state, at a
  * wipe and at an unlink. Nothing from a photo goes to a log.
  */
+@Suppress("TooManyFunctions") // one per step of §10.5.1 the app takes
 interface AttachmentsRepository {
     /** Whether the vault has attachments (`message.attachment.get{}` after each unlock); no attach button otherwise. */
     val available: StateFlow<Boolean>
 
     /** The availability probe: once after each unlock. */
     suspend fun probe()
+
+    /**
+     * Prepares a picked picture's bytes for sending, off the main thread (ANDROID-PLAN "Preparing it, in memory"):
+     * bounds first, orientation, long edge 2,560, JPEG without metadata, the thumbnail. Throws
+     * [com.vettid.core.media.PhotoException].
+     */
+    suspend fun prepare(source: ByteArray): PreparedPhoto
+
+    /** Prepares a camera shot (upright, in memory); the caller recycles [shot]. */
+    suspend fun prepare(shot: android.graphics.Bitmap): PreparedPhoto
 
     /** Starts sending [photo] to [connectionId] with [caption] (it goes with the first photo only). */
     fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto
@@ -101,6 +119,9 @@ interface AttachmentsRepository {
 
     /** Cancel before `message.send` answered: `message.attachment.discard{blob_id}` for an upload, then wiped. */
     suspend fun cancel(p: PendingPhoto)
+
+    /** [cancel] without waiting (the screen that held [p] is gone). */
+    fun abandon(p: PendingPhoto)
 
     /** The thumbnail of a message's photo: from `message.new`, or fetched (`part: "thumb"`); memory only. */
     suspend fun thumbnail(connectionId: String, messageId: String): ByteArray
@@ -148,10 +169,14 @@ class VaultAttachmentOps(private val api: suspend () -> VaultApi) : AttachmentOp
     override suspend fun deleteBlob(blobId: String) = api().deleteBlob(blobId)
 }
 
+@Suppress("TooManyFunctions")
 class AttachmentManager(
     private val ops: AttachmentOps,
     /** A sent photo's message joins its conversation ([SocialManager.addSent]). */
     private val onSent: (MessageInfo) -> Unit,
+    /** Where an abandoned upload's discard runs. */
+    private val scope: kotlinx.coroutines.CoroutineScope =
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
 ) : AttachmentsRepository {
     private val availableFlow = MutableStateFlow(false)
     private val clearedFlow = MutableStateFlow(0L)
@@ -175,6 +200,12 @@ class AttachmentManager(
             false
         }
     }
+
+    override suspend fun prepare(source: ByteArray): PreparedPhoto =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.vettid.core.media.Photos.prepare(source) }
+
+    override suspend fun prepare(shot: android.graphics.Bitmap): PreparedPhoto =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.vettid.core.media.Photos.prepare(shot) }
 
     override fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto =
         PendingPhoto(connectionId, caption, photo, ops.newRequestId()).also { pending += it }
@@ -268,6 +299,10 @@ class AttachmentManager(
         }
     }
 
+    override fun abandon(p: PendingPhoto) {
+        scope.launch { cancel(p) }
+    }
+
     private fun finish(p: PendingPhoto) {
         pending -= p
         p.wipe()
@@ -359,6 +394,7 @@ class AttachmentManager(
         clearedFlow.value++
         thumbs.clear()
         photos.clear()
+        com.vettid.core.media.SharedPhotos.clear() // the share provider refuses every read from now on
         synchronized(pending) {
             pending.forEach { it.wipe() }
             pending.clear()

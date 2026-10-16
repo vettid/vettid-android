@@ -101,7 +101,7 @@ object FeedKinds {
     val KNOWN = setOf(
         "connection.request", "connection.request.peer_declined", "connection.added", "connection.removed",
         "connection.stale", "connection.asks_paused", "connection.authenticate.requested",
-        "message.received", "call.missed",
+        "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused",
         "grant.request", "grant.shared", "grant.revoked", "share.pending", "share.rate_limited",
         "critical-secret.use.request", "item.revealed",
         "device.pair.pending", "device.paired", "device.unlinked", "device.transferred", "device.replaced",
@@ -187,6 +187,9 @@ object FeedKinds {
             "connection.asks_paused" -> FeedText(R.string.data_feed_asks_paused, listOf(first))
             "connection.authenticate.requested" -> FeedText(R.string.data_feed_authenticate, listOf(who))
             "message.received" -> FeedText(R.string.data_feed_message, listOf(who))
+            // §10.5.1 (0.32.0): an outgoing photo that failed, an incoming one refused because the vault is full.
+            "message.attachment_failed" -> FeedText(R.string.data_feed_photo_failed, listOf(who))
+            "message.attachment_refused" -> FeedText(R.string.data_feed_photo_refused, listOf(who))
             "call.missed" -> FeedText(R.string.data_feed_call_missed, listOf(who))
             "grant.request" -> when {
                 count > 1 -> FeedText(plural = R.plurals.data_feed_grant_request_batch, quantity = count, args = listOf(first, count))
@@ -303,7 +306,8 @@ object FeedKinds {
         return when (item.kind) {
             "connection.request.peer_declined" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Connections
             "connection.added", "connection.stale", "connection.asks_paused" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
-            "message.received", "call.missed" -> c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
+            "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused" ->
+                c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
             "share.rate_limited" -> if (c != null && !ref.isNullOrEmpty()) FeedTarget.ShareRule(c, ref) else FeedTarget.Sheet
             "item.revealed" -> if (!ref.isNullOrEmpty()) FeedTarget.Item(ref) else FeedTarget.Sheet
