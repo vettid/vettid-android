@@ -406,6 +406,24 @@ class OnboardingViewModelTest {
         assertTrue(vm.uiState.value.canSubmitPassword)
     }
 
+    /** A reason this app does not know: the generic text, and the same password is not sent again. */
+    @Test
+    fun anUnknownWeakPasswordReasonBlocksTheSamePassword() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        vault.fail["createCredential"] = com.vettid.core.data.vault.VaultFailure(FailureKind.WEAK_PASSWORD, "weak_password")
+        val vm = vm()
+        advanceUntilIdle()
+        vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
+        vm.submitBackup()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
+        assertEquals(PasswordRule.VAULT_REFUSED, vm.uiState.value.passwordRule)
+        assertTrue(vm.uiState.value.passwordRefused)
+        assertFalse(vm.uiState.value.canSubmitPassword)
+        vm.submitPassword()
+        assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
+    }
+
     /** After a move (also after a restart before leaving onboarding) the last screen is the move's, not the enrollment's. */
     @Test
     fun theLastScreenAfterAMoveIsTheMoves() = runTest {

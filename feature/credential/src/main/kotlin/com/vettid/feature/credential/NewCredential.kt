@@ -68,7 +68,7 @@ data class NewCredentialUiState(
 ) {
     val filled: Boolean
         get() = pin.length >= MIN_PIN && current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && acknowledged &&
-            (!newRules || rule.passes && !refused)
+            !refused && (!newRules || rule.passes)
 
     override fun toString(): String = "NewCredentialUiState(busy=$busy, error=$error, done=$done)"
 
@@ -99,7 +99,7 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
         if (it.newRules) {
             it.copy(password = v, rule = PasswordRule.check(v, it.pin), refused = false, mismatch = false)
         } else {
-            it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, mismatch = false)
+            it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, refused = false, mismatch = false)
         }
     }
 
@@ -190,7 +190,7 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
             imeAction = ImeAction.Next,
         )
         Spacer(Modifier.height(Spacing.s))
-        if (state.newRules) {
+        if (state.newRules || state.refused) {
             NewPasswordRule(state.rule, state.refused)
         } else {
             StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))

@@ -83,7 +83,8 @@ class PoliciesTest {
         assertEquals(PasswordRule.COMMON, PasswordRule.fromVault("common"))
         assertEquals(PasswordRule.SAME_AS_PIN, PasswordRule.fromVault("same_as_pin"))
         assertEquals(PasswordRule.GUESSABLE, PasswordRule.fromVault("guessable"))
-        assertNull(PasswordRule.fromVault("something_new"))
-        assertNull(PasswordRule.fromVault(null))
+        assertEquals(PasswordRule.VAULT_REFUSED, PasswordRule.fromVault("something_new"))
+        assertEquals(PasswordRule.VAULT_REFUSED, PasswordRule.fromVault(null))
+        assertFalse(PasswordRule.VAULT_REFUSED.passes)
     }
 }

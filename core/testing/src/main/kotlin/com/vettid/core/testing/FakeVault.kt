@@ -187,6 +187,11 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override var recoveryAttemptsUsed: Int? = null
     override val transferKeptSince = MutableStateFlow<Instant?>(null)
     override val finishMovePending = MutableStateFlow(false)
+    override val finishMoveFailure = MutableStateFlow<FailureKind?>(null)
+
+    override fun acknowledgeFinishMoveFailure() {
+        finishMoveFailure.value = null
+    }
     override val movedBack = MutableStateFlow(false)
 
     override val moveNotDone = MutableStateFlow(false)

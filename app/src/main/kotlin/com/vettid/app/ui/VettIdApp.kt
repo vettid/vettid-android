@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -210,6 +211,7 @@ fun VettIdApp(
  * every start in the open app ([unlocked]; on the unlock screen the unlock itself finishes it), with "Finish the move" in
  * a dialog. The old phone that took the vault back ("The move didn't finish" succeeded) is told once.
  */
+@Suppress("CyclomaticComplexMethod") // one banner per notice, and the dialog
 @Composable
 private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: Boolean, statusBarPadding: Boolean): Boolean {
     val finishMove by viewModel.finishMovePending.collectAsStateWithLifecycle()
@@ -245,13 +247,20 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack,
         )
     }
-    // Kept open through the lock and unlock it sends; never over the app lock.
-    if (finishMoveOpen && finishMove && !appLocked) {
-        Dialog(onDismissRequest = { finishMoveOpen = false }) {
+    // Kept open through the lock and unlock it sends (and never dismissed while they run); never over the app lock. Once
+    // the vault is locked and the hold is over (its bound, or the outcome), the unlock screen takes over and says why.
+    val finishing by viewModel.finishingMove.collectAsStateWithLifecycle()
+    val finishVm: FinishMoveViewModel = hiltViewModel()
+    val finishState by finishVm.uiState.collectAsStateWithLifecycle()
+    val showFinishMove = finishMove && !appLocked && (unlocked || finishing)
+    if (finishMoveOpen && showFinishMove) {
+        val busy = finishState.busy
+        Dialog(
+            onDismissRequest = { if (!busy) finishMoveOpen = false },
+            properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),
+        ) {
             Surface(shape = MaterialTheme.shapes.large) {
-                val finishVm: FinishMoveViewModel = hiltViewModel()
-                val finishState by finishVm.uiState.collectAsStateWithLifecycle()
-                FinishMovePane(finishState, finishVm, onDone = { finishMoveOpen = false })
+                FinishMovePane(finishState, finishVm, onDone = { if (!busy) finishMoveOpen = false })
             }
         }
     }

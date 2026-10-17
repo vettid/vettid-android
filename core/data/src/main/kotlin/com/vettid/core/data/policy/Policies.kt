@@ -136,6 +136,9 @@ enum class PasswordRule {
     TOO_LONG,
     CONTROL_CHARACTERS,
 
+    /** The vault refused the password with a reason this app does not know: "This password is not strong enough." */
+    VAULT_REFUSED,
+
     /** "Strong enough." */
     OK,
     ;
@@ -163,14 +166,14 @@ enum class PasswordRule {
             }
         }
 
-        /** The vault's `weak_password` `reason`, or null for a reason this app does not know (the generic text). */
-        fun fromVault(reason: String?): PasswordRule? = when (reason) {
+        /** The vault's `weak_password` `reason`; a reason this app does not know (or none) is [VAULT_REFUSED]. */
+        fun fromVault(reason: String?): PasswordRule = when (reason) {
             PasswordRules.SHORT -> SHORT
             PasswordRules.REPEATED -> REPEATED
             PasswordRules.COMMON -> COMMON
             PasswordRules.SAME_AS_PIN -> SAME_AS_PIN
             PasswordRules.GUESSABLE -> GUESSABLE
-            else -> null
+            else -> VAULT_REFUSED
         }
     }
 }

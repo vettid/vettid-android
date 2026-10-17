@@ -725,7 +725,13 @@ private fun ValueEditor(
     secret: Boolean,
     onValue: (String) -> Unit,
 ) {
-    val tag = input.fillMaxWidth().testTag("item_edit_field_value_$i")
+    // A value of a secret or critical item (and a one-time-code seed) is never offered to a password manager to save or
+    // fill, whatever its kind (as SecretField).
+    val keepFromAutofill = secret || f.kind == FieldKinds.OTP
+    val tag = input
+        .fillMaxWidth()
+        .then(if (keepFromAutofill) Modifier.excludeFromAutofill() else Modifier)
+        .testTag("item_edit_field_value_$i")
     if (f.kind == FieldKinds.PASSWORD) {
         return SecretField(
             value = f.text,
@@ -797,8 +803,7 @@ private fun ValueEditor(
                 )
             },
             keyboardActions = if (multi) KeyboardActions.Default else ime.keyboardActions,
-            // A secret value is never offered to a password manager to save or fill (as SecretField).
-            modifier = if (guarded) tag.excludeFromAutofill() else tag,
+            modifier = tag,
         )
     }
 }

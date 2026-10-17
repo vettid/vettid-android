@@ -50,6 +50,7 @@ fun PasswordRule.messageRes(): Int = when (this) {
     PasswordRule.GUESSABLE -> R.string.data_password_rule_guessable
     PasswordRule.TOO_LONG -> R.string.data_password_problem_long
     PasswordRule.CONTROL_CHARACTERS -> R.string.data_password_problem_control
+    PasswordRule.VAULT_REFUSED -> R.string.data_failure_weak_password
     PasswordRule.OK -> R.string.data_password_rule_ok
 }
 

@@ -181,6 +181,24 @@ class CredentialViewModelsTest {
         assertFalse(vm.uiState.value.done)
     }
 
+    /** On the earlier meter too, a vault's weak_password is shown and the same password is not sent again. */
+    @Test
+    fun beforeReleaseRTheVaultsVerdictIsShown() = runTest {
+        val vm = ChangePasswordViewModel(vault, vault)
+        vault.fail["changePassword"] = com.vettid.core.data.vault.VaultFailure(FailureKind.WEAK_PASSWORD, "weak_password")
+        vm.setCurrent("old password 1")
+        vm.setPassword("Tr0ub4dor&3x")
+        vm.setConfirm("Tr0ub4dor&3x")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.refused)
+        assertEquals(PasswordRule.VAULT_REFUSED, vm.uiState.value.rule)
+        vm.setCurrent("old password 1")
+        assertFalse(vm.uiState.value.canSubmit)
+        vm.setPassword("a different passphrase 7")
+        assertFalse(vm.uiState.value.refused)
+    }
+
     /** A vault before release R keeps the earlier meter and checks (the plan: nothing changes for it). */
     @Test
     fun beforeReleaseRThePasswordChangeKeepsTheMeter() = runTest {

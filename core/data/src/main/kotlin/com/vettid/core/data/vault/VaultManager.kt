@@ -1022,7 +1022,13 @@ class VaultManager(
         }
     }
 
+    /**
+     * Leaves onboarding for the open app: only from [SetupStage.FINISHING], and never while a lock is pending or "Finish
+     * the move" is locking and unlocking the vault (the phase that follows decides then; the shell never shows over a
+     * vault that is locked).
+     */
     override suspend fun finishSetup() {
+        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMoveFlow.value)) return
         io { saveLocal(local.copy(setupComplete = true, movedIn = false)) }
         phaseFlow.value = AppPhase.Unlocked
     }
@@ -1034,7 +1040,10 @@ class VaultManager(
     }
 
     override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
-        unlockOnce(pin, approve, cancelRecovery, holderApp = true)
+        unlockOnce(pin, approve, cancelRecovery, holderApp = true).also {
+            // An unlock that opened the vault ends what a failed "Finish the move" left to say.
+            if (it == UnlockAttempt.Success) finishMoveFailureFlow.value = null
+        }
 
     /**
      * A locked vault past its owner-check deadline (§3.6.5): unlocks with [pin], reads `vault.status` and sends
@@ -1968,17 +1977,39 @@ class VaultManager(
     private val finishingMoveFlow = MutableStateFlow(false)
     override val finishingMove: StateFlow<Boolean> = finishingMoveFlow.asStateFlow()
 
+    private val finishMoveFailureFlow = MutableStateFlow<FailureKind?>(null)
+    override val finishMoveFailure: StateFlow<FailureKind?> = finishMoveFailureFlow.asStateFlow()
+
+    override fun acknowledgeFinishMoveFailure() {
+        finishMoveFailureFlow.value = null
+    }
+
     /**
      * "Finish the move" (§11.14.10 step 4). The lock is the member's lock as everywhere (pending, durably, until
      * confirmed or superseded by the unlock that follows), so that the phone is locked from its first line; only the
      * screen is held ([finishingMove]) until the unlock has answered.
      */
     override suspend fun finishMove(pin: String): UnlockAttempt {
+        finishMoveFailureFlow.value = null
         finishingMoveFlow.value = true
+        // The hold has a bound: an unlock that waits longer (an unanswered relay lock, a slow service) goes on behind the
+        // unlock screen, which then shows its outcome ([finishMoveFailure]).
+        val bound = scope.launch {
+            delay(FINISH_MOVE_HOLD_MS)
+            finishingMoveFlow.value = false
+        }
         try {
             lock()
-            return unlock(pin, null, false)
+            val r = unlock(pin, null, false)
+            // Kept here, not only in the screen that asked: when the hold ends the root shows the unlock screen, which
+            // says why the move did not finish ("Approve it again on your old phone", a wrong PIN, a wait).
+            finishMoveFailureFlow.value = FinishSetupGate.failureOf(r)
+            return r
+        } catch (e: VaultFailure) {
+            finishMoveFailureFlow.value = e.kind
+            throw e
         } finally {
+            bound.cancel()
             finishingMoveFlow.value = false
         }
     }
@@ -2307,6 +2338,7 @@ class VaultManager(
         private const val UPDATE_MOVED = "moved"
         private const val UPDATE_ABANDONED = "abandoned"
         private const val LOCKED_WAIT_MS = 15_000L
+        private const val FINISH_MOVE_HOLD_MS = 90_000L
         private const val LOCKED_POLL_MS = 1_000L
         private const val KEY_BACKUP = "credential.backup"
         private const val KEY_TTL = "credential.unlock_ttl_seconds"

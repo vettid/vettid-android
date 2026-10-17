@@ -121,7 +121,7 @@ data class OnboardingUiState(
 
     /** The password step can go on: both fields filled, the rules met, the PIN entered when it is asked. */
     val canSubmitPassword: Boolean
-        get() = password.isNotEmpty() && passwordConfirm.isNotEmpty() && credentialPinReady && passwordRule.passes
+        get() = password.isNotEmpty() && passwordConfirm.isNotEmpty() && credentialPinReady && passwordRule.passes && !passwordRefused
 
     override fun toString(): String = "OnboardingUiState(step=$step, busy=$busy, error=$error)"
 }
@@ -387,7 +387,7 @@ class OnboardingViewModel @Inject constructor(
     override fun submitPassword() {
         val s = state.value
         when {
-            !s.credentialPinReady || !s.passwordRule.passes -> return
+            !s.credentialPinReady || !s.passwordRule.passes || s.passwordRefused -> return
             s.passwordConfirm != s.password -> state.update { it.copy(passwordMismatch = true) }
             else -> state.update { it.copy(step = OnboardingStep.BACKUP) }
         }
@@ -456,16 +456,17 @@ class OnboardingViewModel @Inject constructor(
     }
 
     private fun refusedPassword(e: VaultFailure) {
+        // A reason this app does not know: the generic "This password is not strong enough." Either way the same password
+        // cannot be sent again; changing it clears the refusal.
         val rule = PasswordRule.fromVault(e.weakPasswordReason)
         state.update {
             it.copy(
                 step = OnboardingStep.PASSWORD,
                 credentialOnly = enrolled,
                 progress = emptyList(),
-                passwordRule = rule ?: it.passwordRule,
-                passwordRefused = rule != null,
-                // A reason this app does not know: the generic "not strong enough".
-                error = if (rule == null) e.kind else null,
+                passwordRule = rule,
+                passwordRefused = true,
+                error = null,
             )
         }
     }

@@ -9,6 +9,9 @@ import java.time.Instant
 /** No transfer kept ([VaultRepository.transferKeptSince]'s default). */
 val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
 
+/** No failed "Finish the move" ([VaultRepository.finishMoveFailure]'s default). */
+val NO_FINISH_MOVE_FAILURE: StateFlow<FailureKind?> = MutableStateFlow(null)
+
 /** No move to finish ([VaultRepository.finishMovePending]'s default). */
 val NO_MOVE_TO_FINISH: StateFlow<Boolean> = MutableStateFlow(false)
 
@@ -194,8 +197,16 @@ interface VaultRepository {
         return unlock(pin)
     }
 
-    /** (Release R) True while [finishMove] runs. */
+    /** (Release R) True while [finishMove] runs, for at most a bounded time. */
     val finishingMove: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    /**
+     * (Release R) Why the last [finishMove] did not open the vault (`transfer_incomplete`, a wrong PIN, a wait, the
+     * network), for the unlock screen that follows it; null after a success or [acknowledgeFinishMoveFailure].
+     */
+    val finishMoveFailure: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
+    fun acknowledgeFinishMoveFailure() {}
 
     /**
      * (Release R, §11.14.10) This old phone opened the vault with its own keys after approving a transfer ("The move

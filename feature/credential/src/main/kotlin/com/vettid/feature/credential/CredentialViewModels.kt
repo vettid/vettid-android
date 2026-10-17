@@ -149,7 +149,7 @@ data class ChangePasswordUiState(
 
     /** Every field the change needs is filled in. */
     val canSubmit: Boolean
-        get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady && (!newRules || rule.passes && !refused)
+        get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady && !refused && (!newRules || rule.passes)
 
     override fun toString(): String = "ChangePasswordUiState(askPin=$askPin, newRules=$newRules, busy=$busy, error=$error, done=$done)"
 
@@ -184,7 +184,7 @@ class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRe
             val pin = if (it.askPin) it.pin else null
             it.copy(password = v, rule = PasswordRule.check(v, pin), refused = false, mismatch = false, same = false)
         } else {
-            it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, mismatch = false, same = false)
+            it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, refused = false, mismatch = false, same = false)
         }
     }
 
@@ -195,7 +195,7 @@ class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRe
         val p = if (s.newRules) null else PasswordPolicy.check(s.password)
         when {
             s.current.isEmpty() || !s.pinReady -> return
-            s.newRules && (!s.rule.passes || s.refused) -> return
+            s.refused || s.newRules && !s.rule.passes -> return
             p != null -> state.update { it.copy(problem = p) }
             s.password == s.current -> state.update { it.copy(same = true) }
             s.confirm != s.password -> state.update { it.copy(mismatch = true) }
@@ -207,6 +207,7 @@ class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRe
                         state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
                     } catch (e: VaultFailure) {
                         // weak_password (§11.14.7): its reason under the new password, in the same words as the app's.
+                        // Also on the earlier meter: a vault's verdict is always shown, and the same password not sent again.
                         val rule = if (e.kind == FailureKind.WEAK_PASSWORD) PasswordRule.fromVault(e.weakPasswordReason) else null
                         state.update {
                             if (rule != null) {

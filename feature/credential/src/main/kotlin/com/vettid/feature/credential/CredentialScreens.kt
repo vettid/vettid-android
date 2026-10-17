@@ -528,7 +528,7 @@ fun ChangePasswordContent(
             imeAction = androidx.compose.ui.text.input.ImeAction.Next,
         )
         Spacer(Modifier.height(Spacing.s))
-        if (state.newRules) {
+        if (state.newRules || state.refused) {
             NewPasswordRule(state.rule, state.refused)
         } else {
             StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))
