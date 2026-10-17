@@ -281,6 +281,7 @@
     <string name="settings_security_new_secret">New phone secret</string>
     <string name="settings_security_new_secret_body">If you fear that something ran as VettID on this phone</string>
     <string name="settings_new_secret_body">Your vault gives this phone a new secret. Your PIN stays the same, and the old secret opens nothing your vault stores from now on. Enter your PIN and your password.</string>
+    <string name="settings_new_secret_not_enough">If something ran as VettID on this phone, a new secret alone is not enough: move your vault to another phone, or recover it.</string>
     <string name="settings_new_secret_submit">Make a new secret</string>
     <string name="settings_new_secret_done">Your phone now uses a new secret for this vault.</string>
     <!-- ANDROID-PLAN "Change PIN" (release R), verbatim -->

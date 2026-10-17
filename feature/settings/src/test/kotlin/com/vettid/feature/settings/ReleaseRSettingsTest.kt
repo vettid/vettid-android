@@ -112,6 +112,25 @@ class ReleaseRSettingsTest {
     }
 
     @Test
+    fun newPhoneSecretSaysANewSecretAloneIsNotEnoughBeforeThePin() {
+        rule.setContent { NewPhoneSecretContent(NewPhoneSecretUiState(), {}, {}, {}, {}) }
+        rule.onNodeWithText(res.getString(R.string.settings_new_secret_body)).assertExists()
+        rule.onNodeWithText(
+            "If something ran as VettID on this phone, a new secret alone is not enough: move your vault to another " +
+                "phone, or recover it.",
+        ).assertExists()
+        val notice = rule.onNodeWithTag("new_secret_not_enough").fetchSemanticsNode().boundsInRoot
+        val pin = rule.onNodeWithTag("new_secret_pin").fetchSemanticsNode().boundsInRoot
+        assertTrue(notice.bottom <= pin.top)
+    }
+
+    @Test
+    fun newPhoneSecretDoneDropsTheWarning() {
+        rule.setContent { NewPhoneSecretContent(NewPhoneSecretUiState(done = true), {}, {}, {}, {}) }
+        rule.onNodeWithTag("new_secret_not_enough").assertDoesNotExist()
+    }
+
+    @Test
     fun newPhoneSecretRefusedKeepsNothing() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unlocked).apply {
             phoneSecret = true

@@ -256,21 +256,6 @@ class WebRtcMediaEngine private constructor(
 
     // --- on the worker ---
 
-    private fun configuration(servers: List<CallWire.IceServer>) = PeerConnection.RTCConfiguration(
-        servers.map { s ->
-            PeerConnection.IceServer.builder(s.urls).apply {
-                if (s.username != null && s.credential != null) setUsername(s.username).setPassword(s.credential)
-            }.createIceServer()
-        },
-    ).apply {
-        sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
-        rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-        continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
-        // ICE over TCP between two phones is of no use; relayed candidates (TURN over TCP or TLS) are not affected.
-        tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
-    }
-
     private fun open(servers: List<CallWire.IceServer>): PeerConnection {
         check(connection == null) { "this engine already has a call" }
         val pc = checkNotNull(factory.createPeerConnection(configuration(servers), Events())) { "no peer connection" }
@@ -472,6 +457,27 @@ class WebRtcMediaEngine private constructor(
                 true,
                 FrameCryptorKeyDerivationAlgorithm.HKDF,
             )
+        }
+
+        /**
+         * The peer connection's configuration for one call's [servers]. TURN ports are pruned by priority: once a
+         * relay allocation on a network is ready, the lower-priority ones on that network (one per TURN URL) are
+         * released instead of being kept for the whole call, since the TURN server reserves capacity for each.
+         */
+        internal fun configuration(servers: List<CallWire.IceServer>) = PeerConnection.RTCConfiguration(
+            servers.map { s ->
+                PeerConnection.IceServer.builder(s.urls).apply {
+                    if (s.username != null && s.credential != null) setUsername(s.username).setPassword(s.credential)
+                }.createIceServer()
+            },
+        ).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+            // ICE over TCP between two phones is of no use; relayed candidates (TURN over TCP or TLS) are not affected.
+            tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
+            turnPortPrunePolicy = PeerConnection.PortPrunePolicy.PRUNE_BASED_ON_PRIORITY
         }
 
         /** A factory of engines for [context]'s process. Creating an engine loads the native library if needed. */

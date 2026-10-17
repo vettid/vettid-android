@@ -94,6 +94,14 @@ fun NewPhoneSecretContent(
         modifier = Modifier.testTag("new_phone_secret"),
     ) {
         if (state.done) return@FormScaffold
+        // ANDROID-PLAN 0.1.43: a new secret does not end what code that ran as the app could reach; said before the PIN.
+        NoticeCard(
+            NoticeKind.WARNING,
+            stringResource(R.string.settings_security_new_secret),
+            stringResource(R.string.settings_new_secret_not_enough),
+            Modifier.testTag("new_secret_not_enough"),
+        )
+        Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.pin, onPin, stringResource(R.string.settings_delete_pin), isPin = true, imeAction = ImeAction.Next,
             modifier = Modifier.testTag("new_secret_pin"),
