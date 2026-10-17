@@ -89,6 +89,10 @@ fun interface LockAttempt {
  * Retries: [backoff] after each failed attempt, and at once on [retryNow] (the member's "Try again"), which is
  * honoured once in [retryNowEvery] at most.
  *
+ * **A record that cannot be saved never stops a lock.** The lock is pending in this process first, then sent and
+ * retried; the save follows, and its failure is only reported ([onSaveFailed]). The relay lock's time is kept in
+ * memory as well, beside the record. What is lost with a failed save is only the lock's survival of a process death.
+ *
  * **Retries live in this process.** When the process dies they stop until something starts the app again (the
  * member, the on-phone service, a push wake, the boot receiver); [resume] then goes on.
  */
@@ -100,6 +104,7 @@ class LockKeeper(
     private val now: () -> Instant = Instant::now,
     private val backoff: (attempts: Int) -> Duration = ::defaultBackoff,
     private val retryNowEvery: Duration = RETRY_NOW_EVERY,
+    private val onSaveFailed: (Exception) -> Unit = {},
 ) {
     private val gate = Mutex()
     private val noticeFlow = MutableStateFlow<LockNotice>(LockNotice.None)
@@ -110,6 +115,10 @@ class LockKeeper(
     /** The number of the lock that is pending; changed by every [begin], every confirmation and every superseding unlock. */
     @Volatile
     private var epoch = 0L
+
+    /** An unanswered relay lock's time ([relayLockSent]), kept here too: a record that could not be saved still holds an unlock. */
+    @Volatile
+    private var relayUntilMs: Long? = null
 
     /** How many locks were asked for: an unlock supersedes only those asked for before it began. */
     @Volatile
@@ -137,17 +146,19 @@ class LockKeeper(
     }
 
     /**
-     * The member asks for a lock: pending from here on, durably, before anything is sent and before anything else
-     * is done for the lock. Returns the lock's number, for [ask].
+     * The member asks for a lock: pending from here on, in this process and then durably, before anything is sent and
+     * before anything else is done for the lock. Returns the lock's number, for [ask]. A save that fails is reported and
+     * changes nothing else: the lock is sent and retried all the same.
      */
     fun begin(): Long = synchronized(this) {
         retries?.cancel()
         retries = null
         val t = now()
-        store.save(store.load().copy(pendingSinceMs = t.toEpochMilli()))
         noticeFlow.value = LockNotice.Unconfirmed(t, 0)
         asks++
-        ++epoch
+        val mine = ++epoch
+        write { it.copy(pendingSinceMs = t.toEpochMilli()) }
+        mine
     }
 
     /**
@@ -186,13 +197,18 @@ class LockKeeper(
      */
     fun relayLockSent(validFor: Duration) {
         synchronized(this) {
-            store.save(store.load().copy(relayLockUntilMs = now().plus(validFor).plus(RELAY_MARGIN).toEpochMilli()))
+            val until = now().plus(validFor).plus(RELAY_MARGIN).toEpochMilli()
+            relayUntilMs = until
+            write { it.copy(relayLockUntilMs = until) }
         }
     }
 
     /** The vault answered the relay lock: it has acted on it, nothing of it is on its way any more. */
     fun relayLockAnswered() {
-        synchronized(this) { store.save(store.load().copy(relayLockUntilMs = null)) }
+        synchronized(this) {
+            relayUntilMs = null
+            write { it.copy(relayLockUntilMs = null) }
+        }
     }
 
     /**
@@ -204,7 +220,7 @@ class LockKeeper(
             epoch++
             retries?.cancel()
             retries = null
-            if (store.load() != LockRecord()) store.save(LockRecord())
+            write { if (it != LockRecord()) LockRecord() else null }
             noticeFlow.value = LockNotice.None
         }
     }
@@ -231,7 +247,8 @@ class LockKeeper(
                     epoch++
                     retries?.cancel()
                     retries = null
-                    if (store.load() != LockRecord()) store.save(LockRecord())
+                    relayUntilMs = null
+                    write { if (it != LockRecord()) LockRecord() else null }
                     noticeFlow.value = LockNotice.None
                 }
             }
@@ -241,7 +258,13 @@ class LockKeeper(
 
     /** How long an unanswered relay lock may still be acted on (never more than [SETTLE_MAX], whatever the clock says). */
     private fun settle(): Long {
-        val until = store.load().relayLockUntilMs ?: return 0
+        val stored = try {
+            store.load().relayLockUntilMs
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            onSaveFailed(e)
+            null
+        }
+        val until = listOfNotNull(stored, relayUntilMs).maxOrNull() ?: return 0
         return (until - now().toEpochMilli()).coerceIn(0, SETTLE_MAX.toMillis())
     }
 
@@ -273,8 +296,18 @@ class LockKeeper(
         retries?.cancel()
         retries = null
         // The relay lock's time stays: its request may still be waiting for the vault.
-        store.save(store.load().copy(pendingSinceMs = null))
+        write { it.copy(pendingSinceMs = null) }
         noticeFlow.value = if (late) LockNotice.ConfirmedLate else LockNotice.None
+    }
+
+    /** Saves [f] of the record ([f] null: nothing to save); a failure is reported, never thrown: the lock goes on. */
+    @Suppress("TooGenericExceptionCaught") // a disk, a rename, a full phone: whatever it is, the lock is not stopped
+    private fun write(f: (LockRecord) -> LockRecord?) {
+        try {
+            f(store.load())?.let { store.save(it) }
+        } catch (e: Exception) {
+            onSaveFailed(e)
+        }
     }
 
     /** Tries until confirmed or replaced: [atOnce] (a process start) or after the first backoff (a failed first attempt). */

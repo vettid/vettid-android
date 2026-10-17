@@ -453,4 +453,39 @@ class LockKeeperTest {
         val base = listOf(1.0, 2.0, 5.0, 10.0, 30.0, 30.0, 30.0, 30.0, 60.0, 60.0)
         for ((got, want) in seconds.zip(base)) assertTrue("$got for $want", got >= want && got <= want * 1.2)
     }
+
+    /** A store whose saves all fail (a full phone, a failed rename): [failures] counts the reports. */
+    private class FailingStore : LockRecordStore {
+        override fun load(): LockRecord = LockRecord()
+
+        override fun save(record: LockRecord) = throw java.io.IOException("no space left")
+    }
+
+    @Test
+    fun aLockWhoseRecordCannotBeSavedIsStillSentAndRetried() = runTest {
+        var failures = 0
+        vault.clock = { testScheduler.currentTime }
+        val k = LockKeeper(backgroundScope, FailingStore(), vault, { now() }, ::steps, onSaveFailed = { failures++ })
+        assertFalse(k.ask())
+        // Pending in this process, sent at once, and reported.
+        assertTrue(k.pending)
+        assertEquals(listOf(0L to true), vault.attempts)
+        assertTrue(failures > 0)
+        // Tried again on the backoff, as with a record that was saved.
+        advanceTimeBy(1_001)
+        assertEquals(listOf(0L to true, 1_000L to false), vault.attempts)
+        vault.answers += true
+        advanceTimeBy(2_001)
+        assertFalse(k.pending)
+    }
+
+    @Test
+    fun aRelayLockWhoseRecordCannotBeSavedStillHoldsAnUnlock() = runTest {
+        vault.clock = { testScheduler.currentTime }
+        val k = LockKeeper(backgroundScope, FailingStore(), vault, { now() }, ::steps)
+        k.relayLockSent(Duration.ofSeconds(30))
+        var sentAt = -1L
+        k.unlocking(opened = { it }) { true.also { sentAt = testScheduler.currentTime } }
+        assertEquals("kept in memory: 30 s and the margin", 40_000L, sentAt)
+    }
 }

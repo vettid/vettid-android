@@ -385,6 +385,12 @@ enum class FailureKind {
      */
     LOCAL_STATE,
 
+    /**
+     * A wipe of this phone did not finish, or could not start (its marker could not be written): the old vault's keys
+     * may still be here. Nothing is enrolled and no session opens until a wipe finishes ("Try again" runs it again).
+     */
+    ERASE_FAILED,
+
     // --- release R (VAULT-MESSAGING 0.33.0 §11.14; ANDROID-PLAN 0.1.40) ---
 
     /** This phone no longer holds the vault's keys: `device_secret` at the next epoch too, or the phone key is gone. */

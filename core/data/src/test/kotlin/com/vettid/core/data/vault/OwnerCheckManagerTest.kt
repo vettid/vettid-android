@@ -373,7 +373,7 @@ class OwnerCheckManagerTest {
         }
         val m = OwnerCheckManager(
             this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
-            onRecoveryStatus = { seen += it?.counter },
+            onRecoveryStatus = { r, _ -> seen += r?.counter },
         )
         m.refreshOwnerCheck()
         ops.counter = "ok"
