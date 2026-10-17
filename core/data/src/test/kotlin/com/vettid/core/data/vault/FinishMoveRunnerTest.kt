@@ -171,6 +171,20 @@ class FinishMoveRunnerTest {
     }
 
     @Test
+    fun aForgottenVaultMeanwhileGetsNoOffer() = runTest {
+        val f = Fixture(testScheduler)
+        launch { f.runner.run("975310") }
+        runCurrent()
+        // Forgotten (a deleted vault, an abandoned recovery) while the unlock is on its way: signed out, and the
+        // generation is not moved by it; only the signed-out check tells.
+        f.signedOut = true
+        f.answer.complete(UnlockAttempt.Success)
+        advanceUntilIdle()
+        assertFalse(f.record.rotateOffered)
+        f.manager.cancel()
+    }
+
+    @Test
     fun aWipeThenANewEnrolmentGetsNoOffer() = runTest {
         val f = Fixture(testScheduler)
         launch { f.runner.run("975310") }
