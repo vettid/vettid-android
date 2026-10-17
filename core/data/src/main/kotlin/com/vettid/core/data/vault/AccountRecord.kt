@@ -42,6 +42,11 @@ internal data class LocalAccount(
      */
     val lockFileInUse: Boolean = false,
     /**
+     * The last time a `vault.status` read reached the vault service from this phone (epoch ms, this phone's clock,
+     * written at most hourly): after [StuckScreens.LONG_UNREACHABLE] without one, the root screen offers erase-or-recover.
+     */
+    val lastContactAtMs: Long? = null,
+    /**
      * The inner `ts` of the last successful unlock result (epoch ms, the enclave's clock): a `vault.locking`
      * from before it is stale also after a process start ([LockNotices]).
      */
@@ -176,6 +181,10 @@ internal class AccountRecord(
         rotateOfferFlow.value = true
         if (cur.rotateOffered) null else cur.copy(rotateOffered = true)
     }
+
+    /** A `vault.status` read reached the vault service at [nowMs] ([LocalAccount.lastContactAtMs]), for the record of [since]. */
+    fun contacted(since: Int, nowMs: Long): Boolean =
+        update(since) { if (StuckScreens.writeContact(it.lastContactAtMs, nowMs)) it.copy(lastContactAtMs = nowMs) else null }
 
     /** The inner `ts` of an unlock that opened the vault ([LockNotices]), for the record that unlock started with. */
     fun opened(since: Int, atMs: Long): Boolean = update(since) { it.copy(lastOpenedAtMs = maxOf(it.lastOpenedAtMs ?: 0, atMs)) }

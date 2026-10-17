@@ -50,9 +50,9 @@ import java.time.format.FormatStyle
 
 /** The unlock screen, driven by [UnlockViewModel]. */
 @Composable
-fun UnlockRoute(viewModel: UnlockViewModel = hiltViewModel()) {
+fun UnlockRoute(viewModel: UnlockViewModel = hiltViewModel(), onOpenAccountSite: () -> Unit = {}) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    UnlockContent(state, viewModel)
+    UnlockContent(state, viewModel, onOpenAccountSite)
 }
 
 /** `m:ss` for a backoff countdown. */
@@ -60,10 +60,10 @@ fun formatWait(seconds: Long): String = "%d:%02d".format(seconds / SECONDS_PER_M
 
 private const val SECONDS_PER_MINUTE = 60
 
-/** The unlock screen for [state] (stateless). */
+/** The unlock screen for [state] (stateless). [onOpenAccountSite]: "Recover your vault" on a [UnlockUiState.stuck] screen. */
 @Suppress("CyclomaticComplexMethod", "LongMethod")
 @Composable
-fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
+fun UnlockContent(state: UnlockUiState, actions: UnlockActions, onOpenAccountSite: () -> Unit = {}) {
     val p = state.preflight
     val blocked = state.preflightError == FailureKind.RELEASE_ENDED || p?.rollback == true || state.stateRollback
     FormScaffold(
@@ -289,7 +289,11 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                 }
             }
             if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)
-            if (state.notRecognised) NotRecognisedNotice(state.erasing, actions::askErase)
+            if (state.notRecognised) {
+                NotRecognisedNotice(state.erasing, actions::askErase)
+            } else if (state.stuck) {
+                StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
+            }
         }
     }
     if (state.eraseConfirm) {
@@ -318,6 +322,36 @@ private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
         stringResource(R.string.unlock_not_recognised_body),
         modifier = Modifier.testTag("unlock_not_recognised"),
         actions = {
+            TextButton(onClick = onErase, enabled = !erasing, modifier = Modifier.testTag("erase_phone")) {
+                Text(stringResource(R.string.unlock_erase), color = MaterialTheme.colorScheme.error)
+            }
+        },
+    )
+    if (erasing) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
+            CircularProgressIndicator(Modifier.height(20.dp).width(20.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(Spacing.m))
+            Text(stringResource(R.string.unlock_erasing), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/**
+ * This phone cannot open the vault and nothing here changes that ([UnlockUiState.stuck]): erase-or-recover. "Erase VettID
+ * from this phone" opens the same confirmation as [NotRecognisedNotice]; "Recover your vault" opens the account site,
+ * where a recovery starts. Neither unlocks or opens anything.
+ */
+@Composable
+private fun StuckNotice(erasing: Boolean, onErase: () -> Unit, onRecover: () -> Unit) {
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(R.string.unlock_stuck_title),
+        stringResource(R.string.unlock_stuck_body),
+        modifier = Modifier.testTag("unlock_stuck"),
+        actions = {
+            TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
+                Text(stringResource(R.string.unlock_recover))
+            }
             TextButton(onClick = onErase, enabled = !erasing, modifier = Modifier.testTag("erase_phone")) {
                 Text(stringResource(R.string.unlock_erase), color = MaterialTheme.colorScheme.error)
             }

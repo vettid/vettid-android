@@ -3,6 +3,7 @@ package com.vettid.app.ui
 import androidx.annotation.StringRes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,19 +27,26 @@ import com.vettid.core.ui.components.FormScaffold
  * "Start over" ([onStartOver]), after a confirmation that says what it costs: nothing is forgotten or erased by
  * itself. A wipe of this phone that did not finish ([FailureKind.ERASE_FAILED]) offers "Erase VettID's data on this
  * phone" ([com.vettid.core.data.wipe.AppDataClear]); [clearFailed]: the system refused it, and the member is told how
- * to clear VettID's storage themselves. [confirming]: the confirmation shows from the start (the debug screen catalog).
+ * to clear VettID's storage themselves. The account service no longer accepting this phone ([FailureKind.UNAUTHORIZED]),
+ * or a vault unreachable for a long time ([longUnreachable]), offers erase-or-recover: "Erase VettID from this phone"
+ * (confirmed) and "Recover your vault" ([onRecover]: the account site, where a recovery starts). [onStartOver] gets the
+ * confirmed way out. [confirming]: the confirmation shows from the start (the debug screen catalog); a new failure
+ * closes it.
  */
+@Suppress("LongParameterList") // the screen's actions and the states of its ways out
 @Composable
 internal fun UnreachableScreen(
     kind: FailureKind?,
     busy: Boolean,
     onRetry: () -> Unit,
-    onStartOver: () -> Unit,
+    onStartOver: (WayOut) -> Unit,
     confirming: Boolean = false,
     clearFailed: Boolean = false,
+    longUnreachable: Boolean = false,
+    onRecover: () -> Unit = {},
 ) {
-    var confirm by rememberSaveable { mutableStateOf(confirming) }
-    val way = WayOut.of(kind)
+    val way = WayOut.of(kind, longUnreachable)
+    var confirm by rememberSaveable(kind, way) { mutableStateOf(confirming) }
     FormScaffold(
         title = stringResource(titleOf(kind)),
         body = kind?.let { stringResource(it.messageRes()) },
@@ -49,6 +57,19 @@ internal fun UnreachableScreen(
         onSecondary = { confirm = true },
         modifier = Modifier.testTag("unreachable"),
     ) {
+        if (way == WayOut.ERASE_OR_RECOVER) {
+            if (longUnreachable) {
+                Text(
+                    stringResource(R.string.root_long_unreachable),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.testTag("long_unreachable"),
+                )
+            }
+            Text(stringResource(R.string.root_recover_line), style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
+                Text(stringResource(R.string.root_recover))
+            }
+        }
         if (clearFailed && way == WayOut.CLEAR_DATA) {
             Text(
                 stringResource(R.string.root_clear_data_failed),
@@ -65,7 +86,7 @@ internal fun UnreachableScreen(
             confirmLabel = stringResource(way.confirm),
             onConfirm = {
                 confirm = false
-                onStartOver()
+                onStartOver(way)
             },
             onDismiss = { confirm = false },
             modifier = Modifier.testTag("start_over_dialog"),
@@ -95,13 +116,21 @@ internal enum class WayOut(
 
     /** After a wipe that did not finish: erase VettID's data on this phone ([com.vettid.core.data.wipe.AppDataClear]). */
     CLEAR_DATA(R.string.root_clear_data, R.string.root_clear_data_title, R.string.root_clear_data_body, R.string.root_clear_data_confirm),
+
+    /**
+     * The account service no longer accepts this phone, or the vault has been unreachable for a long time: the in-app
+     * erase (confirmed), with "Recover your vault" beside it on the screen.
+     */
+    ERASE_OR_RECOVER(R.string.root_erase, R.string.root_erase_title, R.string.root_erase_body),
     ;
 
     companion object {
-        fun of(kind: FailureKind?): WayOut? = when {
+        fun of(kind: FailureKind?, longUnreachable: Boolean = false): WayOut? = when {
             kind == FailureKind.NO_VAULT -> START_OVER
             kind == FailureKind.LOCAL_STATE -> ERASE
             AppDataClear.offeredFor(kind) -> CLEAR_DATA
+            kind == FailureKind.UNAUTHORIZED -> ERASE_OR_RECOVER
+            longUnreachable && kind != null && kind != FailureKind.CLOCK -> ERASE_OR_RECOVER
             else -> null
         }
     }

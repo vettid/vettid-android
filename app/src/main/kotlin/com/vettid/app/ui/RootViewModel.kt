@@ -10,7 +10,6 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
-import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.VaultFailure
@@ -114,19 +113,20 @@ class RootViewModel @Inject constructor(
      * account has no vault ([AccountRepository.forgetMissingVault], which asks it again first), or this phone's
      * stored keys cannot be read ([AccountRepository.eraseThisPhone]). After a wipe that did not finish: erase VettID's
      * data on this phone ([AppDataClear], local only: no session, nothing sent to the vault; the process ends when it
-     * succeeds). Never without the member's confirmation.
+     * succeeds). The account service no longer accepting this phone, or a vault unreachable for a long time: the in-app
+     * erase ([AccountRepository.eraseThisPhone]). Never without the member's confirmation: [way] is the way out the member
+     * confirmed, acted on only while the phase still offers it.
      */
-    fun startOver() {
-        if (retryingFlow.value) return
-        val kind = (phase.value as? AppPhase.Unreachable)?.failure
+    internal fun startOver(way: WayOut) {
+        val p = phase.value as? AppPhase.Unreachable
+        if (retryingFlow.value || p == null || WayOut.of(p.failure, p.longUnreachable) != way) return
         retryingFlow.value = true
         viewModelScope.launch {
             try {
-                when (kind) {
-                    FailureKind.NO_VAULT -> accounts.forgetMissingVault()
-                    FailureKind.LOCAL_STATE -> accounts.eraseThisPhone()
-                    FailureKind.ERASE_FAILED -> if (!clearData.run()) clearDataFailedFlow.value = true
-                    else -> Unit
+                when (way) {
+                    WayOut.START_OVER -> accounts.forgetMissingVault()
+                    WayOut.ERASE, WayOut.ERASE_OR_RECOVER -> accounts.eraseThisPhone()
+                    WayOut.CLEAR_DATA -> if (!clearData.run()) clearDataFailedFlow.value = true
                 }
             } catch (_: VaultFailure) {
                 accounts.refresh()

@@ -134,6 +134,19 @@ data class UnlockUiState(
     /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
     val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
 
+    /**
+     * This phone cannot open the vault and nothing on this screen changes that (owner decision: a way forward): the
+     * vault's release ended, a rollback of the release or of the vault's state, or this phone no longer holds the vault's
+     * keys (`device_secret`). The screen offers erase-or-recover: "Erase VettID from this phone" (confirmed) and
+     * "Recover your vault" (the account site). Neither unlocks or opens anything.
+     */
+    val stuck: Boolean
+        get() = preflightError == FailureKind.RELEASE_ENDED || preflight?.rollback == true || stateRollback ||
+            (message as? UnlockMessage.Failed)?.kind == FailureKind.DEVICE_SECRET
+
+    /** "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or a [stuck] screen. */
+    val eraseOffered: Boolean get() = notRecognised || stuck
+
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
 
@@ -175,7 +188,7 @@ interface UnlockActions {
     /** Shows or hides the recovery and transfer help under the `signer_refused` notice. */
     fun showSignerHelp(show: Boolean)
 
-    /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.notRecognised]). */
+    /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.eraseOffered]). */
     fun askErase()
 
     /** Closes it; nothing is erased. */
@@ -277,7 +290,7 @@ class UnlockViewModel @Inject constructor(
 
     override fun showSignerHelp(show: Boolean) = state.update { it.copy(signerHelp = show && it.signerRefused) }
 
-    override fun askErase() = state.update { if (it.notRecognised && !it.erasing) it.copy(eraseConfirm = true) else it }
+    override fun askErase() = state.update { if (it.eraseOffered && !it.erasing) it.copy(eraseConfirm = true) else it }
 
     override fun dismissErase() = state.update { it.copy(eraseConfirm = false) }
 
@@ -289,7 +302,7 @@ class UnlockViewModel @Inject constructor(
 
     override fun confirmErase() {
         val s = state.value
-        if (!s.eraseConfirm || !s.notRecognised || s.erasing) return
+        if (!s.eraseConfirm || !s.eraseOffered || s.erasing) return
         state.update { it.copy(eraseConfirm = false, erasing = true, pin = "") }
         // The phase becomes SignedOut at the end: the root shows the welcome screen and drops this screen.
         viewModelScope.launch { account.eraseThisPhone() }
