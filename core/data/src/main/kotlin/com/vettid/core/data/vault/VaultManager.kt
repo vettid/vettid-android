@@ -148,6 +148,7 @@ class VaultManager(
         legacy = { LockRecord(local.lockAskedAtMs, local.relayLockUntilMs) },
         migrated = { local.lockFileInUse },
         onFirstSave = { record.markLockFileInUse() },
+        recordUnreadable = { localUnreadable },
     )
 
     private val local: LocalAccount get() = record.value
@@ -232,6 +233,51 @@ class VaultManager(
                 when (val r = registerClaimed(code, claimed)) {
                     is RecoveryRegistration.Refused -> r.copy(recoveryId = code.recoveryId)
                     is RecoveryRegistration.Registered -> r
+                }
+            }
+
+            /**
+             * After the claim, however the code was read: the sealed `vault.recovery.register` (§11.11.3). Here, in the
+             * enrolments' object, so that the reset to the claimed vault's record is reached only through [enrolments]' check.
+             */
+            @Suppress("ReturnCount")
+            private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
+                val s = session()
+                gateway.memberChanged(claimed.userGuid)
+                io { resetLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
+                // The claim's own record, just made: what the registration writes belongs to it.
+                val rec = record.recordGeneration
+                val r = try {
+                    s.alt.recoveryRegister(
+                        code.vaultId,
+                        build = { e -> buildRegister(s, code, e, rec) },
+                        open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+                    )
+                } catch (e: VaultFailure) {
+                    if (e.code != CODE_NOT_OFFERED) throw e
+                    return RecoveryRegistration.Refused(CODE_NOT_OFFERED)
+                } catch (e: MemberApiException) {
+                    // 2.1.0: a recovery the enclave refused (no backup copy) is `unavailable`: the register is refused too.
+                    if (e.code == MemberApiException.RECOVERY_UNAVAILABLE) {
+                        s.device.dropRecoveryRegistration()
+                        return RecoveryRegistration.Refused(CODE_NO_BACKUP)
+                    }
+                    if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
+                    null
+                }
+                return when {
+                    r == null -> {
+                        s.device.dropRecoveryRegistration()
+                        RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
+                    }
+                    r.ok -> {
+                        phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+                        RecoveryRegistration.Registered(claimed.emailHint)
+                    }
+                    else -> {
+                        s.device.dropRecoveryRegistration()
+                        RecoveryRegistration.Refused(r.code ?: "retry")
+                    }
                 }
             }
         },
@@ -1691,48 +1737,6 @@ class VaultManager(
         MemberApiException.RECOVERY_UNAVAILABLE -> RecoveryRegistration.Refused(CODE_NO_BACKUP)
         MemberApiException.NOT_FOUND -> RecoveryRegistration.Refused(CODE_NO_RECOVERY)
         else -> throw e
-    }
-
-    /** After the claim, however the code was read: the sealed `vault.recovery.register` (§11.11.3). */
-    @Suppress("ReturnCount")
-    private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
-        val s = session()
-        gateway.memberChanged(claimed.userGuid)
-        io { resetLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
-        // The claim's own record, just made: what the registration writes belongs to it.
-        val rec = record.recordGeneration
-        val r = try {
-            s.alt.recoveryRegister(
-                code.vaultId,
-                build = { e -> buildRegister(s, code, e, rec) },
-                open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
-            )
-        } catch (e: VaultFailure) {
-            if (e.code != CODE_NOT_OFFERED) throw e
-            return RecoveryRegistration.Refused(CODE_NOT_OFFERED)
-        } catch (e: MemberApiException) {
-            // 2.1.0: a recovery the enclave refused (no backup copy) is `unavailable`: the register is refused too.
-            if (e.code == MemberApiException.RECOVERY_UNAVAILABLE) {
-                s.device.dropRecoveryRegistration()
-                return RecoveryRegistration.Refused(CODE_NO_BACKUP)
-            }
-            if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
-            null
-        }
-        return when {
-            r == null -> {
-                s.device.dropRecoveryRegistration()
-                RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
-            }
-            r.ok -> {
-                phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
-                RecoveryRegistration.Registered(claimed.emailHint)
-            }
-            else -> {
-                s.device.dropRecoveryRegistration()
-                RecoveryRegistration.Refused(r.code ?: "retry")
-            }
-        }
     }
 
     /**

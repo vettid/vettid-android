@@ -79,4 +79,16 @@ class LockRecordFileTest {
         val f = LockRecordFile(file(), legacy = { LockRecord(relayLockUntilMs = 4) }, migrated = { false })
         assertEquals(LockRecord(relayLockUntilMs = 4), f.load())
     }
+
+    @Test
+    fun aMissingFileWhileTheAccountRecordCannotBeReadSaysALockIsPending() {
+        val f = LockRecordFile(file(), legacy = { LockRecord() }, migrated = { false }, recordUnreadable = { true }, now = { 17 })
+        assertEquals(LockRecord(pendingSinceMs = 17), f.load())
+    }
+
+    @Test
+    fun aFreshInstallHasNoLock() {
+        val f = LockRecordFile(file(), legacy = { LockRecord() }, migrated = { false }, recordUnreadable = { false }, now = { 17 })
+        assertEquals(LockRecord(), f.load())
+    }
 }

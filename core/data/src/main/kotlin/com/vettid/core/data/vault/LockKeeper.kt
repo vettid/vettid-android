@@ -220,6 +220,7 @@ class LockKeeper(
             epoch++
             retries?.cancel()
             retries = null
+            relayUntilMs = null // nothing of this phone's is on its way to a vault it still holds
             write { if (it != LockRecord()) LockRecord() else null }
             noticeFlow.value = LockNotice.None
         }

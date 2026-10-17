@@ -15,20 +15,22 @@ import java.nio.file.StandardOpenOption
  *
  * Before this file, the record was kept in the account record: [legacy] reads it there until the file is in use
  * ([migrated], marked by [onFirstSave] after the first save, which also clears the legacy fields). A file that cannot be
- * read or understood, or one that is missing once in use, says a lock is pending (fail secure: the phone stays locked
- * and the lock is sent again).
+ * read or understood, or one that is missing once in use or while the account record cannot be read ([recordUnreadable]:
+ * whether the file was in use is not known then), says a lock is pending (fail secure: the phone stays locked and the
+ * lock is sent again). A fresh install (no account record, no file) has no lock.
  */
 internal class LockRecordFile(
     private val file: File,
     private val legacy: () -> LockRecord,
     private val migrated: () -> Boolean = { false },
     private val onFirstSave: () -> Unit = {},
+    private val recordUnreadable: () -> Boolean = { false },
     private val now: () -> Long = System::currentTimeMillis,
 ) : LockRecordStore {
     private val lock = Any()
 
     override fun load(): LockRecord = synchronized(lock) {
-        if (!file.exists()) return if (migrated()) LockRecord(pendingSinceMs = now()) else legacy()
+        if (!file.exists()) return if (migrated() || recordUnreadable()) LockRecord(pendingSinceMs = now()) else legacy()
         try {
             parse(file.readText())
         } catch (_: IOException) {
