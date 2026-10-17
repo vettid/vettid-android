@@ -501,6 +501,12 @@ class VaultManager(
         writeLocal(a.copy(lockAskedAtMs = local.lockAskedAtMs, relayLockUntilMs = local.relayLockUntilMs))
     }
 
+    /**
+     * A read-modify-write of the account record under its lock: [f] gets the record as it is now, so that two writers of
+     * different members (the epoch, the move, the recovery clock) never lose each other's change.
+     */
+    private fun updateLocal(f: (LocalAccount) -> LocalAccount) = synchronized(localLock) { saveLocal(f(local)) }
+
     /** Writes the lock's part of the account record, and nothing else of it. */
     private fun saveLockRecord(r: LockRecord) = synchronized(localLock) {
         writeLocal(local.copy(lockAskedAtMs = r.pendingSinceMs, relayLockUntilMs = r.relayLockUntilMs))
@@ -665,6 +671,7 @@ class VaultManager(
     /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
     private suspend fun dropSession(forget: Boolean) = mutex.withLock {
         if (forget) lockKeeper.abandon() // the vault is no longer this phone's: nothing to lock from here
+        if (forget) finishMoveRunner.clearFailure() // a deleted or forgotten vault: nothing of a move is left to say
         observer?.cancel()
         observer = null
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
@@ -1028,8 +1035,8 @@ class VaultManager(
      * vault that is locked).
      */
     override suspend fun finishSetup() {
-        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMoveFlow.value)) return
-        io { saveLocal(local.copy(setupComplete = true, movedIn = false)) }
+        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMove.value)) return
+        io { updateLocal { it.copy(setupComplete = true, movedIn = false) } }
         phaseFlow.value = AppPhase.Unlocked
     }
 
@@ -1040,10 +1047,7 @@ class VaultManager(
     }
 
     override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
-        unlockOnce(pin, approve, cancelRecovery, holderApp = true).also {
-            // An unlock that opened the vault ends what a failed "Finish the move" left to say.
-            if (it == UnlockAttempt.Success) finishMoveFailureFlow.value = null
-        }
+        unlockOnce(pin, approve, cancelRecovery, holderApp = true)
 
     /**
      * A locked vault past its owner-check deadline (§3.6.5): unlocks with [pin], reads `vault.status` and sends
@@ -1069,7 +1073,11 @@ class VaultManager(
         followMove = true,
         holderApp = holderApp,
         beforeOpen = beforeOpen,
-    ).attempt
+    ).attempt.also {
+        // Every unlock that opened the vault (with the owner check, cancelling a recovery, finishing the move) ends what a
+        // failed "Finish the move" left to say.
+        if (it == UnlockAttempt.Success) finishMoveRunner.clearFailure()
+    }
 
     /** One unlock's outcome; [moved]: the vault moved and locked itself (only without following the move). */
     private class StepOutcome(val attempt: UnlockAttempt, val moved: Boolean = false, val abandoned: Boolean = false)
@@ -1176,7 +1184,7 @@ class VaultManager(
         if (!overtaken) clearKeptTransfer()
         // "Finish the move" (release R, §11.14.10): this new phone opened the vault from storage with its own secret.
         if (local.finishMovePending && FinishMoveProof.provedBy(r.ok, overtaken)) {
-            io { saveLocal(local.copy(finishMovePending = false)) }
+            io { updateLocal { it.copy(finishMovePending = false) } }
             finishMoveFlow.value = false
         }
         val attempt = if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
@@ -1210,7 +1218,7 @@ class VaultManager(
             choosePath(caps, makesPhoneKey = false)
             phoneSecrets.secret(phone, ahead = 1)
         }
-        if (UnlockEpoch.confirmsNext(again.ok, again.result.code)) io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
+        if (UnlockEpoch.confirmsNext(again.ok, again.result.code)) io { updateLocal { it.copy(phoneEpoch = phone.epoch + 1) } }
         return again
     }
 
@@ -1492,7 +1500,7 @@ class VaultManager(
         } finally {
             next.fill(0)
         }
-        io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
+        io { updateLocal { it.copy(phoneEpoch = phone.epoch + 1) } }
     }
 
     /** `vault.secret.renew` (release R, §11.14.9): a new phone secret, the PIN unchanged. */
@@ -1505,7 +1513,7 @@ class VaultManager(
         } finally {
             next.fill(0)
         }
-        io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
+        io { updateLocal { it.copy(phoneEpoch = phone.epoch + 1) } }
     }
 
     override val usesPhoneSecret: Boolean get() = local.phone.inUse
@@ -1895,10 +1903,10 @@ class VaultManager(
         }
         // Release R (§11.14.10): "Finish the move" is asked until an unlock from storage with this phone's secret.
         if (local.phone.inUse) {
-            io { saveLocal(local.copy(finishMovePending = true, movedIn = true)) }
+            io { updateLocal { it.copy(finishMovePending = true, movedIn = true) } }
             finishMoveFlow.value = true
         } else {
-            io { saveLocal(local.copy(movedIn = true)) }
+            io { updateLocal { it.copy(movedIn = true) } }
         }
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.openApi.credentialTakeOver()
@@ -1974,45 +1982,26 @@ class VaultManager(
 
     override val finishMovePending: StateFlow<Boolean> = finishMoveFlow.asStateFlow()
 
-    private val finishingMoveFlow = MutableStateFlow(false)
-    override val finishingMove: StateFlow<Boolean> = finishingMoveFlow.asStateFlow()
-
-    private val finishMoveFailureFlow = MutableStateFlow<FailureKind?>(null)
-    override val finishMoveFailure: StateFlow<FailureKind?> = finishMoveFailureFlow.asStateFlow()
-
-    override fun acknowledgeFinishMoveFailure() {
-        finishMoveFailureFlow.value = null
-    }
-
     /**
-     * "Finish the move" (§11.14.10 step 4). The lock is the member's lock as everywhere (pending, durably, until
-     * confirmed or superseded by the unlock that follows), so that the phone is locked from its first line; only the
-     * screen is held ([finishingMove]) until the unlock has answered.
+     * "Finish the move" (§11.14.10 step 4), run in this manager's scope ([FinishMoveRunner]): the lock is the member's
+     * lock as everywhere (pending, durably, until confirmed or superseded by the unlock that follows); the screen is held
+     * ([finishingMove]) for a bounded time; the unlock completes whatever becomes of the screen that asked, and its
+     * failure is kept for the unlock screen ([finishMoveFailure]).
      */
-    override suspend fun finishMove(pin: String): UnlockAttempt {
-        finishMoveFailureFlow.value = null
-        finishingMoveFlow.value = true
-        // The hold has a bound: an unlock that waits longer (an unanswered relay lock, a slow service) goes on behind the
-        // unlock screen, which then shows its outcome ([finishMoveFailure]).
-        val bound = scope.launch {
-            delay(FINISH_MOVE_HOLD_MS)
-            finishingMoveFlow.value = false
-        }
-        try {
-            lock()
-            val r = unlock(pin, null, false)
-            // Kept here, not only in the screen that asked: when the hold ends the root shows the unlock screen, which
-            // says why the move did not finish ("Approve it again on your old phone", a wrong PIN, a wait).
-            finishMoveFailureFlow.value = FinishSetupGate.failureOf(r)
-            return r
-        } catch (e: VaultFailure) {
-            finishMoveFailureFlow.value = e.kind
-            throw e
-        } finally {
-            bound.cancel()
-            finishingMoveFlow.value = false
-        }
-    }
+    private val finishMoveRunner = FinishMoveRunner(
+        scope,
+        FINISH_MOVE_HOLD_MS,
+        lock = { lock() },
+        unlock = { pin -> unlock(pin, null, false) },
+    )
+
+    override val finishingMove: StateFlow<Boolean> get() = finishMoveRunner.finishing
+
+    override val finishMoveFailure: StateFlow<FailureKind?> get() = finishMoveRunner.failure
+
+    override fun acknowledgeFinishMoveFailure() = finishMoveRunner.clearFailure()
+
+    override suspend fun finishMove(pin: String): UnlockAttempt = finishMoveRunner.run(pin)
 
     /** (Release R) When this phone approved a transfer it still keeps the keys for; null otherwise. */
     override val transferKeptSince: StateFlow<Instant?> = transferKeptFlow.asStateFlow()
@@ -2163,6 +2152,7 @@ class VaultManager(
         io { if (wiper.erase()) wiper.finish() }
         local = LocalAccount()
         finishMoveFlow.value = false
+        finishMoveRunner.clearFailure()
         accountFlow.value = null
         generation++
         phaseFlow.value = AppPhase.SignedOut
