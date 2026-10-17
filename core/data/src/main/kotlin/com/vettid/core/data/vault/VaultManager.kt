@@ -146,6 +146,8 @@ class VaultManager(
     private val lockFile = LockRecordFile(
         File(app.noBackupFilesDir, LOCK_FILE),
         legacy = { LockRecord(local.lockAskedAtMs, local.relayLockUntilMs) },
+        migrated = { local.lockFileInUse },
+        onFirstSave = { record.markLockFileInUse() },
     )
 
     private val local: LocalAccount get() = record.value
@@ -161,14 +163,77 @@ class VaultManager(
     private val enrolments = Enrolments(
         pending = { record.eraseFailed || wiper.pending },
         finish = { holder.wipeNow() },
+        // The enrolments themselves, here and nowhere else: reachable only through [enrolments], so none goes round its check.
         ops = object : Enrolments.Ops<TypedRecoveryCode> {
-            override suspend fun redeemSetupCode(code: SetupCodeInput) = redeemSetupCodeNow(code)
+            override suspend fun redeemSetupCode(code: SetupCodeInput): String {
+                // Any refusal of the code itself is `404 invalid_code` ([FailureKind.SETUP_CODE_INVALID], [memberFailure]).
+                val r = guard {
+                    // A phone that holds nothing yet but carries a stale enrollment starts afresh (with a new app key).
+                    freshDeviceIfUnpaired()
+                    when (code) {
+                        is SetupCodeInput.Secret -> gateway.redeemSecret(code.secret)
+                        is SetupCodeInput.Typed -> gateway.redeemTyped(code.email, code.code)
+                    }
+                }
+                gateway.memberChanged(r.userGuid)
+                io { resetLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
+                phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+                return r.emailHint
+            }
 
-            override suspend fun transferIn(code: String) = transferInNow(code)
+            override suspend fun transferIn(code: String): String = guard {
+                val link = when (val p = InviteLinks.parseTransfer(code)) {
+                    is InviteLinks.TransferParsed.Ok -> p.link
+                    InviteLinks.TransferParsed.Expired -> throw VaultFailure(FailureKind.INVITE_EXPIRED, CODE_NOT_TRANSFER)
+                    InviteLinks.TransferParsed.NotATransfer, InviteLinks.TransferParsed.Invalid ->
+                        throw VaultFailure(FailureKind.INVITE_INVALID, CODE_NOT_TRANSFER)
+                }
+                freshDeviceIfUnpaired()
+                val d = session().device
+                if (d.deviceId != null) throw VaultFailure(FailureKind.VAULT_EXISTS)
+                val rec = record.recordGeneration
+                if (!local.transferIn) io { updateLocal(rec) { it.copy(transferIn = true) } }
+                // Release R (§11.14.10): this phone's key and its secret of epoch 1 go in the hs.init. The vault id is not
+                // known yet: the key and the secret are made for "" (as vettid-vault's reference client does).
+                // Stored before the hs.init is sent; a retry reuses the key. §11.10.9: only when the bundle lists `recovery_r`.
+                d.startTransfer(link, env.attester()) { caps ->
+                    val r = choosePath(caps, makesPhoneKey = true, rec) == ReleasePath.Path.R
+                    if (r) phoneSecrets.secret(keepPhoneKey("", rec)) else null
+                }
+                transferStartedAt = Instant.now()
+                try {
+                    // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
+                    withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
+                } catch (e: TimeoutCancellationException) {
+                    d.abandonTransfer()
+                    throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
+                }
+            }
 
-            override suspend fun registerRecovery(code: RecoveryCode) = registerRecoveryNow(code)
+            override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = guard {
+                if (!session().device.recovering) freshDeviceIfUnpaired()
+                // §11.11.7 (0.15.0): the claim gives this phone's key the right to register, and names the member.
+                val claimed = try {
+                    gateway.claimRecovery(code.vaultId, code.recoveryId)
+                } catch (e: MemberApiException) {
+                    return@guard claimRefusal(e)
+                }
+                registerClaimed(code, claimed)
+            }
 
-            override suspend fun registerTypedRecovery(typed: TypedRecoveryCode) = registerTypedRecoveryNow(typed)
+            override suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration = guard {
+                if (!session().device.recovering) freshDeviceIfUnpaired()
+                val claimed = try {
+                    gateway.claimRecoveryByLocator(typed.locator)
+                } catch (e: MemberApiException) {
+                    return@guard claimRefusal(e)
+                }
+                val code = typed.recoveryCode(claimed, apiOrigin)
+                when (val r = registerClaimed(code, claimed)) {
+                    is RecoveryRegistration.Refused -> r.copy(recoveryId = code.recoveryId)
+                    is RecoveryRegistration.Registered -> r
+                }
+            }
         },
     )
 
@@ -562,6 +627,9 @@ class VaultManager(
             LockKeeper(
                 scope,
                 store = lockFile,
+                onSaveFailed = { e ->
+                    android.util.Log.w("VaultManager", "the lock's record could not be saved: ${e.javaClass.simpleName}")
+                },
                 attempt = attempt,
             )
         },
@@ -612,31 +680,30 @@ class VaultManager(
 
     private suspend fun session(): Session = mutex.withLock {
         // Fail secure: while a wipe runs, and after one that did not finish, nothing of the old vault is opened again.
+        // The only place a session is made: through the gate, by construction.
         SessionGate.open(record, session) {
-            openSession().also {
+            io {
+                val trust: AltTrust = env.trust(http)
+                val keys = deviceKeys()
+                for (slot in KeySlot.entries) if (!keys.has(slot)) keys.generate(slot)
+                val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY), gateway.appKey())
+                val store = KeystoreFileStore(File(app.noBackupFilesDir, DEVICE_FILE), "vault-device")
+                val cfg = DeviceConfig(name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust)
+                val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
+                val member = gateway.member()
+                // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
+                // before it compares the bytes as typed.
+                val api = VaultApi(device) { local.phone.inUse }
+                val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
+                device.start(scope)
+                observe(s)
+                s
+            }.also {
                 session = it
                 // What the vault sends while a lock is pending is not handed on: on this phone it is locked.
                 eventsFlow.value = VaultEvents(it.device.events.filter { lockGuard.takesEvents() }, it.device.droppedForTime)
             }
         }
-    }
-
-    private suspend fun openSession(): Session = io {
-        val trust: AltTrust = env.trust(http)
-        val keys = deviceKeys()
-        for (slot in KeySlot.entries) if (!keys.has(slot)) keys.generate(slot)
-        val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY), gateway.appKey())
-        val store = KeystoreFileStore(File(app.noBackupFilesDir, DEVICE_FILE), "vault-device")
-        val cfg = DeviceConfig(name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust)
-        val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
-        val member = gateway.member()
-        // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
-        // before it compares the bytes as typed.
-        val api = VaultApi(device) { local.phone.inUse }
-        val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
-        device.start(scope)
-        observe(s)
-        s
     }
 
     private fun deviceKeys() = DeviceKeys(SeedWrapKey.wrapper(), SharedPreferencesWrappedKeyStore(app))
@@ -905,22 +972,6 @@ class VaultManager(
     }
 
     override suspend fun redeemSetupCode(code: SetupCodeInput): String = enrolments.redeemSetupCode(code)
-
-    private suspend fun redeemSetupCodeNow(code: SetupCodeInput): String {
-        // Any refusal of the code itself is `404 invalid_code` ([FailureKind.SETUP_CODE_INVALID], [memberFailure]).
-        val r = guard {
-            // A phone that holds nothing yet but carries a stale enrollment starts afresh (with a new app key).
-            freshDeviceIfUnpaired()
-            when (code) {
-                is SetupCodeInput.Secret -> gateway.redeemSecret(code.secret)
-                is SetupCodeInput.Typed -> gateway.redeemTyped(code.email, code.code)
-            }
-        }
-        gateway.memberChanged(r.userGuid)
-        io { resetLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
-        phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
-        return r.emailHint
-    }
 
     override suspend fun forgetSetupCode() {
         val paired = session?.device?.deviceId != null
@@ -1628,36 +1679,11 @@ class VaultManager(
 
     override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = enrolments.registerRecovery(code)
 
-    private suspend fun registerRecoveryNow(code: RecoveryCode): RecoveryRegistration = guard {
-        if (!session().device.recovering) freshDeviceIfUnpaired()
-        // §11.11.7 (0.15.0): the claim gives this phone's key the right to register, and names the member.
-        val claimed = try {
-            gateway.claimRecovery(code.vaultId, code.recoveryId)
-        } catch (e: MemberApiException) {
-            return@guard claimRefusal(e)
-        }
-        registerClaimed(code, claimed)
-    }
-
     /**
      * §11.11.10 (0.25.0): the claim by locator names the vault and the recovery; with them and the typed code the
      * app holds what a scan gives, and the register below is the scanned one.
      */
     override suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration = enrolments.registerTypedRecovery(typed)
-
-    private suspend fun registerTypedRecoveryNow(typed: TypedRecoveryCode): RecoveryRegistration = guard {
-        if (!session().device.recovering) freshDeviceIfUnpaired()
-        val claimed = try {
-            gateway.claimRecoveryByLocator(typed.locator)
-        } catch (e: MemberApiException) {
-            return@guard claimRefusal(e)
-        }
-        val code = typed.recoveryCode(claimed, apiOrigin)
-        when (val r = registerClaimed(code, claimed)) {
-            is RecoveryRegistration.Refused -> r.copy(recoveryId = code.recoveryId)
-            is RecoveryRegistration.Registered -> r
-        }
-    }
 
     /** The claim's refusals that have their own text (`409`, `404`); any other error is thrown. */
     private fun claimRefusal(e: MemberApiException): RecoveryRegistration = when (e.code) {
@@ -1901,7 +1927,6 @@ class VaultManager(
         outcome
     }
 
-
     // --- MoveRepository: direct transfer (§6.7.1) ---
 
     /** When this phone sent its transfer hs.init: it waits for the approval until 10 minutes after it. */
@@ -1913,34 +1938,6 @@ class VaultManager(
     private var openTransferId: String? = null
 
     override suspend fun transferIn(code: String): String = enrolments.transferIn(code)
-
-    private suspend fun transferInNow(code: String): String = guard {
-        val link = when (val p = InviteLinks.parseTransfer(code)) {
-            is InviteLinks.TransferParsed.Ok -> p.link
-            InviteLinks.TransferParsed.Expired -> throw VaultFailure(FailureKind.INVITE_EXPIRED, CODE_NOT_TRANSFER)
-            InviteLinks.TransferParsed.NotATransfer, InviteLinks.TransferParsed.Invalid ->
-                throw VaultFailure(FailureKind.INVITE_INVALID, CODE_NOT_TRANSFER)
-        }
-        freshDeviceIfUnpaired()
-        val d = session().device
-        if (d.deviceId != null) throw VaultFailure(FailureKind.VAULT_EXISTS)
-        val rec = record.recordGeneration
-        if (!local.transferIn) io { updateLocal(rec) { it.copy(transferIn = true) } }
-        // Release R (§11.14.10): this phone's key and its secret of epoch 1 go in the hs.init. The vault id is not
-        // known yet: the key and the secret are made for "" (as vettid-vault's reference client does).
-        // Stored before the hs.init is sent; a retry reuses the key. §11.10.9: only when the bundle lists `recovery_r`.
-        d.startTransfer(link, env.attester()) { caps ->
-            if (choosePath(caps, makesPhoneKey = true, rec) == ReleasePath.Path.R) phoneSecrets.secret(keepPhoneKey("", rec)) else null
-        }
-        transferStartedAt = Instant.now()
-        try {
-            // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
-            withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
-        } catch (e: TimeoutCancellationException) {
-            d.abandonTransfer()
-            throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
-        }
-    }
 
     override suspend fun awaitTransferIn(): Boolean = guard {
         val rec = record.recordGeneration
@@ -2201,8 +2198,8 @@ class VaultManager(
             record,
             // First, again at the end, whatever happens between: no lock retry, and nothing of the old vault's session
             // (its observer, its relay connection) outlives a wipe attempt, finished or not.
+            abandonLock = { lockKeeper.abandon() }, // nothing of this phone's is left to lock a vault with
             detach = {
-                lockKeeper.abandon() // nothing of this phone's is left to lock a vault with
                 mutex.withLock {
                     observer?.cancel()
                     observer = null

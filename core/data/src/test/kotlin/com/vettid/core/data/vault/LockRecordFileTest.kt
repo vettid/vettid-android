@@ -54,4 +54,29 @@ class LockRecordFileTest {
         file().writeText("garbage")
         assertEquals(LockRecord(pendingSinceMs = 11), LockRecordFile(file(), legacy = { LockRecord() }, now = { 11 }).load())
     }
+
+    @Test
+    fun theFirstSaveMarksTheFileInUseOnce() {
+        var migrated = false
+        var marks = 0
+        val f = LockRecordFile(file(), legacy = { LockRecord(pendingSinceMs = 5) }, migrated = { migrated }, onFirstSave = {
+            marks++
+            migrated = true
+        })
+        f.save(LockRecord(pendingSinceMs = 5))
+        f.save(LockRecord())
+        assertEquals(1, marks)
+    }
+
+    @Test
+    fun aMissingFileOnceInUseSaysALockIsPending() {
+        val f = LockRecordFile(file(), legacy = { LockRecord() }, migrated = { true }, now = { 13 })
+        assertEquals(LockRecord(pendingSinceMs = 13), f.load())
+    }
+
+    @Test
+    fun aMissingFileBeforeItIsInUseReadsTheOlderRecord() {
+        val f = LockRecordFile(file(), legacy = { LockRecord(relayLockUntilMs = 4) }, migrated = { false })
+        assertEquals(LockRecord(relayLockUntilMs = 4), f.load())
+    }
 }

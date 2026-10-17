@@ -37,6 +37,11 @@ internal data class LocalAccount(
     /** (Legacy, as [lockAskedAtMs].) An unanswered relay `vault.lock` may be acted on by the vault until then. */
     val relayLockUntilMs: Long? = null,
     /**
+     * The lock's record is kept in its own file ([LockRecordFile]) since its first save there: the legacy fields above
+     * are cleared, and a missing file says a lock is pending. The phone's, not a vault's: kept across a [AccountRecord.reset].
+     */
+    val lockFileInUse: Boolean = false,
+    /**
      * The inner `ts` of the last successful unlock result (epoch ms, the enclave's clock): a `vault.locking`
      * from before it is stale also after a process start ([LockNotices]).
      */
@@ -141,8 +146,17 @@ internal class AccountRecord(
     /** A record of its own ([a]: none, or a new setup's): no offer from before it, and the writes still on their way are dropped. */
     fun reset(a: LocalAccount): Boolean = store.reset { cur ->
         rotateOfferFlow.value = a.rotateOffered
-        a.withLockOf(cur)
+        // Nothing of the lock's legacy fields goes into the new record; whether the lock's file is in use stays.
+        a.copy(lockAskedAtMs = null, relayLockUntilMs = null, lockFileInUse = cur.lockFileInUse)
     }
+
+    /**
+     * The lock's record was saved in its own file for the first time: the legacy fields go and the file is in use from
+     * here ([LocalAccount.lockFileInUse]). [RecordStore.UNBOUND]: the phone's state, not a vault's. Refused while the
+     * record cannot be read or is shut; the next save of the lock's file tries again.
+     */
+    fun markLockFileInUse(): Boolean =
+        store.update(RecordStore.UNBOUND) { it.copy(lockAskedAtMs = null, relayLockUntilMs = null, lockFileInUse = true) }
 
     /** The record read again from the phone ([readable]: it could be). */
     fun reload(a: LocalAccount, readable: Boolean) = store.reload(a, readable)
@@ -177,5 +191,5 @@ internal class AccountRecord(
     fun endWipe(complete: Boolean) = store.endWipe(complete) { rotateOfferFlow.value = false }
 
     private fun LocalAccount.withLockOf(cur: LocalAccount) =
-        copy(lockAskedAtMs = cur.lockAskedAtMs, relayLockUntilMs = cur.relayLockUntilMs)
+        copy(lockAskedAtMs = cur.lockAskedAtMs, relayLockUntilMs = cur.relayLockUntilMs, lockFileInUse = cur.lockFileInUse)
 }

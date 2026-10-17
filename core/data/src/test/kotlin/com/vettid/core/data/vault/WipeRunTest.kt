@@ -9,7 +9,12 @@ import org.junit.Test
 
 /** A wipe of this phone fails secure: the session goes first and again last, and only a complete erase says SignedOut. */
 class WipeRunTest {
-    private class Fixture(var markFails: Int = 0, val eraseResult: Boolean = true, val eraseThrows: Boolean = false) {
+    private class Fixture(
+        var markFails: Int = 0,
+        val eraseResult: Boolean = true,
+        val eraseThrows: Boolean = false,
+        val abandonThrows: Boolean = false,
+    ) {
         val record = AccountRecord(LocalAccount(userGuid = "u", vaultId = "v"), readable = true, persist = {})
         val steps = mutableListOf<String>()
         var phase: AppPhase? = null
@@ -29,6 +34,10 @@ class WipeRunTest {
 
         val run = WipeRun(
             record,
+            abandonLock = {
+                steps += "abandon"
+                if (abandonThrows) error("abandon")
+            },
             detach = {
                 steps += "detach"
                 askSession()
@@ -54,7 +63,7 @@ class WipeRunTest {
     fun aCompleteWipeSaysSignedOut() = runTest {
         val f = Fixture()
         f.run.run()
-        assertEquals(listOf("detach", "mark", "erase", "detach"), f.steps)
+        assertEquals(listOf("abandon", "detach", "mark", "erase", "abandon", "detach"), f.steps)
         assertEquals(AppPhase.SignedOut, f.phase)
         assertEquals(LocalAccount(), f.record.value)
         assertFalse(f.record.closed)
@@ -80,7 +89,7 @@ class WipeRunTest {
         val f = Fixture(markFails = Int.MAX_VALUE)
         f.run.run()
         // The session went first (and again last); nothing was erased; the phase is not a clean welcome screen.
-        assertEquals(listOf("detach", "detach"), f.steps)
+        assertEquals(listOf("abandon", "detach", "abandon", "detach"), f.steps)
         assertEquals(WipeRun.MARK_ATTEMPTS, f.marks)
         assertEquals(WipeRun.failedPhase, f.phase)
     }
@@ -170,5 +179,13 @@ class WipeRunTest {
         var finished = false
         WipeRun.beforeEnrolment(pending = { false }) { finished = true }
         assertFalse(finished)
+    }
+
+    @Test
+    fun theSessionIsDetachedEvenWhenTheLockKeeperCannotBeAbandoned() = runTest {
+        val f = Fixture(abandonThrows = true)
+        f.run.run()
+        assertEquals(listOf("abandon", "detach", "mark", "erase", "abandon", "detach"), f.steps)
+        assertEquals(AppPhase.SignedOut, f.phase)
     }
 }

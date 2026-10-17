@@ -114,4 +114,26 @@ class AccountRecordTest {
         assertEquals(9L, f.disk!!.relayLockUntilMs)
         assertTrue(f.disk!!.movedIn)
     }
+
+    @Test
+    fun theLockFileInUseClearsTheLegacyFields() {
+        val f = Fixture(old.copy(lockAskedAtMs = 7, relayLockUntilMs = 9))
+        assertTrue(f.record.markLockFileInUse())
+        assertEquals(null, f.disk!!.lockAskedAtMs)
+        assertEquals(null, f.disk!!.relayLockUntilMs)
+        assertTrue(f.disk!!.lockFileInUse)
+        // Kept by every other write, which cannot change it.
+        f.record.update(f.record.recordGeneration) { it.copy(lockFileInUse = false, movedIn = true) }
+        assertTrue(f.disk!!.lockFileInUse)
+    }
+
+    @Test
+    fun aResetCarriesNoLegacyLockFieldsButKeepsTheLockFileInUse() {
+        val f = Fixture(old.copy(lockAskedAtMs = 7, relayLockUntilMs = 9, lockFileInUse = true))
+        f.record.reset(LocalAccount(userGuid = "u-new"))
+        assertEquals(LocalAccount(userGuid = "u-new", lockFileInUse = true), f.disk)
+        val g = Fixture(old.copy(lockAskedAtMs = 7, relayLockUntilMs = 9))
+        g.record.reset(LocalAccount())
+        assertEquals(LocalAccount(), g.disk)
+    }
 }
