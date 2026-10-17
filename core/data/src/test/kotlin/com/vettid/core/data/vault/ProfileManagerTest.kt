@@ -54,7 +54,7 @@ class ProfileManagerTest {
     private var checksLeftCalls = 0
     private val m = ProfileManager(
         ops = { ops },
-        onRequest = { requests += it },
+        onRequest = { r, _ -> requests += r },
         checksLeft = {
             checksLeftCalls++
             8

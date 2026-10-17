@@ -55,6 +55,8 @@
     <string name="root_retry">Try again</string>
     <string name="root_clock_title">Check this phone\'s date and time</string>
     <string name="root_no_vault_title">Your account has no vault</string>
+    <!-- Draft text for the owner (a wipe that did not finish). -->
+    <string name="root_erase_failed_title">VettID could not erase this phone</string>
     <string name="root_local_state_title">VettID cannot read its keys on this phone</string>
     <string name="root_start_over">Start over on this phone</string>
     <string name="root_start_over_title">Start over on this phone?</string>

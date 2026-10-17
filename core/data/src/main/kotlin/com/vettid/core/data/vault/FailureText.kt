@@ -47,6 +47,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.CLOCK -> R.string.data_failure_clock
     FailureKind.NO_VAULT -> R.string.data_failure_no_vault
     FailureKind.LOCAL_STATE -> R.string.data_failure_local_state
+    FailureKind.ERASE_FAILED -> R.string.data_failure_erase_failed
     FailureKind.DEVICE_SECRET -> R.string.data_failure_device_secret
     FailureKind.TRANSFER_INCOMPLETE -> R.string.data_failure_transfer_incomplete
     FailureKind.BUSY -> R.string.data_failure_busy

@@ -64,6 +64,7 @@ private fun titleOf(kind: FailureKind?): Int = when (kind) {
     FailureKind.CLOCK -> R.string.root_clock_title
     FailureKind.NO_VAULT -> R.string.root_no_vault_title
     FailureKind.LOCAL_STATE -> R.string.root_local_state_title
+    FailureKind.ERASE_FAILED -> R.string.root_erase_failed_title
     else -> R.string.root_unreachable_title
 }
 

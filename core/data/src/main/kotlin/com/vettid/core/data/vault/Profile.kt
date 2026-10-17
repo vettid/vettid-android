@@ -130,13 +130,15 @@ interface ProfileOps {
 }
 
 /**
- * [ProfileRepository] over [ProfileOps]. [onRequest] keeps a new name request with the account; [checksLeft]
- * re-reads the owner check's count after a failed PIN or password (§3.6.4: a name change counts as a check).
+ * [ProfileRepository] over [ProfileOps]. [onRequest] keeps a new name request with the account, with the [mark] read
+ * before the request was sent (the account record it belongs to); [checksLeft] re-reads the owner check's count after a
+ * failed PIN or password (§3.6.4: a name change counts as a check).
  */
 class ProfileManager(
     private val ops: suspend () -> ProfileOps,
-    private val onRequest: suspend (NameRequestView) -> Unit,
+    private val onRequest: suspend (NameRequestView, mark: Int) -> Unit,
     private val checksLeft: suspend () -> Int?,
+    private val mark: () -> Int = { 0 },
 ) : ProfileRepository {
     private val state = MutableStateFlow<OwnProfile?>(null)
     override val profile: StateFlow<OwnProfile?> = state.asStateFlow()
@@ -184,9 +186,10 @@ class ProfileManager(
         val first = AccountNames.normalize(firstName) ?: return NameChangeOutcome.Invalid
         val last = AccountNames.normalize(lastName) ?: return NameChangeOutcome.Invalid
         return try {
+            val since = mark()
             val r = vaultGuard { ops().accountNameSet(pin, password, first, last) }
             val view = NameRequestView.of(r) ?: NameRequestView(r.seq, first, last, null, NameRequestState.PENDING)
-            onRequest(view)
+            onRequest(view, since)
             NameChangeOutcome.Requested(view)
         } catch (e: VaultFailure) {
             failed(e)

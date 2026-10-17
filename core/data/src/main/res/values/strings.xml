@@ -49,6 +49,8 @@
     <string name="data_failure_signer_refused">This vault no longer accepts this installation of VettID. Update the app, or recover your vault with a current version.</string>
     <string name="data_failure_clock">VettID\'s account service refused this phone\'s requests because the phone\'s date and time are more than a few minutes off. Turn on automatic date and time in the phone\'s settings, then try again.</string>
     <string name="data_failure_no_vault">VettID\'s account service says that your account has no vault. That is what it says after a vault was deleted or an account closed, and it can also be a fault of the service. If you did not delete your vault, do not start over: try again later.</string>
+    <!-- Draft text for the owner (a wipe that did not finish). -->
+    <string name="data_failure_erase_failed">VettID could not erase this phone\'s vault. Try again.</string>
     <string name="data_failure_local_state">VettID could not read the keys it keeps on this phone for your vault. Nothing was deleted or changed. Try again, or restart the phone and open VettID again. If it stays like this, this phone cannot open your vault any more, and the way back is to erase VettID here and recover your vault.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>

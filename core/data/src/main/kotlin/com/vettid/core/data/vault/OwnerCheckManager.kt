@@ -56,9 +56,13 @@ class OwnerCheckManager(
     private val onPassed: () -> Unit,
     /** Marks feed items read (the feed's `FeedManager`, the one source of the notices, ANDROID-PLAN 0.1.23). */
     private val readNotices: suspend (List<String>) -> Unit = {},
-    /** (Release R) Each `vault.status`'s `recovery`, for the clock of a counter that stays unavailable (§11.14.5). */
-    private val onRecoveryStatus: suspend (RecoveryStatus?) -> Unit = {},
+    /**
+     * (Release R) Each `vault.status`'s `recovery`, for the clock of a counter that stays unavailable (§11.14.5), with
+     * the [mark] read before the status was asked for (the account record it belongs to).
+     */
+    private val onRecoveryStatus: suspend (RecoveryStatus?, mark: Int) -> Unit = { _, _ -> },
     private val now: () -> Instant = Instant::now,
+    private val mark: () -> Int = { 0 },
 ) : OwnerCheckRepository {
     private val saved = restore()
     private val view = MutableStateFlow(saved?.toView())
@@ -168,9 +172,10 @@ class OwnerCheckManager(
     }
 
     private suspend fun readStatus(): OwnerCheckView? {
+        val since = mark()
         val (st0, recovery) = vaultGuard { ops().statusAndRecovery() }
         presenceFromStatus(recovery)
-        runCatching { onRecoveryStatus(recovery) }
+        runCatching { onRecoveryStatus(recovery, since) }
         val st = st0 ?: return view.value
         val prev = view.value
         val state = when (st.state) {
