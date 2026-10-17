@@ -258,7 +258,8 @@ class UnlockViewModel @Inject constructor(
     override fun retryPreflight() {
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
-        state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false) }
+        // So does an open erase confirmation: it does not come back by itself while the check runs or after it.
+        state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false, eraseConfirm = false) }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()

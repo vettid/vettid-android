@@ -415,6 +415,21 @@ class UnlockViewModelTest {
     }
 
     @Test
+    fun tryAgainClosesAnOpenEraseConfirmation() = runTest {
+        val vm = unrecognised()
+        vm.askErase()
+        assertTrue(vm.uiState.value.eraseConfirm)
+        vm.retryPreflight()
+        assertFalse("closed while the release check runs", vm.uiState.value.eraseConfirm)
+        advanceUntilIdle()
+        assertFalse("still closed after it", vm.uiState.value.eraseConfirm)
+        assertTrue("the offer itself stays", vm.uiState.value.eraseOffered)
+        vm.confirmErase() // a stale confirm from the closed dialog
+        advanceUntilIdle()
+        assertFalse("eraseThisPhone" in vault.calls)
+    }
+
+    @Test
     fun cancelErasesNothing() = runTest {
         val vm = unrecognised()
         vm.askErase()
