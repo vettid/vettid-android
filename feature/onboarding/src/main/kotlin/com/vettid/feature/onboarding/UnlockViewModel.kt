@@ -96,6 +96,12 @@ data class UnlockUiState(
      */
     val notRecognised: Boolean = false,
     /**
+     * This phone no longer holds the vault's keys (`device_secret`): erase-or-recover is offered, "Recover your vault"
+     * first. Kept while the member types (the failure's message goes), cleared by any other answer of the vault; a
+     * network failure leaves it as it was.
+     */
+    val keysGone: Boolean = false,
+    /**
      * The open app was sent here because the relay kept refusing this phone's messages to the vault
      * ([VaultRepository.refusedByVault]): a phone replaced while the vault stayed unlocked on the new one never
      * sees this screen otherwise. Not proof: the PIN asks the enclave, and an unreadable result then sets
@@ -135,17 +141,15 @@ data class UnlockUiState(
     val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
 
     /**
-     * This phone cannot open the vault and nothing on this screen changes that (owner decision: a way forward): the
-     * vault's release ended, a rollback of the release or of the vault's state, or this phone no longer holds the vault's
-     * keys (`device_secret`). The screen offers erase-or-recover: "Erase VettID from this phone" (confirmed) and
-     * "Recover your vault" (the account site). Neither unlocks or opens anything.
+     * The vault cannot be opened from here and erasing this phone would not help (owner decision: a way forward, no
+     * erase): the vault's release ended, or a rollback of the release or of the vault's state. The screen offers
+     * "Recover your vault" (the account site) and contacting VettID support. Nothing unlocks or opens anything.
      */
-    val stuck: Boolean
-        get() = preflightError == FailureKind.RELEASE_ENDED || preflight?.rollback == true || stateRollback ||
-            (message as? UnlockMessage.Failed)?.kind == FailureKind.DEVICE_SECRET
+    val recoverOnly: Boolean
+        get() = preflightError == FailureKind.RELEASE_ENDED || preflight?.rollback == true || stateRollback
 
-    /** "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or a [stuck] screen. */
-    val eraseOffered: Boolean get() = notRecognised || stuck
+    /** "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone. */
+    val eraseOffered: Boolean get() = notRecognised || keysGone
 
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
@@ -328,6 +332,7 @@ class UnlockViewModel @Inject constructor(
                 it.copy(
                     password = "", notRecognised = notRecognisedAfter(r, it.notRecognised),
                     signerRefused = signerRefusedAfter(r, it.signerRefused),
+                    keysGone = keysGoneAfter(r, it.keysGone),
                 )
             }
             when (r) {
@@ -370,6 +375,12 @@ class UnlockViewModel @Inject constructor(
      * vault accepted this installation's signer after all, e.g. on another release), kept through failures that
      * never reached the enclave (network, a paused service).
      */
+    private fun keysGoneAfter(r: UnlockAttempt, before: Boolean): Boolean = when {
+        r is UnlockAttempt.Failed && r.kind == FailureKind.DEVICE_SECRET -> true
+        r is UnlockAttempt.Failed -> before
+        else -> false
+    }
+
     private fun signerRefusedAfter(r: UnlockAttempt, before: Boolean): Boolean = when (r) {
         UnlockAttempt.SignerRefused -> true
         is UnlockAttempt.Failed -> before

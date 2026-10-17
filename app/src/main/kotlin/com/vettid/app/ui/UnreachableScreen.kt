@@ -28,8 +28,9 @@ import com.vettid.core.ui.components.FormScaffold
  * itself. A wipe of this phone that did not finish ([FailureKind.ERASE_FAILED]) offers "Erase VettID's data on this
  * phone" ([com.vettid.core.data.wipe.AppDataClear]); [clearFailed]: the system refused it, and the member is told how
  * to clear VettID's storage themselves. The account service no longer accepting this phone ([FailureKind.UNAUTHORIZED]),
- * or a vault unreachable for a long time ([longUnreachable]), offers erase-or-recover: "Erase VettID from this phone"
- * (confirmed) and "Recover your vault" ([onRecover]: the account site, where a recovery starts). [onStartOver] gets the
+ * or a vault unreachable for a long time ([longUnreachable]), offers recover-or-erase: "Recover your vault" first
+ * ([onRecover]: the account site, where the member checks that a recovery is possible and starts it), "Erase VettID from
+ * this phone" second (confirmed), and "Try again" below them. [onStartOver] gets the
  * confirmed way out. [confirming]: the confirmation shows from the start (the debug screen catalog); a new failure
  * closes it.
  */
@@ -50,8 +51,9 @@ internal fun UnreachableScreen(
     FormScaffold(
         title = stringResource(titleOf(kind)),
         body = kind?.let { stringResource(it.messageRes()) },
-        primaryLabel = stringResource(R.string.root_retry),
-        onPrimary = onRetry,
+        // Erase-or-recover: recovery first (check on the account site that one is possible), the erase second.
+        primaryLabel = stringResource(if (way == WayOut.ERASE_OR_RECOVER) R.string.root_recover else R.string.root_retry),
+        onPrimary = if (way == WayOut.ERASE_OR_RECOVER) onRecover else onRetry,
         busy = busy,
         secondaryLabel = way?.let { stringResource(it.label) },
         onSecondary = { confirm = true },
@@ -66,8 +68,8 @@ internal fun UnreachableScreen(
                 )
             }
             Text(stringResource(R.string.root_recover_line), style = MaterialTheme.typography.bodyMedium)
-            TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
-                Text(stringResource(R.string.root_recover))
+            TextButton(onClick = onRetry, enabled = !busy, modifier = Modifier.testTag("retry_button")) {
+                Text(stringResource(R.string.root_retry))
             }
         }
         if (clearFailed && way == WayOut.CLEAR_DATA) {
@@ -112,7 +114,7 @@ internal enum class WayOut(
     @param:StringRes val confirm: Int = label,
 ) {
     START_OVER(R.string.root_start_over, R.string.root_start_over_title, R.string.root_start_over_body),
-    ERASE(R.string.root_erase, R.string.root_erase_title, R.string.root_erase_body),
+    ERASE(R.string.root_erase, R.string.root_erase_title, com.vettid.core.ui.R.string.core_ui_erase_phone_body),
 
     /** After a wipe that did not finish: erase VettID's data on this phone ([com.vettid.core.data.wipe.AppDataClear]). */
     CLEAR_DATA(R.string.root_clear_data, R.string.root_clear_data_title, R.string.root_clear_data_body, R.string.root_clear_data_confirm),
@@ -121,7 +123,7 @@ internal enum class WayOut(
      * The account service no longer accepts this phone, or the vault has been unreachable for a long time: the in-app
      * erase (confirmed), with "Recover your vault" beside it on the screen.
      */
-    ERASE_OR_RECOVER(R.string.root_erase, R.string.root_erase_title, R.string.root_erase_body),
+    ERASE_OR_RECOVER(R.string.root_erase, R.string.root_erase_title, com.vettid.core.ui.R.string.core_ui_erase_phone_body),
     ;
 
     companion object {

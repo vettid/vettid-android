@@ -60,7 +60,7 @@ fun formatWait(seconds: Long): String = "%d:%02d".format(seconds / SECONDS_PER_M
 
 private const val SECONDS_PER_MINUTE = 60
 
-/** The unlock screen for [state] (stateless). [onOpenAccountSite]: "Recover your vault" on a [UnlockUiState.stuck] screen. */
+/** The unlock screen for [state] (stateless). [onOpenAccountSite]: "Recover your vault" (keys gone, or recover-only). */
 @Suppress("CyclomaticComplexMethod", "LongMethod")
 @Composable
 fun UnlockContent(state: UnlockUiState, actions: UnlockActions, onOpenAccountSite: () -> Unit = {}) {
@@ -289,17 +289,21 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions, onOpenAccountSit
                 }
             }
             if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)
-            if (state.notRecognised) {
-                NotRecognisedNotice(state.erasing, actions::askErase)
-            } else if (state.stuck) {
-                StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
+            when {
+                state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
+                state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
+                state.recoverOnly -> RecoverOnlyNotice(onOpenAccountSite)
             }
         }
     }
     if (state.eraseConfirm) {
         ConfirmDialog(
             title = stringResource(R.string.unlock_erase_confirm_title),
-            text = stringResource(R.string.unlock_erase_confirm_body),
+            // A phone without its vault's keys: the root screen's text, which says what a recovery then needs.
+            text = stringResource(
+                if (state.keysGone && !state.notRecognised) com.vettid.core.ui.R.string.core_ui_erase_phone_body
+                else R.string.unlock_erase_confirm_body,
+            ),
             confirmLabel = stringResource(R.string.unlock_erase_confirm),
             onConfirm = actions::confirmErase,
             onDismiss = actions::dismissErase,
@@ -337,9 +341,9 @@ private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
 }
 
 /**
- * This phone cannot open the vault and nothing here changes that ([UnlockUiState.stuck]): erase-or-recover. "Erase VettID
- * from this phone" opens the same confirmation as [NotRecognisedNotice]; "Recover your vault" opens the account site,
- * where a recovery starts. Neither unlocks or opens anything.
+ * This phone no longer holds the vault's keys ([UnlockUiState.keysGone]): recover-or-erase. "Recover your vault" first
+ * (the account site, where a recovery starts); "Erase VettID from this phone" opens the erase confirmation. Neither
+ * unlocks or opens anything.
  */
 @Composable
 private fun StuckNotice(erasing: Boolean, onErase: () -> Unit, onRecover: () -> Unit) {
@@ -364,6 +368,25 @@ private fun StuckNotice(erasing: Boolean, onErase: () -> Unit, onRecover: () -> 
             Text(stringResource(R.string.unlock_erasing), style = MaterialTheme.typography.bodyMedium)
         }
     }
+}
+
+/**
+ * The vault cannot be opened and erasing this phone would not help ([UnlockUiState.recoverOnly]: an ended release, a
+ * rollback): "Recover your vault" (the account site) and contacting VettID support. No erase.
+ */
+@Composable
+private fun RecoverOnlyNotice(onRecover: () -> Unit) {
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(R.string.unlock_stuck_title),
+        stringResource(R.string.unlock_recover_only_body),
+        modifier = Modifier.testTag("unlock_recover_only"),
+        actions = {
+            TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
+                Text(stringResource(R.string.unlock_recover))
+            }
+        },
+    )
 }
 
 /**

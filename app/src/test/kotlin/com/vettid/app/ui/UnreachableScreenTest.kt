@@ -140,7 +140,9 @@ class UnreachableScreenTest {
     @Test
     fun aPhoneTheAccountServiceNoLongerAcceptsOffersEraseAfterAConfirmationAndRecovery() {
         show(FailureKind.UNAUTHORIZED)
-        rule.onNodeWithTag("recover_vault").performClick()
+        // Recovery first: the primary action; the erase is the second one.
+        rule.onNodeWithText("check on your account site that your vault can be recovered", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("primary_button").performClick()
         assertEquals(listOf("recover"), asked)
         rule.onNodeWithText("Erase VettID from this phone").performClick()
         assertEquals(listOf("recover"), asked)
@@ -154,23 +156,26 @@ class UnreachableScreenTest {
     fun aVaultUnreachableForLongOffersEraseOrRecoverBesideTryAgain() {
         show(FailureKind.NETWORK, longUnreachable = true)
         rule.onNodeWithTag("long_unreachable").assertIsDisplayed()
-        rule.onNodeWithTag("recover_vault").assertIsDisplayed()
         rule.onNodeWithTag("primary_button").performClick()
-        assertEquals(listOf("retry"), asked)
+        assertEquals(listOf("recover"), asked)
+        rule.onNodeWithTag("retry_button").performClick()
+        assertEquals(listOf("recover", "retry"), asked)
         rule.onNodeWithText("Erase VettID from this phone").assertIsDisplayed()
     }
 
     @Test
     fun aShortOutageOrAWrongClockOffersNoEraseOrRecover() {
         show(FailureKind.NETWORK)
-        rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+        rule.onNodeWithTag("retry_button").assertDoesNotExist()
+        rule.onNodeWithText("Recover your vault").assertDoesNotExist()
         rule.onNodeWithText("Erase VettID from this phone").assertDoesNotExist()
     }
 
     @Test
     fun aWrongClockForLongStillOffersNoEraseOrRecover() {
         show(FailureKind.CLOCK, longUnreachable = true)
-        rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+        rule.onNodeWithTag("retry_button").assertDoesNotExist()
+        rule.onNodeWithText("Recover your vault").assertDoesNotExist()
         rule.onNodeWithText("Erase VettID from this phone").assertDoesNotExist()
     }
 

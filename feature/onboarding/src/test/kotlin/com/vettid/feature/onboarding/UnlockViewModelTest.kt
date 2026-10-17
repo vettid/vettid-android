@@ -423,8 +423,11 @@ class UnlockViewModelTest {
         vm.setPin("40281795")
         vm.submit()
         advanceUntilIdle()
-        assertTrue(vm.uiState.value.stuck)
+        assertTrue(vm.uiState.value.keysGone)
         assertFalse(vm.uiState.value.notRecognised)
+        // Typing again clears the failure's message, not the offer.
+        vm.setPin("1")
+        assertTrue(vm.uiState.value.keysGone)
         vm.confirmErase() // nothing without the dialog
         advanceUntilIdle()
         assertFalse("eraseThisPhone" in vault.calls)
@@ -433,6 +436,22 @@ class UnlockViewModelTest {
         vm.confirmErase()
         advanceUntilIdle()
         assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
+    }
+
+    /** The offer goes with any other answer of the vault, and stays through a network failure. */
+    @Test
+    fun aPhoneWithoutTheKeysKeepsTheOfferUntilTheVaultAnswersOtherwise() = runTest {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret")
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NETWORK, null)
+        vault.unlockResults += UnlockAttempt.BadPin(retryAfterSeconds = 0)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        for (expected in listOf(true, true, false)) {
+            vm.setPin("40281795")
+            vm.submit()
+            advanceUntilIdle()
+            assertEquals(expected, vm.uiState.value.keysGone)
+        }
     }
 
     /** An ordinary failure offers no erase. */
@@ -463,12 +482,12 @@ class UnlockViewModelTest {
 
     @Test
     fun noEraseWhereTheVaultKnowsThisPhone() = runTest {
-        // Before any unlock, after a wrong PIN, after a network failure, a recovery pending: no offer. (A state rollback
-        // offers erase-or-recover since the owner's decision: UnlockStuckTest.)
+        // Before any unlock, after a wrong PIN, after a network failure, after a rollback refusal: no offer.
         val outcomes = listOf(
             UnlockAttempt.BadPin(retryAfterSeconds = 0),
             UnlockAttempt.Failed(FailureKind.NETWORK, null),
             UnlockAttempt.Failed(FailureKind.OTHER, "unknown_device"),
+            UnlockAttempt.StateRollback,
             UnlockAttempt.RecoveryPending,
         )
         for (o in outcomes) {

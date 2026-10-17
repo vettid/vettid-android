@@ -2,6 +2,7 @@ package com.vettid.feature.onboarding
 
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.vault.FailureKind
@@ -17,8 +18,9 @@ import org.robolectric.RobolectricTestRunner
 import java.lang.reflect.Proxy
 
 /**
- * An unlock screen that cannot open the vault offers erase-or-recover: an ended release, a rollback of the release or
- * of the vault's state, or a phone that no longer holds the vault's keys. Nowhere else.
+ * An unlock screen that cannot open the vault has a way forward. An ended release or a rollback (of the release or of the
+ * vault's state): "Recover your vault" and support, never an erase. A phone without the vault's keys: recover first, then
+ * erase. Nowhere else.
  */
 @RunWith(RobolectricTestRunner::class)
 class UnlockStuckTest {
@@ -35,15 +37,15 @@ class UnlockStuckTest {
 
     private val release = ReleaseView(3, "aa".repeat(48), "active", null, "")
     private val ok = UnlockUiState(loading = false, preflight = PreflightInfo(release, 3, false, false, null))
+    private val keysGone = ok.copy(keysGone = true)
 
-    private val stuck = mapOf(
+    private val recoverOnly = mapOf(
         "release ended" to UnlockUiState(loading = false, preflightError = FailureKind.RELEASE_ENDED),
         "release rollback" to UnlockUiState(loading = false, preflight = PreflightInfo(release, 4, false, true, null)),
         "state rollback" to ok.copy(stateRollback = true),
-        "device secret" to ok.copy(message = UnlockMessage.Failed(FailureKind.DEVICE_SECRET, "device_secret")),
     )
 
-    private val notStuck = mapOf(
+    private val ordinary = mapOf(
         "ready" to ok,
         "network" to ok.copy(message = UnlockMessage.Failed(FailureKind.NETWORK, null)),
         "bad pin" to ok.copy(message = UnlockMessage.BadPin),
@@ -53,21 +55,41 @@ class UnlockStuckTest {
     )
 
     @Test
-    fun eraseOrRecoverIsOfferedOnStuckScreensOnly() {
-        for ((name, s) in stuck) {
-            assertTrue(name, s.stuck)
-            assertTrue(name, s.eraseOffered)
+    fun theWayForwardOfEachState() {
+        for ((name, s) in recoverOnly) {
+            assertTrue(name, s.recoverOnly)
+            assertFalse("$name: no erase", s.eraseOffered)
         }
-        for ((name, s) in notStuck) {
-            assertFalse(name, s.stuck)
+        assertTrue(keysGone.eraseOffered)
+        assertFalse(keysGone.recoverOnly)
+        for ((name, s) in ordinary) {
+            assertFalse(name, s.recoverOnly)
             assertFalse(name, s.eraseOffered)
         }
     }
 
     @Test
-    fun aStuckScreenShowsBothActions() {
+    fun aRollbackOffersRecoveryAndNoErase() {
         var recovered = 0
-        rule.setContent { UnlockContent(stuck.getValue("device secret"), actions) { recovered++ } }
+        rule.setContent { UnlockContent(recoverOnly.getValue("state rollback"), actions) { recovered++ } }
+        rule.onNodeWithTag("unlock_recover_only").assertExists()
+        rule.onNodeWithText("contact VettID support", substring = true).assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
+        assertEquals(1, recovered)
+    }
+
+    @Test
+    fun anEndedReleaseOffersRecoveryAndNoErase() {
+        rule.setContent { UnlockContent(recoverOnly.getValue("release ended"), actions) }
+        rule.onNodeWithTag("unlock_recover_only").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun aPhoneWithoutTheKeysOffersRecoveryThenErase() {
+        var recovered = 0
+        rule.setContent { UnlockContent(keysGone, actions) { recovered++ } }
         rule.onNodeWithTag("unlock_stuck").assertExists()
         rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
         assertEquals(1, recovered)
@@ -78,15 +100,16 @@ class UnlockStuckTest {
     }
 
     @Test
-    fun anEndedReleaseShowsBothActions() {
-        rule.setContent { UnlockContent(stuck.getValue("release ended"), actions) }
-        rule.onNodeWithTag("unlock_stuck").assertExists()
+    fun theEraseConfirmationForAPhoneWithoutTheKeysSaysWhatARecoveryNeeds() {
+        rule.setContent { UnlockContent(keysGone.copy(eraseConfirm = true), actions) }
+        rule.onNodeWithText("the credential backup must be on", substring = true).assertExists()
     }
 
     @Test
     fun anOrdinaryFailureShowsNeither() {
-        rule.setContent { UnlockContent(notStuck.getValue("network"), actions) }
+        rule.setContent { UnlockContent(ordinary.getValue("network"), actions) }
         rule.onNodeWithTag("unlock_stuck").assertDoesNotExist()
+        rule.onNodeWithTag("unlock_recover_only").assertDoesNotExist()
         rule.onNodeWithTag("recover_vault").assertDoesNotExist()
     }
 }
