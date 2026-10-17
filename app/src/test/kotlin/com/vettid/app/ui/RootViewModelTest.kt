@@ -9,6 +9,7 @@ import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.testing.FakeReleaseUpdates
+import com.vettid.core.data.wipe.AppDataClear
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -52,8 +53,44 @@ class RootViewModelTest {
         override fun delete() = Unit
     }
 
+    /** What "Erase VettID's data on this phone" did, in order; [cleared] is the system's answer. */
+    private val dataSteps = mutableListOf<String>()
+    private var cleared = true
+    private val clearData = AppDataClear(
+        keyAliases = { listOf("k") },
+        deleteKey = { dataSteps += "delete $it" },
+        clearAppData = {
+            dataSteps += "clear"
+            cleared
+        },
+    )
+
     private fun root(vault: FakeVault, prefs: InMemoryPreferencesRepository = InMemoryPreferencesRepository()) =
-        RootViewModel(vault, vault, vault, AppLock(prefs, noKeys, noFile), FakeReleaseUpdates(), prefs)
+        RootViewModel(vault, vault, vault, AppLock(prefs, noKeys, noFile), FakeReleaseUpdates(), prefs, clearData)
+
+    @Test
+    fun afterAWipeThatDidNotFinishTheWayOutErasesTheDataAndNothingElse() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.ERASE_FAILED))
+        val vm = root(vault)
+        vm.startOver()
+        advanceUntilIdle()
+        // Local only: the keys, then the system's clear; no session, nothing asked of the vault.
+        assertEquals(listOf("delete k", "clear"), dataSteps)
+        assertEquals(emptyList<String>(), vault.calls)
+        assertFalse(vm.clearDataFailed.value)
+    }
+
+    @Test
+    fun aRefusedClearIsSaidWithTheWayToDoItInSettings() = runTest(dispatcher) {
+        cleared = false
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.ERASE_FAILED))
+        val vm = root(vault)
+        vm.startOver()
+        advanceUntilIdle()
+        assertTrue(vm.clearDataFailed.value)
+        assertEquals(emptyList<String>(), vault.calls)
+        assertFalse(vm.retrying.value)
+    }
 
     @Test
     fun startOverWithoutAVaultAsksTheRepositoryToForgetItAndNothingIsErased() = runTest(dispatcher) {
@@ -85,6 +122,7 @@ class RootViewModelTest {
         root(vault).startOver()
         advanceUntilIdle()
         assertEquals(listOf("eraseThisPhone"), vault.calls)
+        assertEquals("the wipe, not the system's clear of the data", emptyList<String>(), dataSteps)
     }
 
     @Test
@@ -102,6 +140,7 @@ class RootViewModelTest {
             assertEquals(phase.toString(), emptyList<String>(), vault.calls)
             assertEquals(phase, vault.phase.value)
         }
+        assertEquals("the data is erased only after a wipe that did not finish", emptyList<String>(), dataSteps)
     }
 
     @Test

@@ -26,8 +26,14 @@ class UnreachableScreenTest {
 
     private val asked = mutableListOf<String>()
 
-    private fun show(kind: FailureKind) = rule.setContent {
-        UnreachableScreen(kind, busy = false, onRetry = { asked += "retry" }, onStartOver = { asked += "startOver" })
+    private fun show(kind: FailureKind, clearFailed: Boolean = false) = rule.setContent {
+        UnreachableScreen(
+            kind,
+            busy = false,
+            onRetry = { asked += "retry" },
+            onStartOver = { asked += "startOver" },
+            clearFailed = clearFailed,
+        )
     }
 
     @Test
@@ -76,5 +82,37 @@ class UnreachableScreenTest {
         rule.onNodeWithText("you then need a recovery from the account site", substring = true).assertIsDisplayed()
         rule.onNodeWithTag("confirm_button").performClick()
         assertEquals(listOf("startOver"), asked)
+    }
+
+    @Test
+    fun aWipeThatDidNotFinishOffersTryAgainAndErasingTheDataAfterAConfirmation() {
+        show(FailureKind.ERASE_FAILED)
+        rule.onNodeWithText("VettID could not erase this phone").assertIsDisplayed()
+        rule.onNodeWithText("Your vault itself is not affected", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("primary_button").performClick()
+        assertEquals(listOf("retry"), asked)
+        rule.onNodeWithText("Erase VettID's data on this phone").performClick()
+        assertEquals(listOf("retry"), asked)
+        rule.onNodeWithText("Erase VettID's data?").assertIsDisplayed()
+        rule.onNodeWithText("This removes everything VettID keeps on this phone and closes VettID.").assertIsDisplayed()
+        rule.onNodeWithText("Cancel").performClick()
+        assertEquals(listOf("retry"), asked)
+        rule.onNodeWithText("Erase VettID's data on this phone").performClick()
+        rule.onNodeWithTag("confirm_button").performClick()
+        assertEquals(listOf("retry", "startOver"), asked)
+        rule.onNodeWithTag("clear_data_failed").assertDoesNotExist()
+    }
+
+    @Test
+    fun aRefusedClearSaysHowToDoItInSettings() {
+        show(FailureKind.ERASE_FAILED, clearFailed = true)
+        rule.onNodeWithText("Clear VettID's storage in Android Settings", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun noOtherFailureOffersErasingTheData() {
+        for (k in FailureKind.entries) {
+            assertEquals(k.name, k == FailureKind.ERASE_FAILED, WayOut.of(k) == WayOut.CLEAR_DATA)
+        }
     }
 }

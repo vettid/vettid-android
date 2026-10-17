@@ -173,7 +173,8 @@ fun VettIdApp(
                         composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
                         composable<UnreachableDest> {
                             val kind = (phase as? AppPhase.Unreachable)?.failure
-                            UnreachableScreen(kind, retrying, viewModel::retry, viewModel::startOver)
+                            val clearFailed by viewModel.clearDataFailed.collectAsStateWithLifecycle()
+                            UnreachableScreen(kind, retrying, viewModel::retry, viewModel::startOver, clearFailed = clearFailed)
                         }
                         composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
                         composable<UnlockDest> { UnlockRoute() }

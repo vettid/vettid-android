@@ -66,6 +66,7 @@ import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
+import com.vettid.core.data.wipe.AppDataClear
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.relay.NetworkGate
 import com.vettid.core.relay.TransportRetry
@@ -140,6 +141,11 @@ object AppModule {
         @AppScope scope: CoroutineScope,
         wipe: LocalWipe,
     ): VaultManager = VaultManager(context, env, http, scope, deviceName = Build.MODEL ?: "Android", wiper = wipe)
+
+    /** The way out of a wipe that did not finish: VettID's data on this phone erased by the system (local only). */
+    @Provides
+    @Singleton
+    fun appDataClear(@ApplicationContext context: Context): AppDataClear = AppDataClear.android(context)
 
     /** The wipe of a replaced phone (owner decision, 2026-10-05): what it erases, and the in-memory state it resets. */
     @Provides

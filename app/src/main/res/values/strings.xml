@@ -55,8 +55,14 @@
     <string name="root_retry">Try again</string>
     <string name="root_clock_title">Check this phone\'s date and time</string>
     <string name="root_no_vault_title">Your account has no vault</string>
-    <!-- Draft text for the owner (a wipe that did not finish). -->
+    <!-- Approved by the owner (a wipe that did not finish). -->
     <string name="root_erase_failed_title">VettID could not erase this phone</string>
+    <!-- Approved by the owner (the way out of a wipe that did not finish). -->
+    <string name="root_clear_data">Erase VettID\'s data on this phone</string>
+    <string name="root_clear_data_title">Erase VettID\'s data?</string>
+    <string name="root_clear_data_body">This removes everything VettID keeps on this phone and closes VettID.</string>
+    <string name="root_clear_data_confirm">Erase</string>
+    <string name="root_clear_data_failed">VettID could not erase its data. Clear VettID\'s storage in Android Settings, or uninstall and reinstall VettID.</string>
     <string name="root_local_state_title">VettID cannot read its keys on this phone</string>
     <string name="root_start_over">Start over on this phone</string>
     <string name="root_start_over_title">Start over on this phone?</string>
