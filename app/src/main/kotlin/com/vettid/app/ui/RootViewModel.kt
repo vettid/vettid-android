@@ -15,6 +15,7 @@ import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
+import com.vettid.core.data.wipe.AppDataClear
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,6 +35,7 @@ class RootViewModel @Inject constructor(
     appLock: AppLock,
     updates: ReleaseUpdateRepository,
     private val prefs: PreferencesRepository,
+    private val clearData: AppDataClear,
 ) : ViewModel() {
     val phase: StateFlow<AppPhase> = accounts.phase
     val lock: StateFlow<AppLockState> = appLock.state
@@ -90,6 +92,11 @@ class RootViewModel @Inject constructor(
     private val retryingFlow = MutableStateFlow(false)
     val retrying: StateFlow<Boolean> = retryingFlow.asStateFlow()
 
+    private val clearDataFailedFlow = MutableStateFlow(false)
+
+    /** "Erase VettID's data on this phone" was refused by the system: the member clears VettID's storage themselves. */
+    val clearDataFailed: StateFlow<Boolean> = clearDataFailedFlow.asStateFlow()
+
     fun retry() {
         if (retryingFlow.value) return
         retryingFlow.value = true
@@ -105,7 +112,9 @@ class RootViewModel @Inject constructor(
     /**
      * "Start over", confirmed, on the two dead ends that have one (A6 audit N6, P4): the account service says the
      * account has no vault ([AccountRepository.forgetMissingVault], which asks it again first), or this phone's
-     * stored keys cannot be read ([AccountRepository.eraseThisPhone]). Never without the member's confirmation.
+     * stored keys cannot be read ([AccountRepository.eraseThisPhone]). After a wipe that did not finish: erase VettID's
+     * data on this phone ([AppDataClear], local only: no session, nothing sent to the vault; the process ends when it
+     * succeeds). Never without the member's confirmation.
      */
     fun startOver() {
         if (retryingFlow.value) return
@@ -116,6 +125,7 @@ class RootViewModel @Inject constructor(
                 when (kind) {
                     FailureKind.NO_VAULT -> accounts.forgetMissingVault()
                     FailureKind.LOCAL_STATE -> accounts.eraseThisPhone()
+                    FailureKind.ERASE_FAILED -> if (!clearData.run()) clearDataFailedFlow.value = true
                     else -> Unit
                 }
             } catch (_: VaultFailure) {

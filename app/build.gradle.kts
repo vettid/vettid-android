@@ -56,9 +56,10 @@ android {
         // Same application id as the v1 app (keeps the Play listing and signing key, D1).
         applicationId = releaseApplicationId
         // v1 ended at versionCode 7 / 1.0.55; the rewrite starts at 100 / 2.0.0. 101 / 2.0.0-a1 is the first build
-        // that implements release R (VAULT-MESSAGING 0.33 §11.14); the staging channel requires it.
-        versionCode = 101
-        versionName = "2.0.0-a1"
+        // that implements release R (VAULT-MESSAGING 0.33 §11.14); the staging channel requires it. 102 / 2.0.0-a2 adds
+        // the way out of a wipe that did not finish (erase VettID's data on this phone).
+        versionCode = 102
+        versionName = "2.0.0-a2"
     }
 
     signingConfigs {
