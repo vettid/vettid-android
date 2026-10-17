@@ -71,9 +71,9 @@ class UnlockStuckTest {
     @Test
     fun aRollbackOffersRecoveryAndNoErase() {
         var recovered = 0
-        rule.setContent { UnlockContent(recoverOnly.getValue("state rollback"), actions) { recovered++ } }
+        rule.setContent { UnlockContent(recoverOnly.getValue("state rollback"), actions, onOpenAccountSite = { recovered++ }) }
         rule.onNodeWithTag("unlock_recover_only").assertExists()
-        rule.onNodeWithText("contact VettID support", substring = true).assertExists()
+        rule.onNodeWithText("support@vettid.org", substring = true).assertExists()
         rule.onNodeWithTag("erase_phone").assertDoesNotExist()
         rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
         assertEquals(1, recovered)
@@ -89,7 +89,7 @@ class UnlockStuckTest {
     @Test
     fun aPhoneWithoutTheKeysOffersRecoveryThenErase() {
         var recovered = 0
-        rule.setContent { UnlockContent(keysGone, actions) { recovered++ } }
+        rule.setContent { UnlockContent(keysGone, actions, onOpenAccountSite = { recovered++ }) }
         rule.onNodeWithTag("unlock_stuck").assertExists()
         rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
         assertEquals(1, recovered)
@@ -111,5 +111,54 @@ class UnlockStuckTest {
         rule.onNodeWithTag("unlock_stuck").assertDoesNotExist()
         rule.onNodeWithTag("unlock_recover_only").assertDoesNotExist()
         rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+    }
+
+    @Test
+    fun aRollbackOffersContactSupportAndStillNoErase() {
+        val mails = mutableListOf<String>()
+        rule.setContent {
+            UnlockContent(recoverOnly.getValue("state rollback"), actions, onContactSupport = {
+                mails += "mail"
+                true
+            })
+        }
+        rule.onNodeWithTag("contact_support").performScrollTo().performClick()
+        assertEquals(listOf("mail"), mails)
+        rule.onNodeWithTag("support_address").assertDoesNotExist()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun anEndedReleaseOffersContactSupportAndWithoutAMailAppShowsTheAddress() {
+        rule.setContent { UnlockContent(recoverOnly.getValue("release ended"), actions, onContactSupport = { false }) }
+        rule.onNodeWithTag("contact_support").performScrollTo().performClick()
+        rule.onNodeWithTag("support_address").assertExists()
+        rule.onNodeWithText(SupportMail.ADDRESS).assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun contactSupportIsOfferedOnRecoverOnlyScreensOnly() {
+        rule.setContent { UnlockContent(keysGone, actions, onContactSupport = { true }) }
+        rule.onNodeWithTag("contact_support").assertDoesNotExist()
+    }
+
+    @Test
+    fun theSupportMailCarriesNothingOfTheMembers() {
+        val i = SupportMail.intent()
+        assertEquals(android.content.Intent.ACTION_SENDTO, i.action)
+        assertEquals("mailto:support@vettid.org?subject=VettID%3A%20help%20with%20my%20vault", i.dataString)
+        assertEquals(null, i.extras)
+        assertEquals(null, i.clipData)
+    }
+
+    @Test
+    fun aRollbackWinsOverKeysGoneAndAnUnrecognisedPhone() {
+        val both = recoverOnly.getValue("release rollback").copy(keysGone = true, notRecognised = true)
+        assertFalse(both.eraseOffered)
+        rule.setContent { UnlockContent(both.copy(eraseConfirm = true), actions) }
+        rule.onNodeWithTag("unlock_recover_only").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("erase_confirm").assertDoesNotExist()
     }
 }

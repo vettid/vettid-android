@@ -97,8 +97,9 @@ data class UnlockUiState(
     val notRecognised: Boolean = false,
     /**
      * This phone no longer holds the vault's keys (`device_secret`): erase-or-recover is offered, "Recover your vault"
-     * first. Kept while the member types (the failure's message goes), cleared by any other answer of the vault; a
-     * network failure leaves it as it was.
+     * first. Screen state: kept while the member types (the failure's message goes) and through a failure that did not
+     * reach the vault (a network failure, a pause, a busy service); cleared by any answer of the vault (an attestation
+     * or `transfer_incomplete` refusal included) and by a new release check.
      */
     val keysGone: Boolean = false,
     /**
@@ -148,8 +149,11 @@ data class UnlockUiState(
     val recoverOnly: Boolean
         get() = preflightError == FailureKind.RELEASE_ENDED || preflight?.rollback == true || stateRollback
 
-    /** "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone. */
-    val eraseOffered: Boolean get() = notRecognised || keysGone
+    /**
+     * "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone;
+     * never on a [recoverOnly] screen, which wins over both.
+     */
+    val eraseOffered: Boolean get() = !recoverOnly && (notRecognised || keysGone)
 
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
@@ -254,7 +258,7 @@ class UnlockViewModel @Inject constructor(
     override fun retryPreflight() {
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
-        state.update { it.copy(loading = true, preflightError = null, preflight = null) }
+        state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false) }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
@@ -377,7 +381,7 @@ class UnlockViewModel @Inject constructor(
      */
     private fun keysGoneAfter(r: UnlockAttempt, before: Boolean): Boolean = when {
         r is UnlockAttempt.Failed && r.kind == FailureKind.DEVICE_SECRET -> true
-        r is UnlockAttempt.Failed -> before
+        r is UnlockAttempt.Failed && r.kind in TRANSIENT_FAILURES -> before
         else -> false
     }
 

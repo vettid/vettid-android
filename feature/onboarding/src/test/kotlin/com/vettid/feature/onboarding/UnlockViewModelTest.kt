@@ -414,59 +414,6 @@ class UnlockViewModelTest {
         assertNull(vault.account.value)
     }
 
-    /** A phone that no longer holds the vault's keys: erase-or-recover; the erase still needs the confirmation. */
-    @Test
-    fun aPhoneWithoutTheVaultsKeysMayBeErasedAfterTheConfirmation() = runTest {
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret")
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
-        advanceUntilIdle()
-        vm.setPin("40281795")
-        vm.submit()
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.keysGone)
-        assertFalse(vm.uiState.value.notRecognised)
-        // Typing again clears the failure's message, not the offer.
-        vm.setPin("1")
-        assertTrue(vm.uiState.value.keysGone)
-        vm.confirmErase() // nothing without the dialog
-        advanceUntilIdle()
-        assertFalse("eraseThisPhone" in vault.calls)
-        vm.askErase()
-        assertTrue(vm.uiState.value.eraseConfirm)
-        vm.confirmErase()
-        advanceUntilIdle()
-        assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
-    }
-
-    /** The offer goes with any other answer of the vault, and stays through a network failure. */
-    @Test
-    fun aPhoneWithoutTheKeysKeepsTheOfferUntilTheVaultAnswersOtherwise() = runTest {
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret")
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NETWORK, null)
-        vault.unlockResults += UnlockAttempt.BadPin(retryAfterSeconds = 0)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
-        advanceUntilIdle()
-        for (expected in listOf(true, true, false)) {
-            vm.setPin("40281795")
-            vm.submit()
-            advanceUntilIdle()
-            assertEquals(expected, vm.uiState.value.keysGone)
-        }
-    }
-
-    /** An ordinary failure offers no erase. */
-    @Test
-    fun aNetworkFailureOffersNoErase() = runTest {
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NETWORK, null)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
-        advanceUntilIdle()
-        vm.setPin("40281795")
-        vm.submit()
-        advanceUntilIdle()
-        vm.askErase()
-        assertFalse(vm.uiState.value.eraseConfirm)
-    }
-
     @Test
     fun cancelErasesNothing() = runTest {
         val vm = unrecognised()

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Checkbox
@@ -19,8 +20,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -60,10 +65,20 @@ fun formatWait(seconds: Long): String = "%d:%02d".format(seconds / SECONDS_PER_M
 
 private const val SECONDS_PER_MINUTE = 60
 
-/** The unlock screen for [state] (stateless). [onOpenAccountSite]: "Recover your vault" (keys gone, or recover-only). */
+/**
+ * The unlock screen for [state] (stateless). [onOpenAccountSite]: "Recover your vault" (keys gone, or recover-only).
+ * [onContactSupport]: "Contact support" (recover-only), false when no mail app took it ([SupportMail]).
+ */
 @Suppress("CyclomaticComplexMethod", "LongMethod")
 @Composable
-fun UnlockContent(state: UnlockUiState, actions: UnlockActions, onOpenAccountSite: () -> Unit = {}) {
+fun UnlockContent(
+    state: UnlockUiState,
+    actions: UnlockActions,
+    onOpenAccountSite: () -> Unit = {},
+    onContactSupport: (() -> Boolean)? = null,
+) {
+    val context = LocalContext.current
+    val contactSupport = onContactSupport ?: { SupportMail.open(context) }
     val p = state.preflight
     val blocked = state.preflightError == FailureKind.RELEASE_ENDED || p?.rollback == true || state.stateRollback
     FormScaffold(
@@ -289,14 +304,15 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions, onOpenAccountSit
                 }
             }
             if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)
+            // An ended release or a rollback wins: no erase there, whatever else the last answers said.
             when {
+                state.recoverOnly -> RecoverOnlyNotice(onOpenAccountSite, contactSupport)
                 state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
                 state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
-                state.recoverOnly -> RecoverOnlyNotice(onOpenAccountSite)
             }
         }
     }
-    if (state.eraseConfirm) {
+    if (state.eraseConfirm && state.eraseOffered) {
         ConfirmDialog(
             title = stringResource(R.string.unlock_erase_confirm_title),
             // A phone without its vault's keys: the root screen's text, which says what a recovery then needs.
@@ -372,10 +388,12 @@ private fun StuckNotice(erasing: Boolean, onErase: () -> Unit, onRecover: () -> 
 
 /**
  * The vault cannot be opened and erasing this phone would not help ([UnlockUiState.recoverOnly]: an ended release, a
- * rollback): "Recover your vault" (the account site) and contacting VettID support. No erase.
+ * rollback): "Recover your vault" (the account site) first, "Contact support" second (an email with nothing of the
+ * member's in it; without a mail app the address is shown to copy). No erase.
  */
 @Composable
-private fun RecoverOnlyNotice(onRecover: () -> Unit) {
+private fun RecoverOnlyNotice(onRecover: () -> Unit, onContactSupport: () -> Boolean) {
+    var noMailApp by rememberSaveable { mutableStateOf(false) }
     NoticeCard(
         NoticeKind.URGENT,
         stringResource(R.string.unlock_stuck_title),
@@ -385,8 +403,20 @@ private fun RecoverOnlyNotice(onRecover: () -> Unit) {
             TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
                 Text(stringResource(R.string.unlock_recover))
             }
+            TextButton(onClick = { noMailApp = !onContactSupport() }, modifier = Modifier.testTag("contact_support")) {
+                Text(stringResource(R.string.unlock_contact_support))
+            }
         },
     )
+    if (noMailApp) {
+        SelectionContainer {
+            Text(
+                SupportMail.ADDRESS,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.testTag("support_address"),
+            )
+        }
+    }
 }
 
 /**
