@@ -63,6 +63,14 @@
     <string name="data_password_problem_weak">Make it stronger: longer, or a few unrelated words.</string>
     <string name="data_password_problem_pin">Do not reuse your PIN.</string>
     <string name="data_password_problem_control">Remove tabs and other control characters.</string>
+    <!-- ANDROID-PLAN "Passwords" (release R), verbatim -->
+    <string name="data_password_rule_short">Use at least 12 characters.</string>
+    <string name="data_password_rule_repeated">That is one character repeated.</string>
+    <string name="data_password_rule_common">That is a very common password.</string>
+    <string name="data_password_rule_pin">Don\'t use your PIN as your password.</string>
+    <string name="data_password_rule_guessable">This is easy to guess. Add more words or make it less predictable.</string>
+    <string name="data_password_rule_guessable_hint">Avoid names, dates and keyboard runs.</string>
+    <string name="data_password_rule_ok">Strong enough.</string>
     <string name="data_strength_too_short">Too short</string>
     <string name="data_strength_weak">Weak</string>
     <string name="data_strength_fair">Fair</string>

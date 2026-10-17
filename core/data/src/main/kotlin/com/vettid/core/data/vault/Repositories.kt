@@ -162,6 +162,9 @@ interface VaultRepository {
     /** (Release R) Whether this phone holds a phone secret for its vault (a vault of release R). */
     val usesPhoneSecret: Boolean get() = false
 
+    /** This phone received its vault by a direct transfer and has not left onboarding yet. */
+    val movedIn: Boolean get() = false
+
     /**
      * (0.34.0, §11.10.9) Whether the vault's release offers recovery: true for a release before R (its earlier
      * recovery), and from release R only when its capabilities list `recovery_offered`.
@@ -179,6 +182,20 @@ interface VaultRepository {
      * storage with its own secret): the app asks again at every start until it is done.
      */
     val finishMovePending: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    /**
+     * (Release R, §11.14.10) "Finish the move": `vault.lock`, then `vault.unlock` with [pin] and this phone's own secret.
+     * While it runs, [finishingMove] is true: the phone counts as locked (as after any lock) but the screen that asked
+     * stays, so that the member sees the move finish instead of the unlock screen and the notice of a lock in doubt
+     * that the vault, still in the middle of the move, may not answer at once.
+     */
+    suspend fun finishMove(pin: String): UnlockAttempt {
+        lock()
+        return unlock(pin)
+    }
+
+    /** (Release R) True while [finishMove] runs. */
+    val finishingMove: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
 
     /**
      * (Release R, §11.14.10) This old phone opened the vault with its own keys after approving a transfer ("The move

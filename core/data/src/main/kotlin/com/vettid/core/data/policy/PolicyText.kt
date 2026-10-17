@@ -39,3 +39,20 @@ fun PasswordPolicy.Strength.labelRes(): Int = when (this) {
     PasswordPolicy.Strength.GOOD -> R.string.data_strength_good
     PasswordPolicy.Strength.STRONG -> R.string.data_strength_strong
 }
+
+/** The line under a new password for [this] rule (ANDROID-PLAN "Passwords", verbatim). */
+@StringRes
+fun PasswordRule.messageRes(): Int = when (this) {
+    PasswordRule.SHORT -> R.string.data_password_rule_short
+    PasswordRule.REPEATED -> R.string.data_password_rule_repeated
+    PasswordRule.COMMON -> R.string.data_password_rule_common
+    PasswordRule.SAME_AS_PIN -> R.string.data_password_rule_pin
+    PasswordRule.GUESSABLE -> R.string.data_password_rule_guessable
+    PasswordRule.TOO_LONG -> R.string.data_password_problem_long
+    PasswordRule.CONTROL_CHARACTERS -> R.string.data_password_problem_control
+    PasswordRule.OK -> R.string.data_password_rule_ok
+}
+
+/** The estimator's short hint after [PasswordRule.GUESSABLE], else null. */
+@StringRes
+fun PasswordRule.hintRes(): Int? = if (this == PasswordRule.GUESSABLE) R.string.data_password_rule_guessable_hint else null

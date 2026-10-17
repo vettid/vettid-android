@@ -82,8 +82,8 @@
     <string name="messages_photo_in_type">This file type isn\'t supported</string>
     <string name="messages_photo_in_withdrawn">Not received: %1$s\'s vault can no longer send it</string>
     <string name="messages_photo_in_never">Not received: it never arrived</string>
-    <string name="messages_photo_cd_out">Photo you sent. %1$s. %2$s</string>
-    <string name="messages_photo_cd_in">Photo from %1$s. %2$s. %3$s</string>
+    <string name="messages_photo_cd_out">Photo you sent</string>
+    <string name="messages_photo_cd_in">Photo from %1$s</string>
     <string name="messages_photo_viewer_cd">Photo</string>
     <string name="messages_photo_save">Save to phone</string>
     <string name="messages_photo_share">Share</string>

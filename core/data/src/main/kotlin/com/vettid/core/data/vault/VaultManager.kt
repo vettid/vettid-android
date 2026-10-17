@@ -453,6 +453,11 @@ class VaultManager(
          */
         val finishMovePending: Boolean = false,
         /**
+         * This phone received its vault by a direct transfer and has not yet left onboarding ([finishSetup]): the
+         * last onboarding screen is the move's, not an enrollment's, also after a restart.
+         */
+        val movedIn: Boolean = false,
+        /**
          * (0.34.0, §11.10.6, §11.10.9) This phone has seen `recovery_r` for its vault (a verified descriptor, a transfer
          * bundle, or a request of release R's shape that succeeded): it never takes an earlier path for it again.
          */
@@ -684,7 +689,7 @@ class VaultManager(
             saveLocal(
                 local.copy(
                     setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
-                    finishMovePending = false, recoveryRSeen = false, capabilities = emptyList(),
+                    finishMovePending = false, movedIn = false, recoveryRSeen = false, capabilities = emptyList(),
                 ),
             )
             finishMoveFlow.value = false
@@ -1018,7 +1023,7 @@ class VaultManager(
     }
 
     override suspend fun finishSetup() {
-        io { saveLocal(local.copy(setupComplete = true)) }
+        io { saveLocal(local.copy(setupComplete = true, movedIn = false)) }
         phaseFlow.value = AppPhase.Unlocked
     }
 
@@ -1496,6 +1501,8 @@ class VaultManager(
 
     override val usesPhoneSecret: Boolean get() = local.phone.inUse
 
+    override val movedIn: Boolean get() = local.movedIn
+
     override val recoveryOffered: Boolean get() = ReleasePath.recoveryOffered(local.capabilities)
 
     override suspend fun rotate(password: String) = guard {
@@ -1879,8 +1886,10 @@ class VaultManager(
         }
         // Release R (§11.14.10): "Finish the move" is asked until an unlock from storage with this phone's secret.
         if (local.phone.inUse) {
-            io { saveLocal(local.copy(finishMovePending = true)) }
+            io { saveLocal(local.copy(finishMovePending = true, movedIn = true)) }
             finishMoveFlow.value = true
+        } else {
+            io { saveLocal(local.copy(movedIn = true)) }
         }
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.openApi.credentialTakeOver()
@@ -1955,6 +1964,24 @@ class VaultManager(
     }
 
     override val finishMovePending: StateFlow<Boolean> = finishMoveFlow.asStateFlow()
+
+    private val finishingMoveFlow = MutableStateFlow(false)
+    override val finishingMove: StateFlow<Boolean> = finishingMoveFlow.asStateFlow()
+
+    /**
+     * "Finish the move" (§11.14.10 step 4). The lock is the member's lock as everywhere (pending, durably, until
+     * confirmed or superseded by the unlock that follows), so that the phone is locked from its first line; only the
+     * screen is held ([finishingMove]) until the unlock has answered.
+     */
+    override suspend fun finishMove(pin: String): UnlockAttempt {
+        finishingMoveFlow.value = true
+        try {
+            lock()
+            return unlock(pin, null, false)
+        } finally {
+            finishingMoveFlow.value = false
+        }
+    }
 
     /** (Release R) When this phone approved a transfer it still keeps the keys for; null otherwise. */
     override val transferKeptSince: StateFlow<Instant?> = transferKeptFlow.asStateFlow()

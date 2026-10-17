@@ -29,7 +29,7 @@ class NewCredentialViewModelTest {
 
     @Test
     fun needsTheAcknowledgementAndAConfirmation() = runTest {
-        val vm = NewCredentialViewModel(vault)
+        val vm = NewCredentialViewModel(vault, vault)
         filled(vm)
         assertFalse(vm.uiState.value.filled)
         vm.setAcknowledged(true)
@@ -47,7 +47,7 @@ class NewCredentialViewModelTest {
     @Test
     fun aWrongEntryIsShownAndNotKept() = runTest {
         vault.fail["newCredential"] = FakeVault.failure(FailureKind.BAD_PASSWORD, "bad_password")
-        val vm = NewCredentialViewModel(vault)
+        val vm = NewCredentialViewModel(vault, vault)
         filled(vm)
         vm.setAcknowledged(true)
         vm.submit()
@@ -60,12 +60,30 @@ class NewCredentialViewModelTest {
 
     @Test
     fun theNewPasswordMustMatch() = runTest {
-        val vm = NewCredentialViewModel(vault)
+        val vm = NewCredentialViewModel(vault, vault)
         filled(vm)
         vm.setConfirm("something else entirely 99")
         vm.setAcknowledged(true)
         vm.submit()
         assertTrue(vm.uiState.value.mismatch)
         assertFalse(vm.uiState.value.confirming)
+    }
+
+    /** Release R (ANDROID-PLAN "Passwords"): a reset's new password follows the rules too. */
+    @Test
+    fun releaseRResetFollowsTheRules() = runTest {
+        vault.phoneSecret = true
+        val vm = NewCredentialViewModel(vault, vault)
+        assertTrue(vm.uiState.value.newRules)
+        vm.setPin("975310")
+        vm.setCurrent("old password")
+        vm.setPassword("password12345")
+        vm.setConfirm("password12345")
+        vm.setAcknowledged(true)
+        assertEquals(com.vettid.core.data.policy.PasswordRule.COMMON, vm.uiState.value.rule)
+        assertFalse(vm.uiState.value.filled)
+        vm.setPassword("a much longer new pass phrase 42")
+        vm.setConfirm("a much longer new pass phrase 42")
+        assertTrue(vm.uiState.value.filled)
     }
 }

@@ -26,6 +26,7 @@ import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -65,8 +66,7 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         state.update { it.copy(busy = true, failure = null) }
         viewModelScope.launch {
             val failure = try {
-                vault.lock()
-                when (val r = vault.unlock(pin)) {
+                when (val r = vault.finishMove(pin)) {
                     UnlockAttempt.Success -> null
                     is UnlockAttempt.Failed -> r.kind
                     is UnlockAttempt.BadPin -> FailureKind.BAD_PIN
@@ -102,7 +102,7 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("finish_move_pin"),
+            modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("finish_move_pin"),
         )
         state.failure?.let {
             NoticeCard(

@@ -93,7 +93,7 @@
     <string name="onboarding_done_title">Your vault is ready</string>
     <string name="onboarding_done_body">Your vault is enrolled, this phone holds its credential, and only your PIN opens it.</string>
     <string name="onboarding_done_next_title">Next: your first connection</string>
-    <string name="onboarding_done_next_body">Invite someone with a QR code or a link, compare the safety code, and start messaging. Connections arrive in the next update.</string>
+    <string name="onboarding_done_next_body">Invite someone with a QR code or a link, compare the safety code, and start messaging.</string>
     <string name="onboarding_done_go">Go to VettID</string>
 
     <!-- Development -->

@@ -1,6 +1,7 @@
 package com.vettid.feature.onboarding
 
 import com.vettid.core.data.account.SetupLinkInbox
+import com.vettid.core.data.policy.PasswordRule
 import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
@@ -336,5 +337,94 @@ class OnboardingViewModelTest {
         assertEquals("", vm.uiState.value.email)
         assertEquals("", vm.uiState.value.pin)
         assertNull(vm.uiState.value.error)
+    }
+
+    /** ANDROID-PLAN "Passwords": the rules as the member types; Continue only once they pass (staging release 15: password1234). */
+    @Test
+    fun theReleaseRPasswordRulesAtEnrollment() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.confirmAccount()
+        vm.setPin("40281795"); vm.submitPin(); vm.setPinConfirm("40281795"); vm.submitPinConfirm()
+        assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
+        fun verdict(pw: String): PasswordRule {
+            vm.setPassword(pw); vm.setPasswordConfirm(pw)
+            return vm.uiState.value.passwordRule
+        }
+        assertEquals(PasswordRule.SHORT, verdict("short"))
+        assertEquals(PasswordRule.REPEATED, verdict("aaaaaaaaaaaaaa"))
+        assertEquals(PasswordRule.COMMON, verdict("password1234"))
+        assertEquals(PasswordRule.COMMON, verdict("Password1234"))
+        assertEquals(PasswordRule.GUESSABLE, verdict("123456789123"))
+        assertFalse(vm.uiState.value.canSubmitPassword)
+        vm.submitPassword()
+        assertEquals("a refused password goes no further", OnboardingStep.PASSWORD, vm.uiState.value.step)
+        assertEquals(PasswordRule.OK, verdict("correct horse battery staple"))
+        assertTrue(vm.uiState.value.canSubmitPassword)
+        vm.submitPassword()
+        assertEquals(OnboardingStep.BACKUP, vm.uiState.value.step)
+    }
+
+    @Test
+    fun aPasswordEqualToThePinIsRefused() = runTest {
+        vault.phoneSecret = true
+        vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        val vm = vm()
+        advanceUntilIdle()
+        vm.setPassword("402817950582163"); vm.setPasswordConfirm("402817950582163")
+        assertTrue(vm.uiState.value.passwordRule != PasswordRule.SAME_AS_PIN)
+        // The PIN typed after the password on the same screen.
+        vm.setPin("402817950582163")
+        assertEquals(PasswordRule.SAME_AS_PIN, vm.uiState.value.passwordRule)
+        assertFalse(vm.uiState.value.canSubmitPassword)
+    }
+
+    /** The vault's weak_password{reason}: back to the password, the reason under the field in the app's own words. */
+    @Test
+    fun theVaultsWeakPasswordReasonIsShown() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        vault.fail["createCredential"] = com.vettid.core.data.vault.VaultFailure(
+            FailureKind.WEAK_PASSWORD, "weak_password",
+            cause = com.vettid.core.vault.VaultOpException(
+                "credential.create", "weak_password", body = kotlinx.serialization.json.buildJsonObject {
+                    put("reason", kotlinx.serialization.json.JsonPrimitive("guessable"))
+                },
+            ),
+        )
+        val vm = vm()
+        advanceUntilIdle()
+        vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
+        vm.submitBackup()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
+        assertEquals(PasswordRule.GUESSABLE, vm.uiState.value.passwordRule)
+        assertTrue(vm.uiState.value.passwordRefused)
+        assertNull(vm.uiState.value.error)
+        assertFalse("the same password is not sent again", vm.uiState.value.canSubmitPassword)
+        vm.setPassword("a much better passphrase 9 here"); vm.setPasswordConfirm("a much better passphrase 9 here")
+        assertFalse(vm.uiState.value.passwordRefused)
+        assertTrue(vm.uiState.value.canSubmitPassword)
+    }
+
+    /** After a move (also after a restart before leaving onboarding) the last screen is the move's, not the enrollment's. */
+    @Test
+    fun theLastScreenAfterAMoveIsTheMoves() = runTest {
+        vault.movedInFlag = true
+        vault.phoneSecret = true
+        vault.phase.value = AppPhase.Setup(SetupStage.FINISHING)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.DONE, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.movedIn)
+        assertTrue(vm.uiState.value.phoneSecret)
+    }
+
+    @Test
+    fun theLastScreenAfterAnEnrollmentIsTheEnrollments() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.FINISHING)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.DONE, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.movedIn)
     }
 }

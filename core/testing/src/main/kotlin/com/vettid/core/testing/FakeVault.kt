@@ -173,6 +173,10 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     var phoneSecret = false
     override val usesPhoneSecret: Boolean get() = phoneSecret
 
+    /** The vault came here by a direct transfer ([movedIn]). */
+    var movedInFlag = false
+    override val movedIn: Boolean get() = movedInFlag
+
     /** The PIN the last `credential.create` and `credential.password.change` carried (release R). */
     var lastCredentialPin: String? = null
     var lastPasswordChangePin: String? = null

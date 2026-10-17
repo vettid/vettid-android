@@ -88,6 +88,7 @@ import com.vettid.core.ui.components.RemovableTagChip
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.visibleSecretKeyboard
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.theme.Spacing
 
@@ -319,7 +320,10 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                         }
                         else -> null
                     },
-                    modifier = Modifier.fillMaxWidth().testTag("item_edit_notes"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (secret) Modifier.excludeFromAutofill() else Modifier)
+                        .testTag("item_edit_notes"),
                 )
             }
             if (d.keepNotes) {
@@ -793,7 +797,8 @@ private fun ValueEditor(
                 )
             },
             keyboardActions = if (multi) KeyboardActions.Default else ime.keyboardActions,
-            modifier = tag,
+            // A secret value is never offered to a password manager to save or fill (as SecretField).
+            modifier = if (guarded) tag.excludeFromAutofill() else tag,
         )
     }
 }
@@ -978,7 +983,7 @@ private fun AddressPart(
                 KeyboardOptions(capitalization = capitalization, imeAction = ime?.action ?: ImeAction.Next)
             },
             keyboardActions = ime?.keyboardActions ?: KeyboardActions.Default,
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth().then(if (secret) Modifier.excludeFromAutofill() else Modifier),
         )
     }
 }

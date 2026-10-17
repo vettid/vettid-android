@@ -78,12 +78,13 @@ private fun destinationOf(phase: AppPhase): Any = when (phase) {
  * the destination of the phase is then still on the back stack (restored, or kept by the controller while the lock
  * showed), and navigating to it again would destroy it with its ViewModels: the screen the member was on, what they
  * typed, a running enrolment or the wait for a transfer (A6 audit R1). While the app lock shows, nothing of the app
- * (the NavHost included) is composed; a phase that changed under the lock is followed on unlock.
+ * (the NavHost included) is composed; a phase that changed under the lock is followed on unlock. While [hold] ("Finish
+ * the move" is running) the destination showing stays, and the phase is followed when it ends.
  */
 @Composable
-internal fun RootDestinationEffect(nav: NavHostController, target: Any, locked: Boolean) {
-    LaunchedEffect(nav, target, locked) {
-        if (locked) return@LaunchedEffect
+internal fun RootDestinationEffect(nav: NavHostController, target: Any, locked: Boolean, hold: Boolean = false) {
+    LaunchedEffect(nav, target, locked, hold) {
+        if (locked || hold) return@LaunchedEffect
         if (nav.currentBackStackEntry?.destination?.hasRoute(target::class) == true) return@LaunchedEffect
         nav.navigate(target) {
             popUpTo(0) { inclusive = true }
@@ -128,7 +129,10 @@ fun VettIdApp(
     val target = if (update != null) UpdateDest else destinationOf(phase)
 
     val locked = lock == AppLockState.LOCKED
-    RootDestinationEffect(nav, target, locked)
+    // "Finish the move" locks and then unlocks the vault (§11.14.10): the screen it runs on stays until the unlock has
+    // answered, instead of the unlock screen in between (the phone is locked all the same; a failure then shows it).
+    val finishingMove by viewModel.finishingMove.collectAsStateWithLifecycle()
+    RootDestinationEffect(nav, target, locked, hold = finishingMove)
 
     // Debug builds expose test tags as resource ids, so that adb (uiautomator) can drive two phones at once.
     val root = if (BuildConfig.DEBUG) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
