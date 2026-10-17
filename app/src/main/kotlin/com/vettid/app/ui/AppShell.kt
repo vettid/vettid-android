@@ -49,7 +49,9 @@ import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.feature.credential.CredentialAlarmRoute
+import com.vettid.feature.credential.CredentialPasswordRoute
 import com.vettid.feature.credential.CredentialRoute
+import com.vettid.feature.credential.CredentialRotateRoute
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -205,6 +207,17 @@ fun AppShell(
 
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
     val checkMode = if (gate.gated && (armed || onList)) OwnerCheckMode.GATED else asked
+    val rotateVm: RotateOfferViewModel = hiltViewModel()
+    val rotateOffered by rotateVm.offered.collectAsStateWithLifecycle()
+    // Release R: the owner check sent right after an unlock that cancelled a recovery did not pass; the check screen
+    // shows its answer at once, so that the member's presence is recorded.
+    val checkAfterCancel by gateVm.checkAfterCancel.collectAsStateWithLifecycle()
+    LaunchedEffect(checkAfterCancel) {
+        if (checkAfterCancel) {
+            gateVm.consumeCheckAfterCancel()
+            if (asked == null) asked = OwnerCheckMode.VOLUNTARY
+        }
+    }
     LaunchedEffect(checkMode) { if (checkMode == OwnerCheckMode.GATED) showAccount = false }
 
     Box(Modifier.fillMaxSize()) {
@@ -269,7 +282,17 @@ fun AppShell(
                         statusBarPadding = !alarmShown && !deletionShown && !gate.bannerShown() && !release.visible,
                     )
                 }
-                val bannerShown = alarmShown || deletionShown || gate.bannerShown() || release.visible || notifyPrompt.note
+                // Release R: the offer to rotate the vault's keys after a transfer, a PIN change or a password change.
+                val rotateShown = rotateOffered && current?.hierarchy?.any { it.hasRoute(CredentialRotateRoute::class) } != true
+                if (rotateShown) {
+                    RotateOfferBanner(
+                        // The offer stays until a rotation succeeds (or it is put away); it is hidden on the rotation screen.
+                        onRotate = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
+                        onDismiss = rotateVm::dismiss,
+                        statusBarPadding = !alarmShown && !deletionShown && !gate.bannerShown() && !release.visible && !notifyPrompt.note,
+                    )
+                }
+                val bannerShown = alarmShown || deletionShown || gate.bannerShown() || release.visible || notifyPrompt.note || rotateShown
                 Box(
                     Modifier
                         .weight(1f)
@@ -343,6 +366,7 @@ fun AppShell(
                                 navigate = { navController.navigate(it) },
                                 // Not a drawer destination any more: Settings → Security → Credential, and back to Settings.
                                 onOpenCredential = { navController.navigate(CredentialRoute) { launchSingleTop = true } },
+                                onChangePassword = { navController.navigate(CredentialPasswordRoute) { launchSingleTop = true } },
                                 onEnableAppLock = onEnableAppLock,
                                 onAccountClick = { showAccount = true },
                                 onOpenAccountSite = { uri.openUri(portal) },

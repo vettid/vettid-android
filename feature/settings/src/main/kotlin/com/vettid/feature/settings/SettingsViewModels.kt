@@ -57,6 +57,8 @@ data class SettingsUiState(
     val screenshotsAllowed: Boolean = false,
     /** A development build: the allowance does not end by itself (the row says so). */
     val screenshotsStayOn: Boolean = false,
+    /** (Release R) The vault has a phone secret: Settings → Security → New phone secret is offered. */
+    val phoneSecret: Boolean = false,
 )
 
 /** Settings (ANDROID-PLAN §4): theme (DataStore), app lock and its timeout (D6), lock vault; the account read-only. */
@@ -71,7 +73,9 @@ class SettingsViewModel @Inject constructor(
     private val screenshots: ScreenshotAllowance,
 ) : ViewModel() {
     private val local = MutableStateFlow(
-        SettingsUiState(screenshotsAllowed = screenshots.allowed.value, screenshotsStayOn = screenshots.staysOn),
+        SettingsUiState(
+            screenshotsAllowed = screenshots.allowed.value, screenshotsStayOn = screenshots.staysOn, phoneSecret = vault.usesPhoneSecret,
+        ),
     )
 
     init {
@@ -248,6 +252,11 @@ data class ChangePinUiState(
      */
     val withPassword: Boolean = false,
     val password: String = "",
+    /**
+     * Opened from a notice about recovery attempts ("if that was not you"): the screen says first that changing only the
+     * PIN gives whoever is guessing ten new tries at the same password (ANDROID-PLAN "Change PIN").
+     */
+    val fromAttempts: Boolean = false,
 ) {
     override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done, withPassword=$withPassword)"
 }

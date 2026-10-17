@@ -5,6 +5,7 @@ import com.vettid.core.vault.HeldCounts
 import com.vettid.core.vault.HeldNotice
 import com.vettid.core.vault.OwnerCheckPassed
 import com.vettid.core.vault.OwnerCheckStatus
+import com.vettid.core.vault.RecoveryStatus
 import com.vettid.core.vault.Settings
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
@@ -30,6 +31,9 @@ interface OwnerCheckOps {
 
     suspend fun check(pin: String, password: String, hold: Boolean?, holdOffUntil: String?): OwnerCheckPassed
 
+    /** `vault.status`'s `owner_check` and (release R) `recovery`, from one read. */
+    suspend fun statusAndRecovery(): Pair<OwnerCheckStatus?, RecoveryStatus?> = status() to null
+
     suspend fun settingsGet(): Settings
 
     suspend fun settingsSet(version: Long, set: Map<String, JsonElement>)
@@ -52,6 +56,8 @@ class OwnerCheckManager(
     private val onPassed: () -> Unit,
     /** Marks feed items read (the feed's `FeedManager`, the one source of the notices, ANDROID-PLAN 0.1.23). */
     private val readNotices: suspend (List<String>) -> Unit = {},
+    /** (Release R) Each `vault.status`'s `recovery`, for the clock of a counter that stays unavailable (§11.14.5). */
+    private val onRecoveryStatus: suspend (RecoveryStatus?) -> Unit = {},
     private val now: () -> Instant = Instant::now,
 ) : OwnerCheckRepository {
     private val saved = restore()
@@ -59,6 +65,14 @@ class OwnerCheckManager(
     private val locked = MutableStateFlow(false)
     private val unlockOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
     private val noticeFlow = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
+    private val presenceFlow = MutableStateFlow(saved?.presenceUnrecorded == true)
+    private val checkAfterCancelFlow = MutableStateFlow(false)
+
+    /**
+     * (Release R) When the check whose presence was not recorded passed, on the vault's clock (its answer's deadline less
+     * its interval), so that only a presence recorded since then ends the notice; null when the answer did not say.
+     */
+    private var presenceCheckAt: Instant? = instant(saved?.presenceCheckAt)
 
     /** The `ts` of the newest `vault.held` applied (kept with the view: an older one never overwrites newer counts). */
     private var heldTs: Instant? = instant(saved?.heldTs)
@@ -67,6 +81,12 @@ class OwnerCheckManager(
     override val lockedByOwnerCheck: StateFlow<Boolean> = locked.asStateFlow()
     override val unlockCheckOutcome: StateFlow<OwnerCheckOutcome?> = unlockOutcome.asStateFlow()
     override val notices: StateFlow<List<OwnerCheckNotice>> = noticeFlow.asStateFlow()
+    override val presenceUnrecorded: StateFlow<Boolean> = presenceFlow.asStateFlow()
+    override val checkAfterCancel: StateFlow<Boolean> = checkAfterCancelFlow.asStateFlow()
+
+    override fun consumeCheckAfterCancel() {
+        checkAfterCancelFlow.value = false
+    }
 
     // --- what the vault tells ---
 
@@ -127,6 +147,20 @@ class OwnerCheckManager(
         if (v != null && v.gated(now())) unlockOutcome.value = check(pin, password, null)
     }
 
+    /**
+     * (Release R, ANDROID-PLAN "Other screens") Right after an unlock that cancelled a recovery: the owner check at once,
+     * with the same entries, whatever the deadline, because it records that the member is present (§11.14.5). A check
+     * that does not pass waits in [unlockCheckOutcome], and [checkAfterCancel] asks for the check screen.
+     */
+    suspend fun afterCancelledRecovery(pin: String, password: String) {
+        locked.value = false
+        val r = check(pin, password, null)
+        if (r != OwnerCheckOutcome.Passed) {
+            unlockOutcome.value = r
+            checkAfterCancelFlow.value = true
+        }
+    }
+
     // --- OwnerCheckRepository ---
 
     override suspend fun refreshOwnerCheck() {
@@ -134,7 +168,10 @@ class OwnerCheckManager(
     }
 
     private suspend fun readStatus(): OwnerCheckView? {
-        val st = vaultGuard { ops().status() } ?: return view.value
+        val (st0, recovery) = vaultGuard { ops().statusAndRecovery() }
+        presenceFromStatus(recovery)
+        runCatching { onRecoveryStatus(recovery) }
+        val st = st0 ?: return view.value
         val prev = view.value
         val state = when (st.state) {
             "held" -> OwnerCheckState.HELD
@@ -161,6 +198,7 @@ class OwnerCheckManager(
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
             locked.value = false
             heldTs = null
+            presenceFromCheck(r)
             set(
                 OwnerCheckView(
                     state = OwnerCheckState.OK,
@@ -253,6 +291,36 @@ class OwnerCheckManager(
         return OwnerCheckNotice(item.itemId, item.kind, item.ref, instant(item.at), urgent = item.priority == PRIORITY_URGENT)
     }
 
+    /** §11.14.5: `present_recorded` false starts the notice; true ends it; absent (before release R) changes nothing. */
+    private fun presenceFromCheck(r: OwnerCheckPassed) {
+        when (r.recovery?.presentRecorded) {
+            false -> {
+                val deadline = instant(r.deadline)
+                val interval = r.intervalSeconds
+                presenceCheckAt = if (deadline != null && interval != null) deadline.minusSeconds(interval) else null
+                presenceFlow.value = true
+            }
+            true -> {
+                presenceCheckAt = null
+                presenceFlow.value = false
+            }
+            null -> Unit
+        }
+    }
+
+    /** A `vault.status` whose presence was recorded at or after the check that could not record it ends the notice. */
+    private fun presenceFromStatus(r: RecoveryStatus?) {
+        val at = instant(r?.presentRecordedAt)
+        // Without the check's time (an answer without deadline or interval) no status can show it was recorded since.
+        val since = presenceCheckAt
+        val recordedSince = at != null && since != null && !at.isBefore(since)
+        if (presenceFlow.value && recordedSince) {
+            presenceCheckAt = null
+            presenceFlow.value = false
+            view.value?.let { set(it) }
+        }
+    }
+
     /** Forgets everything (a wipe, a deleted vault). */
     fun clear() {
         view.value = null
@@ -260,6 +328,9 @@ class OwnerCheckManager(
         unlockOutcome.value = null
         noticeFlow.value = emptyList()
         heldTs = null
+        presenceFlow.value = false
+        presenceCheckAt = null
+        checkAfterCancelFlow.value = false
         runCatching { persist(ByteArray(0)) }
     }
 
@@ -274,7 +345,8 @@ class OwnerCheckManager(
 
     private fun set(v: OwnerCheckView) {
         view.value = v
-        runCatching { persist(json.encodeToString(Saved.serializer(), Saved.of(v, heldTs)).toByteArray()) }
+        val saved = Saved.of(v, heldTs).copy(presenceUnrecorded = presenceFlow.value, presenceCheckAt = presenceCheckAt?.toString())
+        runCatching { persist(json.encodeToString(Saved.serializer(), saved).toByteArray()) }
     }
 
     private fun restore(): Saved? = try {
@@ -301,6 +373,9 @@ class OwnerCheckManager(
         val holdOffUntil: String? = null,
         val waiting: SavedCounts? = null,
         val heldTs: String? = null,
+        /** (Release R) The presence notice is showing ([presenceUnrecorded]), and since which check. */
+        val presenceUnrecorded: Boolean = false,
+        val presenceCheckAt: String? = null,
     ) {
         fun toView() = OwnerCheckView(
             runCatching { OwnerCheckState.valueOf(state) }.getOrDefault(OwnerCheckState.OK),

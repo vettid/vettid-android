@@ -251,7 +251,13 @@ data class VaultOverview(
 )
 
 /** `vault.status`'s `recovery` for the status screen: never shown as "0 of 10" when [state] is `unknown`. */
-data class RecoveryStatusView(val state: String, val used: Int?, val counterUnavailable: Boolean)
+data class RecoveryStatusView(
+    val state: String,
+    val used: Int?,
+    val counterUnavailable: Boolean,
+    /** (§11.14.5) Unavailable at every read for 24 hours: shown with the urgency of a used attempt. */
+    val unknownForADay: Boolean = false,
+)
 
 /** MEMBER-API `ReleaseInfo` (advisory; the manifest decides). */
 data class ReleaseInfoView(

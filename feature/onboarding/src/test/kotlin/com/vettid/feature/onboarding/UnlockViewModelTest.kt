@@ -220,6 +220,31 @@ class UnlockViewModelTest {
         assertEquals(AppPhase.Unlocked, vault.phase.value)
     }
 
+    /** Release R (ANDROID-PLAN "Other screens"): a cancel from the app asks for the password and sends the owner check with it. */
+    @Test
+    fun releaseRCancelSendsTheOwnerCheck() = runTest {
+        vault.phoneSecret = true
+        vault.unlockResults += UnlockAttempt.RecoveryPending
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.recoveryPending)
+        assertFalse("the password first", vm.uiState.value.cancelAllowed)
+        vm.cancelRecoveryAndUnlock()
+        advanceUntilIdle()
+        assertFalse(vault.lastCancelRecovery)
+        vm.setPassword("the password")
+        assertTrue(vm.uiState.value.cancelAllowed)
+        vm.cancelRecoveryAndUnlock()
+        advanceUntilIdle()
+        assertTrue(vault.lastCancelRecovery)
+        assertEquals("the password", vault.lastCancelCheckPassword)
+        assertEquals("", vm.uiState.value.password)
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+    }
+
     /**
      * VAULT-MESSAGING 0.27.0 §11.7.1: `signer_refused` is a state of its own. Not a wrong PIN: no message under the
      * field, no countdown, the field stays usable; the same answer for any PIN keeps the notice, and nothing offers

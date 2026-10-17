@@ -68,6 +68,13 @@ data class OwnerCheckUiState(
     /** The check passed: the screen closes. */
     val passed: Boolean = false,
     val locking: Boolean = false,
+    /**
+     * (Release R, §11.14.5) The vault could not record that the member was here (`present_recorded: false`): the
+     * presence notice, until a later answer or `vault.status` says the presence was recorded.
+     */
+    val presenceUnrecorded: Boolean = false,
+    /** The check passed with the presence not recorded: the screen stays with the notice until the member goes on. */
+    val passedUnrecorded: Boolean = false,
 ) {
     val submitAllowed: Boolean get() = !busy && !locking && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
 
@@ -87,6 +94,9 @@ interface OwnerCheckActions {
     fun setHoldOff(choice: HoldOffChoice)
     fun submit()
     fun lockVault()
+
+    /** After a check that passed with the presence notice: the member read it; the screen closes. */
+    fun acknowledgePresence() {}
 }
 
 /**
@@ -107,6 +117,7 @@ class OwnerCheckViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
+        viewModelScope.launch { repo.presenceUnrecorded.collect { p -> state.update { it.copy(presenceUnrecorded = p) } } }
     }
 
     /** Opens the screen for [mode], with nothing entered; a check sent right after an unlock says how it went. */
@@ -114,7 +125,10 @@ class OwnerCheckViewModel @Inject constructor(
         ticker?.cancel()
         val after = repo.unlockCheckOutcome.value
         repo.consumeUnlockCheckOutcome()
-        state.value = OwnerCheckUiState(mode = mode, view = repo.ownerCheck.value, message = after?.let { messageOf(it) })
+        state.value = OwnerCheckUiState(
+            mode = mode, view = repo.ownerCheck.value, message = after?.let { messageOf(it) },
+            presenceUnrecorded = repo.presenceUnrecorded.value,
+        )
         if (after is OwnerCheckOutcome.Backoff) startBackoff(after.retryAfterSeconds)
         viewModelScope.launch { runCatching { repo.refreshOwnerCheck() } }
     }
@@ -122,8 +136,10 @@ class OwnerCheckViewModel @Inject constructor(
     /** Leaves the screen without a check (not while gated): forgets what was entered. */
     fun cancel() {
         ticker?.cancel()
-        state.update { OwnerCheckUiState(mode = it.mode, view = it.view) }
+        state.update { OwnerCheckUiState(mode = it.mode, view = it.view, presenceUnrecorded = it.presenceUnrecorded) }
     }
+
+    override fun acknowledgePresence() = state.update { if (it.passedUnrecorded) it.copy(passed = true) else it }
 
     override fun setPin(v: String) = state.update {
         it.copy(pin = v.filter { c -> c.isDigit() }.take(OwnerCheckUiState.MAX_PIN), message = null)
@@ -148,8 +164,16 @@ class OwnerCheckViewModel @Inject constructor(
             } catch (e: VaultFailure) {
                 OwnerCheckOutcome.Failed(e.kind, e.code)
             }
-            // §3.6.5: neither entry is kept beyond the answer.
-            state.update { it.copy(busy = false, pin = "", password = "", passed = r == OwnerCheckOutcome.Passed, message = messageOf(r)) }
+            // §3.6.5: neither entry is kept beyond the answer. §11.14.5: a check that passed without the presence recorded
+            // keeps the screen, with the notice, until the member goes on.
+            val passed = r == OwnerCheckOutcome.Passed
+            val unrecorded = passed && repo.presenceUnrecorded.value
+            state.update {
+                it.copy(
+                    busy = false, pin = "", password = "", passed = passed && !unrecorded, passedUnrecorded = unrecorded,
+                    presenceUnrecorded = if (passed) repo.presenceUnrecorded.value else it.presenceUnrecorded, message = messageOf(r),
+                )
+            }
             if (r is OwnerCheckOutcome.Backoff) startBackoff(r.retryAfterSeconds)
         }
     }

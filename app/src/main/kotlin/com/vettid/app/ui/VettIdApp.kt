@@ -217,6 +217,7 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
     val finishMove by viewModel.finishMovePending.collectAsStateWithLifecycle()
     val movedBack by viewModel.movedBack.collectAsStateWithLifecycle()
     val moveNotDone by viewModel.moveNotDone.collectAsStateWithLifecycle()
+    val movedAway by viewModel.movedAway.collectAsStateWithLifecycle()
     var finishMoveOpen by rememberSaveable { mutableStateOf(false) }
     val askFinishMove = finishMove && unlocked
     if (askFinishMove) {
@@ -247,6 +248,16 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack,
         )
     }
+    // The old phone removed its keys (the new phone finished the move, or 7 days passed): said once.
+    if (movedAway) {
+        InfoBanner(
+            stringResource(R.string.root_moved_away),
+            Modifier.testTag("moved_away_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeMovedAway,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone,
+        )
+    }
     // Kept open through the lock and unlock it sends (and never dismissed while they run); never over the app lock. Once
     // the vault is locked and the hold is over (its bound, or the outcome), the unlock screen takes over and says why.
     val finishing by viewModel.finishingMove.collectAsStateWithLifecycle()
@@ -264,5 +275,5 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             }
         }
     }
-    return askFinishMove || movedBack || moveNotDone
+    return askFinishMove || movedBack || moveNotDone || movedAway
 }

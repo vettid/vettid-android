@@ -212,11 +212,22 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     stringResource(R.string.unlock_recovery_body),
                     modifier = Modifier.testTag("recovery_pending"),
                     actions = {
-                        TextButton(onClick = actions::cancelRecoveryAndUnlock, enabled = !state.busy) {
+                        TextButton(onClick = actions::cancelRecoveryAndUnlock, enabled = state.cancelAllowed) {
                             Text(stringResource(R.string.unlock_recovery_cancel), color = MaterialTheme.colorScheme.error)
                         }
                     },
                 )
+                if (state.phoneSecret) {
+                    // Release R: the owner check follows the cancel at once (the PIN, kept from the unlock, and the password).
+                    SecretField(
+                        value = state.password,
+                        onValueChange = actions::setPassword,
+                        label = stringResource(R.string.unlock_password_label),
+                        enabled = !state.busy,
+                        onImeAction = actions::cancelRecoveryAndUnlock,
+                        modifier = Modifier.testTag("unlock_cancel_password"),
+                    )
+                }
             }
             // Never a PIN field while the last check of the vault's software failed.
             val verified = p != null && state.preflightError == null

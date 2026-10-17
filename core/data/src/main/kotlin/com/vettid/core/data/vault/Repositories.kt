@@ -224,6 +224,23 @@ interface VaultRepository {
 
     fun acknowledgeMoveNotDone() {}
 
+    /**
+     * (Release R, ANDROID-PLAN "Transfer") After a transfer, a PIN change or a password change the app offers to rotate
+     * the vault's keys (`credential.rotate`), until a rotation or [dismissRotateOffer].
+     */
+    val rotateOffered: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    fun dismissRotateOffer() {}
+
+    /**
+     * (Release R, §11.14.10) This old phone removed its keys at the end of a kept transfer (the new phone finished the
+     * move, or 7 days passed): "Your vault has moved to your new phone. VettID has removed its keys from this phone."
+     * Told once, in this process, until [acknowledgeMovedAway].
+     */
+    val movedAway: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    fun acknowledgeMovedAway() {}
+
     /** Leaves onboarding for the app. */
     suspend fun finishSetup()
 
@@ -232,6 +249,14 @@ interface VaultRepository {
 
     /** Unlocks (§11.4), optionally approving [approve] (§11.10.3) or cancelling a recovery (§11.11.4). */
     suspend fun unlock(pin: String, approve: ReleaseView? = null, cancelRecovery: Boolean = false): UnlockAttempt
+
+    /**
+     * (Release R, ANDROID-PLAN "Other screens") An unlock that cancels a pending recovery (`cancel_recovery`), followed
+     * at once by the owner check with [pin] and [password], which records that the member is present. Before release R:
+     * the unlock with `cancel_recovery` alone.
+     */
+    suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView? = null): UnlockAttempt =
+        unlock(pin, approve, cancelRecovery = true)
 
     /**
      * Unlocks a vault past its owner-check deadline (VAULT-MESSAGING §3.6.5): the PIN unlocks; if `vault.status`

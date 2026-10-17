@@ -140,4 +140,34 @@ class OwnerCheckViewModelTest {
         advanceUntilIdle()
         assertEquals(OwnerCheckMessage.Failed(FailureKind.NETWORK, null), vm.uiState.value.message)
     }
+
+    /** Release R (§11.14.5): a check that passed without the presence recorded keeps the screen with the notice. */
+    @Test
+    fun aPassedCheckWithThePresenceNotRecorded() = runTest {
+        vault.presenceUnrecorded.value = true
+        val vm = vm(OwnerCheckMode.VOLUNTARY)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.presenceUnrecorded)
+        vm.setPin("975310")
+        vm.setPassword("pw")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.passedUnrecorded)
+        assertFalse(vm.uiState.value.passed)
+        assertEquals("", vm.uiState.value.pin)
+        vm.acknowledgePresence()
+        assertTrue(vm.uiState.value.passed)
+    }
+
+    @Test
+    fun aPassedCheckWithThePresenceRecordedCloses() = runTest {
+        val vm = vm(OwnerCheckMode.VOLUNTARY)
+        advanceUntilIdle()
+        vm.setPin("975310")
+        vm.setPassword("pw")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.passed)
+        assertFalse(vm.uiState.value.passedUnrecorded)
+    }
 }
