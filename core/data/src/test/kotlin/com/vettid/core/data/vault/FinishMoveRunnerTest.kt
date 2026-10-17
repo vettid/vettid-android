@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -28,13 +29,33 @@ class FinishMoveRunnerTest {
         val answer = CompletableDeferred<UnlockAttempt>()
         var locked = 0
         val outcomes = mutableListOf<UnlockAttempt>()
+
+        /** As the vault manager's: every lock and every wipe bumps it; a wipe ends signed out with a fresh record. */
+        var generation = 0
+        var signedOut = false
+        var record = Record()
         val runner = FinishMoveRunner(
             manager, holdMs = 90_000,
-            lock = { locked++ },
+            lock = {
+                locked++
+                generation++
+            },
             unlock = { answer.await() },
+            generation = { generation },
+            signedOut = { signedOut },
             onOutcome = { outcomes += it },
+            onOpened = { record = record.copy(rotateOffered = true) },
         )
+
+        fun wipe() {
+            generation++
+            record = Record()
+            signedOut = true
+        }
     }
+
+    /** The part of the account record the rotate offer is kept in. */
+    private data class Record(val rotateOffered: Boolean = false)
 
     @Test
     fun aCancelledCallerStillGetsTheVaultOpened() = runTest {
@@ -77,5 +98,56 @@ class FinishMoveRunnerTest {
         assertTrue(r.isFailure)
         assertEquals(FailureKind.NETWORK, runner.failure.value)
         manager.cancel()
+    }
+
+    @Test
+    fun aSuccessOffersTheRotation() = runTest {
+        val f = Fixture(testScheduler)
+        val caller = launch { f.runner.run("975310") }
+        runCurrent()
+        f.answer.complete(UnlockAttempt.Success)
+        advanceUntilIdle()
+        assertTrue(caller.isCompleted)
+        assertTrue(f.record.rotateOffered)
+        f.manager.cancel()
+    }
+
+    @Test
+    fun aSuccessThatAWipeOvertookOffersNothing() = runTest {
+        val f = Fixture(testScheduler)
+        val caller = launch { f.runner.run("975310") }
+        runCurrent()
+        // `unknown_device` or `device.unlinked` while the unlock is on its way: the phone is wiped, then the unlock answers.
+        f.wipe()
+        f.answer.complete(UnlockAttempt.Success)
+        advanceUntilIdle()
+        assertTrue(caller.isCompleted)
+        assertEquals(listOf<UnlockAttempt>(UnlockAttempt.Success), f.outcomes)
+        assertFalse(f.record.rotateOffered)
+        f.manager.cancel()
+    }
+
+    @Test
+    fun aSecondRunJoinsTheOneOnItsWay() = runTest {
+        val f = Fixture(testScheduler)
+        val first = async { f.runner.run("975310") }
+        runCurrent()
+        val second = async { f.runner.run("111111") }
+        runCurrent()
+        // One lock, one unlock, one hold: the second caller started nothing.
+        assertEquals(1, f.locked)
+        assertTrue(f.runner.finishing.value)
+        f.answer.complete(UnlockAttempt.Success)
+        advanceUntilIdle()
+        assertEquals(UnlockAttempt.Success, first.await())
+        assertEquals(UnlockAttempt.Success, second.await())
+        assertEquals(1, f.outcomes.size)
+        assertFalse(f.runner.finishing.value)
+        // Once it has ended, the next run is a run of its own.
+        launch { f.runner.run("975310") }
+        advanceUntilIdle()
+        assertEquals(2, f.locked)
+        assertEquals(2, f.outcomes.size)
+        f.manager.cancel()
     }
 }

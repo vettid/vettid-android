@@ -150,6 +150,25 @@ class VaultManager(
     /** (Release R, §11.14.10) This new phone has a move to finish. */
     private val finishMoveFlow = MutableStateFlow(local.finishMovePending)
 
+    /**
+     * "Finish the move" (§11.14.10 step 4), run in this manager's scope ([FinishMoveRunner]): the lock is the member's
+     * lock as everywhere (pending, durably, until confirmed or superseded by the unlock that follows); the screen is held
+     * ([finishingMove]) for a bounded time; the unlock completes whatever becomes of the screen that asked, and its
+     * failure is kept for the unlock screen ([finishMoveFailure]). Declared before the init blocks that start work on
+     * [scope].
+     */
+    private val finishMoveRunner = FinishMoveRunner(
+        scope,
+        FINISH_MOVE_HOLD_MS,
+        lock = { lock() },
+        unlock = { pin -> unlock(pin, null, false) },
+        generation = { generation },
+        signedOut = { phaseFlow.value == AppPhase.SignedOut },
+        // ANDROID-PLAN "Transfer": after a transfer the app offers to rotate the vault's keys. Not after a wipe that
+        // overtook the unlock: the offer would land in the fresh record, for a vault enrolled here later.
+        onOpened = { offerRotation(true) },
+    )
+
     /** (Release R, §11.14.10) This old phone took the vault back after a transfer that did not finish. */
     private val movedBackFlow = MutableStateFlow(false)
 
@@ -953,6 +972,7 @@ class VaultManager(
         }
         gateway.memberChanged(r.userGuid)
         io { saveLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
+        rotateOfferFlow.value = false // a fresh record: no offer from before this vault
         phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
         return r.emailHint
     }
@@ -1688,6 +1708,7 @@ class VaultManager(
         val s = session()
         gateway.memberChanged(claimed.userGuid)
         io { saveLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
+        rotateOfferFlow.value = false // a fresh record: no offer from before this vault
         val r = try {
             s.alt.recoveryRegister(
                 code.vaultId,
@@ -2048,21 +2069,6 @@ class VaultManager(
     }
 
     override val finishMovePending: StateFlow<Boolean> = finishMoveFlow.asStateFlow()
-
-    /**
-     * "Finish the move" (§11.14.10 step 4), run in this manager's scope ([FinishMoveRunner]): the lock is the member's
-     * lock as everywhere (pending, durably, until confirmed or superseded by the unlock that follows); the screen is held
-     * ([finishingMove]) for a bounded time; the unlock completes whatever becomes of the screen that asked, and its
-     * failure is kept for the unlock screen ([finishMoveFailure]).
-     */
-    private val finishMoveRunner = FinishMoveRunner(
-        scope,
-        FINISH_MOVE_HOLD_MS,
-        lock = { lock() },
-        unlock = { pin -> unlock(pin, null, false) },
-        // ANDROID-PLAN "Transfer": after a transfer the app offers to rotate the vault's keys.
-        onOutcome = { r -> if (r == UnlockAttempt.Success) offerRotation(true) },
-    )
 
     override val finishingMove: StateFlow<Boolean> get() = finishMoveRunner.finishing
 
