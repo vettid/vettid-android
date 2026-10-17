@@ -172,12 +172,20 @@ fun VettIdApp(
                     NavHost(nav, startDestination = StartingDest) {
                         composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
                         composable<UnreachableDest> {
-                            val kind = (phase as? AppPhase.Unreachable)?.failure
+                            val unreachable = phase as? AppPhase.Unreachable
                             val clearFailed by viewModel.clearDataFailed.collectAsStateWithLifecycle()
-                            UnreachableScreen(kind, retrying, viewModel::retry, viewModel::startOver, clearFailed = clearFailed)
+                            UnreachableScreen(
+                                unreachable?.failure,
+                                retrying,
+                                viewModel::retry,
+                                viewModel::startOver,
+                                clearFailed = clearFailed,
+                                longUnreachable = unreachable?.longUnreachable == true,
+                                onRecover = { uri.openUri(portal) },
+                            )
                         }
                         composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
-                        composable<UnlockDest> { UnlockRoute() }
+                        composable<UnlockDest> { UnlockRoute(onOpenAccountSite = { uri.openUri(portal) }) }
                         composable<UpdateDest> { ReleaseUpdateFlowRoute() }
                         composable<MainDest> {
                             // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).

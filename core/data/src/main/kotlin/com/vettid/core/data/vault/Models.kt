@@ -7,8 +7,11 @@ sealed interface AppPhase {
     /** Reading local state at start. */
     data object Starting : AppPhase
 
-    /** The member API could not be reached at start ([failure] says why). */
-    data class Unreachable(val failure: FailureKind) : AppPhase
+    /**
+     * The member API could not be reached at start ([failure] says why). [longUnreachable]: nothing has reached the vault
+     * service from this phone for [StuckScreens.LONG_UNREACHABLE] or more ([StuckScreens.longUnreachable]).
+     */
+    data class Unreachable(val failure: FailureKind, val longUnreachable: Boolean = false) : AppPhase
 
     /**
      * Nothing set up on this phone: the welcome screen (a setup code, a recovery or a transfer). The app never

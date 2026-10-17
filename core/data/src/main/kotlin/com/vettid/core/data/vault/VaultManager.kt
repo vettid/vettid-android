@@ -924,7 +924,10 @@ class VaultManager(
         } catch (e: VaultFailure) {
             // What the phone stores for the vault could not be read (the device state, a Keystore key): said as
             // that, with the way out, rather than as "cannot connect" (A6 audit P4).
-            AppPhase.Unreachable(if (e.code == CODE_KEYSTORE) FailureKind.LOCAL_STATE else e.kind)
+            val kind = if (e.code == CODE_KEYSTORE) FailureKind.LOCAL_STATE else e.kind
+            // Nothing has reached the vault service for a long time: erase-or-recover beside "Try again".
+            val last = listOfNotNull(local.lastContactAtMs, local.lastOpenedAtMs).maxOrNull()
+            AppPhase.Unreachable(kind, StuckScreens.longUnreachable(kind, last, System.currentTimeMillis()))
         }
         if (gen == generation) phaseFlow.value = p // a wipe meanwhile already said SignedOut
     }
@@ -960,8 +963,9 @@ class VaultManager(
             // complete leaves nothing to resume: the welcome screen.
             return@guard if (local.userGuid.isEmpty()) AppPhase.SignedOut else AppPhase.Setup(SetupStage.NEW_VAULT)
         }
+        val rec = record.recordGeneration
         val st = try {
-            vaultStatus(s)
+            vaultStatus(s).also { io { record.contacted(rec, System.currentTimeMillis()) } }
         } catch (e: VaultFailure) {
             // A lock is pending and the vault cannot be reached: the unlock screen, with its notice (never the
             // open app, and not "cannot connect" either: the member has to see that the lock is not confirmed).

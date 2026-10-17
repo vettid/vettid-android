@@ -63,6 +63,8 @@ class RootViewModelTest {
             dataSteps += "clear"
             cleared
         },
+        known = emptyList(),
+        io = dispatcher,
     )
 
     private fun root(vault: FakeVault, prefs: InMemoryPreferencesRepository = InMemoryPreferencesRepository()) =
@@ -72,7 +74,7 @@ class RootViewModelTest {
     fun afterAWipeThatDidNotFinishTheWayOutErasesTheDataAndNothingElse() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.ERASE_FAILED))
         val vm = root(vault)
-        vm.startOver()
+        vm.startOver(WayOut.CLEAR_DATA)
         advanceUntilIdle()
         // Local only: the keys, then the system's clear; no session, nothing asked of the vault.
         assertEquals(listOf("delete k", "clear"), dataSteps)
@@ -85,7 +87,7 @@ class RootViewModelTest {
         cleared = false
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.ERASE_FAILED))
         val vm = root(vault)
-        vm.startOver()
+        vm.startOver(WayOut.CLEAR_DATA)
         advanceUntilIdle()
         assertTrue(vm.clearDataFailed.value)
         assertEquals(emptyList<String>(), vault.calls)
@@ -96,7 +98,7 @@ class RootViewModelTest {
     fun startOverWithoutAVaultAsksTheRepositoryToForgetItAndNothingIsErased() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.NO_VAULT))
         val vm = root(vault)
-        vm.startOver()
+        vm.startOver(WayOut.START_OVER)
         advanceUntilIdle()
         assertEquals(listOf("forgetMissingVault"), vault.calls)
         assertEquals(AppPhase.SignedOut, vault.phase.value)
@@ -119,7 +121,7 @@ class RootViewModelTest {
     @Test
     fun startOverWithUnreadableKeysErasesThisPhone() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.LOCAL_STATE))
-        root(vault).startOver()
+        root(vault).startOver(WayOut.ERASE)
         advanceUntilIdle()
         assertEquals(listOf("eraseThisPhone"), vault.calls)
         assertEquals("the wipe, not the system's clear of the data", emptyList<String>(), dataSteps)
@@ -130,17 +132,51 @@ class RootViewModelTest {
         listOf(
             AppPhase.Unreachable(FailureKind.NETWORK),
             AppPhase.Unreachable(FailureKind.CLOCK),
-            AppPhase.Unreachable(FailureKind.UNAUTHORIZED),
+            AppPhase.Unreachable(FailureKind.CLOCK, longUnreachable = true),
             AppPhase.Locked,
             AppPhase.Unlocked,
         ).forEach { phase ->
-            val vault = FakeVault(phase)
-            root(vault).startOver()
-            advanceUntilIdle()
-            assertEquals(phase.toString(), emptyList<String>(), vault.calls)
-            assertEquals(phase, vault.phase.value)
+            for (way in WayOut.entries) {
+                val vault = FakeVault(phase)
+                root(vault).startOver(way)
+                advanceUntilIdle()
+                assertEquals("$phase $way", emptyList<String>(), vault.calls)
+                assertEquals(phase, vault.phase.value)
+            }
         }
         assertEquals("the data is erased only after a wipe that did not finish", emptyList<String>(), dataSteps)
+    }
+
+    @Test
+    fun aConfirmedWayOutIsActedOnOnlyWhileThePhaseStillOffersIt() = runTest(dispatcher) {
+        // The member confirmed one way out; the phase is now another one's (or none).
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.NO_VAULT))
+        val vm = root(vault)
+        vm.startOver(WayOut.ERASE)
+        vm.startOver(WayOut.CLEAR_DATA)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), vault.calls)
+        assertEquals(emptyList<String>(), dataSteps)
+    }
+
+    @Test
+    fun aPhoneTheAccountServiceNoLongerAcceptsMayBeErased() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.UNAUTHORIZED))
+        root(vault).startOver(WayOut.ERASE_OR_RECOVER)
+        advanceUntilIdle()
+        assertEquals(listOf("eraseThisPhone"), vault.calls)
+    }
+
+    @Test
+    fun aVaultUnreachableForLongMayBeErasedAndOnlyThen() = runTest(dispatcher) {
+        val long = FakeVault(AppPhase.Unreachable(FailureKind.NETWORK, longUnreachable = true))
+        root(long).startOver(WayOut.ERASE_OR_RECOVER)
+        advanceUntilIdle()
+        assertEquals(listOf("eraseThisPhone"), long.calls)
+        val short = FakeVault(AppPhase.Unreachable(FailureKind.NETWORK))
+        root(short).startOver(WayOut.ERASE_OR_RECOVER)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), short.calls)
     }
 
     @Test

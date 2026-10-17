@@ -1,6 +1,9 @@
 package com.vettid.app.ui
 
 import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -26,13 +29,15 @@ class UnreachableScreenTest {
 
     private val asked = mutableListOf<String>()
 
-    private fun show(kind: FailureKind, clearFailed: Boolean = false) = rule.setContent {
+    private fun show(kind: FailureKind, clearFailed: Boolean = false, longUnreachable: Boolean = false) = rule.setContent {
         UnreachableScreen(
             kind,
             busy = false,
             onRetry = { asked += "retry" },
-            onStartOver = { asked += "startOver" },
+            onStartOver = { asked += if (it == WayOut.ERASE_OR_RECOVER) "erase" else "startOver" },
             clearFailed = clearFailed,
+            longUnreachable = longUnreachable,
+            onRecover = { asked += "recover" },
         )
     }
 
@@ -113,6 +118,77 @@ class UnreachableScreenTest {
     fun noOtherFailureOffersErasingTheData() {
         for (k in FailureKind.entries) {
             assertEquals(k.name, k == FailureKind.ERASE_FAILED, WayOut.of(k) == WayOut.CLEAR_DATA)
+            assertEquals(k.name, k == FailureKind.ERASE_FAILED, WayOut.of(k, longUnreachable = true) == WayOut.CLEAR_DATA)
         }
+    }
+
+    @Test
+    fun eraseOrRecoverIsOfferedForAPhoneNotAcceptedAndAVaultUnreachableForLongOnly() {
+        val own = mapOf(
+            FailureKind.NO_VAULT to WayOut.START_OVER,
+            FailureKind.LOCAL_STATE to WayOut.ERASE,
+            FailureKind.ERASE_FAILED to WayOut.CLEAR_DATA,
+            FailureKind.UNAUTHORIZED to WayOut.ERASE_OR_RECOVER,
+        )
+        for (k in FailureKind.entries) {
+            assertEquals(k.name, own[k], WayOut.of(k))
+            val long = own[k] ?: if (k == FailureKind.CLOCK) null else WayOut.ERASE_OR_RECOVER
+            assertEquals("${k.name} long", long, WayOut.of(k, longUnreachable = true))
+        }
+    }
+
+    @Test
+    fun aPhoneTheAccountServiceNoLongerAcceptsOffersEraseAfterAConfirmationAndRecovery() {
+        show(FailureKind.UNAUTHORIZED)
+        // Recovery first: the primary action; the erase is the second one.
+        rule.onNodeWithText("check on your account site that your vault can be recovered", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("primary_button").performClick()
+        assertEquals(listOf("recover"), asked)
+        rule.onNodeWithText("Erase VettID from this phone").performClick()
+        assertEquals(listOf("recover"), asked)
+        rule.onNodeWithText("Erase VettID from this phone?").assertIsDisplayed()
+        rule.onNodeWithTag("confirm_button").performClick()
+        assertEquals(listOf("recover", "erase"), asked)
+        rule.onNodeWithTag("long_unreachable").assertDoesNotExist()
+    }
+
+    @Test
+    fun aVaultUnreachableForLongOffersEraseOrRecoverBesideTryAgain() {
+        show(FailureKind.NETWORK, longUnreachable = true)
+        rule.onNodeWithTag("long_unreachable").assertIsDisplayed()
+        rule.onNodeWithTag("primary_button").performClick()
+        assertEquals(listOf("recover"), asked)
+        rule.onNodeWithTag("retry_button").performClick()
+        assertEquals(listOf("recover", "retry"), asked)
+        rule.onNodeWithText("Erase VettID from this phone").assertIsDisplayed()
+    }
+
+    @Test
+    fun aShortOutageOrAWrongClockOffersNoEraseOrRecover() {
+        show(FailureKind.NETWORK)
+        rule.onNodeWithTag("retry_button").assertDoesNotExist()
+        rule.onNodeWithText("Recover your vault").assertDoesNotExist()
+        rule.onNodeWithText("Erase VettID from this phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun aWrongClockForLongStillOffersNoEraseOrRecover() {
+        show(FailureKind.CLOCK, longUnreachable = true)
+        rule.onNodeWithTag("retry_button").assertDoesNotExist()
+        rule.onNodeWithText("Recover your vault").assertDoesNotExist()
+        rule.onNodeWithText("Erase VettID from this phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun anOpenConfirmationClosesWhenTheFailureChanges() {
+        var kind by mutableStateOf(FailureKind.NO_VAULT)
+        rule.setContent { UnreachableScreen(kind, busy = false, onRetry = {}, onStartOver = { asked += "startOver" }) }
+        rule.onNodeWithText("Start over on this phone").performClick()
+        rule.onNodeWithText("Start over on this phone?").assertIsDisplayed()
+        kind = FailureKind.LOCAL_STATE
+        rule.waitForIdle()
+        rule.onNodeWithText("Start over on this phone?").assertDoesNotExist()
+        rule.onNodeWithText("Erase VettID from this phone?").assertDoesNotExist()
+        assertEquals(emptyList<String>(), asked)
     }
 }

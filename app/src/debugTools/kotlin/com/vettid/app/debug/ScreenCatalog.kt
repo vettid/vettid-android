@@ -780,6 +780,8 @@ object ScreenCatalog {
         "root.local_state" to { com.vettid.app.ui.UnreachableScreen(FailureKind.LOCAL_STATE, false, {}, {}) },
         "root.local_state_confirm" to { com.vettid.app.ui.UnreachableScreen(FailureKind.LOCAL_STATE, false, {}, {}, confirming = true) },
         "root.erase_failed" to { com.vettid.app.ui.UnreachableScreen(FailureKind.ERASE_FAILED, false, {}, {}) },
+        "root.unauthorized" to { com.vettid.app.ui.UnreachableScreen(FailureKind.UNAUTHORIZED, false, {}, {}) },
+        "root.long_unreachable" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NETWORK, false, {}, {}, longUnreachable = true) },
         "root.erase_failed_confirm" to { com.vettid.app.ui.UnreachableScreen(FailureKind.ERASE_FAILED, false, {}, {}, confirming = true) },
         "root.erase_failed_clear_refused" to {
             com.vettid.app.ui.UnreachableScreen(FailureKind.ERASE_FAILED, false, {}, {}, clearFailed = true)

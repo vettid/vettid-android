@@ -168,7 +168,9 @@ class LocalWipeTest {
         LocalWipe(t).erase()
         assertEquals(LocalWipe.KNOWN_ALIASES, deleted)
         assertEquals(
-            listOf("vettid.device_attestation.v1", "vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.local_files.v1"),
+            listOf(
+                "vettid.device_attestation.v1", "vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.app_api.v1", "vettid.local_files.v1",
+            ),
             LocalWipe.KNOWN_ALIASES,
         )
     }

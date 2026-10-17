@@ -96,6 +96,13 @@ data class UnlockUiState(
      */
     val notRecognised: Boolean = false,
     /**
+     * This phone no longer holds the vault's keys (`device_secret`): erase-or-recover is offered, "Recover your vault"
+     * first. Screen state: kept while the member types (the failure's message goes) and through a failure that did not
+     * reach the vault (a network failure, a pause, a busy service); cleared by any answer of the vault (an attestation
+     * or `transfer_incomplete` refusal included) and by a new release check.
+     */
+    val keysGone: Boolean = false,
+    /**
      * The open app was sent here because the relay kept refusing this phone's messages to the vault
      * ([VaultRepository.refusedByVault]): a phone replaced while the vault stayed unlocked on the new one never
      * sees this screen otherwise. Not proof: the PIN asks the enclave, and an unreadable result then sets
@@ -133,6 +140,20 @@ data class UnlockUiState(
 ) {
     /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
     val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
+
+    /**
+     * The vault cannot be opened from here and erasing this phone would not help (owner decision: a way forward, no
+     * erase): the vault's release ended, or a rollback of the release or of the vault's state. The screen offers
+     * "Recover your vault" (the account site) and contacting VettID support. Nothing unlocks or opens anything.
+     */
+    val recoverOnly: Boolean
+        get() = preflightError == FailureKind.RELEASE_ENDED || preflight?.rollback == true || stateRollback
+
+    /**
+     * "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone;
+     * never on a [recoverOnly] screen, which wins over both.
+     */
+    val eraseOffered: Boolean get() = !recoverOnly && (notRecognised || keysGone)
 
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
@@ -175,7 +196,7 @@ interface UnlockActions {
     /** Shows or hides the recovery and transfer help under the `signer_refused` notice. */
     fun showSignerHelp(show: Boolean)
 
-    /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.notRecognised]). */
+    /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.eraseOffered]). */
     fun askErase()
 
     /** Closes it; nothing is erased. */
@@ -237,7 +258,7 @@ class UnlockViewModel @Inject constructor(
     override fun retryPreflight() {
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
-        state.update { it.copy(loading = true, preflightError = null, preflight = null) }
+        state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false) }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
@@ -277,7 +298,7 @@ class UnlockViewModel @Inject constructor(
 
     override fun showSignerHelp(show: Boolean) = state.update { it.copy(signerHelp = show && it.signerRefused) }
 
-    override fun askErase() = state.update { if (it.notRecognised && !it.erasing) it.copy(eraseConfirm = true) else it }
+    override fun askErase() = state.update { if (it.eraseOffered && !it.erasing) it.copy(eraseConfirm = true) else it }
 
     override fun dismissErase() = state.update { it.copy(eraseConfirm = false) }
 
@@ -289,7 +310,7 @@ class UnlockViewModel @Inject constructor(
 
     override fun confirmErase() {
         val s = state.value
-        if (!s.eraseConfirm || !s.notRecognised || s.erasing) return
+        if (!s.eraseConfirm || !s.eraseOffered || s.erasing) return
         state.update { it.copy(eraseConfirm = false, erasing = true, pin = "") }
         // The phase becomes SignedOut at the end: the root shows the welcome screen and drops this screen.
         viewModelScope.launch { account.eraseThisPhone() }
@@ -315,6 +336,7 @@ class UnlockViewModel @Inject constructor(
                 it.copy(
                     password = "", notRecognised = notRecognisedAfter(r, it.notRecognised),
                     signerRefused = signerRefusedAfter(r, it.signerRefused),
+                    keysGone = keysGoneAfter(r, it.keysGone),
                 )
             }
             when (r) {
@@ -357,6 +379,12 @@ class UnlockViewModel @Inject constructor(
      * vault accepted this installation's signer after all, e.g. on another release), kept through failures that
      * never reached the enclave (network, a paused service).
      */
+    private fun keysGoneAfter(r: UnlockAttempt, before: Boolean): Boolean = when {
+        r is UnlockAttempt.Failed && r.kind == FailureKind.DEVICE_SECRET -> true
+        r is UnlockAttempt.Failed && r.kind in TRANSIENT_FAILURES -> before
+        else -> false
+    }
+
     private fun signerRefusedAfter(r: UnlockAttempt, before: Boolean): Boolean = when (r) {
         UnlockAttempt.SignerRefused -> true
         is UnlockAttempt.Failed -> before

@@ -179,6 +179,7 @@ class LocalWipe(private val targets: WipeTargets, private val hooks: List<suspen
             AndroidKeys.ALIAS_DEVICE_ATTESTATION,
             AndroidKeys.ALIAS_SEED_WRAP,
             AndroidKeys.ALIAS_APP_DATA,
+            AndroidKeys.ALIAS_APP_API,
             KeystoreFileStore.ALIAS,
         )
     }

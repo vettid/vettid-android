@@ -62,6 +62,10 @@
     <string name="root_clear_data_title">Erase VettID\'s data?</string>
     <string name="root_clear_data_body">This removes everything VettID keeps on this phone and closes VettID.</string>
     <string name="root_clear_data_confirm">Erase</string>
+    <!-- Draft text for the owner (erase-or-recover on a screen that could not be left). -->
+    <string name="root_recover">Recover your vault</string>
+    <string name="root_recover_line">Before you erase VettID here, check on your account site that your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose \"I lost my phone: recover my vault\".</string>
+    <string name="root_long_unreachable">VettID has not reached your vault for 7 days or more.</string>
     <string name="root_clear_data_failed">VettID could not erase its data. Clear VettID\'s storage in Android Settings, or uninstall and reinstall VettID.</string>
     <string name="root_local_state_title">VettID cannot read its keys on this phone</string>
     <string name="root_start_over">Start over on this phone</string>
@@ -69,7 +73,6 @@
     <string name="root_start_over_body">VettID asks the account service once more. If it still says that your account has no vault, VettID forgets its keys for that vault on this phone and goes back to the start, where you can set up a new vault with a setup code.\n\nOnly do this if you deleted your vault or closed your account. If the vault still exists, this phone could afterwards get back into it only with a recovery.</string>
     <string name="root_erase">Erase VettID from this phone</string>
     <string name="root_erase_title">Erase VettID from this phone?</string>
-    <string name="root_erase_body">Everything VettID keeps on this phone is erased, including its keys for your vault, and VettID goes back to the start. Your vault itself is not changed.\n\nTo get back into it you then need a recovery from the account site (it takes 24 hours and needs your PIN and credential password, and the credential backup must be on), or a move from another phone that still holds your vault.</string>
     <string name="root_preferences_reset">VettID\'s settings on this phone could not be read and were reset: the theme, the app lock (now off) and notifications. Your vault is not affected.</string>
     <string name="root_preferences_reset_ok">OK</string>
     <!-- Release R (ANDROID-PLAN 0.1.40, §11.14.10): draft texts. -->
