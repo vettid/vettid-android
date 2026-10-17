@@ -488,4 +488,17 @@ class LockKeeperTest {
         k.unlocking(opened = { it }) { true.also { sentAt = testScheduler.currentTime } }
         assertEquals("kept in memory: 30 s and the margin", 40_000L, sentAt)
     }
+
+    @Test
+    fun abandoningForgetsTheRelayLocksTimeInMemoryToo() = runTest {
+        vault.clock = { testScheduler.currentTime }
+        // Only in memory: the record could not be saved.
+        val k = LockKeeper(backgroundScope, FailingStore(), vault, { now() }, ::steps)
+        k.relayLockSent(Duration.ofSeconds(30))
+        // The phone was erased; a vault enrolled after it unlocks in the same process at once.
+        k.abandon()
+        var sentAt = -1L
+        k.unlocking(opened = { it }) { true.also { sentAt = testScheduler.currentTime } }
+        assertEquals(0L, sentAt)
+    }
 }
