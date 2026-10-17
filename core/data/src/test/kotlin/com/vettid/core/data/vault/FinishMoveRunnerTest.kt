@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -47,10 +48,11 @@ class FinishMoveRunnerTest {
             onOpened = { record = record.copy(rotateOffered = true) },
         )
 
-        fun wipe() {
+        /** [signedOut] false: the phone was set up again at once (enrolment, phase Setup); only the generation tells. */
+        fun wipe(signedOut: Boolean = true) {
             generation++
             record = Record()
-            signedOut = true
+            this.signedOut = signedOut
         }
     }
 
@@ -93,7 +95,10 @@ class FinishMoveRunnerTest {
     @Test
     fun aVaultFailureIsRecorded() = runTest {
         val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
-        val runner = FinishMoveRunner(manager, 90_000, lock = {}, unlock = { throw VaultFailure(FailureKind.NETWORK) })
+        val runner = FinishMoveRunner(
+            manager, 90_000, lock = {}, unlock = { throw VaultFailure(FailureKind.NETWORK) },
+            generation = { 0 }, signedOut = { false },
+        )
         val r = runCatching { runner.run("975310") }
         assertTrue(r.isFailure)
         assertEquals(FailureKind.NETWORK, runner.failure.value)
@@ -149,5 +154,64 @@ class FinishMoveRunnerTest {
         assertEquals(2, f.locked)
         assertEquals(2, f.outcomes.size)
         f.manager.cancel()
+    }
+
+    @Test
+    fun aLockThatOvertookTheUnlockOffersNothing() = runTest {
+        val f = Fixture(testScheduler)
+        launch { f.runner.run("975310") }
+        runCurrent()
+        // The member locks while the unlock is on its way: the generation moves, the phone is not signed out.
+        f.generation++
+        f.answer.complete(UnlockAttempt.Success)
+        advanceUntilIdle()
+        assertFalse(f.signedOut)
+        assertFalse(f.record.rotateOffered)
+        f.manager.cancel()
+    }
+
+    @Test
+    fun aWipeThenANewEnrolmentGetsNoOffer() = runTest {
+        val f = Fixture(testScheduler)
+        launch { f.runner.run("975310") }
+        runCurrent()
+        // Wiped and set up again before the unlock answers: not signed out, only the generation guards.
+        f.wipe(signedOut = false)
+        f.answer.complete(UnlockAttempt.Success)
+        advanceUntilIdle()
+        assertFalse(f.record.rotateOffered)
+        f.manager.cancel()
+    }
+
+    @Test
+    fun aRunAfterOneThatThrewRuns() = runTest {
+        val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        var unlocks = 0
+        val runner = FinishMoveRunner(
+            manager, 90_000, lock = {},
+            unlock = { if (++unlocks == 1) throw VaultFailure(FailureKind.NETWORK) else UnlockAttempt.Success },
+            generation = { 0 }, signedOut = { false },
+        )
+        assertTrue(runCatching { runner.run("975310") }.isFailure)
+        assertEquals(UnlockAttempt.Success, runner.run("975310"))
+        assertEquals(2, unlocks)
+        assertNull(runner.failure.value)
+        manager.cancel()
+    }
+
+    @Test
+    fun aRunAfterOneThatWasCancelledRuns() = runTest {
+        val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        var unlocks = 0
+        val runner = FinishMoveRunner(
+            manager, 90_000, lock = {},
+            unlock = { if (++unlocks == 1) throw CancellationException("gone") else UnlockAttempt.Success },
+            generation = { 0 }, signedOut = { false },
+        )
+        assertTrue(runCatching { runner.run("975310") }.isFailure)
+        assertEquals(UnlockAttempt.Success, runner.run("975310"))
+        assertEquals(2, unlocks)
+        assertFalse(runner.finishing.value)
+        manager.cancel()
     }
 }

@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 
 /**
  * "Finish the move" (release R, VAULT-MESSAGING §11.14.10 step 4): `vault.lock`, then `vault.unlock` with this phone's
@@ -20,8 +19,9 @@ import kotlinx.coroutines.sync.Mutex
  *
  * [finishing] holds the screen that asked for at most [holdMs]. [onOutcome] hears every answer of the unlock;
  * [onOpened] only a success that nothing overtook: [generation] (bumped by every lock and every wipe) unchanged since
- * the run's own lock, and not [signedOut]. A wipe that lands during the unlock leaves its success standing, but
- * nothing of the vault it erased is written into the fresh record.
+ * the run's own lock, and not [signedOut]. It gets that generation, to check it again as one step with its write (a
+ * wipe runs on another thread). A wipe that lands during the unlock leaves its success standing, but nothing of the
+ * vault it erased is written into the fresh record.
  *
  * One run at a time: a [run] while one is on its way starts nothing and waits for that one's answer.
  */
@@ -30,10 +30,10 @@ internal class FinishMoveRunner(
     private val holdMs: Long,
     private val lock: suspend () -> Unit,
     private val unlock: suspend (String) -> UnlockAttempt,
-    private val generation: () -> Int = { 0 },
-    private val signedOut: () -> Boolean = { false },
+    private val generation: () -> Int,
+    private val signedOut: () -> Boolean,
     private val onOutcome: suspend (UnlockAttempt) -> Unit = {},
-    private val onOpened: suspend () -> Unit = {},
+    private val onOpened: suspend (generation: Int) -> Unit = {},
 ) {
     private val finishingFlow = MutableStateFlow(false)
     val finishing: StateFlow<Boolean> = finishingFlow.asStateFlow()
@@ -47,11 +47,9 @@ internal class FinishMoveRunner(
         failureFlow.value = null
     }
 
-    /** Held from a run's start to its end (released on its completion, also one cancelled before it began). */
-    private val running = Mutex()
     private val runs = Any()
 
-    /** The run that holds [running]; set together with it, under [runs]. */
+    /** The last run; under [runs]. Active from its start until its end, its hold's release included. */
     private var current: Deferred<UnlockAttempt>? = null
 
     /**
@@ -60,14 +58,7 @@ internal class FinishMoveRunner(
      * never overlap, so one run's end never releases another's hold or overwrites its [failure].
      */
     suspend fun run(pin: String): UnlockAttempt = synchronized(runs) {
-        if (running.tryLock()) {
-            scope.async { body(pin) }.also {
-                current = it
-                it.invokeOnCompletion { running.unlock() }
-            }
-        } else {
-            checkNotNull(current)
-        }
+        current?.takeIf { it.isActive } ?: scope.async { body(pin) }.also { current = it }
     }.await()
 
     @Suppress("TooGenericExceptionCaught") // any failure is recorded for the unlock screen, then rethrown
@@ -85,7 +76,7 @@ internal class FinishMoveRunner(
             val r = unlock(pin)
             failureFlow.value = FinishSetupGate.failureOf(r)
             onOutcome(r)
-            if (r == UnlockAttempt.Success && gen == generation() && !signedOut()) onOpened()
+            if (r == UnlockAttempt.Success && gen == generation() && !signedOut()) onOpened(gen)
             return r
         } catch (e: Exception) {
             // Recorded for the unlock screen, then rethrown. A cancellation comes only from the manager's own scope ending
