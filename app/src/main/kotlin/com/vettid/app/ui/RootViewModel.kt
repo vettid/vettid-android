@@ -68,6 +68,11 @@ class RootViewModel @Inject constructor(
 
     fun acknowledgeMoveNotDone() = vault.acknowledgeMoveNotDone()
 
+    /** (Release R) This old phone removed its keys at the end of a kept transfer: told once on the welcome screen. */
+    val movedAway: StateFlow<Boolean> = vault.movedAway
+
+    fun acknowledgeMovedAway() = vault.acknowledgeMovedAway()
+
     /** A release update under way or its outcome (ANDROID-PLAN 0.1.19): shown over every phase until it is left. */
     val updateProgress: StateFlow<UpdateProgress?> = updates.progress
 

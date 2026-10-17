@@ -156,6 +156,16 @@ class VaultManager(
     /** (Release R) At the end of the 7 days the vault confirmed this phone is still its app: the move did not happen. */
     private val moveNotDoneFlow = MutableStateFlow(false)
 
+    /** (Release R) The offer to rotate the vault's keys after a transfer, a PIN change or a password change. */
+    private val rotateOfferFlow = MutableStateFlow(local.rotateOffered)
+
+    /** (Release R) This old phone removed its keys at the end of a kept transfer: said once on the welcome screen. */
+    private val movedAwayFlow = MutableStateFlow(wiper.movedAway)
+
+    /** The next wipe is that of the end of a kept transfer (the new phone finished the move, or 7 days passed). */
+    @Volatile
+    private var wipeMovedAway = false
+
     /** One end-of-keep check at a time (a start, a return to the foreground and the timer may meet). */
     private val keptEndLock = Mutex()
     private val accountFlow = MutableStateFlow(local.toInfo())
@@ -319,6 +329,7 @@ class VaultManager(
             // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
             onPassed = { social.refreshAllQuietly() },
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
+            onRecoveryStatus = { noteRecoveryStatus(it) },
         )
     }
 
@@ -457,6 +468,14 @@ class VaultManager(
          * last onboarding screen is the move's, not an enrollment's, also after a restart.
          */
         val movedIn: Boolean = false,
+        /**
+         * (Release R, §11.14.11) Since when (epoch ms, this phone's clock) every read of `vault.status` found the recovery
+         * counter unavailable (or the recovery `unknown`); null after a read that did not. After 24 hours the status
+         * screen says so with the urgency of a used attempt.
+         */
+        val recoveryUnknownSinceMs: Long? = null,
+        /** (Release R) The offer to rotate the vault's keys is open, until a rotation succeeds or it is put away. */
+        val rotateOffered: Boolean = false,
         /**
          * (0.34.0, §11.10.6, §11.10.9) This phone has seen `recovery_r` for its vault (a verified descriptor, a transfer
          * bundle, or a request of release R's shape that succeeded): it never takes an earlier path for it again.
@@ -793,7 +812,15 @@ class VaultManager(
             // §10.3: opened under the session, from the vault's relay key. `transferred` (§6.7.1 step 4) and
             // `replaced` (§11.11.5 step 3) wipe this phone (in another coroutine: the wipe cancels this observer);
             // another reason (`vault_deleted`) is re-read like any change of the vault.
-            HolderPolicy.DEVICE_UNLINKED -> if (!holder.onVaultEvent(m)) scope.launch { refresh() }
+            HolderPolicy.DEVICE_UNLINKED -> {
+                // Release R (§11.14.10): `transferred` on an old phone that kept its keys is the end of the kept transfer.
+                val movedAway = local.transferApprovedAtMs != null && VaultJson.str(m.body, "reason") == HolderPolicy.REASON_TRANSFERRED
+                if (movedAway) wipeMovedAway = true
+                if (!holder.onVaultEvent(m)) {
+                    wipeMovedAway = false
+                    scope.launch { refresh() }
+                }
+            }
         }
     }
 
@@ -1055,6 +1082,13 @@ class VaultManager(
      */
     override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
         unlockOnce(pin, approve, cancelRecovery, holderApp = true) { ownerCheck.afterUnlock(pin, password) }
+
+    /**
+     * (Release R, ANDROID-PLAN "Other screens") An unlock with `cancel_recovery`, then at once the owner check with the
+     * PIN and the password, which records that the member is present (§11.14.5).
+     */
+    override suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView?): UnlockAttempt =
+        unlockOnce(pin, approve, cancelRecovery = true, holderApp = true) { ownerCheck.afterCancelledRecovery(pin, password) }
 
     /**
      * [holderApp]: this phone unlocks as the vault's app (not a recovering one): an enclave's sealed
@@ -1369,13 +1403,41 @@ class VaultManager(
             devices = vs?.devices,
             connections = vs?.connections,
             signer = signer,
-            recovery = vs?.recovery?.let { RecoveryStatusView(it.state, it.attempts?.used, it.counter == "unavailable") },
+            recovery = vs?.recovery?.let { r ->
+                val unavailable = RecoveryUnknownClock.unavailable(r.state, r.counter)
+                RecoveryStatusView(
+                    r.state, r.attempts?.used, r.counter == COUNTER_UNAVAILABLE, unknownForADay = unknownForADay(unavailable),
+                )
+            },
             recoveryOffered = ReleasePath.recoveryOffered(local.capabilities),
         )
     }
 
     override suspend fun changePin(pin: String, newPin: String) = guard {
         session().openApi.pinChange(pin, newPin)
+    }
+
+    /**
+     * §11.14.5, §11.14.11: whether the recovery counter has been unavailable at every read for 24 hours. A read that
+     * finds it available forgets the start; the first that does not records it (kept on the phone across restarts).
+     */
+    private suspend fun unknownForADay(unavailable: Boolean): Boolean {
+        val now = System.currentTimeMillis()
+        // A read-modify-write under the account record's lock: every status read comes here, beside the other writers.
+        val since = io {
+            synchronized(localLock) {
+                val next = RecoveryUnknownClock.next(local.recoveryUnknownSinceMs, unavailable, now)
+                if (next != local.recoveryUnknownSinceMs) saveLocal(local.copy(recoveryUnknownSinceMs = next))
+                next
+            }
+        }
+        return RecoveryUnknownClock.urgent(since, now)
+    }
+
+    /** Every `vault.status` read that carries `recovery` (the owner check's too) moves the clock of [unknownForADay]. */
+    private suspend fun noteRecoveryStatus(r: com.vettid.core.vault.RecoveryStatus?) {
+        if (r == null) return
+        unknownForADay(RecoveryUnknownClock.unavailable(r.state, r.counter))
     }
 
     override suspend fun deleteVault(pin: String, password: String) {
@@ -1485,6 +1547,8 @@ class VaultManager(
     /** (Release R, §11.14.9) With the PIN, which the vault verifies; the change closes the recovery generation. */
     override suspend fun changePassword(password: String, newPassword: String, pin: String?) = guard {
         session().openApi.credentialChangePassword(password, newPassword, pin?.takeIf { local.phone.inUse })
+        // ANDROID-PLAN "Transfer" (release R): after a password change the app offers to rotate the vault's keys.
+        if (local.phone.inUse) offerRotation(true)
     }
 
     /**
@@ -1501,6 +1565,8 @@ class VaultManager(
             next.fill(0)
         }
         io { updateLocal { it.copy(phoneEpoch = phone.epoch + 1) } }
+        // ANDROID-PLAN "Transfer": after a PIN change the app offers to rotate the vault's keys.
+        offerRotation(true)
     }
 
     /** `vault.secret.renew` (release R, §11.14.9): a new phone secret, the PIN unchanged. */
@@ -1525,6 +1591,7 @@ class VaultManager(
     override suspend fun rotate(password: String) = guard {
         val s = session()
         s.openApi.credentialRotate(password)
+        offerRotation(false)
         windowFlow.value = null
         refreshAlarm(s)
     }
@@ -1993,6 +2060,8 @@ class VaultManager(
         FINISH_MOVE_HOLD_MS,
         lock = { lock() },
         unlock = { pin -> unlock(pin, null, false) },
+        // ANDROID-PLAN "Transfer": after a transfer the app offers to rotate the vault's keys.
+        onOutcome = { r -> if (r == UnlockAttempt.Success) offerRotation(true) },
     )
 
     override val finishingMove: StateFlow<Boolean> get() = finishMoveRunner.finishing
@@ -2051,6 +2120,25 @@ class VaultManager(
 
     override val moveNotDone: StateFlow<Boolean> = moveNotDoneFlow.asStateFlow()
 
+    override val rotateOffered: StateFlow<Boolean> = rotateOfferFlow.asStateFlow()
+
+    override fun dismissRotateOffer() {
+        scope.launch { offerRotation(false) }
+    }
+
+    /** The rotate offer, kept on the phone (a restart does not lose it). */
+    private suspend fun offerRotation(on: Boolean) {
+        rotateOfferFlow.value = on
+        if (local.rotateOffered != on) io { updateLocal { it.copy(rotateOffered = on) } }
+    }
+
+    override val movedAway: StateFlow<Boolean> = movedAwayFlow.asStateFlow()
+
+    override fun acknowledgeMovedAway() {
+        runCatching { wiper.acknowledgeMovedAway() }
+        movedAwayFlow.value = false
+    }
+
     override fun acknowledgeMoveNotDone() {
         moveNotDoneFlow.value = false
     }
@@ -2073,6 +2161,7 @@ class VaultManager(
                 moveNotDoneFlow.value = true
             } else {
                 android.util.Log.i("VaultManager", "a transfer approved 7 days ago: this phone's keys are removed")
+                wipeMovedAway = true
                 eraseThisPhone()
             }
         } finally {
@@ -2117,8 +2206,14 @@ class VaultManager(
      * the files, the preferences and the notifications ([LocalWipe]); the app then shows the welcome screen.
      */
     private suspend fun wipeThisPhone() {
+        // Release R (§11.14.10): an old phone that removes its keys at the end of a kept transfer (the new phone finished
+        // the move, or the 7 days are over) says so on the welcome screen; the reason is in the wipe's marker, so that a
+        // wipe a crash interrupted still leaves the notice when it is finished at the next start.
+        val movedAway = wipeMovedAway
+        wipeMovedAway = false
         generation++
-        wiper.begin() // crash-safe: a process that dies from here on finishes the wipe at its next start
+        // crash-safe: a process that dies from here on finishes the wipe at its next start
+        wiper.begin(if (movedAway) LocalWipe.REASON_MOVED_AWAY else null)
         lockKeeper.abandon() // nothing of this phone's is left to lock a vault with
         mutex.withLock {
             observer?.cancel()
@@ -2152,6 +2247,8 @@ class VaultManager(
         io { if (wiper.erase()) wiper.finish() }
         local = LocalAccount()
         finishMoveFlow.value = false
+        rotateOfferFlow.value = false
+        movedAwayFlow.value = wiper.movedAway
         finishMoveRunner.clearFailure()
         accountFlow.value = null
         generation++
@@ -2327,6 +2424,7 @@ class VaultManager(
         private const val CODE_NO_RECOVERY = "no_recovery"
         private const val UPDATE_MOVED = "moved"
         private const val UPDATE_ABANDONED = "abandoned"
+        private const val COUNTER_UNAVAILABLE = "unavailable"
         private const val LOCKED_WAIT_MS = 15_000L
         private const val FINISH_MOVE_HOLD_MS = 90_000L
         private const val LOCKED_POLL_MS = 1_000L

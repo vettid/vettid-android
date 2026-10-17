@@ -36,6 +36,11 @@ class OwnerCheckManagerTest {
         var status: OwnerCheckStatus? = null
         var checkError: String? = null
         var checkErrorBody: JsonObject? = null
+        /** (Release R) The answer's `recovery.present_recorded`, and the status's `recovery.present_recorded_at`. */
+        var presentRecorded: Boolean? = null
+        var presentRecordedAt: String? = null
+        var counter: String = "ok"
+        var answerDeadline: String? = "2026-10-07T12:00:00Z"
         val checks = mutableListOf<List<Any?>>()
         val sets = mutableListOf<Map<String, JsonElement>>()
 
@@ -44,8 +49,14 @@ class OwnerCheckManagerTest {
         override suspend fun check(pin: String, password: String, hold: Boolean?, holdOffUntil: String?): OwnerCheckPassed {
             checks += listOf(pin, password, hold, holdOffUntil)
             checkError?.let { throw VaultOpException("vault.owner_check", it, body = checkErrorBody) }
-            return OwnerCheckPassed("2026-10-07T12:00:00Z", 86_400, hold = hold ?: true, holdOffUntil = holdOffUntil)
+            return OwnerCheckPassed(
+                answerDeadline, 86_400, hold = hold ?: true, holdOffUntil = holdOffUntil,
+                recovery = presentRecorded?.let { com.vettid.core.vault.OwnerCheckRecovery("armed", it) },
+            )
         }
+
+        override suspend fun statusAndRecovery() =
+            status to com.vettid.core.vault.RecoveryStatus("armed", presentRecordedAt = presentRecordedAt, counter = counter)
 
         override suspend fun settingsGet() = Settings(7, JsonObject(emptyMap()))
 
@@ -280,5 +291,93 @@ class OwnerCheckManagerTest {
         assertEquals(mapOf<String, JsonElement>("owner_check.interval_seconds" to JsonPrimitive(3_600L)), ops.sets.single())
         assertTrue(runCatching { m.setCheckInterval(90_000) }.isFailure)
         assertTrue(runCatching { m.setCheckInterval(600) }.isFailure)
+    }
+
+    /** Release R (§11.14.5): `present_recorded: false` starts the presence notice; a later recorded presence ends it. */
+    @Test
+    fun thePresenceNoticeFollowsTheVault() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            presentRecorded = false
+        }
+        val m = manager(ops)
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw"))
+        assertTrue(m.presenceUnrecorded.value)
+        // Kept across a restart.
+        assertTrue(manager(Ops()).presenceUnrecorded.value)
+        // A presence recorded before that check (its time: the deadline less the interval) does not end it.
+        ops.presentRecordedAt = "2026-10-06T11:00:00Z"
+        m.refreshOwnerCheck()
+        assertTrue(m.presenceUnrecorded.value)
+        // One recorded since does.
+        ops.presentRecordedAt = "2026-10-06T12:01:00Z"
+        m.refreshOwnerCheck()
+        assertFalse(m.presenceUnrecorded.value)
+        // So does a later answer that says it was recorded.
+        ops.presentRecorded = false
+        m.check("975310", "pw")
+        assertTrue(m.presenceUnrecorded.value)
+        ops.presentRecorded = true
+        m.check("975310", "pw")
+        assertFalse(m.presenceUnrecorded.value)
+    }
+
+    /** Before release R the answer has no `recovery`: nothing changes. */
+    @Test
+    fun noPresenceNoticeBeforeReleaseR() = runTest {
+        val m = manager(Ops())
+        m.check("975310", "pw")
+        assertFalse(m.presenceUnrecorded.value)
+    }
+
+    /** ANDROID-PLAN "Other screens": after a cancel from the app the check goes at once; one that fails asks for the screen. */
+    @Test
+    fun theCheckAfterACancelledRecovery() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.afterCancelledRecovery("975310", "pw")
+        assertEquals(1, ops.checks.size)
+        assertFalse(m.checkAfterCancel.value)
+        ops.checkError = "bad_password"
+        m.afterCancelledRecovery("975310", "wrong")
+        assertEquals(2, ops.checks.size)
+        assertTrue(m.checkAfterCancel.value)
+        assertTrue(m.unlockCheckOutcome.value is OwnerCheckOutcome.BadPassword)
+        m.consumeCheckAfterCancel()
+        assertFalse(m.checkAfterCancel.value)
+    }
+
+    /** Without the check's time no status can end the notice: an old present_recorded_at must not. */
+    @Test
+    fun thePresenceNoticeStaysWithoutTheChecksTime() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            presentRecorded = false
+            answerDeadline = null
+            presentRecordedAt = "2026-10-01T12:00:00Z"
+        }
+        val m = manager(ops)
+        m.check("975310", "pw")
+        assertTrue(m.presenceUnrecorded.value)
+        m.refreshOwnerCheck()
+        assertTrue(m.presenceUnrecorded.value)
+    }
+
+    /** Every status read hands its recovery on (the clock of a counter that stays unavailable). */
+    @Test
+    fun everyStatusReadReportsTheRecovery() = runTest {
+        val seen = mutableListOf<String?>()
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            counter = "unavailable"
+        }
+        val m = OwnerCheckManager(
+            this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
+            onRecoveryStatus = { seen += it?.counter },
+        )
+        m.refreshOwnerCheck()
+        ops.counter = "ok"
+        m.refreshOwnerCheck()
+        assertEquals(listOf<String?>("unavailable", "ok"), seen)
     }
 }

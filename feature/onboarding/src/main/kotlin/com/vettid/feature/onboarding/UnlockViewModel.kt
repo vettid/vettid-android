@@ -121,11 +121,19 @@ data class UnlockUiState(
     /** The vault locked after ten failed checks (§3.6.4). */
     val lockedByOwnerCheck: Boolean = false,
     /**
+     * (Release R, ANDROID-PLAN "Other screens") The vault has a phone secret: cancelling a recovery from here sends the
+     * owner check at once, so the password is asked for with it.
+     */
+    val phoneSecret: Boolean = false,
+    /**
      * (Release R, §11.14.10) Why the last "Finish the move" did not open the vault (`transfer_incomplete`: "Approve it
      * again on your old phone", a wrong PIN, a wait), said here after its lock sent the app to this screen.
      */
     val moveFailure: FailureKind? = null,
 ) {
+    /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
+    val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
+
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
 
@@ -206,7 +214,9 @@ class UnlockViewModel @Inject constructor(
     ownerCheck: OwnerCheckRepository,
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), UnlockActions {
-    private val state = MutableStateFlow(UnlockUiState(email = account.account.value?.emailHint?.takeIf { it.isNotEmpty() }))
+    private val state = MutableStateFlow(
+        UnlockUiState(email = account.account.value?.emailHint?.takeIf { it.isNotEmpty() }, phoneSecret = vault.usesPhoneSecret),
+    )
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
     private var ticker: Job? = null
     private var serviceTicker: Job? = null
@@ -260,7 +270,10 @@ class UnlockViewModel @Inject constructor(
 
     override fun submit() = attempt(cancelRecovery = false)
 
-    override fun cancelRecoveryAndUnlock() = attempt(cancelRecovery = true)
+    override fun cancelRecoveryAndUnlock() {
+        if (!state.value.cancelAllowed) return
+        attempt(cancelRecovery = true)
+    }
 
     override fun showSignerHelp(show: Boolean) = state.update { it.copy(signerHelp = show && it.signerRefused) }
 
@@ -282,13 +295,17 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch { account.eraseThisPhone() }
     }
 
+    @Suppress("CyclomaticComplexMethod") // one branch per §11.4 answer
     private fun attempt(cancelRecovery: Boolean) {
         val s = state.value
         if (!s.submitAllowed || s.erasing) return
         state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
             val offer = if (s.approveOffer) s.preflight?.offer else null
-            val r = if (s.checkDue) {
+            val r = if (cancelRecovery && s.phoneSecret) {
+                // Release R: after a cancel from the app, the owner check at once, which records the member's presence.
+                vault.unlockCancellingRecovery(s.pin, s.password, offer)
+            } else if (s.checkDue) {
                 vault.unlockWithCheck(s.pin, s.password, offer, cancelRecovery)
             } else {
                 vault.unlock(s.pin, offer, cancelRecovery)

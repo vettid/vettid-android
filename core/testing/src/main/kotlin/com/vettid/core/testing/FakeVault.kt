@@ -272,6 +272,28 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return r
     }
 
+    /** The password the last unlock that cancelled a recovery sent with its owner check (release R). */
+    var lastCancelCheckPassword: String? = null
+
+    override suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView?): UnlockAttempt {
+        lastCancelCheckPassword = password
+        return unlock(pin, approve, true)
+    }
+
+    /** The PIN and password of the last `vault.secret.renew` (release R). */
+    var lastRenew: Pair<String, String>? = null
+
+    override suspend fun renewPhoneSecret(pin: String, password: String) {
+        call("renewPhoneSecret")
+        lastRenew = pin to password
+    }
+
+    override val rotateOffered = MutableStateFlow(false)
+
+    override fun dismissRotateOffer() {
+        rotateOffered.value = false
+    }
+
     override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
         lastPassword = password
         val r = unlock(pin, approve, cancelRecovery)
@@ -492,6 +514,12 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override val lockedByOwnerCheck = MutableStateFlow(false)
     override val unlockCheckOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
     override val notices = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
+    override val presenceUnrecorded = MutableStateFlow(false)
+    override val checkAfterCancel = MutableStateFlow(false)
+
+    override fun consumeCheckAfterCancel() {
+        checkAfterCancel.value = false
+    }
 
     /** Scripted answers to [check] (default: passed). */
     val checkResults = ArrayDeque<OwnerCheckOutcome>()

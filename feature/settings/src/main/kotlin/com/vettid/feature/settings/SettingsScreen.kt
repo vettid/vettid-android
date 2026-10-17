@@ -81,6 +81,7 @@ import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import androidx.navigation.toRoute
 
 @Serializable
 data object SettingsRoute
@@ -88,8 +89,13 @@ data object SettingsRoute
 @Serializable
 data object VaultStatusRoute
 
+/** [fromAttempts]: opened from a notice about recovery attempts ("if that was not you"): the PIN screen warns first. */
 @Serializable
-data object ChangePinRoute
+data class ChangePinRoute(val fromAttempts: Boolean = false)
+
+/** (Release R) Settings → Security → New phone secret (`vault.secret.renew`). */
+@Serializable
+data object NewPhoneSecretRoute
 
 @Serializable
 data object RecoveryRoute
@@ -119,6 +125,8 @@ data class SettingsHost(
     val onOwnerCheck: (holdOff: Boolean) -> Unit = {},
     /** Opens an item of the Vault (items feature): the shared profile's `@profile` items. */
     val onOpenItem: (String) -> Unit = {},
+    /** Opens the credential password change (from a notice about recovery attempts). */
+    val onChangePassword: () -> Unit = onOpenCredential,
     /** Opens the update screen (ANDROID-PLAN 0.1.19): Settings → Vault → "Update available". */
     val onReleaseUpdate: () -> Unit = {},
     /** The Notifications bell (ANDROID-PLAN 0.1.23): Settings is a drawer screen; null hides it. */
@@ -145,7 +153,8 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 account = host.onAccountClick,
                 vaultStatus = { host.navigate(VaultStatusRoute) },
                 lockVault = vm::lockVault,
-                changePin = { host.navigate(ChangePinRoute) },
+                changePin = { host.navigate(ChangePinRoute()) },
+                newPhoneSecret = { host.navigate(NewPhoneSecretRoute) },
                 credential = host.onOpenCredential,
                 recovery = { host.navigate(RecoveryRoute) },
                 transfer = { host.navigate(TransferOutRoute) },
@@ -260,12 +269,24 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<VaultStatusRoute> {
         val vm: VaultStatusViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        VaultStatusContent(state, vm::load, host.onBack)
+        VaultStatusContent(
+            state, vm::load, host.onBack,
+            onChangePin = { host.navigate(ChangePinRoute(fromAttempts = true)) },
+            onChangePassword = host.onChangePassword,
+        )
     }
-    composable<ChangePinRoute> {
+    composable<ChangePinRoute> { entry ->
         val vm: ChangePinViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        ChangePinContent(state, vm::setCurrent, vm::setPin, vm::setConfirm, vm::submit, host.onBack, vm::setPassword)
+        val fromAttempts = entry.toRoute<ChangePinRoute>().fromAttempts
+        ChangePinContent(
+            state.copy(fromAttempts = fromAttempts), vm::setCurrent, vm::setPin, vm::setConfirm, vm::submit, host.onBack, vm::setPassword,
+        )
+    }
+    composable<NewPhoneSecretRoute> {
+        val vm: NewPhoneSecretViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        NewPhoneSecretContent(state, vm::setPin, vm::setPassword, vm::submit, host.onBack)
     }
     composable<RecoveryRoute> {
         val vm: RecoveryViewModel = hiltViewModel()
@@ -339,6 +360,8 @@ data class SettingsActions(
     val vaultStatus: () -> Unit = {},
     val lockVault: () -> Unit = {},
     val changePin: () -> Unit = {},
+    /** (Release R) Settings → Security → New phone secret. */
+    val newPhoneSecret: () -> Unit = {},
     val credential: () -> Unit = {},
     val recovery: () -> Unit = {},
     val transfer: () -> Unit = {},
@@ -391,7 +414,7 @@ private fun AccountCard(state: SettingsUiState, onClick: () -> Unit) {
  * Settings (ANDROID-PLAN §4): Vault, Security, Privacy, App, Account. Grouped
  * cards (Proton); every destructive action confirms first.
  */
-@Suppress("LongMethod")
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun SettingsContent(
     state: SettingsUiState,
@@ -475,6 +498,14 @@ fun SettingsContent(
                 SettingsDivider()
                 SettingsRow(stringResource(R.string.settings_security_recovery), actions.recovery, icon = Icons.Outlined.Restore)
                 SettingsDivider()
+                if (state.phoneSecret) {
+                    SettingsRow(
+                        stringResource(R.string.settings_security_new_secret), actions.newPhoneSecret, icon = Icons.Outlined.Key,
+                        supporting = stringResource(R.string.settings_security_new_secret_body),
+                        modifier = Modifier.testTag("new_phone_secret_row"),
+                    )
+                    SettingsDivider()
+                }
                 SettingsRow(stringResource(R.string.settings_security_attestation), actions.attestation, icon = Icons.Outlined.VerifiedUser)
                 // The daily owner check (VAULT-MESSAGING §3.6.2, §3.6.7): the interval, a check now, the hold switch.
                 OwnerCheckSettingsRows(ownerCheck, ownerCheckActions)

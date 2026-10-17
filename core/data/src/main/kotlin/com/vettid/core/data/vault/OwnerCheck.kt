@@ -123,9 +123,26 @@ interface OwnerCheckRepository {
 
     fun consumeUnlockCheckOutcome()
 
+    /**
+     * (Release R, §11.14.5) The last check passed but the vault could not record that the member was here
+     * (`recovery.present_recorded: false`): the presence notice shows until a later answer or `vault.status` says the
+     * presence was recorded.
+     */
+    val presenceUnrecorded: StateFlow<Boolean> get() = NOT_SET
+
+    /**
+     * (Release R, ANDROID-PLAN "Other screens") An unlock that cancelled a recovery sent its owner check and that check
+     * did not pass: the owner-check screen is to be shown at once, so that the member's presence is recorded.
+     */
+    val checkAfterCancel: StateFlow<Boolean> get() = NOT_SET
+
+    fun consumeCheckAfterCancel() {}
+
     /** Marks the notices read (`feed.update{status: "read"}`). */
     suspend fun dismissNotices()
 }
+
+private val NOT_SET: StateFlow<Boolean> = kotlinx.coroutines.flow.MutableStateFlow(false)
 
 /** Turning the hold off (§3.6.7): [until] at most 30 days ahead, or null. */
 data class HoldOff(val until: Instant?)

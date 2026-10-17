@@ -90,6 +90,10 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             stringResource(R.string.ownercheck_body_voluntary, interval)
         OwnerCheckMode.HOLD_OFF -> stringResource(R.string.ownercheck_title_hold_off) to stringResource(R.string.ownercheck_body_hold_off)
     }
+    if (state.passedUnrecorded) {
+        PresenceAfterCheck(title, actions)
+        return
+    }
     FormScaffold(
         title = title,
         body = body,
@@ -113,6 +117,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+            if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
             if (state.mode == OwnerCheckMode.HOLD_OFF) {
                 NoticeCard(
@@ -177,6 +182,31 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 }
 
 private const val WARN_LEFT = 3
+
+/** ANDROID-PLAN "Owner check and status" (release R): the vault could not record that the member was here. */
+@Composable
+private fun PresenceNotice() {
+    NoticeCard(
+        NoticeKind.WARNING,
+        stringResource(R.string.ownercheck_presence_title),
+        stringResource(R.string.ownercheck_presence_body),
+        modifier = Modifier.testTag("owner_check_presence"),
+        announce = androidx.compose.ui.semantics.LiveRegionMode.Polite,
+    )
+}
+
+/** The check passed, but the presence was not recorded: the notice, then the member goes on. */
+@Composable
+private fun PresenceAfterCheck(title: String, actions: OwnerCheckActions) {
+    FormScaffold(
+        title = title,
+        primaryLabel = stringResource(R.string.onboarding_continue),
+        onPrimary = actions::acknowledgePresence,
+        modifier = Modifier.testTag("owner_check_passed_unrecorded"),
+    ) {
+        PresenceNotice()
+    }
+}
 
 /**
  * What the gated check shows of what is waiting (§3.6.5). [counts] null: the vault has not said yet (no `vault.held`

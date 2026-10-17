@@ -127,7 +127,14 @@ private const val DIGEST_GROUP = 8
 /** Vault status (stateless). */
 @Suppress("CyclomaticComplexMethod")
 @Composable
-fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBack: () -> Unit, signerDetails: Boolean = false) {
+fun VaultStatusContent(
+    state: LoadState<VaultOverview>,
+    retry: () -> Unit,
+    onBack: () -> Unit,
+    signerDetails: Boolean = false,
+    onChangePin: () -> Unit = {},
+    onChangePassword: () -> Unit = {},
+) {
     DetailScaffold(onBackClick = onBack, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_status_title))
@@ -146,6 +153,7 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                             )
                         }
                     }
+                    if (v.recoveryOffered) v.recovery?.let { RecoveryNotices(it, onChangePin, onChangePassword) }
                     SettingsGroup {
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_state),
@@ -252,6 +260,39 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
     }
 }
 
+/**
+ * Release R (ANDROID-PLAN "Owner check and status"): the recovery counter unavailable at every read for a day, with the
+ * urgency of a used attempt; and used attempts ("if that was not you"), with the password and PIN changes. The PIN change
+ * opened from here warns first that the PIN alone gives whoever is guessing ten new tries at the same password.
+ */
+@Composable
+private fun RecoveryNotices(r: com.vettid.core.data.vault.RecoveryStatusView, onChangePin: () -> Unit, onChangePassword: () -> Unit) {
+    val title = stringResource(R.string.settings_status_recovery)
+    val pad = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
+    if (r.unknownForADay) {
+        NoticeCard(NoticeKind.URGENT, title, stringResource(R.string.settings_recovery_unknown_day), pad.testTag("recovery_unknown_day"))
+    }
+    val used = r.used
+    if (r.state == "armed" && used != null && used in 1 until RECOVERY_ATTEMPTS) {
+        NoticeCard(
+            NoticeKind.URGENT,
+            title,
+            stringResource(R.string.settings_recovery_status_used, used),
+            pad.testTag("recovery_attempts_used"),
+            actions = {
+                androidx.compose.material3.TextButton(onClick = onChangePassword, modifier = Modifier.testTag("attempts_change_password")) {
+                    Text(stringResource(R.string.settings_recovery_change_password))
+                }
+                androidx.compose.material3.TextButton(onClick = onChangePin, modifier = Modifier.testTag("attempts_change_pin")) {
+                    Text(stringResource(R.string.settings_pin_submit))
+                }
+            },
+        )
+    }
+}
+
+private const val RECOVERY_ATTEMPTS = 10
+
 /** A [StatusText] in words. */
 @Composable
 private fun statusLine(t: StatusText): String = t.arg?.let { stringResource(t.res, it) } ?: stringResource(t.res)
@@ -282,6 +323,15 @@ fun ChangePinContent(
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        if (state.fromAttempts && state.withPassword) {
+            NoticeCard(
+                NoticeKind.WARNING,
+                stringResource(R.string.settings_pin_title),
+                stringResource(R.string.settings_pin_password_too),
+                Modifier.testTag("pin_password_too"),
+            )
+            Spacer(Modifier.height(Spacing.l))
+        }
         SecretField(state.current, onCurrent, stringResource(R.string.settings_pin_current), isPin = true, imeAction = ImeAction.Next)
         Spacer(Modifier.height(Spacing.l))
         val problem = state.problem

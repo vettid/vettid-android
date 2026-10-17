@@ -277,4 +277,15 @@
     <string name="settings_recovery_not_offered">This vault\'s release does not offer recovery.</string>
     <string name="settings_transfer_moved_kept_body">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most 7 days. Before you give this phone away, remove VettID from it or reset it.</string>
     <string name="settings_recovery_status_change_required">Recovery is off until you choose a new password that meets the rules.</string>
+    <!-- Release R (ANDROID-PLAN "Other screens"): Settings → Security → New phone secret -->
+    <string name="settings_security_new_secret">New phone secret</string>
+    <string name="settings_security_new_secret_body">If you fear that something ran as VettID on this phone</string>
+    <string name="settings_new_secret_body">Your vault gives this phone a new secret. Your PIN stays the same, and the old secret opens nothing your vault stores from now on. Enter your PIN and your password.</string>
+    <string name="settings_new_secret_submit">Make a new secret</string>
+    <string name="settings_new_secret_done">Your phone now uses a new secret for this vault.</string>
+    <!-- ANDROID-PLAN "Change PIN" (release R), verbatim -->
+    <string name="settings_pin_password_too">Changing only the PIN gives whoever is guessing ten new tries at the same password. Change your password too.</string>
+    <!-- ANDROID-PLAN "Owner check and status" (release R), verbatim -->
+    <string name="settings_recovery_unknown_day">For a day your vault has not been able to check its recovery attempts or record that you were here. If this goes on for three days, your vault is no longer protected against a recovery started by someone else, and until it ends you cannot change your PIN or password. This is a fault of the VettID service or an attack on it. Contact VettID.</string>
+    <string name="settings_recovery_change_password">Change password</string>
 </resources>
