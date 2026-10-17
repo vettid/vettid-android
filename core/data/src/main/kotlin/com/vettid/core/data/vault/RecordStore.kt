@@ -11,6 +11,9 @@ package com.vettid.core.data.vault
  *   write that belongs to whatever record is current passes [UNBOUND], and says why.
  * - An update is a function of the record as it is under the lock, never a copy made before: a copy of the old record
  *   that straddles a wipe cannot be written back.
+ * - **After a wipe that did not finish** ([failed]; also from the start, when a wipe's marker is left over) nothing is
+ *   written and nothing is reset until a wipe completes: the record on the phone was never (or not wholly) erased, and an
+ *   empty record written over it would leave nothing for a later start to finish.
  * - **While the record could not be read** ([readable] false) nothing is written: a write would replace the record that
  *   names this phone's vault with an empty one. A [reload] that reads it, a [reset] or a wipe ends that.
  *
@@ -25,6 +28,7 @@ internal class RecordStore<T : Any>(
     readable: Boolean,
     private val empty: () -> T,
     private val persist: (T) -> Unit,
+    failed: Boolean = false,
 ) {
     private val lock = Any()
 
@@ -47,8 +51,18 @@ internal class RecordStore<T : Any>(
     var readable: Boolean = readable
         private set
 
-    /** Read and written under [lock] only. */
-    private var wiping = false
+    /** A wipe runs ([beginWipe] to [endWipe]). */
+    @Volatile
+    var wiping: Boolean = false
+        private set
+
+    /** The last wipe did not finish (or one was left over at the start): shut until a wipe completes. */
+    @Volatile
+    var failed: Boolean = failed
+        private set
+
+    /** Nothing is written, reset or opened: a wipe runs or did not finish. */
+    val closed: Boolean get() = wiping || failed
 
     fun bumpGeneration() {
         synchronized(lock) { generation++ }
@@ -61,7 +75,7 @@ internal class RecordStore<T : Any>(
      */
     fun update(since: Int, generation: Int? = null, f: (T) -> T?): Boolean = synchronized(lock) {
         val stale = (since != UNBOUND && since != recordGeneration) || (generation != null && generation != this.generation)
-        if (wiping || !readable || stale) return false
+        if (closed || !readable || stale) return false
         val next = f(value) ?: return false
         write(next)
         true
@@ -69,7 +83,7 @@ internal class RecordStore<T : Any>(
 
     /** A record of its own ([f] of the one now): the writes still on their way for the one before are dropped. */
     fun reset(f: (T) -> T): Boolean = synchronized(lock) {
-        if (wiping) return false
+        if (closed) return false
         generation++
         recordGeneration++
         readable = true
@@ -80,7 +94,7 @@ internal class RecordStore<T : Any>(
     /** The record read again from the phone; [readable]: it could be. Nothing is written. */
     fun reload(a: T, readable: Boolean) {
         synchronized(lock) {
-            if (wiping) return
+            if (closed) return
             value = a
             this.readable = readable
         }
@@ -95,13 +109,20 @@ internal class RecordStore<T : Any>(
         }
     }
 
-    /** The fresh record in memory (the phone's is erased), both counters moved, [also] and the end of the wipe: one step. */
-    fun endWipe(also: () -> Unit = {}) {
+    /**
+     * The end of the wipe, both counters moved and [also], as one step. [complete] (the phone's record is erased): the
+     * fresh record in memory, open. Otherwise the store stays shut ([failed]) over the record as it was, until a wipe
+     * completes.
+     */
+    fun endWipe(complete: Boolean, also: () -> Unit = {}) {
         synchronized(lock) {
             generation++
             recordGeneration++
-            value = empty()
-            readable = true
+            if (complete) {
+                value = empty()
+                readable = true
+            }
+            failed = !complete
             wiping = false
             also()
         }

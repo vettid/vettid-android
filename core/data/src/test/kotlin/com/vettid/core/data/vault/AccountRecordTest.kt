@@ -23,7 +23,7 @@ class AccountRecordTest {
         fun wipe() {
             record.beginWipe()
             disk = null
-            record.endWipe()
+            record.endWipe(complete = true)
         }
     }
 
@@ -107,9 +107,8 @@ class AccountRecordTest {
     }
 
     @Test
-    fun theLocksPartIsKeptByEveryOtherWrite() {
-        val f = Fixture(old)
-        f.record.saveLock(pendingSinceMs = 7, relayLockUntilMs = 9)
+    fun theLegacyLockFieldsAreKeptByEveryWrite() {
+        val f = Fixture(old.copy(lockAskedAtMs = 7, relayLockUntilMs = 9))
         f.record.update(f.record.recordGeneration) { it.copy(lockAskedAtMs = null, relayLockUntilMs = null, movedIn = true) }
         assertEquals(7L, f.disk!!.lockAskedAtMs)
         assertEquals(9L, f.disk!!.relayLockUntilMs)

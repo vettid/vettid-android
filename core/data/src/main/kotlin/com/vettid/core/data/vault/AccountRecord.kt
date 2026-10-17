@@ -29,11 +29,12 @@ internal data class LocalAccount(
      */
     val replaced: String? = null,
     /**
-     * A lock the member asked for that the vault has not confirmed ([LockKeeper]): when it was asked (epoch
-     * ms). While it is set this phone is locked and keeps trying, across process starts.
+     * (Legacy: read only while no [LockRecordFile] exists.) A lock the member asked for that the vault has not confirmed
+     * ([LockKeeper]): when it was asked (epoch ms). While it is set this phone is locked and keeps trying, across process
+     * starts.
      */
     val lockAskedAtMs: Long? = null,
-    /** An unanswered relay `vault.lock` may be acted on by the vault until then ([LockRecord.relayLockUntilMs]). */
+    /** (Legacy, as [lockAskedAtMs].) An unanswered relay `vault.lock` may be acted on by the vault until then. */
     val relayLockUntilMs: Long? = null,
     /**
      * The inner `ts` of the last successful unlock result (epoch ms, the enclave's clock): a `vault.locking`
@@ -96,14 +97,19 @@ internal data class LocalAccount(
 
 /**
  * The account record and the writes [VaultManager] makes to it, over a [RecordStore] (one lock, a wipe and a reset on
- * another thread, the record that could not be read). Every write keeps the lock's part of the record ([LockRecord]):
- * whatever a caller says of it, what is on the phone stays; only [saveLock] writes it. The rotate offer's flow is kept
+ * another thread, the record that could not be read, a wipe that did not finish). Every write keeps the legacy lock
+ * fields of the record as they are: the lock's record has its own file now ([LockRecordFile]). The rotate offer's flow is kept
  * here, set under the same lock as the record, so that a wipe's or a reset's clearing of it is never undone by a write
  * that was on its way.
  */
 @Suppress("TooManyFunctions") // one per kind of write the vault manager makes, each with its guard
-internal class AccountRecord(initial: LocalAccount, readable: Boolean, persist: (LocalAccount) -> Unit) {
-    private val store = RecordStore(initial, readable, empty = { LocalAccount() }, persist = persist)
+internal class AccountRecord(
+    initial: LocalAccount,
+    readable: Boolean,
+    persist: (LocalAccount) -> Unit,
+    eraseFailed: Boolean = false,
+) {
+    private val store = RecordStore(initial, readable, empty = { LocalAccount() }, persist = persist, failed = eraseFailed)
     private val rotateOfferFlow = MutableStateFlow(initial.rotateOffered)
 
     /** (Release R) The offer to rotate the vault's keys after a transfer, a PIN change or a password change. */
@@ -118,6 +124,12 @@ internal class AccountRecord(initial: LocalAccount, readable: Boolean, persist: 
     val recordGeneration: Int get() = store.recordGeneration
 
     fun bumpGeneration() = store.bumpGeneration()
+
+    /** A wipe runs, or the last one did not finish: no session is opened, nothing is written ([RecordStore.closed]). */
+    val closed: Boolean get() = store.closed
+
+    /** The last wipe did not finish, or one was left over at the start ([RecordStore.failed]). */
+    val eraseFailed: Boolean get() = store.failed
 
     /**
      * A read-modify-write under the record's lock: [f] gets the record as it is now ([RecordStore.update]), so that two
@@ -134,14 +146,6 @@ internal class AccountRecord(initial: LocalAccount, readable: Boolean, persist: 
 
     /** The record read again from the phone ([readable]: it could be). */
     fun reload(a: LocalAccount, readable: Boolean) = store.reload(a, readable)
-
-    /**
-     * The lock's part of the record ([LockKeeper]'s), and nothing else of it. [RecordStore.UNBOUND]: the lock's state is
-     * the keeper's own, of whatever record is current, and a lock asked for is kept at once; a wipe or a forgotten vault
-     * abandons the keeper first.
-     */
-    fun saveLock(pendingSinceMs: Long?, relayLockUntilMs: Long?): Boolean =
-        store.update(RecordStore.UNBOUND) { it.copy(lockAskedAtMs = pendingSinceMs, relayLockUntilMs = relayLockUntilMs) }
 
     /** The rotate offer [on] or put away, for the record of [since]; shown only when it is kept. */
     fun setRotateOffer(on: Boolean, since: Int): Boolean = store.update(since) { cur ->
@@ -169,8 +173,8 @@ internal class AccountRecord(initial: LocalAccount, readable: Boolean, persist: 
 
     fun beginWipe() = store.beginWipe()
 
-    /** The fresh record in memory and no offer, as one step ([RecordStore.endWipe]). */
-    fun endWipe() = store.endWipe { rotateOfferFlow.value = false }
+    /** The end of the wipe ([RecordStore.endWipe]): no offer, whether or not it completed. */
+    fun endWipe(complete: Boolean) = store.endWipe(complete) { rotateOfferFlow.value = false }
 
     private fun LocalAccount.withLockOf(cur: LocalAccount) =
         copy(lockAskedAtMs = cur.lockAskedAtMs, relayLockUntilMs = cur.relayLockUntilMs)

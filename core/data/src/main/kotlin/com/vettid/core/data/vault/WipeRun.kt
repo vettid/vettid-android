@@ -6,14 +6,15 @@ import kotlinx.coroutines.delay
 /**
  * One wipe of this phone ([VaultManager]'s), in an order that fails secure:
  *
- * 1. the account record's guard shuts ([AccountRecord.beginWipe]);
- * 2. [detach]: the session, its observer and the relay connection stop, so that none of them outlives a wipe attempt;
+ * 1. the account record's guard shuts ([AccountRecord.beginWipe]): from here no session opens ([SessionGate]);
+ * 2. [detach]: the lock keeper is abandoned and the session, its observer and the relay connection stop;
  * 3. [mark]: the wipe's marker, which makes a later start finish it, tried [attempts] times;
  * 4. [erase]: everything else; true when nothing is left.
  *
- * Whatever happens, the guard then opens on the fresh record ([AccountRecord.endWipe]) and [onEnd] hears the phase to
- * show: SignedOut only after a complete erase; otherwise [failedPhase], which says that this phone was not erased and
- * offers to try again (a marker that could not be written leaves nothing for a later start to finish).
+ * Whatever happens, [detach] runs again (nothing opened meanwhile outlives the wipe), the guard ends
+ * ([AccountRecord.endWipe]: open on the fresh record only after a complete erase, shut otherwise) and [onEnd] hears the
+ * phase to show: SignedOut only after a complete erase; otherwise [failedPhase], which says that this phone was not
+ * erased and offers to try again (a marker that could not be written leaves nothing for a later start to finish).
  */
 internal class WipeRun(
     private val record: AccountRecord,
@@ -24,16 +25,22 @@ internal class WipeRun(
     private val attempts: Int = MARK_ATTEMPTS,
     private val retryMs: Long = MARK_RETRY_MS,
 ) {
+    @Suppress("TooGenericExceptionCaught") // the second detach is best effort: the wipe's end follows whatever it does
     suspend fun run() {
         record.beginWipe()
-        var phase: AppPhase = failedPhase
+        var complete = false
         try {
             detach()
             if (!marked()) return
-            if (erase()) phase = AppPhase.SignedOut
+            complete = erase()
         } finally {
-            record.endWipe()
-            onEnd(phase)
+            try {
+                detach()
+            } catch (_: Exception) {
+                // the store stays shut below unless the erase completed; no session opens while it is
+            }
+            record.endWipe(complete)
+            onEnd(if (complete) AppPhase.SignedOut else failedPhase)
         }
     }
 

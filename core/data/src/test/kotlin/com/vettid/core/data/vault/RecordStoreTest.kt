@@ -38,7 +38,7 @@ class RecordStoreTest {
         assertFalse(f.store.update(RecordStore.UNBOUND) { it.copy(rotateOffered = true) })
         assertFalse(f.store.reset { Record(vault = "new") })
         assertNull(f.disk)
-        f.store.endWipe()
+        f.store.endWipe(complete = true)
         assertNull(f.disk)
         assertEquals(Record(), f.store.value)
     }
@@ -50,7 +50,7 @@ class RecordStoreTest {
         // The runner's lock and its check came after the wipe began; the offer comes after the wipe ended.
         val gen = f.store.generation
         f.erase()
-        f.store.endWipe()
+        f.store.endWipe(complete = true)
         assertFalse(f.offer(gen))
         assertNull(f.disk)
         assertFalse(f.store.value.rotateOffered)
@@ -62,7 +62,7 @@ class RecordStoreTest {
         f.store.beginWipe()
         val since = f.store.recordGeneration
         f.erase()
-        f.store.endWipe()
+        f.store.endWipe(complete = true)
         // The unlock answers after the wipe: its last-opened time is for the erased record.
         assertFalse(f.opened(since, at = 42))
         assertNull(f.disk)
@@ -75,7 +75,7 @@ class RecordStoreTest {
         val since = f.store.recordGeneration
         f.store.beginWipe()
         f.erase()
-        f.store.endWipe()
+        f.store.endWipe(complete = true)
         assertFalse(f.opened(since, at = 42))
         assertNull(f.disk)
     }
@@ -115,7 +115,7 @@ class RecordStoreTest {
         val f = Fixture()
         f.store.beginWipe()
         f.erase()
-        f.store.endWipe()
+        f.store.endWipe(complete = true)
         // A setup code redeemed (or a recovery claimed) after the wipe: a record of its own, written.
         assertTrue(f.store.reset { Record(vault = "new") })
         assertEquals(Record(vault = "new"), f.disk)
@@ -155,5 +155,34 @@ class RecordStoreTest {
         assertTrue(store.reset { Record() }) // the member chose to start over
         assertTrue(store.update(store.recordGeneration) { it.copy(lastOpened = 1) })
         assertEquals(Record(lastOpened = 1), disk)
+    }
+
+    @Test
+    fun aWipeThatDidNotFinishKeepsTheRecordShut() {
+        val f = Fixture()
+        f.store.beginWipe()
+        // The marker could not be written: nothing was erased, and the record on the phone is the old one.
+        f.store.endWipe(complete = false)
+        assertTrue(f.store.failed)
+        assertTrue(f.store.closed)
+        assertFalse(f.store.update(RecordStore.UNBOUND) { it.copy(rotateOffered = true) })
+        assertFalse(f.store.reset { Record() })
+        assertEquals(Record(vault = "old"), f.disk)
+        // A wipe that completes opens it on the fresh record.
+        f.store.beginWipe()
+        f.erase()
+        f.store.endWipe(complete = true)
+        assertFalse(f.store.closed)
+        assertTrue(f.store.reset { Record(vault = "new") })
+        assertEquals(Record(vault = "new"), f.disk)
+    }
+
+    @Test
+    fun aMarkerLeftOverAtTheStartKeepsTheRecordShut() {
+        var disk: Record? = Record(vault = "old")
+        val store = RecordStore(disk!!, readable = true, empty = { Record() }, persist = { disk = it }, failed = true)
+        assertFalse(store.reset { Record() })
+        assertFalse(store.update(RecordStore.UNBOUND) { it.copy(lastOpened = 1) })
+        assertEquals(Record(vault = "old"), disk)
     }
 }

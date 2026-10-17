@@ -135,6 +135,17 @@ class VaultManager(
             accountFile.save(json.encodeToString(LocalAccount.serializer(), a).toByteArray())
             accountFlow.value = a.toInfo()
         },
+        // A wipe's marker left over at the start (the start's resume could not finish it): shut until a wipe completes.
+        eraseFailed = wiper.pending,
+    )
+
+    /**
+     * The lock's record, in a file of its own ([LockRecordFile]): durable whatever the state of the account record (one
+     * that cannot be read, or shut after a wipe that did not finish). Before it, the record was kept in the account record.
+     */
+    private val lockFile = LockRecordFile(
+        File(app.noBackupFilesDir, LOCK_FILE),
+        legacy = { LockRecord(local.lockAskedAtMs, local.relayLockUntilMs) },
     )
 
     private val local: LocalAccount get() = record.value
@@ -142,12 +153,24 @@ class VaultManager(
     /** Bumped by every wipe, reset and lock ([RecordStore.generation]): a phase computed before it is not published after it. */
     private val generation: Int get() = record.generation
 
-    /**
-     * The last wipe did not finish, or could not start: no session opens and nothing is enrolled until one does
-     * ([WipeRun]); "Try again" ([refresh]) runs it again.
-     */
+    /** The old vault's device, detached by a wipe ([WipeRun]) and kept until it is forgotten (a retried wipe too). */
     @Volatile
-    private var eraseFailed = false
+    private var wipeDevice: VaultDevice? = null
+
+    /** How a vault comes to this phone, each after an unfinished wipe is finished or refused while it is not ([Enrolments]). */
+    private val enrolments = Enrolments(
+        pending = { record.eraseFailed || wiper.pending },
+        finish = { holder.wipeNow() },
+        ops = object : Enrolments.Ops<TypedRecoveryCode> {
+            override suspend fun redeemSetupCode(code: SetupCodeInput) = redeemSetupCodeNow(code)
+
+            override suspend fun transferIn(code: String) = transferInNow(code)
+
+            override suspend fun registerRecovery(code: RecoveryCode) = registerRecoveryNow(code)
+
+            override suspend fun registerTypedRecovery(typed: TypedRecoveryCode) = registerTypedRecoveryNow(typed)
+        },
+    )
 
     /** Proofs that this phone was replaced, and the wipe they start. */
     val holder = HolderWatch(scope) { wipeThisPhone() }
@@ -469,11 +492,6 @@ class VaultManager(
         record.reset(a)
     }
 
-    /** Writes the lock's part of the account record, and nothing else of it. */
-    private fun saveLockRecord(r: LockRecord) {
-        record.saveLock(r.pendingSinceMs, r.relayLockUntilMs)
-    }
-
     // --- session ---
 
     /**
@@ -543,11 +561,7 @@ class VaultManager(
         newKeeper = { attempt ->
             LockKeeper(
                 scope,
-                store = object : LockRecordStore {
-                    override fun load() = LockRecord(local.lockAskedAtMs, local.relayLockUntilMs)
-
-                    override fun save(record: LockRecord) = saveLockRecord(record)
-                },
+                store = lockFile,
                 attempt = attempt,
             )
         },
@@ -597,12 +611,13 @@ class VaultManager(
     fun onBeforeLock(hook: suspend () -> Unit) = locking.addHook(hook)
 
     private suspend fun session(): Session = mutex.withLock {
-        // Fail secure: after a wipe that did not finish, nothing of the old vault is opened again.
-        if (eraseFailed) throw VaultFailure(FailureKind.ERASE_FAILED, WipeRun.CODE_WIPE_PENDING)
-        session ?: openSession().also {
-            session = it
-            // What the vault sends while a lock is pending is not handed on: on this phone it is locked.
-            eventsFlow.value = VaultEvents(it.device.events.filter { lockGuard.takesEvents() }, it.device.droppedForTime)
+        // Fail secure: while a wipe runs, and after one that did not finish, nothing of the old vault is opened again.
+        SessionGate.open(record, session) {
+            openSession().also {
+                session = it
+                // What the vault sends while a lock is pending is not handed on: on this phone it is locked.
+                eventsFlow.value = VaultEvents(it.device.events.filter { lockGuard.takesEvents() }, it.device.droppedForTime)
+            }
         }
     }
 
@@ -651,8 +666,9 @@ class VaultManager(
             feed.clear()
             ownerCheck.clear()
             phoneSecrets.delete(local.phone)
-            // UNBOUND: clears the vault's part of whatever record is current (after a wipe there is nothing to clear);
-            // every forget path resets the record next.
+            // UNBOUND: clears the vault's part of whatever record is current, which the forgotten device leaves nothing
+            // to belong to. A forget that ends the account resets the record next; a fresh device before an enrolment
+            // ([freshDeviceIfUnpaired]: a redeem, a transfer to this phone, a recovery) keeps its member's part.
             updateLocal(RecordStore.UNBOUND) {
                 it.copy(
                     setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
@@ -802,17 +818,17 @@ class VaultManager(
 
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one phase per state of the device
     private suspend fun evaluate(): AppPhase = guard {
+        if (record.eraseFailed) {
+            // "Try again" after a wipe that did not finish (or a marker left over at the start): it runs again, and says how it ended.
+            holder.wipeNow()
+            return@guard phaseFlow.value
+        }
         if (localUnreadable) {
             // Read again (a Keystore that was not ready at start): never taken for an empty record.
             val a = io { loadLocal() }
             record.reload(a, readable = !localUnreadable)
             if (localUnreadable) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_KEYSTORE)
             accountFlow.value = local.toInfo()
-        }
-        if (eraseFailed) {
-            // "Try again" after a wipe that did not finish: it runs again, and says how it ended.
-            holder.wipeNow()
-            return@guard phaseFlow.value
         }
         if (local.replaced != null) {
             // A phone the build before the wipe marked replaced (its device keys already forgotten): erase it now.
@@ -888,9 +904,10 @@ class VaultManager(
         }
     }
 
-    override suspend fun redeemSetupCode(code: SetupCodeInput): String {
+    override suspend fun redeemSetupCode(code: SetupCodeInput): String = enrolments.redeemSetupCode(code)
+
+    private suspend fun redeemSetupCodeNow(code: SetupCodeInput): String {
         // Any refusal of the code itself is `404 invalid_code` ([FailureKind.SETUP_CODE_INVALID], [memberFailure]).
-        beforeEnrolment()
         val r = guard {
             // A phone that holds nothing yet but carries a stale enrollment starts afresh (with a new app key).
             freshDeviceIfUnpaired()
@@ -1013,8 +1030,9 @@ class VaultManager(
      * vault that is locked).
      */
     override suspend fun finishSetup() {
+        val rec = record.recordGeneration
         if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMove.value)) return
-        io { updateLocal(record.recordGeneration) { it.copy(setupComplete = true, movedIn = false) } }
+        io { updateLocal(rec) { it.copy(setupComplete = true, movedIn = false) } }
         phaseFlow.value = AppPhase.Unlocked
     }
 
@@ -1608,7 +1626,9 @@ class VaultManager(
         }
     }
 
-    override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = guard {
+    override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = enrolments.registerRecovery(code)
+
+    private suspend fun registerRecoveryNow(code: RecoveryCode): RecoveryRegistration = guard {
         if (!session().device.recovering) freshDeviceIfUnpaired()
         // §11.11.7 (0.15.0): the claim gives this phone's key the right to register, and names the member.
         val claimed = try {
@@ -1623,7 +1643,9 @@ class VaultManager(
      * §11.11.10 (0.25.0): the claim by locator names the vault and the recovery; with them and the typed code the
      * app holds what a scan gives, and the register below is the scanned one.
      */
-    override suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration = guard {
+    override suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration = enrolments.registerTypedRecovery(typed)
+
+    private suspend fun registerTypedRecoveryNow(typed: TypedRecoveryCode): RecoveryRegistration = guard {
         if (!session().device.recovering) freshDeviceIfUnpaired()
         val claimed = try {
             gateway.claimRecoveryByLocator(typed.locator)
@@ -1890,8 +1912,9 @@ class VaultManager(
     @Volatile
     private var openTransferId: String? = null
 
-    override suspend fun transferIn(code: String): String = guard {
-        beforeEnrolment()
+    override suspend fun transferIn(code: String): String = enrolments.transferIn(code)
+
+    private suspend fun transferInNow(code: String): String = guard {
         val link = when (val p = InviteLinks.parseTransfer(code)) {
             is InviteLinks.TransferParsed.Ok -> p.link
             InviteLinks.TransferParsed.Expired -> throw VaultFailure(FailureKind.INVITE_EXPIRED, CODE_NOT_TRANSFER)
@@ -2172,28 +2195,30 @@ class VaultManager(
         // Release R (§11.14.10): an old phone that removes its keys at the end of a kept transfer (the new phone finished
         // the move, or the 7 days are over) says so on the welcome screen; the reason is in the wipe's marker, so that a
         // wipe a crash interrupted still leaves the notice when it is finished at the next start.
+        // Kept until a wipe completes: a retried wipe still says why it ran.
         val movedAway = wipeMovedAway
-        wipeMovedAway = false
-        var device: VaultDevice? = null
         WipeRun(
             record,
-            // First, whatever follows: nothing of the old vault's session (its observer, its relay connection) outlives
-            // a wipe attempt, finished or not.
+            // First, again at the end, whatever happens between: no lock retry, and nothing of the old vault's session
+            // (its observer, its relay connection) outlives a wipe attempt, finished or not.
             detach = {
+                lockKeeper.abandon() // nothing of this phone's is left to lock a vault with
                 mutex.withLock {
                     observer?.cancel()
                     observer = null
-                    device = session?.device
+                    session?.device?.let { d ->
+                        wipeDevice = d
+                        runCatching { d.stop() }
+                    }
                     session = null
                     eventsFlow.value = null
-                    device?.let { d -> runCatching { d.stop() } }
                 }
             },
             // crash-safe: a process that dies from here on finishes the wipe at its next start
             mark = { wiper.begin(if (movedAway) LocalWipe.REASON_MOVED_AWAY else null) },
-            erase = { eraseAfterMark(device) },
+            erase = { eraseAfterMark() },
             onEnd = { phase ->
-                eraseFailed = phase != AppPhase.SignedOut
+                if (phase == AppPhase.SignedOut) wipeMovedAway = false
                 finishMoveFlow.value = false
                 movedAwayFlow.value = runCatching { wiper.movedAway }.getOrDefault(false)
                 finishMoveRunner.clearFailure()
@@ -2204,12 +2229,12 @@ class VaultManager(
     }
 
     /** The wipe after its marker ([WipeRun]): everything of this phone's goes; true when nothing is left. */
-    private suspend fun eraseAfterMark(d: VaultDevice?): Boolean {
-        lockKeeper.abandon() // nothing of this phone's is left to lock a vault with
-        if (d != null) {
+    private suspend fun eraseAfterMark(): Boolean {
+        wipeDevice?.let { d ->
             // Best effort, bounded: the relay forgets the mailbox; the wipe does not depend on it.
             withTimeoutOrNull(BEST_EFFORT_MS) { runCatching { io { d.deleteMailbox() } } }
             runCatching { d.forget() }
+            wipeDevice = null
         }
         social.clear()
         attachments.reset()
@@ -2230,12 +2255,6 @@ class VaultManager(
         wiper.resetMemory()
         return io { wiper.erase().also { if (it) wiper.finish() } }
     }
-
-    /**
-     * Before an enrolment (a setup code's redeem, a recovery's claim, a transfer to this phone): a wipe that did not
-     * finish is finished first, or the enrolment is refused ([WipeRun.beforeEnrolment]).
-     */
-    private suspend fun beforeEnrolment() = WipeRun.beforeEnrolment(pending = { eraseFailed || wiper.pending }) { holder.wipeNow() }
 
     // --- BackgroundVault: the notification service (ANDROID-PLAN 0.1.23) ---
 
@@ -2396,6 +2415,7 @@ class VaultManager(
 
     companion object {
         private const val DEVICE_FILE = "vault-device.bin"
+        private const val LOCK_FILE = "lock-record"
         private const val SOCIAL_FILE = "social.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"

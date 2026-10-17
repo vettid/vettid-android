@@ -7,23 +7,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
-/** A wipe of this phone fails secure: the session goes first, and only a complete erase says SignedOut. */
+/** A wipe of this phone fails secure: the session goes first and again last, and only a complete erase says SignedOut. */
 class WipeRunTest {
     private class Fixture(var markFails: Int = 0, val eraseResult: Boolean = true, val eraseThrows: Boolean = false) {
         val record = AccountRecord(LocalAccount(userGuid = "u", vaultId = "v"), readable = true, persist = {})
         val steps = mutableListOf<String>()
         var phase: AppPhase? = null
         var marks = 0
+
+        /** What a session asked for at each step got: refused, or opened. */
+        val sessions = mutableListOf<String>()
+
+        private fun askSession() {
+            sessions += try {
+                SessionGate.refuseWhileClosed(record)
+                "opened"
+            } catch (e: VaultFailure) {
+                "refused ${e.kind}"
+            }
+        }
+
         val run = WipeRun(
             record,
-            detach = { steps += "detach" },
+            detach = {
+                steps += "detach"
+                askSession()
+            },
             mark = {
                 marks++
+                askSession()
                 if (markFails-- > 0) throw java.io.IOException("no space")
                 steps += "mark"
             },
             erase = {
                 steps += "erase"
+                askSession()
                 if (eraseThrows) error("erase")
                 eraseResult
             },
@@ -36,21 +54,52 @@ class WipeRunTest {
     fun aCompleteWipeSaysSignedOut() = runTest {
         val f = Fixture()
         f.run.run()
-        assertEquals(listOf("detach", "mark", "erase"), f.steps)
+        assertEquals(listOf("detach", "mark", "erase", "detach"), f.steps)
         assertEquals(AppPhase.SignedOut, f.phase)
         assertEquals(LocalAccount(), f.record.value)
+        assertFalse(f.record.closed)
+    }
+
+    @Test
+    fun noSessionOpensWhileTheWipeRuns() = runTest {
+        val f = Fixture()
+        f.run.run()
+        // A lock retry, the owner check or a refresh during the wipe: refused at every step.
+        assertEquals(List(4) { "refused ${FailureKind.BUSY}" }, f.sessions)
+    }
+
+    @Test
+    fun theSessionIsDetachedAgainAtTheEndWhateverHappens() = runTest {
+        val f = Fixture(eraseThrows = true)
+        assertTrue(runCatching { f.run.run() }.isFailure)
+        assertEquals("detach", f.steps.last())
     }
 
     @Test
     fun aMarkerThatCannotBeWrittenStopsTheWipeAndSaysSo() = runTest {
         val f = Fixture(markFails = Int.MAX_VALUE)
         f.run.run()
-        // The session went first; nothing was erased; the phase is not a clean welcome screen.
-        assertEquals(listOf("detach"), f.steps)
+        // The session went first (and again last); nothing was erased; the phase is not a clean welcome screen.
+        assertEquals(listOf("detach", "detach"), f.steps)
         assertEquals(WipeRun.MARK_ATTEMPTS, f.marks)
         assertEquals(WipeRun.failedPhase, f.phase)
-        // The guard is open again (on the fresh record), so that "Try again" can run the wipe.
-        assertTrue(f.record.update(f.record.recordGeneration) { it.copy(movedIn = true) })
+    }
+
+    @Test
+    fun theRecordStaysShutAfterAWipeThatDidNotFinish() = runTest {
+        val f = Fixture(markFails = Int.MAX_VALUE)
+        f.run.run()
+        // The old record was never erased: nothing is written or reset over it, and no session opens.
+        assertTrue(f.record.eraseFailed)
+        assertFalse(f.record.update(RecordStore.UNBOUND) { it.copy(movedIn = true) })
+        assertFalse(f.record.reset(LocalAccount()))
+        assertEquals(LocalAccount(userGuid = "u", vaultId = "v"), f.record.value)
+        try {
+            SessionGate.refuseWhileClosed(f.record)
+            fail("a session opened after a wipe that did not finish")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.ERASE_FAILED, e.kind)
+        }
     }
 
     @Test
@@ -66,6 +115,7 @@ class WipeRunTest {
         val f = Fixture(eraseResult = false)
         f.run.run()
         assertEquals(WipeRun.failedPhase, f.phase)
+        assertTrue(f.record.eraseFailed)
     }
 
     @Test
@@ -73,6 +123,18 @@ class WipeRunTest {
         val f = Fixture(eraseThrows = true)
         assertTrue(runCatching { f.run.run() }.isFailure)
         assertEquals(WipeRun.failedPhase, f.phase)
+        assertTrue(f.record.eraseFailed)
+    }
+
+    @Test
+    fun aRetriedWipeThatCompletesOpensTheRecord() = runTest {
+        val f = Fixture(markFails = WipeRun.MARK_ATTEMPTS)
+        f.run.run()
+        assertTrue(f.record.eraseFailed)
+        // "Try again": the marker can be written now.
+        f.run.run()
+        assertEquals(AppPhase.SignedOut, f.phase)
+        assertFalse(f.record.closed)
         assertEquals(LocalAccount(), f.record.value)
     }
 
