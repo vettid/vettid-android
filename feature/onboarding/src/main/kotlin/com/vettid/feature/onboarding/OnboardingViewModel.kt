@@ -6,7 +6,7 @@ import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.SetupCodes
 import com.vettid.core.data.account.EmailFormat
 import com.vettid.core.data.account.SetupLinkInbox
-import com.vettid.core.data.policy.PasswordPolicy
+import com.vettid.core.data.policy.PasswordRule
 import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
@@ -83,8 +83,14 @@ data class OnboardingUiState(
     val pinMismatch: Boolean = false,
     val password: String = "",
     val passwordConfirm: String = "",
-    val passwordStrength: PasswordPolicy.Strength = PasswordPolicy.Strength.TOO_SHORT,
-    val passwordProblem: PasswordPolicy.Problem? = null,
+    /**
+     * The password rules of release R (ANDROID-PLAN "Passwords"), as the member types. At enrollment they apply whatever
+     * the vault's release: it is not known before the enrollment, and a password they accept is one every release
+     * accepts (before release R: 8–1,024 bytes).
+     */
+    val passwordRule: PasswordRule = PasswordRule.SHORT,
+    /** [passwordRule] is the vault's verdict (`weak_password{reason}`), not the app's. */
+    val passwordRefused: Boolean = false,
     val passwordMismatch: Boolean = false,
     val backup: Boolean = true,
     val backupOffAcknowledged: Boolean = false,
@@ -95,6 +101,12 @@ data class OnboardingUiState(
      * flow in memory: `credential.create` carries the PIN, which the vault verifies, so the password step asks for it.
      */
     val askPin: Boolean = false,
+    /** The vault came to this phone by a direct transfer: the last screen is the move's ([OnboardingStep.DONE]). */
+    val movedIn: Boolean = false,
+    /** (Release R) The move still has to be finished with the PIN on this phone ("Finish the move"). */
+    val finishMovePending: Boolean = false,
+    /** The vault has a phone secret (release R): the move's last screen says so in its words. */
+    val phoneSecret: Boolean = false,
     val progress: List<Pair<EnrollStep, StepState>> = emptyList(),
     val busy: Boolean = false,
     val error: FailureKind? = null,
@@ -106,6 +118,10 @@ data class OnboardingUiState(
 
     /** (Release R) The PIN the password step asks for ([askPin]) is entered: digits only, the policy was met at setup. */
     val credentialPinReady: Boolean get() = !askPin || pin.length >= MIN_EXISTING_PIN && pin.all { it.isDigit() }
+
+    /** The password step can go on: both fields filled, the rules met, the PIN entered when it is asked. */
+    val canSubmitPassword: Boolean
+        get() = password.isNotEmpty() && passwordConfirm.isNotEmpty() && credentialPinReady && passwordRule.passes && !passwordRefused
 
     override fun toString(): String = "OnboardingUiState(step=$step, busy=$busy, error=$error)"
 }
@@ -135,6 +151,7 @@ class OnboardingViewModel @Inject constructor(
     init {
         viewModelScope.launch { account.phase.collect { route(it) } }
         viewModelScope.launch { inbox.link.collect { raw -> if (raw != null) receiveLink(raw) } }
+        viewModelScope.launch { vault.finishMovePending.collect { p -> state.update { it.copy(finishMovePending = p) } } }
     }
 
     @Suppress("CyclomaticComplexMethod")
@@ -180,7 +197,10 @@ class OnboardingViewModel @Inject constructor(
                     }
                 }
                 // A recovery or a transfer shows its own "your vault is connected to this phone now".
-                SetupStage.FINISHING -> if (!moving) go(OnboardingStep.DONE)
+                SetupStage.FINISHING -> if (!moving) {
+                    go(OnboardingStep.DONE)
+                    state.update { it.copy(movedIn = vault.movedIn, phoneSecret = vault.usesPhoneSecret) }
+                }
             }
             else -> Unit
         }
@@ -204,7 +224,10 @@ class OnboardingViewModel @Inject constructor(
         state.update {
             when (to) {
                 OnboardingStep.PIN_CREATE -> it.copy(step = to, pinConfirm = "", pinMismatch = false, error = null)
-                OnboardingStep.PIN_CONFIRM -> it.copy(step = to, password = "", passwordConfirm = "", passwordProblem = null, error = null)
+                OnboardingStep.PIN_CONFIRM -> it.copy(
+                    step = to, password = "", passwordConfirm = "", passwordRule = PasswordRule.SHORT, passwordRefused = false,
+                    error = null,
+                )
                 else -> it.copy(step = to, error = null, scanRefusal = null, codeInvalid = false)
             }
         }
@@ -326,7 +349,12 @@ class OnboardingViewModel @Inject constructor(
 
     // --- vault PIN ---
 
-    override fun setPin(v: String) = state.update { it.copy(pin = v.take(PinPolicy.MAX_LENGTH), pinProblem = null) }
+    override fun setPin(v: String) = state.update {
+        val pin = v.take(PinPolicy.MAX_LENGTH)
+        // The password step may ask for the PIN too (askPin): "Don't use your PIN as your password." follows it.
+        val rule = if (it.passwordRefused || it.password.isEmpty()) it.passwordRule else PasswordRule.check(it.password, pin)
+        it.copy(pin = pin, pinProblem = null, passwordRule = rule)
+    }
 
     override fun submitPin() {
         val p = PinPolicy.check(state.value.pin)
@@ -351,17 +379,15 @@ class OnboardingViewModel @Inject constructor(
     // --- credential password ---
 
     override fun setPassword(v: String) = state.update {
-        it.copy(password = v, passwordStrength = PasswordPolicy.strength(v), passwordProblem = null, passwordMismatch = false)
+        it.copy(password = v, passwordRule = PasswordRule.check(v, it.pin), passwordRefused = false, passwordMismatch = false)
     }
 
     override fun setPasswordConfirm(v: String) = state.update { it.copy(passwordConfirm = v, passwordMismatch = false) }
 
     override fun submitPassword() {
         val s = state.value
-        val p = PasswordPolicy.check(s.password, pin = s.pin.ifEmpty { null })
         when {
-            !s.credentialPinReady -> return
-            p != null -> state.update { it.copy(passwordProblem = p) }
+            !s.credentialPinReady || !s.passwordRule.passes || s.passwordRefused -> return
             s.passwordConfirm != s.password -> state.update { it.copy(passwordMismatch = true) }
             else -> state.update { it.copy(step = OnboardingStep.BACKUP) }
         }
@@ -423,7 +449,25 @@ class OnboardingViewModel @Inject constructor(
                 if (e.kind == FailureKind.VAULT_EXISTS) {
                     state.update { it.copy(step = OnboardingStep.VAULT_ELSEWHERE, pin = "", pinConfirm = "") }
                 }
+                // The vault refused the password (§11.14.7): back to the password, with its reason under the field.
+                if (e.kind == FailureKind.WEAK_PASSWORD) refusedPassword(e)
             }
+        }
+    }
+
+    private fun refusedPassword(e: VaultFailure) {
+        // A reason this app does not know: the generic "This password is not strong enough." Either way the same password
+        // cannot be sent again; changing it clears the refusal.
+        val rule = PasswordRule.fromVault(e.weakPasswordReason)
+        state.update {
+            it.copy(
+                step = OnboardingStep.PASSWORD,
+                credentialOnly = enrolled,
+                progress = emptyList(),
+                passwordRule = rule,
+                passwordRefused = true,
+                error = null,
+            )
         }
     }
 

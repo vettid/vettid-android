@@ -120,6 +120,11 @@ data class UnlockUiState(
     val password: String = "",
     /** The vault locked after ten failed checks (§3.6.4). */
     val lockedByOwnerCheck: Boolean = false,
+    /**
+     * (Release R, §11.14.10) Why the last "Finish the move" did not open the vault (`transfer_incomplete`: "Approve it
+     * again on your old phone", a wrong PIN, a wait), said here after its lock sent the app to this screen.
+     */
+    val moveFailure: FailureKind? = null,
 ) {
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
@@ -174,6 +179,9 @@ interface UnlockActions {
     /** The member has read that the vault confirmed the lock. */
     fun dismissLockNotice() = Unit
 
+    /** The member has read why "Finish the move" did not finish. */
+    fun dismissMoveFailure() = Unit
+
     /** The member confirmed: erases this phone ([AccountRepository.eraseThisPhone]), then the welcome screen. */
     fun confirmErase()
 }
@@ -209,6 +217,7 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch { vault.refusedByVault.collect { r -> state.update { it.copy(refused = r) } } }
         viewModelScope.launch { vault.lockNotice.collect { n -> state.update { it.copy(lock = n) } } }
         viewModelScope.launch { vault.transferKeptSince.collect { k -> state.update { it.copy(keptTransfer = k != null) } } }
+        viewModelScope.launch { vault.finishMoveFailure.collect { f -> state.update { it.copy(moveFailure = f) } } }
         viewModelScope.launch {
             combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> (v?.gated(Instant.now()) == true) to locked }
                 .collect { (due, locked) -> state.update { it.copy(checkDue = due || locked, lockedByOwnerCheck = locked) } }
@@ -262,6 +271,8 @@ class UnlockViewModel @Inject constructor(
     override fun retryLock() = vault.retryLock()
 
     override fun dismissLockNotice() = vault.dismissLockNotice()
+
+    override fun dismissMoveFailure() = vault.acknowledgeFinishMoveFailure()
 
     override fun confirmErase() {
         val s = state.value

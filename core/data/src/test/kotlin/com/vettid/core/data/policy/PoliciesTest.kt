@@ -2,6 +2,8 @@ package com.vettid.core.data.policy
 
 import com.vettid.core.data.policy.PasswordPolicy.Strength
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,5 +54,37 @@ class PoliciesTest {
     fun deletePhrase() {
         assertTrue(DeletePhrase.matches(" delete my vault "))
         assertTrue(!DeletePhrase.matches("Delete my vault"))
+    }
+
+    /** VAULT-MESSAGING §11.14.7 on the phone, in the vault's order, with the app's own limits first. */
+    @Test
+    fun releaseRPasswordRules() {
+        assertEquals(PasswordRule.SHORT, PasswordRule.check("", null))
+        assertEquals(PasswordRule.SHORT, PasswordRule.check("elevenchars", null))
+        assertEquals(PasswordRule.REPEATED, PasswordRule.check("zzzzzzzzzzzzzzzz", null))
+        assertEquals(PasswordRule.COMMON, PasswordRule.check("password1234", null))
+        assertEquals(PasswordRule.COMMON, PasswordRule.check("PASSWORD1234", null))
+        assertEquals(PasswordRule.SAME_AS_PIN, PasswordRule.check("975310864208", "975310864208"))
+        assertEquals(PasswordRule.GUESSABLE, PasswordRule.check("123456789123", null))
+        assertEquals(PasswordRule.OK, PasswordRule.check("correct horse battery staple (test)", null))
+        assertEquals(PasswordRule.OK, PasswordRule.check("correct horse battery staple (test)", ""))
+        assertEquals(PasswordRule.CONTROL_CHARACTERS, PasswordRule.check("Tab\tInside-Password-1", null))
+        assertEquals(PasswordRule.TOO_LONG, PasswordRule.check("é".repeat(513), null))
+        // Characters, not bytes: twelve two-byte letters are long enough.
+        assertNotEquals(PasswordRule.SHORT, PasswordRule.check("éàüöñçøåæßðþ", null))
+        assertTrue(PasswordRule.OK.passes)
+        assertFalse(PasswordRule.GUESSABLE.passes)
+    }
+
+    @Test
+    fun theVaultsReasons() {
+        assertEquals(PasswordRule.SHORT, PasswordRule.fromVault("short"))
+        assertEquals(PasswordRule.REPEATED, PasswordRule.fromVault("repeated"))
+        assertEquals(PasswordRule.COMMON, PasswordRule.fromVault("common"))
+        assertEquals(PasswordRule.SAME_AS_PIN, PasswordRule.fromVault("same_as_pin"))
+        assertEquals(PasswordRule.GUESSABLE, PasswordRule.fromVault("guessable"))
+        assertEquals(PasswordRule.VAULT_REFUSED, PasswordRule.fromVault("something_new"))
+        assertEquals(PasswordRule.VAULT_REFUSED, PasswordRule.fromVault(null))
+        assertFalse(PasswordRule.VAULT_REFUSED.passes)
     }
 }

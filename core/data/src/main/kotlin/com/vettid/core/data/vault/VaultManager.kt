@@ -453,6 +453,11 @@ class VaultManager(
          */
         val finishMovePending: Boolean = false,
         /**
+         * This phone received its vault by a direct transfer and has not yet left onboarding ([finishSetup]): the
+         * last onboarding screen is the move's, not an enrollment's, also after a restart.
+         */
+        val movedIn: Boolean = false,
+        /**
          * (0.34.0, §11.10.6, §11.10.9) This phone has seen `recovery_r` for its vault (a verified descriptor, a transfer
          * bundle, or a request of release R's shape that succeeded): it never takes an earlier path for it again.
          */
@@ -495,6 +500,12 @@ class VaultManager(
     private fun saveLocal(a: LocalAccount) = synchronized(localLock) {
         writeLocal(a.copy(lockAskedAtMs = local.lockAskedAtMs, relayLockUntilMs = local.relayLockUntilMs))
     }
+
+    /**
+     * A read-modify-write of the account record under its lock: [f] gets the record as it is now, so that two writers of
+     * different members (the epoch, the move, the recovery clock) never lose each other's change.
+     */
+    private fun updateLocal(f: (LocalAccount) -> LocalAccount) = synchronized(localLock) { saveLocal(f(local)) }
 
     /** Writes the lock's part of the account record, and nothing else of it. */
     private fun saveLockRecord(r: LockRecord) = synchronized(localLock) {
@@ -660,6 +671,7 @@ class VaultManager(
     /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
     private suspend fun dropSession(forget: Boolean) = mutex.withLock {
         if (forget) lockKeeper.abandon() // the vault is no longer this phone's: nothing to lock from here
+        if (forget) finishMoveRunner.clearFailure() // a deleted or forgotten vault: nothing of a move is left to say
         observer?.cancel()
         observer = null
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
@@ -684,7 +696,7 @@ class VaultManager(
             saveLocal(
                 local.copy(
                     setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
-                    finishMovePending = false, recoveryRSeen = false, capabilities = emptyList(),
+                    finishMovePending = false, movedIn = false, recoveryRSeen = false, capabilities = emptyList(),
                 ),
             )
             finishMoveFlow.value = false
@@ -1017,8 +1029,14 @@ class VaultManager(
         }
     }
 
+    /**
+     * Leaves onboarding for the open app: only from [SetupStage.FINISHING], and never while a lock is pending or "Finish
+     * the move" is locking and unlocking the vault (the phase that follows decides then; the shell never shows over a
+     * vault that is locked).
+     */
     override suspend fun finishSetup() {
-        io { saveLocal(local.copy(setupComplete = true)) }
+        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMove.value)) return
+        io { updateLocal { it.copy(setupComplete = true, movedIn = false) } }
         phaseFlow.value = AppPhase.Unlocked
     }
 
@@ -1055,7 +1073,11 @@ class VaultManager(
         followMove = true,
         holderApp = holderApp,
         beforeOpen = beforeOpen,
-    ).attempt
+    ).attempt.also {
+        // Every unlock that opened the vault (with the owner check, cancelling a recovery, finishing the move) ends what a
+        // failed "Finish the move" left to say.
+        if (it == UnlockAttempt.Success) finishMoveRunner.clearFailure()
+    }
 
     /** One unlock's outcome; [moved]: the vault moved and locked itself (only without following the move). */
     private class StepOutcome(val attempt: UnlockAttempt, val moved: Boolean = false, val abandoned: Boolean = false)
@@ -1162,7 +1184,7 @@ class VaultManager(
         if (!overtaken) clearKeptTransfer()
         // "Finish the move" (release R, §11.14.10): this new phone opened the vault from storage with its own secret.
         if (local.finishMovePending && FinishMoveProof.provedBy(r.ok, overtaken)) {
-            io { saveLocal(local.copy(finishMovePending = false)) }
+            io { updateLocal { it.copy(finishMovePending = false) } }
             finishMoveFlow.value = false
         }
         val attempt = if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
@@ -1196,7 +1218,7 @@ class VaultManager(
             choosePath(caps, makesPhoneKey = false)
             phoneSecrets.secret(phone, ahead = 1)
         }
-        if (UnlockEpoch.confirmsNext(again.ok, again.result.code)) io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
+        if (UnlockEpoch.confirmsNext(again.ok, again.result.code)) io { updateLocal { it.copy(phoneEpoch = phone.epoch + 1) } }
         return again
     }
 
@@ -1478,7 +1500,7 @@ class VaultManager(
         } finally {
             next.fill(0)
         }
-        io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
+        io { updateLocal { it.copy(phoneEpoch = phone.epoch + 1) } }
     }
 
     /** `vault.secret.renew` (release R, §11.14.9): a new phone secret, the PIN unchanged. */
@@ -1491,10 +1513,12 @@ class VaultManager(
         } finally {
             next.fill(0)
         }
-        io { saveLocal(local.copy(phoneEpoch = phone.epoch + 1)) }
+        io { updateLocal { it.copy(phoneEpoch = phone.epoch + 1) } }
     }
 
     override val usesPhoneSecret: Boolean get() = local.phone.inUse
+
+    override val movedIn: Boolean get() = local.movedIn
 
     override val recoveryOffered: Boolean get() = ReleasePath.recoveryOffered(local.capabilities)
 
@@ -1879,8 +1903,10 @@ class VaultManager(
         }
         // Release R (§11.14.10): "Finish the move" is asked until an unlock from storage with this phone's secret.
         if (local.phone.inUse) {
-            io { saveLocal(local.copy(finishMovePending = true)) }
+            io { updateLocal { it.copy(finishMovePending = true, movedIn = true) } }
             finishMoveFlow.value = true
+        } else {
+            io { updateLocal { it.copy(movedIn = true) } }
         }
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.openApi.credentialTakeOver()
@@ -1955,6 +1981,27 @@ class VaultManager(
     }
 
     override val finishMovePending: StateFlow<Boolean> = finishMoveFlow.asStateFlow()
+
+    /**
+     * "Finish the move" (§11.14.10 step 4), run in this manager's scope ([FinishMoveRunner]): the lock is the member's
+     * lock as everywhere (pending, durably, until confirmed or superseded by the unlock that follows); the screen is held
+     * ([finishingMove]) for a bounded time; the unlock completes whatever becomes of the screen that asked, and its
+     * failure is kept for the unlock screen ([finishMoveFailure]).
+     */
+    private val finishMoveRunner = FinishMoveRunner(
+        scope,
+        FINISH_MOVE_HOLD_MS,
+        lock = { lock() },
+        unlock = { pin -> unlock(pin, null, false) },
+    )
+
+    override val finishingMove: StateFlow<Boolean> get() = finishMoveRunner.finishing
+
+    override val finishMoveFailure: StateFlow<FailureKind?> get() = finishMoveRunner.failure
+
+    override fun acknowledgeFinishMoveFailure() = finishMoveRunner.clearFailure()
+
+    override suspend fun finishMove(pin: String): UnlockAttempt = finishMoveRunner.run(pin)
 
     /** (Release R) When this phone approved a transfer it still keeps the keys for; null otherwise. */
     override val transferKeptSince: StateFlow<Instant?> = transferKeptFlow.asStateFlow()
@@ -2105,6 +2152,7 @@ class VaultManager(
         io { if (wiper.erase()) wiper.finish() }
         local = LocalAccount()
         finishMoveFlow.value = false
+        finishMoveRunner.clearFailure()
         accountFlow.value = null
         generation++
         phaseFlow.value = AppPhase.SignedOut
@@ -2280,6 +2328,7 @@ class VaultManager(
         private const val UPDATE_MOVED = "moved"
         private const val UPDATE_ABANDONED = "abandoned"
         private const val LOCKED_WAIT_MS = 15_000L
+        private const val FINISH_MOVE_HOLD_MS = 90_000L
         private const val LOCKED_POLL_MS = 1_000L
         private const val KEY_BACKUP = "credential.backup"
         private const val KEY_TTL = "credential.unlock_ttl_seconds"

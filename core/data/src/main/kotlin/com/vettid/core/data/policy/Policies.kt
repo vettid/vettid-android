@@ -1,5 +1,8 @@
 package com.vettid.core.data.policy
 
+import com.vettid.core.crypto.altchan.PasswordRules
+import com.vettid.core.crypto.altchan.Passwords
+
 /**
  * The vault PIN rules the app enforces when a PIN is chosen (enrollment,
  * PIN change). VAULT-MESSAGING requires 6–32 ASCII digits (§11.3); the
@@ -112,6 +115,65 @@ object PasswordPolicy {
             pin != null && password == pin -> Problem.SAME_AS_PIN
             strength(password) < Strength.FAIR -> Problem.TOO_WEAK
             else -> null
+        }
+    }
+}
+
+/**
+ * The password rules from release R (VAULT-MESSAGING 0.33.0 §11.14.7; ANDROID-PLAN "Passwords"), as the member types:
+ * at least 12 characters, not one character repeated, not on the common-password list, not the PIN, and an estimated
+ * guessability above the vault's minimum ([PasswordRules], with the app's slightly higher floor). Also the limits every
+ * password has: at most 1,024 bytes, and (the app's own) no control characters. They replace [PasswordPolicy]'s meter
+ * for a new password at enrollment, a password change and a reset; the vault's verdict (`weak_password{reason}`) is
+ * shown with the same texts ([fromVault]).
+ */
+enum class PasswordRule {
+    SHORT,
+    REPEATED,
+    COMMON,
+    SAME_AS_PIN,
+    GUESSABLE,
+    TOO_LONG,
+    CONTROL_CHARACTERS,
+
+    /** The vault refused the password with a reason this app does not know: "This password is not strong enough." */
+    VAULT_REFUSED,
+
+    /** "Strong enough." */
+    OK,
+    ;
+
+    val passes: Boolean get() = this == OK
+
+    companion object {
+        private const val FIRST_PRINTABLE = 0x20
+        private const val DEL = 0x7f
+
+        /** The first rule [password] breaks (or [OK]); [pin] is the vault PIN when the screen knows it. */
+        fun check(password: String, pin: String?): PasswordRule {
+            val nfc = Passwords.nfc(password)
+            return when {
+                nfc.toByteArray(Charsets.UTF_8).size > Passwords.MAX_BYTES -> TOO_LONG
+                nfc.any { it.code < FIRST_PRINTABLE || it.code == DEL } -> CONTROL_CHARACTERS
+                else -> when (PasswordRules.check(nfc, pin?.ifEmpty { null })) {
+                    null -> OK
+                    PasswordRules.SHORT -> SHORT
+                    PasswordRules.REPEATED -> REPEATED
+                    PasswordRules.COMMON -> COMMON
+                    PasswordRules.SAME_AS_PIN -> SAME_AS_PIN
+                    else -> GUESSABLE
+                }
+            }
+        }
+
+        /** The vault's `weak_password` `reason`; a reason this app does not know (or none) is [VAULT_REFUSED]. */
+        fun fromVault(reason: String?): PasswordRule = when (reason) {
+            PasswordRules.SHORT -> SHORT
+            PasswordRules.REPEATED -> REPEATED
+            PasswordRules.COMMON -> COMMON
+            PasswordRules.SAME_AS_PIN -> SAME_AS_PIN
+            PasswordRules.GUESSABLE -> GUESSABLE
+            else -> VAULT_REFUSED
         }
     }
 }

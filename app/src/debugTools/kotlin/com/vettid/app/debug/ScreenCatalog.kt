@@ -564,7 +564,7 @@ object ScreenCatalog {
             Ob(
                 onboarding.copy(
                     step = OnboardingStep.PASSWORD, password = "correct horse battery", passwordConfirm = "correct horse battery",
-                    passwordStrength = PasswordPolicy.Strength.GOOD,
+                    passwordRule = com.vettid.core.data.policy.PasswordRule.OK,
                 ),
             )
         },

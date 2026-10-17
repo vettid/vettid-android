@@ -37,6 +37,7 @@ import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.SecureWindow
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -444,7 +445,7 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
         trailingIcon = { ShowHide(state.showPin, vm::toggleShowPin) },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth().testTag("open_finish_pin"),
+        modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("open_finish_pin"),
     )
     val o = state.outcome
     val failure = state.failure
@@ -507,7 +508,7 @@ private fun OpenEntry(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onS
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
         trailingIcon = { ShowHide(state.showPin, vm::toggleShowPin) },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth().testTag("open_pin"),
+        modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("open_pin"),
     )
     OutlinedTextField(
         value = state.password,
@@ -517,7 +518,7 @@ private fun OpenEntry(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onS
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         trailingIcon = { ShowHide(state.showPassword, vm::toggleShowPassword) },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth().testTag("open_password"),
+        modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("open_password"),
     )
     Text(stringResource(R.string.onboarding_open_ten), style = MaterialTheme.typography.bodyMedium)
     Button(onClick = vm::review, enabled = state.canContinue, modifier = Modifier.testTag("open_continue")) {

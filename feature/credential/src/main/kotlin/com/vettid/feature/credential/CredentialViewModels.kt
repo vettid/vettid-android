@@ -3,6 +3,7 @@ package com.vettid.feature.credential
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.policy.PasswordPolicy
+import com.vettid.core.data.policy.PasswordRule
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.CredentialStatus
@@ -129,6 +130,14 @@ data class ChangePasswordUiState(
     val confirm: String = "",
     val strength: PasswordPolicy.Strength = PasswordPolicy.Strength.TOO_SHORT,
     val problem: PasswordPolicy.Problem? = null,
+    /**
+     * (Release R) The vault is of release R: the new password follows its rules as the member types ([rule]; ANDROID-PLAN
+     * "Passwords") instead of the earlier meter ([strength], [problem]), which a vault before release R keeps.
+     */
+    val newRules: Boolean = false,
+    val rule: PasswordRule = PasswordRule.SHORT,
+    /** [rule] is the vault's verdict (`weak_password{reason}`). */
+    val refused: Boolean = false,
     val mismatch: Boolean = false,
     val same: Boolean = false,
     val busy: Boolean = false,
@@ -139,16 +148,22 @@ data class ChangePasswordUiState(
     val pinReady: Boolean get() = !askPin || pin.length >= MIN_PIN && pin.all { it.isDigit() }
 
     /** Every field the change needs is filled in. */
-    val canSubmit: Boolean get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady
+    val canSubmit: Boolean
+        get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady && !refused && (!newRules || rule.passes)
 
-    override fun toString(): String = "ChangePasswordUiState(askPin=$askPin, busy=$busy, error=$error, done=$done)"
+    override fun toString(): String = "ChangePasswordUiState(askPin=$askPin, newRules=$newRules, busy=$busy, error=$error, done=$done)"
 
     private companion object {
         const val MIN_PIN = 6
         const val MAX_PIN = 32
     }
 
-    internal fun withPin(v: String) = copy(pin = v.filter { it.isDigit() }.take(MAX_PIN), error = null)
+    internal fun withPin(v: String): ChangePasswordUiState {
+        val pin = v.filter { it.isDigit() }.take(MAX_PIN)
+        // "Don't use your PIN as your password." follows the PIN as it is typed too.
+        val rule = if (newRules && !refused && password.isNotEmpty()) PasswordRule.check(password, pin) else rule
+        return copy(pin = pin, rule = rule, error = null)
+    }
 }
 
 /**
@@ -157,23 +172,30 @@ data class ChangePasswordUiState(
  */
 @HiltViewModel
 class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRepository, vault: VaultRepository) : ViewModel() {
-    private val state = MutableStateFlow(ChangePasswordUiState(askPin = vault.usesPhoneSecret))
+    private val state = MutableStateFlow(ChangePasswordUiState(askPin = vault.usesPhoneSecret, newRules = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePasswordUiState> = state.asStateFlow()
 
     fun setPin(v: String) = state.update { it.withPin(v) }
 
     fun setCurrent(v: String) = state.update { it.copy(current = v, error = null) }
 
-    fun setPassword(v: String) = state.update { it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, mismatch =
-        false, same = false) }
+    fun setPassword(v: String) = state.update {
+        if (it.newRules) {
+            val pin = if (it.askPin) it.pin else null
+            it.copy(password = v, rule = PasswordRule.check(v, pin), refused = false, mismatch = false, same = false)
+        } else {
+            it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, refused = false, mismatch = false, same = false)
+        }
+    }
 
     fun setConfirm(v: String) = state.update { it.copy(confirm = v, mismatch = false) }
 
     fun submit() {
         val s = state.value
-        val p = PasswordPolicy.check(s.password)
+        val p = if (s.newRules) null else PasswordPolicy.check(s.password)
         when {
             s.current.isEmpty() || !s.pinReady -> return
+            s.refused || s.newRules && !s.rule.passes -> return
             p != null -> state.update { it.copy(problem = p) }
             s.password == s.current -> state.update { it.copy(same = true) }
             s.confirm != s.password -> state.update { it.copy(mismatch = true) }
@@ -182,9 +204,18 @@ class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRe
                 viewModelScope.launch {
                     try {
                         repo.changePassword(s.current, s.password, s.pin.takeIf { s.askPin })
-                        state.update { ChangePasswordUiState(askPin = it.askPin, done = true) }
+                        state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
                     } catch (e: VaultFailure) {
-                        state.update { it.copy(busy = false, error = e.kind, current = "", pin = "") }
+                        // weak_password (§11.14.7): its reason under the new password, in the same words as the app's.
+                        // Also on the earlier meter: a vault's verdict is always shown, and the same password not sent again.
+                        val rule = if (e.kind == FailureKind.WEAK_PASSWORD) PasswordRule.fromVault(e.weakPasswordReason) else null
+                        state.update {
+                            if (rule != null) {
+                                it.copy(busy = false, error = null, rule = rule, refused = true, current = "", pin = "")
+                            } else {
+                                it.copy(busy = false, error = e.kind, current = "", pin = "")
+                            }
+                        }
                     }
                 }
             }

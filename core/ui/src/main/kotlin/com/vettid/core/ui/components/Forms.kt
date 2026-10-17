@@ -177,6 +177,41 @@ fun StrengthMeter(level: Int, label: String, modifier: Modifier = Modifier) {
 private const val SEGMENTS = 4
 
 /**
+ * The line under a new password (ANDROID-PLAN "Passwords", release R): the rule it breaks, in words, with [hint] under
+ * it, or the positive line ([passes]). [refused]: the vault's own verdict (`weak_password`), shown as an error. Read
+ * out as it changes, politely.
+ */
+@Composable
+fun PasswordRuleLine(text: String, passes: Boolean, modifier: Modifier = Modifier, hint: String? = null, refused: Boolean = false) {
+    val colors = MaterialTheme.colorScheme
+    val color = when {
+        refused -> colors.error
+        passes -> VettIdTheme.colors.success
+        else -> colors.onSurfaceVariant
+    }
+    Row(
+        modifier.fillMaxWidth().semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            when {
+                refused -> Icons.Outlined.ErrorOutline
+                passes -> Icons.Outlined.CheckCircle
+                else -> Icons.Outlined.Info
+            },
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(Spacing.s))
+        Column {
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = color)
+            if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+        }
+    }
+}
+
+/**
  * A step of a form flow (onboarding, unlock, credential and settings forms):
  * optional back arrow, a heading and body, the [content], and the primary
  * (and optional secondary) action pinned to the bottom above the keyboard.

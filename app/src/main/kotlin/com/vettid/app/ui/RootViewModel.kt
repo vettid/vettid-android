@@ -55,6 +55,9 @@ class RootViewModel @Inject constructor(
      */
     val finishMovePending: StateFlow<Boolean> = vault.finishMovePending
 
+    /** "Finish the move" is locking and unlocking the vault: the root keeps the screen that shows it. */
+    val finishingMove: StateFlow<Boolean> = vault.finishingMove
+
     /** (Release R) This old phone took the vault back after a move that did not finish: said once, until dismissed. */
     val movedBack: StateFlow<Boolean> = vault.movedBack
 

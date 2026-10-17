@@ -1,6 +1,7 @@
 package com.vettid.feature.credential
 
 import com.vettid.core.data.policy.PasswordPolicy
+import com.vettid.core.data.policy.PasswordRule
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.FailureKind
@@ -141,5 +142,73 @@ class CredentialViewModelsTest {
         advanceUntilIdle()
         assertEquals(FailureKind.CREDENTIAL_FROZEN, vm.uiState.value.error)
         assertFalse(vm.uiState.value.done)
+    }
+
+    /** Release R (ANDROID-PLAN "Passwords"): the rules as the member types, and the vault's weak_password reason. */
+    @Test
+    fun releaseRPasswordChangeFollowsTheRules() = runTest {
+        vault.phoneSecret = true
+        val vm = ChangePasswordViewModel(vault, vault)
+        assertTrue(vm.uiState.value.newRules)
+        vm.setPin("975310")
+        vm.setCurrent("old password 1")
+        vm.setPassword("password1234")
+        vm.setConfirm("password1234")
+        assertEquals(PasswordRule.COMMON, vm.uiState.value.rule)
+        assertFalse(vm.uiState.value.canSubmit)
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse("changePassword" in vault.calls)
+        vm.setPassword("975310975310")
+        vm.setConfirm("975310975310")
+        assertFalse(vm.uiState.value.canSubmit)
+        vm.setPassword("a much better passphrase here")
+        vm.setConfirm("a much better passphrase here")
+        assertEquals(PasswordRule.OK, vm.uiState.value.rule)
+        vault.fail["changePassword"] = com.vettid.core.data.vault.VaultFailure(
+            FailureKind.WEAK_PASSWORD, "weak_password",
+            cause = com.vettid.core.vault.VaultOpException(
+                "credential.password.change", "weak_password", body = kotlinx.serialization.json.buildJsonObject {
+                    put("reason", kotlinx.serialization.json.JsonPrimitive("common"))
+                },
+            ),
+        )
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(PasswordRule.COMMON, vm.uiState.value.rule)
+        assertTrue(vm.uiState.value.refused)
+        assertEquals(null, vm.uiState.value.error)
+        assertFalse(vm.uiState.value.done)
+    }
+
+    /** On the earlier meter too, a vault's weak_password is shown and the same password is not sent again. */
+    @Test
+    fun beforeReleaseRTheVaultsVerdictIsShown() = runTest {
+        val vm = ChangePasswordViewModel(vault, vault)
+        vault.fail["changePassword"] = com.vettid.core.data.vault.VaultFailure(FailureKind.WEAK_PASSWORD, "weak_password")
+        vm.setCurrent("old password 1")
+        vm.setPassword("Tr0ub4dor&3x")
+        vm.setConfirm("Tr0ub4dor&3x")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.refused)
+        assertEquals(PasswordRule.VAULT_REFUSED, vm.uiState.value.rule)
+        vm.setCurrent("old password 1")
+        assertFalse(vm.uiState.value.canSubmit)
+        vm.setPassword("a different passphrase 7")
+        assertFalse(vm.uiState.value.refused)
+    }
+
+    /** A vault before release R keeps the earlier meter and checks (the plan: nothing changes for it). */
+    @Test
+    fun beforeReleaseRThePasswordChangeKeepsTheMeter() = runTest {
+        val vm = ChangePasswordViewModel(vault, vault)
+        assertFalse(vm.uiState.value.newRules)
+        vm.setCurrent("old password 1")
+        vm.setPassword("Tr0ub4dor&3x")
+        vm.setConfirm("Tr0ub4dor&3x")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
     }
 }

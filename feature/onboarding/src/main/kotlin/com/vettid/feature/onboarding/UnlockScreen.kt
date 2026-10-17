@@ -187,6 +187,17 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     modifier = Modifier.testTag("unlock_owner_check"),
                 )
             }
+            state.moveFailure?.let { f ->
+                // Release R (§11.14.10): "Finish the move" locked the vault, and its unlock did not open it.
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.onboarding_finish_move_title),
+                    stringResource(f.messageRes()),
+                    modifier = Modifier.testTag("unlock_move_failure"),
+                    announce = LiveRegionMode.Polite,
+                    actions = { TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) } },
+                )
+            }
             if (state.stateRollback) {
                 NoticeCard(
                     NoticeKind.URGENT,

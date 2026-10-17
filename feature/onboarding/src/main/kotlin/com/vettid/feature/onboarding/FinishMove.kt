@@ -1,5 +1,6 @@
 package com.vettid.feature.onboarding
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,7 @@ import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -65,8 +67,7 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         state.update { it.copy(busy = true, failure = null) }
         viewModelScope.launch {
             val failure = try {
-                vault.lock()
-                when (val r = vault.unlock(pin)) {
+                when (val r = vault.finishMove(pin)) {
                     UnlockAttempt.Success -> null
                     is UnlockAttempt.Failed -> r.kind
                     is UnlockAttempt.BadPin -> FailureKind.BAD_PIN
@@ -87,6 +88,8 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
 
 @Composable
 fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: () -> Unit, modifier: Modifier = Modifier) {
+    // Nothing leaves the move while its lock and unlock run (the back key included): the outcome decides where it goes.
+    BackHandler(enabled = state.busy) {}
     Column(modifier.fillMaxWidth().padding(Spacing.gutter).testTag("finish_move"), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
         Text(stringResource(R.string.onboarding_finish_move_title), style = MaterialTheme.typography.titleLarge)
         if (state.done) {
@@ -102,7 +105,7 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("finish_move_pin"),
+            modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("finish_move_pin"),
         )
         state.failure?.let {
             NoticeCard(
@@ -112,7 +115,9 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
-            TextButton(onClick = onDone) { Text(stringResource(R.string.onboarding_finish_move_later)) }
+            TextButton(onClick = onDone, enabled = !state.busy, modifier = Modifier.testTag("finish_move_later")) {
+                Text(stringResource(R.string.onboarding_finish_move_later))
+            }
             Button(onClick = vm::finish, enabled = state.pin.length >= 6 && !state.busy, modifier = Modifier.testTag("finish_move_go")) {
                 Text(stringResource(R.string.onboarding_finish_move_title))
             }

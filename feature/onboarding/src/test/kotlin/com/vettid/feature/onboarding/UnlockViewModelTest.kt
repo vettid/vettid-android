@@ -192,6 +192,18 @@ class UnlockViewModelTest {
         assertTrue(vm.uiState.value.pinAllowed)
     }
 
+    /** Release R: a "Finish the move" that did not open the vault says why on the unlock screen it leads to. */
+    @Test
+    fun aFailedFinishTheMoveIsShownHere() = runTest {
+        vault.finishMoveFailure.value = FailureKind.TRANSFER_INCOMPLETE
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertEquals(FailureKind.TRANSFER_INCOMPLETE, vm.uiState.value.moveFailure)
+        vm.dismissMoveFailure()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.moveFailure)
+    }
+
     @Test
     fun recoveryPendingThenCancelAndUnlock() = runTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending

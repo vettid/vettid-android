@@ -9,6 +9,9 @@ import java.time.Instant
 /** No transfer kept ([VaultRepository.transferKeptSince]'s default). */
 val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
 
+/** No failed "Finish the move" ([VaultRepository.finishMoveFailure]'s default). */
+val NO_FINISH_MOVE_FAILURE: StateFlow<FailureKind?> = MutableStateFlow(null)
+
 /** No move to finish ([VaultRepository.finishMovePending]'s default). */
 val NO_MOVE_TO_FINISH: StateFlow<Boolean> = MutableStateFlow(false)
 
@@ -162,6 +165,9 @@ interface VaultRepository {
     /** (Release R) Whether this phone holds a phone secret for its vault (a vault of release R). */
     val usesPhoneSecret: Boolean get() = false
 
+    /** This phone received its vault by a direct transfer and has not left onboarding yet. */
+    val movedIn: Boolean get() = false
+
     /**
      * (0.34.0, §11.10.9) Whether the vault's release offers recovery: true for a release before R (its earlier
      * recovery), and from release R only when its capabilities list `recovery_offered`.
@@ -179,6 +185,28 @@ interface VaultRepository {
      * storage with its own secret): the app asks again at every start until it is done.
      */
     val finishMovePending: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    /**
+     * (Release R, §11.14.10) "Finish the move": `vault.lock`, then `vault.unlock` with [pin] and this phone's own secret.
+     * While it runs, [finishingMove] is true: the phone counts as locked (as after any lock) but the screen that asked
+     * stays, so that the member sees the move finish instead of the unlock screen and the notice of a lock in doubt
+     * that the vault, still in the middle of the move, may not answer at once.
+     */
+    suspend fun finishMove(pin: String): UnlockAttempt {
+        lock()
+        return unlock(pin)
+    }
+
+    /** (Release R) True while [finishMove] runs, for at most a bounded time. */
+    val finishingMove: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    /**
+     * (Release R) Why the last [finishMove] did not open the vault (`transfer_incomplete`, a wrong PIN, a wait, the
+     * network), for the unlock screen that follows it; null after a success or [acknowledgeFinishMoveFailure].
+     */
+    val finishMoveFailure: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
+    fun acknowledgeFinishMoveFailure() {}
 
     /**
      * (Release R, §11.14.10) This old phone opened the vault with its own keys after approving a transfer ("The move

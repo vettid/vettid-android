@@ -523,12 +523,16 @@ fun ChangePasswordContent(
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.password, onPassword, stringResource(R.string.credential_password_new),
-            error = state.problem?.let { stringResource(it.messageRes()) }
+            error = state.problem?.takeIf { !state.newRules }?.let { stringResource(it.messageRes()) }
                 ?: if (state.same) stringResource(R.string.credential_password_same) else null,
             imeAction = androidx.compose.ui.text.input.ImeAction.Next,
         )
         Spacer(Modifier.height(Spacing.s))
-        StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))
+        if (state.newRules || state.refused) {
+            NewPasswordRule(state.rule, state.refused)
+        } else {
+            StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))
+        }
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.confirm, onConfirm, stringResource(R.string.credential_password_confirm),

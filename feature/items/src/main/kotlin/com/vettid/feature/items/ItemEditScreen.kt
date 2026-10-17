@@ -88,6 +88,7 @@ import com.vettid.core.ui.components.RemovableTagChip
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.visibleSecretKeyboard
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.theme.Spacing
 
@@ -319,7 +320,10 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                         }
                         else -> null
                     },
-                    modifier = Modifier.fillMaxWidth().testTag("item_edit_notes"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (secret) Modifier.excludeFromAutofill() else Modifier)
+                        .testTag("item_edit_notes"),
                 )
             }
             if (d.keepNotes) {
@@ -721,7 +725,13 @@ private fun ValueEditor(
     secret: Boolean,
     onValue: (String) -> Unit,
 ) {
-    val tag = input.fillMaxWidth().testTag("item_edit_field_value_$i")
+    // A value of a secret or critical item (and a one-time-code seed) is never offered to a password manager to save or
+    // fill, whatever its kind (as SecretField).
+    val keepFromAutofill = secret || f.kind == FieldKinds.OTP
+    val tag = input
+        .fillMaxWidth()
+        .then(if (keepFromAutofill) Modifier.excludeFromAutofill() else Modifier)
+        .testTag("item_edit_field_value_$i")
     if (f.kind == FieldKinds.PASSWORD) {
         return SecretField(
             value = f.text,
@@ -978,7 +988,7 @@ private fun AddressPart(
                 KeyboardOptions(capitalization = capitalization, imeAction = ime?.action ?: ImeAction.Next)
             },
             keyboardActions = ime?.keyboardActions ?: KeyboardActions.Default,
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth().then(if (secret) Modifier.excludeFromAutofill() else Modifier),
         )
     }
 }

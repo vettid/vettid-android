@@ -347,6 +347,13 @@ internal fun PhotoDraftOverlay(draft: PhotoDraft, name: String, actions: PhotoAc
 }
 
 /**
+ * What a screen reader says for a photo message: "Photo you sent" or "Photo from {name}", then the caption and the
+ * state, each only when there is one ("Photo you sent. Delivered", never "Photo you sent. . Delivered").
+ */
+internal fun photoLabel(head: String, caption: String?, status: String?): String =
+    listOf(head, caption, status).mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }.joinToString(". ")
+
+/**
  * A photo message (ANDROID-PLAN 0.1.39 "The bubble"): the thumbnail (from memory, or fetched as it is shown),
  * decoded only after the type and the header's bounds (1,024 a side) are checked; a neutral placeholder sized from
  * the claimed `width` and `height`, clamped, until then; the caption under it; the state.
@@ -362,11 +369,8 @@ internal fun PhotoBubble(m: MessageInfo, name: String, actions: PhotoActions, on
     }
     val status = photoStatus(a, m.outgoing)
     val statusText = status?.let { if (it.withName) stringResource(it.text, name) else stringResource(it.text) }
-    val label = if (m.outgoing) {
-        stringResource(R.string.messages_photo_cd_out, m.text, statusText.orEmpty())
-    } else {
-        stringResource(R.string.messages_photo_cd_in, name, m.text, statusText.orEmpty())
-    }
+    val head = if (m.outgoing) stringResource(R.string.messages_photo_cd_out) else stringResource(R.string.messages_photo_cd_in, name)
+    val label = photoLabel(head, m.text, statusText)
     val ratio = if (a.width in 1..PhotoLimits.VIEW_MAX_SIDE && a.height in 1..PhotoLimits.VIEW_MAX_SIDE) {
         (a.width.toFloat() / a.height).coerceIn(MIN_RATIO, MAX_RATIO)
     } else {
