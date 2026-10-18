@@ -167,15 +167,6 @@ class VaultApi(
         cred.credOp("credential.rotate", { put("password", password) })
     }
 
-    suspend fun credentialChangePassword(password: String, newPassword: String, pin: String? = null) {
-        cred.credOp("credential.password.change", {
-            // (0.33.0, release R) The PIN is verified; the change closes the recovery generation and arms the next.
-            pin?.let { put("pin", it) }
-            put("password", password)
-            put("new_password", newPassword)
-        })
-    }
-
     // No `credential.delete` (VAULT-MESSAGING 0.15.2): a credential goes only with the vault (`vault.delete`);
     // starting over with a new one is a recovery's `credential.reset`.
 

@@ -213,4 +213,29 @@ class PhoneSecretsTest {
         // So after such an unlock the phone still reaches its own earlier vault.
         assertEquals(ReleasePath.Path.EARLIER, ReleasePath.choose(emptyList(), releaseRKnown = false))
     }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9 step 5, the two-step unlock: while a PIN change is unresolved the PIN typed first
+     * (the previous one) goes with the current record only; its `device_secret` (decided before any PIN is tested) asks
+     * for the new PIN instead of trying the candidate with the same PIN; the new PIN then goes with the candidate only.
+     * Without an unresolved change the unlock is as before (current, then the next epoch with the same PIN).
+     */
+    @Test
+    fun anUnresolvedPinChangeUnlocksInTwoSteps() {
+        val secret = "device_secret"
+        // First step: the current record.
+        assertFalse(UnlockEpoch.nextOnly(pinChangeUnresolved = true, newPinAsked = false))
+        assertEquals(UnlockEpoch.Next.ASK_NEW_PIN, UnlockEpoch.afterCurrent(true, ok = false, code = secret, pinChangeUnresolved = true))
+        // `ok` with the previous PIN, or any other answer: it stands (the check after the open decides the change).
+        assertEquals(UnlockEpoch.Next.DONE, UnlockEpoch.afterCurrent(true, ok = true, code = null, pinChangeUnresolved = true))
+        for (c in listOf("bad_pin", "backoff", "retry", "transfer_incomplete")) {
+            assertEquals(c, UnlockEpoch.Next.DONE, UnlockEpoch.afterCurrent(true, ok = false, code = c, pinChangeUnresolved = true))
+        }
+        // Second step: the new PIN, with the candidate only.
+        assertTrue(UnlockEpoch.nextOnly(pinChangeUnresolved = true, newPinAsked = true))
+        // Nothing unresolved: as before.
+        assertFalse(UnlockEpoch.nextOnly(pinChangeUnresolved = false, newPinAsked = true))
+        assertEquals(UnlockEpoch.Next.TRY_NEXT, UnlockEpoch.afterCurrent(true, ok = false, code = secret, pinChangeUnresolved = false))
+        assertEquals(UnlockEpoch.Next.DONE, UnlockEpoch.afterCurrent(false, ok = false, code = secret, pinChangeUnresolved = true))
+    }
 }

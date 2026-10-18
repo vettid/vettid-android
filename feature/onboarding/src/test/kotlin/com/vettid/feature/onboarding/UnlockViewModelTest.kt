@@ -643,4 +643,64 @@ class UnlockViewModelTest {
         advanceUntilIdle()
         assertEquals(com.vettid.core.data.vault.LockNotice.None, vm.uiState.value.lock)
     }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9 step 5: with a PIN change unresolved the screen asks for the previous PIN; when the
+     * vault shows (`device_secret`, before any PIN is tested) that the change went through it asks for the new PIN, and
+     * the PIN typed first is not reused: each PIN the member types is the one the vault tests.
+     */
+    @Test
+    fun anUnresolvedPinChangeAsksForThePreviousPinThenTheNewOne() = runTest {
+        vault.pinChangeUnresolved.value = true
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.previousPinStep)
+        assertFalse(vm.uiState.value.newPinStep)
+        vault.unlockResults.add(UnlockAttempt.NewPinNeeded)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("40281795", vault.lastPin)
+        with(vm.uiState.value) {
+            assertTrue(newPinStep)
+            assertEquals("the previous PIN is not kept for the new record", "", pin)
+            assertNull(message)
+            assertFalse("not \"this phone no longer holds the keys\"", keysGone)
+        }
+        // A failure that never reached the vault keeps the step.
+        vault.unlockResults.add(UnlockAttempt.Failed(FailureKind.NETWORK, null))
+        vm.setPin("59173048")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.newPinStep)
+        vm.setPin("59173048")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("59173048", vault.lastPin)
+        assertEquals(3, vault.calls.count { it == "unlock" })
+        assertFalse(vm.uiState.value.newPinStep)
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+        // Decided: the prompt is the usual one again.
+        vault.pinChangeUnresolved.value = false
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.previousPinStep)
+    }
+
+    /** A wrong new PIN (the candidate matched, so the change is confirmed) ends the second step: the next try is as usual. */
+    @Test
+    fun aWrongNewPinEndsTheSecondStep() = runTest {
+        vault.pinChangeUnresolved.value = true
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vault.unlockResults.add(UnlockAttempt.NewPinNeeded)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        vault.unlockResults.add(UnlockAttempt.BadPin(0))
+        vm.setPin("11112222")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.newPinStep)
+        assertEquals(UnlockMessage.BadPin, vm.uiState.value.message)
+    }
 }

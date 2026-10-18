@@ -6,6 +6,7 @@ import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.AttestationInfo
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.CredentialStatus
@@ -51,6 +52,21 @@ import java.time.Instant
 class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository, ProfileRepository {
     val calls = mutableListOf<String>()
+
+    /** (VAULT-MESSAGING 0.44.0 §11.14.9) The decision of a change whose answer was lost, as a test sets it. */
+    override val changeCheck = MutableStateFlow<ChangeCheck?>(null)
+    var changeCheckAcknowledged = 0
+
+    override fun acknowledgeChangeCheck() {
+        changeCheckAcknowledged++
+        changeCheck.value = changeCheck.value?.takeIf { it.open }
+    }
+
+    /** (§11.14.9 step 5) A PIN change is unresolved: the unlock's two steps. */
+    override val pinChangeUnresolved = MutableStateFlow(false)
+
+    /** As the vault manager: set by [UnlockAttempt.NewPinNeeded], kept through a network failure, cleared by any other answer. */
+    override val newPinAsked = MutableStateFlow(false)
 
     /** MEMBER-API 1.2.0: the vault service paused (the banner). */
     override val servicePaused = MutableStateFlow(false)
@@ -268,6 +284,9 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastCancelRecovery = cancelRecovery
         val r = unlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
         if (r !is UnlockAttempt.Failed) refusedByVault.value = false // a sealed answer, as VaultManager
+        if (!(r is UnlockAttempt.Failed && r.kind in setOf(FailureKind.NETWORK, FailureKind.NO_RESPONSE))) {
+            newPinAsked.value = r == UnlockAttempt.NewPinNeeded
+        }
         if (r == UnlockAttempt.Success) phase.value = AppPhase.Unlocked
         return r
     }

@@ -15,6 +15,9 @@ val NO_FINISH_MOVE_FAILURE: StateFlow<FailureKind?> = MutableStateFlow(null)
 /** No move to finish ([VaultRepository.finishMovePending]'s default). */
 val NO_MOVE_TO_FINISH: StateFlow<Boolean> = MutableStateFlow(false)
 
+/** No change being decided ([VaultRepository.changeCheck]'s default). */
+val NO_CHANGE_CHECK: StateFlow<ChangeCheck?> = MutableStateFlow(null)
+
 /**
  * The answer to `vault.recovery.open` (§11.14.6): [code] `ok` or one of the result codes (`wrong`, `wrong_again`,
  * `attempt_lost`, `quiet`, `wait`, `busy`, `retry`, `stored_mismatch`, `exhausted`, `closed`, `not_armed`,
@@ -158,6 +161,27 @@ interface VaultRepository {
      * phone secret ([changePin] of two arguments is the earlier operation).
      */
     suspend fun changePin(pin: String, newPin: String, password: String): Unit = throw VaultFailure(FailureKind.NOT_SUPPORTED)
+
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) Where the decision of a PIN or password change whose answer was lost stands; null
+     * when there is none. A decided state stays until [acknowledgeChangeCheck].
+     */
+    val changeCheck: StateFlow<ChangeCheck?> get() = NO_CHANGE_CHECK
+
+    /** The member has read the decided state of [changeCheck]. */
+    fun acknowledgeChangeCheck() {}
+
+    /**
+     * (§11.14.9 step 5) A PIN change is unresolved: the unlock asks for the previous PIN, and for the new PIN only after
+     * the vault showed that it holds the change ([UnlockAttempt.NewPinNeeded]).
+     */
+    val pinChangeUnresolved: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
+    /**
+     * (§11.14.9 step 5) The previous PIN showed that the PIN change went through: the next [unlock] tries the PIN typed as
+     * the NEW one. Kept through a failure that never reached the vault; cleared by any answer to that try.
+     */
+    val newPinAsked: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
 
     /** (Release R) `vault.secret.renew`: a new phone secret with the PIN unchanged (Settings → Security). */
     suspend fun renewPhoneSecret(pin: String, password: String): Unit = throw VaultFailure(FailureKind.NOT_SUPPORTED)

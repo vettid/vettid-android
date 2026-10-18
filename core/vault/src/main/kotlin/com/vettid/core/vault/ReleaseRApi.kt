@@ -28,15 +28,23 @@ suspend fun VaultApi.transferApprove(transferId: String, pin: String, password: 
 
 /**
  * `pin.change`: the current PIN, the new one, the password and the phone's next epoch's secret, sealed to one UTK.
- * The app moves to the next epoch only with the answer (`epoch_advanced`).
+ * The app moves to the next epoch only with the answer (`epoch_advanced`), or when the change is decided as applied.
+ * (0.44.0, §11.14.9) [onMarker] stores the marker before the send; no answer throws [ChangeUnansweredException], and a
+ * `stale_credential` is never retried with the typed secrets ([CredentialOps.change]).
  */
-suspend fun VaultApi.pinChange(pin: String, newPin: String, password: String, newUnlockSecret: ByteArray) {
-    credentialOps.credOp("pin.change", {
+suspend fun VaultApi.pinChange(
+    pin: String,
+    newPin: String,
+    password: String,
+    newUnlockSecret: ByteArray,
+    onMarker: suspend (ChangeMarker) -> Unit = {},
+) {
+    credentialOps.change(ChangeTypes.PIN_CHANGE, {
         put("pin", pin)
         put("new_pin", newPin)
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))
-    })
+    }, onMarker)
 }
 
 /** `vault.secret.renew`: a new phone secret with the PIN unchanged; the DEK is replaced. */
@@ -46,4 +54,23 @@ suspend fun VaultApi.secretRenew(pin: String, password: String, newUnlockSecret:
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))
     })
+}
+
+/**
+ * `credential.password.change` (§10.6): the current password and the new one, and (0.33.0, release R) the PIN, which the
+ * vault verifies; the change closes the recovery generation and arms the next. (0.44.0, §11.14.9) Decided rather than
+ * repeated when its answer is lost: [onMarker] stores the marker before the send; no answer throws
+ * [ChangeUnansweredException] ([CredentialOps.change]).
+ */
+suspend fun VaultApi.credentialChangePassword(
+    password: String,
+    newPassword: String,
+    pin: String? = null,
+    onMarker: suspend (ChangeMarker) -> Unit = {},
+) {
+    credentialOps.change(ChangeTypes.PASSWORD_CHANGE, {
+        pin?.let { put("pin", it) }
+        put("password", password)
+        put("new_password", newPassword)
+    }, onMarker)
 }

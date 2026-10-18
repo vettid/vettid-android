@@ -133,10 +133,16 @@ class DeviceConfig(
     val pollWait: Duration = Duration.ofSeconds(RelayClient.DEFAULT_WAIT_S),
     /** Interactive requests time out after 30 s (§8.1); a request is re-sent with the same inner id at most twice (§8.6). */
     val requestTimeout: Duration = Duration.ofSeconds(DEFAULT_TIMEOUT_S),
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) The phone's monotonic clock in milliseconds, which the vault's clock as last
+     * seen is carried forward on ([VaultDevice.vaultNow]): `SystemClock.elapsedRealtime` in the app.
+     */
+    val elapsedMs: () -> Long = { System.nanoTime() / NANOS_PER_MS },
 ) {
     companion object {
         const val ROLE_APP = "app"
         const val DEFAULT_TIMEOUT_S = 30L
+        private const val NANOS_PER_MS = 1_000_000L
     }
 }
 
@@ -550,6 +556,7 @@ class VaultDevice private constructor(
         val p = pendingUnlock ?: throw VaultStateException("no pending unlock")
         val inner = AltResults.openInner(raw, secrets.kem, AltResults.TYPE_UNLOCK_RESULT, p.requestId)
         val r = UnlockResult.parse(inner.body).copy(at = inner.ts)
+        noteVaultTime(inner.ts)
         pendingUnlock = null
         run {
             setAlt(AltRequests.applyUnlock(alt(), p, r))
@@ -1141,6 +1148,7 @@ class VaultDevice private constructor(
             timeDrops.tryEmit(inner.type)
             throw e
         }
+        noteVaultTime(inner.ts)
         if (st.seenInner.containsKey(inner.id)) return
         st.seenInner[inner.id] = t.toEpochMilli()
         prune(st.seenInner, t)
@@ -1421,6 +1429,63 @@ class VaultDevice private constructor(
     }
 
     internal fun newId(): String = Ulid.new(now())
+
+    // --- the vault's clock, and a change request kept for resending (VAULT-MESSAGING 0.44.0 §11.14.9) ---
+
+    /** The `ts` of the newest message from the vault, and [DeviceConfig.elapsedMs] when it arrived; in memory only. */
+    private var vaultTs: Instant? = null
+    private var vaultTsAtMs = 0L
+    private val vaultClockLock = Any()
+
+    private fun noteVaultTime(ts: Instant) {
+        val at = cfg.elapsedMs()
+        synchronized(vaultClockLock) {
+            val last = vaultTs
+            // The newest answer, carried forward: an older message delivered late does not move the clock back.
+            if (last == null || ts.isAfter(last.plusMillis(at - vaultTsAtMs))) {
+                vaultTs = ts
+                vaultTsAtMs = at
+            }
+        }
+    }
+
+    /**
+     * The vault's clock as this phone last saw it (§11.14.9 step 1): the `ts` of the newest message from the vault plus
+     * the time elapsed since on the phone's monotonic clock, or the phone's own clock before any message.
+     */
+    fun vaultNow(): Instant = synchronized(vaultClockLock) {
+        vaultTs?.plusMillis((cfg.elapsedMs() - vaultTsAtMs).coerceAtLeast(0)) ?: now()
+    }
+
+    /**
+     * Sends [k] (the same inner id, body and `exp`, each time in a new envelope) at most [sends] times while its `exp`
+     * has not passed by [vaultNow], waiting [timeout] after each; its answer, or null. Deposited directly, never through
+     * the outbox, so the request is never written to the phone's storage; a relay failure counts as no answer. The
+     * answer is awaited until [dropKept], so an answer that comes late, to any of the sends, is not lost.
+     */
+    internal suspend fun sendKept(k: KeptChange, sends: Int, timeout: Duration = cfg.requestTimeout): VaultMessage? {
+        pending.putIfAbsent(k.innerId, k.answer)
+        k.release = { pending.remove(k.innerId, k.answer) }
+        repeat(sends) {
+            k.answered()?.let { return it }
+            // The vault drops a copy whose exp has passed, unanswered: nothing more to send.
+            if (!vaultNow().isBefore(k.exp)) return k.answered()
+            try {
+                lock.withLock { sendOnceLocked(k.innerId, k.type, k.body, k.exp) }
+            } catch (_: IOException) {
+                // Not delivered (a relay error, no session): no answer from this send.
+            }
+            withTimeoutOrNull(timeout.toMillis()) { k.answer.await() }?.let { return VaultMessage(it) }
+            ensureCollecting()
+        }
+        return k.answered()
+    }
+
+    /** Stops awaiting [k]'s answer: the change is decided. */
+    internal fun dropKept(k: KeptChange) {
+        pending.remove(k.innerId, k.answer)
+        k.release = null
+    }
 
     /** Forgets the vault and every key's state on this device (sign-out, transfer away). */
     suspend fun forget() = lock.withLock {

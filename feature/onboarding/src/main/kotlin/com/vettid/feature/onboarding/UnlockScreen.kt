@@ -247,6 +247,24 @@ fun UnlockContent(
             // Never a PIN field while the last check of the vault's software failed.
             val verified = p != null && state.preflightError == null
             if (!blocked && !state.recoveryPending && verified) {
+                // VAULT-MESSAGING 0.44.0 §11.14.9 step 5: an unresolved PIN change asks for the previous PIN first, and for
+                // the new one only after the vault showed that it holds the change.
+                if (state.newPinStep) {
+                    NoticeCard(
+                        NoticeKind.SUCCESS,
+                        stringResource(R.string.unlock_new_pin_title),
+                        stringResource(R.string.unlock_new_pin_body),
+                        modifier = Modifier.testTag("unlock_new_pin"),
+                        announce = LiveRegionMode.Polite,
+                    )
+                } else if (state.previousPinStep) {
+                    NoticeCard(
+                        NoticeKind.INFO,
+                        stringResource(R.string.unlock_previous_pin_title),
+                        stringResource(R.string.unlock_previous_pin_body),
+                        modifier = Modifier.testTag("unlock_previous_pin"),
+                    )
+                }
                 Spacer(Modifier.height(Spacing.s))
                 val waitText = if (state.waitSeconds > 0) stringResource(R.string.unlock_wait, formatWait(state.waitSeconds)) else null
                 SecretField(

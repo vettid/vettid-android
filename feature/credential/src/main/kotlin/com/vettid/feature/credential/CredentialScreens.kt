@@ -53,6 +53,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.policy.labelRes
 import com.vettid.core.data.policy.messageRes
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
@@ -513,6 +514,7 @@ fun ChangePasswordContent(
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        ChangeCheckNotice(state.check)
         if (state.askPin) ChangePasswordPin(state.pin, onPin)
         SecretField(
             state.current,
@@ -541,6 +543,24 @@ fun ChangePasswordContent(
         )
         ErrorCard(state.error)
     }
+}
+
+/** VAULT-MESSAGING 0.44.0 §11.14.9: a password change whose answer was lost is decided, not repeated. */
+@Composable
+private fun ChangeCheckNotice(c: ChangeCheck?) {
+    val text = when (c) {
+        is ChangeCheck.Checking -> R.string.credential_change_checking
+        is ChangeCheck.Unreachable -> R.string.credential_change_unreachable
+        is ChangeCheck.NotApplied -> R.string.credential_change_not_changed
+        else -> return
+    }
+    NoticeCard(
+        if (c is ChangeCheck.NotApplied) NoticeKind.WARNING else NoticeKind.INFO,
+        stringResource(R.string.credential_change_title),
+        stringResource(text),
+        Modifier.testTag("password_change_check"),
+    )
+    Spacer(Modifier.height(Spacing.l))
 }
 
 /** Release R (§11.14.9): the vault verifies its PIN with the password change. */

@@ -93,6 +93,11 @@ internal data class LocalAccount(
     val recoveryRSeen: Boolean = false,
     /** (0.34.0) The capabilities of the vault's instance this phone last verified (`recovery_offered` for the status). */
     val capabilities: List<String> = emptyList(),
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) A `pin.change` or `credential.password.change` that was sent and is not decided
+     * yet: written before the send, cleared when an answer or the check decides it. No PIN, password or secret.
+     */
+    val unresolvedChange: UnresolvedChange? = null,
 ) {
     val phone: PhoneSecretState get() = PhoneSecretState(phoneKeyVault, phoneEpoch)
 

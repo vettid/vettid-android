@@ -7,9 +7,12 @@ import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.RecoveryView
 import com.vettid.core.data.vault.SetupStage
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -140,6 +143,92 @@ class SettingsViewModelsTest {
         advanceUntilIdle()
         assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.error)
         assertEquals("", vm.uiState.value.current)
+    }
+
+    private fun ChangePinViewModel.typed() {
+        setCurrent("40281795")
+        setPin("59173048")
+        setConfirm("59173048")
+    }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9: no answer to the PIN change is not a failure. The entries stay, the screen follows
+     * VettID's check (checking, unreachable) and sends nothing meanwhile; "applied" is the usual success.
+     */
+    @Test
+    fun aLostPinChangeAnswerKeepsTheEntriesAndFollowsTheCheck() = runTest {
+        vault.fail["changePin"] = VaultFailure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = ChangePinViewModel(vault)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PIN)
+        advanceUntilIdle()
+        with(vm.uiState.value) {
+            assertNull(error)
+            assertFalse(busy)
+            assertEquals("40281795", current)
+            assertEquals("59173048", pin)
+            assertEquals("59173048", confirm)
+            assertTrue(checking)
+            assertEquals(ChangeCheck.Checking(ChangeKind.PIN), check)
+        }
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("nothing sent while it is decided", 1, vault.calls.count { it == "changePin" })
+        vault.changeCheck.value = ChangeCheck.Unreachable(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertEquals(ChangeCheck.Unreachable(ChangeKind.PIN), vm.uiState.value.check)
+        assertEquals("59173048", vm.uiState.value.pin)
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertEquals(1, vault.changeCheckAcknowledged)
+        assertNull(vault.changeCheck.value)
+    }
+
+    /** "Not changed": said, the entries kept, and the member may try again (a new request). */
+    @Test
+    fun aPinChangeThatDidNotApplyMayBeTriedAgain() = runTest {
+        vault.fail["changePin"] = VaultFailure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = ChangePinViewModel(vault)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.NotApplied(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertEquals(ChangeCheck.NotApplied(ChangeKind.PIN), vm.uiState.value.check)
+        assertFalse(vm.uiState.value.checking)
+        assertEquals("40281795", vm.uiState.value.current)
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "changePin" })
+        assertTrue(vm.uiState.value.done)
+    }
+
+    /**
+     * An answer that came at last and refused the change is shown as it is, the wrong entry cleared and the new ones kept;
+     * another change still being decided keeps everything; the password change's check is not this screen's.
+     */
+    @Test
+    fun aRefusedOrUndecidedPinChangeClearsOnlyTheWrongEntry() = runTest {
+        val vm = ChangePinViewModel(vault)
+        vm.typed()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.check)
+        vault.changeCheck.value = ChangeCheck.Refused(ChangeKind.PIN, FailureKind.BAD_PIN)
+        advanceUntilIdle()
+        assertEquals(FailureKind.BAD_PIN, vm.uiState.value.error)
+        assertEquals("", vm.uiState.value.current)
+        assertEquals("59173048", vm.uiState.value.pin)
+        vm.typed()
+        vault.fail["changePin"] = VaultFailure(FailureKind.CHANGE_UNRESOLVED, "change_unresolved")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(FailureKind.CHANGE_UNRESOLVED, vm.uiState.value.error)
+        assertEquals("40281795", vm.uiState.value.current)
+        assertEquals("59173048", vm.uiState.value.pin)
     }
 
     @Test

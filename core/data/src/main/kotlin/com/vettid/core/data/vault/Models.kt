@@ -185,6 +185,13 @@ sealed interface UnlockAttempt {
     /** [retryAfterSeconds]: when the service said when to try again (`Retry-After`, e.g. [FailureKind.SERVICE_PAUSED]). */
     data class Failed(val kind: FailureKind, val code: String?, val retryAfterSeconds: Long = 0) : UnlockAttempt
 
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9 step 5) A PIN change is unresolved and the previous PIN, sent with the current
+     * record, got `device_secret` (decided before any PIN is tested): the change went through, and the unlock now asks
+     * for the new PIN, which the next [VaultRepository.unlock] tries with the new record.
+     */
+    data object NewPinNeeded : UnlockAttempt
+
     companion object {
         /**
          * [Failed]'s code when this phone has no `user_guid` to unlock with: it was set up by a direct transfer from
@@ -424,7 +431,55 @@ enum class FailureKind {
      * answer is never silence. Nothing changed; a list asked for again in smaller pages may fit.
      */
     RESPONSE_TOO_LARGE,
+
+    // --- a lost answer to a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9; ANDROID-PLAN 0.1.45) ---
+
+    /**
+     * The change got no answer: not a failure. VettID decides it ([VaultRepository.changeCheck]); the screen keeps the
+     * member's new entries and says it is checking.
+     */
+    CHANGE_CHECKING,
+
+    /**
+     * A PIN or password change is still undecided: no other change, owner check or credential operation is sent until
+     * it is ("VettID is still checking whether your last change went through.").
+     */
+    CHANGE_UNRESOLVED,
     OTHER,
+}
+
+/** (VAULT-MESSAGING 0.44.0 §11.14.9) The change a lost answer is decided for. */
+enum class ChangeKind { PIN, PASSWORD }
+
+/**
+ * (VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45) Where the decision of a PIN or password change whose answer was
+ * lost stands. [open] while undecided: no other change, owner check or credential operation is sent meanwhile.
+ */
+sealed interface ChangeCheck {
+    val kind: ChangeKind
+    val open: Boolean get() = false
+
+    /** VettID is checking (resending the same request, asking `credential.version`). */
+    data class Checking(override val kind: ChangeKind) : ChangeCheck {
+        override val open: Boolean get() = true
+    }
+
+    /** The vault cannot be reached: VettID checks again when it can (at a reconnection, a start, an unlock). */
+    data class Unreachable(override val kind: ChangeKind) : ChangeCheck {
+        override val open: Boolean get() = true
+    }
+
+    /** The change went through: the usual success text. */
+    data class Applied(override val kind: ChangeKind) : ChangeCheck
+
+    /** The change did not apply and never will: "Your PIN was not changed. You can try again." */
+    data class NotApplied(override val kind: ChangeKind) : ChangeCheck
+
+    /** An answer to the request came at last and refused the change ([failure], shown as it is). */
+    data class Refused(override val kind: ChangeKind, val failure: FailureKind) : ChangeCheck
+
+    /** The check ended without a decision (no credential, another version, a clone alarm): that answer's own path. */
+    data class Ended(override val kind: ChangeKind) : ChangeCheck
 }
 
 /**

@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.collapse
 import androidx.compose.ui.semantics.expand
@@ -47,6 +48,7 @@ import com.vettid.core.data.policy.messageArg
 import com.vettid.core.data.policy.messageRes
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CanaryManifestView
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseInfoView
 import com.vettid.core.data.vault.SignerView
@@ -318,11 +320,31 @@ fun ChangePinContent(
         },
         primaryLabel = stringResource(if (state.done) R.string.settings_done else R.string.settings_pin_submit),
         onPrimary = if (state.done) onBack else onSubmit,
-        primaryEnabled = state.done || (state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
+        primaryEnabled = state.done ||
+            (!state.checking && state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
         busy = state.busy,
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        // VAULT-MESSAGING 0.44.0 §11.14.9: a change whose answer was lost is decided, not repeated.
+        state.check?.let { c ->
+            val text = when (c) {
+                is ChangeCheck.Checking -> R.string.settings_pin_checking
+                is ChangeCheck.Unreachable -> R.string.settings_pin_unreachable
+                is ChangeCheck.NotApplied -> R.string.settings_pin_not_changed
+                else -> null
+            }
+            if (text != null) {
+                NoticeCard(
+                    if (c is ChangeCheck.NotApplied) NoticeKind.WARNING else NoticeKind.INFO,
+                    stringResource(R.string.settings_pin_title),
+                    stringResource(text),
+                    Modifier.testTag("pin_change_check"),
+                    announce = LiveRegionMode.Polite,
+                )
+                Spacer(Modifier.height(Spacing.l))
+            }
+        }
         if (state.fromAttempts && state.withPassword) {
             NoticeCard(
                 NoticeKind.WARNING,

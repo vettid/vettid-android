@@ -52,6 +52,8 @@
     <!-- Approved by the owner (a wipe that did not finish). -->
     <string name="data_failure_erase_failed">VettID could not remove your vault\'s keys from this phone. Try again. If it keeps failing, erase VettID\'s data on this phone. Your vault itself is not affected: afterwards you can set VettID up again or recover your vault from your account.</string>
     <string name="data_failure_local_state">VettID could not read the keys it keeps on this phone for your vault. Nothing was deleted or changed. Try again, or restart the phone and open VettID again. If it stays like this, this phone cannot open your vault any more, and the way back is to erase VettID here and recover your vault.</string>
+    <!-- VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45 (approved text, shared with the iPhone app). -->
+    <string name="data_failure_change_unresolved">VettID is still checking whether your last change went through. Try again when your vault can be reached.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>
     <string name="data_pin_problem_short">Use at least %1$d digits.</string>

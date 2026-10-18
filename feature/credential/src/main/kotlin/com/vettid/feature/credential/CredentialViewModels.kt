@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.policy.PasswordRule
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.CredentialStatus
@@ -143,15 +145,36 @@ data class ChangePasswordUiState(
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val done: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) The change got no answer and VettID is deciding it ([ChangeCheck.Checking],
+     * [ChangeCheck.Unreachable]), or decided that it did not apply ([ChangeCheck.NotApplied]). The entries are kept.
+     */
+    val check: ChangeCheck? = null,
 ) {
+    /** A change is being decided: nothing is sent from this screen meanwhile. */
+    val checking: Boolean get() = check?.open == true
+
     /** The PIN, when it is asked ([askPin]): digits, at least 6. */
     val pinReady: Boolean get() = !askPin || pin.length >= MIN_PIN && pin.all { it.isDigit() }
 
-    /** Every field the change needs is filled in. */
+    /** Every field the change needs is filled in, and no change is being decided (§11.14.9). */
     val canSubmit: Boolean
-        get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady && !refused && (!newRules || rule.passes)
+        get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady && !refused &&
+            (!newRules || rule.passes) && !checking
 
-    override fun toString(): String = "ChangePasswordUiState(askPin=$askPin, newRules=$newRules, busy=$busy, error=$error, done=$done)"
+    override fun toString(): String =
+        "ChangePasswordUiState(askPin=$askPin, newRules=$newRules, busy=$busy, error=$error, done=$done, check=$check)"
+
+    /**
+     * (§11.14.9 step 4) A refused change: the entry that was wrong is cleared, the new ones are kept. An undecided earlier
+     * change keeps every entry.
+     */
+    internal fun afterRefusal(kind: FailureKind): ChangePasswordUiState = when (kind) {
+        FailureKind.BAD_PASSWORD -> copy(current = "")
+        FailureKind.BAD_PIN -> copy(pin = "")
+        FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_CHECKING -> this
+        else -> copy(current = "", pin = "")
+    }
 
     private companion object {
         const val MIN_PIN = 6
@@ -171,9 +194,45 @@ data class ChangePasswordUiState(
  * also the PIN (§11.14.9).
  */
 @HiltViewModel
-class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRepository, vault: VaultRepository) : ViewModel() {
+class ChangePasswordViewModel @Inject constructor(
+    private val repo: CredentialRepository,
+    private val vault: VaultRepository,
+) : ViewModel() {
     private val state = MutableStateFlow(ChangePasswordUiState(askPin = vault.usesPhoneSecret, newRules = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePasswordUiState> = state.asStateFlow()
+
+    init {
+        // §11.14.9: a password change whose answer was lost is decided by VettID; this screen shows where that stands.
+        viewModelScope.launch {
+            vault.changeCheck.collect { c -> if (c != null && c.kind == ChangeKind.PASSWORD) onCheck(c) }
+        }
+    }
+
+    private fun onFailure(e: VaultFailure) {
+        // weak_password (§11.14.7): its reason under the new password, in the same words as the app's.
+        // Also on the earlier meter: a vault's verdict is always shown, and the same password not sent again.
+        val rule = if (e.kind == FailureKind.WEAK_PASSWORD) PasswordRule.fromVault(e.weakPasswordReason) else null
+        when {
+            // §11.14.9: no answer is not a failure; the entries stay and the check's state follows.
+            e.kind == FailureKind.CHANGE_CHECKING -> {
+                state.update { it.copy(busy = false, error = null) }
+                vault.changeCheck.value?.takeIf { it.kind == ChangeKind.PASSWORD }?.let(::onCheck)
+            }
+            rule != null -> state.update { it.copy(busy = false, error = null, rule = rule, refused = true, current = "", pin = "") }
+            else -> state.update { it.copy(busy = false, error = e.kind).afterRefusal(e.kind) }
+        }
+    }
+
+    private fun onCheck(c: ChangeCheck) {
+        when (c) {
+            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied ->
+                state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.Applied -> state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
+            is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure).afterRefusal(c.failure) }
+            is ChangeCheck.Ended -> state.update { it.copy(busy = false, check = null, error = FailureKind.OTHER) }
+        }
+        if (!c.open) vault.acknowledgeChangeCheck()
+    }
 
     fun setPin(v: String) = state.update { it.withPin(v) }
 
@@ -194,28 +253,20 @@ class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRe
         val s = state.value
         val p = if (s.newRules) null else PasswordPolicy.check(s.password)
         when {
-            s.current.isEmpty() || !s.pinReady -> return
+            // (§11.14.9) Nothing is sent while a change is being decided.
+            s.checking || s.current.isEmpty() || !s.pinReady -> return
             s.refused || s.newRules && !s.rule.passes -> return
             p != null -> state.update { it.copy(problem = p) }
             s.password == s.current -> state.update { it.copy(same = true) }
             s.confirm != s.password -> state.update { it.copy(mismatch = true) }
             else -> {
-                state.update { it.copy(busy = true, error = null) }
+                state.update { it.copy(busy = true, error = null, check = null) }
                 viewModelScope.launch {
                     try {
                         repo.changePassword(s.current, s.password, s.pin.takeIf { s.askPin })
                         state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
                     } catch (e: VaultFailure) {
-                        // weak_password (§11.14.7): its reason under the new password, in the same words as the app's.
-                        // Also on the earlier meter: a vault's verdict is always shown, and the same password not sent again.
-                        val rule = if (e.kind == FailureKind.WEAK_PASSWORD) PasswordRule.fromVault(e.weakPasswordReason) else null
-                        state.update {
-                            if (rule != null) {
-                                it.copy(busy = false, error = null, rule = rule, refused = true, current = "", pin = "")
-                            } else {
-                                it.copy(busy = false, error = e.kind, current = "", pin = "")
-                            }
-                        }
+                        onFailure(e)
                     }
                 }
             }

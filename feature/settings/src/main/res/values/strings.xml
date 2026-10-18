@@ -149,6 +149,10 @@
     <string name="settings_pin_same">Choose a PIN different from the current one.</string>
     <string name="settings_pin_submit">Change PIN</string>
     <string name="settings_pin_done">Your vault PIN was changed.</string>
+    <!-- VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45 (approved texts, shared with the iPhone app). -->
+    <string name="settings_pin_checking">Your vault hasn\'t answered yet, so VettID is checking whether your PIN was changed. Keep your new PIN at hand.</string>
+    <string name="settings_pin_not_changed">Your PIN was not changed. You can try again.</string>
+    <string name="settings_pin_unreachable">VettID can\'t reach your vault right now, so it doesn\'t know yet whether your PIN was changed. It will check as soon as it can. Keep both your old and your new PIN at hand.</string>
 
     <!-- Recovery -->
     <string name="settings_recovery_title">Recovery</string>

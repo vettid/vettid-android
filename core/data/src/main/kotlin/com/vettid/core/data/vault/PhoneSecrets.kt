@@ -68,6 +68,37 @@ object UnlockEpoch {
     fun confirmsNext(ok: Boolean, code: String?): Boolean = ok || code in AFTER_SECRET
 
     private val AFTER_SECRET = setOf("bad_pin", "transfer_incomplete")
+
+    /** What an unlock does after the answer to the current record ([afterCurrent]). */
+    enum class Next {
+        /** The answer stands. */
+        DONE,
+
+        /** `device_secret`: the same PIN is tried once more with the next epoch (an earlier change's answer may be lost). */
+        TRY_NEXT,
+
+        /**
+         * (VAULT-MESSAGING 0.44.0 §11.14.9 step 5) `device_secret` while a PIN change is unresolved: the vault holds the
+         * candidate, decided before any PIN was tested. The member is asked for the NEW PIN; the previous one is not
+         * reused for the candidate.
+         */
+        ASK_NEW_PIN,
+    }
+
+    /**
+     * Whether the PIN typed goes with the next epoch only: [pinChangeUnresolved] and the member typed it after the
+     * previous PIN got `device_secret` ([newPinAsked]). Otherwise the unlock starts with the current record.
+     */
+    fun nextOnly(pinChangeUnresolved: Boolean, newPinAsked: Boolean): Boolean = pinChangeUnresolved && newPinAsked
+
+    /** After the current record's answer (release R only: [releaseR]). */
+    fun afterCurrent(releaseR: Boolean, ok: Boolean, code: String?, pinChangeUnresolved: Boolean): Next = when {
+        !releaseR || ok || code != CODE_DEVICE_SECRET -> Next.DONE
+        pinChangeUnresolved -> Next.ASK_NEW_PIN
+        else -> Next.TRY_NEXT
+    }
+
+    private const val CODE_DEVICE_SECRET = "device_secret"
 }
 
 /** The old phone's keys after a transfer it approved (release R, §11.14.10; owner decision 2026-10-15). */
