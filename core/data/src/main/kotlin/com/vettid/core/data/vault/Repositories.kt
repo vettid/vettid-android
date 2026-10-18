@@ -183,6 +183,12 @@ interface VaultRepository {
      */
     val newPinAsked: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
 
+    /**
+     * (0.45.0 §11.14.9 step 2) Why a flow that locks and unlocks with a PIN typed on its own screen ("Finish the move", the
+     * release update) is held: the gate's text for an unresolved change or an uncertain PIN; null when it is not.
+     */
+    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
     /** (Release R) `vault.secret.renew`: a new phone secret with the PIN unchanged (Settings → Security). */
     suspend fun renewPhoneSecret(pin: String, password: String): Unit = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 

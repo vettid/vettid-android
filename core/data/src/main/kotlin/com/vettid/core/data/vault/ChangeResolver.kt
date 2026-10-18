@@ -38,6 +38,44 @@ internal data class UnresolvedChange(
     override fun toString(): String = "UnresolvedChange($type)"
 }
 
+/**
+ * (VAULT-MESSAGING 0.45.0 §11.14.9 step 5, N1) A `vault.secret.renew` stored before it was sent: its inner id, the blob
+ * version it carried, its `exp` (epoch ms) and the epoch it was sent from (its candidate is the next). No secret.
+ */
+@Serializable
+internal data class UnconfirmedRenew(val innerId: String, val sentVersion: Long, val expMs: Long, val fromEpoch: Long)
+
+/** (N5) A decision the member has not seen yet: [kind] and [verdict] (the [ChangeCheck] class), [failure] for a refusal. */
+@Serializable
+internal data class SavedDecision(val kind: String, val verdict: String, val failure: String? = null) {
+    fun toCheck(): ChangeCheck? {
+        val k = runCatching { ChangeKind.valueOf(kind) }.getOrNull() ?: return null
+        return when (verdict) {
+            APPLIED -> ChangeCheck.Applied(k)
+            NOT_APPLIED -> ChangeCheck.NotApplied(k)
+            ENDED -> ChangeCheck.Ended(k)
+            REFUSED -> ChangeCheck.Refused(k, failure?.let { runCatching { FailureKind.valueOf(it) }.getOrNull() } ?: FailureKind.OTHER)
+            else -> null
+        }
+    }
+
+    companion object {
+        private const val APPLIED = "applied"
+        private const val NOT_APPLIED = "not_applied"
+        private const val ENDED = "ended"
+        private const val REFUSED = "refused"
+
+        /** The decided [c] to keep; null for none or an undecided state. */
+        fun of(c: ChangeCheck?): SavedDecision? = when (c) {
+            is ChangeCheck.Applied -> SavedDecision(c.kind.name, APPLIED)
+            is ChangeCheck.NotApplied -> SavedDecision(c.kind.name, NOT_APPLIED)
+            is ChangeCheck.Ended -> SavedDecision(c.kind.name, ENDED)
+            is ChangeCheck.Refused -> SavedDecision(c.kind.name, REFUSED, c.failure.name)
+            else -> null
+        }
+    }
+}
+
 /** §11.14.9 step 3: what an answer to `credential.version` says of an unresolved change. */
 internal object ChangeDecision {
     enum class Verdict {
@@ -57,11 +95,16 @@ internal object ChangeDecision {
     /** How long after the request's `exp` an unchanged version decides "not applied". */
     val MARGIN: Duration = Duration.ofMinutes(1)
 
-    fun of(m: UnresolvedChange, exists: Boolean, version: Long?, alarm: Boolean, ts: Instant): Verdict = when {
+    fun of(m: UnresolvedChange, exists: Boolean, version: Long?, alarm: Boolean, ts: Instant): Verdict =
+        of(m.sentVersion, m.expMs, exists, version, alarm, ts)
+
+    /** The same for any request that carried blob version [sentVersion] and expired at [expMs] (a renew, N1). */
+    @Suppress("LongParameterList")
+    fun of(sentVersion: Long, expMs: Long, exists: Boolean, version: Long?, alarm: Boolean, ts: Instant): Verdict = when {
         !exists || version == null || alarm -> Verdict.ENDED
-        version == m.sentVersion + 1 -> Verdict.APPLIED
-        version == m.sentVersion && ts.isAfter(Instant.ofEpochMilli(m.expMs).plus(MARGIN)) -> Verdict.NOT_APPLIED
-        version == m.sentVersion -> Verdict.UNDECIDED
+        version == sentVersion + 1 -> Verdict.APPLIED
+        version == sentVersion && ts.isAfter(Instant.ofEpochMilli(expMs).plus(MARGIN)) -> Verdict.NOT_APPLIED
+        version == sentVersion -> Verdict.UNDECIDED
         else -> Verdict.ENDED
     }
 }
@@ -122,23 +165,35 @@ internal class ChangeResolver(
 
         /** (0.45.0 step 3) The PIN is uncertain after a check that ended without a decision. */
         fun pinUncertain(): Boolean = false
+
+        /** (N5) The decision not yet seen, kept on the phone across a process death. */
+        fun savedDecision(): ChangeCheck? = null
+
+        /** (N5) Keeps [c] (a decided state) on the phone until it is seen; null once seen. */
+        fun saveDecision(c: ChangeCheck?) = Unit
     }
 
     private val mutex = Mutex()
 
-    private val state = MutableStateFlow<ChangeCheck?>(ops.marker()?.let { ChangeCheck.Checking(it.kind) })
+    private val state = MutableStateFlow(ops.marker()?.let { ChangeCheck.Checking(it.kind) } ?: ops.savedDecision())
+
+    /** Every change of [state]: a decided state is kept on the phone until it is seen (N5), an open one replaces it. */
+    private fun set(c: ChangeCheck?) {
+        state.value = c
+        ops.saveDecision(c?.takeIf { !it.open })
+    }
 
     /** Where the decision stands; a decided state stays until [acknowledge]. */
     val check: StateFlow<ChangeCheck?> = state.asStateFlow()
 
     /** Says [c] (for the change's own answer, decided by the caller). */
     fun publish(c: ChangeCheck?) {
-        state.value = c
+        set(c)
     }
 
     /** The member has read a decided state. */
     fun acknowledge() {
-        state.value = state.value?.takeIf { it.open }
+        set(state.value?.takeIf { it.open })
     }
 
     /**
@@ -148,11 +203,11 @@ internal class ChangeResolver(
     suspend fun decide(): ChangeCheck? = mutex.withLock {
         val m = ops.marker()
         if (m == null) {
-            if (state.value?.open == true) state.value = null
+            if (state.value?.open == true) set(null)
             return@withLock null
         }
-        if (state.value?.open != true) state.value = ChangeCheck.Checking(m.kind)
-        round(m).also { state.value = it }
+        if (state.value?.open != true) set(ChangeCheck.Checking(m.kind))
+        round(m).also { set(it) }
     }
 
     @Suppress("ReturnCount")

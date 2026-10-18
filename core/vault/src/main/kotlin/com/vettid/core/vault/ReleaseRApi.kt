@@ -47,13 +47,21 @@ suspend fun VaultApi.pinChange(
     }, onMarker)
 }
 
-/** `vault.secret.renew`: a new phone secret with the PIN unchanged; the DEK is replaced. */
-suspend fun VaultApi.secretRenew(pin: String, password: String, newUnlockSecret: ByteArray) {
+/**
+ * `vault.secret.renew`: a new phone secret with the PIN unchanged; the DEK is replaced. (0.45.0 §11.14.9) [onSending]
+ * stores the renew before it is sent, so that a lost answer can be decided ([SentRequest]).
+ */
+suspend fun VaultApi.secretRenew(
+    pin: String,
+    password: String,
+    newUnlockSecret: ByteArray,
+    onSending: (suspend (SentRequest) -> Unit)? = null,
+) {
     credentialOps.credOp("vault.secret.renew", {
         put("pin", pin)
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))
-    })
+    }, onSending = onSending)
 }
 
 /**

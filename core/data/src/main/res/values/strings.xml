@@ -59,6 +59,8 @@
     <string name="data_failure_change_undecided_password">VettID is still checking whether your last password change went through. This can take up to about 10 minutes. Try again then.</string>
     <string name="data_failure_credential_unsettled">VettID is still finishing an earlier request to your vault. Nothing was changed. Try again in a minute.</string>
     <string name="data_failure_pin_uncertain">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
+    <!-- DRAFT (PR 144, N1; for the owner's wording): a new phone secret without an answer that the version cannot decide. -->
+    <string name="data_failure_renew_unconfirmed">VettID couldn\'t confirm your last new phone secret. Before you change your PIN, lock your vault and unlock it again: your PIN hasn\'t changed, so this doesn\'t use an attempt.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>
     <string name="data_pin_problem_short">Use at least %1$d digits.</string>

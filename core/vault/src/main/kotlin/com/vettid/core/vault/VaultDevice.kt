@@ -939,6 +939,9 @@ class VaultDevice private constructor(
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
             st.outbox.remove(e)
+            // (M1) An entry an earlier app version queued (no exp): sent now, the vault acts on it in its next batch; from
+            // here it is settled like a request with an exp of now + 10 minutes, unless it is answered first.
+            if (st.unsettled[e.id] == LEGACY_UNSENT) st.unsettled[e.id] = vaultNow().plus(LEGACY_SENT_WINDOW).toEpochMilli()
             save()
         } catch (x: RelayException) {
             if (x.retryable) {
@@ -948,6 +951,7 @@ class VaultDevice private constructor(
             }
             countRefusal(x, e.mailbox, e.token)
             st.outbox.remove(e)
+            st.unsettled.remove(e.id) // never delivered: it cannot reach the vault
             save()
             throw x
         }
@@ -1172,6 +1176,7 @@ class VaultDevice private constructor(
         }
         val re = inner.re
         // (0.44.0, §11.14.9) An answer to a credential operation settles it, also one that comes after its wait ended.
+        if (re != null) noteAnswerTime(inner.ts)
         if (re != null && st.unsettled.remove(re) != null) save()
         if (re != null) {
             if (inner.status != Inner.STATUS_OK && inner.error?.code == CODE_OWNER_CHECK_REQUIRED) ownerCheckRefusals.tryEmit(inner.type)
@@ -1448,6 +1453,18 @@ class VaultDevice private constructor(
     private var vaultTsAtMs = 0L
     private val vaultClockLock = Any()
 
+    /**
+     * (0.45.0 §11.14.9, N4) The newest `ts` the vault stamped on an **answer**: the batch property of §11.14.9 ("one clock
+     * reading per batch, the `ts` of every answer from it") is stated for answers, so only they settle a request.
+     */
+    private var answerTs: Instant? = null
+
+    private fun noteAnswerTime(ts: Instant) {
+        synchronized(vaultClockLock) {
+            if (answerTs?.isBefore(ts) != false) answerTs = ts
+        }
+    }
+
     private fun noteVaultTime(ts: Instant) {
         val at = cfg.elapsedMs()
         synchronized(vaultClockLock) {
@@ -1511,7 +1528,7 @@ class VaultDevice private constructor(
      * stamped (never the phone's estimate) is more than [SETTLE_MARGIN] past its `exp`.
      */
     internal suspend fun credentialSettled(): Boolean = lock.withLock {
-        val seen = synchronized(vaultClockLock) { vaultTs }?.toEpochMilli()
+        val seen = synchronized(vaultClockLock) { answerTs }?.toEpochMilli()
         if (pruneSettled(st.unsettled, seen)) save()
         st.unsettled.isEmpty()
     }
@@ -1524,9 +1541,25 @@ class VaultDevice private constructor(
         if (credentialSettled()) return true
         runCatching { flushOutbox() }
         return withTimeoutOrNull(cfg.settleWait.toMillis()) {
-            while (!credentialSettled()) kotlinx.coroutines.delay(SETTLE_POLL_MS)
+            var probed = false
+            while (!credentialSettled()) {
+                // (N3) In a quiet session no answer may come to move the vault's clock: once every entry should have
+                // expired by the phone's estimate, one request that is not a credential operation fetches a stamped one.
+                if (!probed && expiredByEstimate()) {
+                    probed = true
+                    runCatching { requestOnce("credential.version", timeout = cfg.requestTimeout) }
+                    continue
+                }
+                kotlinx.coroutines.delay(SETTLE_POLL_MS)
+            }
             true
         } ?: false
+    }
+
+    /** Every unsettled entry is past its `exp` plus the margin by [vaultNow] (an estimate: it only triggers a probe). */
+    private suspend fun expiredByEstimate(): Boolean = lock.withLock {
+        val now = vaultNow().toEpochMilli()
+        st.unsettled.isNotEmpty() && st.unsettled.values.all { exp -> exp != LEGACY_UNSENT && now > exp + SETTLE_MARGIN.toMillis() }
     }
 
     /** Stops awaiting [k]'s answer: the change is decided. */
@@ -1565,6 +1598,10 @@ class VaultDevice private constructor(
         val SETTLE_MARGIN: Duration = Duration.ofMinutes(1)
         private const val SETTLE_POLL_MS = 250L
 
+        /** (M1) An outbox entry of an earlier app version, not sent yet: unsettled until it is answered or sent. */
+        internal const val LEGACY_UNSENT = Long.MAX_VALUE / 2
+        private val LEGACY_SENT_WINDOW: Duration = Duration.ofMinutes(10)
+
         /**
          * Drops from [unsettled] (inner id to `exp`, epoch ms) every request the vault can no longer act on: the newest
          * `ts` it stamped ([seenMs]; null: none seen yet, nothing dropped) is more than [SETTLE_MARGIN] past its `exp`.
@@ -1602,7 +1639,7 @@ class VaultDevice private constructor(
 
         /** A new device with fresh state; registers its mailbox on its relay. */
         suspend fun create(cfg: DeviceConfig, secrets: DeviceSecrets): VaultDevice {
-            val d = VaultDevice(cfg, secrets, DeviceState(cfg.role, cfg.name, cfg.relayUrl.trimEnd('/')))
+            val d = VaultDevice(cfg, secrets, DeviceState(cfg.role, cfg.name, cfg.relayUrl.trimEnd('/'), outboxTracked = true))
             d.own.register()
             d.save()
             return d
@@ -1612,6 +1649,12 @@ class VaultDevice private constructor(
         fun load(cfg: DeviceConfig, secrets: DeviceSecrets): VaultDevice? {
             val b = cfg.store.load() ?: return null
             val st = stateJson.decodeFromString(DeviceState.serializer(), String(b))
+            // (M1) A state of an app version before 0.45.0: what its outbox holds may be a credential operation without an
+            // exp, so it counts as unsettled until it is answered or sent.
+            if (!st.outboxTracked) {
+                for (e in st.outbox) st.unsettled.putIfAbsent(e.id, LEGACY_UNSENT)
+                st.outboxTracked = true
+            }
             return VaultDevice(cfg, secrets, st)
         }
     }

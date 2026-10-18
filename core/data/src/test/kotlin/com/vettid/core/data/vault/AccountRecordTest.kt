@@ -212,13 +212,14 @@ class AccountRecordTest {
      */
     @Test
     fun anEndedPinChangeLeavesThePinUncertainUntilAnUnlock() {
-        val f = Fixture(old.copy(phoneEpoch = 3, unresolvedChange = pinChange, renewUnconfirmed = true))
+        val renew = UnconfirmedRenew("01JRENEW", 6, 1_000, 3)
+        val f = Fixture(old.copy(phoneEpoch = 3, unresolvedChange = pinChange, unconfirmedRenew = renew))
         assertTrue(f.record.endChange(pinChange))
         assertNull(f.disk!!.unresolvedChange)
         assertEquals(3L, f.disk!!.uncertainPinFromEpoch)
         assertTrue(f.record.settlePin(f.record.recordGeneration))
         assertNull(f.disk!!.uncertainPinFromEpoch)
-        assertFalse(f.disk!!.renewUnconfirmed)
+        assertNull(f.disk!!.unconfirmedRenew)
         assertEquals(3L, f.disk!!.phoneEpoch)
         val g = Fixture(old.copy(phoneEpoch = 3, uncertainPinFromEpoch = 3))
         assertTrue(g.record.settlePin(g.record.recordGeneration, epoch = 4))
@@ -228,5 +229,41 @@ class AccountRecordTest {
         val h = Fixture(old.copy(phoneEpoch = 3, unresolvedChange = pw))
         assertTrue(h.record.endChange(pw))
         assertNull(h.disk!!.uncertainPinFromEpoch)
+    }
+
+    /**
+     * (0.45.0 step 5, N1) A renew is stored before it is sent; its answer or the version check decides it: applied moves
+     * the phone to its candidate (only from the epoch it was sent from), not applied leaves the epoch.
+     */
+    @Test
+    fun aRenewIsStoredBeforeTheSendAndDecidedOnce() {
+        val f = Fixture(old.copy(phoneEpoch = 3))
+        val r = UnconfirmedRenew("01JRENEW", 6, 1_000, 3)
+        assertTrue(f.record.storeRenew(f.record.recordGeneration, r))
+        assertEquals(r, f.disk!!.unconfirmedRenew)
+        assertTrue(f.record.value.renewUnconfirmed)
+        assertFalse("another renew's answer", f.record.decideRenew("01JOTHER", applied = true))
+        assertTrue(f.record.decideRenew(r.innerId, applied = true))
+        assertEquals(4L, f.disk!!.phoneEpoch)
+        assertNull(f.disk!!.unconfirmedRenew)
+        val g = Fixture(old.copy(phoneEpoch = 3, unconfirmedRenew = r))
+        assertTrue(g.record.decideRenew(r.innerId, applied = false))
+        assertEquals(3L, g.disk!!.phoneEpoch)
+        var fail = false
+        val h = AccountRecord(old, readable = true, persist = { if (fail) throw java.io.IOException("disk full") })
+        fail = true
+        assertFalse("not stored: nothing may be sent", h.storeRenew(h.recordGeneration, r))
+    }
+
+    /** (N5) A decision the member has not seen is kept on the phone until it is seen. */
+    @Test
+    fun aDecisionIsKeptUntilSeen() {
+        val f = Fixture(old)
+        val d = SavedDecision.of(ChangeCheck.Refused(ChangeKind.PIN, FailureKind.BAD_PIN))!!
+        assertTrue(f.record.saveDecision(d))
+        assertEquals(ChangeCheck.Refused(ChangeKind.PIN, FailureKind.BAD_PIN), f.disk!!.changeDecision?.toCheck())
+        assertTrue(f.record.saveDecision(null))
+        assertNull(f.disk!!.changeDecision)
+        assertNull(SavedDecision.of(ChangeCheck.Checking(ChangeKind.PIN)))
     }
 }

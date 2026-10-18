@@ -62,6 +62,9 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         changeCheck.value = changeCheck.value?.takeIf { it.open }
     }
 
+    /** (§11.14.9 step 2) Why a lock-and-unlock flow is held, as a test sets it. */
+    override val changeHold = MutableStateFlow<FailureKind?>(null)
+
     /** (§11.14.9 step 5) A PIN change is unresolved: the unlock's two steps. */
     override val pinChangeUnresolved = MutableStateFlow(false)
 

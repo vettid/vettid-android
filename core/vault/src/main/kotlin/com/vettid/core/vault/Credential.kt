@@ -97,6 +97,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         payload: JsonObjectBuilder.() -> Unit,
         reply: Boolean,
         extra: JsonObjectBuilder.() -> Unit,
+        onSending: (suspend (SentRequest) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> {
         val rk = if (reply) KemPrivateKey.generate() else null
         val id = d.newId()
@@ -105,6 +106,20 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         // PIN or password change waits for it, so that "version + 1" can only be the change's ([change]).
         val exp = d.vaultNow().plus(ChangeTypes.EXP).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
         d.trackCredential(id, exp)
+        // Stored by the caller before anything is sent (a renew, §11.14.9 step 5); a throw stops it, nothing sent.
+        onSending?.let { f ->
+            var stored = false
+            try {
+                f(SentRequest(type, id, d.credentialVersion, exp))
+                stored = true
+            } finally {
+                if (!stored) {
+                    d.settleCredential(id)
+                    d.returnUtk(utk)
+                    rk?.destroy()
+                }
+            }
+        }
         val r = d.requestWithId(id, type, body, exp = exp)
         d.settleCredential(id)
         if (r.inner.status != Inner.STATUS_OK) {
@@ -177,13 +192,14 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         payload: JsonObjectBuilder.() -> Unit,
         reply: Boolean = false,
         extra: JsonObjectBuilder.() -> Unit = {},
+        onSending: (suspend (SentRequest) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> = gated(payload).credentialLock.withLock {
         try {
-            sealedWith(type, takeUtk(), true, payload, reply, extra)
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending)
         } catch (e: VaultOpException) {
             if (e.code != CODE_STALE || type in ChangeTypes.ALL) throw e
             fetch()
-            sealedWith(type, takeUtk(), true, payload, reply, extra)
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending)
         }
     }
 

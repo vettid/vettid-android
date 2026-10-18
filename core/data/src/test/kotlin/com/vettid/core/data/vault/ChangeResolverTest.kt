@@ -324,4 +324,38 @@ class ChangeResolverTest {
         assertFalse(r.check.value?.open ?: false)
         scope.cancel()
     }
+
+    /** (N5) The decision survives a process death until it is seen: kept by the ops, restored at the next start. */
+    @Test
+    fun theDecisionIsKeptUntilSeen() = runTest {
+        var saved: ChangeCheck? = null
+        val ops = object : ChangeResolver.Ops {
+            var marker: UnresolvedChange? = pinChange
+            override fun marker() = marker
+            override suspend fun resend(m: UnresolvedChange): ChangeResolver.Answer? = null
+            override suspend fun version() = version(8, exp)
+            override suspend fun fetch() = Unit
+            override fun confirm(m: UnresolvedChange): Boolean {
+                marker = null
+                return true
+            }
+            override fun clear(m: UnresolvedChange) {
+                marker = null
+            }
+            override fun savedDecision() = saved
+            override fun saveDecision(c: ChangeCheck?) {
+                saved = c
+            }
+        }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        assertEquals(ChangeCheck.Applied(ChangeKind.PIN), ChangeResolver(scope, ops).decide())
+        assertEquals(ChangeCheck.Applied(ChangeKind.PIN), saved)
+        // The process dies before the member sees it: the next start says it again.
+        val again = ChangeResolver(scope, ops)
+        assertEquals(ChangeCheck.Applied(ChangeKind.PIN), again.check.value)
+        again.acknowledge()
+        assertNull(saved)
+        assertNull(ChangeResolver(scope, ops).check.value)
+        scope.cancel()
+    }
 }

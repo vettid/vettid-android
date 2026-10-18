@@ -42,6 +42,11 @@ internal data class DeviceState(
      * version one above the change's can only come from the change.
      */
     val unsettled: MutableMap<String, Long> = mutableMapOf(),
+    /**
+     * The outbox's entries are tracked in [unsettled]. False only in a state written by an app version before 0.45.0:
+     * its outbox entries carry no `exp` and are tracked at the first load ([VaultDevice.LEGACY_UNSENT]).
+     */
+    var outboxTracked: Boolean = false,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

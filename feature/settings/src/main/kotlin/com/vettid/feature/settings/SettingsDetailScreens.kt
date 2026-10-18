@@ -394,6 +394,12 @@ fun ChangePinContent(
                 stringResource(R.string.settings_pin_title),
                 stringResource(it.messageRes()),
                 Modifier.testTag("error"),
+                // (0.45.0 §11.14.9) An uncertain PIN or an unconfirmed new phone secret: settled by a lock and unlock.
+                actions = if (it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) {
+                    { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
+                } else {
+                    null
+                },
             )
         }
     }

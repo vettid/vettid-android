@@ -1749,6 +1749,94 @@ class VaultDeviceTest {
         assertEquals(setOf("b"), m.keys)
     }
 
+    /** (0.45.0 step 5, N1) A renew tells the caller what it carries before it is sent; a refusal to store sends nothing. */
+    @Test
+    fun aRenewIsReportedBeforeItIsSent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val seen = mutableListOf<SentRequest>()
+            val depositsAtReport = mutableListOf<Int>()
+            val renew = async(Dispatchers.IO) {
+                runCatching {
+                    api.secretRenew("975310", "password one", ByteArray(32) { 5 }) { r ->
+                        seen += r
+                        depositsAtReport += deposits.size
+                    }
+                }
+            }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c6", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.secret.renew", req.type)
+            assertEquals(listOf(0), depositsAtReport)
+            assertEquals(req.id, seen.single().innerId)
+            assertEquals(3L, seen.single().sentVersion)
+            assertEquals(req.exp, seen.single().exp)
+            d.handle(v.seal(req.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = req.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            assertTrue(renew.await().isSuccess)
+            // Not stored: nothing sent, the UTK back in the pool.
+            val refused = async(Dispatchers.IO) {
+                runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }) { throw java.io.IOException("not stored") } }
+            }
+            val get2 = v.open(nextDeposit().second)
+            d.handle(v.seal(get2.type, """{"utks":[${utkJson("00112233445566c7", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
+            assertEquals("not stored", refused.await().exceptionOrNull()?.message)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.utkCount)
+            assertTrue(d.credentialSettled())
+        }
+    }
+
+    /**
+     * (N3) In a quiet session, once every unsettled request should have expired by the phone's estimate, one request
+     * that is not a credential operation (`credential.version`) asks the vault for a stamped time.
+     */
+    @Test
+    fun aQuietSessionAsksTheVaultForItsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c8", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            repeat(3) { v.open(nextDeposit().second) }
+            assertTrue(check.await().isFailure)
+            elapsed += 12 * 60_000L // past exp + 1 min by the estimate; no vault message since
+            val waited = async(Dispatchers.IO) { d.awaitCredentialSettled() }
+            val probe = v.open(nextDeposit().second)
+            assertEquals("credential.version", probe.type)
+            assertFalse("unanswered here: still unsettled after the wait", waited.await())
+        }
+    }
+
+    /**
+     * (M1) A state from an app version before 0.45.0: what its outbox holds counts as unsettled (it may be a credential
+     * operation without an exp) until it is answered.
+     */
+    @Test
+    fun anOutboxOfAnEarlierVersionIsUnsettledUntilAnswered() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            d.stop()
+            val st = savedState(store)
+            val legacyId = Ulid.new()
+            st.outbox.add(OutboxEntry(legacyId, VaultApi.TYPE_OWNER_CHECK, v.relayUrl, v.mailbox, "tok", "ZW52"))
+            st.outboxTracked = false
+            store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+            val again = VaultDevice.load(config(store), secrets)!!
+            assertFalse(again.credentialSettled())
+            again.handle(v.seal(VaultApi.TYPE_OWNER_CHECK, "{}", re = legacyId, status = Inner.STATUS_OK))
+            assertTrue(again.credentialSettled())
+        }
+    }
+
     @Test
     fun deviceStateJsonRoundTrips() {
         val s = DeviceState("app", "phone", "https://relay.vettid.test", vaultId = "v", outbox = mutableListOf(OutboxEntry("i", "t", "u", "m", "tok", "ZW52")))

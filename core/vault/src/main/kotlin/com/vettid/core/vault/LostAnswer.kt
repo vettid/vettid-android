@@ -25,6 +25,12 @@ object ChangeTypes {
 }
 
 /**
+ * A credential operation about to be sent (VAULT-MESSAGING 0.45.0 §11.14.9 step 5): its type, inner id, the blob version
+ * it carries and its `exp`. A renew's is stored before the send, so that a lost answer can be decided.
+ */
+data class SentRequest(val type: String, val innerId: String, val sentVersion: Long?, val exp: Instant)
+
+/**
  * What the app stores durably before it sends a change (§11.14.9 step 1): the type, the inner id, the blob version the
  * request carries and the request's `exp`. No PIN, password or secret.
  */
@@ -103,3 +109,9 @@ suspend fun VaultApi.credentialVersionAt(): Pair<CredentialInfo, Instant> {
 
 /** Fetches a pool of UTKs when none is left. */
 suspend fun VaultApi.credentialTopUpUtks() = credentialOps.topUpUtks()
+
+/**
+ * (0.45.0 §11.14.9 step 1) Waits, at most 30 s, until no credential operation of this phone can still reach the vault
+ * (the outbox flushed, every one answered or past its `exp`). False: some did not settle in time.
+ */
+suspend fun VaultApi.credentialAwaitSettled(): Boolean = device.awaitCredentialSettled()

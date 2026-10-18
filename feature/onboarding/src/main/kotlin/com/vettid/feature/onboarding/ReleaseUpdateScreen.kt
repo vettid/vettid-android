@@ -92,11 +92,11 @@ fun ReleaseUpdateContent(state: ReleaseUpdateUiState, actions: ReleaseUpdateActi
                         )
                     }
                     // VAULT-MESSAGING 0.44.0 §11.14.9: no update while a PIN or password change is being decided.
-                    if (state.changeUnresolved) {
+                    state.changeHold?.let { why ->
                         NoticeCard(
                             NoticeKind.WARNING,
                             stringResource(R.string.release_update_title),
-                            stringResource(FailureKind.CHANGE_UNRESOLVED.messageRes()),
+                            stringResource(why.messageRes()),
                             modifier = Modifier.testTag("release_update_change_unresolved"),
                         )
                     }
@@ -270,7 +270,7 @@ fun ReleaseUpdateFlowContent(state: ReleaseUpdateFlowUiState, actions: ReleaseUp
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
                 // (§11.14.9) Also on the PIN step: a change being decided holds the update ("still checking").
-                if (p.step == UpdateStep.FAILED || p.failure == FailureKind.CHANGE_UNRESOLVED) {
+                if (p.step == UpdateStep.FAILED || p.failureCode == ReleaseUpdateManager.CODE_CHANGE_HELD) {
                     NoticeCard(NoticeKind.WARNING, stringResource(R.string.release_update_failed_title), failureText(p))
                 }
                 UpdatePin(state, actions, p)

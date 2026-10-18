@@ -459,6 +459,12 @@ enum class FailureKind {
     PIN_UNCERTAIN,
 
     /**
+     * (0.45.0 §11.14.9 step 5, N1) A new phone secret got no answer and `credential.version` cannot tell whether it
+     * applied: no PIN change until a lock and unlock settles it (at no cost: the PIN did not change).
+     */
+    RENEW_UNCONFIRMED,
+
+    /**
      * An earlier credential operation of this phone may still reach the vault: a PIN or password change waits until it
      * is answered or can no longer apply, so that its decision can only be its own. Nothing was sent.
      */

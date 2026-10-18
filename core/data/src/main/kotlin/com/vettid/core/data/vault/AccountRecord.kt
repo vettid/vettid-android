@@ -105,11 +105,16 @@ internal data class LocalAccount(
      */
     val uncertainPinFromEpoch: Long? = null,
     /**
-     * (0.45.0 step 5) A `vault.secret.renew` got no answer: its candidate (the next epoch, with the PIN unchanged) may be
-     * the vault's. The two-step unlock tries it with the previous PIN before asking for a new PIN.
+     * (0.45.0 §11.14.9 step 5, N1) A `vault.secret.renew` stored before it was sent and not answered yet: its candidate
+     * (the next epoch, with the PIN unchanged) may be the vault's. No PIN change is sent until it is decided
+     * (`credential.version` once it is settled, or an unlock, which costs nothing: the PIN is unchanged).
      */
-    val renewUnconfirmed: Boolean = false,
+    val unconfirmedRenew: UnconfirmedRenew? = null,
+    /** (0.45.0 step 7, N5) The decision of a lost answer not yet seen by the member: kept across a process death. */
+    val changeDecision: SavedDecision? = null,
 ) {
+    /** A renew may have applied without its answer ([unconfirmedRenew]). */
+    val renewUnconfirmed: Boolean get() = unconfirmedRenew != null
     val phone: PhoneSecretState get() = PhoneSecretState(phoneKeyVault, phoneEpoch)
 
     /** Release R is known for this vault: the mark, or a phone secret for it. */
@@ -306,13 +311,32 @@ internal class AccountRecord(
         if (cur.uncertainPinFromEpoch == null && !cur.renewUnconfirmed && e == cur.phoneEpoch) {
             null
         } else {
-            cur.copy(phoneEpoch = e, uncertainPinFromEpoch = null, renewUnconfirmed = false)
+            cur.copy(phoneEpoch = e, uncertainPinFromEpoch = null, unconfirmedRenew = null)
         }
     }
 
-    /** (0.45.0 step 5) A renew got no answer ([on]), or its answer came ([on] false). */
-    fun renewUnconfirmed(since: Int, on: Boolean): Boolean = update(since) { cur ->
-        if (cur.renewUnconfirmed == on) null else cur.copy(renewUnconfirmed = on)
+    /** (N1) The renew [r], stored before it is sent; false: not written, and nothing may be sent. */
+    fun storeRenew(since: Int, r: UnconfirmedRenew): Boolean = try {
+        update(since) { it.copy(unconfirmedRenew = r) }
+    } catch (_: com.vettid.core.keystore.KeystoreException) {
+        false
+    } catch (_: java.io.IOException) {
+        false
+    }
+
+    /**
+     * The renew [innerId] applied ([applied]: its answer, or `credential.version` one above the version it carried): the
+     * phone moves to its candidate (only from the epoch it was sent from); or it did not apply. Either way it goes.
+     */
+    fun decideRenew(innerId: String, applied: Boolean): Boolean = update(RecordStore.UNBOUND) { cur ->
+        val r = cur.unconfirmedRenew?.takeIf { it.innerId == innerId } ?: return@update null
+        val epoch = if (applied && cur.phoneEpoch == r.fromEpoch) r.fromEpoch + 1 else cur.phoneEpoch
+        cur.copy(phoneEpoch = epoch, unconfirmedRenew = null)
+    }
+
+    /** (N5) The decision the member has not seen yet ([d]), or none once seen. */
+    fun saveDecision(d: SavedDecision?): Boolean = update(RecordStore.UNBOUND) { cur ->
+        if (cur.changeDecision == d) null else cur.copy(changeDecision = d)
     }
 
     /** The change [m] did not apply, was refused, or the check ended: its marker goes; the epoch stays. */

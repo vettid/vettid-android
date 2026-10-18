@@ -31,11 +31,16 @@ data class ReleaseUpdateUiState(
     val pin: String = "",
     /** The owner check is due or held (§3.6.5): it comes first; the shell's gate shows it. */
     val checkDue: Boolean = false,
-    /** (VAULT-MESSAGING 0.44.0 §11.14.9) A PIN or password change is being decided: no update until it is. */
-    val changeUnresolved: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.45.0 §11.14.9) Why no update can start now: a PIN or password change being decided, or an
+     * uncertain PIN, in the gate's words; null when it can.
+     */
+    val changeHold: com.vettid.core.data.vault.FailureKind? = null,
     /** What's new in the offered release (ANDROID-PLAN 0.1.31); null while it loads. Never gates the approval. */
     val notes: ReleaseNotes? = null,
 ) {
+    val changeUnresolved: Boolean get() = changeHold != null
+
     val submitAllowed: Boolean get() = offer != null && !checkDue && !changeUnresolved && pin.length >= MIN_PIN_LENGTH
 
     override fun toString(): String = "ReleaseUpdateUiState(loading=$loading, offer=${offer?.target?.number}, checkDue=$checkDue)"
@@ -68,7 +73,7 @@ class ReleaseUpdateViewModel @Inject constructor(
         ReleaseUpdateUiState(
             offer = updates.offer.value,
             loading = updates.offer.value == null,
-            changeUnresolved = updates.changeUnresolved(),
+            changeHold = updates.changeHold.value,
         ),
     )
     val uiState: StateFlow<ReleaseUpdateUiState> = state.asStateFlow()
@@ -87,6 +92,8 @@ class ReleaseUpdateViewModel @Inject constructor(
                     }
                 }
         }
+        // (N6) Followed, so that the PIN field opens again once the change is decided, and the text is the gate's.
+        viewModelScope.launch { updates.changeHold.collect { h -> state.update { it.copy(changeHold = h) } } }
         viewModelScope.launch {
             updates.refreshOffer()
             state.update { it.copy(loading = false) }
@@ -106,7 +113,7 @@ class ReleaseUpdateViewModel @Inject constructor(
         if (updates.start(s.pin, offer)) {
             state.update { it.copy(pin = "") }
         } else {
-            state.update { it.copy(checkDue = updates.ownerCheckDue(), changeUnresolved = updates.changeUnresolved()) }
+            state.update { it.copy(checkDue = updates.ownerCheckDue(), changeHold = updates.changeHold.value) }
         }
     }
 
