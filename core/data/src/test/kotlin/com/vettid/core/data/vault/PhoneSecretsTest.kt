@@ -247,7 +247,9 @@ class PhoneSecretsTest {
         var confirmed = 0
         var fail: java.io.IOException? = null
 
-        suspend fun run(unresolved: Boolean, newPinAsked: Boolean): UnlockEpoch.Answer = UnlockEpoch.run(
+        var currentOk = 0
+
+        suspend fun run(unresolved: Boolean, newPinAsked: Boolean, renew: Boolean = false): UnlockEpoch.Answer = UnlockEpoch.run(
             pinChangeUnresolved = unresolved,
             newPinAsked = newPinAsked,
             send = { ahead ->
@@ -258,6 +260,8 @@ class PhoneSecretsTest {
             },
             setNewPinAsked = { asked = it },
             confirmNext = { confirmed++ },
+            previousPinCandidates = if (renew) listOf(1) else emptyList(),
+            currentOk = { currentOk++ },
         )
     }
 
@@ -286,6 +290,21 @@ class PhoneSecretsTest {
         ok.run(unresolved = true, newPinAsked = false)
         assertEquals(listOf(0), ok.sent)
         assertEquals(null, ok.asked)
+        assertEquals("settles an uncertain PIN, not the change", 1, ok.currentOk)
+        // (0.45.0) An unanswered renew: its candidate is tried with the previous PIN before the new PIN is asked for.
+        val renewHeld = Sends(answer("device_secret"), answer(null))
+        renewHeld.run(unresolved = true, newPinAsked = false, renew = true)
+        assertEquals(listOf(0, 1), renewHeld.sent)
+        assertEquals(1, renewHeld.confirmed)
+        assertEquals("no new PIN asked", null, renewHeld.asked)
+        val renewNot = Sends(answer("device_secret"), answer("device_secret"))
+        renewNot.run(unresolved = true, newPinAsked = false, renew = true)
+        assertEquals(listOf(0, 1), renewNot.sent)
+        assertEquals(true, renewNot.asked)
+        val renewBusy = Sends(answer("device_secret"), answer("retry"))
+        renewBusy.run(unresolved = true, newPinAsked = false, renew = true)
+        assertEquals("decided before the secret check: proves nothing", null, renewBusy.asked)
+        assertEquals(0, renewBusy.confirmed)
         val net = Sends().apply { fail = java.io.IOException("network") }
         assertThrows(java.io.IOException::class.java) { kotlinx.coroutines.runBlocking { net.run(unresolved = true, newPinAsked = true) } }
         assertEquals("the step stays", null, net.asked)

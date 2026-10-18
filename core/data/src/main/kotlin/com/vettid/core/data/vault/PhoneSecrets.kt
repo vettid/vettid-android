@@ -111,38 +111,56 @@ object UnlockEpoch {
     data class Answer(val ok: Boolean, val code: String?, val releaseR: Boolean)
 
     /**
-     * The records one unlock tries with the PIN typed (§11.14.1 rule 4, §11.14.9 step 5): [send] sends it with the record
-     * [send]'s argument epochs ahead (0 the current one, 1 the candidate) and returns its outcome and [Answer]. While a
-     * PIN change is unresolved, the PIN typed after the previous one got `device_secret` ([newPinAsked]) goes with the
-     * candidate only; the previous PIN's `device_secret` asks for the new PIN ([setNewPinAsked] true) instead of trying the
-     * candidate with it. Without an unresolved change: the current record, then the candidate with the same PIN.
-     * [confirmNext]: an answer the vault gives only after the candidate's secret matched. A failure that never reached the
-     * vault (thrown by [send]) changes nothing.
+     * The records one unlock tries with the PIN typed (§11.14.1 rule 4, VAULT-MESSAGING 0.45.0 §11.14.9 step 5): [send]
+     * sends it with the record [send]'s argument epochs ahead (0 the current one) and returns its outcome and [Answer].
+     *
+     * - Without an unresolved change: the current record, then the candidate with the same PIN.
+     * - With one (or an uncertain PIN), the PIN typed first is the previous one and goes with the current record; its
+     *   `ok` settles an uncertain PIN ([currentOk]) but not the change. Its `device_secret` first tries the other
+     *   candidates that go with the previous PIN ([previousPinCandidates], an unanswered renew's), each once; an answer
+     *   given after the secret matched confirms that one ([confirmNext]) and ends the unlock; one decided before the
+     *   secret check ends it too. Only when every one answered `device_secret` is the new PIN asked for ([setNewPinAsked]).
+     * - The PIN typed after that ([newPinAsked]) goes with the change's candidate only.
+     *
+     * A failure that never reached the vault (thrown by [send]) changes nothing.
      */
-    @Suppress("LongParameterList")
+    @Suppress("LongParameterList", "ReturnCount")
     suspend fun <T> run(
         pinChangeUnresolved: Boolean,
         newPinAsked: Boolean,
         send: suspend (ahead: Int) -> Pair<T, Answer>,
         setNewPinAsked: (Boolean) -> Unit,
-        confirmNext: suspend () -> Unit,
+        confirmNext: suspend (ahead: Int) -> Unit,
+        previousPinCandidates: List<Int> = emptyList(),
+        currentOk: suspend () -> Unit = {},
     ): T {
         if (nextOnly(pinChangeUnresolved, newPinAsked)) {
             val (o, a) = send(1)
             setNewPinAsked(false) // answered: the candidate was tried once
-            if (confirmsNext(a.ok, a.code)) confirmNext()
+            if (confirmsNext(a.ok, a.code)) confirmNext(1)
             return o
         }
         val (o, a) = send(0)
+        if (a.ok) currentOk()
         return when (afterCurrent(a.releaseR, a.ok, a.code, pinChangeUnresolved)) {
             Next.DONE -> o
             Next.ASK_NEW_PIN -> {
+                var last = o
+                for (ahead in previousPinCandidates) {
+                    val (oc, ac) = send(ahead)
+                    if (confirmsNext(ac.ok, ac.code)) {
+                        confirmNext(ahead)
+                        return oc
+                    }
+                    if (ac.code != CODE_DEVICE_SECRET) return oc // decided before the secret check: proves nothing
+                    last = oc
+                }
                 setNewPinAsked(true)
-                o
+                last
             }
             Next.TRY_NEXT -> {
                 val (o2, a2) = send(1)
-                if (confirmsNext(a2.ok, a2.code)) confirmNext()
+                if (confirmsNext(a2.ok, a2.code)) confirmNext(1)
                 o2
             }
         }

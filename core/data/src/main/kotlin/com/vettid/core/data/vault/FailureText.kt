@@ -60,6 +60,8 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.RESPONSE_TOO_LARGE -> R.string.data_failure_response_too_large
     FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNRESOLVED -> R.string.data_failure_change_unresolved
     FailureKind.CHANGE_UNDECIDED -> R.string.data_failure_change_undecided
+    FailureKind.CHANGE_UNDECIDED_PASSWORD -> R.string.data_failure_change_undecided_password
+    FailureKind.PIN_UNCERTAIN -> R.string.data_failure_pin_uncertain
     FailureKind.CREDENTIAL_UNSETTLED -> R.string.data_failure_credential_unsettled
     FailureKind.OTHER -> R.string.data_failure_other
 }

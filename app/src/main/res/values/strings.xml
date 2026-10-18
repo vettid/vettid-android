@@ -79,19 +79,15 @@
     <string name="root_finish_move">Finish moving your vault to this phone: enter your PIN on this phone.</string>
     <string name="root_finish_move_action">Finish the move</string>
     <string name="root_move_not_done">Your vault did not move to your new phone: it still works with this phone, which keeps its keys. Start the move again when you are ready.</string>
-    <!-- VAULT-MESSAGING 0.44.0 §11.14.9: a change whose answer was lost, decided later (PR 144). -->
-    <!-- DRAFT (for the owner's wording). -->
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9 step 7, ANDROID-PLAN 0.1.46 (approved texts): a lost answer decided later. -->
     <string name="root_change_pin_applied">Your PIN change went through. Use your new PIN from now on.</string>
-    <!-- DRAFT (for the owner's wording). -->
     <string name="root_change_password_applied">Your password change went through. Use your new password from now on.</string>
-    <!-- Approved text (ANDROID-PLAN 0.1.45). -->
-    <string name="root_change_pin_not_changed">Your PIN was not changed. You can try again.</string>
-    <!-- Approved text (ANDROID-PLAN 0.1.45). -->
-    <string name="root_change_password_not_changed">Your password was not changed. You can try again.</string>
-    <!-- DRAFT (for the owner's wording): no "try again" that resends secrets. -->
-    <string name="root_change_pin_ended">VettID couldn\'t confirm whether your PIN was changed: your vault reported a change it didn\'t expect. Contact VettID support before you change your PIN again.</string>
-    <!-- DRAFT (for the owner's wording): no "try again" that resends secrets. -->
-    <string name="root_change_password_ended">VettID couldn\'t confirm whether your password was changed: your vault reported a change it didn\'t expect. Contact VettID support before you change your password again.</string>
+    <string name="root_change_pin_not_changed">Your PIN change didn\'t go through. Your previous PIN is still your PIN.</string>
+    <string name="root_change_password_not_changed">Your password change didn\'t go through. Your previous password is still your password.</string>
+    <string name="root_change_pin_ended">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
+    <string name="root_change_password_ended">VettID couldn\'t confirm whether your password was changed, because something else changed in your vault at the same time. Either your previous or your new password may be the current one.</string>
+    <string name="root_change_lock_unlock">Lock and unlock now</string>
+    <string name="root_change_channel_title">PIN or password change</string>
     <string name="root_moved_back">This phone is your vault\'s phone again. Start the move again when you are ready.</string>
     <string name="root_service_paused">The vault service is paused for maintenance. Try again later.</string>
     <string name="app_lock_enable_failed">The app lock cannot be used on this phone (it needs a fingerprint, face or screen lock).</string>

@@ -204,4 +204,29 @@ class AccountRecordTest {
         assertNull(f.disk!!.unresolvedChange)
         assertEquals(3L, f.disk!!.phoneEpoch)
     }
+
+    /**
+     * (0.45.0 step 3, 5) A PIN change's check that ended leaves the PIN uncertain (a password change's does not); an
+     * unlock settles it: `ok` with the current record keeps the epoch, a confirmed candidate moves to it. Either way an
+     * unconfirmed renew is settled too.
+     */
+    @Test
+    fun anEndedPinChangeLeavesThePinUncertainUntilAnUnlock() {
+        val f = Fixture(old.copy(phoneEpoch = 3, unresolvedChange = pinChange, renewUnconfirmed = true))
+        assertTrue(f.record.endChange(pinChange))
+        assertNull(f.disk!!.unresolvedChange)
+        assertEquals(3L, f.disk!!.uncertainPinFromEpoch)
+        assertTrue(f.record.settlePin(f.record.recordGeneration))
+        assertNull(f.disk!!.uncertainPinFromEpoch)
+        assertFalse(f.disk!!.renewUnconfirmed)
+        assertEquals(3L, f.disk!!.phoneEpoch)
+        val g = Fixture(old.copy(phoneEpoch = 3, uncertainPinFromEpoch = 3))
+        assertTrue(g.record.settlePin(g.record.recordGeneration, epoch = 4))
+        assertEquals(4L, g.disk!!.phoneEpoch)
+        assertNull(g.disk!!.uncertainPinFromEpoch)
+        val pw = pinChange.copy(type = com.vettid.core.vault.ChangeTypes.PASSWORD_CHANGE)
+        val h = Fixture(old.copy(phoneEpoch = 3, unresolvedChange = pw))
+        assertTrue(h.record.endChange(pw))
+        assertNull(h.disk!!.uncertainPinFromEpoch)
+    }
 }

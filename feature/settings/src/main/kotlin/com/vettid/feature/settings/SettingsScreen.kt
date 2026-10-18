@@ -281,6 +281,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         val fromAttempts = entry.toRoute<ChangePinRoute>().fromAttempts
         ChangePinContent(
             state.copy(fromAttempts = fromAttempts), vm::setCurrent, vm::setPin, vm::setConfirm, vm::submit, host.onBack, vm::setPassword,
+            onLockAndUnlock = vm::lockAndUnlock,
         )
     }
     composable<NewPhoneSecretRoute> {

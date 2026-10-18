@@ -27,6 +27,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -310,6 +311,7 @@ fun ChangePinContent(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
     onPassword: (String) -> Unit = {},
+    onLockAndUnlock: () -> Unit = {},
 ) {
     FormScaffold(
         title = stringResource(if (state.done) R.string.settings_pin_done else R.string.settings_pin_title),
@@ -342,6 +344,12 @@ fun ChangePinContent(
                     stringResource(text),
                     Modifier.testTag("pin_change_check"),
                     announce = LiveRegionMode.Polite,
+                    // (0.45.0 step 3) No "Try again": the lock and two-step unlock settles the PIN without an attempt.
+                    actions = if (c is ChangeCheck.Ended) {
+                        { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
+                    } else {
+                        null
+                    },
                 )
                 Spacer(Modifier.height(Spacing.l))
             }

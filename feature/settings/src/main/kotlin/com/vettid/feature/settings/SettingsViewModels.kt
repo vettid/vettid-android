@@ -328,6 +328,17 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
         }
     }
 
+    /** "Lock and unlock now" (0.45.0 step 3): the unlock screen's two steps settle an uncertain PIN. */
+    fun lockAndUnlock() {
+        viewModelScope.launch {
+            try {
+                vault.lock()
+            } catch (_: VaultFailure) {
+                // The lock is pending and retried by the vault manager; the unlock screen follows.
+            }
+        }
+    }
+
     fun submit() {
         val s = state.value
         val p = PinPolicy.check(s.pin)

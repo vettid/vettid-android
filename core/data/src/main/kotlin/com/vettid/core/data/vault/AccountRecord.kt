@@ -98,6 +98,17 @@ internal data class LocalAccount(
      * yet: written before the send, cleared when an answer or the check decides it. No PIN, password or secret.
      */
     val unresolvedChange: UnresolvedChange? = null,
+    /**
+     * (VAULT-MESSAGING 0.45.0 §11.14.9 step 3) A PIN change's check ended without a decision: the PIN is uncertain (the
+     * previous or the new one). The epoch of the current record it was sent from; until an unlock with the two steps
+     * settles it, the owner check and every operation that carries the PIN are refused.
+     */
+    val uncertainPinFromEpoch: Long? = null,
+    /**
+     * (0.45.0 step 5) A `vault.secret.renew` got no answer: its candidate (the next epoch, with the PIN unchanged) may be
+     * the vault's. The two-step unlock tries it with the previous PIN before asking for a new PIN.
+     */
+    val renewUnconfirmed: Boolean = false,
 ) {
     val phone: PhoneSecretState get() = PhoneSecretState(phoneKeyVault, phoneEpoch)
 
@@ -268,9 +279,47 @@ internal class AccountRecord(
         return ok
     }
 
+    /**
+     * (0.45.0 step 3) The check of [m] ended without a decision: the marker goes and, after a PIN change, the PIN is
+     * uncertain until a two-step unlock settles it ([settlePin]).
+     */
+    fun endChange(m: UnresolvedChange): Boolean = try {
+        update(RecordStore.UNBOUND) { cur ->
+            if (cur.unresolvedChange?.innerId != m.innerId) return@update null
+            val uncertain = if (m.kind == ChangeKind.PIN) m.fromEpoch else cur.uncertainPinFromEpoch
+            cur.copy(unresolvedChange = null, uncertainPinFromEpoch = uncertain)
+        }
+    } catch (_: com.vettid.core.keystore.KeystoreException) {
+        false
+    } catch (_: java.io.IOException) {
+        false
+    }
+
+    /**
+     * An unlock settled which PIN the vault holds: the previous one (`ok` with the current record) or the new one (the
+     * candidate confirmed); with [epoch] the phone moves to that epoch (the candidate). The uncertain PIN and an
+     * unconfirmed renew go (the vault holds the current record, or the candidate is now current); an unresolved change
+     * stays (§11.14.9 step 5: `ok` does not decide it).
+     */
+    fun settlePin(since: Int, epoch: Long? = null): Boolean = update(since) { cur ->
+        val e = epoch ?: cur.phoneEpoch
+        if (cur.uncertainPinFromEpoch == null && !cur.renewUnconfirmed && e == cur.phoneEpoch) {
+            null
+        } else {
+            cur.copy(phoneEpoch = e, uncertainPinFromEpoch = null, renewUnconfirmed = false)
+        }
+    }
+
+    /** (0.45.0 step 5) A renew got no answer ([on]), or its answer came ([on] false). */
+    fun renewUnconfirmed(since: Int, on: Boolean): Boolean = update(since) { cur ->
+        if (cur.renewUnconfirmed == on) null else cur.copy(renewUnconfirmed = on)
+    }
+
     /** The change [m] did not apply, was refused, or the check ended: its marker goes; the epoch stays. */
     fun clearChange(m: UnresolvedChange): Boolean = try {
-        update(RecordStore.UNBOUND) { cur -> if (cur.unresolvedChange?.innerId == m.innerId) cur.copy(unresolvedChange = null) else null }
+        update(RecordStore.UNBOUND) { cur ->
+            if (cur.unresolvedChange?.innerId == m.innerId) cur.copy(unresolvedChange = null) else null
+        }
     } catch (_: com.vettid.core.keystore.KeystoreException) {
         false
     } catch (_: java.io.IOException) {

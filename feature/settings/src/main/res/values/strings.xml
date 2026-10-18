@@ -152,8 +152,9 @@
     <!-- VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45 (approved texts, shared with the iPhone app). -->
     <string name="settings_pin_checking">Your vault hasn\'t answered yet, so VettID is checking whether your PIN was changed. Keep your new PIN at hand.</string>
     <string name="settings_pin_not_changed">Your PIN was not changed. You can try again.</string>
-    <!-- DRAFT (PR 144, for the owner's wording): the check ended without a decision; no "try again" that resends secrets. -->
-    <string name="settings_pin_ended">VettID couldn\'t confirm whether your PIN was changed: your vault reported a change it didn\'t expect. Contact VettID support before you change your PIN again.</string>
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9, ANDROID-PLAN 0.1.46 (approved texts). -->
+    <string name="settings_pin_ended">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
+    <string name="settings_pin_lock_unlock">Lock and unlock now</string>
     <string name="settings_pin_unreachable">VettID can\'t reach your vault right now, so it doesn\'t know yet whether your PIN was changed. It will check as soon as it can. Keep both your old and your new PIN at hand.</string>
 
     <!-- Recovery -->

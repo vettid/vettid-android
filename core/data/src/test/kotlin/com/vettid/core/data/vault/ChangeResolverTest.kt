@@ -240,23 +240,26 @@ class ChangeResolverTest {
         val ops = FakeOps(passwordChange).apply { versions += IOException("no answer") }
         val (r, scope) = resolver(testScheduler, ops)
         suspend fun ownerCheck() {
-            r.gate()
+            r.gate(carriesPin = true)
             ops.sent += "vault.owner_check"
         }
+        // Refused at once (0.45.0: no waiting for the decision), and the check is started.
         val e = runCatching { ownerCheck() }.exceptionOrNull() as VaultFailure
-        assertEquals(FailureKind.CHANGE_UNRESOLVED, e.kind)
+        assertEquals(FailureKind.CHANGE_UNDECIDED_PASSWORD, e.kind)
         assertTrue(ops.sent.isEmpty())
-        // Undecided before exp, the vault reachable: still refused, with "still checking" (not "when it can be reached").
-        ops.versions.clear()
-        ops.versions += version(7, exp.minusSeconds(5))
-        assertEquals(FailureKind.CHANGE_UNDECIDED, (runCatching { ownerCheck() }.exceptionOrNull() as VaultFailure).kind)
+        assertEquals(0, ops.versionCalls)
+        testScheduler.runCurrent()
+        assertEquals("the check started", 1, ops.versionCalls)
+        // The vault cannot be reached: "can't reach your vault".
+        assertEquals(FailureKind.CHANGE_UNRESOLVED, (runCatching { ownerCheck() }.exceptionOrNull() as VaultFailure).kind)
         assertTrue(ops.sent.isEmpty())
         // Decided: it goes.
         ops.versions.clear()
         ops.versions += version(7, exp.plusSeconds(90))
+        testScheduler.runCurrent()
+        assertEquals(ChangeCheck.NotApplied(ChangeKind.PASSWORD), r.check.value)
         ownerCheck()
         assertEquals(listOf("vault.owner_check"), ops.sent)
-        assertEquals(ChangeCheck.NotApplied(ChangeKind.PASSWORD), r.check.value)
         // Nothing unresolved: no check at all.
         val calls = ops.versionCalls
         ownerCheck()
@@ -264,23 +267,47 @@ class ChangeResolverTest {
         scope.cancel()
     }
 
-    /** (L1) A gated operation waits for the check at most 10 s, never a full round behind a spinner. */
+    /** A PIN change undecided while the vault answers: refused with the PIN's "still checking" text. */
     @Test
-    fun theGateWaitsBoundedForTheCheck() = runTest {
+    fun theGateNamesThePinChange() = runTest {
+        val ops = FakeOps(pinChange).apply { versions += version(7, exp.minusSeconds(30)) }
+        val (r, scope) = resolver(testScheduler, ops)
+        r.decide()
+        assertEquals(FailureKind.CHANGE_UNDECIDED, (runCatching { r.gate(carriesPin = false) }.exceptionOrNull() as VaultFailure).kind)
+        scope.cancel()
+    }
+
+    /**
+     * (0.45.0 step 3) A PIN change's check that ends without a decision leaves the PIN uncertain: operations that carry
+     * the PIN are refused until a two-step unlock settles it; the others go.
+     */
+    @Test
+    fun anEndedPinChangeLeavesThePinUncertain() = runTest {
+        var uncertain = false
         val ops = object : ChangeResolver.Ops {
-            override fun marker() = pinChange
+            var marker: UnresolvedChange? = pinChange
+            override fun marker() = marker
             override suspend fun resend(m: UnresolvedChange): ChangeResolver.Answer? = null
-            override suspend fun version(): ChangeResolver.Version = kotlinx.coroutines.awaitCancellation()
+            override suspend fun version() = version(9, exp)
             override suspend fun fetch() = Unit
             override fun confirm(m: UnresolvedChange) = true
-            override fun clear(m: UnresolvedChange) = Unit
+            override fun clear(m: UnresolvedChange) {
+                marker = null
+            }
+            override fun end(m: UnresolvedChange) {
+                marker = null
+                uncertain = true
+            }
+            override fun pinUncertain() = uncertain
         }
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
         val r = ChangeResolver(scope, ops)
-        val t0 = testScheduler.currentTime
-        val e = runCatching { r.gate() }.exceptionOrNull() as VaultFailure
-        assertEquals(FailureKind.CHANGE_UNDECIDED, e.kind)
-        assertEquals(ChangeResolver.GATE_WAIT_MS, testScheduler.currentTime - t0)
+        assertEquals(ChangeCheck.Ended(ChangeKind.PIN), r.decide())
+        assertTrue(uncertain)
+        assertEquals(FailureKind.PIN_UNCERTAIN, (runCatching { r.gate(carriesPin = true) }.exceptionOrNull() as VaultFailure).kind)
+        r.gate(carriesPin = false) // a password-only operation goes
+        uncertain = false // settled by the unlock
+        r.gate(carriesPin = true)
         scope.cancel()
     }
 

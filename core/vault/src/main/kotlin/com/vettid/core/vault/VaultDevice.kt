@@ -138,10 +138,13 @@ class DeviceConfig(
      * seen is carried forward on ([VaultDevice.vaultNow]): `SystemClock.elapsedRealtime` in the app.
      */
     val elapsedMs: () -> Long = { System.nanoTime() / NANOS_PER_MS },
+    /** (VAULT-MESSAGING 0.45.0 §11.14.9 step 1) How long a change waits for earlier credential operations to settle. */
+    val settleWait: Duration = Duration.ofSeconds(DEFAULT_SETTLE_WAIT_S),
 ) {
     companion object {
         const val ROLE_APP = "app"
         const val DEFAULT_TIMEOUT_S = 30L
+        const val DEFAULT_SETTLE_WAIT_S = 30L
         private const val NANOS_PER_MS = 1_000_000L
     }
 }
@@ -1513,6 +1516,19 @@ class VaultDevice private constructor(
         st.unsettled.isEmpty()
     }
 
+    /**
+     * (0.45.0 §11.14.9 step 1) Flushes the outbox and waits, at most [DeviceConfig.settleWait], until no credential
+     * operation of this phone can still reach the vault ([credentialSettled]). False: some did not settle in time.
+     */
+    internal suspend fun awaitCredentialSettled(): Boolean {
+        if (credentialSettled()) return true
+        runCatching { flushOutbox() }
+        return withTimeoutOrNull(cfg.settleWait.toMillis()) {
+            while (!credentialSettled()) kotlinx.coroutines.delay(SETTLE_POLL_MS)
+            true
+        } ?: false
+    }
+
     /** Stops awaiting [k]'s answer: the change is decided. */
     internal fun dropKept(k: KeptChange) {
         pending.remove(k.innerId, k.answer)
@@ -1547,6 +1563,7 @@ class VaultDevice private constructor(
 
         /** (§11.14.9) How long after its `exp`, by the vault's clock, an unanswered request can no longer apply. */
         val SETTLE_MARGIN: Duration = Duration.ofMinutes(1)
+        private const val SETTLE_POLL_MS = 250L
 
         /**
          * Drops from [unsettled] (inner id to `exp`, epoch ms) every request the vault can no longer act on: the newest

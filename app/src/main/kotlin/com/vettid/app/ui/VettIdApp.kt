@@ -272,11 +272,14 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
     // VAULT-MESSAGING 0.44.0 §11.14.9: the decision of a change whose answer was lost, wherever the member is.
     val changeDecided by viewModel.changeDecided.collectAsStateWithLifecycle()
     changeDecided?.let { c ->
+        // (0.45.0 step 3) Ended without a decision after a PIN change: no retry, but the lock and two-step unlock that
+        // settles the PIN without spending an attempt.
+        val lockUnlock = c is ChangeCheck.Ended && c.kind == ChangeKind.PIN
         InfoBanner(
             stringResource(changeDecidedText(c)),
             Modifier.testTag("change_decided_banner"),
-            actionLabel = stringResource(R.string.root_preferences_reset_ok),
-            onAction = viewModel::acknowledgeChangeDecided,
+            actionLabel = stringResource(if (lockUnlock) R.string.root_change_lock_unlock else R.string.root_preferences_reset_ok),
+            onAction = if (lockUnlock) viewModel::lockAndUnlockForPin else viewModel::acknowledgeChangeDecided,
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway,
         )
     }

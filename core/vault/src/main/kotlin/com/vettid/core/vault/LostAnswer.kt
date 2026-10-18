@@ -79,7 +79,7 @@ class CredentialUnsettledException : IOException("vault client: an earlier crede
 // --- the client's side (VaultApi extensions, as ReleaseRApi.kt) ---
 
 /** Before every credential operation: decides an unresolved change first, or throws ([CredentialOps.gate]). */
-fun VaultApi.setCredentialGate(gate: (suspend () -> Unit)?) {
+fun VaultApi.setCredentialGate(gate: (suspend (carriesPin: Boolean) -> Unit)?) {
     credentialOps.gate = gate
 }
 

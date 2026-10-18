@@ -84,6 +84,12 @@ class RootViewModel @Inject constructor(
 
     fun acknowledgeChangeDecided() = vault.acknowledgeChangeCheck()
 
+    /** "Lock and unlock now" (0.45.0 step 3): the unlock screen's two steps settle an uncertain PIN. */
+    fun lockAndUnlockForPin() {
+        vault.acknowledgeChangeCheck()
+        lockVault()
+    }
+
     /** A release update under way or its outcome (ANDROID-PLAN 0.1.19): shown over every phase until it is left. */
     val updateProgress: StateFlow<UpdateProgress?> = updates.progress
 

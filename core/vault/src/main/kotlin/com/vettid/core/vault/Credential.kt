@@ -162,7 +162,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         payload: JsonObjectBuilder.() -> Unit,
         extra: JsonObjectBuilder.() -> Unit = {},
     ): Pair<JsonObject, Instant> =
-        gated().credentialLock.withLock {
+        gated(payload).credentialLock.withLock {
             val body = sealedWith(type, takeUtk(), false, payload, false, extra).first
             body to (lastTs ?: Instant.now())
         }
@@ -177,7 +177,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         payload: JsonObjectBuilder.() -> Unit,
         reply: Boolean = false,
         extra: JsonObjectBuilder.() -> Unit = {},
-    ): Triple<JsonObject, KemPrivateKey?, String> = gated().credentialLock.withLock {
+    ): Triple<JsonObject, KemPrivateKey?, String> = gated(payload).credentialLock.withLock {
         try {
             sealedWith(type, takeUtk(), true, payload, reply, extra)
         } catch (e: VaultOpException) {
@@ -189,18 +189,19 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
 
     /** A sealed operation without the blob (create, recover, reset). */
     suspend fun sealedOp(type: String, payload: JsonObjectBuilder.() -> Unit, extra: JsonObjectBuilder.() -> Unit = {}): JsonObject =
-        gated().credentialLock.withLock { sealedWith(type, takeUtk(), false, payload, false, extra).first }
+        gated(payload).credentialLock.withLock { sealedWith(type, takeUtk(), false, payload, false, extra).first }
 
     /**
      * (0.44.0, §11.14.9 step 2) Asked before every credential operation that carries a PIN, a password or the blob:
      * while a PIN or password change is unresolved it decides the change first and throws when it cannot, so that
-     * nothing is sent with what may be the old PIN or password, or a stale blob. Null: nothing to wait for.
+     * nothing is sent with what may be the old PIN or password, or a stale blob. Its argument: the operation carries the
+     * PIN (0.45.0: refused while the PIN is uncertain after a check that ended without a decision). Null: nothing to ask.
      */
     @Volatile
-    var gate: (suspend () -> Unit)? = null
+    var gate: (suspend (carriesPin: Boolean) -> Unit)? = null
 
-    private suspend fun gated(): VaultDevice {
-        gate?.invoke()
+    private suspend fun gated(payload: JsonObjectBuilder.() -> Unit): VaultDevice {
+        gate?.let { g -> g(buildJsonObject(payload).containsKey("pin")) }
         return d
     }
 
@@ -214,8 +215,9 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     suspend fun change(type: String, payload: JsonObjectBuilder.() -> Unit, onMarker: suspend (ChangeMarker) -> Unit): JsonObject {
         require(type in ChangeTypes.ALL) { "not a change: $type" }
         val kept = d.credentialLock.withLock {
-            // (M1) No other credential operation may still reach the vault: then one above the version sent is this.
-            if (!d.credentialSettled()) throw CredentialUnsettledException()
+            // (0.45.0 step 1) Nothing else in flight: the outbox flushed and every earlier credential operation answered
+            // (waited for at most 30 s), so that one above the version sent can only be this change.
+            if (!d.awaitCredentialSettled()) throw CredentialUnsettledException()
             val utk = takeUtk()
             var stored = false
             try {

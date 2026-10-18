@@ -320,6 +320,15 @@ object AppModule {
         m: VaultManager,
     ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope, notes) { m.phase.value == AppPhase.SignedOut }
 
+    /** VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background. */
+    @Provides
+    @Singleton
+    fun changeDecisionNotifier(
+        @ApplicationContext context: Context,
+        m: VaultManager,
+        @AppScope scope: CoroutineScope,
+    ): com.vettid.app.notify.ChangeDecisionNotifier = com.vettid.app.notify.ChangeDecisionNotifier(context, m, scope)
+
     /** No vault on this phone: no notification of VettID stays (owner report 2026-10-11). */
     @Provides
     @Singleton

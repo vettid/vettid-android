@@ -51,6 +51,9 @@ class VettIdApplication : DistributionApplication() {
     lateinit var feedNotifier: FeedNotifier
 
     @Inject
+    lateinit var changeNotifier: com.vettid.app.notify.ChangeDecisionNotifier
+
+    @Inject
     lateinit var modes: ModeController
 
     @Inject
@@ -94,6 +97,8 @@ class VettIdApplication : DistributionApplication() {
         // on-phone service while the mode is the service and the phone has a vault.
         runCatching { Channels.ensure(this) }
         feedNotifier.start()
+        // VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background.
+        changeNotifier.start()
         // Google push (ANDROID-PLAN 0.1.30; the `full` distribution): in a build with the Firebase options, Firebase
         // is initialised here, before any service runs, so that a wake that started this process is handled; the
         // registration with the vault follows the mode. Without the options, and in the `foss` distribution, neither
@@ -125,11 +130,13 @@ class VettIdApplication : DistributionApplication() {
         private var started = 0
 
         override fun onActivityStarted(activity: Activity) {
+            com.vettid.app.notify.AppForeground.visible = true
             if (started++ == 0) onForeground()
         }
 
         override fun onActivityStopped(activity: Activity) {
             if (started > 0) started--
+            com.vettid.app.notify.AppForeground.visible = started > 0
         }
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit

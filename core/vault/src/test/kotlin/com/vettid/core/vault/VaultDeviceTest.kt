@@ -210,6 +210,7 @@ class VaultDeviceTest {
         DeviceConfig(
             name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = timeout,
             elapsedMs = { elapsed },
+            settleWait = java.time.Duration.ofMillis(800),
         )
 
     /** Enrollment, the first handshake and device.paired: a device with a live session. */
@@ -1667,7 +1668,7 @@ class VaultDeviceTest {
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
             var undecided = true
-            api.setCredentialGate { if (undecided) throw VaultStateException("change undecided") }
+            api.setCredentialGate { _ -> if (undecided) throw VaultStateException("change undecided") }
             assertTrue(runCatching { api.ownerCheck("975310", "password one") }.exceptionOrNull() is VaultStateException)
             assertTrue(runCatching { api.secretRenew("975310", "password one", ByteArray(32)) }.exceptionOrNull() is VaultStateException)
             assertTrue(runCatching { api.credentialUnlock("password one") }.exceptionOrNull() is VaultStateException)

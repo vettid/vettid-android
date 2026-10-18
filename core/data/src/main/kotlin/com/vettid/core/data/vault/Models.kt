@@ -446,8 +446,17 @@ enum class FailureKind {
      */
     CHANGE_UNRESOLVED,
 
-    /** The vault can be reached and the change is simply not decided yet (up to about 10 minutes): nothing was sent. */
+    /** The vault can be reached and the PIN change is simply not decided yet (up to about 10 minutes): nothing was sent. */
     CHANGE_UNDECIDED,
+
+    /** As [CHANGE_UNDECIDED], for a password change. */
+    CHANGE_UNDECIDED_PASSWORD,
+
+    /**
+     * (0.45.0 §11.14.9 step 3) A PIN change's check ended without a decision: the PIN is uncertain, and nothing that
+     * carries it is sent until a lock and two-step unlock settles it ("Lock and unlock now").
+     */
+    PIN_UNCERTAIN,
 
     /**
      * An earlier credential operation of this phone may still reach the vault: a PIN or password change waits until it
