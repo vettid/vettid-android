@@ -265,8 +265,11 @@ data class ChangePinUiState(
      */
     val check: ChangeCheck? = null,
 ) {
-    /** A change is being decided: nothing is sent from this screen meanwhile. */
-    val checking: Boolean get() = check?.open == true
+    /**
+     * A change is being decided, or its check ended without a decision (L2: no new try that could spend an attempt with
+     * the wrong secret): nothing is sent from this screen.
+     */
+    val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended
 
     override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done, withPassword=$withPassword, check=$check)"
 }
@@ -296,6 +299,12 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
 
     fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 
+    /**
+     * This screen follows a change: one it sent, or one being decided when it opened. Only then is a decision shown here
+     * (and acknowledged); an old decision never opens the screen as "done" (the shell's notice says it once).
+     */
+    private var following = false
+
     init {
         // §11.14.9: a PIN change whose answer was lost is decided by VettID; this screen shows where that stands.
         viewModelScope.launch {
@@ -304,14 +313,19 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
     }
 
     private fun onCheck(c: ChangeCheck) {
+        if (c.open) following = true
+        // Not this screen's change, or its own answer is still on its way (handled where it returns).
+        if (!following || !c.open && state.value.busy) return
         when (c) {
             is ChangeCheck.Checking, is ChangeCheck.Unreachable -> state.update { it.copy(busy = false, error = null, check = c) }
             is ChangeCheck.Applied -> state.update { ChangePinUiState(done = true, withPassword = it.withPassword) }
-            is ChangeCheck.NotApplied -> state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.NotApplied, is ChangeCheck.Ended -> state.update { it.copy(busy = false, error = null, check = c) }
             is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure).afterRefusal(c.failure) }
-            is ChangeCheck.Ended -> state.update { it.copy(busy = false, check = null, error = FailureKind.OTHER) }
         }
-        if (!c.open) vault.acknowledgeChangeCheck()
+        if (!c.open) {
+            following = false
+            vault.acknowledgeChangeCheck()
+        }
     }
 
     fun submit() {
@@ -326,10 +340,13 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
             s.pin != s.confirm -> state.update { it.copy(mismatch = true, confirm = "") }
             else -> {
                 state.update { it.copy(busy = true, error = null, check = null) }
+                following = true
                 viewModelScope.launch {
                     try {
                         if (s.withPassword) vault.changePin(s.current, s.pin, s.password) else vault.changePin(s.current, s.pin)
                         state.update { ChangePinUiState(done = true, withPassword = s.withPassword) }
+                        following = false
+                        vault.acknowledgeChangeCheck() // said here: not again by the shell
                     } catch (e: VaultFailure) {
                         // CHANGE_CHECKING: no answer is not a failure; the entries stay and the check's state follows.
                         if (e.kind == FailureKind.CHANGE_CHECKING) {
@@ -337,6 +354,8 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
                             vault.changeCheck.value?.takeIf { it.kind == ChangeKind.PIN }?.let(::onCheck)
                         } else {
                             state.update { it.copy(busy = false, error = e.kind).afterRefusal(e.kind) }
+                            following = false
+                            vault.acknowledgeChangeCheck()
                         }
                     }
                 }

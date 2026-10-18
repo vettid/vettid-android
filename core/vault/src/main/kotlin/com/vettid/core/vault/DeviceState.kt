@@ -35,6 +35,13 @@ internal data class DeviceState(
      * key, whose signer the vault has not shown yet) and after an unlock answered `signer_refused`.
      */
     var signerSeen: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) Credential operations sent and not answered yet: inner id to the request's
+     * `exp` (epoch ms, the vault's clock). Kept across restarts (the outbox may still deliver one): until each is
+     * answered, or the vault's clock is past its `exp` plus a minute, no PIN or password change is sent, so that a
+     * version one above the change's can only come from the change.
+     */
+    val unsettled: MutableMap<String, Long> = mutableMapOf(),
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

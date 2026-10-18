@@ -1168,6 +1168,8 @@ class VaultDevice private constructor(
             "identity.rotate" -> followRotation(inner.body)
         }
         val re = inner.re
+        // (0.44.0, §11.14.9) An answer to a credential operation settles it, also one that comes after its wait ended.
+        if (re != null && st.unsettled.remove(re) != null) save()
         if (re != null) {
             if (inner.status != Inner.STATUS_OK && inner.error?.code == CODE_OWNER_CHECK_REQUIRED) ownerCheckRefusals.tryEmit(inner.type)
             pending[re]?.complete(inner)
@@ -1411,16 +1413,22 @@ class VaultDevice private constructor(
     val credentialVersion: Long? get() = st.credential?.version
 
     /** Sends [type] with a caller-chosen inner id and awaits the response (sealed credential payloads bind the id). */
-    internal suspend fun requestWithId(id: String, type: String, body: JsonObject, timeout: Duration = cfg.requestTimeout): VaultMessage {
+    internal suspend fun requestWithId(
+        id: String,
+        type: String,
+        body: JsonObject,
+        timeout: Duration = cfg.requestTimeout,
+        exp: Instant? = null,
+    ): VaultMessage {
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendLocked(id, type, body, null, null, null) }
+            lock.withLock { sendLocked(id, type, body, null, null, exp) }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, null) }
+                if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, exp) }
             }
             throw VaultStateException("$type: no response")
         } finally {
@@ -1481,6 +1489,30 @@ class VaultDevice private constructor(
         return k.answered()
     }
 
+    /**
+     * (§11.14.9, M1) A credential operation [id] with [exp] is about to be sent: unsettled until its answer arrives
+     * ([handle]) or the vault's clock is past [exp] plus [SETTLE_MARGIN].
+     */
+    internal suspend fun trackCredential(id: String, exp: Instant) = lock.withLock {
+        st.unsettled[id] = exp.toEpochMilli()
+        save()
+    }
+
+    /** [id] got its answer. */
+    internal suspend fun settleCredential(id: String) = lock.withLock {
+        if (st.unsettled.remove(id) != null) save()
+    }
+
+    /**
+     * No credential operation of this phone can still reach the vault: each was answered, or the newest `ts` the vault
+     * stamped (never the phone's estimate) is more than [SETTLE_MARGIN] past its `exp`.
+     */
+    internal suspend fun credentialSettled(): Boolean = lock.withLock {
+        val seen = synchronized(vaultClockLock) { vaultTs }?.toEpochMilli()
+        if (pruneSettled(st.unsettled, seen)) save()
+        st.unsettled.isEmpty()
+    }
+
     /** Stops awaiting [k]'s answer: the change is decided. */
     internal fun dropKept(k: KeptChange) {
         pending.remove(k.innerId, k.answer)
@@ -1512,6 +1544,16 @@ class VaultDevice private constructor(
         private const val INBOX_MAX = 500
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
+
+        /** (§11.14.9) How long after its `exp`, by the vault's clock, an unanswered request can no longer apply. */
+        val SETTLE_MARGIN: Duration = Duration.ofMinutes(1)
+
+        /**
+         * Drops from [unsettled] (inner id to `exp`, epoch ms) every request the vault can no longer act on: the newest
+         * `ts` it stamped ([seenMs]; null: none seen yet, nothing dropped) is more than [SETTLE_MARGIN] past its `exp`.
+         */
+        internal fun pruneSettled(unsettled: MutableMap<String, Long>, seenMs: Long?): Boolean =
+            seenMs != null && unsettled.values.removeAll { exp -> seenMs > exp + SETTLE_MARGIN.toMillis() }
         private const val OPEN_TOKEN_MINUTES = 10L
         private const val AWAIT_DEFAULT_S = 90L
         private const val SECONDS_PER_MINUTE = 60L

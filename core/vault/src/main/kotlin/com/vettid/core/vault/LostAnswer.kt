@@ -34,10 +34,11 @@ data class ChangeMarker(val type: String, val innerId: String, val sentVersion: 
  * A change request as it was sent: the same inner id and body (the sealed payload and the blob) go out again in a new
  * envelope until the change is decided. Held in memory only, never written to the phone's storage.
  */
-class KeptChange internal constructor(
+class KeptChange(
     val type: String,
     val innerId: String,
-    internal val body: JsonObject,
+    /** The outer body as sent (the sealed payload and the blob); resent unchanged. */
+    val body: JsonObject,
     val exp: Instant,
     val sentVersion: Long,
 ) {
@@ -65,7 +66,15 @@ class KeptChange internal constructor(
  * No answer to a change after its automatic resends (§11.14.9 step 2): not a failure. [kept] is what the app resends
  * while it decides the change.
  */
-class ChangeUnansweredException(val kept: KeptChange) : IOException("vault client: ${kept.type}: no answer yet")
+class ChangeUnansweredException(val kept: KeptChange, cause: Throwable? = null) :
+    IOException("vault client: ${kept.type}: no answer yet", cause)
+
+/**
+ * (§11.14.9, M1) A credential operation of this phone may still reach the vault (unanswered, before its `exp`): no PIN or
+ * password change is sent until it is settled, so that "version + 1" can only mean that the change applied. Nothing
+ * was sent.
+ */
+class CredentialUnsettledException : IOException("vault client: an earlier credential operation is not settled")
 
 // --- the client's side (VaultApi extensions, as ReleaseRApi.kt) ---
 

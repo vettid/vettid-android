@@ -48,7 +48,6 @@ import com.vettid.core.vault.callEnd
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.VaultStateException
 import com.vettid.core.vault.ChangeMarker
-import com.vettid.core.vault.ChangeUnansweredException
 import com.vettid.core.vault.KeptChange
 import com.vettid.core.vault.changeResend
 import com.vettid.core.vault.changeSettle
@@ -237,103 +236,61 @@ class VaultManager(
 
     /**
      * §11.14.9 step 1: the unresolved change, stored before the send. A write that is dropped or fails stops the
-     * operation before anything is sent ([FailureKind.LOCAL_STATE]); nothing of it stays in memory.
+     * operation before anything is sent ([FailureKind.LOCAL_STATE]); another change still unresolved, checked in the same
+     * step as the write (L4), refuses it ([FailureKind.CHANGE_UNRESOLVED]).
      */
-    private fun storeChange(since: Int, m: ChangeMarker, fromEpoch: Long) {
+    private fun storeChange(since: Int, m: ChangeMarker, fromEpoch: Long): UnresolvedChange {
         val u = UnresolvedChange(m.type, m.innerId, m.sentVersion, m.exp.toEpochMilli(), fromEpoch)
-        val before = record.value
-        val ok = try {
-            record.update(since) { it.copy(unresolvedChange = u) }
-        } catch (_: KeystoreException) {
-            false
-        } catch (_: IOException) {
-            false
-        }
-        if (!ok) {
-            if (record.value.unresolvedChange == u) record.reload(before, readable = true)
-            throw VaultFailure(FailureKind.LOCAL_STATE, CODE_NOT_STORED)
+        when (record.storeChange(since, u)) {
+            AccountRecord.ChangeStored.STORED -> Unit
+            AccountRecord.ChangeStored.CONFLICT -> throw VaultFailure(FailureKind.CHANGE_UNRESOLVED, ChangeResolver.CODE_UNRESOLVED)
+            AccountRecord.ChangeStored.FAILED -> throw VaultFailure(FailureKind.LOCAL_STATE, CODE_NOT_STORED)
         }
         refreshChangeFlows()
+        return u
     }
 
-    /**
-     * The change applied (its answer, or the check): a PIN change's candidate becomes current (the next epoch, when the
-     * current record is still the one it was sent from) and the unresolved change goes, as one write. False when the write
-     * failed: the change is still shown as done, and the next check or unlock confirms it.
-     */
-    private fun confirmChange(m: UnresolvedChange): Boolean {
+    private fun forgetKept(m: UnresolvedChange) {
         keptChange?.takeIf { it.innerId == m.innerId }?.let {
             it.forget()
             keptChange = null
         }
-        val ok = try {
-            record.update(RecordStore.UNBOUND) { cur ->
-                // UNBOUND: the change belongs to whatever record holds its marker; a reset or wipe leaves none.
-                if (cur.unresolvedChange?.innerId != m.innerId) return@update null
-                val epoch = if (m.kind == ChangeKind.PIN && cur.phoneEpoch == m.fromEpoch) m.fromEpoch + 1 else cur.phoneEpoch
-                cur.copy(phoneEpoch = epoch, unresolvedChange = null)
-            }
-        } catch (_: KeystoreException) {
-            false
-        } catch (_: IOException) {
-            false
-        }
-        // ANDROID-PLAN "Transfer": after a PIN or password change the app offers to rotate the vault's keys.
-        if (ok) record.setRotateOffer(true, record.recordGeneration)
+    }
+
+    /** The change applied ([AccountRecord.confirmChange]); false when the write failed (still shown as done). */
+    private fun confirmChange(m: UnresolvedChange): Boolean {
+        forgetKept(m)
+        val ok = record.confirmChange(m)
         newPinStep = false
         refreshChangeFlows()
         return ok
     }
 
-    /** The change is decided as not applied, refused or ended: its marker goes; the candidate stays (§11.14.1 rules 3–5). */
+    /** The change is decided as not applied, refused or ended: its marker goes; the epoch stays (§11.14.1 rules 3–5). */
     private fun clearChange(m: UnresolvedChange) {
-        keptChange?.takeIf { it.innerId == m.innerId }?.let {
-            it.forget()
-            keptChange = null
-        }
-        try {
-            record.update(RecordStore.UNBOUND) { cur ->
-                if (cur.unresolvedChange?.innerId == m.innerId) cur.copy(unresolvedChange = null) else null
-            }
-        } catch (_: KeystoreException) {
-            // Kept on the phone: the next check decides it again.
-        } catch (_: IOException) {
-            // As above.
-        }
+        forgetKept(m)
+        record.clearChange(m)
         newPinStep = false
         refreshChangeFlows()
     }
 
-    /**
-     * Sends a PIN or password change through [send], which stores the marker first ([storeChange]). The answer decides
-     * it (success, or the refusal thrown as it is, the marker cleared). No answer is not a failure: the request is kept
-     * in memory, the check runs, and [FailureKind.CHANGE_CHECKING] tells the screen to keep the entries and follow
-     * [changeCheck]. A `stale_credential` is not retried: the change did not apply.
-     */
-    @Suppress("ThrowsCount")
-    private suspend fun sendChange(since: Int, kind: ChangeKind, fromEpoch: Long, send: suspend (suspend (ChangeMarker) -> Unit) -> Unit) {
-        var marker: UnresolvedChange? = null
-        try {
-            send { m ->
-                storeChange(since, m, fromEpoch)
-                marker = local.unresolvedChange
+    /** Sends a PIN or password change in this manager's scope ([ChangeSender]). */
+    private val changeSender = ChangeSender(
+        scope,
+        changes,
+        object : ChangeSender.Ops {
+            override fun store(since: Int, m: ChangeMarker, fromEpoch: Long): UnresolvedChange = storeChange(since, m, fromEpoch)
+
+            override fun confirm(m: UnresolvedChange): Boolean = confirmChange(m)
+
+            override fun clear(m: UnresolvedChange) = clearChange(m)
+
+            override fun keep(k: KeptChange) {
+                keptChange = k
             }
-        } catch (e: ChangeUnansweredException) {
-            keptChange = e.kept
-            changes.publish(ChangeCheck.Checking(kind))
-            changes.kick()
-            throw VaultFailure(FailureKind.CHANGE_CHECKING, CODE_CHANGE_CHECKING, cause = e)
-        } catch (e: VaultOpException) {
-            marker?.let { clearChange(it) }
-            if (e.code == CODE_STALE) {
-                changes.publish(ChangeCheck.NotApplied(kind))
-                throw VaultFailure(FailureKind.CHANGE_CHECKING, CODE_CHANGE_CHECKING, cause = e)
-            }
-            throw e
-        }
-        marker?.let { confirmChange(it) }
-        changes.publish(null)
-    }
+        },
+        failureOf = { opFailure(it) },
+    )
 
     /** Bumped by every wipe, reset and lock ([RecordStore.generation]): a phase computed before it is not published after it. */
     private val generation: Int get() = record.generation
@@ -1368,6 +1325,7 @@ class VaultManager(
         followMove = true,
         holderApp = holderApp,
         beforeOpen = beforeOpen,
+        twoStepScreen = true,
     ).attempt.also {
         // Every unlock that opened the vault (with the owner check, cancelling a recovery, finishing the move) ends what a
         // failed "Finish the move" left to say.
@@ -1391,9 +1349,16 @@ class VaultManager(
         release: String? = null,
         onStarting: ((Long) -> Unit)? = null,
         beforeOpen: suspend () -> Unit = {},
+        /** The unlock screen, which asks for the previous PIN and then the new one (§11.14.9 step 5). */
+        twoStepScreen: Boolean = false,
     ): StepOutcome {
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
+        // (0.44.0, §11.14.9 step 5; H1) With a PIN change unresolved only the unlock screen's two steps know which PIN was
+        // typed: any other unlock (the release update's) sends nothing.
+        if (!UnlockEpoch.allowed(pinChangeUndecided(), twoStepScreen)) {
+            return StepOutcome(UnlockAttempt.Failed(FailureKind.CHANGE_UNRESOLVED, ChangeResolver.CODE_UNRESOLVED))
+        }
         // Read before the unlock: a lock asked for while it is on its way bumps it, and this unlock then publishes no phase.
         val gen = generation
         // The record this unlock writes to: after a wipe meanwhile, nothing of it is (RecordStore).
@@ -1513,43 +1478,28 @@ class VaultManager(
         // The record this unlock writes to: after a wipe meanwhile, nothing of it is (RecordStore).
         val rec = record.recordGeneration
         // (0.44.0, §11.14.9 step 5) A PIN change is unresolved: the PIN typed after `device_secret` is the NEW one, and it
-        // is tried with the candidate (the next epoch) only; the previous PIN is never reused for it.
+        // is tried with the candidate (the next epoch) only; the previous PIN is never reused for it ([UnlockEpoch.run]).
         val twoStep = pinChangeUndecided()
-        if (UnlockEpoch.nextOnly(twoStep, newPinStep)) {
-            val next = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { caps ->
-                choosePath(caps, makesPhoneKey = false, rec)
-                phoneSecrets.secret(phone, ahead = 1)
-            }
-            // Answered (a failure to reach the vault keeps the step): the candidate was tried once.
-            newPinStep = false
-            if (UnlockEpoch.confirmsNext(next.ok, next.result.code)) {
-                // The vault holds the candidate: the change applied. The check after the open fetches the blob and clears it.
+        return UnlockEpoch.run(
+            pinChangeUnresolved = twoStep,
+            newPinAsked = newPinStep,
+            send = { ahead ->
+                val o = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { caps ->
+                    val path = choosePath(caps, makesPhoneKey = false, rec)
+                    // An unlock never sets the mark on a phone without a phone secret (it then fails without one, unmarked).
+                    if (ahead == 0) r = path == ReleasePath.Path.R
+                    if (ahead > 0) phoneSecrets.secret(phone, ahead = ahead.toLong()) else if (r) phoneSecrets.secret(phone) else null
+                }
+                o to UnlockEpoch.Answer(o.ok, o.result.code, r)
+            },
+            setNewPinAsked = { newPinStep = it },
+            confirmNext = {
+                // The vault holds the candidate. With a change unresolved, the check after the open fetches the blob and
+                // clears it.
                 io { updateLocal(rec) { it.copy(phoneEpoch = phone.epoch + 1) } }
                 refreshChangeFlows()
-            }
-            return next
-        }
-        val out = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { caps ->
-            // An unlock never sets the mark on a phone without a phone secret (it then fails without one, unmarked).
-            r = choosePath(caps, makesPhoneKey = false, rec) == ReleasePath.Path.R
-            if (r) phoneSecrets.secret(phone) else null
-        }
-        when (UnlockEpoch.afterCurrent(r, out.ok, out.result.code, twoStep)) {
-            UnlockEpoch.Next.DONE -> return out
-            UnlockEpoch.Next.ASK_NEW_PIN -> {
-                // `device_secret` with the current record, decided before any PIN is tested: the vault holds the
-                // candidate. The member is asked for the new PIN ([UnlockAttempt.NewPinNeeded]); nothing more is sent.
-                newPinStep = true
-                return out
-            }
-            UnlockEpoch.Next.TRY_NEXT -> Unit
-        }
-        val again = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { caps ->
-            choosePath(caps, makesPhoneKey = false, rec)
-            phoneSecrets.secret(phone, ahead = 1)
-        }
-        if (UnlockEpoch.confirmsNext(again.ok, again.result.code)) io { updateLocal(rec) { it.copy(phoneEpoch = phone.epoch + 1) } }
-        return again
+            },
+        )
     }
 
     /**
@@ -1599,6 +1549,9 @@ class VaultManager(
         override fun ownerCheckDue(): Boolean =
             ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || ownerCheck.lockedByOwnerCheck.value
 
+        // (0.44.0, §11.14.9; H1) No lock and unlock while a PIN or password change is undecided.
+        override fun changeUnresolved(): Boolean = local.unresolvedChange != null
+
         override suspend fun lock() {
             this@VaultManager.lock()
             // An update moves on only from a vault that is known to be locked.
@@ -1645,7 +1598,12 @@ class VaultManager(
             UnlockAttempt.SignerRefused -> UpdateStepResult.Failed(FailureKind.SIGNER_REFUSED, SignerWire.CODE_SIGNER_REFUSED)
             UnlockAttempt.StateRollback -> UpdateStepResult.Failed(FailureKind.ROLLBACK, "state_rollback")
             // (0.44.0, §11.14.9 step 5) The previous PIN showed that a PIN change went through: the next try is the new PIN.
-            UnlockAttempt.NewPinNeeded -> UpdateStepResult.Failed(FailureKind.CHANGE_UNRESOLVED, CODE_NEW_PIN_NEEDED)
+            // Never reached from the update (it sends nothing while a change is unresolved); a backstop all the same: no PIN
+            // typed outside the unlock screen's two steps is ever tried with the candidate.
+            UnlockAttempt.NewPinNeeded -> {
+                newPinStep = false
+                UpdateStepResult.Failed(FailureKind.CHANGE_UNRESOLVED, CODE_NEW_PIN_NEEDED)
+            }
         }
     }
 
@@ -1852,7 +1810,7 @@ class VaultManager(
         // §11.14.9 step 2: an earlier change is decided first.
         changes.gate()
         val s = session()
-        sendChange(rec, ChangeKind.PASSWORD, local.phone.epoch) { store ->
+        changeSender.send(rec, ChangeKind.PASSWORD, local.phone.epoch) { store ->
             s.openApi.credentialChangePassword(password, newPassword, pin?.takeIf { local.phone.inUse }, store)
         }
         // ANDROID-PLAN "Transfer" (release R): after a password change the app offers to rotate the vault's keys.
@@ -1862,7 +1820,7 @@ class VaultManager(
     /**
      * `pin.change` (release R, §11.14.9): the current PIN, the new one, the password and the next epoch's secret. The
      * phone moves to the next epoch only with the answer, or when a lost answer is decided as applied (0.44.0: the
-     * change is decided, not repeated; [sendChange]).
+     * change is decided, not repeated; [ChangeSender]).
      */
     override suspend fun changePin(pin: String, newPin: String, password: String) = guard {
         val rec = record.recordGeneration
@@ -1871,11 +1829,14 @@ class VaultManager(
         // §11.14.9 step 2: an earlier change is decided first.
         changes.gate()
         val s = session()
-        val next = phoneSecrets.secret(phone, ahead = 1)
-        try {
-            sendChange(rec, ChangeKind.PIN, phone.epoch) { store -> s.openApi.pinChange(pin, newPin, password, next, store) }
-        } finally {
-            next.fill(0)
+        changeSender.send(rec, ChangeKind.PIN, phone.epoch) { store ->
+            // Computed and wiped inside the send, which runs in this manager's scope and outlives a screen that goes away.
+            val next = phoneSecrets.secret(phone, ahead = 1)
+            try {
+                s.openApi.pinChange(pin, newPin, password, next, store)
+            } finally {
+                next.fill(0)
+            }
         }
         // ANDROID-PLAN "Transfer": after a PIN change the app offers to rotate the vault's keys.
         offerRotation(true, rec)
@@ -2701,7 +2662,6 @@ class VaultManager(
 
         /** (§11.14.9) The unresolved change could not be stored before the send: nothing was sent. */
         private const val CODE_NOT_STORED = "change_not_stored"
-        private const val CODE_CHANGE_CHECKING = "change_checking"
         private const val CODE_STALE = "stale_credential"
         private const val CODE_NEW_PIN_NEEDED = "new_pin_needed"
 

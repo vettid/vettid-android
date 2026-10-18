@@ -637,7 +637,9 @@ class VaultDeviceTest {
         val req = v.open(nextDeposit().second)
         val body = StrictJson.parseObject(req.body)
         val payload = com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, utkId, req.type, req.id, body.base64("sealed"))
-        job.cancel()
+        // Answered (refused), so that the operation is settled (§11.14.9) and the next one may be sent.
+        d.handle(v.error(req.id, req.type, "bad_request"))
+        job.await()
         return StrictJson.parseObject(payload)
     }
 
@@ -1702,6 +1704,48 @@ class VaultDeviceTest {
             d.handle(v.seal("feed.event", """{"id":"f1"}"""))
             assertEquals(ahead.plusSeconds(30), d.vaultNow())
         }
+    }
+
+    /**
+     * §11.14.9 (M1): every credential operation carries an exp and stays unsettled until it is answered; while one may
+     * still reach the vault no PIN or password change is sent (nothing at all goes out), so that "version + 1" can only
+     * be the change's. Its answer, also one that comes after its wait ended, settles it.
+     */
+    @Test
+    fun noChangeIsSentWhileAnEarlierCredentialOperationIsUnsettled() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c5", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val sends = (1..3).map { v.open(nextDeposit().second) }
+            assertEquals(VaultApi.TYPE_OWNER_CHECK, sends[0].type)
+            assertNotNull("a credential operation carries an exp", sends[0].exp)
+            assertTrue(check.await().isFailure) // no answer
+            assertEquals(setOf(sends[0].id), savedState(store).unsettled.keys)
+            val change = runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) }
+            assertTrue(change.exceptionOrNull() is CredentialUnsettledException)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // The owner check's answer comes late: settled.
+            d.handle(v.seal(sends[0].type, """{"credential":"TkVX","version":4,"utks":[]}""", re = sends[0].id, status = Inner.STATUS_OK))
+            assertTrue(savedState(store).unsettled.isEmpty())
+            assertTrue(d.credentialSettled())
+        }
+    }
+
+    /** §11.14.9 (M1): an unanswered request is settled once the vault's own clock is more than a minute past its exp. */
+    @Test
+    fun anUnansweredRequestIsSettledOnlyByTheVaultsClock() {
+        val exp = 1_000_000L
+        val m = mutableMapOf("a" to exp, "b" to exp + 120_000)
+        assertFalse("no vault ts seen yet", VaultDevice.pruneSettled(m, null))
+        assertFalse(VaultDevice.pruneSettled(m, exp + 60_000))
+        assertEquals(2, m.size)
+        assertTrue(VaultDevice.pruneSettled(m, exp + 60_001))
+        assertEquals(setOf("b"), m.keys)
     }
 
     @Test

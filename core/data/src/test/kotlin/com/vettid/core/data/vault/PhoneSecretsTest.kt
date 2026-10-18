@@ -238,4 +238,64 @@ class PhoneSecretsTest {
         assertEquals(UnlockEpoch.Next.TRY_NEXT, UnlockEpoch.afterCurrent(true, ok = false, code = secret, pinChangeUnresolved = false))
         assertEquals(UnlockEpoch.Next.DONE, UnlockEpoch.afterCurrent(false, ok = false, code = secret, pinChangeUnresolved = true))
     }
+
+    /** One sealed unlock as [UnlockEpoch.run] sends it: the epoch offset, and the answer it gets. */
+    private class Sends(vararg answers: UnlockEpoch.Answer) {
+        val sent = mutableListOf<Int>()
+        val queue = ArrayDeque(answers.toList())
+        var asked: Boolean? = null
+        var confirmed = 0
+        var fail: java.io.IOException? = null
+
+        suspend fun run(unresolved: Boolean, newPinAsked: Boolean): UnlockEpoch.Answer = UnlockEpoch.run(
+            pinChangeUnresolved = unresolved,
+            newPinAsked = newPinAsked,
+            send = { ahead ->
+                fail?.let { throw it }
+                sent += ahead
+                val a = queue.removeFirst()
+                a to a
+            },
+            setNewPinAsked = { asked = it },
+            confirmNext = { confirmed++ },
+        )
+    }
+
+    private fun answer(code: String?) = UnlockEpoch.Answer(ok = code == null, code = code, releaseR = true)
+
+    /**
+     * The real sequence of the unlock (VAULT-MESSAGING 0.44.0 §11.14.9 step 5; [UnlockEpoch.run], used by the vault
+     * manager): the previous PIN goes with the current record only, its `device_secret` asks for the new PIN without
+     * sending anything more; the new PIN goes with the candidate only, and an answer after the secret check confirms
+     * it. Without an unresolved change: current, then the candidate with the same PIN. A failure that never reached the
+     * vault keeps the step.
+     */
+    @Test
+    fun theUnlockSendsEachPinWithItsOwnRecord() = kotlinx.coroutines.runBlocking {
+        val first = Sends(answer("device_secret"))
+        first.run(unresolved = true, newPinAsked = false)
+        assertEquals(listOf(0), first.sent)
+        assertEquals(true, first.asked)
+        assertEquals(0, first.confirmed)
+        val second = Sends(answer("bad_pin"))
+        second.run(unresolved = true, newPinAsked = true)
+        assertEquals("the new PIN, with the candidate only", listOf(1), second.sent)
+        assertEquals(false, second.asked)
+        assertEquals(1, second.confirmed)
+        val ok = Sends(answer(null))
+        ok.run(unresolved = true, newPinAsked = false)
+        assertEquals(listOf(0), ok.sent)
+        assertEquals(null, ok.asked)
+        val net = Sends().apply { fail = java.io.IOException("network") }
+        assertThrows(java.io.IOException::class.java) { kotlinx.coroutines.runBlocking { net.run(unresolved = true, newPinAsked = true) } }
+        assertEquals("the step stays", null, net.asked)
+        val before = Sends(answer("device_secret"), answer(null))
+        before.run(unresolved = false, newPinAsked = false)
+        assertEquals(listOf(0, 1), before.sent)
+        assertEquals(1, before.confirmed)
+        // (H1) Outside the unlock screen nothing is sent while a PIN change is unresolved.
+        assertFalse(UnlockEpoch.allowed(pinChangeUnresolved = true, twoStepScreen = false))
+        assertTrue(UnlockEpoch.allowed(pinChangeUnresolved = true, twoStepScreen = true))
+        assertTrue(UnlockEpoch.allowed(pinChangeUnresolved = false, twoStepScreen = false))
+    }
 }

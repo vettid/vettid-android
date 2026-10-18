@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -78,6 +79,7 @@ internal class ChangeResolver(
     private val ops: Ops,
     private val firstPauseMs: Long = FIRST_PAUSE_MS,
     private val maxPauseMs: Long = MAX_PAUSE_MS,
+    private val gateWaitMs: Long = GATE_WAIT_MS,
 ) {
     /** An answer to the request itself (to the first send or a resend). */
     sealed interface Answer {
@@ -116,6 +118,9 @@ internal class ChangeResolver(
     }
 
     private val mutex = Mutex()
+
+    /** Rounds finished, for [gate]'s bounded wait. */
+    private val rounds = MutableStateFlow(0L)
     private val state = MutableStateFlow<ChangeCheck?>(ops.marker()?.let { ChangeCheck.Checking(it.kind) })
 
     /** Where the decision stands; a decided state stays until [acknowledge]. */
@@ -142,7 +147,10 @@ internal class ChangeResolver(
             return@withLock null
         }
         if (state.value?.open != true) state.value = ChangeCheck.Checking(m.kind)
-        round(m).also { state.value = it }
+        round(m).also {
+            state.value = it
+            rounds.value++
+        }
     }
 
     @Suppress("ReturnCount")
@@ -216,19 +224,28 @@ internal class ChangeResolver(
 
     /**
      * §11.14.9 step 2: before a change, an owner check or another credential operation, an unresolved change is decided
-     * first; while it cannot be, the operation is refused ([FailureKind.CHANGE_UNRESOLVED]) and nothing is sent.
+     * first. The check is started at once and waited for at most [gateWaitMs] (never a full round behind a spinner);
+     * while undecided the operation is refused and nothing is sent: [FailureKind.CHANGE_UNRESOLVED] when the vault could
+     * not be reached, [FailureKind.CHANGE_UNDECIDED] while it can and the change is simply not decided yet.
      */
     suspend fun gate() {
         if (ops.marker() == null) return
-        val c = decide()
-        if (c?.open == true) {
-            kick()
-            throw VaultFailure(FailureKind.CHANGE_UNRESOLVED, CODE_UNRESOLVED)
+        val before = rounds.value
+        kick()
+        withTimeoutOrNull(gateWaitMs) { rounds.first { it > before } }
+        if (ops.marker() == null) return
+        when (state.value) {
+            is ChangeCheck.Unreachable -> throw VaultFailure(FailureKind.CHANGE_UNRESOLVED, CODE_UNRESOLVED)
+            else -> throw VaultFailure(FailureKind.CHANGE_UNDECIDED, CODE_UNDECIDED)
         }
     }
 
     companion object {
         const val CODE_UNRESOLVED = "change_unresolved"
+        const val CODE_UNDECIDED = "change_undecided"
+
+        /** How long a gated operation waits for the check before it is refused. */
+        const val GATE_WAIT_MS = 10_000L
         const val FIRST_PAUSE_MS = 30_000L
         const val MAX_PAUSE_MS = 300_000L
     }

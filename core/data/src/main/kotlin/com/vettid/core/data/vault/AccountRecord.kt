@@ -199,6 +199,84 @@ internal class AccountRecord(
         it.copy(snapshot = u.snapshot, emailHint = u.snapshot?.emailHint ?: it.emailHint, nameRequest = u.nameRequest)
     }
 
+    // --- a lost answer to a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9) ---
+
+    /** What [storeChange] did. */
+    enum class ChangeStored {
+        /** Written: the change may be sent. */
+        STORED,
+
+        /** Another change is unresolved (checked and refused in the same step as the write): nothing written. */
+        CONFLICT,
+
+        /** The write was dropped or failed: nothing of it stays, and nothing may be sent. */
+        FAILED,
+    }
+
+    /**
+     * §11.14.9 step 1: [u] stored before the send, for the record of [since]. Refused, in the same step under the record's
+     * lock, while another change is unresolved, so that two changes can never both be sent.
+     */
+    fun storeChange(since: Int, u: UnresolvedChange): ChangeStored {
+        var conflict = false
+        val before = store.value
+        val ok = try {
+            update(since) { cur ->
+                val other = cur.unresolvedChange
+                if (other != null && other.innerId != u.innerId) {
+                    conflict = true
+                    null
+                } else {
+                    cur.copy(unresolvedChange = u)
+                }
+            }
+        } catch (_: com.vettid.core.keystore.KeystoreException) {
+            false
+        } catch (_: java.io.IOException) {
+            false
+        }
+        return when {
+            conflict -> ChangeStored.CONFLICT
+            ok -> ChangeStored.STORED
+            else -> {
+                // A persist that failed after the value was set in memory: nothing of it stays.
+                if (store.value.unresolvedChange == u) store.reload(before, readable = true)
+                ChangeStored.FAILED
+            }
+        }
+    }
+
+    /**
+     * The change [m] applied (its answer, or the check): a PIN change's candidate becomes current (the next epoch, only
+     * while the current record is still the one it was sent from) and the marker goes, as one write, with the offer to
+     * rotate the vault's keys. [RecordStore.UNBOUND]: the change belongs to whatever record holds its marker; a reset or
+     * wipe leaves none. False when nothing was written (no such marker, or the write failed).
+     */
+    fun confirmChange(m: UnresolvedChange): Boolean {
+        val ok = try {
+            update(RecordStore.UNBOUND) { cur ->
+                if (cur.unresolvedChange?.innerId != m.innerId) return@update null
+                val epoch = if (m.kind == ChangeKind.PIN && cur.phoneEpoch == m.fromEpoch) m.fromEpoch + 1 else cur.phoneEpoch
+                cur.copy(phoneEpoch = epoch, unresolvedChange = null)
+            }
+        } catch (_: com.vettid.core.keystore.KeystoreException) {
+            false
+        } catch (_: java.io.IOException) {
+            false
+        }
+        if (ok) setRotateOffer(true, recordGeneration)
+        return ok
+    }
+
+    /** The change [m] did not apply, was refused, or the check ended: its marker goes; the epoch stays. */
+    fun clearChange(m: UnresolvedChange): Boolean = try {
+        update(RecordStore.UNBOUND) { cur -> if (cur.unresolvedChange?.innerId == m.innerId) cur.copy(unresolvedChange = null) else null }
+    } catch (_: com.vettid.core.keystore.KeystoreException) {
+        false
+    } catch (_: java.io.IOException) {
+        false
+    }
+
     fun beginWipe() = store.beginWipe()
 
     /** The end of the wipe ([RecordStore.endWipe]): no offer, whether or not it completed. */

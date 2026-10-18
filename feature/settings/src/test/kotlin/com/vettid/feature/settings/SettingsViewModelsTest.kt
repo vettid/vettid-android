@@ -217,6 +217,8 @@ class SettingsViewModelsTest {
         vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
         advanceUntilIdle()
         assertNull(vm.uiState.value.check)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PIN)
+        advanceUntilIdle()
         vault.changeCheck.value = ChangeCheck.Refused(ChangeKind.PIN, FailureKind.BAD_PIN)
         advanceUntilIdle()
         assertEquals(FailureKind.BAD_PIN, vm.uiState.value.error)
@@ -229,6 +231,33 @@ class SettingsViewModelsTest {
         assertEquals(FailureKind.CHANGE_UNRESOLVED, vm.uiState.value.error)
         assertEquals("40281795", vm.uiState.value.current)
         assertEquals("59173048", vm.uiState.value.pin)
+    }
+
+    /**
+     * (M2) A decision this screen did not follow (an old "applied", said once by the shell) never opens Change PIN as
+     * "done", and is left for the shell to say; "ended without a decision" holds the screen (no new try with what may be
+     * the wrong PIN).
+     */
+    @Test
+    fun anOldDecisionDoesNotOpenChangePinAsDone() = runTest {
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.PIN)
+        val vm = ChangePinViewModel(vault)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.done)
+        assertNull(vm.uiState.value.check)
+        assertEquals(0, vault.changeCheckAcknowledged)
+        assertEquals(ChangeCheck.Applied(ChangeKind.PIN), vault.changeCheck.value)
+        // A check this screen follows that ends without a decision: said, and nothing more is sent from here.
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PIN)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Ended(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertEquals(ChangeCheck.Ended(ChangeKind.PIN), vm.uiState.value.check)
+        assertTrue(vm.uiState.value.checking)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse("changePin" in vault.calls)
     }
 
     @Test

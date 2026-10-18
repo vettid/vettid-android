@@ -101,7 +101,12 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         val rk = if (reply) KemPrivateKey.generate() else null
         val id = d.newId()
         val body = sealedBody(type, utk, withBlob, id, payload, rk, extra)
-        val r = d.requestWithId(id, type, body)
+        // (0.44.0, §11.14.9) Every credential operation carries an exp, and is unsettled until answered or past it: a
+        // PIN or password change waits for it, so that "version + 1" can only be the change's ([change]).
+        val exp = d.vaultNow().plus(ChangeTypes.EXP).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+        d.trackCredential(id, exp)
+        val r = d.requestWithId(id, type, body, exp = exp)
+        d.settleCredential(id)
         if (r.inner.status != Inner.STATUS_OK) {
             rk?.destroy()
             // §6.7.1 step 3 (0.27.0): refused before the UTK was spent; the retry uses the same one.
@@ -209,6 +214,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     suspend fun change(type: String, payload: JsonObjectBuilder.() -> Unit, onMarker: suspend (ChangeMarker) -> Unit): JsonObject {
         require(type in ChangeTypes.ALL) { "not a change: $type" }
         val kept = d.credentialLock.withLock {
+            // (M1) No other credential operation may still reach the vault: then one above the version sent is this.
+            if (!d.credentialSettled()) throw CredentialUnsettledException()
             val utk = takeUtk()
             var stored = false
             try {
@@ -225,7 +232,15 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
                 if (!stored) d.returnUtk(utk)
             }
         }
-        val r = d.sendKept(kept, CHANGE_SENDS) ?: throw ChangeUnansweredException(kept)
+        // After the marker, whatever goes wrong before an answer is read is "no answer" (§11.14.9 step 2), never a failure.
+        @Suppress("TooGenericExceptionCaught")
+        val r = try {
+            d.sendKept(kept, CHANGE_SENDS)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw ChangeUnansweredException(kept, e)
+        } ?: throw ChangeUnansweredException(kept)
         return settle(kept, r)
     }
 

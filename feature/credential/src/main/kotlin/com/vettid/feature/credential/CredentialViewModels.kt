@@ -151,8 +151,11 @@ data class ChangePasswordUiState(
      */
     val check: ChangeCheck? = null,
 ) {
-    /** A change is being decided: nothing is sent from this screen meanwhile. */
-    val checking: Boolean get() = check?.open == true
+    /**
+     * A change is being decided, or its check ended without a decision (L2: no new try that could spend an attempt with
+     * the wrong secret): nothing is sent from this screen.
+     */
+    val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended
 
     /** The PIN, when it is asked ([askPin]): digits, at least 6. */
     val pinReady: Boolean get() = !askPin || pin.length >= MIN_PIN && pin.all { it.isDigit() }
@@ -217,21 +220,35 @@ class ChangePasswordViewModel @Inject constructor(
             e.kind == FailureKind.CHANGE_CHECKING -> {
                 state.update { it.copy(busy = false, error = null) }
                 vault.changeCheck.value?.takeIf { it.kind == ChangeKind.PASSWORD }?.let(::onCheck)
+                return
             }
             rule != null -> state.update { it.copy(busy = false, error = null, rule = rule, refused = true, current = "", pin = "") }
             else -> state.update { it.copy(busy = false, error = e.kind).afterRefusal(e.kind) }
         }
+        following = false
+        vault.acknowledgeChangeCheck()
     }
 
+    /**
+     * This screen follows a change: one it sent, or one being decided when it opened. Only then is a decision shown here
+     * (and acknowledged); an old decision never opens the screen as "done" (the shell's notice says it once).
+     */
+    private var following = false
+
     private fun onCheck(c: ChangeCheck) {
+        if (c.open) following = true
+        // Not this screen's change, or its own answer is still on its way (handled where it returns).
+        if (!following || !c.open && state.value.busy) return
         when (c) {
-            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied ->
+            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied, is ChangeCheck.Ended ->
                 state.update { it.copy(busy = false, error = null, check = c) }
             is ChangeCheck.Applied -> state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
             is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure).afterRefusal(c.failure) }
-            is ChangeCheck.Ended -> state.update { it.copy(busy = false, check = null, error = FailureKind.OTHER) }
         }
-        if (!c.open) vault.acknowledgeChangeCheck()
+        if (!c.open) {
+            following = false
+            vault.acknowledgeChangeCheck()
+        }
     }
 
     fun setPin(v: String) = state.update { it.withPin(v) }
@@ -261,10 +278,13 @@ class ChangePasswordViewModel @Inject constructor(
             s.confirm != s.password -> state.update { it.copy(mismatch = true) }
             else -> {
                 state.update { it.copy(busy = true, error = null, check = null) }
+                following = true
                 viewModelScope.launch {
                     try {
                         repo.changePassword(s.current, s.password, s.pin.takeIf { s.askPin })
                         state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
+                        following = false
+                        vault.acknowledgeChangeCheck() // said here: not again by the shell
                     } catch (e: VaultFailure) {
                         onFailure(e)
                     }

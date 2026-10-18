@@ -31,10 +31,12 @@ data class ReleaseUpdateUiState(
     val pin: String = "",
     /** The owner check is due or held (§3.6.5): it comes first; the shell's gate shows it. */
     val checkDue: Boolean = false,
+    /** (VAULT-MESSAGING 0.44.0 §11.14.9) A PIN or password change is being decided: no update until it is. */
+    val changeUnresolved: Boolean = false,
     /** What's new in the offered release (ANDROID-PLAN 0.1.31); null while it loads. Never gates the approval. */
     val notes: ReleaseNotes? = null,
 ) {
-    val submitAllowed: Boolean get() = offer != null && !checkDue && pin.length >= MIN_PIN_LENGTH
+    val submitAllowed: Boolean get() = offer != null && !checkDue && !changeUnresolved && pin.length >= MIN_PIN_LENGTH
 
     override fun toString(): String = "ReleaseUpdateUiState(loading=$loading, offer=${offer?.target?.number}, checkDue=$checkDue)"
 
@@ -62,7 +64,13 @@ class ReleaseUpdateViewModel @Inject constructor(
     ownerCheck: OwnerCheckRepository,
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), ReleaseUpdateActions {
-    private val state = MutableStateFlow(ReleaseUpdateUiState(offer = updates.offer.value, loading = updates.offer.value == null))
+    private val state = MutableStateFlow(
+        ReleaseUpdateUiState(
+            offer = updates.offer.value,
+            loading = updates.offer.value == null,
+            changeUnresolved = updates.changeUnresolved(),
+        ),
+    )
     val uiState: StateFlow<ReleaseUpdateUiState> = state.asStateFlow()
 
     init {
@@ -98,7 +106,7 @@ class ReleaseUpdateViewModel @Inject constructor(
         if (updates.start(s.pin, offer)) {
             state.update { it.copy(pin = "") }
         } else {
-            state.update { it.copy(checkDue = updates.ownerCheckDue()) }
+            state.update { it.copy(checkDue = updates.ownerCheckDue(), changeUnresolved = updates.changeUnresolved()) }
         }
     }
 

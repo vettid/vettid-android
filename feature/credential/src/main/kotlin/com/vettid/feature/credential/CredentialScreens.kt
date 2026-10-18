@@ -552,10 +552,11 @@ private fun ChangeCheckNotice(c: ChangeCheck?) {
         is ChangeCheck.Checking -> R.string.credential_change_checking
         is ChangeCheck.Unreachable -> R.string.credential_change_unreachable
         is ChangeCheck.NotApplied -> R.string.credential_change_not_changed
+        is ChangeCheck.Ended -> R.string.credential_change_ended
         else -> return
     }
     NoticeCard(
-        if (c is ChangeCheck.NotApplied) NoticeKind.WARNING else NoticeKind.INFO,
+        if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended) NoticeKind.WARNING else NoticeKind.INFO,
         stringResource(R.string.credential_change_title),
         stringResource(text),
         Modifier.testTag("password_change_check"),

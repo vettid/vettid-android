@@ -445,6 +445,15 @@ enum class FailureKind {
      * it is ("VettID is still checking whether your last change went through.").
      */
     CHANGE_UNRESOLVED,
+
+    /** The vault can be reached and the change is simply not decided yet (up to about 10 minutes): nothing was sent. */
+    CHANGE_UNDECIDED,
+
+    /**
+     * An earlier credential operation of this phone may still reach the vault: a PIN or password change waits until it
+     * is answered or can no longer apply, so that its decision can only be its own. Nothing was sent.
+     */
+    CREDENTIAL_UNSETTLED,
     OTHER,
 }
 

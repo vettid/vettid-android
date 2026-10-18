@@ -332,11 +332,12 @@ fun ChangePinContent(
                 is ChangeCheck.Checking -> R.string.settings_pin_checking
                 is ChangeCheck.Unreachable -> R.string.settings_pin_unreachable
                 is ChangeCheck.NotApplied -> R.string.settings_pin_not_changed
+                is ChangeCheck.Ended -> R.string.settings_pin_ended
                 else -> null
             }
             if (text != null) {
                 NoticeCard(
-                    if (c is ChangeCheck.NotApplied) NoticeKind.WARNING else NoticeKind.INFO,
+                    if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended) NoticeKind.WARNING else NoticeKind.INFO,
                     stringResource(R.string.settings_pin_title),
                     stringResource(text),
                     Modifier.testTag("pin_change_check"),

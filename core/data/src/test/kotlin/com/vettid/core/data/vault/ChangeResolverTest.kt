@@ -246,10 +246,10 @@ class ChangeResolverTest {
         val e = runCatching { ownerCheck() }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.CHANGE_UNRESOLVED, e.kind)
         assertTrue(ops.sent.isEmpty())
-        // Undecided before exp: still refused.
+        // Undecided before exp, the vault reachable: still refused, with "still checking" (not "when it can be reached").
         ops.versions.clear()
         ops.versions += version(7, exp.minusSeconds(5))
-        assertEquals(FailureKind.CHANGE_UNRESOLVED, (runCatching { ownerCheck() }.exceptionOrNull() as VaultFailure).kind)
+        assertEquals(FailureKind.CHANGE_UNDECIDED, (runCatching { ownerCheck() }.exceptionOrNull() as VaultFailure).kind)
         assertTrue(ops.sent.isEmpty())
         // Decided: it goes.
         ops.versions.clear()
@@ -261,6 +261,26 @@ class ChangeResolverTest {
         val calls = ops.versionCalls
         ownerCheck()
         assertEquals(calls, ops.versionCalls)
+        scope.cancel()
+    }
+
+    /** (L1) A gated operation waits for the check at most 10 s, never a full round behind a spinner. */
+    @Test
+    fun theGateWaitsBoundedForTheCheck() = runTest {
+        val ops = object : ChangeResolver.Ops {
+            override fun marker() = pinChange
+            override suspend fun resend(m: UnresolvedChange): ChangeResolver.Answer? = null
+            override suspend fun version(): ChangeResolver.Version = kotlinx.coroutines.awaitCancellation()
+            override suspend fun fetch() = Unit
+            override fun confirm(m: UnresolvedChange) = true
+            override fun clear(m: UnresolvedChange) = Unit
+        }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val r = ChangeResolver(scope, ops)
+        val t0 = testScheduler.currentTime
+        val e = runCatching { r.gate() }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.CHANGE_UNDECIDED, e.kind)
+        assertEquals(ChangeResolver.GATE_WAIT_MS, testScheduler.currentTime - t0)
         scope.cancel()
     }
 

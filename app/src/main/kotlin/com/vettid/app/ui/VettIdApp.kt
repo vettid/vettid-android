@@ -36,6 +36,8 @@ import androidx.navigation.compose.rememberNavController
 import com.vettid.app.R
 import com.vettid.core.data.lock.AppLockState
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.ui.components.FullScreenProgress
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.feature.onboarding.AppLockScreen
@@ -267,6 +269,17 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone,
         )
     }
+    // VAULT-MESSAGING 0.44.0 §11.14.9: the decision of a change whose answer was lost, wherever the member is.
+    val changeDecided by viewModel.changeDecided.collectAsStateWithLifecycle()
+    changeDecided?.let { c ->
+        InfoBanner(
+            stringResource(changeDecidedText(c)),
+            Modifier.testTag("change_decided_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeChangeDecided,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway,
+        )
+    }
     // Kept open through the lock and unlock it sends (and never dismissed while they run); never over the app lock. Once
     // the vault is locked and the hold is over (its bound, or the outcome), the unlock screen takes over and says why.
     val finishing by viewModel.finishingMove.collectAsStateWithLifecycle()
@@ -284,5 +297,16 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             }
         }
     }
-    return askFinishMove || movedBack || moveNotDone || movedAway
+    return askFinishMove || movedBack || moveNotDone || movedAway || changeDecided != null
+}
+
+/** The decided change's notice (ANDROID-PLAN 0.1.45; the applied and ended texts are drafts for the owner). */
+@androidx.annotation.StringRes
+internal fun changeDecidedText(c: ChangeCheck): Int {
+    val pin = c.kind == ChangeKind.PIN
+    return when (c) {
+        is ChangeCheck.Applied -> if (pin) R.string.root_change_pin_applied else R.string.root_change_password_applied
+        is ChangeCheck.Ended -> if (pin) R.string.root_change_pin_ended else R.string.root_change_password_ended
+        else -> if (pin) R.string.root_change_pin_not_changed else R.string.root_change_password_not_changed
+    }
 }
