@@ -266,4 +266,17 @@ class AccountRecordTest {
         assertNull(f.disk!!.changeDecision)
         assertNull(SavedDecision.of(ChangeCheck.Checking(ChangeKind.PIN)))
     }
+
+    /** (P4) Whether the kept decision was notified survives the same decision written again. */
+    @Test
+    fun aNotifiedDecisionStaysNotified() {
+        val f = Fixture(old)
+        val d = SavedDecision.of(ChangeCheck.Applied(ChangeKind.PIN))!!
+        f.record.saveDecision(d)
+        assertTrue(f.record.decisionNotified())
+        f.record.saveDecision(d)
+        assertTrue(f.disk!!.changeDecision!!.notified)
+        f.record.saveDecision(SavedDecision.of(ChangeCheck.NotApplied(ChangeKind.PIN)))
+        assertFalse(f.disk!!.changeDecision!!.notified)
+    }
 }

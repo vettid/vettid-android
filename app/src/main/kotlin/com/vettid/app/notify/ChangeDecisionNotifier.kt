@@ -41,7 +41,11 @@ class ChangeDecisionNotifier(
                 runCatching {
                     when {
                         c == null -> NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
-                        !c.open && !AppForeground.visible && canPost() -> post(c)
+                        // (P4) Once per decision: a restart in the background does not post it again.
+                        !c.open && !AppForeground.visible && !vault.changeDecisionNotified() && canPost() -> {
+                            post(c)
+                            vault.markChangeDecisionNotified()
+                        }
                     }
                 }
             }

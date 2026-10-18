@@ -1837,6 +1837,26 @@ class VaultDeviceTest {
         }
     }
 
+    /** (P3) A deposit refused for good does not drop a tracked request: an earlier copy may have reached the vault. */
+    @Test
+    fun aRefusedDepositKeepsATrackedRequestUnsettled() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c9", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val first = v.open(nextDeposit().second) // accepted
+            refuseDeposits = "token_revoked" // the resends are refused for good
+            assertTrue(check.await().isFailure)
+            refuseDeposits = null
+            assertTrue("still unsettled", savedState(store).unsettled.containsKey(first.id))
+            assertFalse(d.credentialSettled())
+        }
+    }
+
     @Test
     fun deviceStateJsonRoundTrips() {
         val s = DeviceState("app", "phone", "https://relay.vettid.test", vaultId = "v", outbox = mutableListOf(OutboxEntry("i", "t", "u", "m", "tok", "ZW52")))

@@ -175,7 +175,11 @@ data class ChangePasswordUiState(
     internal fun afterRefusal(kind: FailureKind): ChangePasswordUiState = when (kind) {
         FailureKind.BAD_PASSWORD -> copy(current = "")
         FailureKind.BAD_PIN -> copy(pin = "")
-        FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_CHECKING -> this
+        // Refused with nothing sent: every entry stays.
+        FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNDECIDED,
+        FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
+        FailureKind.RENEW_UNCONFIRMED,
+        -> this
         else -> copy(current = "", pin = "")
     }
 

@@ -336,7 +336,14 @@ internal class AccountRecord(
 
     /** (N5) The decision the member has not seen yet ([d]), or none once seen. */
     fun saveDecision(d: SavedDecision?): Boolean = update(RecordStore.UNBOUND) { cur ->
-        if (cur.changeDecision == d) null else cur.copy(changeDecision = d)
+        // The same decision again keeps whether it was notified (P4).
+        if (cur.changeDecision == d || d != null && d.sameAs(cur.changeDecision)) null else cur.copy(changeDecision = d)
+    }
+
+    /** (P4) The kept decision was posted as a notification. */
+    fun decisionNotified(): Boolean = update(RecordStore.UNBOUND) { cur ->
+        val d = cur.changeDecision ?: return@update null
+        if (d.notified) null else cur.copy(changeDecision = d.copy(notified = true))
     }
 
     /** The change [m] did not apply, was refused, or the check ended: its marker goes; the epoch stays. */

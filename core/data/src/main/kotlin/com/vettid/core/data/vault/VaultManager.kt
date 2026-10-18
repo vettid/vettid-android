@@ -221,12 +221,19 @@ class VaultManager(
             override fun savedDecision(): ChangeCheck? = local.changeDecision?.toCheck()
 
             override fun saveDecision(c: ChangeCheck?) {
-                runCatching { record.saveDecision(SavedDecision.of(c)) }
+                // (P4) Off the caller's thread (an acknowledgement comes from the main thread); always the newest wish.
+                decisionToSave = SavedDecision.of(c)
+                scope.launch(Dispatchers.IO) { decisionWrite.withLock { runCatching { record.saveDecision(decisionToSave) } } }
             }
         },
     )
 
     private val pinChangeUnresolvedFlow = MutableStateFlow(false)
+
+    /** (P4) The decision to keep on the phone, written off the main thread, the newest each time. */
+    @Volatile
+    private var decisionToSave: SavedDecision? = null
+    private val decisionWrite = Mutex()
 
     /**
      * (§11.14.9 step 5) A PIN change is unresolved and the phone's current record is still the one it was sent from: the
@@ -1882,10 +1889,10 @@ class VaultManager(
         // §11.14.9 step 2: an earlier change is decided first.
         changes.gate(carriesPin = true)
         // (N1) Never a PIN change while a renew may have applied: its candidate is the same secret as the change's.
-        when (settleRenew()) {
-            RenewState.NONE -> Unit
-            RenewState.UNSETTLED -> throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, ChangeSender.CODE_UNSETTLED)
-            RenewState.UNDECIDABLE -> throw VaultFailure(FailureKind.RENEW_UNCONFIRMED, CODE_RENEW_UNCONFIRMED)
+        when (renewRunner.settle()) {
+            RenewRunner.State.NONE -> Unit
+            RenewRunner.State.UNSETTLED -> throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, ChangeSender.CODE_UNSETTLED)
+            RenewRunner.State.UNDECIDABLE -> throw VaultFailure(FailureKind.RENEW_UNCONFIRMED, CODE_RENEW_UNCONFIRMED)
         }
         val s = session()
         // Read again: a renew decided just above may have moved the phone to its candidate.
@@ -1907,6 +1914,12 @@ class VaultManager(
 
     override fun acknowledgeChangeCheck() = changes.acknowledge()
 
+    override fun changeDecisionNotified(): Boolean = local.changeDecision?.notified == true
+
+    override fun markChangeDecisionNotified() {
+        scope.launch(Dispatchers.IO) { decisionWrite.withLock { runCatching { record.decisionNotified() } } }
+    }
+
     override val pinChangeUnresolved: StateFlow<Boolean> = pinChangeUnresolvedFlow.asStateFlow()
 
     override val changeHold: StateFlow<FailureKind?> = changeHoldFlow.asStateFlow()
@@ -1922,61 +1935,59 @@ class VaultManager(
         changes.gate(carriesPin = true)
         val s = session()
         // In this manager's scope (N1): a screen that goes away does not stop it, and its outcome is kept.
-        scope.async(Dispatchers.IO) {
-            val next = phoneSecrets.secret(phone, ahead = 1)
-            var sent: SentRequest? = null
-            try {
-                s.openApi.secretRenew(pin, password, next) { req ->
-                    // (0.45.0 step 5, N1) Stored before the send: a lost answer is decided, and no PIN change is sent
-                    // while it may have applied.
-                    val r = UnconfirmedRenew(req.innerId, req.sentVersion ?: 0, req.exp.toEpochMilli(), phone.epoch)
-                    if (!record.storeRenew(rec, r)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_NOT_STORED)
-                    sent = req
+        try {
+            renewRunner.send { onSending ->
+                val next = phoneSecrets.secret(phone, ahead = 1)
+                try {
+                    s.openApi.secretRenew(pin, password, next) { req ->
+                        // Stored before the send (§11.14.9 step 5, N1); the record of [rec].
+                        renewEpoch = phone.epoch
+                        renewSince = rec
+                        onSending(req)
+                    }
+                } finally {
+                    next.fill(0)
                 }
-                sent?.let { record.decideRenew(it.innerId, applied = true) }
-                Unit
-            } catch (e: VaultOpException) {
-                // A refusal is an answer: the renew did not apply.
-                sent?.let { record.decideRenew(it.innerId, applied = false) }
-                throw e
-            } finally {
-                next.fill(0)
-                refreshChangeFlows()
             }
-        }.await()
-    }
-
-    /** What [settleRenew] found. */
-    private enum class RenewState { NONE, UNSETTLED, UNDECIDABLE }
-
-    /**
-     * (0.45.0 §11.14.9 step 5, N1) An unconfirmed renew decided by `credential.version` once nothing else is in flight:
-     * one above the version it carried, applied (the phone moves to its candidate, the blob is fetched); the same in an
-     * answer stamped more than a minute after its `exp`, not applied. Otherwise it stays: [RenewState.UNSETTLED] while it
-     * may still apply, [RenewState.UNDECIDABLE] when the version cannot tell (an unlock settles it, at no cost).
-     */
-    @Suppress("ReturnCount")
-    private suspend fun settleRenew(): RenewState {
-        val r = local.unconfirmedRenew ?: return RenewState.NONE
-        val api = session().openApi
-        if (!api.credentialAwaitSettled()) return RenewState.UNSETTLED
-        val (info, ts) = api.credentialVersionAt()
-        return when (ChangeDecision.of(r.sentVersion, r.expMs, info.exists, info.version, info.alarm != null, ts)) {
-            ChangeDecision.Verdict.APPLIED -> {
-                api.credentialFetch()
-                api.credentialTopUpUtks()
-                record.decideRenew(r.innerId, applied = true)
-                refreshChangeFlows()
-                RenewState.NONE
-            }
-            ChangeDecision.Verdict.NOT_APPLIED -> {
-                record.decideRenew(r.innerId, applied = false)
-                RenewState.NONE
-            }
-            ChangeDecision.Verdict.UNDECIDED -> RenewState.UNSETTLED
-            ChangeDecision.Verdict.ENDED -> RenewState.UNDECIDABLE
+        } finally {
+            refreshChangeFlows()
         }
     }
+
+    /** The epoch and record a renew is sent from (read by [renewRunner]'s store). */
+    @Volatile
+    private var renewEpoch = 0L
+
+    @Volatile
+    private var renewSince = RecordStore.UNBOUND
+
+    private val renewRunner = RenewRunner(
+        scope,
+        object : RenewRunner.Ops {
+            override fun store(r: SentRequest): Boolean =
+                record.storeRenew(renewSince, UnconfirmedRenew(r.innerId, r.sentVersion ?: 0, r.exp.toEpochMilli(), renewEpoch))
+
+            override fun decide(innerId: String, applied: Boolean) {
+                record.decideRenew(innerId, applied)
+                refreshChangeFlows()
+            }
+
+            override fun unconfirmed(): UnconfirmedRenew? = local.unconfirmedRenew
+
+            override suspend fun awaitSettled(): Boolean = session().openApi.credentialAwaitSettled()
+
+            override suspend fun version(): ChangeResolver.Version {
+                val (info, ts) = session().openApi.credentialVersionAt()
+                return ChangeResolver.Version(info.exists, info.version, info.alarm != null, ts)
+            }
+
+            override suspend fun fetch() {
+                val api = session().openApi
+                api.credentialFetch()
+                api.credentialTopUpUtks()
+            }
+        },
+    )
 
     override val usesPhoneSecret: Boolean get() = local.phone.inUse
 

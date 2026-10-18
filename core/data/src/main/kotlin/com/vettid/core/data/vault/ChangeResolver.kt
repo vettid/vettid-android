@@ -47,7 +47,16 @@ internal data class UnconfirmedRenew(val innerId: String, val sentVersion: Long,
 
 /** (N5) A decision the member has not seen yet: [kind] and [verdict] (the [ChangeCheck] class), [failure] for a refusal. */
 @Serializable
-internal data class SavedDecision(val kind: String, val verdict: String, val failure: String? = null) {
+internal data class SavedDecision(
+    val kind: String,
+    val verdict: String,
+    val failure: String? = null,
+    /** (P4) Already posted as a notification: not posted again after a restart in the background. */
+    val notified: Boolean = false,
+) {
+    /** The same decision, whatever [notified] says. */
+    fun sameAs(o: SavedDecision?): Boolean = o != null && kind == o.kind && verdict == o.verdict && failure == o.failure
+
     fun toCheck(): ChangeCheck? {
         val k = runCatching { ChangeKind.valueOf(kind) }.getOrNull() ?: return null
         return when (verdict) {

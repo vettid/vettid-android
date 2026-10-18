@@ -951,7 +951,9 @@ class VaultDevice private constructor(
             }
             countRefusal(x, e.mailbox, e.token)
             st.outbox.remove(e)
-            st.unsettled.remove(e.id) // never delivered: it cannot reach the vault
+            // (P3) Only a request no copy of which was ever accepted (an earlier version's, never sent) is dropped here;
+            // a tracked one stays until it is answered or past its exp: an earlier copy may have reached the vault.
+            if (st.unsettled[e.id] == LEGACY_UNSENT) st.unsettled.remove(e.id)
             save()
             throw x
         }

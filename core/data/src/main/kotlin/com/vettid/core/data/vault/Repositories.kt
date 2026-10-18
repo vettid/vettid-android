@@ -171,6 +171,12 @@ interface VaultRepository {
     /** The member has read the decided state of [changeCheck]. */
     fun acknowledgeChangeCheck() {}
 
+    /** (P4) The decided state kept on the phone was already posted as a notification. */
+    fun changeDecisionNotified(): Boolean = false
+
+    /** (P4) It has been posted now. */
+    fun markChangeDecisionNotified() {}
+
     /**
      * (§11.14.9 step 5) A PIN change is unresolved: the unlock asks for the previous PIN, and for the new PIN only after
      * the vault showed that it holds the change ([UnlockAttempt.NewPinNeeded]).

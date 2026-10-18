@@ -260,6 +260,22 @@ class SettingsViewModelsTest {
         assertFalse("changePin" in vault.calls)
     }
 
+    /** Refused with nothing sent (an earlier request, an unconfirmed renew): every entry stays. */
+    @Test
+    fun aRefusalWithNothingSentKeepsTheEntries() = runTest {
+        for (kind in listOf(FailureKind.CREDENTIAL_UNSETTLED, FailureKind.RENEW_UNCONFIRMED)) {
+            vault.fail["changePin"] = VaultFailure(kind, null)
+            val vm = ChangePinViewModel(vault)
+            vm.typed()
+            vm.submit()
+            advanceUntilIdle()
+            assertEquals(kind, vm.uiState.value.error)
+            assertEquals("40281795", vm.uiState.value.current)
+            assertEquals("59173048", vm.uiState.value.pin)
+            assertEquals("59173048", vm.uiState.value.confirm)
+        }
+    }
+
     @Test
     fun deleteNeedsPhrasePinPasswordAcknowledgementAndFinalConfirmation() = runTest {
         val vm = DeleteVaultViewModel(vault)
