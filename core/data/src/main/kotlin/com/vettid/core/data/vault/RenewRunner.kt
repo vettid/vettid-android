@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.vault.CredentialUnsettledException
 import com.vettid.core.vault.SentRequest
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CoroutineScope
@@ -8,7 +9,8 @@ import kotlinx.coroutines.async
 /**
  * A new phone secret (`vault.secret.renew`) and the decision of one whose answer was lost (VAULT-MESSAGING 0.45.0
  * §11.14.9 step 5): the renew is stored before it is sent and runs in the vault manager's scope; no PIN change is sent
- * while it may have applied ([settle]).
+ * while it may have applied ([settle]). (0.47.0) It is sent only once every earlier credential request is settled and
+ * with the vault's current blob, both checked before it is stored; otherwise [FailureKind.CREDENTIAL_UNSETTLED].
  */
 internal class RenewRunner(private val scope: CoroutineScope, private val ops: Ops) {
     interface Ops {
@@ -58,10 +60,21 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
                     { id -> answered = id },
                     { id, _ -> ops.decide(id, applied = false) },
                 )
+            } catch (e: CredentialUnsettledException) {
+                // (0.47.0 §11.14.9 step 1) Before anything was stored or sent: an earlier request may still apply, or the
+                // vault's blob is newer than this phone's and could not be fetched. The "earlier request" text.
+                throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, ChangeSender.CODE_UNSETTLED, cause = e)
             } catch (e: VaultOpException) {
                 // Its own refusal was decided as it came (onRefused); an error of a step around it decides nothing,
                 // unless the renew had already been answered `ok`.
-                if (answered == null) throw e
+                if (answered == null) {
+                    // (0.47.0) Its own `stale_credential`: an earlier operation moved the blob after the check. Not applied,
+                    // nothing to retry with the typed secrets: the "earlier request" text, not "did not answer".
+                    if (e.code == CODE_STALE && e.type == TYPE_RENEW) {
+                        throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, ChangeSender.CODE_UNSETTLED, cause = e)
+                    }
+                    throw e
+                }
             }
             answered?.let { ops.decide(it, applied = true) }
             Unit
@@ -97,5 +110,6 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
     companion object {
         const val TYPE_RENEW = "vault.secret.renew"
         const val CODE_NOT_STORED = "renew_not_stored"
+        private const val CODE_STALE = "stale_credential"
     }
 }

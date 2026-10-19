@@ -55,6 +55,7 @@ import com.vettid.core.vault.SentRequest
 import com.vettid.core.vault.changeResend
 import com.vettid.core.vault.changeSettle
 import com.vettid.core.vault.credentialChangePassword
+import com.vettid.core.vault.credentialGeneration
 import com.vettid.core.vault.credentialTopUpUtks
 import com.vettid.core.vault.credentialVersionAt
 import com.vettid.core.vault.setCredentialGate
@@ -1905,8 +1906,11 @@ class VaultManager(
         // §11.14.9 step 2: an earlier change is decided first.
         changes.gate(carriesPin = pin != null && local.phone.inUse)
         val s = session()
-        changeSender.send(rec, ChangeKind.PASSWORD, local.phone.epoch) { store ->
-            s.openApi.credentialChangePassword(password, newPassword, pin?.takeIf { local.phone.inUse }, store)
+        // §11.14.9 step 2: refused, nothing sent, if a change or a renew goes out before this one is under the lock.
+        val gen = s.openApi.credentialGeneration
+        val epoch = local.phone.epoch
+        changeSender.send(rec, ChangeKind.PASSWORD, epoch) { store ->
+            s.openApi.credentialChangePassword(password, newPassword, pin?.takeIf { local.phone.inUse }, since = gen, onMarker = store)
         }
         // ANDROID-PLAN "Transfer" (release R): after a password change the app offers to rotate the vault's keys.
         if (local.phone.inUse) offerRotation(true, rec)
@@ -1923,6 +1927,9 @@ class VaultManager(
         if (!phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
         // §11.14.9 step 2: an earlier change is decided first.
         changes.gate(carriesPin = true)
+        // Read before the renew's decision and the epoch below: if a change or a renew goes out after this, the change
+        // is refused under the lock with nothing sent, so the epoch and the typed PIN it uses are still current.
+        val gen = session().openApi.credentialGeneration
         // (N1) Never a PIN change while a renew may have applied: its candidate is the same secret as the change's.
         when (renewRunner.settle()) {
             RenewRunner.State.NONE -> Unit
@@ -1936,7 +1943,7 @@ class VaultManager(
             // Computed and wiped inside the send, which runs in this manager's scope and outlives a screen that goes away.
             val next = phoneSecrets.secret(now, ahead = 1)
             try {
-                s.openApi.pinChange(pin, newPin, password, next, store)
+                s.openApi.pinChange(pin, newPin, password, next, since = gen, onMarker = store)
             } finally {
                 next.fill(0)
             }
@@ -1977,11 +1984,13 @@ class VaultManager(
     /** `vault.secret.renew` (release R, §11.14.9): a new phone secret, the PIN unchanged. */
     override suspend fun renewPhoneSecret(pin: String, password: String): Unit = guard {
         val rec = record.recordGeneration
-        val phone = local.phone
-        if (!phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
+        if (!local.phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
         // §11.14.9 step 2 (also gated as a credential operation): an unresolved change is decided first.
         changes.gate(carriesPin = true)
         val s = session()
+        // Read before the epoch: refused under the lock, nothing sent, if a change or a renew went out since.
+        val gen = s.openApi.credentialGeneration
+        val phone = local.phone
         // In this manager's scope (N1): a screen that goes away does not stop it, and its outcome is kept.
         try {
             renewRunner.send { onSending, onAnswered, onRefused ->
@@ -1992,7 +2001,7 @@ class VaultManager(
                         renewEpoch = phone.epoch
                         renewSince = rec
                         onSending(req)
-                    }, onAnswered = onAnswered, onRefused = onRefused)
+                    }, onAnswered = onAnswered, onRefused = onRefused, since = gen)
                 } finally {
                     next.fill(0)
                 }

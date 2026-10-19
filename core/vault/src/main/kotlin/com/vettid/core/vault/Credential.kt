@@ -184,7 +184,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         payload: JsonObjectBuilder.() -> Unit,
         extra: JsonObjectBuilder.() -> Unit = {},
     ): Pair<JsonObject, Instant> =
-        gated(payload).credentialLock.withLock {
+        serialized(payload, null) {
             val body = sealedWith(type, takeUtk(), false, payload, false, extra).first
             body to (lastTs ?: Instant.now())
         }
@@ -202,7 +202,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         onSending: (suspend (SentRequest) -> Unit)? = null,
         onAnswered: (suspend (innerId: String) -> Unit)? = null,
         onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
-    ): Triple<JsonObject, KemPrivateKey?, String> = gated(payload).credentialLock.withLock {
+    ): Triple<JsonObject, KemPrivateKey?, String> = serialized(payload, null) {
         try {
             sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered, onRefused)
         } catch (e: VaultOpException) {
@@ -212,9 +212,77 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         }
     }
 
+    /**
+     * (VAULT-MESSAGING 0.45.0 / 0.47.0 §11.14.9 step 1, ANDROID-PLAN 0.1.48) `vault.secret.renew`, under
+     * [VaultDevice.credentialLock] as a change: sent only once every earlier credential request is settled
+     * ([CredentialUnsettledException] otherwise) and with the vault's current blob ([currentBlob]); [onSending] stores the
+     * renew only after both. Its own answer decides it: `ok` ([onAnswered]) applied; any refusal ([onRefused]),
+     * `stale_credential` included, not applied. A `stale_credential` fetches the latest blob and is thrown; it is never
+     * retried with the typed secrets (a second renew would not be preceded by its own check). [since]: the
+     * [secretGeneration] its caller read before it read the phone's epoch ([serialized]).
+     */
+    @Suppress("LongParameterList")
+    suspend fun renew(
+        type: String,
+        payload: JsonObjectBuilder.() -> Unit,
+        onSending: suspend (SentRequest) -> Unit,
+        onAnswered: (suspend (innerId: String) -> Unit)? = null,
+        onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
+        since: Long? = null,
+    ): JsonObject = serialized(payload, since) {
+        if (!d.awaitCredentialSettled()) throw CredentialUnsettledException()
+        currentBlob()
+        // Stored by the caller, then sent: from here a later operation's typed secrets may be stale.
+        val sending: suspend (SentRequest) -> Unit = { r ->
+            onSending(r)
+            secretGeneration++
+        }
+        try {
+            sealedWith(type, takeUtk(), true, payload, false, {}, sending, onAnswered, onRefused).first
+        } catch (e: VaultOpException) {
+            if (e.code == CODE_STALE && e.type == type) fetchQuietly()
+            throw e
+        }
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.47.0 §11.14.9 step 1, "Sent with the vault's current blob") Asked under
+     * [VaultDevice.credentialLock], once every earlier credential request is settled, right before a change or a renew
+     * is built: `credential.version`. Equal to the held blob's version: the request goes with it. Otherwise an earlier
+     * operation applied without its answer reaching the phone: the latest blob is fetched and kept, and the request goes
+     * with it only when its version equals the vault's. A fetch that fails, or that gives another version, throws
+     * [CredentialUnsettledException] (the "earlier request" text); no answer to `credential.version` throws its
+     * [java.io.IOException] as it is. Either way nothing of the request was built or sent.
+     */
+    private suspend fun currentBlob() {
+        val held = d.credentialVersion ?: throw VaultStateException("no credential on this device")
+        val r = d.request("credential.version")
+        // An answer that is not `ok` carries no version: it is not the held one.
+        val vault = if (r.inner.status == Inner.STATUS_OK) VaultJson.long(r.body, "version") else null
+        if (vault == held) return
+        @Suppress("TooGenericExceptionCaught")
+        try {
+            fetch()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw CredentialUnsettledException(e)
+        }
+        if (vault == null || d.credentialVersion != vault) throw CredentialUnsettledException()
+    }
+
+    /** The latest blob, for the next operation; a failure leaves it to [currentBlob] or the next stale answer. */
+    private suspend fun fetchQuietly() {
+        try {
+            fetch()
+        } catch (_: java.io.IOException) {
+            // VaultOpException included: the next change or renew checks the version again before it is sent.
+        }
+    }
+
     /** A sealed operation without the blob (create, recover, reset). */
     suspend fun sealedOp(type: String, payload: JsonObjectBuilder.() -> Unit, extra: JsonObjectBuilder.() -> Unit = {}): JsonObject =
-        gated(payload).credentialLock.withLock { sealedWith(type, takeUtk(), false, payload, false, extra).first }
+        serialized(payload, null) { sealedWith(type, takeUtk(), false, payload, false, extra).first }
 
     /**
      * (0.44.0, §11.14.9 step 2) Asked before every credential operation that carries a PIN, a password or the blob:
@@ -231,18 +299,54 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     }
 
     /**
+     * (§11.14.9 step 2) How many PIN or password changes and renews this client has sent (counted once each is stored
+     * and about to go out, under [VaultDevice.credentialLock]). An operation whose PIN or password was typed, or whose
+     * phone epoch was read, before one of them went out may carry what is no longer current: it is refused with nothing
+     * sent ([serialized]), so that it never spends a failed owner check or a password attempt.
+     */
+    @Volatile
+    var secretGeneration: Long = 0L
+        private set
+
+    /**
+     * Runs [block] under [VaultDevice.credentialLock] with the change gate asked twice: before the lock (a refusal at
+     * once, without waiting for it) and again inside it, since a change may have stored its marker and gone out while
+     * this operation waited (the change sends outside the lock). Inside the lock it is also refused when a change or a
+     * renew went out since [since] (or since this call began): [CredentialUnsettledException], nothing sent.
+     */
+    private suspend fun <T> serialized(payload: JsonObjectBuilder.() -> Unit, since: Long?, block: suspend () -> T): T {
+        val from = since ?: secretGeneration
+        return gated(payload).credentialLock.withLock {
+            gated(payload)
+            if (secretGeneration != from) throw CredentialUnsettledException()
+            block()
+        }
+    }
+
+    /**
      * (0.44.0, §11.14.9) A PIN or password change, decided rather than repeated when its answer is lost. [onMarker]
      * stores the marker durably before anything is sent and throws to stop the operation. The request carries an
      * `exp` 10 minutes after [VaultDevice.vaultNow] and is sent as [KeptChange] (the automatic resends of §8.6 with
      * the same id and body). An answer decides it ([settle]); none throws [ChangeUnansweredException] with the kept
-     * request. Not gated: the caller decides an earlier change first.
+     * request. Not gated: the caller decides an earlier change first. Refused with nothing sent when another change or
+     * a renew went out since [since] (the [secretGeneration] the caller read before its epoch and secrets; null: since
+     * this call began).
      */
-    suspend fun change(type: String, payload: JsonObjectBuilder.() -> Unit, onMarker: suspend (ChangeMarker) -> Unit): JsonObject {
+    suspend fun change(
+        type: String,
+        payload: JsonObjectBuilder.() -> Unit,
+        onMarker: suspend (ChangeMarker) -> Unit,
+        since: Long? = null,
+    ): JsonObject {
         require(type in ChangeTypes.ALL) { "not a change: $type" }
+        val from = since ?: secretGeneration
         val kept = d.credentialLock.withLock {
+            if (secretGeneration != from) throw CredentialUnsettledException()
             // (0.45.0 step 1) Nothing else in flight: the outbox flushed and every earlier credential operation answered
             // (waited for at most 30 s), so that one above the version sent can only be this change.
             if (!d.awaitCredentialSettled()) throw CredentialUnsettledException()
+            // (0.47.0 step 1) Sent with the vault's current blob; checked before the UTK, the marker and the candidate.
+            currentBlob()
             val utk = takeUtk()
             var stored = false
             try {
@@ -253,6 +357,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
                 KeptChange(type, id, body, exp, version).also {
                     onMarker(it.marker)
                     stored = true
+                    secretGeneration++
                 }
             } finally {
                 // Nothing was sent: the UTK goes back to the pool.
