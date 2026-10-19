@@ -259,6 +259,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
      * [java.io.IOException] as it is. Either way nothing of the request was built or sent.
      */
     private suspend fun currentBlob() {
+        // No credential on this phone: nothing to send with, nothing asked (0.47.0, as before the key was compared).
+        if (d.credentialVersion == null) throw VaultStateException("no credential on this device")
         val v = vaultCredential()
         if (v.matchesHeld()) return
         @Suppress("TooGenericExceptionCaught")
@@ -306,10 +308,15 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
      * the rotation, and after a rotation answered `rotation_required` or `credential_frozen`, `credential.version`
      * decides whether the held blob is the vault's (version and key); when it is not, the latest blob is fetched and kept
      * (`credential.get`, `credential.ack`), the UTKs topped up, and the rotation retried **once** with it. Otherwise the
-     * refusal is thrown as it is. `stale_credential` keeps the generic fetch and single retry.
+     * refusal is thrown as it is. A fetch is made only once nothing of this phone can still reach the vault. A check or a
+     * fetch that fails is never what the member is told: the rotation's own answer is (the check before then sends the
+     * rotation with the held blob; the check after leaves its refusal). `stale_credential` keeps the generic fetch and
+     * single retry.
      */
     suspend fun rotate(payload: JsonObjectBuilder.() -> Unit, alarmOpen: Boolean): JsonObject = serialized(payload, null) {
-        if (alarmOpen) refreshIfSuperseded()
+        // The check before is only a shortcut: one that fails (no answer, a refused or lost fetch) sends the rotation with
+        // the held blob all the same, and the vault's answer to the rotation is what the member is told.
+        if (alarmOpen) refreshQuietly()
         try {
             sealedWith(TYPE_ROTATE, takeUtk(), true, payload, false, {}).first
         } catch (e: VaultOpException) {
@@ -318,12 +325,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
                     fetch()
                     true
                 }
-                // A check or fetch that fails leaves the refusal as it was.
-                CODE_ROTATION_REQUIRED, CODE_FROZEN -> try {
-                    refreshIfSuperseded()
-                } catch (_: java.io.IOException) {
-                    false
-                }
+                // A check or fetch that fails leaves the rotation's refusal as it was.
+                CODE_ROTATION_REQUIRED, CODE_FROZEN -> refreshQuietly()
                 else -> false
             }
             if (!retry) throw e
@@ -339,10 +342,20 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     private suspend fun refreshIfSuperseded(): Boolean {
         val v = vaultCredential()
         if (v.version == null || v.matchesHeld()) return false
+        // Nothing of this phone may still reach the vault (a reset in flight would pair another key with the blob).
+        if (!d.awaitCredentialSettled()) return false
         fetch()
         if (!v.adoptFetched()) return false
         topUpUtks()
         return true
+    }
+
+    /** [refreshIfSuperseded], with a check or a fetch that fails taken as "nothing to retry with". */
+    private suspend fun refreshQuietly(): Boolean = try {
+        refreshIfSuperseded()
+    } catch (_: java.io.IOException) {
+        // VaultOpException included (a refused or `not_found` fetch, `credential_frozen`).
+        false
     }
 
     /** The latest blob, for the next operation; a failure leaves it to [currentBlob] or the next stale answer. */
