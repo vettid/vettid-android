@@ -76,7 +76,15 @@ internal data class AwaitingRekey(val createdMs: Long, val state: String)
 
 /** This app's copy of the Protean Credential (§3.5): the sealed blob, useless without the vault's CEK and the password. */
 @Serializable
-internal data class CredentialCopy(val blob: String, val version: Long)
+internal data class CredentialCopy(
+    val blob: String,
+    val version: Long,
+    /**
+     * The credential key's public key (§10.6 `key`) under which [blob] was issued, when an answer named it (a rotation,
+     * a reset, or `credential.version` right after a fetch); null: not known, and then only the version is compared.
+     */
+    val key: String? = null,
+)
 
 /** An issued one-time transaction key (§3.5.4). */
 @Serializable

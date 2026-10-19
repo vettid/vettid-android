@@ -59,8 +59,12 @@ private val PASSWORD_KEYS = setOf("password", "new_password")
  * password exactly as typed, as before release R.
  */
 internal class CredentialOps(private val d: VaultDevice, private val normalizePasswords: () -> Boolean = { false }) {
-    /** Stores the UTKs and the blob a response carries, and confirms the blob (`credential.ack`, §3.5.3). */
-    suspend fun keep(o: JsonObject) {
+    /**
+     * Stores the UTKs and the blob a response carries, and confirms the blob (`credential.ack`, §3.5.3). The blob's
+     * credential key is the answer's `key` when it names one; otherwise the held one when [sameKey] (an operation that
+     * does not replace the credential key), or not known.
+     */
+    suspend fun keep(o: JsonObject, sameKey: Boolean = true) {
         (o["utks"] as? JsonArray)?.let { arr ->
             val list = arr.map { e ->
                 val u = Utk.parse(com.vettid.core.crypto.json.StrictJson.parseObject(e.toString()))
@@ -72,7 +76,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         // Item operations carry the item's version as `version` and the credential's as `credential_version` (§10.6).
         val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
             ?: throw VaultStateException("credential without version")
-        d.keepCredential(blob, v)
+        d.keepCredential(blob, v, VaultJson.str(o, "key") ?: d.credentialKey.takeIf { sameKey })
         d.op("credential.ack", buildJsonObject { put("version", v) })
     }
 
@@ -136,7 +140,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         }
         // (Q1) The operation's own answer was `ok`: said before anything that follows it (keeping the blob, its ack).
         onAnswered?.invoke(id)
-        keep(r.body)
+        keep(r.body, sameKey = type !in KEY_REPLACING)
         lastTs = r.ts
         return Triple(r.body, rk, id)
     }
@@ -255,11 +259,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
      * [java.io.IOException] as it is. Either way nothing of the request was built or sent.
      */
     private suspend fun currentBlob() {
-        val held = d.credentialVersion ?: throw VaultStateException("no credential on this device")
-        val r = d.request("credential.version")
-        // An answer that is not `ok` carries no version: it is not the held one.
-        val vault = if (r.inner.status == Inner.STATUS_OK) VaultJson.long(r.body, "version") else null
-        if (vault == held) return
+        val v = vaultCredential()
+        if (v.matchesHeld()) return
         @Suppress("TooGenericExceptionCaught")
         try {
             fetch()
@@ -268,7 +269,80 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         } catch (e: Exception) {
             throw CredentialUnsettledException(e)
         }
-        if (vault == null || d.credentialVersion != vault) throw CredentialUnsettledException()
+        if (!v.adoptFetched()) throw CredentialUnsettledException()
+    }
+
+    /** `credential.version` as asked under the lock: its [version] and [key] (null when absent or not `ok`). */
+    private inner class VaultCredential(val version: Long?, val key: String?) {
+        /**
+         * The held blob is the vault's: the same version and, when both are known, the same credential key (a reset
+         * starts again at version 1 under a new key, so a version alone can match a superseded blob).
+         */
+        fun matchesHeld(): Boolean {
+            val heldKey = d.credentialKey
+            return version != null && version == d.credentialVersion && (heldKey == null || key == null || heldKey == key)
+        }
+
+        /** After a fetch: the fetched blob is the vault's version; its key is then the one the vault named. */
+        suspend fun adoptFetched(): Boolean {
+            if (version == null || d.credentialVersion != version) return false
+            val blob = d.credentialBlob() ?: return false
+            if (key != null && d.credentialKey != key) d.keepCredential(blob, version, key)
+            return true
+        }
+    }
+
+    private suspend fun vaultCredential(): VaultCredential {
+        val r = d.request("credential.version")
+        // An answer that is not `ok` carries no version: it is not the held one.
+        if (r.inner.status != Inner.STATUS_OK) return VaultCredential(null, null)
+        return VaultCredential(VaultJson.long(r.body, "version"), VaultJson.str(r.body, "key"))
+    }
+
+    /**
+     * (vettid.org #358, §3.5.9) `credential.rotate` while a clone alarm may be open. The vault answers the holder's own
+     * superseded blob with `rotation_required` or `credential_frozen` there, never `stale_credential`, so a rotation that
+     * only fetched on `stale_credential` would fail again at every try, each spending a UTK. So: with [alarmOpen], before
+     * the rotation, and after a rotation answered `rotation_required` or `credential_frozen`, `credential.version`
+     * decides whether the held blob is the vault's (version and key); when it is not, the latest blob is fetched and kept
+     * (`credential.get`, `credential.ack`), the UTKs topped up, and the rotation retried **once** with it. Otherwise the
+     * refusal is thrown as it is. `stale_credential` keeps the generic fetch and single retry.
+     */
+    suspend fun rotate(payload: JsonObjectBuilder.() -> Unit, alarmOpen: Boolean): JsonObject = serialized(payload, null) {
+        if (alarmOpen) refreshIfSuperseded()
+        try {
+            sealedWith(TYPE_ROTATE, takeUtk(), true, payload, false, {}).first
+        } catch (e: VaultOpException) {
+            val retry = when (e.code) {
+                CODE_STALE -> {
+                    fetch()
+                    true
+                }
+                // A check or fetch that fails leaves the refusal as it was.
+                CODE_ROTATION_REQUIRED, CODE_FROZEN -> try {
+                    refreshIfSuperseded()
+                } catch (_: java.io.IOException) {
+                    false
+                }
+                else -> false
+            }
+            if (!retry) throw e
+            sealedWith(TYPE_ROTATE, takeUtk(), true, payload, false, {}).first
+        }
+    }
+
+    /**
+     * The held blob compared with `credential.version` (version and key); when it is not the vault's, the latest blob is
+     * fetched and kept and the UTKs topped up. True when a fetched blob now matches the vault's version; false when the
+     * held blob was already the vault's, or the fetch did not give the version the vault named (nothing to retry with).
+     */
+    private suspend fun refreshIfSuperseded(): Boolean {
+        val v = vaultCredential()
+        if (v.version == null || v.matchesHeld()) return false
+        fetch()
+        if (!v.adoptFetched()) return false
+        topUpUtks()
+        return true
     }
 
     /** The latest blob, for the next operation; a failure leaves it to [currentBlob] or the next stale answer. */
@@ -414,7 +488,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     }
 
     /** Fetches the latest blob the vault holds (the holder only). */
-    suspend fun fetch() = keep(d.op("credential.get"))
+    suspend fun fetch() = keep(d.op("credential.get"), sameKey = false)
 
     /** Opens a value the vault sealed to [rk] for request [innerId] (§3.5.4). */
     fun open(rk: KemPrivateKey, innerId: String, sealedB64: String): ByteArray {
@@ -429,6 +503,12 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     private companion object {
         const val CODE_SIGNER_UNCONFIRMED = "signer_unconfirmed"
         const val CODE_STALE = "stale_credential"
+        const val CODE_ROTATION_REQUIRED = "rotation_required"
+        const val CODE_FROZEN = "credential_frozen"
+        const val TYPE_ROTATE = "credential.rotate"
+
+        /** Operations whose answer carries a credential under a new key (or one this phone has not held before). */
+        val KEY_REPLACING = setOf(TYPE_ROTATE, "credential.reset", "credential.create", "credential.recover")
 
         /** The first send and the two automatic resends of §8.6. */
         const val CHANGE_SENDS = 3

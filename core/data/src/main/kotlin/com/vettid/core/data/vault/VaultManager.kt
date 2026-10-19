@@ -2078,7 +2078,8 @@ class VaultManager(
     override suspend fun rotate(password: String) = guard {
         val rec = record.recordGeneration
         val s = session()
-        s.openApi.credentialRotate(password)
+        // vettid.org #358: while a clone alarm is open, the held blob is checked (and refreshed) before the rotation.
+        s.openApi.credentialRotate(password, alarmOpen = alarmFlow.value != null)
         offerRotation(false, rec)
         windowFlow.value = null
         refreshAlarm(s)

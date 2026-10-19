@@ -2442,6 +2442,130 @@ class VaultDeviceTest {
         }
     }
 
+    // --- (vettid.org #358, §3.5.9) the holder's superseded blob during a clone alarm ---
+
+    /** Answers the next deposit, which must be [type], with [body]. */
+    private suspend fun answer(d: VaultDevice, v: FakeVault, type: String, body: String): Inner {
+        val r = v.open(nextDeposit().second)
+        assertEquals(type, r.type)
+        d.handle(v.seal(r.type, body, re = r.id, status = Inner.STATUS_OK))
+        return r
+    }
+
+    private val alarmJson = """"alarm":{"alarm_id":"01JALARM","state":"rotation_required","at":"2026-10-19T10:00:00Z"}"""
+
+    /**
+     * The stuck alarm: the holder holds v7, the vault is at v1 under another key with an alarm open. Before the rotation
+     * `credential.version` shows the held blob superseded: the latest blob is fetched, kept and acknowledged, the UTKs
+     * topped up, and the rotation goes with the fetched blob and succeeds.
+     */
+    @Test
+    fun aRotationDuringAnAlarmGoesWithTheVaultsBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            d.keepCredential("U0VWRU4=", 7, "a2V5LW9uZQ==")
+            val rotate = async(Dispatchers.IO) { runCatching { api.credentialRotate("password one", alarmOpen = true) } }
+            answer(d, v, "credential.version", """{"exists":true,"version":1,"key":"a2V5LXR3bw==",$alarmJson}""")
+            answer(d, v, "credential.get", """{"credential":"T05F","version":1}""")
+            answer(d, v, "credential.ack", "{}")
+            answer(d, v, "credential.utk.get", """{"utks":[${utkJson("00112233445569a1", KemPrivateKey.generate())}]}""")
+            assertEquals("a2V5LXR3bw==", d.credentialKey)
+            val r = v.open(nextDeposit().second)
+            assertEquals("credential.rotate", r.type)
+            assertEquals("T05F", blobOf(r))
+            d.handle(v.seal(r.type, """{"credential":"VFdP","version":2,"key":"a2V5LXRocmVl","utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            answer(d, v, "credential.ack", "{}")
+            assertTrue(rotate.await().isSuccess)
+            assertEquals(2L, d.credentialVersion)
+            assertEquals("a2V5LXRocmVl", d.credentialKey)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * Without the alarm known (no check first): a rotation answered `rotation_required` checks the version, fetches the
+     * vault's blob and is retried once with it; a second refusal is thrown, with no third try and no further fetch.
+     */
+    @Test
+    fun aRefusedRotationIsRetriedOnceWithTheFetchedBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            d.keepCredential("U0VWRU4=", 7)
+            val rotate = async(Dispatchers.IO) { runCatching { api.credentialRotate("password one") } }
+            answer(d, v, "credential.utk.get", """{"utks":[${utkJson("00112233445569b1", KemPrivateKey.generate())}]}""")
+            val first = v.open(nextDeposit().second)
+            assertEquals("credential.rotate", first.type)
+            assertEquals("U0VWRU4=", blobOf(first))
+            d.handle(v.error(first.id, first.type, "rotation_required"))
+            answer(d, v, "credential.version", """{"exists":true,"version":1,"key":"a2V5LXR3bw==",$alarmJson}""")
+            answer(d, v, "credential.get", """{"credential":"T05F","version":1}""")
+            answer(d, v, "credential.ack", "{}")
+            answer(d, v, "credential.utk.get", """{"utks":[${utkJson("00112233445569b2", KemPrivateKey.generate())}]}""")
+            val second = v.open(nextDeposit().second)
+            assertEquals("credential.rotate", second.type)
+            assertEquals("T05F", blobOf(second))
+            d.handle(v.error(second.id, second.type, "credential_frozen"))
+            val e = rotate.await().exceptionOrNull() as VaultOpException
+            assertEquals("credential_frozen", e.code)
+            assertNull("no third rotation, no further check", deposits.poll(500, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * The held blob is the vault's (same version and key): nothing is fetched before the rotation, and a
+     * `rotation_required` then is thrown as it is, without a retry.
+     */
+    @Test
+    fun nothingIsFetchedWhenTheBlobIsTheVaults() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            d.keepCredential("U0VWRU4=", 7, "a2V5LW9uZQ==")
+            val rotate = async(Dispatchers.IO) { runCatching { api.credentialRotate("password one", alarmOpen = true) } }
+            answer(d, v, "credential.version", """{"exists":true,"version":7,"key":"a2V5LW9uZQ==",$alarmJson}""")
+            answer(d, v, "credential.utk.get", """{"utks":[${utkJson("00112233445569c1", KemPrivateKey.generate())}]}""")
+            val r = v.open(nextDeposit().second)
+            assertEquals("credential.rotate", r.type)
+            assertEquals("U0VWRU4=", blobOf(r))
+            d.handle(v.error(r.id, r.type, "rotation_required"))
+            answer(d, v, "credential.version", """{"exists":true,"version":7,"key":"a2V5LW9uZQ==",$alarmJson}""")
+            assertEquals("rotation_required", (rotate.await().exceptionOrNull() as VaultOpException).code)
+            assertNull("no fetch, no retry", deposits.poll(500, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * The same version under another credential key (a reset starts again at 1) is not the held blob: fetched, and the
+     * key the vault named is kept with it. Also for a change's check (0.47.0), where it only adds a refresh.
+     */
+    @Test
+    fun theSameVersionUnderAnotherKeyIsFetched() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("T0xE", 1, "a2V5LW9uZQ==")
+            val markers = mutableListOf<ChangeMarker>()
+            val change = async(Dispatchers.IO) {
+                runCatching { api.credentialChangePassword("old password", "new password!", "975310") { markers += it } }
+            }
+            answer(d, v, "credential.version", """{"exists":true,"version":1,"key":"a2V5LXR3bw=="}""")
+            answer(d, v, "credential.get", """{"credential":"TkVX","version":1}""")
+            answer(d, v, "credential.ack", "{}")
+            answer(d, v, "credential.utk.get", """{"utks":[${utkJson("00112233445569d1", KemPrivateKey.generate())}]}""")
+            assertEquals("the key the vault named, kept after the fetch", "a2V5LXR3bw==", d.credentialKey)
+            val sends = (1..3).map { v.open(nextDeposit().second) }
+            assertEquals(ChangeTypes.PASSWORD_CHANGE, sends[0].type)
+            assertEquals("TkVX", blobOf(sends[0]))
+            assertEquals(1L, markers.single().sentVersion)
+            assertTrue(change.await().exceptionOrNull() is ChangeUnansweredException)
+            // Unknown held key: the version alone decides, as before (nothing fetched when it matches).
+            d.keepCredential("T0xE", 4)
+            assertNull(d.credentialKey)
+        }
+    }
+
     @Test
     fun deviceStateJsonRoundTrips() {
         val s = DeviceState("app", "phone", "https://relay.vettid.test", vaultId = "v", outbox = mutableListOf(OutboxEntry("i", "t", "u", "m", "tok", "ZW52")))
