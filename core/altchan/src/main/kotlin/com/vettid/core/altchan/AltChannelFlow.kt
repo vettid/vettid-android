@@ -156,6 +156,12 @@ class AltChannelFlow(
         null
     }
 
+    /**
+     * Whether this build may take [scale] as its vault's time scale (STAGING-TIME-SCALE §4 item 4): the rule the
+     * descriptor is checked against, for a scale that reaches the app another way (`vault.status`, §11.10.8).
+     */
+    fun acceptsTimeScale(scale: Long): Boolean = trust.acceptsTimeScale(scale)
+
     private suspend fun enclaveFor(
         release: String?,
         m: ReleaseManifest,

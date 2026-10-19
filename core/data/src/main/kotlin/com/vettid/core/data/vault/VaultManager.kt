@@ -704,6 +704,7 @@ class VaultManager(
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },
+            onTimeScale = { t, since -> noteStatusTimeScale(t, since) },
         )
     }
 
@@ -1737,6 +1738,7 @@ class VaultManager(
         } else {
             null
         }
+        noteStatusTimeScale(vs?.timeScale, rec)
         // "Installed from" (ANDROID-PLAN §7): from the app's own device.list entry; no line when it cannot be read.
         val signer = if (open) {
             try {
@@ -1759,8 +1761,11 @@ class VaultManager(
             signer = signer,
             recovery = vs?.recovery?.let { r ->
                 val unavailable = RecoveryUnknownClock.unavailable(r.state, r.counter)
+                val clock = unknownForADay(unavailable, rec)
                 RecoveryStatusView(
-                    r.state, r.attempts?.used, r.counter == COUNTER_UNAVAILABLE, unknownForADay = unknownForADay(unavailable, rec),
+                    r.state, r.attempts?.used, r.counter == COUNTER_UNAVAILABLE,
+                    unknownForADay = clock.urgent(System.currentTimeMillis()),
+                    unknownForSeconds = clock.period / MS_PER_SECOND,
                 )
             },
             recoveryOffered = ReleasePath.recoveryOffered(local.capabilities),
@@ -1772,22 +1777,40 @@ class VaultManager(
     }
 
     /**
-     * §11.14.5, §11.14.11: whether the recovery counter has been unavailable at every read for 24 hours. A read that
-     * finds it available forgets the start; the first that does not records it (kept on the phone across restarts).
+     * §11.14.5, §11.14.11: the clock of a recovery counter unavailable at every read, urgent after 24 hours. A read that
+     * finds it available forgets the start; the first that does not records it (kept on the phone across restarts), with
+     * the 24 hours divided by the vault's time scale then (STAGING-TIME-SCALE S8): a running clock keeps its period.
      */
-    private suspend fun unknownForADay(unavailable: Boolean, since: Int): Boolean {
+    private suspend fun unknownForADay(unavailable: Boolean, since: Int): RecoveryUnknownClock.State {
         val now = System.currentTimeMillis()
         // A read-modify-write under the account record's lock: every status read comes here, beside the other writers.
-        val since = io {
-            var next: Long? = null
+        return io {
+            var next = RecoveryUnknownClock.State()
             updateLocal(since) { cur ->
-                val n = RecoveryUnknownClock.next(cur.recoveryUnknownSinceMs, unavailable, now)
+                val was = RecoveryUnknownClock.State(cur.recoveryUnknownSinceMs, cur.recoveryUnknownForMs)
+                val n = RecoveryUnknownClock.advance(was, unavailable, now, cur.timeScale ?: com.vettid.core.crypto.altchan.TimeScale.REAL)
                 next = n
-                if (n != cur.recoveryUnknownSinceMs) cur.copy(recoveryUnknownSinceMs = n) else null
+                if (n != was) cur.copy(recoveryUnknownSinceMs = n.since, recoveryUnknownForMs = n.periodMs) else null
             }
             next
         }
-        return RecoveryUnknownClock.urgent(since, now)
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.43.0 §11.10.8, STAGING-TIME-SCALE §5.2) A `vault.status`'s `time_scale` is stored as the vault's
+     * ([TimeScales.fromStatus]) when this build accepts it by the rule the descriptor is checked against: a phone updated
+     * while its vault was open (which has not read a descriptor since) reckons the owner check's early warning (S2) and
+     * the waits it starts from now on with the vault's scale from the first status read, not from the next unlock. Waits
+     * already started keep the period stored with them. A value this build does not accept is not taken.
+     */
+    private suspend fun noteStatusTimeScale(reported: Long?, since: Int) {
+        val accepts = session?.alt?.let { a -> a::acceptsTimeScale }
+        if (reported == null || reported == local.timeScale || accepts == null) return
+        if (TimeScales.fromStatus(local.timeScale, reported, accepts) == null) {
+            android.util.Log.w("VaultManager", "vault.status time_scale $reported not taken by this build")
+        } else {
+            io { updateLocal(since) { cur -> TimeScales.fromStatus(cur.timeScale, reported, accepts)?.let { cur.copy(timeScale = it) } } }
+        }
     }
 
     /** Every `vault.status` read that carries `recovery` (the owner check's too) moves the clock of [unknownForADay]. */

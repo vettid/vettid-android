@@ -58,6 +58,11 @@ class OwnerCheckManagerTest {
         override suspend fun statusAndRecovery() =
             status to com.vettid.core.vault.RecoveryStatus("armed", presentRecordedAt = presentRecordedAt, counter = counter)
 
+        /** (0.43.0) The status's `time_scale`; null: absent. */
+        var timeScale: Long? = null
+
+        override suspend fun statusRead() = statusAndRecovery().let { (o, r) -> StatusRead(o, r, timeScale) }
+
         override suspend fun settingsGet() = Settings(7, JsonObject(emptyMap()))
 
         override suspend fun settingsSet(version: Long, set: Map<String, JsonElement>) {
@@ -379,5 +384,70 @@ class OwnerCheckManagerTest {
         ops.counter = "ok"
         m.refreshOwnerCheck()
         assertEquals(listOf<String?>("unavailable", "ok"), seen)
+    }
+
+    /**
+     * STAGING-TIME-SCALE S2 (VAULT-MESSAGING 0.43.0 §11.10.8): each status read hands its `time_scale` on before the
+     * deadline it came with is taken in, so the early warning is reckoned with the scale of the vault that set it.
+     */
+    @Test
+    fun everyStatusReadReportsItsTimeScaleBeforeItsDeadline() = runTest {
+        val seen = mutableListOf<Pair<Long?, Instant?>>()
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-06T12:30:00Z", 86_400, hold = true)
+            timeScale = 24
+        }
+        lateinit var m: OwnerCheckManager
+        m = OwnerCheckManager(
+            this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
+            onTimeScale = { t, _ -> seen += t to m.ownerCheck.value?.deadline },
+        )
+        m.refreshOwnerCheck()
+        ops.timeScale = null
+        m.refreshOwnerCheck()
+        assertEquals(listOf<Pair<Long?, Instant?>>(24L to null, null to Instant.parse("2026-10-06T12:30:00Z")), seen)
+    }
+
+    /**
+     * STAGING-TIME-SCALE S2: a staging phone updated while its vault was open does not know the scale; its status read
+     * says 24, the scale is stored (a staging build accepts it), and the deadline an hour away (the interval at 24) is no
+     * longer inside the warning, nor due on a return to the app. A production build never takes it: real time.
+     */
+    @Test
+    fun theFirstStatusReadFillsTheScaleForTheEarlyWarning() = runTest {
+        var stored: Long? = null
+        val staging: (Long) -> Boolean = { it == 1L || it == 24L }
+        val production: (Long) -> Boolean = { it == 1L }
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-06T13:00:00Z", 86_400, hold = true)
+            timeScale = 24
+        }
+        val m = OwnerCheckManager(
+            this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
+            onTimeScale = { t, _ -> TimeScales.fromStatus(stored, t, staging)?.let { stored = it } },
+        )
+        // Before the read: the scale counts as 1, and a deadline an hour away would warn at once.
+        val before = OwnerCheckView(OwnerCheckState.OK, Instant.parse("2026-10-06T13:00:00Z"), 86_400, 0, true, null)
+        assertTrue(before.warning(now, stored ?: 1))
+        m.refreshOwnerCheck()
+        assertEquals(24L, stored)
+        val v = m.ownerCheck.value!!
+        assertFalse(v.warning(now, stored ?: 1))
+        assertFalse(v.gated(now) || v.warning(now, stored ?: 1))
+        assertTrue(v.warning(now.plusSeconds(3_600 - 150), stored ?: 1))
+
+        // The rule the descriptor is checked against: a production build stores nothing but 1.
+        assertNull(TimeScales.fromStatus(null, 24, production))
+        assertEquals(1L, TimeScales.fromStatus(null, 1, production))
+    }
+
+    /** `vault.status`'s `time_scale` (0.43.0): read when present, null from a release before the scale. */
+    @Test
+    fun theStatusCarriesItsTimeScale() {
+        fun read(body: String) =
+            VaultJson.decode(com.vettid.core.vault.VaultStatusInfo.serializer(), VaultJson.parseObject(body.toByteArray()))
+        assertEquals(24L, read("""{"vault_id":"x","time_scale":24}""").timeScale)
+        val without = read("""{"vault_id":"x"}""")
+        assertNull(without.timeScale)
     }
 }

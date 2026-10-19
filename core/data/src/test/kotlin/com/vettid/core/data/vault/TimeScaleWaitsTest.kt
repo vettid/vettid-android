@@ -13,7 +13,7 @@ import java.time.Instant
 
 /**
  * The app's own waits under the vault's time scale (STAGING-TIME-SCALE §3, §5.6; ANDROID-PLAN 0.1.44): each is divided
- * when it starts and keeps the absolute time it was given (S2, S10, S12, S16); at 1 nothing changes.
+ * when it starts and keeps the absolute time it was given (S2, S8, S10, S12, S16); at 1 nothing changes.
  */
 class TimeScaleWaitsTest {
     private val hour = 3_600_000L
@@ -58,6 +58,28 @@ class TimeScaleWaitsTest {
         // The interval keeps its real units; it runs divided.
         assertEquals(3_600L, v.intervalRunsSeconds(24))
         assertEquals(86_400L, v.intervalRunsSeconds(1))
+    }
+
+    /**
+     * S2 (VAULT-MESSAGING 0.43.0 §11.10.8): `vault.status`'s `time_scale` is stored when this build accepts it by the
+     * descriptor's rule; an absent, unchanged, out-of-range or refused value stores nothing.
+     */
+    @Test
+    fun aStatusScaleIsTakenByTheDescriptorsRule() {
+        val staging: (Long) -> Boolean = { it == 1L || it == 24L }
+        val production: (Long) -> Boolean = { it == 1L }
+        assertEquals("fills a missing scale", 24L, TimeScales.fromStatus(null, 24, staging))
+        assertEquals("follows the vault", 24L, TimeScales.fromStatus(1, 24, staging))
+        assertEquals(1L, TimeScales.fromStatus(24, 1, staging))
+        assertNull("unchanged", TimeScales.fromStatus(24, 24, staging))
+        assertNull("absent: the stored scale stays", TimeScales.fromStatus(24, null, staging))
+        assertNull("production refuses 24", TimeScales.fromStatus(null, 24, production))
+        assertNull(TimeScales.fromStatus(1, 24, production))
+        assertEquals(1L, TimeScales.fromStatus(null, 1, production))
+        assertNull("not an accepted value", TimeScales.fromStatus(null, 12, staging))
+        assertNull("out of range", TimeScales.fromStatus(null, 0) { true })
+        assertNull(TimeScales.fromStatus(null, -24) { true })
+        assertNull(TimeScales.fromStatus(null, 86_401) { true })
     }
 
     /** S10: the old phone keeps its keys 7 days after the approval, 7 hours at 24, from the period stored with it. */

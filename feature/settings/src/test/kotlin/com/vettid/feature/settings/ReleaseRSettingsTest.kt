@@ -58,8 +58,28 @@ class ReleaseRSettingsTest {
         val r = RecoveryStatusView("unknown", null, true, unknownForADay = true)
         rule.setContent { VaultStatusContent(LoadState(false, overview(r)), {}, {}) }
         rule.onNodeWithTag("recovery_unknown_day").assertIsDisplayed()
-        rule.onNodeWithText(res.getString(R.string.settings_recovery_unknown_day)).assertExists()
+        rule.onNodeWithText(res.getString(R.string.settings_recovery_unknown_day, "24 hours", "3 days")).assertExists()
+        rule.onNodeWithText("Staging: 1 day = 1 hour", substring = true).assertDoesNotExist()
         rule.onNodeWithTag("recovery_attempts_used").assertDoesNotExist()
+    }
+
+    /**
+     * STAGING-TIME-SCALE S8 (ANDROID-PLAN 0.1.49): on a vault at 24 the text names the clock's period as it started (1
+     * hour) and the quiet period as the vault runs it (3 hours), with the staging note.
+     */
+    @Test
+    fun atTwentyFourTheTextSaysAnHourAndThreeHours() {
+        val r = RecoveryStatusView("unknown", null, true, unknownForADay = true, unknownForSeconds = 3_600)
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.vettid.core.ui.format.LocalTimeScale provides com.vettid.core.ui.format.UiTimeScale(24, stagingNote = true),
+            ) {
+                VaultStatusContent(LoadState(false, overview(r)), {}, {})
+            }
+        }
+        rule.onNodeWithText("For 1 hour your vault has not been able", substring = true).assertExists()
+        rule.onNodeWithText("If this goes on for 3 hours, your vault", substring = true).assertExists()
+        rule.onNodeWithText("Staging: 1 day = 1 hour", substring = true).assertExists()
     }
 
     @Test
