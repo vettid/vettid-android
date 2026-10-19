@@ -38,6 +38,7 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.StagingTimeNote
 import com.vettid.core.ui.format.durationText
@@ -182,13 +183,24 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 
 private const val WARN_LEFT = 3
 
+/**
+ * The presence notice's body: in real time (production, and every vault at scale 1) the approved words ("three days");
+ * on a vault with a time scale the quiet period as it runs there (STAGING-TIME-SCALE S7; owner decision 2026-10-19).
+ */
+@Composable
+fun presenceBody(): String = if (LocalTimeScale.current.scale <= 1) {
+    stringResource(R.string.ownercheck_presence_body)
+} else {
+    stringResource(R.string.ownercheck_presence_body_scaled, scaledDurationText(RECOVERY_QUIET_S))
+}
+
 /** ANDROID-PLAN "Owner check and status" (release R): the vault could not record that the member was here. */
 @Composable
 private fun PresenceNotice() {
     NoticeCard(
         NoticeKind.WARNING,
         stringResource(R.string.ownercheck_presence_title),
-        stringResource(R.string.ownercheck_presence_body, scaledDurationText(RECOVERY_QUIET_S)) + stagingNoteSuffix(),
+        presenceBody() + stagingNoteSuffix(),
         modifier = Modifier.testTag("owner_check_presence"),
         announce = androidx.compose.ui.semantics.LiveRegionMode.Polite,
     )

@@ -2,7 +2,9 @@
 <resources>
     <!-- The daily owner check in the shell (VAULT-MESSAGING §3.6.5, §3.6.7) -->
     <string name="owner_check_warning">Your daily check is due at %1$s.</string>
-    <string name="owner_check_warning_soon">Your daily check is due within %1$s.</string>
+    <string name="owner_check_warning_soon">Your daily check is due within the hour.</string>
+    <!-- The same on a vault with a time scale (staging): how long before the deadline the warning starts, e.g. "150 seconds" -->
+    <string name="owner_check_warning_soon_scaled">Your daily check is due within %1$s.</string>
     <string name="owner_check_now">Check now</string>
     <string name="owner_check_hold_off">The hold is off.</string>
     <string name="owner_check_hold_off_until">The hold is off until %1$s.</string>

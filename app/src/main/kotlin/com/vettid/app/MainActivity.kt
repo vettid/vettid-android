@@ -29,6 +29,7 @@ import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.vault.CanaryManifestInbox
 import com.vettid.core.data.vault.ReleaseUpdateInbox
+import com.vettid.core.data.vault.SCALED_FAILURE_TEXTS
 import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.lock.AppLock
@@ -125,7 +126,7 @@ class MainActivity : ComponentActivity() {
                 ThemeController(themeMode) { m -> lifecycleScope.launch { prefs.setTheme(m.toPreference()) } }
             }
             val t by timeScales.timeScale.collectAsStateWithLifecycle()
-            val uiTimeScale = remember(t) { UiTimeScale(t.scale, t.stagingNote) }
+            val uiTimeScale = remember(t) { UiTimeScale(t.scale, t.stagingNote, SCALED_FAILURE_TEXTS) }
             CompositionLocalProvider(
                 LocalThemeController provides controller,
                 LocalUserPresence provides presence,
