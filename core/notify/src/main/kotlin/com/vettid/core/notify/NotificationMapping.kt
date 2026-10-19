@@ -2,6 +2,7 @@ package com.vettid.core.notify
 
 import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.data.feed.FeedManager
+import com.vettid.core.data.vault.RecoveryRefs
 import com.vettid.core.vault.FeedItem
 
 /**
@@ -33,10 +34,21 @@ object NotificationMapping {
         item.kind in MESSAGES -> Channels.MESSAGES
         item.kind in REQUESTS -> Channels.REQUESTS
         item.kind in CALLS -> Channels.CALLS
-        item.kind in SECURITY -> Channels.SECURITY
+        item.kind in SECURITY || urgentRecovery(item) -> Channels.SECURITY
         // Connections, grants, shares, items, devices, the credential renewed, agents, location, wallet; and
         // a newer vault's kinds (priority normal and above, never low: above).
         else -> Channels.ACTIVITY
+    }
+
+    /**
+     * The urgent recovery notifications (ANDROID-PLAN 0.1.52 §4 "Event titles", owner decision of 2026-10-19): a failed
+     * `recovery.attempt` (urgent and `not_success`, or urgent with a `ref` that does not read), `recovery.counter_unavailable`
+     * and `recovery.change_required`. A successful or not urgent attempt stays on Vault activity.
+     */
+    private fun urgentRecovery(item: FeedItem): Boolean = when (item.kind) {
+        "recovery.counter_unavailable", "recovery.change_required" -> true
+        "recovery.attempt" -> item.priority == FeedManager.PRIORITY_URGENT && RecoveryRefs.attempt(item.ref)?.success != true
+        else -> false
     }
 
     /** Kinds whose screens come later (§6): the notification says to open a newer VettID. */
