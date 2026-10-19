@@ -552,20 +552,23 @@ class VaultDevice private constructor(
         val opts = options.copy(sendChain = !st.signerSeen)
         val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), opts, now())
         pendingUnlock = b.pending
-        discardable = b to issuedBefore
+        discardable = Discardable(b, issuedBefore, st.issuedExpMs)
         save()
         b
     }
 
-    /** The unlock last built and the standing token's issue before it ([discardUnlock]). */
-    private var discardable: Pair<BuiltUnlock, Long>? = null
+    /** The unlock last built, the standing token's issue before it, and the issue the build recorded ([discardUnlock]). */
+    private class Discardable(val built: BuiltUnlock, val issuedBefore: Long, val issuedByBuild: Long)
+
+    private var discardable: Discardable? = null
 
     override suspend fun discardUnlock(built: BuiltUnlock) = lock.withLock {
-        val (b, issuedBefore) = discardable ?: return@withLock
-        if (b !== built) return@withLock
+        val d = discardable?.takeIf { it.built === built } ?: return@withLock
         discardable = null
         if (pendingUnlock === built.pending) pendingUnlock = null
-        st.issuedExpMs = issuedBefore
+        // Only the build's own issue goes back: a token minted since (a `relay.token.refresh`, maintain()) did reach the
+        // vault, and its expiry stays (restoring an older one, or 0, would delay or stop the next re-issue).
+        if (st.issuedExpMs == d.issuedByBuild) st.issuedExpMs = d.issuedBefore
         save()
     }
 

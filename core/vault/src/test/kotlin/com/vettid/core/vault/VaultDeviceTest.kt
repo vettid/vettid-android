@@ -1131,14 +1131,14 @@ class VaultDeviceTest {
     /**
      * (VAULT-MESSAGING §11.14.9 step 2) An unlock built and then not posted (its PIN may no longer be the one the vault
      * expects) leaves nothing behind: the standing token's issue goes back to what it was, kept across a restart, and no
-     * pending unlock remains.
+     * pending unlock remains; but a token minted since the build (the vault's refresh) keeps its expiry, also from 0.
      */
     @Test
     fun aDiscardedUnlockLeavesNothingRecorded() = runBlocking<Unit> {
         withTimeout(30_000) {
             val store = InMemoryDeviceStateStore()
             val secrets = DeviceSecrets.generate()
-            val (d, _) = pairedDevice(this, store, secrets)
+            val (d, v) = pairedDevice(this, store, secrets)
             val pcr0 = "a3".repeat(48)
             val etk = KemPrivateKey.generate()
             val pair = java.security.KeyPairGenerator.getInstance("EC").apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }.generateKeyPair()
@@ -1177,6 +1177,34 @@ class VaultDeviceTest {
             assertEquals(before, VaultDevice.load(config(store), secrets)!!.issuedTokenExpMs)
             val e = runCatching { d.openUnlockResult(ByteArray(8)) }.exceptionOrNull()
             assertTrue("$e", e is VaultStateException && e.message!!.contains("no pending unlock"))
+            // A newer token minted between the build and the discard (the vault's relay.token.refresh) reached the vault:
+            // its expiry stays.
+            val b2 = d.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)
+            val built = d.issuedTokenExpMs
+            kotlinx.coroutines.delay(20)
+            d.handle(v.seal("relay.token.refresh", "{}"))
+            val minted = d.issuedTokenExpMs
+            assertTrue("a newer token was minted", minted > built)
+            d.discardUnlock(b2)
+            assertEquals(minted, d.issuedTokenExpMs)
+            assertEquals(minted, VaultDevice.load(config(store), secrets)!!.issuedTokenExpMs)
+
+            // The case where restoring would harm: no standing token issued yet (0: maintain() never re-issues then).
+            val zeroStore = InMemoryDeviceStateStore()
+            zeroStore.save(String(store.load()!!).replace(Regex("\"issuedExpMs\":[0-9]+"), "\"issuedExpMs\":0").toByteArray())
+            val z = VaultDevice.load(config(zeroStore), secrets)!!
+            assertEquals(0L, z.issuedTokenExpMs)
+            // Discarded with nothing minted since: back to 0.
+            z.discardUnlock(z.prepareUnlock("guid-1", "246802", enclave, manifest, att, options))
+            assertEquals(0L, z.issuedTokenExpMs)
+            // A refresh's mint in between: kept, not put back to 0.
+            val b3 = z.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)
+            kotlinx.coroutines.delay(20)
+            z.handle(v.seal("relay.token.refresh", "{}"))
+            val zMinted = z.issuedTokenExpMs
+            assertTrue(zMinted > 0)
+            z.discardUnlock(b3)
+            assertEquals(zMinted, z.issuedTokenExpMs)
         }
     }
 
