@@ -1358,10 +1358,16 @@ class VaultManager(
      * vault that is locked).
      */
     override suspend fun finishSetup() {
+        finishSetupGated()
+    }
+
+    /** [finishSetup]; false when its gate refused (nothing written, the phase left as it is). */
+    private suspend fun finishSetupGated(): Boolean {
         val rec = record.recordGeneration
-        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMove.value)) return
+        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMove.value)) return false
         io { updateLocal(rec) { it.copy(setupComplete = true, movedIn = false) } }
         phaseFlow.value = AppPhase.Unlocked
+        return true
     }
 
     override suspend fun preflight(): PreflightInfo = guard {
@@ -2290,14 +2296,30 @@ class VaultManager(
      * phone's last setup screen (a recovered phone is a new install, `setupComplete` false, so [afterUnlocked] says
      * [SetupStage.FINISHING]): setup is finished here as from the onboarding's last screen ([finishSetup], under its
      * gate: never over a pending lock). Without it the phase stayed FINISHING under the recovery screen, which ignores it.
+     * The rules are [RecoveryOpenFinish]'s: as at the end of an unlock, a lock or a wipe since this began, or a lock
+     * pending now, is never overwritten (Locked while a lock is pending), and an app that did not open is a failure.
      */
     override suspend fun finishRecoveryOpen() {
-        guard {
-            val s = session()
-            val p = afterUnlocked(s)
-            phaseFlow.value = p
-        }
-        finishSetup()
+        // Read before anything: a lock asked for from here on bumps it, and this then publishes no open phase.
+        val gen = generation
+        RecoveryOpenFinish.run(
+            object : RecoveryOpenFinish.Ports {
+                override fun overtaken() = when {
+                    lockGuard.lockedWhatever(unlocked = true) -> RecoveryOpenFinish.Overtaken.LOCK_PENDING
+                    gen != generation -> RecoveryOpenFinish.Overtaken.OTHER
+                    else -> RecoveryOpenFinish.Overtaken.NO
+                }
+
+                override suspend fun afterUnlocked(): AppPhase = guard { this@VaultManager.afterUnlocked(session()) }
+
+                override fun publish(phase: AppPhase) {
+                    phaseFlow.value = phase
+                }
+
+                // Under guard: a failure of the account record's write is a VaultFailure, as everything else here.
+                override suspend fun finishSetup(): Boolean = guard { finishSetupGated() }
+            },
+        )
     }
 
     override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {

@@ -170,6 +170,8 @@ fun RecoverContent(
     onOpenAccountSite: () -> Unit,
     camera: (@Composable (Modifier) -> Unit)? = null,
     secureTyping: Boolean = true,
+    /** The release-R pane's view model; null: Hilt's (a test passes its own). */
+    recoveryOpen: RecoveryOpenViewModel? = null,
 ) {
     val leaveable = state.step in setOf(RecoverStep.INTRO, RecoverStep.LOADING)
     val back: () -> Unit = { if (!actions.back() && leaveable) onLeave() }
@@ -206,7 +208,7 @@ fun RecoverContent(
         }
         // Release R (ANDROID-PLAN 0.1.40): the PIN and the password on one screen, checked before they are sent.
         RecoverStep.PIN -> if (state.phoneSecret) {
-            val open: RecoveryOpenViewModel = hiltViewModel()
+            val open: RecoveryOpenViewModel = recoveryOpen ?: hiltViewModel()
             val openState by open.uiState.collectAsStateWithLifecycle()
             // The `ok` text is the recovered phone's last setup screen: once the vault opened, setup is finished.
             RecoveryOpenPane(openState, open, onStartOver = actions::askStartOver, onOpened = actions::finish)

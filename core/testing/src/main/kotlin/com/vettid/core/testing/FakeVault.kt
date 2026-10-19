@@ -253,14 +253,30 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
      */
     var setupComplete = false
 
+    /** Set by a test: a lock was asked for and is not confirmed (VaultManager's `LockKeeper.pending`). */
+    var lockPending = false
+
     /**
-     * As the vault's own unlock ends (`afterUnlocked`): the open app when setup is complete, otherwise
-     * [SetupStage.FINISHING]. (VaultManager then finishes setup itself; the fake leaves that to the screens' own
-     * finish, so that a screen that only waits for the phase to change cannot pass here.)
+     * Set by a test: [finishRecoveryOpen] returns with the phone still at [SetupStage.FINISHING] instead of finishing
+     * setup, as an app that did not open by itself; for the recovery screen's own hand-over to the end of setup.
+     */
+    var recoveryOpenLeavesFinishing = false
+
+    /**
+     * As VaultManager's (`RecoveryOpenFinish`): a pending lock first (Locked, and `lock_pending`); then the vault's own
+     * unlock ends (`afterUnlocked`) in the open app when setup is complete, otherwise in [SetupStage.FINISHING], and
+     * setup is finished under [finishSetup]'s gate; an app that did not open is `not_opened`. The finish here is not
+     * recorded in [calls]: `finishSetup` there is always a screen's.
      */
     override suspend fun finishRecoveryOpen() {
         call("finishRecoveryOpen")
+        if (lockPending) {
+            phase.value = AppPhase.Locked
+            throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_LOCK_PENDING)
+        }
         phase.value = if (setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
+        if (setupComplete || recoveryOpenLeavesFinishing) return
+        if (!finishSetupGated()) throw VaultFailure(FailureKind.OTHER, MoveRepository.CODE_NOT_OPENED)
     }
 
     override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit, pin: String?) {
@@ -281,10 +297,17 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         phase.value = AppPhase.Setup(SetupStage.FINISHING)
     }
 
+    /** As VaultManager's, under its gate (`FinishSetupGate`): only from [SetupStage.FINISHING], never with a lock pending. */
     override suspend fun finishSetup() {
         call("finishSetup")
+        finishSetupGated()
+    }
+
+    private fun finishSetupGated(): Boolean {
+        if (phase.value != AppPhase.Setup(SetupStage.FINISHING) || lockPending) return false
         setupComplete = true
         phase.value = AppPhase.Unlocked
+        return true
     }
 
     override suspend fun preflight(): PreflightInfo {
