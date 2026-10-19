@@ -481,12 +481,23 @@ interface MoveRepository {
      */
     suspend fun resumeLostOk(pin: String): RecoveryOpenOutcome = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 
-    /** (Release R) After an `ok` [recoveryOpen] the member has read: the app opens. */
+    /**
+     * (Release R) After an `ok` [recoveryOpen] the member has read: the app opens (setup is finished: the `ok` text is a
+     * recovered phone's last setup screen). Returns only once the app is open. Otherwise a [VaultFailure], and the app
+     * stays closed: [CODE_LOCK_PENDING] when a lock asked for meanwhile is pending (the phase is then Locked),
+     * [CODE_NOT_OPENED] when the app did not open for another reason.
+     */
     suspend fun finishRecoveryOpen() {}
 
     companion object {
         /** (Release R) [abandonRecovery] after the vault made this phone its app: never; the phone key stays. */
         const val CODE_RECOVERY_OPENED = "recovery_opened"
+
+        /** [finishRecoveryOpen]: a lock is pending, so the app did not open (as a release update's lock). */
+        const val CODE_LOCK_PENDING = ReleaseUpdateManager.CODE_LOCK_PENDING
+
+        /** [finishRecoveryOpen]: the app did not open (a lock or a wipe meanwhile, or setup could not be finished). */
+        const val CODE_NOT_OPENED = "not_opened"
 
         /**
          * How long the new phone waits for the vault's `hs.resp` after its transfer `hs.init` (§6.7.1 step 2,

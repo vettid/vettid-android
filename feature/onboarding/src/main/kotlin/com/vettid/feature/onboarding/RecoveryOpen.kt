@@ -42,6 +42,7 @@ import com.vettid.core.ui.components.SecureWindow
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -259,16 +260,29 @@ class RecoveryOpenViewModel @Inject constructor(
     /**
      * After the `ok` text: the app opens. Then [RecoveryOpenUiState.opened], for the screen to finish setup if the app
      * is not open yet (the `ok` text is the recovered phone's last setup screen). Continue may be pressed again after a
-     * failure; it opens nothing twice.
+     * failure; it opens nothing twice. A failure never opens anything: a lock asked for meanwhile
+     * ([MoveRepository.CODE_LOCK_PENDING]) keeps the phone locked and is said as the unlock screen says it.
      */
     fun openApp() {
         if (state.value.step != OpenStep.DONE) return
         viewModelScope.launch {
-            try {
+            val failure = try {
                 move.finishRecoveryOpen()
-                state.update { it.copy(failure = null, opened = true) }
+                null
             } catch (e: VaultFailure) {
-                state.update { it.copy(failure = e.kind) }
+                e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: RuntimeException) {
+                // Anything else (the account record's write): not opened, said as a failure, and the screen stays.
+                VaultFailure(FailureKind.OTHER, MoveRepository.CODE_NOT_OPENED, cause = e)
+            }
+            state.update {
+                if (failure == null) {
+                    it.copy(failure = null, failureCode = null, opened = true)
+                } else {
+                    it.copy(failure = failure.kind, failureCode = failure.code, opened = false)
+                }
             }
         }
     }
@@ -510,7 +524,15 @@ private fun OpenDone(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     @Suppress("SpreadOperator") // a string's arguments
     val body = stringResource(t.res, *t.args.toTypedArray())
     NoticeCard(NoticeKind.INFO, stringResource(R.string.onboarding_open_answer_title), body, Modifier.testTag("open_answer_ok"))
-    state.failure?.let { Text(failureText(it.messageRes()), style = MaterialTheme.typography.bodyMedium) }
+    state.failure?.let {
+        // A lock asked for meanwhile is pending: said as the unlock screen says it (the phone stays locked).
+        val text = if (state.failureCode == MoveRepository.CODE_LOCK_PENDING) {
+            stringResource(R.string.unlock_lock_unconfirmed_body)
+        } else {
+            failureText(it.messageRes())
+        }
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("open_app_failure"))
+    }
     Button(onClick = vm::openApp, modifier = Modifier.testTag("open_app")) { Text(stringResource(R.string.onboarding_open_continue)) }
 }
 

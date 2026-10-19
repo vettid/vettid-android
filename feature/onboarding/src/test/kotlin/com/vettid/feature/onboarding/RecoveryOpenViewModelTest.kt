@@ -49,20 +49,21 @@ class RecoveryOpenViewModelTest {
         vm.openApp()
         advanceUntilIdle()
         assertTrue("finishRecoveryOpen" in vault.calls)
-        // A recovered phone is a new install: the vault's unlock ends in FINISHING, and the screen is told it opened,
-        // to finish setup ([RecoveryOpenPane]'s onOpened).
-        assertEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
+        // A recovered phone is a new install: the open finishes setup itself, and the screen is told it opened.
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+        assertTrue(vault.setupComplete)
         assertTrue(vm.uiState.value.opened)
     }
 
     /**
      * The release-R recovery end to end over one vault, as the screens run it: onboarding at RECOVER, the recovery flow
-     * at its PIN, the open answered `ok`, Continue. The open's FINISHING is ignored by the onboarding while it shows
-     * the recovery (as it must be for the earlier path's own last screen), so only the recovery screen's hand-over to
-     * the end of setup opens the app; and it does.
+     * at its PIN, the open answered `ok`, Continue. When the open returns without the app open (FINISHING, which the
+     * onboarding ignores while it shows the recovery, as it must for the earlier path's own last screen), the recovery
+     * screen's hand-over to the end of setup opens it.
      */
     @Test
     fun okThenContinueOpensTheAppFromTheRecoveryScreens() = runTest {
+        vault.recoveryOpenLeavesFinishing = true
         vault.recoveryStageValue = RecoveryStage.PIN
         val onboarding = OnboardingViewModel(vault, vault, com.vettid.core.data.account.SetupLinkInbox())
         val recover = RecoverViewModel(vault, vault, vault, com.vettid.core.testing.FakeReleaseNotes())
@@ -100,6 +101,51 @@ class RecoveryOpenViewModelTest {
         vm.openApp()
         advanceUntilIdle()
         assertEquals(AppPhase.Unlocked, vault.phase.value)
+    }
+
+    /**
+     * A lock asked for between `ok` and Continue is pending: the phone stays locked, the app never opens, and the
+     * screen says so (not a silent stop); nothing is handed over to the end of setup.
+     */
+    @Test
+    fun aLockPendingAtContinueKeepsThePhoneLockedAndSaysSo() = runTest {
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.enterAndSend()
+        advanceUntilIdle()
+        vault.lockPending = true
+        vm.openApp()
+        advanceUntilIdle()
+        assertEquals(AppPhase.Locked, vault.phase.value)
+        assertFalse(vault.setupComplete)
+        val s = vm.uiState.value
+        assertFalse(s.opened)
+        assertEquals(FailureKind.NO_RESPONSE, s.failure)
+        assertEquals(com.vettid.core.data.vault.MoveRepository.CODE_LOCK_PENDING, s.failureCode)
+        assertEquals(OpenStep.DONE, s.step)
+    }
+
+    /** Anything else thrown at Continue (the account record's write): a failure on the screen, never the open app. */
+    @Test
+    fun anUnexpectedErrorAtContinueIsAFailureNotACrash() = runTest {
+        val move = object : com.vettid.core.data.vault.MoveRepository by vault {
+            override suspend fun finishRecoveryOpen() {
+                error("the record could not be written")
+            }
+        }
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        val vm = RecoveryOpenViewModel(move, vault)
+        advanceUntilIdle()
+        vm.enterAndSend()
+        advanceUntilIdle()
+        vm.openApp()
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertFalse(s.opened)
+        assertEquals(FailureKind.OTHER, s.failure)
+        assertEquals(com.vettid.core.data.vault.MoveRepository.CODE_NOT_OPENED, s.failureCode)
+        assertEquals(AppPhase.Setup(SetupStage.RECOVERING), vault.phase.value)
     }
 
     /** After ok the vault removed the recovery: a failure then, or a restart, finishes with the PIN, never a new open. */
