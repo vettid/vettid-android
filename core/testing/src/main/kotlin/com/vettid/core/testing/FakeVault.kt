@@ -266,7 +266,8 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
      * As VaultManager's (`RecoveryOpenFinish`): a pending lock first (Locked, and `lock_pending`); then the vault's own
      * unlock ends (`afterUnlocked`) in the open app when setup is complete, otherwise in [SetupStage.FINISHING], and
      * setup is finished under [finishSetup]'s gate; an app that did not open is `not_opened`. The finish here is not
-     * recorded in [calls]: `finishSetup` there is always a screen's.
+     * recorded in [calls]: `finishSetup` there is always a screen's. Not modelled: VaultManager's generation check (a lock
+     * or a wipe while the phase is computed or the record written); that is `RecoveryOpenFinishTest`'s.
      */
     override suspend fun finishRecoveryOpen() {
         call("finishRecoveryOpen")

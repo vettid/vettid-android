@@ -39,13 +39,20 @@ class RecoveryOpenFinishTest {
             this.phase = phase
         }
 
+        /** Run while the account record is written, after the gate passed: a lock asked for during the write. */
+        var onRecordWrite: () -> Unit = {}
+
+        /** As VaultManager's `finishSetupGated`: the gate, the record's write, then the checks again before Unlocked. */
         override suspend fun finishSetup(): Boolean {
             steps += "finishSetup"
             onFinishSetup()
             // As FinishSetupGate.
             val allowed = gateOpen && FinishSetupGate.allows(phase, overtaken == RecoveryOpenFinish.Overtaken.LOCK_PENDING, false)
-            if (allowed) phase = AppPhase.Unlocked
-            return allowed
+            if (!allowed) return false
+            onRecordWrite()
+            if (overtaken != RecoveryOpenFinish.Overtaken.NO) return false
+            phase = AppPhase.Unlocked
+            return true
         }
     }
 
@@ -98,6 +105,36 @@ class RecoveryOpenFinishTest {
         val e = failure(p)
         assertEquals(MoveRepository.CODE_LOCK_PENDING, e.code)
         assertEquals(AppPhase.Locked, p.phase)
+    }
+
+    /**
+     * A lock asked for while the record is written, after the gate passed (it publishes Locked itself): never Unlocked
+     * over it; Locked, and the caller is told.
+     */
+    @Test
+    fun aLockDuringTheRecordWriteIsNotOverwritten() {
+        val p = Ports(unlocked = finishing)
+        p.onRecordWrite = {
+            p.phase = AppPhase.Locked
+            p.overtaken = RecoveryOpenFinish.Overtaken.LOCK_PENDING
+        }
+        val e = failure(p)
+        assertEquals(MoveRepository.CODE_LOCK_PENDING, e.code)
+        assertEquals(AppPhase.Locked, p.phase)
+        assertEquals("publish ${AppPhase.Locked}", p.steps.last())
+    }
+
+    /** A wipe (or a lock already confirmed) while the record is written: what it published stands, and a failure. */
+    @Test
+    fun aWipeDuringTheRecordWriteStands() {
+        val p = Ports(unlocked = finishing)
+        p.onRecordWrite = {
+            p.phase = AppPhase.SignedOut
+            p.overtaken = RecoveryOpenFinish.Overtaken.OTHER
+        }
+        val e = failure(p)
+        assertEquals(MoveRepository.CODE_NOT_OPENED, e.code)
+        assertEquals(AppPhase.SignedOut, p.phase)
     }
 
     /** The gate refused for another reason ("Finish the move" running): not opened, and a failure. */

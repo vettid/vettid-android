@@ -1361,11 +1361,21 @@ class VaultManager(
         finishSetupGated()
     }
 
-    /** [finishSetup]; false when its gate refused (nothing written, the phase left as it is). */
+    /**
+     * [finishSetup]; false when its gate refused (nothing written, the phase left as it is), or when a lock or a wipe
+     * came while the record was written (the record says setup is complete, but the phase that lock or wipe published
+     * stands: never Unlocked over it).
+     */
+    @Suppress("ReturnCount") // the gate, then the checks after the write
     private suspend fun finishSetupGated(): Boolean {
+        // Read before the gate: a lock asked for from here on bumps it (as at the end of an unlock).
+        val gen = generation
         val rec = record.recordGeneration
         if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMove.value)) return false
         io { updateLocal(rec) { it.copy(setupComplete = true, movedIn = false) } }
+        // Both checks after the write, which suspends: the generation (a lock or a wipe meanwhile) and the guard (a lock
+        // pending now).
+        if (gen != generation || lockGuard.lockedWhatever(unlocked = true)) return false
         phaseFlow.value = AppPhase.Unlocked
         return true
     }
@@ -2316,7 +2326,8 @@ class VaultManager(
                     phaseFlow.value = phase
                 }
 
-                // Under guard: a failure of the account record's write is a VaultFailure, as everything else here.
+                // Under guard: the failures it knows (an IOException of the account record's write, among others)
+                // become a VaultFailure; anything else (an IllegalStateException) is caught by the view model's openApp.
                 override suspend fun finishSetup(): Boolean = guard { finishSetupGated() }
             },
         )
