@@ -354,6 +354,8 @@
     <string name="onboarding_open_change">Change</string>
     <string name="onboarding_open_warning_title">Before you send</string>
     <string name="onboarding_open_second">This is your second attempt. If it is wrong too, you can try again in 24 hours, and the wait gets longer after every further wrong attempt.</string>
+    <!-- The same on a vault with a time scale (staging): the wait after a wrong second attempt as it runs there, e.g. "10 minutes" -->
+    <string name="onboarding_open_second_scaled">This is your second attempt. If it is wrong too, you can try again in %1$s, and the wait gets longer after every further wrong attempt.</string>
     <string name="onboarding_open_few_left">You have %1$d attempts left. If they are all wrong, this vault cannot be recovered and you would have to start over with an empty one. Check both entries before you go on.</string>
     <string name="onboarding_open_answer_title">Recovery</string>
     <string name="onboarding_open_try_again">Try again</string>
