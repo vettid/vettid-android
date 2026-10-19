@@ -95,6 +95,12 @@ internal data class LocalAccount(
      * screen says so with the urgency of a used attempt.
      */
     val recoveryUnknownSinceMs: Long? = null,
+    /**
+     * (STAGING-TIME-SCALE, S8) How long [recoveryUnknownSinceMs] runs before the notice is urgent, set when it started:
+     * 24 hours divided by the vault's time scale then ([RecoveryUnknownClock.urgentMs]). Null: 24 hours (started before
+     * the scale, or at scale 1).
+     */
+    val recoveryUnknownForMs: Long? = null,
     /** (Release R) The offer to rotate the vault's keys is open, until a rotation succeeds or it is put away. */
     val rotateOffered: Boolean = false,
     /**

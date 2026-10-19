@@ -25,6 +25,11 @@ data class VaultStatusInfo(
     @SerialName("owner_check") val ownerCheck: OwnerCheckStatus? = null,
     /** (0.33.0, release R) Recovery's state and attempts (§11.14.11); absent before release R. */
     val recovery: RecoveryStatus? = null,
+    /**
+     * (0.43.0, STAGING-TIME-SCALE §5.2) The release's time scale (§11.10.8), to the app and desktops; absent from a
+     * release before the scale. Which values the app takes is its build's rule, as for the descriptor's.
+     */
+    @SerialName("time_scale") val timeScale: Long? = null,
 )
 
 /**

@@ -71,9 +71,13 @@ import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsSectionHeader
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.LocalTimeScale
+import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdTheme
 import java.time.Instant
@@ -277,7 +281,19 @@ private fun RecoveryNotices(r: com.vettid.core.data.vault.RecoveryStatusView, on
     val title = stringResource(R.string.settings_status_recovery)
     val pad = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
     if (r.unknownForADay) {
-        NoticeCard(NoticeKind.URGENT, title, stringResource(R.string.settings_recovery_unknown_day), pad.testTag("recovery_unknown_day"))
+        // Real time (production, and every vault at scale 1): the approved words. STAGING-TIME-SCALE S8, S7 otherwise:
+        // the clock's period as it started, and the quiet period as the vault runs it, with the staging note.
+        val realTime = LocalTimeScale.current.scale <= 1 && r.unknownForSeconds == Durations.DAY
+        val text = if (realTime) {
+            stringResource(R.string.settings_recovery_unknown_day)
+        } else {
+            stringResource(
+                R.string.settings_recovery_unknown_day_scaled,
+                durationText(r.unknownForSeconds),
+                scaledDurationText(RECOVERY_QUIET_S),
+            ) + stagingNoteSuffix()
+        }
+        NoticeCard(NoticeKind.URGENT, title, text, pad.testTag("recovery_unknown_day"))
     }
     val used = r.used
     if (r.state == "armed" && used != null && used in 1 until RECOVERY_ATTEMPTS) {

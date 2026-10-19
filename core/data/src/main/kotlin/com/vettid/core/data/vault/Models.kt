@@ -270,8 +270,13 @@ data class RecoveryStatusView(
     val state: String,
     val used: Int?,
     val counterUnavailable: Boolean,
-    /** (§11.14.5) Unavailable at every read for 24 hours: shown with the urgency of a used attempt. */
+    /**
+     * (§11.14.5) Unavailable at every read for 24 hours (divided by the vault's time scale when the clock started,
+     * STAGING-TIME-SCALE S8): shown with the urgency of a used attempt.
+     */
     val unknownForADay: Boolean = false,
+    /** (STAGING-TIME-SCALE, S8) How long the counter was unavailable before [unknownForADay], in seconds, for the text. */
+    val unknownForSeconds: Long = RecoveryUnknownClock.URGENT_S,
 )
 
 /** MEMBER-API `ReleaseInfo` (advisory; the manifest decides). */

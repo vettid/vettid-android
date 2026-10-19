@@ -58,8 +58,45 @@ class ReleaseRSettingsTest {
         val r = RecoveryStatusView("unknown", null, true, unknownForADay = true)
         rule.setContent { VaultStatusContent(LoadState(false, overview(r)), {}, {}) }
         rule.onNodeWithTag("recovery_unknown_day").assertIsDisplayed()
+        // Real time: exactly the approved words of ANDROID-PLAN "Owner check and status".
+        rule.onNodeWithText(APPROVED_UNKNOWN_DAY).assertExists()
         rule.onNodeWithText(res.getString(R.string.settings_recovery_unknown_day)).assertExists()
+        rule.onNodeWithText("Staging: 1 day = 1 hour", substring = true).assertDoesNotExist()
         rule.onNodeWithTag("recovery_attempts_used").assertDoesNotExist()
+    }
+
+    /**
+     * STAGING-TIME-SCALE S8 (ANDROID-PLAN 0.1.49): on a vault at 24 the text names the clock's period as it started (1
+     * hour) and the quiet period as the vault runs it (3 hours), with the staging note.
+     */
+    @Test
+    fun atTwentyFourTheTextSaysAnHourAndThreeHours() {
+        val r = RecoveryStatusView("unknown", null, true, unknownForADay = true, unknownForSeconds = 3_600)
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.vettid.core.ui.format.LocalTimeScale provides com.vettid.core.ui.format.UiTimeScale(24, stagingNote = true),
+            ) {
+                VaultStatusContent(LoadState(false, overview(r)), {}, {})
+            }
+        }
+        rule.onNodeWithText("For 1 hour your vault has not been able", substring = true).assertExists()
+        rule.onNodeWithText("If this goes on for 3 hours, your vault", substring = true).assertExists()
+        rule.onNodeWithText("Staging: 1 day = 1 hour", substring = true).assertExists()
+    }
+
+    /** A vault at scale 1 in a staging build renders the approved words too, and no note; so does a provided scale of 1. */
+    @Test
+    fun atScaleOneTheApprovedWordsRender() {
+        val r = RecoveryStatusView("unknown", null, true, unknownForADay = true, unknownForSeconds = 86_400)
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.vettid.core.ui.format.LocalTimeScale provides com.vettid.core.ui.format.UiTimeScale(1, stagingNote = false),
+            ) {
+                VaultStatusContent(LoadState(false, overview(r)), {}, {})
+            }
+        }
+        rule.onNodeWithText(APPROVED_UNKNOWN_DAY).assertExists()
+        rule.onNodeWithText("Staging: 1 day = 1 hour", substring = true).assertDoesNotExist()
     }
 
     @Test
@@ -144,5 +181,14 @@ class ReleaseRSettingsTest {
         assertEquals(FailureKind.BAD_PASSWORD, vm.uiState.value.error)
         assertEquals("", vm.uiState.value.password)
         assertFalse(vm.uiState.value.done)
+    }
+
+    private companion object {
+        /** ANDROID-PLAN "Owner check and status": the approved production text, word for word. */
+        const val APPROVED_UNKNOWN_DAY =
+            "For a day your vault has not been able to check its recovery attempts or record that you were here. If " +
+                "this goes on for three days, your vault is no longer protected against a recovery started by someone " +
+                "else, and until it ends you cannot change your PIN or password. This is a fault of the VettID service " +
+                "or an attack on it. Contact VettID."
     }
 }

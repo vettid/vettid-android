@@ -36,7 +36,7 @@ data class TimeScaleView(
     val stagingNote: Boolean get() = stagingBuild && (scaled || !known)
 }
 
-/** The rule of STAGING-TIME-SCALE §3, for the app's own waits (S2, S9, S10, S12, S16). */
+/** The rule of STAGING-TIME-SCALE §3, for the app's own waits (S2, S8, S9, S10, S12, S16). */
 object TimeScales {
     /** [seconds] divided by [scale], rounded up to a whole second; a scale below 1 counts as 1. */
     fun divide(seconds: Long, scale: Long): Long {
@@ -46,6 +46,20 @@ object TimeScales {
 
     /** [ms] divided by [scale] in whole seconds (rounded up), as milliseconds. */
     fun divideMs(ms: Long, scale: Long): Long = divide(ms / MS_PER_S, scale) * MS_PER_S
+
+    /**
+     * (VAULT-MESSAGING 0.43.0 §11.10.8, STAGING-TIME-SCALE §5.2) The scale to store when a `vault.status` [reported] one,
+     * or null to store nothing. The status comes from the vault's running enclave over the open session, so it is as
+     * current as the descriptor read before the last unlock or more: it fills a scale this phone does not know (a phone
+     * updated while its vault was open) and replaces one that is no longer the vault's. A value this build does not
+     * accept ([accepts], the rule the descriptor is checked against: a production build 1 only) or out of range is never
+     * taken, nor is an absent one: the stored scale stays until the next descriptor says otherwise.
+     */
+    fun fromStatus(stored: Long?, reported: Long?, accepts: (Long) -> Boolean): Long? = when {
+        reported == null || reported == stored -> null
+        reported !in TimeScale.REAL..TimeScale.MAX || !accepts(reported) -> null
+        else -> reported
+    }
 
     private const val MS_PER_S = 1_000L
 }

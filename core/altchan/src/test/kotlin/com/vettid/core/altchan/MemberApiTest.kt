@@ -402,6 +402,54 @@ class MemberApiTest {
         assertThrows(AltRefusedException::class.java) { runBlocking { flow().preflight(p.state) } }
     }
 
+    /**
+     * STAGING-TIME-SCALE §4 item 4 (VAULT-MESSAGING §11.10.9 "Where the app reads it": a recovery's register and open
+     * read the descriptor of the instance the vault is routed to): a production build refuses a scaled instance there
+     * too, before the request is built or anything is posted.
+     */
+    @Test
+    fun aProductionBuildRefusesAScaledInstanceForARecoveryRegister() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 24))
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow().recoveryRegister(
+                    "0123456789abcdef0123456789abcdef",
+                    build = { error("built a request") },
+                    open = { _, _ -> error("opened a result") },
+                )
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+        assertEquals(0, log.count { it == "POST /api/vault/recovery/register" })
+        assertEquals(0, log.count { it.startsWith("GET /api/vault/requests/") })
+        // The same instance at real time: registered as before.
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 1))
+        assertEquals(RecoveryResult(true, null), register())
+    }
+
+    @Test
+    fun aProductionBuildRefusesAScaledInstanceForARecoveryOpen() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 24))
+        var sent = false
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow().recoveryOpen(
+                    "0123456789abcdef0123456789abcdef",
+                    build = { _, _ -> error("built a request") },
+                    open = { _, _ -> error("opened a result") },
+                    onSent = { sent = true },
+                )
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+        assertFalse("nothing may have reached the vault, no attempt used", sent)
+        assertEquals(0, log.count { it == "POST /api/vault/recovery/open" })
+        assertEquals(0, log.count { it.startsWith("GET /api/vault/requests/") })
+    }
+
     @Test
     fun aStagingBuildAcceptsOneAndTwentyFourOnly() = runBlocking<Unit> {
         for (scale in listOf(null, 1L, 24L)) {

@@ -34,10 +34,16 @@ interface OwnerCheckOps {
     /** `vault.status`'s `owner_check` and (release R) `recovery`, from one read. */
     suspend fun statusAndRecovery(): Pair<OwnerCheckStatus?, RecoveryStatus?> = status() to null
 
+    /** `vault.status`'s `owner_check`, (release R) `recovery` and (0.43.0) `time_scale`, from one read. */
+    suspend fun statusRead(): StatusRead = statusAndRecovery().let { (o, r) -> StatusRead(o, r) }
+
     suspend fun settingsGet(): Settings
 
     suspend fun settingsSet(version: Long, set: Map<String, JsonElement>)
 }
+
+/** One `vault.status` read for the owner check: [ownerCheck], [recovery], and [timeScale] (null when absent). */
+data class StatusRead(val ownerCheck: OwnerCheckStatus?, val recovery: RecoveryStatus?, val timeScale: Long? = null)
 
 /**
  * The app's side of the daily owner check (VAULT-MESSAGING 0.13.0 §3.6): follows the vault's deadline and hold,
@@ -61,6 +67,12 @@ class OwnerCheckManager(
      * the [mark] read before the status was asked for (the account record it belongs to).
      */
     private val onRecoveryStatus: suspend (RecoveryStatus?, mark: Int) -> Unit = { _, _ -> },
+    /**
+     * (STAGING-TIME-SCALE §5.2, VAULT-MESSAGING 0.43.0 §11.10.8) Each `vault.status`'s `time_scale` (null when absent),
+     * with the [mark] read before the status was asked for, before the deadline it came with is taken in: the early
+     * warning (S2) is reckoned with the scale of the vault that set the deadline.
+     */
+    private val onTimeScale: suspend (Long?, mark: Int) -> Unit = { _, _ -> },
     private val now: () -> Instant = Instant::now,
     private val mark: () -> Int = { 0 },
 ) : OwnerCheckRepository {
@@ -173,7 +185,8 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
-        val (st0, recovery) = vaultGuard { ops().statusAndRecovery() }
+        val (st0, recovery, timeScale) = vaultGuard { ops().statusRead() }
+        runCatching { onTimeScale(timeScale, since) }
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
         val st = st0 ?: return view.value
