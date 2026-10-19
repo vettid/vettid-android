@@ -162,9 +162,13 @@ class VaultApi(
         op("credential.lock")
     }
 
-    /** Rotates the credential key (and the vault's ik and kem, §3.4). */
-    suspend fun credentialRotate(password: String) {
-        cred.credOp("credential.rotate", { put("password", password) })
+    /**
+     * Rotates the credential key (and the vault's ik and kem, §3.4). [alarmOpen]: a clone alarm is open, so the held blob
+     * is checked against `credential.version` first and refreshed when superseded (vettid.org #358,
+     * [CredentialOps.rotate]); a `rotation_required` or `credential_frozen` answer gets the same check and one retry.
+     */
+    suspend fun credentialRotate(password: String, alarmOpen: Boolean = false) {
+        cred.rotate({ put("password", password) }, alarmOpen)
     }
 
     // No `credential.delete` (VAULT-MESSAGING 0.15.2): a credential goes only with the vault (`vault.delete`);

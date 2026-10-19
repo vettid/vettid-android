@@ -1372,8 +1372,8 @@ class VaultDevice private constructor(
         save()
     }
 
-    internal suspend fun keepCredential(blob: String, version: Long) = lock.withLock {
-        st.credential = CredentialCopy(blob, version)
+    internal suspend fun keepCredential(blob: String, version: Long, key: String? = null) = lock.withLock {
+        st.credential = CredentialCopy(blob, version, key)
         save()
     }
 
@@ -1424,6 +1424,9 @@ class VaultDevice private constructor(
 
     /** The credential version this app holds, or null. */
     val credentialVersion: Long? get() = st.credential?.version
+
+    /** The credential key (§10.6 `key`) of the held blob, when an answer named it; null: not known. */
+    val credentialKey: String? get() = st.credential?.key
 
     /** Sends [type] with a caller-chosen inner id and awaits the response (sealed credential payloads bind the id). */
     internal suspend fun requestWithId(
