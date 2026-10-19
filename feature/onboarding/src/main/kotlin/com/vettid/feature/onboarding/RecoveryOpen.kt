@@ -107,6 +107,11 @@ data class RecoveryOpenUiState(
      * not be completed").
      */
     val rightButIncomplete: Boolean = false,
+    /**
+     * The member continued after `ok` and the vault opened on this phone ([RecoveryOpenViewModel.openApp]): the
+     * recovery's own screen hands over to the end of setup ([RecoveryOpenPane]'s `onOpened`).
+     */
+    val opened: Boolean = false,
 ) {
     val canContinue: Boolean get() = pinValid && password.isNotEmpty()
 
@@ -251,12 +256,17 @@ class RecoveryOpenViewModel @Inject constructor(
         viewModelScope.launch { account.eraseThisPhone() }
     }
 
-    /** After the `ok` text: the app opens. */
+    /**
+     * After the `ok` text: the app opens. Then [RecoveryOpenUiState.opened], for the screen to finish setup if the app
+     * is not open yet (the `ok` text is the recovered phone's last setup screen). Continue may be pressed again after a
+     * failure; it opens nothing twice.
+     */
     fun openApp() {
         if (state.value.step != OpenStep.DONE) return
         viewModelScope.launch {
             try {
                 move.finishRecoveryOpen()
+                state.update { it.copy(failure = null, opened = true) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(failure = e.kind) }
             }
@@ -410,8 +420,14 @@ fun RecoveryOpenPane(
     modifier: Modifier = Modifier,
     /** "Start over": this phone forgets the registered recovery (after a confirmation). Never offered after `ok`. */
     onStartOver: (() -> Unit)? = null,
+    /**
+     * The vault opened on this phone after `ok` ([RecoveryOpenUiState.opened]): the end of setup (the recovery flow's
+     * `finish`), so that the screen never stays when the app has not opened by itself.
+     */
+    onOpened: () -> Unit = {},
 ) {
     SecureWindow()
+    LaunchedEffect(state.opened) { if (state.opened) onOpened() }
     Column(
         modifier.fillMaxWidth().padding(Spacing.gutter).testTag("recovery_open"),
         verticalArrangement = Arrangement.spacedBy(Spacing.m),

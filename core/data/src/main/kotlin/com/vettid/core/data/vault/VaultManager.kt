@@ -2284,10 +2284,19 @@ class VaultManager(
 
     override val recoveryAttemptsUsed: Int? get() = local.recoveryAttemptsUsed
 
-    override suspend fun finishRecoveryOpen() = guard {
-        val s = session()
-        val p = afterUnlocked(s)
-        phaseFlow.value = p
+    /**
+     * (Release R) After the member has read the `ok` text: the vault opens on this phone. That text is the recovered
+     * phone's last setup screen (a recovered phone is a new install, `setupComplete` false, so [afterUnlocked] says
+     * [SetupStage.FINISHING]): setup is finished here as from the onboarding's last screen ([finishSetup], under its
+     * gate: never over a pending lock). Without it the phase stayed FINISHING under the recovery screen, which ignores it.
+     */
+    override suspend fun finishRecoveryOpen() {
+        guard {
+            val s = session()
+            val p = afterUnlocked(s)
+            phaseFlow.value = p
+        }
+        finishSetup()
     }
 
     override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
