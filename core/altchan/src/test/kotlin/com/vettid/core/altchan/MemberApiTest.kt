@@ -303,6 +303,29 @@ class MemberApiTest {
         assertEquals(6, log.count { it.startsWith("GET /api/vault/requests/") }) // each slot: queued, then done
     }
 
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2) The unlock's `beforePost` runs right before the request is posted: a throw stops
+     * it with nothing posted (a PIN typed on the update's or the move's own screen before a change); otherwise once per
+     * post, and the unlock goes as usual.
+     */
+    @Test
+    fun beforePostRunsBeforeEachUnlockPostAndAThrowPostsNothing() = runBlocking<Unit> {
+        val p = Party()
+        val f = flow()
+        val out = f.enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
+        p.vaultId = out.vaultId
+        p.state = AltRequests.applyEnrolled(p.state, 1)
+        val e = assertThrows(IllegalStateException::class.java) {
+            runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { error("pin taken before a change") }) }
+        }
+        assertEquals("pin taken before a change", e.message)
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        var checks = 0
+        assertTrue(f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { checks++ }).ok)
+        assertEquals(1, checks)
+        assertEquals(1, log.count { it == "POST /api/vault/unlock" })
+    }
+
     private suspend fun register(): RecoveryResult {
         val code = RecoveryCode("0123456789abcdef0123456789abcdef", Ulid.new(), "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0")
         val app = Party().app

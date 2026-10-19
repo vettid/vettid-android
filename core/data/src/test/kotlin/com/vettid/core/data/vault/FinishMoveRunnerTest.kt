@@ -41,7 +41,7 @@ class FinishMoveRunnerTest {
                 locked++
                 generation++
             },
-            unlock = { answer.await() },
+            unlock = { _, _ -> answer.await() },
             generation = { generation },
             signedOut = { signedOut },
             onOutcome = { outcomes += it },
@@ -96,7 +96,7 @@ class FinishMoveRunnerTest {
     fun aVaultFailureIsRecorded() = runTest {
         val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
         val runner = FinishMoveRunner(
-            manager, 90_000, lock = {}, unlock = { throw VaultFailure(FailureKind.NETWORK) },
+            manager, 90_000, lock = {}, unlock = { _, _ -> throw VaultFailure(FailureKind.NETWORK) },
             generation = { 0 }, signedOut = { false },
         )
         val r = runCatching { runner.run("975310") }
@@ -203,7 +203,7 @@ class FinishMoveRunnerTest {
         var unlocks = 0
         val runner = FinishMoveRunner(
             manager, 90_000, lock = {},
-            unlock = { if (++unlocks == 1) throw VaultFailure(FailureKind.NETWORK) else UnlockAttempt.Success },
+            unlock = { _, _ -> if (++unlocks == 1) throw VaultFailure(FailureKind.NETWORK) else UnlockAttempt.Success },
             generation = { 0 }, signedOut = { false },
         )
         assertTrue(runCatching { runner.run("975310") }.isFailure)
@@ -219,7 +219,7 @@ class FinishMoveRunnerTest {
         var unlocks = 0
         val runner = FinishMoveRunner(
             manager, 90_000, lock = {},
-            unlock = { if (++unlocks == 1) throw CancellationException("gone") else UnlockAttempt.Success },
+            unlock = { _, _ -> if (++unlocks == 1) throw CancellationException("gone") else UnlockAttempt.Success },
             generation = { 0 }, signedOut = { false },
         )
         assertTrue(runCatching { runner.run("975310") }.isFailure)

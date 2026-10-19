@@ -29,7 +29,8 @@ internal class FinishMoveRunner(
     private val scope: CoroutineScope,
     private val holdMs: Long,
     private val lock: suspend () -> Unit,
-    private val unlock: suspend (String) -> UnlockAttempt,
+    /** The unlock with the PIN and the [VaultRepository.pinGeneration] it was taken at. */
+    private val unlock: suspend (pin: String, taken: Int?) -> UnlockAttempt,
     private val generation: () -> Int,
     private val signedOut: () -> Boolean,
     private val onOutcome: suspend (UnlockAttempt) -> Unit = {},
@@ -55,14 +56,15 @@ internal class FinishMoveRunner(
     /**
      * Runs the move in [scope] and waits for it; a caller that is cancelled only stops waiting. While a run is on its
      * way, another caller joins it (its [pin] is not used), as the screen ignores a second tap while busy: two runs
-     * never overlap, so one run's end never releases another's hold or overwrites its [failure].
+     * never overlap, so one run's end never releases another's hold or overwrites its [failure]. [taken]: the
+     * [VaultRepository.pinGeneration] the PIN was taken at (null: not checked).
      */
-    suspend fun run(pin: String): UnlockAttempt = synchronized(runs) {
-        current?.takeIf { it.isActive } ?: scope.async { body(pin) }.also { current = it }
+    suspend fun run(pin: String, taken: Int? = null): UnlockAttempt = synchronized(runs) {
+        current?.takeIf { it.isActive } ?: scope.async { body(pin, taken) }.also { current = it }
     }.await()
 
     @Suppress("TooGenericExceptionCaught") // any failure is recorded for the unlock screen, then rethrown
-    private suspend fun body(pin: String): UnlockAttempt {
+    private suspend fun body(pin: String, taken: Int?): UnlockAttempt {
         failureFlow.value = null
         finishingFlow.value = true
         val bound = scope.launch {
@@ -73,7 +75,7 @@ internal class FinishMoveRunner(
             lock()
             // Read after the run's own lock, which bumps it: a later change is a lock or a wipe during the unlock.
             val gen = generation()
-            val r = unlock(pin)
+            val r = unlock(pin, taken)
             failureFlow.value = FinishSetupGate.failureOf(r)
             onOutcome(r)
             if (r == UnlockAttempt.Success && gen == generation() && !signedOut()) onOpened(gen)

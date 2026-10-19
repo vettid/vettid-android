@@ -134,6 +134,15 @@ sealed interface UpdateStepResult {
     data class Failed(val kind: FailureKind, val code: String?, val retryAfterSeconds: Long = 0) : UpdateStepResult
 }
 
+/**
+ * A PIN the member typed on the update's own screen, with [ReleaseUpdateOps.pinGeneration] as it was when the screen's
+ * keypad became usable: an unlock sends nothing once that moved (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the
+ * spec). Held only while a step runs. Never printed.
+ */
+class TakenPin(val pin: String, val generation: Int) {
+    override fun toString(): String = "TakenPin(generation=$generation)"
+}
+
 /** What the update needs from the vault. */
 interface ReleaseUpdateOps {
     /** The offer for the vault as this phone knows it, from the manifest it trusts; null for none. */
@@ -156,9 +165,16 @@ interface ReleaseUpdateOps {
 
     /**
      * One unlock with [pin]: approving [approve] (§11.10.3) when non-null, or abandoning the unconfirmed move
-     * ([abandon], §11.10.4); never following a move by itself. [onStarting] hears `503 release_starting`.
+     * ([abandon], §11.10.4); never following a move by itself. [onStarting] hears `503 release_starting`. Nothing is
+     * sent once [pinGeneration] moved since [pin] was taken ([ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE]).
      */
-    suspend fun unlock(pin: String, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult
+    suspend fun unlock(pin: TakenPin, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult
+
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects, as a generation
+     * ([VaultRepository.pinGeneration]): read when the update's keypad becomes usable, handed over with the PIN.
+     */
+    fun pinGeneration(): Int = 0
 
     /** An unconfirmed move can be abandoned: this phone knows the release it moved from. */
     fun canAbandon(): Boolean
@@ -245,16 +261,30 @@ interface ReleaseUpdateRepository {
     val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
 
     /**
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects, as a generation
+     * ([VaultRepository.pinGeneration]): a screen reads it when its keypad becomes usable and hands it over with the PIN;
+     * an unlock sends nothing once it moved since ([ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE]).
+     */
+    val pinGeneration: Int get() = 0
+
+    /**
      * The member approved [offer] with [pin] ("Approve and update"): locks, unlocks with the approval, and after
      * `moved` unlocks again with the same PIN. False when it cannot start (an update runs, or the check is due).
+     * [generation]: [pinGeneration] when the keypad became usable (null: read now).
      */
-    fun start(pin: String, offer: ReleaseUpdateOffer): Boolean
+    fun start(pin: String, offer: ReleaseUpdateOffer, generation: Int? = null): Boolean
 
-    /** [UpdateStep.BAD_PIN] or [UpdateStep.FAILED]: the approved update again; [UpdateStep.NEW_RELEASE_FAILED]: the unlock again. */
-    fun retry(pin: String)
+    /**
+     * [UpdateStep.BAD_PIN] or [UpdateStep.FAILED]: the approved update again; [UpdateStep.NEW_RELEASE_FAILED]: the unlock
+     * again. [generation] as for [start].
+     */
+    fun retry(pin: String, generation: Int? = null)
 
-    /** [UpdateStep.NEW_RELEASE_FAILED] with [UpdateProgress.canAbandon]: back to the previous release (§11.10.4). */
-    fun abandon(pin: String)
+    /**
+     * [UpdateStep.NEW_RELEASE_FAILED] with [UpdateProgress.canAbandon]: back to the previous release (§11.10.4).
+     * [generation] as for [start].
+     */
+    fun abandon(pin: String, generation: Int? = null)
 
     /** Leaves the outcome (or gives up): the app follows the vault's phase again. Ignored while a step runs. */
     fun finish()
@@ -300,8 +330,12 @@ class ReleaseUpdateManager(
 
     override val changeHold: StateFlow<FailureKind?> get() = ops.changeHold
 
-    override fun start(pin: String, offer: ReleaseUpdateOffer): Boolean {
+    override val pinGeneration: Int get() = ops.pinGeneration()
+
+    override fun start(pin: String, offer: ReleaseUpdateOffer, generation: Int?): Boolean {
         if (running() || pin.isEmpty() || !mayStart()) return false
+        // The PIN as the keypad took it: whatever moves which PIN the vault expects before an unlock goes out stops it.
+        val typed = taken(pin, generation)
         progressFlow.value = UpdateProgress(UpdateStep.LOCKING, offer.current, offer.target)
         job = scope.launch {
             try {
@@ -311,16 +345,17 @@ class ReleaseUpdateManager(
                 set { it.copy(step = UpdateStep.FAILED, failure = e.kind, failureCode = e.code, vaultOpen = true) }
                 return@launch
             }
-            approve(pin)
+            approve(typed)
         }
         return true
     }
 
-    override fun retry(pin: String) {
+    override fun retry(pin: String, generation: Int?) {
         val p = progressFlow.value ?: return
         if (running() || pin.isEmpty() || refusedWhileChangeUnresolved()) return
+        val typed = taken(pin, generation)
         when (p.step) {
-            UpdateStep.BAD_PIN -> launch { approve(pin) }
+            UpdateStep.BAD_PIN -> launch { approve(typed) }
             UpdateStep.FAILED -> launch {
                 if (p.vaultOpen) {
                     try {
@@ -331,20 +366,21 @@ class ReleaseUpdateManager(
                         return@launch
                     }
                 }
-                approve(pin)
+                approve(typed)
             }
-            UpdateStep.NEW_RELEASE_FAILED -> launch { reopen(pin) }
+            UpdateStep.NEW_RELEASE_FAILED -> launch { reopen(typed) }
             else -> Unit
         }
     }
 
-    override fun abandon(pin: String) {
+    override fun abandon(pin: String, generation: Int?) {
         val p = progressFlow.value ?: return
         val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon() && pin.isNotEmpty()
         if (running() || !offered || refusedWhileChangeUnresolved()) return
+        val typed = taken(pin, generation)
         launch {
             set { it.copy(step = UpdateStep.ABANDONING, failure = null, failureCode = null) }
-            when (val r = withStart { s -> ops.unlock(pin, approve = null, abandon = true, onStarting = s) }) {
+            when (val r = withStart { s -> ops.unlock(typed, approve = null, abandon = true, onStarting = s) }) {
                 UpdateStepResult.Abandoned, UpdateStepResult.Opened ->
                     set { it.copy(step = UpdateStep.ABANDONED, vaultOpen = true, canAbandon = false) }
                 else -> newReleaseFailed(r)
@@ -361,6 +397,9 @@ class ReleaseUpdateManager(
     }
 
     private fun running(): Boolean = job?.isActive == true
+
+    /** [pin] with [generation], the [pinGeneration] when the keypad became usable; else read as the screen hands it over. */
+    private fun taken(pin: String, generation: Int?): TakenPin = TakenPin(pin, generation ?: ops.pinGeneration())
 
     /** Neither the owner check (§3.6.5) nor an undecided PIN or password change (§11.14.9) comes first. */
     private fun mayStart(): Boolean = !ops.ownerCheckDue() && !ops.changeUnresolved()
@@ -380,7 +419,7 @@ class ReleaseUpdateManager(
     private fun set(f: (UpdateProgress) -> UpdateProgress) = progressFlow.update { it?.let(f) }
 
     /** The unlock with the approval of [UpdateProgress.to]; nothing else sends one. */
-    private suspend fun approve(pin: String) {
+    private suspend fun approve(pin: TakenPin) {
         val to = progressFlow.value?.to ?: return
         set { it.copy(step = UpdateStep.APPROVING, failure = null, failureCode = null, waitSeconds = 0, refusal = null) }
         when (val r = withStart { s -> ops.unlock(pin, approve = to, abandon = false, onStarting = s) }) {
@@ -400,7 +439,7 @@ class ReleaseUpdateManager(
     }
 
     /** After `moved`: the unlock that reaches the new release, with the same PIN, and no approval. */
-    private suspend fun reopen(pin: String) {
+    private suspend fun reopen(pin: TakenPin) {
         set { it.copy(step = UpdateStep.REOPENING, failure = null, failureCode = null, waitSeconds = 0) }
         var r = withStart { s -> ops.unlock(pin, approve = null, abandon = false, onStarting = s) }
         // Routed to the old release still (the API learns the move from its lifecycle event): it completes the
@@ -457,6 +496,13 @@ class ReleaseUpdateManager(
 
         /** (§11.14.9) The step was held: a PIN or password change is undecided, or the PIN uncertain. */
         const val CODE_CHANGE_HELD = "change_held"
+
+        /**
+         * (§11.14.9 step 2; chosen, not in the spec) The unlock sent nothing: which PIN the vault expects may have changed
+         * since the PIN was typed ([pinGeneration]). [FailureKind.CREDENTIAL_UNSETTLED] (the "earlier request" text); the
+         * PIN is asked for again, and no PIN attempt was spent.
+         */
+        const val CODE_PIN_TAKEN_BEFORE = "pin_taken_before_change"
 
         /** [UpdateProgress.refusal] when the vault opened without saying anything of the update. */
         const val CODE_NOT_MOVED = "not_moved"

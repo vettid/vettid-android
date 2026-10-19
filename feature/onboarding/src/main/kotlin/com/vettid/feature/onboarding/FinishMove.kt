@@ -50,6 +50,9 @@ data class FinishMoveUiState(
      */
     val held: FailureKind? = null,
 ) {
+    /** The PIN field can be used: not held, not running, not done. */
+    val pinAllowed: Boolean get() = held == null && !busy && !done
+
     override fun toString(): String = "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, held=$held)"
 }
 
@@ -65,19 +68,37 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
     private val state = MutableStateFlow(FinishMoveUiState())
     val uiState: StateFlow<FinishMoveUiState> = state.asStateFlow()
 
-    init {
-        viewModelScope.launch { vault.changeHold.collect { h -> state.update { it.copy(held = h) } } }
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects, read when the PIN field
+     * becomes usable and handed over with the PIN: a change sent or decided while the member types it stops the move
+     * with nothing sent, and the PIN is asked for again.
+     */
+    private val keypad = KeypadReading { vault.pinGeneration }
+
+    /** Every change of the state, with the keypad's reading following whether the PIN field can be used. */
+    private fun set(f: (FinishMoveUiState) -> FinishMoveUiState) {
+        // Digits typed while held were typed before the hold's decision: they go with it.
+        state.update { s -> f(s).let { n -> if (n.held != null && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
+        keypad.follow(state.value.pinAllowed)
     }
 
-    fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null) }
+    init {
+        keypad.follow(state.value.pinAllowed)
+        viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
+    }
+
+    fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null) }
 
     fun finish() {
-        val pin = state.value.pin
-        if (pin.length < MIN_PIN || state.value.busy || state.value.held != null) return
-        state.update { it.copy(busy = true, failure = null) }
+        val s = state.value
+        val pin = s.pin
+        if (pin.length < MIN_PIN || !s.pinAllowed) return
+        val taken = keypad.take(s.pinAllowed)
+        // Handed over: the keypad empties, so that a PIN refused as typed before a change is typed again.
+        set { it.copy(busy = true, failure = null, pin = "") }
         viewModelScope.launch {
             val failure = try {
-                when (val r = vault.finishMove(pin)) {
+                when (val r = vault.finishMove(pin, taken)) {
                     UnlockAttempt.Success -> null
                     is UnlockAttempt.Failed -> r.kind
                     is UnlockAttempt.BadPin -> FailureKind.BAD_PIN
@@ -86,7 +107,7 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
             } catch (e: VaultFailure) {
                 e.kind
             }
-            state.update { it.copy(busy = false, done = failure == null, failure = failure, pin = if (failure == null) "" else it.pin) }
+            set { it.copy(busy = false, done = failure == null, failure = failure) }
         }
     }
 
@@ -115,6 +136,7 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             singleLine = true,
+            enabled = state.pinAllowed,
             modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("finish_move_pin"),
         )
         state.held?.let {
@@ -138,7 +160,7 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             }
             Button(
                 onClick = vm::finish,
-                enabled = state.pin.length >= 6 && !state.busy && state.held == null,
+                enabled = state.pin.length >= 6 && state.pinAllowed,
                 modifier = Modifier.testTag("finish_move_go"),
             ) {
                 Text(stringResource(R.string.onboarding_finish_move_title))

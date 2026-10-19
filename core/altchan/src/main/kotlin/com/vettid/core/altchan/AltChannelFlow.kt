@@ -245,6 +245,11 @@ class AltChannelFlow(
         options: UnlockOptions = UnlockOptions(),
         release: String? = null,
         onStarting: ((Long) -> Unit)? = null,
+        /**
+         * Runs right before each request is posted (retries included); a throw stops it with nothing posted. For a PIN
+         * typed on a flow's own screen that may no longer be the one the vault expects (VAULT-MESSAGING §11.14.9 step 2).
+         */
+        beforePost: () -> Unit = {},
         /** (0.34.0, release R) As for [enroll]: the request's shape from the routed instance's capabilities. */
         unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { options.unlockSecret?.copyOf() },
     ): UnlockOutcome {
@@ -262,6 +267,7 @@ class AltChannelFlow(
             }
             var err: MemberApiException? = null
             var slot: Slot? = null
+            beforePost()
             try {
                 api.unlock(vaultId, info.instanceId, built.request)
                 slot = api.poll(built.request.requestId)

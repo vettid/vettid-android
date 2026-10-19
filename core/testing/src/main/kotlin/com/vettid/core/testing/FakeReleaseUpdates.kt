@@ -1,5 +1,6 @@
 package com.vettid.core.testing
 
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateProgress
@@ -15,10 +16,17 @@ class FakeReleaseUpdates(offer: ReleaseUpdateOffer? = null) : ReleaseUpdateRepos
     override val offerKnown = MutableStateFlow(offer != null)
     override val progress = MutableStateFlow<UpdateProgress?>(null)
     var checkDue = false
+
+    /** Why the update is held (a change undecided, the PIN uncertain); null when it is not. */
+    override val changeHold = MutableStateFlow<FailureKind?>(null)
     var refreshed = 0
 
     /** What [start] answers when the check is not due. */
     var startResult = true
+
+    /** What [pinGeneration] reads; [generations] records the reading each PIN was handed over with (null: none). */
+    override var pinGeneration = 0
+    val generations = mutableListOf<Int?>()
 
     override suspend fun refreshOffer() {
         refreshed++
@@ -27,17 +35,20 @@ class FakeReleaseUpdates(offer: ReleaseUpdateOffer? = null) : ReleaseUpdateRepos
 
     override fun ownerCheckDue(): Boolean = checkDue
 
-    override fun start(pin: String, offer: ReleaseUpdateOffer): Boolean {
+    override fun start(pin: String, offer: ReleaseUpdateOffer, generation: Int?): Boolean {
         calls += "start:$pin:${offer.target.number}"
+        generations += generation
         return startResult && !checkDue
     }
 
-    override fun retry(pin: String) {
+    override fun retry(pin: String, generation: Int?) {
         calls += "retry:$pin"
+        generations += generation
     }
 
-    override fun abandon(pin: String) {
+    override fun abandon(pin: String, generation: Int?) {
         calls += "abandon:$pin"
+        generations += generation
     }
 
     override fun finish() {

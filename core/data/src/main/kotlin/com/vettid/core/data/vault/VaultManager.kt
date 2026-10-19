@@ -283,6 +283,8 @@ class VaultManager(
     private var newPinStep: Boolean
         get() = newPinAskedFlow.value
         set(v) {
+            // The unlock's PIN step changed: a PIN typed before it may no longer be the one asked for (pinGeneration).
+            if (newPinAskedFlow.value != v) record.pinMoved()
             newPinAskedFlow.value = v
         }
 
@@ -517,7 +519,7 @@ class VaultManager(
         FINISH_MOVE_HOLD_MS,
         lock = { lock() },
         // Its own prompt, not the unlock screen's two steps (§11.14.9 step 2): refused while a change is unresolved.
-        unlock = { pin -> unlockOnce(pin, null, false, holderApp = true) },
+        unlock = { pin, taken -> unlockOnce(pin, null, false, holderApp = true, pinTaken = taken) },
         generation = { generation },
         signedOut = { phaseFlow.value == AppPhase.SignedOut },
         // ANDROID-PLAN "Transfer": after a transfer the app offers to rotate the vault's keys. Not after a wipe that
@@ -1417,6 +1419,8 @@ class VaultManager(
         holderApp: Boolean = false,
         /** (0.45.0 §11.14.9 step 5) Only the unlock screen's entry points: it asks for the previous PIN, then the new one. */
         twoStepScreen: Boolean = false,
+        /** A PIN typed on a flow's own screen ("Finish the move"), taken at this [pinGeneration] ([unlockStep]). */
+        pinTaken: Int? = null,
         beforeOpen: suspend () -> Unit = {},
     ): UnlockAttempt = unlockStep(
         pin,
@@ -1425,6 +1429,7 @@ class VaultManager(
         holderApp = holderApp,
         beforeOpen = beforeOpen,
         twoStepScreen = twoStepScreen,
+        pinTaken = pinTaken,
     ).attempt.also {
         // Every unlock that opened the vault (with the owner check, cancelling a recovery, finishing the move) ends what a
         // failed "Finish the move" left to say.
@@ -1450,6 +1455,12 @@ class VaultManager(
         beforeOpen: suspend () -> Unit = {},
         /** The unlock screen, which asks for the previous PIN and then the new one (§11.14.9 step 5). */
         twoStepScreen: Boolean = false,
+        /**
+         * (§11.14.9 step 2; chosen, not in the spec) A PIN typed on a flow's own screen (the release update, "Finish the
+         * move"), taken at this [pinGeneration]: once that moved, nothing is sent, checked before the request is built
+         * and again right before each one is posted (retries and candidate tries included). Null: the unlock screen.
+         */
+        pinTaken: Int? = null,
     ): StepOutcome {
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
@@ -1458,6 +1469,7 @@ class VaultManager(
         if (!UnlockEpoch.allowed(pinChangeUndecided(), twoStepScreen)) {
             return StepOutcome(UnlockAttempt.Failed(FailureKind.CHANGE_UNRESOLVED, ChangeResolver.CODE_UNRESOLVED))
         }
+        pinTakenBefore(pinTaken)?.let { return StepOutcome(UnlockAttempt.Failed(it.kind, it.code)) }
         // Read before the unlock: a lock asked for while it is on its way bumps it, and this unlock then publishes no phase.
         val gen = generation
         // The record this unlock writes to: after a wipe meanwhile, nothing of it is (RecordStore).
@@ -1470,11 +1482,11 @@ class VaultManager(
               lockKeeper.unlocking(opened = { it.result.ok }) {
                 guard {
                     val s = session()
-                    var out: UnlockOutcome = unlockWithSecret(s, pin, opts, release, onStarting)
+                    var out: UnlockOutcome = unlockWithSecret(s, pin, opts, release, onStarting, pinTaken)
                     if (out.ok && out.result.update?.result == UPDATE_MOVED) {
                         moved = true
                         // §11.10.6: after a move the vault is locked under the new release; unlock again, which reaches it.
-                        if (followMove) out = unlockWithSecret(s, pin, UnlockOptions(), null, onStarting)
+                        if (followMove) out = unlockWithSecret(s, pin, UnlockOptions(), null, onStarting, pinTaken)
                     }
                     // A sealed result: the enclave knows this phone; earlier relay refusals no longer count (RefusalWatch).
                     s.device.clearVaultRefusals()
@@ -1569,8 +1581,11 @@ class VaultManager(
         opts: UnlockOptions,
         release: String?,
         onStarting: ((Long) -> Unit)?,
+        pinTaken: Int? = null,
     ): UnlockOutcome {
         val phone = local.phone
+        // Right before each request is posted: a held-back unlock would otherwise still go out (and may mint a token).
+        val beforePost: () -> Unit = { pinTakenBefore(pinTaken)?.let { throw it } }
         // §11.10.9: the routed instance's capabilities choose the shape; an instance without `recovery_r` for a vault
         // known to have it is refused before anything is sent.
         var r = false
@@ -1583,7 +1598,7 @@ class VaultManager(
             pinChangeUnresolved = twoStep,
             newPinAsked = newPinStep,
             send = { ahead ->
-                val o = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { traits ->
+                val o = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting, beforePost) { traits ->
                     val path = choosePath(traits, makesPhoneKey = false, rec)
                     // An unlock never sets the mark on a phone without a phone secret (it then fails without one, unmarked).
                     if (ahead == 0) r = path == ReleasePath.Path.R
@@ -1677,7 +1692,12 @@ class VaultManager(
             }
         }
 
-        override suspend fun unlock(pin: String, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+        override fun pinGeneration(): Int = record.pinGeneration
+
+        @Suppress("ReturnCount") // nothing sent: a PIN taken before a change, or no release to return to
+        override suspend fun unlock(pin: TakenPin, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+            // (§11.14.9 step 2; chosen) Nothing is sent with a PIN taken before something moved which PIN the vault expects.
+            pinTakenBefore(pin.generation)?.let { return UpdateStepResult.Failed(it.kind, it.code) }
             val previous = session?.device?.altState?.previousRelease?.takeIf { it.isNotEmpty() }
             val opts = UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, abandon = abandon)
             val release = if (abandon) {
@@ -1685,12 +1705,17 @@ class VaultManager(
             } else {
                 null
             }
-            var o = unlockStep(pin, opts, followMove = false, holderApp = true, release = release, onStarting = onStarting)
+            var o = unlockStep(
+                pin.pin, opts, followMove = false, holderApp = true, release = release, onStarting = onStarting, pinTaken = pin.generation,
+            )
             val a = o.attempt
             if (abandon && a is UnlockAttempt.Failed && a.code == MemberApiException.VAULT_BUSY) {
                 // §11.10.5: an instance of the new release holds the vault; lock it first, then return.
                 runCatching { this@VaultManager.lock() }
-                o = unlockStep(pin, opts, followMove = false, holderApp = true, release = release, onStarting = onStarting)
+                o = unlockStep(
+                    pin.pin, opts, followMove = false, holderApp = true, release = release, onStarting = onStarting,
+                    pinTaken = pin.generation,
+                )
             }
             return o.toStepResult()
         }
@@ -1978,6 +2003,8 @@ class VaultManager(
         val s = session()
         // Read again: a renew decided just above may have moved the phone to its candidate.
         val now = local.phone
+        // A PIN change begins: a PIN taken before it by the update's or the move's own screen is not sent (pinGeneration).
+        record.pinMoved()
         changeSender.send(rec, ChangeKind.PIN, now.epoch) { store ->
             // Computed and wiped inside the send, which runs in this manager's scope and outlives a screen that goes away.
             val next = phoneSecrets.secret(now, ahead = 1)
@@ -2030,6 +2057,8 @@ class VaultManager(
         // Read before the epoch: refused under the lock, nothing sent, if a change or a renew went out since.
         val gen = s.openApi.credentialGeneration
         val phone = local.phone
+        // A renew begins: a PIN taken before it by the update's or the move's own screen is not sent (pinGeneration).
+        record.pinMoved()
         // In this manager's scope (N1): a screen that goes away does not stop it, and its outcome is kept.
         try {
             renewRunner.send { onSending, onAnswered, onRefused ->
@@ -2507,12 +2536,23 @@ class VaultManager(
 
     override fun acknowledgeFinishMoveFailure() = finishMoveRunner.clearFailure()
 
-    override suspend fun finishMove(pin: String): UnlockAttempt {
+    override suspend fun finishMove(pin: String, taken: Int?): UnlockAttempt {
         // (0.45.0 §11.14.9 step 2; N2) No lock and unlock with a PIN typed outside the two-step unlock while a PIN or
         // password change is unresolved or the PIN uncertain: nothing is sent, and "still checking" is said.
         changeHoldFlow.value?.let { return UnlockAttempt.Failed(it, ChangeResolver.CODE_UNRESOLVED) }
-        return finishMoveRunner.run(pin)
+        // (§11.14.9 step 2; chosen) The PIN as the screen's keypad took it; without a reading, taken now.
+        return finishMoveRunner.run(pin, taken ?: record.pinGeneration)
     }
+
+    override val pinGeneration: Int get() = record.pinGeneration
+
+    /**
+     * (§11.14.9 step 2; chosen, not in the spec) The refusal of an unlock whose PIN was typed on a flow's own screen and
+     * taken at [taken], when [pinGeneration] moved since: the PIN is asked for again with the "earlier request" text, and
+     * nothing is sent (no PIN attempt spent). Null when it may go out, or for the unlock screen (null [taken]).
+     */
+    private fun pinTakenBefore(taken: Int?): VaultFailure? =
+        if (taken != null && taken != record.pinGeneration) VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, CODE_PIN_TAKEN_BEFORE) else null
 
     /** (Release R) When this phone approved a transfer it still keeps the keys for; null otherwise. */
     override val transferKeptSince: StateFlow<Instant?> = transferKeptFlow.asStateFlow()
@@ -2915,6 +2955,12 @@ class VaultManager(
 
         /** The code of a vault operation refused on this phone because a lock is pending ([openApi]). */
         const val CODE_LOCK_PENDING = ReleaseUpdateManager.CODE_LOCK_PENDING
+
+        /**
+         * (§11.14.9 step 2; chosen, not in the spec) An unlock of the release update or of "Finish the move" refused with
+         * nothing sent: which PIN the vault expects may have changed since the PIN was typed ([pinGeneration]).
+         */
+        const val CODE_PIN_TAKEN_BEFORE = ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE
         private const val LIST_PAGE = 500
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16
