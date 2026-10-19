@@ -50,10 +50,6 @@
     <string name="ownercheck_submit_hold_off">Check and turn the hold off</string>
     <string name="ownercheck_lock">Lock vault</string>
     <string name="ownercheck_cancel">Cancel</string>
-    <plurals name="ownercheck_hours">
-        <item quantity="one">%d hour</item>
-        <item quantity="other">%d hours</item>
-    </plurals>
 
     <!-- Unlock past the deadline (§3.6.5) and after ten failed checks (§3.6.4) -->
     <string name="unlock_owner_check_title">Your daily check is due</string>

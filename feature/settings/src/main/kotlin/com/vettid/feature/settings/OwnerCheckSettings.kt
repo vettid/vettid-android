@@ -1,5 +1,6 @@
 package com.vettid.feature.settings
 
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.Schedule
@@ -18,13 +19,18 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckView
+import com.vettid.core.data.vault.TimeScaleSource
+import com.vettid.core.data.vault.TimeScaleView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.components.SettingsSwitchRow
+import com.vettid.core.ui.format.StagingTimeNote
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.scaledSettingText
+import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -44,6 +50,8 @@ data class OwnerCheckSettingsUiState(
     val error: FailureKind? = null,
     /** The interval was shortened: offer a check with the change (§3.6.2). */
     val offerCheck: Boolean = false,
+    /** (STAGING-TIME-SCALE) The vault's time scale: the interval also as it runs, and the staging note. */
+    val timeScale: TimeScaleView = TimeScaleView(),
 )
 
 /** What the owner-check rows can ask for. */
@@ -58,10 +66,18 @@ data class OwnerCheckSettingsActions(
 
 /** The interval (1–24 h) and the hold switch (§3.6.2, §3.6.7). */
 @HiltViewModel
-class OwnerCheckSettingsViewModel @Inject constructor(private val repo: OwnerCheckRepository) : ViewModel() {
+class OwnerCheckSettingsViewModel @Inject constructor(
+    private val repo: OwnerCheckRepository,
+    timeScale: TimeScaleSource = TimeScaleSource.RealTime,
+) : ViewModel() {
     private val local = MutableStateFlow(OwnerCheckSettingsUiState())
-    val uiState: StateFlow<OwnerCheckSettingsUiState> = combine(local, repo.ownerCheck) { s, v -> s.copy(view = v) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, OwnerCheckSettingsUiState(view = repo.ownerCheck.value))
+    val uiState: StateFlow<OwnerCheckSettingsUiState> =
+        combine(local, repo.ownerCheck, timeScale.timeScale) { s, v, t -> s.copy(view = v, timeScale = t) }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                OwnerCheckSettingsUiState(view = repo.ownerCheck.value, timeScale = timeScale.timeScale.value),
+            )
 
     init {
         viewModelScope.launch { runCatching { repo.refreshOwnerCheck() } }
@@ -110,14 +126,22 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
     var picker by rememberSaveable { mutableStateOf(false) }
     val hours = (v.intervalSeconds / OwnerCheckSettingsViewModel.SECONDS_PER_HOUR).toInt().coerceAtLeast(1)
     val next = v.deadline?.let { stringResource(R.string.settings_owner_check_next, Times.full(it)) }
+    val t = state.timeScale
+    // STAGING-TIME-SCALE §3 rule 3: the setting in its real units, and as it runs on a scaled vault.
+    val every = scaledSettingText(
+        pluralStringResource(R.plurals.settings_owner_check_every, hours, hours),
+        t.scaled,
+        t.scaledSeconds(v.intervalSeconds),
+    )
     SettingsDivider()
     SettingsRow(
         stringResource(R.string.settings_owner_check),
         { picker = true },
         icon = Icons.Outlined.Schedule,
-        supporting = listOfNotNull(pluralStringResource(R.plurals.settings_owner_check_every, hours, hours), next).joinToString(" · "),
+        supporting = listOfNotNull(every, next).joinToString(" · "),
         modifier = Modifier.testTag("owner_check_interval"),
     )
+    if (t.stagingNote) StagingTimeNote(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs))
     SettingsDivider()
     SettingsRow(
         stringResource(R.string.settings_owner_check_now),
@@ -147,7 +171,13 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
             title = stringResource(R.string.settings_owner_check),
             options = OwnerCheckSettingsViewModel.INTERVAL_HOURS,
             selected = hours,
-            label = { pluralStringResource(R.plurals.settings_owner_check_every, it, it) },
+            label = {
+                scaledSettingText(
+                    pluralStringResource(R.plurals.settings_owner_check_every, it, it),
+                    t.scaled,
+                    t.scaledSeconds(it * OwnerCheckSettingsViewModel.SECONDS_PER_HOUR),
+                )
+            },
             onPick = {
                 picker = false
                 actions.setIntervalHours(it)

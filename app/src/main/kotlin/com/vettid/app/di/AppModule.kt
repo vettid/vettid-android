@@ -64,6 +64,7 @@ import com.vettid.core.data.vault.ReleaseUpdateInbox
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.vault.VaultManager
+import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
 import com.vettid.core.data.wipe.AppDataClear
@@ -184,6 +185,9 @@ object AppModule {
 
     @Provides
     fun ownerCheckRepository(m: VaultManager): OwnerCheckRepository = m.ownerCheck
+
+    @Provides
+    fun timeScaleSource(m: VaultManager): TimeScaleSource = m
 
     @Provides
     fun profileRepository(m: VaultManager): ProfileRepository = m.profile

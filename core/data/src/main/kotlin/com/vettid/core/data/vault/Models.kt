@@ -9,9 +9,14 @@ sealed interface AppPhase {
 
     /**
      * The member API could not be reached at start ([failure] says why). [longUnreachable]: nothing has reached the vault
-     * service from this phone for [StuckScreens.LONG_UNREACHABLE] or more ([StuckScreens.longUnreachable]).
+     * service from this phone for [StuckScreens.LONG_UNREACHABLE] or more ([StuckScreens.longUnreachable]), or as divided
+     * by the vault's time scale ([unreachableAfterSeconds], for the text).
      */
-    data class Unreachable(val failure: FailureKind, val longUnreachable: Boolean = false) : AppPhase
+    data class Unreachable(
+        val failure: FailureKind,
+        val longUnreachable: Boolean = false,
+        val unreachableAfterSeconds: Long = StuckScreens.LONG_UNREACHABLE.seconds,
+    ) : AppPhase
 
     /**
      * Nothing set up on this phone: the welcome screen (a setup code, a recovery or a transfer). The app never
@@ -347,6 +352,12 @@ enum class FailureKind {
 
     /** The ENCLAVE's attestation document or descriptor did not verify: nothing was sent to it. */
     ENCLAVE,
+
+    /**
+     * (STAGING-TIME-SCALE §4 item 4) The vault's release has a time scale this build does not accept (a production build:
+     * any but 1), in its descriptor or a transfer bundle: refused as malformed, nothing was sent to it.
+     */
+    TIME_SCALE,
     NOT_FOUND,
     CONNECTION_UNAVAILABLE,
     INVITE_INVALID,

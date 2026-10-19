@@ -59,6 +59,8 @@ import com.vettid.core.ui.components.PasswordRuleLine
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.visibleSecretKeyboard
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
@@ -343,7 +345,7 @@ fun VaultElsewhereScreen(state: OnboardingUiState, actions: OnboardingActions, o
         NoticeCard(
             NoticeKind.WARNING,
             stringResource(R.string.onboarding_elsewhere_recovery_title),
-            stringResource(R.string.onboarding_elsewhere_recovery_body),
+            stringResource(R.string.onboarding_elsewhere_recovery_body, scaledDurationText(Durations.DAY)),
             modifier = Modifier.testTag("elsewhere_recovery"),
             actions = {
                 androidx.compose.material3.TextButton(onClick = onOpenAccountSite) {

@@ -7,6 +7,7 @@ import com.vettid.core.data.vault.HoldOff
 import com.vettid.core.data.vault.OwnerCheckOutcome
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckView
+import com.vettid.core.data.vault.TimeScaleView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -75,6 +76,8 @@ data class OwnerCheckUiState(
     val presenceUnrecorded: Boolean = false,
     /** The check passed with the presence not recorded: the screen stays with the notice until the member goes on. */
     val passedUnrecorded: Boolean = false,
+    /** (STAGING-TIME-SCALE) The vault's time scale: the interval as it runs, and the staging note. */
+    val timeScale: TimeScaleView = TimeScaleView(),
 ) {
     val submitAllowed: Boolean get() = !busy && !locking && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
 
@@ -111,13 +114,14 @@ class OwnerCheckViewModel @Inject constructor(
     private val repo: OwnerCheckRepository,
     private val vault: VaultRepository,
 ) : ViewModel(), OwnerCheckActions {
-    private val state = MutableStateFlow(OwnerCheckUiState(view = repo.ownerCheck.value))
+    private val state = MutableStateFlow(OwnerCheckUiState(view = repo.ownerCheck.value, timeScale = vault.timeScale.value))
     val uiState: StateFlow<OwnerCheckUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
         viewModelScope.launch { repo.presenceUnrecorded.collect { p -> state.update { it.copy(presenceUnrecorded = p) } } }
+        viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(timeScale = t) } } }
     }
 
     /** Opens the screen for [mode], with nothing entered; a check sent right after an unlock says how it went. */
@@ -127,7 +131,7 @@ class OwnerCheckViewModel @Inject constructor(
         repo.consumeUnlockCheckOutcome()
         state.value = OwnerCheckUiState(
             mode = mode, view = repo.ownerCheck.value, message = after?.let { messageOf(it) },
-            presenceUnrecorded = repo.presenceUnrecorded.value,
+            presenceUnrecorded = repo.presenceUnrecorded.value, timeScale = vault.timeScale.value,
         )
         if (after is OwnerCheckOutcome.Backoff) startBackoff(after.retryAfterSeconds)
         viewModelScope.launch { runCatching { repo.refreshOwnerCheck() } }
@@ -136,7 +140,9 @@ class OwnerCheckViewModel @Inject constructor(
     /** Leaves the screen without a check (not while gated): forgets what was entered. */
     fun cancel() {
         ticker?.cancel()
-        state.update { OwnerCheckUiState(mode = it.mode, view = it.view, presenceUnrecorded = it.presenceUnrecorded) }
+        state.update {
+            OwnerCheckUiState(mode = it.mode, view = it.view, presenceUnrecorded = it.presenceUnrecorded, timeScale = it.timeScale)
+        }
     }
 
     override fun acknowledgePresence() = state.update { if (it.passedUnrecorded) it.copy(passed = true) else it }

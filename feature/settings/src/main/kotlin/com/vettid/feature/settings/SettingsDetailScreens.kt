@@ -70,6 +70,9 @@ import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsSectionHeader
 import com.vettid.core.ui.components.excludeFromAutofill
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdTheme
 import java.time.Instant
@@ -119,7 +122,7 @@ private fun SignerDetails(signer: SignerView) {
     NoticeCard(
         NoticeKind.INFO,
         stringResource(signer.signerClass.installedFromRes()),
-        stringResource(R.string.settings_signer_explanation) + "\n\n" +
+        stringResource(R.string.settings_signer_explanation, scaledDurationText(Durations.DAY)) + "\n\n" +
             stringResource(R.string.settings_signer_digest, signer.digest.chunked(DIGEST_GROUP).joinToString(" ")),
         modifier = Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s).testTag("signer_details"),
     )
@@ -430,7 +433,7 @@ fun RecoveryContent(
     }
     FormScaffold(
         title = stringResource(R.string.settings_recovery_title),
-        body = stringResource(R.string.settings_recovery_body),
+        body = stringResource(R.string.settings_recovery_body, scaledDurationText(Durations.DAY)),
         primaryLabel = stringResource(R.string.settings_recovery_open),
         onPrimary = onOpenAccountSite,
         busy = state.busy || state.loading,
@@ -438,6 +441,7 @@ fun RecoveryContent(
         secondaryLabel = if (active) null else stringResource(R.string.settings_recovery_transfer),
         onSecondary = onTransfer,
     ) {
+        StagingTimeNoteIfShown()
         if (state.backupOff) {
             NoticeCard(
                 NoticeKind.WARNING,

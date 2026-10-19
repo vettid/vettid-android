@@ -19,6 +19,7 @@ import com.vettid.core.attestation.manifest.ManifestVerifier
 import com.vettid.core.attestation.manifest.Release
 import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.crypto.Bytes
+import com.vettid.core.crypto.altchan.ReleaseTraits
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.MemberGateway
 import com.vettid.core.data.social.InviteLinks
@@ -126,7 +127,7 @@ class VaultManager(
     private val scope: CoroutineScope,
     private val deviceName: String,
     private val wiper: LocalWipe,
-) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository, BackgroundVault, PushVault {
+) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository, BackgroundVault, PushVault, TimeScaleSource {
     private val app = context.applicationContext
     private val http = env.http(baseHttp)
     private val gateway: MemberGateway = env.memberGateway(app, http) { session?.device?.vaultId ?: local.vaultId.ifEmpty { null } }
@@ -386,8 +387,8 @@ class VaultManager(
                 // Release R (§11.14.10): this phone's key and its secret of epoch 1 go in the hs.init. The vault id is not
                 // known yet: the key and the secret are made for "" (as vettid-vault's reference client does).
                 // Stored before the hs.init is sent; a retry reuses the key. §11.10.9: only when the bundle lists `recovery_r`.
-                d.startTransfer(link, env.attester()) { caps ->
-                    val r = choosePath(caps, makesPhoneKey = true, rec) == ReleasePath.Path.R
+                d.startTransfer(link, env.attester()) { traits ->
+                    val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
                     if (r) phoneSecrets.secret(keepPhoneKey("", rec)) else null
                 }
                 transferStartedAt = Instant.now()
@@ -486,6 +487,22 @@ class VaultManager(
 
     /** (Release R, §11.14.10) This new phone has a move to finish. */
     private val finishMoveFlow = MutableStateFlow(local.finishMovePending)
+
+    /** (STAGING-TIME-SCALE §5.2) The vault's time scale, from the account record ([syncTimeScale]). */
+    private val timeScaleFlow = MutableStateFlow(timeScaleOf(local))
+
+    override val timeScale: StateFlow<TimeScaleView> = timeScaleFlow.asStateFlow()
+
+    private fun timeScaleOf(a: LocalAccount) = TimeScaleView(
+        scale = a.timeScale ?: com.vettid.core.crypto.altchan.TimeScale.REAL,
+        known = a.timeScale != null,
+        stagingBuild = env.name == ENV_STAGING,
+    )
+
+    /** The flow follows the record after a write, a reset, a reload or a wipe. */
+    private fun syncTimeScale() {
+        timeScaleFlow.value = timeScaleOf(local)
+    }
 
     /**
      * "Finish the move" (§11.14.10 step 4), run in this manager's scope ([FinishMoveRunner]): the lock is the member's
@@ -785,12 +802,17 @@ class VaultManager(
      * since [since] ([AccountRecord.recordGeneration], read before the operation the write belongs to) was read.
      */
     private fun updateLocal(since: Int, f: (LocalAccount) -> LocalAccount?) {
-        record.update(since, f)
+        try {
+            record.update(since, f)
+        } finally {
+            syncTimeScale()
+        }
     }
 
     /** A record of its own ([a]: none, or a new setup's): the writes still on their way for the one before are dropped. */
     private fun resetLocal(a: LocalAccount) {
         record.reset(a)
+        syncTimeScale()
     }
 
     // --- session ---
@@ -980,7 +1002,8 @@ class VaultManager(
             updateLocal(RecordStore.UNBOUND) {
                 it.copy(
                     setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
-                    finishMovePending = false, movedIn = false, recoveryRSeen = false, capabilities = emptyList(),
+                    transferKeepMs = null, finishMovePending = false, movedIn = false, recoveryRSeen = false,
+                    capabilities = emptyList(), timeScale = null, unreachableAfterMs = null,
                 )
             }
             finishMoveFlow.value = false
@@ -1106,7 +1129,7 @@ class VaultManager(
         // Not while a lock is pending: nothing but the lock is sent to a vault that counts as locked.
         if (!lockKeeper.pending) scope.launch { runCatching { d.flushOutbox() } }
         val t = Instant.now()
-        val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t) } == true
+        val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
         if (phaseFlow.value is AppPhase.Unlocked) {
             scope.launch { releaseUpdate.refreshOffer() }
@@ -1124,7 +1147,9 @@ class VaultManager(
             val kind = if (e.code == CODE_KEYSTORE) FailureKind.LOCAL_STATE else e.kind
             // Nothing has reached the vault service for a long time: erase-or-recover beside "Try again".
             val last = listOfNotNull(local.lastContactAtMs, local.lastOpenedAtMs).maxOrNull()
-            AppPhase.Unreachable(kind, StuckScreens.longUnreachable(kind, last, System.currentTimeMillis()))
+            // STAGING-TIME-SCALE (S12): the bound as divided by the time scale when the last contact started it.
+            val after = local.unreachableAfterMs ?: StuckScreens.LONG_UNREACHABLE.toMillis()
+            AppPhase.Unreachable(kind, StuckScreens.longUnreachable(kind, last, System.currentTimeMillis(), after), after / MS_PER_SECOND)
         }
         if (gen == generation) phaseFlow.value = p // a wipe meanwhile already said SignedOut
     }
@@ -1140,6 +1165,7 @@ class VaultManager(
             // Read again (a Keystore that was not ready at start): never taken for an empty record.
             val a = io { loadLocal() }
             record.reload(a, readable = !localUnreadable)
+            syncTimeScale()
             if (localUnreadable) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_KEYSTORE)
             accountFlow.value = local.toInfo()
         }
@@ -1279,8 +1305,8 @@ class VaultManager(
         // §11.10.9: the instance's capabilities choose the shape. Release R (§11.14.1): a phone key and its secret of
         // epoch 1 in the request; the state is stored before the request is sent, and a retry of this enrollment (a lost
         // answer, a crash) reuses the key: the vault may already hold its secret. Without `recovery_r`: as before.
-        val out = s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester()) { caps ->
-            val r = choosePath(caps, makesPhoneKey = true, rec) == ReleasePath.Path.R
+        val out = s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
+            val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
             if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
         }
         if (!out.ok) throw VaultFailure(enrollFailure(out.code), out.code)
@@ -1539,8 +1565,8 @@ class VaultManager(
             pinChangeUnresolved = twoStep,
             newPinAsked = newPinStep,
             send = { ahead ->
-                val o = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { caps ->
-                    val path = choosePath(caps, makesPhoneKey = false, rec)
+                val o = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting) { traits ->
+                    val path = choosePath(traits, makesPhoneKey = false, rec)
                     // An unlock never sets the mark on a phone without a phone secret (it then fails without one, unmarked).
                     if (ahead == 0) r = path == ReleasePath.Path.R
                     if (ahead > 0) phoneSecrets.secret(phone, ahead = ahead.toLong()) else if (r) phoneSecrets.secret(phone) else null
@@ -1567,14 +1593,18 @@ class VaultManager(
 
     /**
      * §11.10.9: the request's shape from the capabilities of the instance just verified ([ReleasePath.choose]); the
-     * mark and the last capabilities are stored, into the record of [since]. A vault known to have release R and an
+     * mark, the last capabilities and the time scale are stored, into the record of [since]. A vault known to have release R and an
      * instance without it: refused.
      */
-    private fun choosePath(capabilities: List<String>, makesPhoneKey: Boolean, since: Int): ReleasePath.Path {
+    private fun choosePath(traits: ReleaseTraits, makesPhoneKey: Boolean, since: Int): ReleasePath.Path {
+        // STAGING-TIME-SCALE §4 item 4: a time scale this build does not accept never gets here (the alternate channel
+        // refuses such a descriptor, the vault client such a transfer bundle, before anything is sent).
+        val capabilities = traits.capabilities
         val path = ReleasePath.choose(capabilities, local.releaseRKnown)
         val seen = ReleasePath.marks(local.recoveryRSeen, path, makesPhoneKey = makesPhoneKey, holdsPhoneSecret = local.phone.inUse)
-        if (seen != local.recoveryRSeen || capabilities != local.capabilities) {
-            updateLocal(since) { it.copy(recoveryRSeen = seen, capabilities = capabilities) }
+        // §11.10.9: the time scale is stored per vault with the capabilities; the app's own waits start from it.
+        if (seen != local.recoveryRSeen || capabilities != local.capabilities || traits.timeScale != local.timeScale) {
+            updateLocal(since) { it.copy(recoveryRSeen = seen, capabilities = capabilities, timeScale = traits.timeScale) }
         }
         return path
     }
@@ -2099,7 +2129,7 @@ class VaultManager(
         since: Int,
     ): com.vettid.core.altchan.SealedRequest {
         val caps = e.descriptor.capabilities
-        if (choosePath(caps, makesPhoneKey = true, since) == ReleasePath.Path.R) {
+        if (choosePath(e.descriptor.traits, makesPhoneKey = true, since) == ReleasePath.Path.R) {
             if (!ReleasePath.recoveryOffered(caps)) throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_NOT_OFFERED)
             val phone = phoneSecrets.create(code.vaultId)
             updateLocal(since) { it.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch) }
@@ -2128,7 +2158,7 @@ class VaultManager(
                 local.vaultId,
                 build = { e, m ->
                     // §11.10.9: this phone registered with release R; an instance without it is refused, nothing sent.
-                    choosePath(e.descriptor.capabilities, makesPhoneKey = false, rec)
+                    choosePath(e.descriptor.traits, makesPhoneKey = false, rec)
                     s.device.prepareRecoveryOpen(local.userGuid, pin, password, secret, e, m, env.attester())
                 },
                 open = { raw, rid -> s.device.openRecoveryOpenResult(raw, rid) },
@@ -2372,20 +2402,24 @@ class VaultManager(
         // stored before the approval is sent, so that an approval whose answer is lost is bounded too; a refusal, or an
         // answer that does not keep the keys, removes it again.
         val before = local.transferApprovedAtMs
-        if (r) io { updateLocal(rec) { it.copy(transferApprovedAtMs = System.currentTimeMillis()) } }
+        val keepBefore = local.transferKeepMs
+        // STAGING-TIME-SCALE (S10): the keep period is divided by the vault's time scale now, and kept with the time.
+        val keepMs = KeptTransfer.keepMs(timeScaleFlow.value.scale).takeIf { it != KeptTransfer.KEEP_MS }
+        if (r) io { updateLocal(rec) { it.copy(transferApprovedAtMs = System.currentTimeMillis(), transferKeepMs = keepMs) } }
+        val restore: (LocalAccount) -> LocalAccount = { it.copy(transferApprovedAtMs = before, transferKeepMs = keepBefore) }
         val moved = try {
             holder.approveTransfer(if (r) 0 else UNLINK_WAIT_MS) {
                 keep = guard { session().openApi.transferApprove(transferId, pin, password, signer) }.keepUntilNewUnlock
                 openTransferId = null
             }
         } catch (e: VaultFailure) {
-            if (r && !KeptTransfer.mayHaveReached(e.kind)) io { updateLocal(rec) { it.copy(transferApprovedAtMs = before) } }
+            if (r && !KeptTransfer.mayHaveReached(e.kind)) io { updateLocal(rec, restore) }
             throw e
         }
         if (keep) {
             checkKeptTransfer()
         } else if (r) {
-            io { updateLocal(rec) { it.copy(transferApprovedAtMs = before) } }
+            io { updateLocal(rec, restore) }
         }
         return moved
     }
@@ -2408,6 +2442,8 @@ class VaultManager(
     /** (Release R) When this phone approved a transfer it still keeps the keys for; null otherwise. */
     override val transferKeptSince: StateFlow<Instant?> = transferKeptFlow.asStateFlow()
 
+    override val transferKeepSeconds: Long get() = (local.transferKeepMs ?: KeptTransfer.KEEP_MS) / MS_PER_SECOND
+
     /**
      * At every start, on every return to the foreground, and when the 7 days run out while the process lives: a
      * transfer approved 7 days ago or more ends here (the old phone's keys go, §11.14.10); before that,
@@ -2420,7 +2456,7 @@ class VaultManager(
         // A clock behind the approval: the 7 days run from now, stored, so that later checks do not extend them again.
         val at = KeptTransfer.start(stored, now)
         if (at != stored) io { updateLocal(rec) { it.copy(transferApprovedAtMs = at) } }
-        when (val k = KeptTransfer.decide(at, now)) {
+        when (val k = KeptTransfer.decide(at, now, local.transferKeepMs ?: KeptTransfer.KEEP_MS)) {
             KeptTransfer.Decision.Erase -> {
                 keptTransferTimer?.cancel()
                 endKeptTransfer()
@@ -2785,6 +2821,8 @@ class VaultManager(
         private const val UPDATE_MOVED = "moved"
         private const val UPDATE_ABANDONED = "abandoned"
         private const val COUNTER_UNAVAILABLE = "unavailable"
+        private const val MS_PER_SECOND = 1_000L
+        private const val ENV_STAGING = "staging"
         private const val LOCKED_WAIT_MS = 15_000L
         private const val FINISH_MOVE_HOLD_MS = 90_000L
         private const val LOCKED_POLL_MS = 1_000L

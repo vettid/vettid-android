@@ -48,6 +48,10 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNote
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -116,9 +120,11 @@ fun UnlockContent(
                 NoticeCard(
                     NoticeKind.INFO,
                     stringResource(R.string.onboarding_move_didnt_finish),
-                    stringResource(R.string.onboarding_kept_transfer) + "\n\n" + stringResource(R.string.onboarding_move_didnt_finish_body),
+                    stringResource(R.string.onboarding_kept_transfer, durationText(state.keptForSeconds)) + "\n\n" +
+                        stringResource(R.string.onboarding_move_didnt_finish_body),
                     modifier = Modifier.testTag("kept_transfer"),
                 )
+                if (state.stagingNote) StagingTimeNote()
             }
             state.preflightError?.let {
                 NoticeCard(
@@ -337,6 +343,8 @@ fun UnlockContent(
             text = stringResource(
                 if (state.keysGone && !state.notRecognised) com.vettid.core.ui.R.string.core_ui_erase_phone_body
                 else R.string.unlock_erase_confirm_body,
+                // The erase text's recovery wait (unused by the other text).
+                scaledDurationText(Durations.DAY),
             ),
             confirmLabel = stringResource(R.string.unlock_erase_confirm),
             onConfirm = actions::confirmErase,
@@ -459,7 +467,7 @@ private fun SignerRefusedNotice(help: Boolean, onHelp: (Boolean) -> Unit) {
         NoticeCard(
             NoticeKind.INFO,
             stringResource(R.string.unlock_signer_refused_help_title),
-            stringResource(R.string.unlock_signer_refused_help_body),
+            stringResource(R.string.unlock_signer_refused_help_body, scaledDurationText(Durations.DAY)),
             modifier = Modifier.testTag("signer_refused_help_text"),
         )
     }

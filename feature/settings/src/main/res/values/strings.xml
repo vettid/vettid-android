@@ -127,7 +127,7 @@
     <string name="settings_signer_installed_google_play">Installed from: Google Play (signed by Google)</string>
     <string name="settings_signer_installed_vettid">Installed from: F-Droid or direct (signed by VettID)</string>
     <string name="settings_signer_installed_development">Development build</string>
-    <string name="settings_signer_explanation">The Google Play version is signed by Google, so it trusts Google\'s signing; the F-Droid and direct versions are signed by VettID and do not. To change version, transfer your vault to the other version on another phone, or reinstall and recover it, which takes 24 hours.</string>
+    <string name="settings_signer_explanation">The Google Play version is signed by Google, so it trusts Google\'s signing; the F-Droid and direct versions are signed by VettID and do not. To change version, transfer your vault to the other version on another phone, or reinstall and recover it, which takes %1$s.</string>
     <string name="settings_signer_details_shown">Details shown</string>
     <string name="settings_signer_details_hidden">Details hidden</string>
     <string name="settings_signer_digest">Signing certificate (SHA-256): %1$s</string>
@@ -159,7 +159,7 @@
 
     <!-- Recovery -->
     <string name="settings_recovery_title">Recovery</string>
-    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after 24 hours the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone then erases VettID the next time it reaches your vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
+    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after %1$s the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone then erases VettID the next time it reaches your vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
     <string name="settings_recovery_transfer">Move to a new phone</string>
     <string name="settings_recovery_backup_off">No recovery: your credential backup is off. If this phone is lost, broken, reset or replaced without a transfer, your vault cannot be recovered; it can only be deleted and replaced, and everything in it is lost.</string>
     <string name="settings_recovery_none">No recovery is in progress.</string>
@@ -282,7 +282,7 @@
     <string name="settings_recovery_status_off">Recovery: off (credential backup is off).</string>
     <string name="settings_recovery_status_unknown">Recovery: cannot be checked right now.</string>
     <string name="settings_recovery_not_offered">This vault\'s release does not offer recovery.</string>
-    <string name="settings_transfer_moved_kept_body">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most 7 days. Before you give this phone away, remove VettID from it or reset it.</string>
+    <string name="settings_transfer_moved_kept_body">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most %1$s. Before you give this phone away, remove VettID from it or reset it.</string>
     <string name="settings_recovery_status_change_required">Recovery is off until you choose a new password that meets the rules.</string>
     <!-- Release R (ANDROID-PLAN "Other screens"): Settings → Security → New phone secret -->
     <string name="settings_security_new_secret">New phone secret</string>

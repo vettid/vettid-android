@@ -14,6 +14,7 @@ import com.vettid.core.data.vault.ReleaseNotices
 import com.vettid.core.data.vault.ReleaseUpdateInbox
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseUpdateRepository
+import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.UrgentBanner
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.Instant
 import javax.inject.Inject
 
@@ -39,8 +41,10 @@ data class ReleaseBannerState(
 )
 
 /** A stored dismissal as [ReleaseNotices] reads it; null for none or an unknown kind. */
-fun ReleaseNoticeDismissal.toDismissal(): ReleaseDismissal? =
-    runCatching { ReleaseDismissal(release, UpdateNoticeKind.valueOf(kind), Instant.ofEpochMilli(atMs)) }.getOrNull()
+fun ReleaseNoticeDismissal.toDismissal(): ReleaseDismissal? = runCatching {
+    val duration = if (forMs > 0) Duration.ofMillis(forMs) else ReleaseNotices.DISMISS_FOR
+    ReleaseDismissal(release, UpdateNoticeKind.valueOf(kind), Instant.ofEpochMilli(atMs), duration)
+}.getOrNull()
 
 /**
  * The shell's release notice (owner decision 2026-10-09): shown while the vault has an update to approve, dismissed
@@ -52,6 +56,7 @@ class ReleaseBannerViewModel @Inject constructor(
     private val updates: ReleaseUpdateRepository,
     private val prefs: PreferencesRepository,
     private val inbox: ReleaseUpdateInbox,
+    private val timeScale: TimeScaleSource = TimeScaleSource.RealTime,
 ) : ViewModel() {
     private val clock = flow {
         while (true) {
@@ -72,7 +77,9 @@ class ReleaseBannerViewModel @Inject constructor(
     fun dismiss() {
         val o = banner.value.offer ?: return
         viewModelScope.launch {
-            prefs.setReleaseNoticeDismissed(ReleaseNoticeDismissal(o.target.number, o.kind.name, Instant.now().toEpochMilli()))
+            // STAGING-TIME-SCALE (S16): the 24 h divided by the vault's time scale now, kept with the dismissal.
+            val forMs = ReleaseNotices.dismissFor(timeScale.timeScale.value.scale).toMillis()
+            prefs.setReleaseNoticeDismissed(ReleaseNoticeDismissal(o.target.number, o.kind.name, Instant.now().toEpochMilli(), forMs))
         }
     }
 

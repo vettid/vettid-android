@@ -105,10 +105,31 @@ class InviteBundle(
      * when absent (a release before R). No other kind carries it.
      */
     val capabilities: List<String>? = null,
+    /**
+     * (0.43.0, STAGING-TIME-SCALE) A transfer bundle's release time scale (§11.10.9), bound by the QR's `h`; null when
+     * absent (a release before the scale: 1). No other kind carries it.
+     */
+    val timeScale: Long? = null,
 ) {
+    /** The capabilities and the time scale of a transfer bundle's release (absent members: none, and 1). */
+    val traits: com.vettid.core.crypto.altchan.ReleaseTraits
+        get() = com.vettid.core.crypto.altchan.ReleaseTraits(
+            capabilities.orEmpty(),
+            timeScale ?: com.vettid.core.crypto.altchan.TimeScale.REAL,
+        )
+
+    /** (0.43.0) `time_scale`: a transfer bundle's only, an integer from 1 to [com.vettid.core.crypto.altchan.TimeScale.MAX]. */
+    private fun validateTimeScale() {
+        val s = timeScale ?: return
+        if (kind != InviteKind.APP || s !in com.vettid.core.crypto.altchan.TimeScale.REAL..com.vettid.core.crypto.altchan.TimeScale.MAX) {
+            throw CryptoException.Format("bundle time_scale")
+        }
+    }
+
     private fun validate() {
         if (remote && kind != InviteKind.CONNECTION) throw CryptoException.Format("bundle remote")
         if (capabilities != null && kind != InviteKind.APP) throw CryptoException.Format("bundle capabilities")
+        validateTimeScale()
         if (!Ulid.isValid(inviteId) || !Relay.isValidToken(token) || exp.nano != 0) throw CryptoException.Format("bundle")
         if (hintName != null && hintName.toByteArray().size > MAX_HINT_NAME) throw CryptoException.Format("bundle hint")
         if (vault.ik().size != Suite.ED25519_PUBLIC_SIZE) throw CryptoException.Format("bundle")
@@ -127,6 +148,7 @@ class InviteBundle(
             .string("token", token)
             .string("exp", Timestamps.formatSeconds(exp))
         capabilities?.let { com.vettid.core.crypto.altchan.Capabilities.write(b, it) }
+        timeScale?.let { com.vettid.core.crypto.altchan.TimeScale.write(b, it) }
         if (!hintName.isNullOrEmpty()) b.raw("hint", JsonBuilder().string("name", hintName).build())
         return b.bytes()
     }
@@ -150,6 +172,11 @@ class InviteBundle(
                 hintName = o.optObj("hint")?.optString("name"),
                 capabilities = if (o.has(com.vettid.core.crypto.altchan.Capabilities.MEMBER)) {
                     com.vettid.core.crypto.altchan.Capabilities.parse(o)
+                } else {
+                    null
+                },
+                timeScale = if (o.has(com.vettid.core.crypto.altchan.TimeScale.MEMBER)) {
+                    com.vettid.core.crypto.altchan.TimeScale.parse(o)
                 } else {
                     null
                 },

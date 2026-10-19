@@ -38,6 +38,9 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.StagingTimeNote
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
 
@@ -69,21 +72,13 @@ fun OwnerCheckRoute(
     OwnerCheckContent(state.copy(mode = mode), viewModel, onCancel = cancel)
 }
 
-/** Hours of an interval, for the texts. */
-@Composable
-private fun hoursText(seconds: Long): String {
-    val h = (seconds / SECONDS_PER_HOUR).toInt().coerceAtLeast(1)
-    return pluralStringResource(R.plurals.ownercheck_hours, h, h)
-}
-
-private const val SECONDS_PER_HOUR = 3_600L
-
 /** The owner-check screen for [state] (stateless). */
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCancel: () -> Unit) {
     val v = state.view
-    val interval = hoursText(v?.intervalSeconds ?: OwnerCheckView.MAX_INTERVAL_S)
+    // STAGING-TIME-SCALE: the interval as it runs (the setting divided by the vault's time scale), from seconds.
+    val interval = durationText(state.timeScale.scaledSeconds(v?.intervalSeconds ?: OwnerCheckView.MAX_INTERVAL_S))
     val (title, body) = when (state.mode) {
         OwnerCheckMode.GATED -> stringResource(R.string.ownercheck_title_gated) to stringResource(R.string.ownercheck_body_gated, interval)
         OwnerCheckMode.VOLUNTARY -> stringResource(R.string.ownercheck_title_voluntary) to
@@ -117,6 +112,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+            if (state.timeScale.stagingNote) StagingTimeNote()
             if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
             if (state.mode == OwnerCheckMode.HOLD_OFF) {
@@ -183,13 +179,19 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 
 private const val WARN_LEFT = 3
 
+/**
+ * The recovery quiet period (VAULT-MESSAGING §11.14.5: 72 h in real time), which the presence notice names: a wait the
+ * time scale divides (STAGING-TIME-SCALE S7).
+ */
+const val RECOVERY_QUIET_S = 259_200L
+
 /** ANDROID-PLAN "Owner check and status" (release R): the vault could not record that the member was here. */
 @Composable
 private fun PresenceNotice() {
     NoticeCard(
         NoticeKind.WARNING,
         stringResource(R.string.ownercheck_presence_title),
-        stringResource(R.string.ownercheck_presence_body),
+        stringResource(R.string.ownercheck_presence_body, scaledDurationText(RECOVERY_QUIET_S)),
         modifier = Modifier.testTag("owner_check_presence"),
         announce = androidx.compose.ui.semantics.LiveRegionMode.Polite,
     )

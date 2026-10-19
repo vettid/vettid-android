@@ -10,6 +10,8 @@ import com.vettid.core.attestation.manifest.Release
 import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.attestation.nitro.NitroRoot
 import com.vettid.core.attestation.nitro.NitroVerifier
+import com.vettid.core.crypto.altchan.ReleaseTraits
+import com.vettid.core.crypto.altchan.TimeScale
 import com.vettid.core.crypto.envelope.Ulid
 import java.io.IOException
 import java.security.cert.X509Certificate
@@ -23,13 +25,37 @@ import java.time.Instant
  * [staging] the `staging` build type's;
  * the local dev stack's TEST-ONLY anchors are passed by development code
  * and instrumented tests, never compiled into a release.
+ *
+ * [timeScaleOk] says which release time scales this build accepts (STAGING-TIME-SCALE §4 item 4, §5.2): a production
+ * build only 1, a staging build 1 and 24. An instance or a transfer bundle with any other value gets nothing.
  */
-class AltTrust(val nitroRoots: List<X509Certificate>, val manifestKeys: List<ManifestKey>) {
+class AltTrust(
+    val nitroRoots: List<X509Certificate>,
+    val manifestKeys: List<ManifestKey>,
+    private val timeScaleOk: (Long) -> Boolean = PRODUCTION_SCALES,
+) {
+    /** Whether this build may talk to a release with [scale]. */
+    fun acceptsTimeScale(scale: Long): Boolean = timeScaleOk(scale)
+
+    /** Refuses a release this build may not talk to ([acceptsTimeScale]): nothing is sent to it. */
+    fun checkTimeScale(scale: Long) {
+        if (!acceptsTimeScale(scale)) throw AltRefusedException(AltRefusedException.Reason.TIME_SCALE)
+    }
+
     companion object {
+        /** A production build: real time only. */
+        val PRODUCTION_SCALES: (Long) -> Boolean = { it == TimeScale.REAL }
+
+        /** A staging build: real time, or 1 day = 1 hour. */
+        val STAGING_SCALES: (Long) -> Boolean = { it == TimeScale.REAL || it == TimeScale.STAGING }
+
+        /** The dev stack (TEST ONLY): its `-time-scale` flag, 1 to 86,400. */
+        val DEV_STACK_SCALES: (Long) -> Boolean = { it in TimeScale.REAL..TimeScale.MAX }
+
         fun production() = AltTrust(listOf(NitroRoot.certificate), ManifestKeys.PRODUCTION)
 
-        /** The `staging` build type's: the real AWS Nitro root and the staging manifest key. */
-        fun staging() = AltTrust(listOf(NitroRoot.certificate), ManifestKeys.STAGING)
+        /** The `staging` build type's: the real AWS Nitro root and the staging manifest key; scales 1 and 24. */
+        fun staging() = AltTrust(listOf(NitroRoot.certificate), ManifestKeys.STAGING, STAGING_SCALES)
     }
 }
 
@@ -139,6 +165,8 @@ class AltChannelFlow(
         val info = api.enclaveWait(release, onStarting)
         val e = verifyEnclave(info.descriptor(), info.attestation(), m, enroll, Instant.now(clock))
         if (e.descriptor.instanceId != info.instanceId) throw AltChannelException("descriptor names another instance")
+        // STAGING-TIME-SCALE §4 item 4: a release with a time scale this build does not accept gets nothing.
+        trust.checkTimeScale(e.descriptor.timeScale)
         return info to e
     }
 
@@ -152,7 +180,7 @@ class AltChannelFlow(
     /**
      * Enrolls this app (§11.3) into [vaultId], the vault the setup code's redeem named (§11.12.1). Success also
      * arrives as vault.enrolled over the relay. (0.34.0, release R) [unlockSecretFor] is given the verified instance's
-     * capabilities (§11.10.9) before each request is built: it returns the phone's unlock secret for release R's shape,
+     * capabilities and time scale (§11.10.9) before each request is built: it returns the phone's unlock secret for release R's shape,
      * null for the earlier one, or throws, and then nothing is sent. The secret is zeroed once the request is sealed.
      */
     suspend fun enroll(
@@ -161,14 +189,14 @@ class AltChannelFlow(
         userGuid: String,
         pin: String,
         attester: Attester,
-        unlockSecretFor: suspend (capabilities: List<String>) -> ByteArray? = { null },
+        unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { null },
     ): EnrollOutcome {
         var m = manifest(party.manifestSerialSeen())
         var refetched = false
         var attempt = 1
         while (true) {
             val (info, e) = enclaveFor(null, m, enroll = true)
-            val secret = unlockSecretFor(e.descriptor.capabilities)
+            val secret = unlockSecretFor(e.descriptor.traits)
             val req = try {
                 party.prepareEnroll(userGuid, pin, e, m, attester, secret)
             } finally {
@@ -212,7 +240,7 @@ class AltChannelFlow(
         release: String? = null,
         onStarting: ((Long) -> Unit)? = null,
         /** (0.34.0, release R) As for [enroll]: the request's shape from the routed instance's capabilities. */
-        unlockSecretFor: suspend (capabilities: List<String>) -> ByteArray? = { options.unlockSecret?.copyOf() },
+        unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { options.unlockSecret?.copyOf() },
     ): UnlockOutcome {
         val vaultId = party.vaultId() ?: throw AltRefusedException(AltRefusedException.Reason.NOT_PAIRED)
         var m = manifest(party.manifestSerialSeen())
@@ -220,7 +248,7 @@ class AltChannelFlow(
         var attempt = 1
         while (true) {
             val (info, e) = enclaveFor(release, m, enroll = false, onStarting)
-            val secret = unlockSecretFor(e.descriptor.capabilities)
+            val secret = unlockSecretFor(e.descriptor.traits)
             val built = try {
                 party.prepareUnlock(userGuid, pin, e, m, attester, options.copy(unlockSecret = secret))
             } finally {

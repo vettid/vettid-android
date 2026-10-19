@@ -42,8 +42,15 @@ data class OwnerCheckView(
     /** Past the deadline: the app may send only the check (§3.6.3), whether or not the hold is on. */
     fun gated(now: Instant): Boolean = state != OwnerCheckState.OK || (deadline != null && !now.isBefore(deadline))
 
-    /** From [WARNING] before the deadline until it (§3.6.5: the reference app warns from 1 h ahead). */
-    fun warning(now: Instant): Boolean = deadline != null && !gated(now) && !now.isBefore(deadline.minus(WARNING))
+    /**
+     * From [WARNING] before the deadline until it (§3.6.5: the reference app warns from 1 h ahead); on a vault with a
+     * time scale (STAGING-TIME-SCALE, S2) from [WARNING] divided by [timeScale] before it (2.5 minutes at 24).
+     */
+    fun warning(now: Instant, timeScale: Long = 1): Boolean =
+        deadline != null && !gated(now) && !now.isBefore(deadline.minus(warningFor(timeScale)))
+
+    /** The interval as it runs on a vault of [timeScale] (the setting keeps its real units, §3.6.2). */
+    fun intervalRunsSeconds(timeScale: Long): Long = TimeScales.divide(intervalSeconds, timeScale)
 
     /** Whether the hold is off now (an end date in the past means it came back on). */
     fun holdOff(now: Instant): Boolean = !hold && (holdOffUntil == null || now.isBefore(holdOffUntil))
@@ -62,6 +69,9 @@ data class OwnerCheckView(
         val MAX_HOLD_OFF: Duration = Duration.ofDays(30)
 
         val WARNING: Duration = Duration.ofHours(1)
+
+        /** (STAGING-TIME-SCALE, S2) The early warning on a vault of [timeScale]. */
+        fun warningFor(timeScale: Long): Duration = Duration.ofSeconds(TimeScales.divide(WARNING.seconds, timeScale))
     }
 }
 

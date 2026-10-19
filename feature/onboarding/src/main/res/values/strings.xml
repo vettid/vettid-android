@@ -42,7 +42,7 @@
     <string name="onboarding_elsewhere_transfer_body">Move VettID with a direct transfer: the other phone shows a code, this phone scans it, and you approve there with your PIN and credential password. No waiting.</string>
     <string name="onboarding_elsewhere_transfer">Move from my old phone</string>
     <string name="onboarding_elsewhere_recovery_title">Lost it?</string>
-    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After 24 hours it shows a code that this phone scans; then your PIN and credential password move the vault here, and the old phone erases VettID the next time it reaches your vault.</string>
+    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After %1$s it shows a code that this phone scans; then your PIN and credential password move the vault here, and the old phone erases VettID the next time it reaches your vault.</string>
     <string name="onboarding_elsewhere_recover">Recover my vault</string>
     <string name="onboarding_elsewhere_open">Open the account site</string>
     <string name="onboarding_elsewhere_anyway">Set up a new vault anyway</string>
@@ -158,7 +158,7 @@
     <string name="unlock_signer_refused_help">How to recover your vault</string>
     <string name="unlock_signer_refused_help_hide">Hide</string>
     <string name="unlock_signer_refused_help_title">Recovering or moving your vault</string>
-    <string name="unlock_signer_refused_help_body">First update VettID from where you installed it and try again: your PIN was not counted as wrong.\n\nIf that does not help, recover your vault. Start a recovery on the account site, install a current version of VettID (on this phone after removing this one, or on another phone) and choose \"I lost my phone: recover my vault\" on its first screen, then scan or type the recovery code. A recovery takes 24 hours and needs your PIN and your credential password.\n\nMoving your vault to a new phone directly is not possible while this phone cannot open it.</string>
+    <string name="unlock_signer_refused_help_body">First update VettID from where you installed it and try again: your PIN was not counted as wrong.\n\nIf that does not help, recover your vault. Start a recovery on the account site, install a current version of VettID (on this phone after removing this one, or on another phone) and choose \"I lost my phone: recover my vault\" on its first screen, then scan or type the recovery code. A recovery takes %1$s and needs your PIN and your credential password.\n\nMoving your vault to a new phone directly is not possible while this phone cannot open it.</string>
     <string name="unlock_refused_title">Your vault is refusing this phone</string>
     <string name="unlock_refused_body">Messages from this phone to your vault keep being refused. If you moved VettID to another phone, this one may have been replaced. Enter your PIN to check with your vault.</string>
     <string name="unlock_erase_confirm_title">Erase VettID from this phone?</string>
@@ -184,7 +184,7 @@
 
     <!-- Recovery on this phone (§11.11) -->
     <string name="recover_title">Recover your vault</string>
-    <string name="recover_body">Your account site shows a recovery QR code 24 hours after you start a recovery there. Open it (Vault, then Recovery, then Show the code) and scan it with this phone, or type the code shown under it.</string>
+    <string name="recover_body">Your account site shows a recovery QR code %1$s after you start a recovery there. Open it (Vault, then Recovery, then Show the code) and scan it with this phone, or type the code shown under it.</string>
     <string name="recover_need_title">You will need</string>
     <string name="recover_need_body">The recovery code from the account site, your vault PIN and your credential password. This phone then replaces your old one, which erases VettID the next time it reaches your vault.</string>
     <string name="recover_scan">Scan the code</string>
@@ -197,7 +197,7 @@
     <string name="recover_scan_not_code">That is not a VettID recovery code.</string>
     <string name="recover_scan_other_environment">That code is from another VettID environment (%1$s), not the one this app uses.</string>
     <string name="recover_scan_no_api">That recovery code is from an older account site. Reload the recovery page on the account site and scan the new code.</string>
-    <string name="recover_not_available">This recovery is not available: its code may not be ready yet (24 hours after the request), or the recovery was cancelled, used or has expired. Check the account site.</string>
+    <string name="recover_not_available">This recovery is not available: its code may not be ready yet (%1$s after the request), or the recovery was cancelled, used or has expired. Check the account site.</string>
     <!-- The code typed instead of scanned (VAULT-MESSAGING 0.25.0 §11.11.10; ANDROID-PLAN 0.1.33) -->
     <string name="recover_type">Type the code instead</string>
     <string name="recover_scan_instead">Scan instead</string>
@@ -409,11 +409,11 @@
     <string name="onboarding_finish_move_body">Enter your PIN on this phone to finish moving your vault.</string>
     <string name="onboarding_finish_move_done">Your vault is on this phone now.</string>
     <string name="onboarding_finish_move_later">Later</string>
-    <string name="onboarding_kept_transfer">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most 7 days. Before you give this phone away, remove VettID from it or reset it.</string>
+    <string name="onboarding_kept_transfer">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most %1$s. Before you give this phone away, remove VettID from it or reset it.</string>
     <string name="onboarding_move_didnt_finish">The move didn\'t finish</string>
     <string name="onboarding_move_didnt_finish_body">Use this if your new phone cannot open your vault. If your new phone opens the vault, ignore this.</string>
     <string name="onboarding_move_back_failed">Your vault could not be opened from this phone. Contact VettID within a day of the failed move: it may be repairable.</string>
     <!-- ANDROID-PLAN "Owner check and status" (release R), verbatim, in two parts -->
     <string name="ownercheck_presence_title">Your vault could not record that you were here.</string>
-    <string name="ownercheck_presence_body">If this stays for three days, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
+    <string name="ownercheck_presence_body">If this stays for %1$s, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
 </resources>

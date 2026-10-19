@@ -269,8 +269,10 @@ class MemberApiTest {
     }
 
     private fun flow(
-        api: MemberApiClient = api()) = AltChannelFlow(api,
-        AltTrust(emptyList(), listOf(TestSupport.manifestKey)),
+        api: MemberApiClient = api(),
+        timeScales: (Long) -> Boolean = AltTrust.PRODUCTION_SCALES,
+    ) = AltChannelFlow(api,
+        AltTrust(emptyList(), listOf(TestSupport.manifestKey), timeScales),
     ) { d, _, m, enroll, _ ->
         val e = enclaves.first()
         assertTrue(d.contentEquals(e.descriptor))
@@ -347,7 +349,7 @@ class MemberApiTest {
         val p = Party()
         var seen: List<String>? = null
         val out = flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) {
-            seen = it
+            seen = it.capabilities
             ByteArray(32) { 0x42 }
         }
         assertTrue(out.ok)
@@ -359,13 +361,13 @@ class MemberApiTest {
         enclaves.add(TestSupport.Enclave("inst-a"))
         val enrolls = log.count { it == "POST /api/vault/enroll" }
         assertThrows(IllegalStateException::class.java) {
-            runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { caps -> check("recovery_r" in caps) { "rollback" }; null } }
+            runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { t -> check("recovery_r" in t.capabilities) { "rollback" }; null } }
         }
         assertEquals(0, log.count { it == "POST /api/vault/unlock" })
         assertThrows(IllegalStateException::class.java) {
             runBlocking {
-                flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) { caps ->
-                    check("recovery_r" in caps) { "rollback" }
+                flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) { t ->
+                    check("recovery_r" in t.capabilities) { "rollback" }
                     null
                 }
             }
@@ -373,8 +375,68 @@ class MemberApiTest {
         assertEquals(enrolls, log.count { it == "POST /api/vault/enroll" })
         // A release before R (no list): the earlier shape, as before.
         var plain: List<String>? = null
-        assertTrue(flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { caps -> plain = caps; null }.ok)
+        assertTrue(flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { t -> plain = t.capabilities; null }.ok)
         assertEquals(emptyList<String>(), plain)
+    }
+
+    /**
+     * STAGING-TIME-SCALE §4 item 4, §5.6: a production build refuses a descriptor whose `time_scale` is not 1 before
+     * anything is built or sent; a staging build accepts 1 and 24 and hands the scale to the app with the capabilities.
+     */
+    @Test
+    fun aProductionBuildRefusesAScaledInstanceAndSendsNothing() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 24))
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow().enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) {
+                    error("asked for the request's shape")
+                }
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+        assertEquals(0, log.count { it == "POST /api/vault/enroll" })
+        val p = Party().also { it.vaultId = "0123456789abcdef0123456789abcdef" }
+        assertThrows(AltRefusedException::class.java) { runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        assertThrows(AltRefusedException::class.java) { runBlocking { flow().preflight(p.state) } }
+    }
+
+    @Test
+    fun aStagingBuildAcceptsOneAndTwentyFourOnly() = runBlocking<Unit> {
+        for (scale in listOf(null, 1L, 24L)) {
+            enclaves.clear()
+            enclaves.add(TestSupport.Enclave("inst-a", timeScale = scale))
+            var seen: Long? = null
+            val out = flow(timeScales = AltTrust.STAGING_SCALES)
+                .enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) {
+                    seen = it.timeScale
+                    null
+                }
+            assertTrue(out.ok)
+            // Absent: a release before the scale, real time.
+            assertEquals(scale ?: 1L, seen)
+        }
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 2))
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow(timeScales = AltTrust.STAGING_SCALES)
+                    .enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+    }
+
+    @Test
+    fun theTrustsTimeScales() {
+        assertTrue(AltTrust.production().acceptsTimeScale(1))
+        assertFalse(AltTrust.production().acceptsTimeScale(24))
+        assertTrue(AltTrust.staging().acceptsTimeScale(1))
+        assertTrue(AltTrust.staging().acceptsTimeScale(24))
+        assertFalse(AltTrust.staging().acceptsTimeScale(12))
+        assertFalse(AltTrust.staging().acceptsTimeScale(3_600))
+        assertTrue(AltTrust(emptyList(), emptyList(), AltTrust.DEV_STACK_SCALES).acceptsTimeScale(3_600))
     }
 
     @Test

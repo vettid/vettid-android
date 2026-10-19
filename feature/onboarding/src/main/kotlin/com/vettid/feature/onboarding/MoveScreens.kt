@@ -53,6 +53,9 @@ import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.visibleSecretKeyboard
 import com.vettid.core.ui.components.rememberCameraPermission
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 import java.time.Instant
@@ -338,7 +341,7 @@ private fun ClaimFailure(state: RecoverUiState) {
 private fun RecoverIntro(state: RecoverUiState, actions: RecoverActions, onBack: (() -> Unit)?, onOpenAccountSite: () -> Unit) {
     FormScaffold(
         title = stringResource(R.string.recover_title),
-        body = stringResource(R.string.recover_body),
+        body = stringResource(R.string.recover_body, scaledDurationText(Durations.DAY)),
         primaryLabel = if (state.step == RecoverStep.LOADING) null else stringResource(R.string.recover_scan),
         onPrimary = actions::scan,
         busy = state.busy || state.step == RecoverStep.LOADING,
@@ -347,6 +350,7 @@ private fun RecoverIntro(state: RecoverUiState, actions: RecoverActions, onBack:
         onSecondary = actions::type,
         onBack = onBack,
     ) {
+        StagingTimeNoteIfShown()
         NoticeCard(NoticeKind.INFO, stringResource(R.string.recover_need_title), stringResource(R.string.recover_need_body))
         CodeRefusalNotice(state)
         ClaimFailure(state)
@@ -370,7 +374,7 @@ private fun CodeRefusalNotice(state: RecoverUiState) {
         CodeRefusal.NOT_A_CODE -> stringResource(R.string.recover_scan_not_code)
         CodeRefusal.OTHER_ENVIRONMENT -> stringResource(R.string.recover_scan_other_environment, state.otherApi ?: "")
         CodeRefusal.NO_API -> stringResource(R.string.recover_scan_no_api)
-        CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available)
+        CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available, scaledDurationText(Durations.DAY))
         CodeRefusal.NOT_OFFERED -> stringResource(R.string.recover_not_offered)
     }
     Spacer(Modifier.height(Spacing.l))

@@ -64,7 +64,7 @@ class DevStack(
         val root = CertificateFactory.getInstance("X.509")
             .generateCertificate(Base64s.decodeStd(o["nitro_root"]!!.jsonPrimitive.content).inputStream()) as X509Certificate
         val keys = o["manifest_keys"]!!.jsonArray.map { ManifestKey.fromBase64(it.jsonPrimitive.content) }
-        return AltTrust(listOf(root), keys)
+        return AltTrust(listOf(root), keys, AltTrust.DEV_STACK_SCALES)
     }
 
     /** `vaultctl request TYPE BODY` on the peer: the response `{status, body}`. */

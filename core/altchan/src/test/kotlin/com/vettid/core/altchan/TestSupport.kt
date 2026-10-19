@@ -74,9 +74,12 @@ object TestSupport {
         val pcr0: String = TestSupport.pcr0,
         /** (0.34.0) The release's capabilities in the descriptor; null: none (a release before R). */
         capabilities: List<String>? = null,
+        /** (0.43.0) The release's time scale in the descriptor; null: none (a release before the scale). */
+        timeScale: Long? = null,
     ) {
         val etk: KemPrivateKey = KemPrivateKey.generate()
-        val descriptor: ByteArray = Descriptor.marshal(instanceId, etk.publicKey, pcr0, Instant.now().plusSeconds(3600), capabilities)
+        val descriptor: ByteArray =
+            Descriptor.marshal(instanceId, etk.publicKey, pcr0, Instant.now().plusSeconds(3600), capabilities, timeScale)
 
         fun verified(m: ReleaseManifest): VerifiedEnclave =
             VerifiedEnclave(Descriptor.parse(descriptor), Measurements(pcr0, pcr1, pcr2), m.byPcr0(pcr0) ?: error("not in manifest"))

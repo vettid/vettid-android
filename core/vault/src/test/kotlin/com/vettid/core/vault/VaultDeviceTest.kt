@@ -206,11 +206,16 @@ class VaultDeviceTest {
     @Volatile
     private var elapsed = 0L
 
-    private fun config(store: DeviceStateStore, timeout: java.time.Duration = java.time.Duration.ofSeconds(5)) =
+    private fun config(
+        store: DeviceStateStore,
+        timeout: java.time.Duration = java.time.Duration.ofSeconds(5),
+        trust: com.vettid.core.altchan.AltTrust? = null,
+    ) =
         DeviceConfig(
             name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = timeout,
             elapsedMs = { elapsed },
             settleWait = java.time.Duration.ofMillis(800),
+            trust = trust,
         )
 
     /** Enrollment, the first handshake and device.paired: a device with a live session. */
@@ -844,10 +849,16 @@ class VaultDeviceTest {
     }
 
     /** The old app's transfer QR (§6.7.1): a claim with an app bundle on the vault's relay. */
-    private fun transferLink(v: FakeVault, inviteId: String, kind: InviteKind = InviteKind.APP, exp: Instant = Instant.now().plusSeconds(600)): String {
+    private fun transferLink(
+        v: FakeVault,
+        inviteId: String,
+        kind: InviteKind = InviteKind.APP,
+        exp: Instant = Instant.now().plusSeconds(600),
+        timeScale: Long? = null,
+    ): String {
         val e = exp.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
         val tok = DepositTokens.mintOpen(v.relayKey, v.relayUrl, Instant.now(), java.time.Duration.ofMinutes(10))
-        val (blob, kb, h) = InviteBundle.seal(InviteBundle(kind, inviteId, false, v.principal(), tok, e).marshal())
+        val (blob, kb, h) = InviteBundle.seal(InviteBundle(kind, inviteId, false, v.principal(), tok, e, timeScale = timeScale).marshal())
         val claimId = "abcdefghijklmnopqrstuvwxy" + "234567"[claims.size % 6]
         claims[claimId] = blob
         return InviteQr(kind, v.relayUrl, claimId, h, kb, e.epochSecond).link()
@@ -932,6 +943,31 @@ class VaultDeviceTest {
             d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
             assertEquals(v.mailbox, nextDeposit().first)
         }
+    }
+
+    /**
+     * STAGING-TIME-SCALE §4 item 4: a transfer bundle whose time scale this build does not accept is refused before the
+     * app is asked for anything and before an hs.init is sent; a staging build takes 24 and hands it on.
+     */
+    @Test
+    fun aTransferBundlesTimeScaleIsCheckedBeforeAnythingIsSent() = runBlocking<Unit> {
+        val v = FakeVault()
+        val prod = VaultDevice.create(config(InMemoryDeviceStateStore(), trust = com.vettid.core.altchan.AltTrust(emptyList(), emptyList())), DeviceSecrets.generate())
+        val e = assertThrows(com.vettid.core.altchan.AltRefusedException::class.java) {
+            runBlocking { prod.startTransfer(transferLink(v, Ulid.new(), timeScale = 24), RecordingAttester()) { error("asked") } }
+        }
+        assertEquals(com.vettid.core.altchan.AltRefusedException.Reason.TIME_SCALE, e.reason)
+        assertNull(deposits.poll(200, TimeUnit.MILLISECONDS))
+        assertTrue(!prod.hasVault)
+        val staging = com.vettid.core.altchan.AltTrust(emptyList(), emptyList(), com.vettid.core.altchan.AltTrust.STAGING_SCALES)
+        val d = VaultDevice.create(config(InMemoryDeviceStateStore(), trust = staging), DeviceSecrets.generate())
+        var seen: Long? = null
+        d.startTransfer(transferLink(v, Ulid.new(), timeScale = 24), RecordingAttester()) { t ->
+            seen = t.timeScale
+            null
+        }
+        assertEquals(24L, seen)
+        assertEquals(v.mailbox, nextDeposit().first)
     }
 
     @Test

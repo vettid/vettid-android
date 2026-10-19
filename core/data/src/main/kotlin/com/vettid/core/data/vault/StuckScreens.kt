@@ -27,15 +27,24 @@ object StuckScreens {
 
     /**
      * Whether the root screen for [kind] also offers erase-or-recover because nothing has reached the vault service for
-     * [LONG_UNREACHABLE]: [lastContactMs] is the last contact this phone knows of (null: none known, nothing offered).
+     * [afterMs] ([LONG_UNREACHABLE], or as divided by the time scale when the last contact was written): [lastContactMs]
+     * is the last contact this phone knows of (null: none known, nothing offered).
      */
-    fun longUnreachable(kind: FailureKind, lastContactMs: Long?, nowMs: Long): Boolean =
-        kind !in OWN_WAY && lastContactMs != null && nowMs - lastContactMs >= LONG_UNREACHABLE.toMillis()
+    fun longUnreachable(kind: FailureKind, lastContactMs: Long?, nowMs: Long, afterMs: Long = LONG_UNREACHABLE.toMillis()): Boolean =
+        kind !in OWN_WAY && lastContactMs != null && nowMs - lastContactMs >= afterMs
+
+    /** (STAGING-TIME-SCALE, S12) [LONG_UNREACHABLE] divided by [timeScale], when a contact starts it. */
+    fun unreachableAfterMs(timeScale: Long): Long = TimeScales.divideMs(LONG_UNREACHABLE.toMillis(), timeScale)
 
     /** A last contact is written at most this often (every start and return reads the status). */
     val CONTACT_WRITE_EVERY: Duration = Duration.ofHours(1)
 
-    /** Whether a contact at [nowMs] is worth writing over [lastContactMs]. */
-    fun writeContact(lastContactMs: Long?, nowMs: Long): Boolean =
-        lastContactMs == null || nowMs - lastContactMs >= CONTACT_WRITE_EVERY.toMillis() || nowMs < lastContactMs
+    /**
+     * Whether a contact at [nowMs] is worth writing over [lastContactMs]. With a bound shorter than 7 days ([afterMs], a
+     * scaled vault) the contact is written as much more often, so that the bound is not reached early.
+     */
+    fun writeContact(lastContactMs: Long?, nowMs: Long, afterMs: Long = LONG_UNREACHABLE.toMillis()): Boolean {
+        val every = CONTACT_WRITE_EVERY.toMillis() * afterMs / LONG_UNREACHABLE.toMillis()
+        return lastContactMs == null || nowMs - lastContactMs >= every || nowMs < lastContactMs
+    }
 }
