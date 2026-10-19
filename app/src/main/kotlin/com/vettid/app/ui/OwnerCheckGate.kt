@@ -14,10 +14,9 @@ import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.UrgentBanner
-import com.vettid.core.ui.format.RECOVERY_QUIET_S
+import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.durationText
-import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.format.stagingNoteSuffix
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -152,8 +151,14 @@ fun OwnerCheckBanners(
         top = false
     }
     if (gate.warning && !gate.gated) {
+        // Without a deadline (not reached from [OwnerCheckGateState.of]: the warning needs one): in real time the approved
+        // "within the hour", on a vault with a time scale the warning's span as it runs there.
         val text = gate.deadline?.let { stringResource(R.string.owner_check_warning, Times.time(it)) }
-            ?: stringResource(R.string.owner_check_warning_soon, durationText(gate.warningSeconds))
+            ?: if (LocalTimeScale.current.scale <= 1) {
+                stringResource(R.string.owner_check_warning_soon)
+            } else {
+                stringResource(R.string.owner_check_warning_soon_scaled, durationText(gate.warningSeconds))
+            }
         InfoBanner(text, Modifier.testTag("owner_check_warning"), stringResource(R.string.owner_check_now), onCheckNow, top)
         top = false
     }
@@ -168,10 +173,7 @@ fun OwnerCheckBanners(
     if (gate.presenceUnrecorded) {
         InfoBanner(
             stringResource(com.vettid.feature.onboarding.R.string.ownercheck_presence_title) + " " +
-                stringResource(
-                    com.vettid.feature.onboarding.R.string.ownercheck_presence_body,
-                    scaledDurationText(RECOVERY_QUIET_S),
-                ) + stagingNoteSuffix(),
+                com.vettid.feature.onboarding.presenceBody() + stagingNoteSuffix(),
             Modifier.testTag("owner_check_presence_banner"),
             statusBarPadding = top,
         )

@@ -415,5 +415,7 @@
     <string name="onboarding_move_back_failed">Your vault could not be opened from this phone. Contact VettID within a day of the failed move: it may be repairable.</string>
     <!-- ANDROID-PLAN "Owner check and status" (release R), verbatim, in two parts -->
     <string name="ownercheck_presence_title">Your vault could not record that you were here.</string>
-    <string name="ownercheck_presence_body">If this stays for %1$s, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
+    <string name="ownercheck_presence_body">If this stays for three days, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
+    <!-- The same on a vault with a time scale (staging): the recovery quiet period as it runs there, e.g. "3 hours" -->
+    <string name="ownercheck_presence_body_scaled">If this stays for %1$s, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
 </resources>

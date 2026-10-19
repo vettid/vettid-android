@@ -4,6 +4,13 @@ import android.content.res.Resources
 import androidx.annotation.StringRes
 import com.vettid.core.data.R
 
+/**
+ * (STAGING-TIME-SCALE §5.2; owner decision 2026-10-19) The failure texts that say an approved duration in words in real
+ * time, each with its `_scaled` variant for a vault with a time scale, where the durations are computed: for the app's
+ * root to hand to `UiTimeScale.scaledTexts`.
+ */
+val SCALED_FAILURE_TEXTS: Map<Int, Int> = mapOf(R.string.data_failure_device_secret to R.string.data_failure_device_secret_scaled)
+
 /** The member-facing message of a failure (strings in this module, `data_failure_*`). */
 @Suppress("CyclomaticComplexMethod") // one string per kind
 @StringRes

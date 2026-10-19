@@ -41,9 +41,11 @@ object Durations {
 /**
  * The vault's time scale as the screens need it (STAGING-TIME-SCALE §5.2), provided at the app's root ([LocalTimeScale]):
  * [scale] divides the waits of 1 hour or more; [stagingNote]: a staging build shows "Staging: 1 day = 1 hour" next to
- * them.
+ * them. [scaledTexts]: a failure text that says an approved duration in words in real time ("one to three days") and
+ * its `_scaled` variant, with the durations computed, used on a vault with a time scale ([failureText]; owner decision
+ * 2026-10-19).
  */
-data class UiTimeScale(val scale: Long = 1, val stagingNote: Boolean = false) {
+data class UiTimeScale(val scale: Long = 1, val stagingNote: Boolean = false, val scaledTexts: Map<Int, Int> = emptyMap()) {
     /** [realSeconds] of a scaled wait as it runs (divided, rounded up to a whole second). */
     fun runs(realSeconds: Long): Long {
         val s = scale.coerceAtLeast(1)
@@ -75,11 +77,15 @@ fun StagingTimeNoteIfShown(modifier: Modifier = Modifier) {
 /**
  * A failure's text ([res]: `FailureKind.messageRes()`), with the recovery's waits a text may name: the code delay
  * (`%1$s`, 24 hours) and the end of the quiet period (`%2$s`, 3 days), both divided by the vault's time scale. A text
- * without them ignores them.
+ * without them ignores them. In real time a text with approved words for a duration is shown as approved; on a vault
+ * with a time scale its `_scaled` variant ([UiTimeScale.scaledTexts]) is shown instead, with the durations computed.
  */
 @Composable
-fun failureText(@StringRes res: Int): String =
-    stringResource(res, scaledDurationText(Durations.DAY), scaledDurationText(RECOVERY_QUIET_S))
+fun failureText(@StringRes res: Int): String {
+    val t = LocalTimeScale.current
+    val shown = if (t.scale > 1) t.scaledTexts[res] ?: res else res
+    return stringResource(shown, scaledDurationText(Durations.DAY), scaledDurationText(RECOVERY_QUIET_S))
+}
 
 /** The recovery quiet period in real time (VAULT-MESSAGING §11.14.5: 72 h), a wait the time scale divides (S7). */
 const val RECOVERY_QUIET_S = 259_200L

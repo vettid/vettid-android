@@ -43,12 +43,14 @@ class OwnerCheckTimeScaleTest {
         rule.onNodeWithTag("staging_time_note").assertExists()
     }
 
-    /** The lost-keys text names the recovery's waits from seconds: "24 hours to 3 days", "1 hour to 3 hours" at 24. */
+    /** On a scaled vault the lost-keys text computes the recovery's waits ("1 hour to 3 hours" at 24); see ApprovedWordsTest. */
     @Test
     fun theLostKeysTextComputesTheRecoveryWaits() {
         rule.setContent {
             androidx.compose.runtime.CompositionLocalProvider(
-                com.vettid.core.ui.format.LocalTimeScale provides com.vettid.core.ui.format.UiTimeScale(24, stagingNote = true),
+                com.vettid.core.ui.format.LocalTimeScale provides com.vettid.core.ui.format.UiTimeScale(
+                    24, stagingNote = true, scaledTexts = com.vettid.core.data.vault.SCALED_FAILURE_TEXTS,
+                ),
             ) {
                 androidx.compose.material3.Text(
                     com.vettid.core.ui.format.failureText(com.vettid.core.data.vault.FailureKind.DEVICE_SECRET.messageRes()) +
