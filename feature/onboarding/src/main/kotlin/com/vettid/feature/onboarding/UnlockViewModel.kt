@@ -137,6 +137,16 @@ data class UnlockUiState(
      * again on your old phone", a wrong PIN, a wait), said here after its lock sent the app to this screen.
      */
     val moveFailure: FailureKind? = null,
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9 step 5) A PIN change got no answer and is not decided yet: the screen asks for the
+     * previous PIN ("Enter your previous PIN"), which goes with the current record.
+     */
+    val previousPinStep: Boolean = false,
+    /**
+     * The previous PIN got `device_secret`: the change went through, and the screen asks for the new PIN ("Your PIN change
+     * went through. Enter your new PIN."), which the next unlock tries with the new record.
+     */
+    val newPinStep: Boolean = false,
 ) {
     /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
     val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
@@ -249,6 +259,12 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch { vault.lockNotice.collect { n -> state.update { it.copy(lock = n) } } }
         viewModelScope.launch { vault.transferKeptSince.collect { k -> state.update { it.copy(keptTransfer = k != null) } } }
         viewModelScope.launch { vault.finishMoveFailure.collect { f -> state.update { it.copy(moveFailure = f) } } }
+        // §11.14.9 step 5: which PIN is asked for follows the vault manager's state, so that the PIN typed is always the
+        // one the next unlock sends with the matching record (also on a screen made afresh).
+        viewModelScope.launch {
+            combine(vault.pinChangeUnresolved, vault.newPinAsked) { u, n -> u to (u && n) }
+                .collect { (u, n) -> state.update { it.copy(previousPinStep = u, newPinStep = n) } }
+        }
         viewModelScope.launch {
             combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> (v?.gated(Instant.now()) == true) to locked }
                 .collect { (due, locked) -> state.update { it.copy(checkDue = due || locked, lockedByOwnerCheck = locked) } }
@@ -344,6 +360,9 @@ class UnlockViewModel @Inject constructor(
                 // §11.7.1: not a PIN failure: no "wrong PIN" text, no count, no backoff. The notice says what to do.
                 UnlockAttempt.SignerRefused -> state.update { it.copy(busy = false, pin = "", message = null) }
                 UnlockAttempt.Success -> state.update { it.copy(busy = false, pin = "", recoveryPending = false) }
+                // §11.14.9 step 5: decided before any PIN was tested; the PIN typed is not reused for the new record (the
+                // screen asks for the new PIN from [VaultRepository.newPinAsked]).
+                UnlockAttempt.NewPinNeeded -> state.update { it.copy(busy = false, pin = "", message = null) }
                 is UnlockAttempt.BadPin -> {
                     state.update { it.copy(busy = false, pin = "", message = UnlockMessage.BadPin) }
                     startBackoff(r.retryAfterSeconds)

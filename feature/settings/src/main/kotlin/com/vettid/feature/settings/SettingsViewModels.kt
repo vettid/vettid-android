@@ -17,6 +17,8 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CanaryManifestView
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.RecoveryView
@@ -257,8 +259,34 @@ data class ChangePinUiState(
      * PIN gives whoever is guessing ten new tries at the same password (ANDROID-PLAN "Change PIN").
      */
     val fromAttempts: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) The change got no answer and VettID is deciding it ([ChangeCheck.Checking],
+     * [ChangeCheck.Unreachable]), or decided that it did not apply ([ChangeCheck.NotApplied]). The entries are kept.
+     */
+    val check: ChangeCheck? = null,
 ) {
-    override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done, withPassword=$withPassword)"
+    /**
+     * A change is being decided, or its check ended without a decision (L2: no new try that could spend an attempt with
+     * the wrong secret): nothing is sent from this screen.
+     */
+    val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended
+
+    override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done, withPassword=$withPassword, check=$check)"
+}
+
+/**
+ * (VAULT-MESSAGING 0.44.0 §11.14.9 step 4) A refused change: the entry that was wrong is cleared, the new ones are kept.
+ * [CHANGE_UNRESOLVED][FailureKind.CHANGE_UNRESOLVED] (an earlier change is undecided) keeps every entry.
+ */
+internal fun ChangePinUiState.afterRefusal(kind: FailureKind): ChangePinUiState = when (kind) {
+    FailureKind.BAD_PIN -> copy(current = "")
+    FailureKind.BAD_PASSWORD -> copy(password = "")
+    // Refused with nothing sent: every entry stays.
+    FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNDECIDED,
+    FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
+    FailureKind.RENEW_UNCONFIRMED,
+    -> this
+    else -> copy(current = "", password = "")
 }
 
 /** `pin.change` (§10.6). */
@@ -275,23 +303,75 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
 
     fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 
+    /**
+     * This screen follows a change: one it sent, or one being decided when it opened. Only then is a decision shown here
+     * (and acknowledged); an old decision never opens the screen as "done" (the shell's notice says it once).
+     */
+    private var following = false
+
+    init {
+        // §11.14.9: a PIN change whose answer was lost is decided by VettID; this screen shows where that stands.
+        viewModelScope.launch {
+            vault.changeCheck.collect { c -> if (c != null && c.kind == ChangeKind.PIN) onCheck(c) }
+        }
+    }
+
+    private fun onCheck(c: ChangeCheck) {
+        if (c.open) following = true
+        // Not this screen's change, or its own answer is still on its way (handled where it returns).
+        if (!following || !c.open && state.value.busy) return
+        when (c) {
+            is ChangeCheck.Checking, is ChangeCheck.Unreachable -> state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.Applied -> state.update { ChangePinUiState(done = true, withPassword = it.withPassword) }
+            is ChangeCheck.NotApplied, is ChangeCheck.Ended -> state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure).afterRefusal(c.failure) }
+        }
+        if (!c.open) {
+            following = false
+            vault.acknowledgeChangeCheck()
+        }
+    }
+
+    /** "Lock and unlock now" (0.45.0 step 3): the unlock screen's two steps settle an uncertain PIN. */
+    fun lockAndUnlock() {
+        viewModelScope.launch {
+            try {
+                vault.lock()
+            } catch (_: VaultFailure) {
+                // The lock is pending and retried by the vault manager; the unlock screen follows.
+            }
+        }
+    }
+
     fun submit() {
         val s = state.value
         val p = PinPolicy.check(s.pin)
         when {
-            s.current.isEmpty() -> return
+            // (§11.14.9) Nothing is sent while a change is being decided.
+            s.checking || s.current.isEmpty() -> return
             s.withPassword && s.password.isEmpty() -> return
             p != null -> state.update { it.copy(problem = p) }
             s.pin == s.current -> state.update { it.copy(same = true) }
             s.pin != s.confirm -> state.update { it.copy(mismatch = true, confirm = "") }
             else -> {
-                state.update { it.copy(busy = true, error = null) }
+                state.update { it.copy(busy = true, error = null, check = null) }
+                following = true
                 viewModelScope.launch {
                     try {
                         if (s.withPassword) vault.changePin(s.current, s.pin, s.password) else vault.changePin(s.current, s.pin)
                         state.update { ChangePinUiState(done = true, withPassword = s.withPassword) }
+                        following = false
+                        vault.acknowledgeChangeCheck() // said here: not again by the shell
                     } catch (e: VaultFailure) {
-                        state.update { it.copy(busy = false, error = e.kind, current = "", password = "") }
+                        // CHANGE_CHECKING: no answer is not a failure; the entries stay and the check's state follows.
+                        if (e.kind == FailureKind.CHANGE_CHECKING) {
+                            state.update { it.copy(busy = false, error = null) }
+                            vault.changeCheck.value?.takeIf { it.kind == ChangeKind.PIN }?.let(::onCheck)
+                        } else {
+                            state.update { it.copy(busy = false, error = e.kind).afterRefusal(e.kind) }
+                            following = false
+                            vault.acknowledgeChangeCheck()
+                        }
                     }
                 }
             }

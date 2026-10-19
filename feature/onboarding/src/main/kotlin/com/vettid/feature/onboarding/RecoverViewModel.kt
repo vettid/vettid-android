@@ -487,7 +487,8 @@ class RecoverViewModel @Inject constructor(
                 is UnlockAttempt.UpdateRefused -> state.update {
                     it.copy(busy = false, pin = "", error = FailureKind.OTHER, errorCode = r.code)
                 }
-                UnlockAttempt.RecoveryPending, UnlockAttempt.StateRollback ->
+                // NewPinNeeded: never on a recovering phone (no PIN change of its own to decide).
+                UnlockAttempt.RecoveryPending, UnlockAttempt.StateRollback, UnlockAttempt.NewPinNeeded ->
                     state.update { it.copy(busy = false, pin = "", error = FailureKind.OTHER) }
                 // §11.7.1 (0.27.0): the release does not pin this installation's signer; not a wrong PIN.
                 UnlockAttempt.SignerRefused -> state.update {

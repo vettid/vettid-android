@@ -213,4 +213,108 @@ class PhoneSecretsTest {
         // So after such an unlock the phone still reaches its own earlier vault.
         assertEquals(ReleasePath.Path.EARLIER, ReleasePath.choose(emptyList(), releaseRKnown = false))
     }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9 step 5, the two-step unlock: while a PIN change is unresolved the PIN typed first
+     * (the previous one) goes with the current record only; its `device_secret` (decided before any PIN is tested) asks
+     * for the new PIN instead of trying the candidate with the same PIN; the new PIN then goes with the candidate only.
+     * Without an unresolved change the unlock is as before (current, then the next epoch with the same PIN).
+     */
+    @Test
+    fun anUnresolvedPinChangeUnlocksInTwoSteps() {
+        val secret = "device_secret"
+        // First step: the current record.
+        assertFalse(UnlockEpoch.nextOnly(pinChangeUnresolved = true, newPinAsked = false))
+        assertEquals(UnlockEpoch.Next.ASK_NEW_PIN, UnlockEpoch.afterCurrent(true, ok = false, code = secret, pinChangeUnresolved = true))
+        // `ok` with the previous PIN, or any other answer: it stands (the check after the open decides the change).
+        assertEquals(UnlockEpoch.Next.DONE, UnlockEpoch.afterCurrent(true, ok = true, code = null, pinChangeUnresolved = true))
+        for (c in listOf("bad_pin", "backoff", "retry", "transfer_incomplete")) {
+            assertEquals(c, UnlockEpoch.Next.DONE, UnlockEpoch.afterCurrent(true, ok = false, code = c, pinChangeUnresolved = true))
+        }
+        // Second step: the new PIN, with the candidate only.
+        assertTrue(UnlockEpoch.nextOnly(pinChangeUnresolved = true, newPinAsked = true))
+        // Nothing unresolved: as before.
+        assertFalse(UnlockEpoch.nextOnly(pinChangeUnresolved = false, newPinAsked = true))
+        assertEquals(UnlockEpoch.Next.TRY_NEXT, UnlockEpoch.afterCurrent(true, ok = false, code = secret, pinChangeUnresolved = false))
+        assertEquals(UnlockEpoch.Next.DONE, UnlockEpoch.afterCurrent(false, ok = false, code = secret, pinChangeUnresolved = true))
+    }
+
+    /** One sealed unlock as [UnlockEpoch.run] sends it: the epoch offset, and the answer it gets. */
+    private class Sends(vararg answers: UnlockEpoch.Answer) {
+        val sent = mutableListOf<Int>()
+        val queue = ArrayDeque(answers.toList())
+        var asked: Boolean? = null
+        var confirmed = 0
+        var fail: java.io.IOException? = null
+
+        var currentOk = 0
+
+        suspend fun run(unresolved: Boolean, newPinAsked: Boolean, renew: Boolean = false): UnlockEpoch.Answer = UnlockEpoch.run(
+            pinChangeUnresolved = unresolved,
+            newPinAsked = newPinAsked,
+            send = { ahead ->
+                fail?.let { throw it }
+                sent += ahead
+                val a = queue.removeFirst()
+                a to a
+            },
+            setNewPinAsked = { asked = it },
+            confirmNext = { confirmed++ },
+            previousPinCandidates = if (renew) listOf(1) else emptyList(),
+            currentOk = { currentOk++ },
+        )
+    }
+
+    private fun answer(code: String?) = UnlockEpoch.Answer(ok = code == null, code = code, releaseR = true)
+
+    /**
+     * The real sequence of the unlock (VAULT-MESSAGING 0.44.0 §11.14.9 step 5; [UnlockEpoch.run], used by the vault
+     * manager): the previous PIN goes with the current record only, its `device_secret` asks for the new PIN without
+     * sending anything more; the new PIN goes with the candidate only, and an answer after the secret check confirms
+     * it. Without an unresolved change: current, then the candidate with the same PIN. A failure that never reached the
+     * vault keeps the step.
+     */
+    @Test
+    fun theUnlockSendsEachPinWithItsOwnRecord() = kotlinx.coroutines.runBlocking {
+        val first = Sends(answer("device_secret"))
+        first.run(unresolved = true, newPinAsked = false)
+        assertEquals(listOf(0), first.sent)
+        assertEquals(true, first.asked)
+        assertEquals(0, first.confirmed)
+        val second = Sends(answer("bad_pin"))
+        second.run(unresolved = true, newPinAsked = true)
+        assertEquals("the new PIN, with the candidate only", listOf(1), second.sent)
+        assertEquals(false, second.asked)
+        assertEquals(1, second.confirmed)
+        val ok = Sends(answer(null))
+        ok.run(unresolved = true, newPinAsked = false)
+        assertEquals(listOf(0), ok.sent)
+        assertEquals(null, ok.asked)
+        assertEquals("settles an uncertain PIN, not the change", 1, ok.currentOk)
+        // (0.45.0) An unanswered renew: its candidate is tried with the previous PIN before the new PIN is asked for.
+        val renewHeld = Sends(answer("device_secret"), answer(null))
+        renewHeld.run(unresolved = true, newPinAsked = false, renew = true)
+        assertEquals(listOf(0, 1), renewHeld.sent)
+        assertEquals(1, renewHeld.confirmed)
+        assertEquals("no new PIN asked", null, renewHeld.asked)
+        val renewNot = Sends(answer("device_secret"), answer("device_secret"))
+        renewNot.run(unresolved = true, newPinAsked = false, renew = true)
+        assertEquals(listOf(0, 1), renewNot.sent)
+        assertEquals(true, renewNot.asked)
+        val renewBusy = Sends(answer("device_secret"), answer("retry"))
+        renewBusy.run(unresolved = true, newPinAsked = false, renew = true)
+        assertEquals("decided before the secret check: proves nothing", null, renewBusy.asked)
+        assertEquals(0, renewBusy.confirmed)
+        val net = Sends().apply { fail = java.io.IOException("network") }
+        assertThrows(java.io.IOException::class.java) { kotlinx.coroutines.runBlocking { net.run(unresolved = true, newPinAsked = true) } }
+        assertEquals("the step stays", null, net.asked)
+        val before = Sends(answer("device_secret"), answer(null))
+        before.run(unresolved = false, newPinAsked = false)
+        assertEquals(listOf(0, 1), before.sent)
+        assertEquals(1, before.confirmed)
+        // (H1) Outside the unlock screen nothing is sent while a PIN change is unresolved.
+        assertFalse(UnlockEpoch.allowed(pinChangeUnresolved = true, twoStepScreen = false))
+        assertTrue(UnlockEpoch.allowed(pinChangeUnresolved = true, twoStepScreen = true))
+        assertTrue(UnlockEpoch.allowed(pinChangeUnresolved = false, twoStepScreen = false))
+    }
 }

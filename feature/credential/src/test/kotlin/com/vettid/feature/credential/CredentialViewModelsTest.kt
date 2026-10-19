@@ -3,8 +3,11 @@ package com.vettid.feature.credential
 import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.policy.PasswordRule
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -208,6 +211,49 @@ class CredentialViewModelsTest {
         vm.setPassword("Tr0ub4dor&3x")
         vm.setConfirm("Tr0ub4dor&3x")
         vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+    }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9: no answer to the password change is not a failure. The entries stay while VettID
+     * checks, nothing is sent meanwhile; "not changed" lets the member try again; "applied" is the usual success; a
+     * refusal that came at last clears only the wrong entry.
+     */
+    @Test
+    fun aLostPasswordChangeAnswerIsDecidedNotRepeated() = runTest {
+        vault.fail["changePassword"] = VaultFailure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = ChangePasswordViewModel(vault, vault)
+        vm.setCurrent("old password 1")
+        vm.setPassword("a much better passphrase here")
+        vm.setConfirm("a much better passphrase here")
+        vm.submit()
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        with(vm.uiState.value) {
+            assertNull(error)
+            assertTrue(checking)
+            assertEquals("old password 1", current)
+            assertEquals("a much better passphrase here", password)
+        }
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "changePassword" })
+        vault.changeCheck.value = ChangeCheck.NotApplied(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.checking)
+        assertEquals(ChangeCheck.NotApplied(ChangeKind.PASSWORD), vm.uiState.value.check)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Refused(ChangeKind.PASSWORD, FailureKind.BAD_PASSWORD)
+        advanceUntilIdle()
+        assertEquals(FailureKind.BAD_PASSWORD, vm.uiState.value.error)
+        assertEquals("", vm.uiState.value.current)
+        assertEquals("a much better passphrase here", vm.uiState.value.password)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.PASSWORD)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.done)
     }

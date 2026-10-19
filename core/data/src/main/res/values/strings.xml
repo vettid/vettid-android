@@ -52,6 +52,15 @@
     <!-- Approved by the owner (a wipe that did not finish). -->
     <string name="data_failure_erase_failed">VettID could not remove your vault\'s keys from this phone. Try again. If it keeps failing, erase VettID\'s data on this phone. Your vault itself is not affected: afterwards you can set VettID up again or recover your vault from your account.</string>
     <string name="data_failure_local_state">VettID could not read the keys it keeps on this phone for your vault. Nothing was deleted or changed. Try again, or restart the phone and open VettID again. If it stays like this, this phone cannot open your vault any more, and the way back is to erase VettID here and recover your vault.</string>
+    <!-- VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45 (approved text, shared with the iPhone app). -->
+    <string name="data_failure_change_unresolved">VettID is still checking whether your last change went through. Try again when your vault can be reached.</string>
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9, ANDROID-PLAN 0.1.46 (approved texts, shared with the iPhone app). -->
+    <string name="data_failure_change_undecided">VettID is still checking whether your last PIN change went through. This can take up to about 10 minutes. Try again then.</string>
+    <string name="data_failure_change_undecided_password">VettID is still checking whether your last password change went through. This can take up to about 10 minutes. Try again then.</string>
+    <string name="data_failure_credential_unsettled">VettID is still finishing an earlier request to your vault. Nothing was changed. Try again in a minute.</string>
+    <string name="data_failure_pin_uncertain">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9 step 5 (approved by the owner 2026-10-18): a new phone secret without an answer that the version cannot decide. -->
+    <string name="data_failure_renew_unconfirmed">VettID couldn\'t confirm your last new phone secret. Before you change your PIN, lock your vault and unlock it again: your PIN hasn\'t changed, so this doesn\'t use an attempt.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>
     <string name="data_pin_problem_short">Use at least %1$d digits.</string>

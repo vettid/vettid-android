@@ -93,7 +93,28 @@ internal data class LocalAccount(
     val recoveryRSeen: Boolean = false,
     /** (0.34.0) The capabilities of the vault's instance this phone last verified (`recovery_offered` for the status). */
     val capabilities: List<String> = emptyList(),
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) A `pin.change` or `credential.password.change` that was sent and is not decided
+     * yet: written before the send, cleared when an answer or the check decides it. No PIN, password or secret.
+     */
+    val unresolvedChange: UnresolvedChange? = null,
+    /**
+     * (VAULT-MESSAGING 0.45.0 §11.14.9 step 3) A PIN change's check ended without a decision: the PIN is uncertain (the
+     * previous or the new one). The epoch of the current record it was sent from; until an unlock with the two steps
+     * settles it, the owner check and every operation that carries the PIN are refused.
+     */
+    val uncertainPinFromEpoch: Long? = null,
+    /**
+     * (0.45.0 §11.14.9 step 5, N1) A `vault.secret.renew` stored before it was sent and not answered yet: its candidate
+     * (the next epoch, with the PIN unchanged) may be the vault's. No PIN change is sent until it is decided
+     * (`credential.version` once it is settled, or an unlock, which costs nothing: the PIN is unchanged).
+     */
+    val unconfirmedRenew: UnconfirmedRenew? = null,
+    /** (0.45.0 step 7, N5) The decision of a lost answer not yet seen by the member: kept across a process death. */
+    val changeDecision: SavedDecision? = null,
 ) {
+    /** A renew may have applied without its answer ([unconfirmedRenew]). */
+    val renewUnconfirmed: Boolean get() = unconfirmedRenew != null
     val phone: PhoneSecretState get() = PhoneSecretState(phoneKeyVault, phoneEpoch)
 
     /** Release R is known for this vault: the mark, or a phone secret for it. */
@@ -192,6 +213,148 @@ internal class AccountRecord(
     /** What `account.get` brought ([accountUpdate]), for the record the request was sent for. */
     fun refreshed(since: Int, u: AccountUpdate): Boolean = update(since) {
         it.copy(snapshot = u.snapshot, emailHint = u.snapshot?.emailHint ?: it.emailHint, nameRequest = u.nameRequest)
+    }
+
+    // --- a lost answer to a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9) ---
+
+    /** What [storeChange] did. */
+    enum class ChangeStored {
+        /** Written: the change may be sent. */
+        STORED,
+
+        /** Another change is unresolved (checked and refused in the same step as the write): nothing written. */
+        CONFLICT,
+
+        /** The write was dropped or failed: nothing of it stays, and nothing may be sent. */
+        FAILED,
+    }
+
+    /**
+     * §11.14.9 step 1: [u] stored before the send, for the record of [since]. Refused, in the same step under the record's
+     * lock, while another change is unresolved, so that two changes can never both be sent.
+     */
+    fun storeChange(since: Int, u: UnresolvedChange): ChangeStored {
+        var conflict = false
+        val before = store.value
+        val ok = try {
+            update(since) { cur ->
+                val other = cur.unresolvedChange
+                if (other != null && other.innerId != u.innerId) {
+                    conflict = true
+                    null
+                } else {
+                    cur.copy(unresolvedChange = u)
+                }
+            }
+        } catch (_: com.vettid.core.keystore.KeystoreException) {
+            false
+        } catch (_: java.io.IOException) {
+            false
+        }
+        return when {
+            conflict -> ChangeStored.CONFLICT
+            ok -> ChangeStored.STORED
+            else -> {
+                // A persist that failed after the value was set in memory: nothing of it stays.
+                if (store.value.unresolvedChange == u) store.reload(before, readable = true)
+                ChangeStored.FAILED
+            }
+        }
+    }
+
+    /**
+     * The change [m] applied (its answer, or the check): a PIN change's candidate becomes current (the next epoch, only
+     * while the current record is still the one it was sent from) and the marker goes, as one write, with the offer to
+     * rotate the vault's keys. [RecordStore.UNBOUND]: the change belongs to whatever record holds its marker; a reset or
+     * wipe leaves none. False when nothing was written (no such marker, or the write failed).
+     */
+    fun confirmChange(m: UnresolvedChange): Boolean {
+        val ok = try {
+            update(RecordStore.UNBOUND) { cur ->
+                if (cur.unresolvedChange?.innerId != m.innerId) return@update null
+                val epoch = if (m.kind == ChangeKind.PIN && cur.phoneEpoch == m.fromEpoch) m.fromEpoch + 1 else cur.phoneEpoch
+                cur.copy(phoneEpoch = epoch, unresolvedChange = null)
+            }
+        } catch (_: com.vettid.core.keystore.KeystoreException) {
+            false
+        } catch (_: java.io.IOException) {
+            false
+        }
+        if (ok) setRotateOffer(true, recordGeneration)
+        return ok
+    }
+
+    /**
+     * (0.45.0 step 3) The check of [m] ended without a decision: the marker goes and, after a PIN change, the PIN is
+     * uncertain until a two-step unlock settles it ([settlePin]).
+     */
+    fun endChange(m: UnresolvedChange): Boolean = try {
+        update(RecordStore.UNBOUND) { cur ->
+            if (cur.unresolvedChange?.innerId != m.innerId) return@update null
+            val uncertain = if (m.kind == ChangeKind.PIN) m.fromEpoch else cur.uncertainPinFromEpoch
+            cur.copy(unresolvedChange = null, uncertainPinFromEpoch = uncertain)
+        }
+    } catch (_: com.vettid.core.keystore.KeystoreException) {
+        false
+    } catch (_: java.io.IOException) {
+        false
+    }
+
+    /**
+     * An unlock settled which PIN the vault holds: the previous one (`ok` with the current record) or the new one (the
+     * candidate confirmed); with [epoch] the phone moves to that epoch (the candidate). The uncertain PIN and an
+     * unconfirmed renew go (the vault holds the current record, or the candidate is now current); an unresolved change
+     * stays (§11.14.9 step 5: `ok` does not decide it).
+     */
+    fun settlePin(since: Int, epoch: Long? = null): Boolean = update(since) { cur ->
+        val e = epoch ?: cur.phoneEpoch
+        if (cur.uncertainPinFromEpoch == null && !cur.renewUnconfirmed && e == cur.phoneEpoch) {
+            null
+        } else {
+            cur.copy(phoneEpoch = e, uncertainPinFromEpoch = null, unconfirmedRenew = null)
+        }
+    }
+
+    /** (N1) The renew [r], stored before it is sent; false: not written, and nothing may be sent. */
+    fun storeRenew(since: Int, r: UnconfirmedRenew): Boolean = try {
+        update(since) { it.copy(unconfirmedRenew = r) }
+    } catch (_: com.vettid.core.keystore.KeystoreException) {
+        false
+    } catch (_: java.io.IOException) {
+        false
+    }
+
+    /**
+     * The renew [innerId] applied ([applied]: its answer, or `credential.version` one above the version it carried): the
+     * phone moves to its candidate (only from the epoch it was sent from); or it did not apply. Either way it goes.
+     */
+    fun decideRenew(innerId: String, applied: Boolean): Boolean = update(RecordStore.UNBOUND) { cur ->
+        val r = cur.unconfirmedRenew?.takeIf { it.innerId == innerId } ?: return@update null
+        val epoch = if (applied && cur.phoneEpoch == r.fromEpoch) r.fromEpoch + 1 else cur.phoneEpoch
+        cur.copy(phoneEpoch = epoch, unconfirmedRenew = null)
+    }
+
+    /** (N5) The decision the member has not seen yet ([d]), or none once seen. */
+    fun saveDecision(d: SavedDecision?): Boolean = update(RecordStore.UNBOUND) { cur ->
+        // The same decision again keeps whether it was notified (P4).
+        if (cur.changeDecision == d || d != null && d.sameAs(cur.changeDecision)) null else cur.copy(changeDecision = d)
+    }
+
+    /** (P4) The kept decision was posted as a notification. */
+    fun decisionNotified(): Boolean = update(RecordStore.UNBOUND) { cur ->
+        val d = cur.changeDecision ?: return@update null
+        if (d.notified) null else cur.copy(changeDecision = d.copy(notified = true))
+    }
+
+    /** The change [m] did not apply, was refused, or the check ended: its marker goes; the epoch stays. */
+    fun clearChange(m: UnresolvedChange): Boolean = try {
+        update(RecordStore.UNBOUND) { cur ->
+            if (cur.unresolvedChange?.innerId == m.innerId) cur.copy(unresolvedChange = null) else null
+        }
+    } catch (_: com.vettid.core.keystore.KeystoreException) {
+        false
+    } catch (_: java.io.IOException) {
+        false
     }
 
     fun beginWipe() = store.beginWipe()

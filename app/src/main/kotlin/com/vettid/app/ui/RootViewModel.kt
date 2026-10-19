@@ -8,6 +8,7 @@ import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.ReleaseUpdateRepository
@@ -73,6 +74,21 @@ class RootViewModel @Inject constructor(
     val movedAway: StateFlow<Boolean> = vault.movedAway
 
     fun acknowledgeMovedAway() = vault.acknowledgeMovedAway()
+
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) A PIN or password change whose answer was lost has been decided: said once,
+     * wherever the member is, until dismissed (a change screen that follows it says it there and dismisses it).
+     */
+    val changeDecided: StateFlow<ChangeCheck?> = vault.changeCheck.map { c -> c?.takeIf { !it.open } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    fun acknowledgeChangeDecided() = vault.acknowledgeChangeCheck()
+
+    /** "Lock and unlock now" (0.45.0 step 3): the unlock screen's two steps settle an uncertain PIN. */
+    fun lockAndUnlockForPin() {
+        vault.acknowledgeChangeCheck()
+        lockVault()
+    }
 
     /** A release update under way or its outcome (ANDROID-PLAN 0.1.19): shown over every phase until it is left. */
     val updateProgress: StateFlow<UpdateProgress?> = updates.progress

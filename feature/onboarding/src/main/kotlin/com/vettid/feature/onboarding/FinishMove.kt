@@ -43,8 +43,13 @@ data class FinishMoveUiState(
     val busy: Boolean = false,
     val done: Boolean = false,
     val failure: FailureKind? = null,
+    /**
+     * (VAULT-MESSAGING 0.45.0 §11.14.9 step 2) A PIN or password change is being decided, or the PIN is uncertain: no
+     * lock and unlock with a PIN typed here until it is (the gate's text); null when the move can be finished.
+     */
+    val held: FailureKind? = null,
 ) {
-    override fun toString(): String = "FinishMoveUiState(busy=$busy, done=$done, failure=$failure)"
+    override fun toString(): String = "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, held=$held)"
 }
 
 /**
@@ -59,11 +64,15 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
     private val state = MutableStateFlow(FinishMoveUiState())
     val uiState: StateFlow<FinishMoveUiState> = state.asStateFlow()
 
+    init {
+        viewModelScope.launch { vault.changeHold.collect { h -> state.update { it.copy(held = h) } } }
+    }
+
     fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null) }
 
     fun finish() {
         val pin = state.value.pin
-        if (pin.length < MIN_PIN || state.value.busy) return
+        if (pin.length < MIN_PIN || state.value.busy || state.value.held != null) return
         state.update { it.copy(busy = true, failure = null) }
         viewModelScope.launch {
             val failure = try {
@@ -107,6 +116,14 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             singleLine = true,
             modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("finish_move_pin"),
         )
+        state.held?.let {
+            NoticeCard(
+                kind = NoticeKind.WARNING,
+                title = stringResource(R.string.onboarding_finish_move_title),
+                body = stringResource(it.messageRes()),
+                modifier = Modifier.testTag("finish_move_held"),
+            )
+        }
         state.failure?.let {
             NoticeCard(
                 kind = NoticeKind.WARNING,
@@ -118,7 +135,11 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             TextButton(onClick = onDone, enabled = !state.busy, modifier = Modifier.testTag("finish_move_later")) {
                 Text(stringResource(R.string.onboarding_finish_move_later))
             }
-            Button(onClick = vm::finish, enabled = state.pin.length >= 6 && !state.busy, modifier = Modifier.testTag("finish_move_go")) {
+            Button(
+                onClick = vm::finish,
+                enabled = state.pin.length >= 6 && !state.busy && state.held == null,
+                modifier = Modifier.testTag("finish_move_go"),
+            ) {
                 Text(stringResource(R.string.onboarding_finish_move_title))
             }
         }

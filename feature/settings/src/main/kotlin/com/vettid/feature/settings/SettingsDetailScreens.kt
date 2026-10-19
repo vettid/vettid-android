@@ -27,6 +27,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.collapse
 import androidx.compose.ui.semantics.expand
@@ -47,6 +49,7 @@ import com.vettid.core.data.policy.messageArg
 import com.vettid.core.data.policy.messageRes
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CanaryManifestView
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseInfoView
 import com.vettid.core.data.vault.SignerView
@@ -308,6 +311,7 @@ fun ChangePinContent(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
     onPassword: (String) -> Unit = {},
+    onLockAndUnlock: () -> Unit = {},
 ) {
     FormScaffold(
         title = stringResource(if (state.done) R.string.settings_pin_done else R.string.settings_pin_title),
@@ -318,11 +322,38 @@ fun ChangePinContent(
         },
         primaryLabel = stringResource(if (state.done) R.string.settings_done else R.string.settings_pin_submit),
         onPrimary = if (state.done) onBack else onSubmit,
-        primaryEnabled = state.done || (state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
+        primaryEnabled = state.done ||
+            (!state.checking && state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
         busy = state.busy,
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        // VAULT-MESSAGING 0.44.0 §11.14.9: a change whose answer was lost is decided, not repeated.
+        state.check?.let { c ->
+            val text = when (c) {
+                is ChangeCheck.Checking -> R.string.settings_pin_checking
+                is ChangeCheck.Unreachable -> R.string.settings_pin_unreachable
+                is ChangeCheck.NotApplied -> R.string.settings_pin_not_changed
+                is ChangeCheck.Ended -> R.string.settings_pin_ended
+                else -> null
+            }
+            if (text != null) {
+                NoticeCard(
+                    if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended) NoticeKind.WARNING else NoticeKind.INFO,
+                    stringResource(R.string.settings_pin_title),
+                    stringResource(text),
+                    Modifier.testTag("pin_change_check"),
+                    announce = LiveRegionMode.Polite,
+                    // (0.45.0 step 3) No "Try again": the lock and two-step unlock settles the PIN without an attempt.
+                    actions = if (c is ChangeCheck.Ended) {
+                        { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
+                    } else {
+                        null
+                    },
+                )
+                Spacer(Modifier.height(Spacing.l))
+            }
+        }
         if (state.fromAttempts && state.withPassword) {
             NoticeCard(
                 NoticeKind.WARNING,
@@ -363,6 +394,12 @@ fun ChangePinContent(
                 stringResource(R.string.settings_pin_title),
                 stringResource(it.messageRes()),
                 Modifier.testTag("error"),
+                // (0.45.0 §11.14.9) An uncertain PIN or an unconfirmed new phone secret: settled by a lock and unlock.
+                actions = if (it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) {
+                    { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
+                } else {
+                    null
+                },
             )
         }
     }

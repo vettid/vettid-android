@@ -68,6 +68,103 @@ object UnlockEpoch {
     fun confirmsNext(ok: Boolean, code: String?): Boolean = ok || code in AFTER_SECRET
 
     private val AFTER_SECRET = setOf("bad_pin", "transfer_incomplete")
+
+    /** What an unlock does after the answer to the current record ([afterCurrent]). */
+    enum class Next {
+        /** The answer stands. */
+        DONE,
+
+        /** `device_secret`: the same PIN is tried once more with the next epoch (an earlier change's answer may be lost). */
+        TRY_NEXT,
+
+        /**
+         * (VAULT-MESSAGING 0.44.0 §11.14.9 step 5) `device_secret` while a PIN change is unresolved: the vault holds the
+         * candidate, decided before any PIN was tested. The member is asked for the NEW PIN; the previous one is not
+         * reused for the candidate.
+         */
+        ASK_NEW_PIN,
+    }
+
+    /**
+     * Whether the PIN typed goes with the next epoch only: [pinChangeUnresolved] and the member typed it after the
+     * previous PIN got `device_secret` ([newPinAsked]). Otherwise the unlock starts with the current record.
+     */
+    fun nextOnly(pinChangeUnresolved: Boolean, newPinAsked: Boolean): Boolean = pinChangeUnresolved && newPinAsked
+
+    /** After the current record's answer (release R only: [releaseR]). */
+    fun afterCurrent(releaseR: Boolean, ok: Boolean, code: String?, pinChangeUnresolved: Boolean): Next = when {
+        !releaseR || ok || code != CODE_DEVICE_SECRET -> Next.DONE
+        pinChangeUnresolved -> Next.ASK_NEW_PIN
+        else -> Next.TRY_NEXT
+    }
+
+    private const val CODE_DEVICE_SECRET = "device_secret"
+
+    /**
+     * (§11.14.9 step 5, H1) Whether an unlock may be sent with the PIN typed at all: while a PIN change is unresolved only
+     * the unlock screen's two steps ([twoStepScreen]) know which PIN the member typed. Any other unlock (the release
+     * update's) sends nothing.
+     */
+    fun allowed(pinChangeUnresolved: Boolean, twoStepScreen: Boolean): Boolean = !pinChangeUnresolved || twoStepScreen
+
+    /** One sealed unlock's answer, as [run] needs it: [releaseR] the request carried a phone secret. */
+    data class Answer(val ok: Boolean, val code: String?, val releaseR: Boolean)
+
+    /**
+     * The records one unlock tries with the PIN typed (§11.14.1 rule 4, VAULT-MESSAGING 0.45.0 §11.14.9 step 5): [send]
+     * sends it with the record [send]'s argument epochs ahead (0 the current one) and returns its outcome and [Answer].
+     *
+     * - Without an unresolved change: the current record, then the candidate with the same PIN.
+     * - With one (or an uncertain PIN), the PIN typed first is the previous one and goes with the current record; its
+     *   `ok` settles an uncertain PIN ([currentOk]) but not the change. Its `device_secret` first tries the other
+     *   candidates that go with the previous PIN ([previousPinCandidates], an unanswered renew's), each once; an answer
+     *   given after the secret matched confirms that one ([confirmNext]) and ends the unlock; one decided before the
+     *   secret check ends it too. Only when every one answered `device_secret` is the new PIN asked for ([setNewPinAsked]).
+     * - The PIN typed after that ([newPinAsked]) goes with the change's candidate only.
+     *
+     * A failure that never reached the vault (thrown by [send]) changes nothing.
+     */
+    @Suppress("LongParameterList", "ReturnCount")
+    suspend fun <T> run(
+        pinChangeUnresolved: Boolean,
+        newPinAsked: Boolean,
+        send: suspend (ahead: Int) -> Pair<T, Answer>,
+        setNewPinAsked: (Boolean) -> Unit,
+        confirmNext: suspend (ahead: Int) -> Unit,
+        previousPinCandidates: List<Int> = emptyList(),
+        currentOk: suspend () -> Unit = {},
+    ): T {
+        if (nextOnly(pinChangeUnresolved, newPinAsked)) {
+            val (o, a) = send(1)
+            setNewPinAsked(false) // answered: the candidate was tried once
+            if (confirmsNext(a.ok, a.code)) confirmNext(1)
+            return o
+        }
+        val (o, a) = send(0)
+        if (a.ok) currentOk()
+        return when (afterCurrent(a.releaseR, a.ok, a.code, pinChangeUnresolved)) {
+            Next.DONE -> o
+            Next.ASK_NEW_PIN -> {
+                var last = o
+                for (ahead in previousPinCandidates) {
+                    val (oc, ac) = send(ahead)
+                    if (confirmsNext(ac.ok, ac.code)) {
+                        confirmNext(ahead)
+                        return oc
+                    }
+                    if (ac.code != CODE_DEVICE_SECRET) return oc // decided before the secret check: proves nothing
+                    last = oc
+                }
+                setNewPinAsked(true)
+                last
+            }
+            Next.TRY_NEXT -> {
+                val (o2, a2) = send(1)
+                if (confirmsNext(a2.ok, a2.code)) confirmNext(1)
+                o2
+            }
+        }
+    }
 }
 
 /** The old phone's keys after a transfer it approved (release R, §11.14.10; owner decision 2026-10-15). */

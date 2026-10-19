@@ -130,6 +130,15 @@ interface ReleaseUpdateOps {
     /** The owner check is due or held (§3.6.5): the check comes first, the update never bypasses it. */
     fun ownerCheckDue(): Boolean
 
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) A PIN or password change is undecided: the update neither starts nor retries nor
+     * abandons (its lock and unlock would send a PIN that may be the wrong one of two); "still checking" is said instead.
+     */
+    fun changeUnresolved(): Boolean = false
+
+    /** (N6) Why the update is held, in the gate's words ([VaultRepository.changeHold]); null when it is not. */
+    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
     /** Locks the vault and waits (bounded) until the member API no longer sees it unlocked. */
     suspend fun lock()
 
@@ -217,6 +226,12 @@ interface ReleaseUpdateRepository {
     /** Whether the owner check must come first (§3.6.5). */
     fun ownerCheckDue(): Boolean
 
+    /** (§11.14.9) A PIN or password change is undecided: no update step is sent until it is. */
+    fun changeUnresolved(): Boolean = false
+
+    /** (N6) Why the update is held, observed by its screens; null when it is not. */
+    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
     /**
      * The member approved [offer] with [pin] ("Approve and update"): locks, unlocks with the approval, and after
      * `moved` unlocks again with the same PIN. False when it cannot start (an update runs, or the check is due).
@@ -269,8 +284,12 @@ class ReleaseUpdateManager(
 
     override fun ownerCheckDue(): Boolean = ops.ownerCheckDue()
 
+    override fun changeUnresolved(): Boolean = ops.changeUnresolved()
+
+    override val changeHold: StateFlow<FailureKind?> get() = ops.changeHold
+
     override fun start(pin: String, offer: ReleaseUpdateOffer): Boolean {
-        if (running() || ops.ownerCheckDue() || pin.isEmpty()) return false
+        if (running() || pin.isEmpty() || !mayStart()) return false
         progressFlow.value = UpdateProgress(UpdateStep.LOCKING, offer.current, offer.target)
         job = scope.launch {
             try {
@@ -287,7 +306,7 @@ class ReleaseUpdateManager(
 
     override fun retry(pin: String) {
         val p = progressFlow.value ?: return
-        if (running() || pin.isEmpty()) return
+        if (running() || pin.isEmpty() || refusedWhileChangeUnresolved()) return
         when (p.step) {
             UpdateStep.BAD_PIN -> launch { approve(pin) }
             UpdateStep.FAILED -> launch {
@@ -309,8 +328,8 @@ class ReleaseUpdateManager(
 
     override fun abandon(pin: String) {
         val p = progressFlow.value ?: return
-        val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon()
-        if (running() || pin.isEmpty() || !offered) return
+        val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon() && pin.isNotEmpty()
+        if (running() || !offered || refusedWhileChangeUnresolved()) return
         launch {
             set { it.copy(step = UpdateStep.ABANDONING, failure = null, failureCode = null) }
             when (val r = withStart { s -> ops.unlock(pin, approve = null, abandon = true, onStarting = s) }) {
@@ -330,6 +349,17 @@ class ReleaseUpdateManager(
     }
 
     private fun running(): Boolean = job?.isActive == true
+
+    /** Neither the owner check (§3.6.5) nor an undecided PIN or password change (§11.14.9) comes first. */
+    private fun mayStart(): Boolean = !ops.ownerCheckDue() && !ops.changeUnresolved()
+
+    /** (§11.14.9) A change is undecided: nothing is sent, and the step says "still checking". */
+    private fun refusedWhileChangeUnresolved(): Boolean {
+        if (!ops.changeUnresolved()) return false
+        val why = ops.changeHold.value ?: FailureKind.CHANGE_UNRESOLVED
+        set { it.copy(failure = why, failureCode = CODE_CHANGE_HELD) }
+        return true
+    }
 
     private fun launch(block: suspend () -> Unit) {
         job = scope.launch { block() }
@@ -412,6 +442,9 @@ class ReleaseUpdateManager(
 
         /** The update's lock was asked for and is not confirmed ([LockKeeper]): the update does not move on. */
         const val CODE_LOCK_PENDING = "lock_pending"
+
+        /** (§11.14.9) The step was held: a PIN or password change is undecided, or the PIN uncertain. */
+        const val CODE_CHANGE_HELD = "change_held"
 
         /** [UpdateProgress.refusal] when the vault opened without saying anything of the update. */
         const val CODE_NOT_MOVED = "not_moved"

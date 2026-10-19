@@ -202,16 +202,25 @@ class VaultDeviceTest {
     @After
     fun stop() = relay.close()
 
-    private fun config(store: DeviceStateStore) =
-        DeviceConfig(name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = java.time.Duration.ofSeconds(5))
+    /** The phone's monotonic clock as [DeviceConfig.elapsedMs] reads it (milliseconds), for the vault-clock test. */
+    @Volatile
+    private var elapsed = 0L
+
+    private fun config(store: DeviceStateStore, timeout: java.time.Duration = java.time.Duration.ofSeconds(5)) =
+        DeviceConfig(
+            name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = timeout,
+            elapsedMs = { elapsed },
+            settleWait = java.time.Duration.ofMillis(800),
+        )
 
     /** Enrollment, the first handshake and device.paired: a device with a live session. */
     private suspend fun pairedDevice(
         scope: CoroutineScope,
         store: DeviceStateStore = InMemoryDeviceStateStore(),
         secrets: DeviceSecrets = DeviceSecrets.generate(),
+        timeout: java.time.Duration = java.time.Duration.ofSeconds(5),
     ): Pair<VaultDevice, FakeVault> {
-        val d = VaultDevice.create(config(store), secrets)
+        val d = VaultDevice.create(config(store, timeout), secrets)
         val v = FakeVault()
         d.handle(v.enrolled(d))
         d.awaitEnrolled(java.time.Duration.ofSeconds(1))
@@ -629,7 +638,9 @@ class VaultDeviceTest {
         val req = v.open(nextDeposit().second)
         val body = StrictJson.parseObject(req.body)
         val payload = com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, utkId, req.type, req.id, body.base64("sealed"))
-        job.cancel()
+        // Answered (refused), so that the operation is settled (§11.14.9) and the next one may be sent.
+        d.handle(v.error(req.id, req.type, "bad_request"))
+        job.await()
         return StrictJson.parseObject(payload)
     }
 
@@ -1491,6 +1502,394 @@ class VaultDeviceTest {
             d.flushOutbox()
             assertEquals("message.send", v.open(nextDeposit().second).type)
             assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    // --- a lost answer to a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9) ---
+
+    private fun utkJson(id: String, utk: KemPrivateKey) =
+        """{"utk_id":"$id","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
+
+    private fun FakeVault.error(re: String, type: String, code: String): RelayMessage = msg(
+        keyring.current()!!.seal(
+            Inner(id = Ulid.new(), type = type, ts = Instant.now(), re = re, status = Inner.STATUS_ERROR,
+                error = com.vettid.core.crypto.envelope.InnerError(code)),
+        ),
+    )
+
+    /**
+     * §11.14.9 steps 1–3: the marker (type, inner id, blob version, exp; no secret) is stored before anything is sent;
+     * the request carries an exp 10 minutes after the vault's clock and is sent three times with the same inner id and
+     * body, never through the outbox; no answer is [ChangeUnansweredException] with the kept request; a resend is the
+     * same request again, and the vault's cached answer settles it (the new blob kept and acked).
+     */
+    @Test
+    fun aLostChangeIsKeptAndResentAsTheSameRequestUntilItsAnswerSettlesIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(400))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val utk = KemPrivateKey.generate()
+            val markers = mutableListOf<ChangeMarker>()
+            val depositsAtMarker = mutableListOf<Int>()
+            val change = async(Dispatchers.IO) {
+                runCatching {
+                    api.credentialChangePassword("old password", "new password!", "975310") { m ->
+                        markers.add(m)
+                        depositsAtMarker.add(deposits.size)
+                    }
+                }
+            }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c1", utk)}]}""", re = get.id, status = Inner.STATUS_OK))
+            val sends = (1..3).map { v.open(nextDeposit().second) }
+            val e = change.await().exceptionOrNull() as ChangeUnansweredException
+            val m = markers.single()
+            assertEquals("stored before the first send", listOf(0), depositsAtMarker)
+            assertEquals(ChangeTypes.PASSWORD_CHANGE, m.type)
+            assertEquals(3L, m.sentVersion)
+            assertEquals(m, e.kept.marker)
+            val ahead = java.time.Duration.between(Instant.now(), m.exp)
+            assertTrue("exp 10 minutes ahead: $ahead", ahead > java.time.Duration.ofMinutes(9) && ahead <= java.time.Duration.ofMinutes(10))
+            for (r in sends) {
+                assertEquals(m.innerId, r.id)
+                assertEquals(m.type, r.type)
+                assertEquals(m.exp, r.exp)
+                org.junit.Assert.assertArrayEquals(sends[0].body, r.body)
+            }
+            // The payload is the one typed, sealed once: the same secrets, never re-typed.
+            val payload = StrictJson.parseObject(
+                com.vettid.core.crypto.credential.CredentialSeal.openPayload(
+                    utk, v.vaultId, "00112233445566c1", m.type, m.innerId, StrictJson.parseObject(sends[0].body).base64("sealed"),
+                ),
+            )
+            assertEquals("old password", payload.string("password"))
+            assertTrue("never written to the phone's storage", savedState(store).outbox.none { it.type == m.type })
+
+            // The resend: the same id and body once more; the vault answers from its cache.
+            val again = async(Dispatchers.IO) { api.changeResend(e.kept) }
+            val r = v.open(nextDeposit().second)
+            assertEquals(m.innerId, r.id)
+            org.junit.Assert.assertArrayEquals(sends[0].body, r.body)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()
+            assertNotNull(answer)
+            val settle = async(Dispatchers.IO) { api.changeSettle(e.kept, answer!!) }
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            settle.await()
+            assertEquals(4L, d.credentialVersion)
+            assertEquals("TkVX", d.credentialBlob())
+        }
+    }
+
+    /** §11.14.9 step 4: an answer that comes after the sends gave up is not lost: the next check takes it, unsent. */
+    @Test
+    fun aLateAnswerToALostChangeIsTakenWithoutSendingAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val change = async(Dispatchers.IO) {
+                runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) }
+            }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c2", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val first = (1..3).map { v.open(nextDeposit().second) }.first()
+            assertEquals(ChangeTypes.PIN_CHANGE, first.type)
+            val e = change.await().exceptionOrNull() as ChangeUnansweredException
+            // The vault's answer to the first send arrives late.
+            d.handle(v.seal(first.type, """{"credential":"TkVX","version":4,"utks":[],"epoch_advanced":true}""", re = first.id, status = Inner.STATUS_OK))
+            val answer = api.changeResend(e.kept)
+            assertNotNull(answer)
+            assertNull("nothing sent again", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * §11.14.9 step 4: `stale_credential` to a change is never retried with the typed secrets (it would spend an attempt
+     * with what may be the old PIN): the latest blob is fetched and the refusal thrown, and nothing else is sent.
+     */
+    @Test
+    fun aStaleCredentialToAChangeIsNotRetriedWithTheTypedSecrets() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val change = async(Dispatchers.IO) {
+                runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) }
+            }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val pc = v.open(nextDeposit().second)
+            assertEquals(ChangeTypes.PIN_CHANGE, pc.type)
+            d.handle(v.error(pc.id, pc.type, "stale_credential"))
+            val fetch = v.open(nextDeposit().second)
+            assertEquals("credential.get", fetch.type)
+            d.handle(v.seal(fetch.type, """{"credential":"TkVX","version":5,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            assertEquals("stale_credential", (change.await().exceptionOrNull() as VaultOpException).code)
+            assertNull("no second pin.change", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertEquals(5L, d.credentialVersion)
+        }
+    }
+
+    /** §11.14.9 step 1: a marker that cannot be stored stops the change before anything is sent; the UTK goes back. */
+    @Test
+    fun aMarkerThatCannotBeStoredStopsTheChangeBeforeTheSend() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val change = async(Dispatchers.IO) {
+                runCatching { api.credentialChangePassword("old password", "new password!", "975310") { throw java.io.IOException("not stored") } }
+            }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c4", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            assertEquals("not stored", change.await().exceptionOrNull()?.message)
+            assertNull("nothing sent", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.utkCount)
+        }
+    }
+
+    /**
+     * §11.14.9 step 2: while a change is unresolved the gate refuses every other credential operation before anything is
+     * sent (an owner check, another change of secret, a sealed operation), and lets them through once it is decided.
+     */
+    @Test
+    fun theGateStopsEveryOtherCredentialOperationBeforeItIsSent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            var undecided = true
+            api.setCredentialGate { _ -> if (undecided) throw VaultStateException("change undecided") }
+            assertTrue(runCatching { api.ownerCheck("975310", "password one") }.exceptionOrNull() is VaultStateException)
+            assertTrue(runCatching { api.secretRenew("975310", "password one", ByteArray(32)) }.exceptionOrNull() is VaultStateException)
+            assertTrue(runCatching { api.credentialUnlock("password one") }.exceptionOrNull() is VaultStateException)
+            assertTrue(runCatching { api.credentialCreate("password one") }.exceptionOrNull() is VaultStateException)
+            assertNull("nothing sent, not even a UTK request", deposits.poll(300, TimeUnit.MILLISECONDS))
+            undecided = false
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            assertEquals("credential.utk.get", v.open(nextDeposit().second).type)
+            check.cancel()
+        }
+    }
+
+    /**
+     * §11.14.9 step 1: the vault's clock as last seen is the newest answer's `ts` carried forward on the phone's monotonic
+     * clock; `credential.version` comes with its answer's `ts`.
+     */
+    @Test
+    fun theVaultClockIsTheNewestAnswerCarriedForward() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            val ahead = Instant.now().plusSeconds(90).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            val asked = async(Dispatchers.IO) { api.credentialVersionAt() }
+            val req = v.open(nextDeposit().second)
+            assertEquals("credential.version", req.type)
+            d.handle(v.msg(v.keyring.current()!!.seal(Inner(id = Ulid.new(), type = req.type, ts = ahead, re = req.id, status = Inner.STATUS_OK, body = """{"exists":true,"version":4}""".toByteArray()))))
+            val (info, ts) = asked.await()
+            assertEquals(4L, info.version)
+            assertEquals(ahead, ts)
+            assertEquals(ahead, d.vaultNow())
+            elapsed += 30_000
+            assertEquals(ahead.plusSeconds(30), d.vaultNow())
+            // An older message delivered late does not move it back.
+            d.handle(v.seal("feed.event", """{"id":"f1"}"""))
+            assertEquals(ahead.plusSeconds(30), d.vaultNow())
+        }
+    }
+
+    /**
+     * §11.14.9 (M1): every credential operation carries an exp and stays unsettled until it is answered; while one may
+     * still reach the vault no PIN or password change is sent (nothing at all goes out), so that "version + 1" can only
+     * be the change's. Its answer, also one that comes after its wait ended, settles it.
+     */
+    @Test
+    fun noChangeIsSentWhileAnEarlierCredentialOperationIsUnsettled() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c5", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val sends = (1..3).map { v.open(nextDeposit().second) }
+            assertEquals(VaultApi.TYPE_OWNER_CHECK, sends[0].type)
+            assertNotNull("a credential operation carries an exp", sends[0].exp)
+            assertTrue(check.await().isFailure) // no answer
+            assertEquals(setOf(sends[0].id), savedState(store).unsettled.keys)
+            val change = runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) }
+            assertTrue(change.exceptionOrNull() is CredentialUnsettledException)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // The owner check's answer comes late: settled.
+            d.handle(v.seal(sends[0].type, """{"credential":"TkVX","version":4,"utks":[]}""", re = sends[0].id, status = Inner.STATUS_OK))
+            assertTrue(savedState(store).unsettled.isEmpty())
+            assertTrue(d.credentialSettled())
+        }
+    }
+
+    /** §11.14.9 (M1): an unanswered request is settled once the vault's own clock is more than a minute past its exp. */
+    @Test
+    fun anUnansweredRequestIsSettledOnlyByTheVaultsClock() {
+        val exp = 1_000_000L
+        val m = mutableMapOf("a" to exp, "b" to exp + 120_000)
+        assertFalse("no vault ts seen yet", VaultDevice.pruneSettled(m, null))
+        assertFalse(VaultDevice.pruneSettled(m, exp + 60_000))
+        assertEquals(2, m.size)
+        assertTrue(VaultDevice.pruneSettled(m, exp + 60_001))
+        assertEquals(setOf("b"), m.keys)
+    }
+
+    /** (0.45.0 step 5, N1) A renew tells the caller what it carries before it is sent; a refusal to store sends nothing. */
+    @Test
+    fun aRenewIsReportedBeforeItIsSent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val seen = mutableListOf<SentRequest>()
+            val depositsAtReport = mutableListOf<Int>()
+            val answered = mutableListOf<String>()
+            val renew = async(Dispatchers.IO) {
+                runCatching {
+                    api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { r ->
+                        seen += r
+                        depositsAtReport += deposits.size
+                    }, onAnswered = { answered += it })
+                }
+            }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c6", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.secret.renew", req.type)
+            assertEquals(listOf(0), depositsAtReport)
+            assertEquals(req.id, seen.single().innerId)
+            assertEquals(3L, seen.single().sentVersion)
+            assertEquals(req.exp, seen.single().exp)
+            d.handle(v.seal(req.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = req.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("said before the ack (Q1)", listOf(req.id), answered)
+            d.handle(v.error(ack.id, ack.type, "bad_request"))
+            assertTrue("the ack refused", renew.await().isFailure)
+            assertEquals(listOf(req.id), answered)
+            // Not stored: nothing sent, the UTK back in the pool.
+            val refused = async(Dispatchers.IO) {
+                runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { throw java.io.IOException("not stored") }) }
+            }
+            val get2 = v.open(nextDeposit().second)
+            d.handle(v.seal(get2.type, """{"utks":[${utkJson("00112233445566c7", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
+            assertEquals("not stored", refused.await().exceptionOrNull()?.message)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.utkCount)
+            assertTrue(d.credentialSettled())
+        }
+    }
+
+    /**
+     * (N3) In a quiet session, once every unsettled request should have expired by the phone's estimate, one request
+     * that is not a credential operation (`credential.version`) asks the vault for a stamped time.
+     */
+    @Test
+    fun aQuietSessionAsksTheVaultForItsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c8", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            repeat(3) { v.open(nextDeposit().second) }
+            assertTrue(check.await().isFailure)
+            elapsed += 12 * 60_000L // past exp + 1 min by the estimate; no vault message since
+            val waited = async(Dispatchers.IO) { d.awaitCredentialSettled() }
+            val probe = v.open(nextDeposit().second)
+            assertEquals("credential.version", probe.type)
+            assertFalse("unanswered here: still unsettled after the wait", waited.await())
+        }
+    }
+
+    /**
+     * (M1) A state from an app version before 0.45.0: what its outbox holds counts as unsettled (it may be a credential
+     * operation without an exp) until it is answered.
+     */
+    @Test
+    fun anOutboxOfAnEarlierVersionIsUnsettledUntilAnswered() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            d.stop()
+            val st = savedState(store)
+            val legacyId = Ulid.new()
+            st.outbox.add(OutboxEntry(legacyId, VaultApi.TYPE_OWNER_CHECK, v.relayUrl, v.mailbox, "tok", "ZW52"))
+            st.outboxTracked = false
+            store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+            val again = VaultDevice.load(config(store), secrets)!!
+            assertFalse(again.credentialSettled())
+            again.handle(v.seal(VaultApi.TYPE_OWNER_CHECK, "{}", re = legacyId, status = Inner.STATUS_OK))
+            assertTrue(again.credentialSettled())
+        }
+    }
+
+    /** (P3) A deposit refused for good does not drop a tracked request: an earlier copy may have reached the vault. */
+    @Test
+    fun aRefusedDepositKeepsATrackedRequestUnsettled() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c9", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val first = v.open(nextDeposit().second) // accepted
+            refuseDeposits = "token_revoked" // the resends are refused for good
+            assertTrue(check.await().isFailure)
+            refuseDeposits = null
+            assertTrue("still unsettled", savedState(store).unsettled.containsKey(first.id))
+            assertFalse(d.credentialSettled())
+        }
+    }
+
+    /**
+     * (Q1, R1) A renew answered `stale_credential` whose blob fetch is refused: its own answer was never `ok`, and its
+     * refusal is reported under its id before the fetch.
+     */
+    @Test
+    fun aStaleRenewWithARefusedFetchIsNotAnswered() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val answered = mutableListOf<String>()
+            val refused = mutableListOf<Pair<String, String>>()
+            val renew = async(Dispatchers.IO) {
+                runCatching {
+                    api.secretRenew(
+                        "975310", "password one", ByteArray(32) { 5 }, onSending = {}, onAnswered = { answered += it },
+                        onRefused = { id, code -> refused += id to code },
+                    )
+                }
+            }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566ca", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            d.handle(v.error(req.id, req.type, "stale_credential"))
+            val fetch = v.open(nextDeposit().second)
+            assertEquals("credential.get", fetch.type)
+            assertEquals("reported before the fetch", listOf(req.id to "stale_credential"), refused)
+            d.handle(v.error(fetch.id, fetch.type, "busy"))
+            assertEquals("credential.get", (renew.await().exceptionOrNull() as VaultOpException).type)
+            assertTrue(answered.isEmpty())
         }
     }
 

@@ -112,6 +112,11 @@
     <string name="unlock_body">Enter your vault PIN.</string>
     <string name="unlock_body_account">Enter the vault PIN for %1$s.</string>
     <string name="unlock_pin_label">Vault PIN</string>
+    <!-- VAULT-MESSAGING 0.44.0 §11.14.9 step 5, ANDROID-PLAN 0.1.45 (approved texts, shared with the iPhone app). -->
+    <string name="unlock_previous_pin_title">Enter your previous PIN</string>
+    <string name="unlock_previous_pin_body">Your last PIN change got no answer. If it went through, VettID will ask for your new PIN next.</string>
+    <string name="unlock_new_pin_title">Your PIN change went through.</string>
+    <string name="unlock_new_pin_body">Enter your new PIN.</string>
     <string name="unlock_submit">Unlock</string>
     <string name="unlock_checking">Checking your vault\'s software</string>
     <string name="unlock_retry">Try again</string>

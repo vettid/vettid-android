@@ -41,6 +41,10 @@ class ReleaseUpdateManagerTest {
 
         override fun ownerCheckDue() = due
 
+        var changeUnresolved = false
+
+        override fun changeUnresolved() = changeUnresolved
+
         override suspend fun lock() {
             log += "lock"
             lockFails?.let { throw it }
@@ -358,5 +362,47 @@ class ReleaseUpdateManagerTest {
         m.refreshOffer()
         assertTrue(m.offerKnown.value)
         assertNull(m.offer.value)
+    }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9 (H1): while a PIN or password change is undecided the update sends nothing: it
+     * does not start, and a retry or a return to the previous release is held with "still checking". Its lock and
+     * unlock would send a PIN that may be the wrong one of two.
+     */
+    @Test
+    fun noUpdateStepIsSentWhileAChangeIsUnresolved() = runTest {
+        val ops = Ops()
+        ops.changeUnresolved = true
+        val m = manager(ops)
+        assertTrue(m.changeUnresolved())
+        assertFalse(m.start("2468", offer))
+        runCurrent()
+        assertTrue(ops.log.isEmpty())
+        // A failed update (the PIN step) and a new release that did not open: held too.
+        ops.changeUnresolved = false
+        ops.results += UpdateStepResult.BadPin(0)
+        assertTrue(m.start("2468", offer))
+        runCurrent()
+        assertEquals(UpdateStep.BAD_PIN, m.progress.value!!.step)
+        val sent = ops.log.size
+        ops.changeUnresolved = true
+        m.retry("1357")
+        runCurrent()
+        assertEquals("nothing sent", sent, ops.log.size)
+        assertEquals(FailureKind.CHANGE_UNRESOLVED, m.progress.value!!.failure)
+        assertEquals(UpdateStep.BAD_PIN, m.progress.value!!.step)
+        ops.changeUnresolved = false
+        ops.results += UpdateStepResult.Moved
+        ops.results += UpdateStepResult.Failed(FailureKind.NETWORK, null)
+        m.retry("1357")
+        runCurrent()
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
+        val sent2 = ops.log.size
+        ops.changeUnresolved = true
+        m.abandon("1357")
+        m.retry("1357")
+        runCurrent()
+        assertEquals(sent2, ops.log.size)
+        assertEquals(FailureKind.CHANGE_UNRESOLVED, m.progress.value!!.failure)
     }
 }
