@@ -28,14 +28,27 @@ class NotificationMappingTest {
             "connection.added", "connection.request.peer_declined", "connection.asks_paused", "connection.stale", "connection.removed",
             "grant.shared", "grant.revoked", "share.rate_limited", "item.revealed", "device.paired", "device.unlinked", "credential.rotated",
             "leash.rate_limited", "leash.item.read", "leash.agent.suspended", "leash.referrals_limited", "location.shared", "wallet.signed",
+            // ANDROID-PLAN 0.1.52 §4 "Event titles": the release R kinds, on Vault activity as every other kind.
+            "device.secret_renewed", "recovery.completed", "recovery.attempt", "recovery.change_required",
+            "recovery.counter_unavailable", "identity.rotation_failed", "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
         ),
     )
 
     @Test
     fun everyKindOfTheSpecHasItsChannel() {
         val mapped = expected.values.flatten().toSet()
-        assertEquals("every §10.9 kind but guide is mapped", FeedKinds.KNOWN - "guide", mapped)
+        assertEquals("every §10.9 kind but guide and the History-only ones is mapped", FeedKinds.KNOWN - "guide" - FeedKinds.HISTORY_ONLY, mapped)
         expected.forEach { (channel, kinds) -> kinds.forEach { assertEquals(it, channel, NotificationMapping.channel(item(it))) } }
+    }
+
+    /** ANDROID-PLAN 0.1.52 §4 "Event titles": one recovery raises one notification; a PIN change is History only. */
+    @Test
+    fun theHistoryOnlyKindsNeverNotify() {
+        for (k in listOf("credential.recovered", "recovery.device_paired", "vault.pin_changed")) {
+            assertNull(k, NotificationMapping.channel(item(k)))
+            assertNull(k, NotificationMapping.channel(item(k, priority = "urgent")))
+        }
+        assertEquals(Channels.ACTIVITY, NotificationMapping.channel(item("recovery.completed")))
     }
 
     @Test

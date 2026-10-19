@@ -16,6 +16,7 @@ import com.vettid.core.data.vault.AuditRequest
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HistoryRepository
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.RecoveryRefs
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -68,6 +70,15 @@ data class HistoryUiState(
 ) {
     val connections: List<ConnectionOption>
         get() = connectionNames.map { (id, name) -> ConnectionOption(id, name) }.sortedBy { it.name.lowercase() }
+
+    /**
+     * The entries the list shows: [entries] without the hidden kinds (ANDROID-PLAN 0.1.52 §4 "Event titles"), which
+     * stay in [entries] for the chain check.
+     */
+    val shown: List<AuditRecord> by lazy { entries.filterNot { AuditKinds.hidden(it.kind, it.ref) } }
+
+    /** Nothing to show and nothing filtered: "No history yet" (with hidden entries read and more to read, the list loads on). */
+    val emptyHistory: Boolean get() = shown.isEmpty() && filter.isEmpty && (end || entries.isEmpty())
 }
 
 /** Builds the filter of the History screen from the member's choices (kept pure for tests). */
@@ -160,11 +171,13 @@ class HistoryViewModel @Inject constructor(
      */
     private fun localText(r: AuditRecord): List<String> {
         val c = r.connectionId?.let { known[it] }
+        val item = AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] }
+        val device = r.deviceId?.let { state.value.deviceNames?.get(it) }
         return AuditFilter.kindText(r.kind) + listOfNotNull(
-            HistoryText.title(context, r.kind),
+            HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item)),
             c?.name, c?.firstName, c?.lastName, c?.accountName,
-            AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] },
-            r.deviceId?.let { state.value.deviceNames?.get(it) },
+            item,
+            device,
         )
     }
 
@@ -291,6 +304,8 @@ data class HistoryEntryUiState(
     val devicesKnown: Boolean = false,
     /** The entry's device is this phone. */
     val thisDevice: Boolean = false,
+    /** A `not_success` recovery attempt's outcome, from the matching `recovery.open` (ANDROID-PLAN 0.1.52). */
+    val outcome: AuditKinds.Outcome = AuditKinds.Outcome.Unknown,
     val loading: Boolean = true,
     val missing: Boolean = false,
     val error: FailureKind? = null,
@@ -329,9 +344,45 @@ class HistoryEntryViewModel @Inject constructor(
                         thisDevice = e?.deviceId != null && e.deviceId == history.selfDeviceId(),
                     )
                 }
+                if (e != null) loadOutcome(e)
             } catch (f: VaultFailure) {
                 state.update { it.copy(loading = false, error = f.kind) }
             }
         }
+    }
+
+    /**
+     * A `not_success` attempt's outcome (ANDROID-PLAN 0.1.52 §4 "Event titles"): the `recovery.open` and
+     * `recovery.attempt` entries of the hour on each side, matched by time ([RecoveryRefs.outcomes]). A failed read
+     * leaves the outcome unknown (no line), never "Details not available".
+     */
+    @Suppress("ReturnCount")
+    private suspend fun loadOutcome(e: AuditRecord) {
+        val at = e.at ?: return
+        if (e.kind != RecoveryRefs.KIND_ATTEMPT || RecoveryRefs.attempt(e.ref)?.success != false) return
+        val since = at.minus(OUTCOME_SPAN)
+        val until = at.plus(OUTCOME_SPAN)
+        val read = try {
+            history.auditPage(
+                AuditRequest(
+                    kinds = listOf(RecoveryRefs.KIND_OPEN, RecoveryRefs.KIND_ATTEMPT), since = since, until = until, limit = OUTCOME_LIMIT,
+                ),
+            ).entries
+        } catch (_: VaultFailure) {
+            return
+        }
+        // A vault that ignored the range or the kinds: kept to what was asked.
+        val near = read.filter { r ->
+            (r.kind == RecoveryRefs.KIND_OPEN || r.kind == RecoveryRefs.KIND_ATTEMPT) &&
+                r.at?.let { !it.isBefore(since) && it.isBefore(until) } == true
+        }
+        val entries = if (near.any { it.seq == e.seq }) near else near + e
+        val outcome = RecoveryRefs.outcomes(entries)[e.seq]?.let { AuditKinds.Outcome.Matched(it) } ?: AuditKinds.Outcome.None
+        state.update { it.copy(outcome = outcome) }
+    }
+
+    private companion object {
+        val OUTCOME_SPAN: Duration = Duration.ofHours(1)
+        const val OUTCOME_LIMIT = 100
     }
 }

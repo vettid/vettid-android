@@ -199,7 +199,7 @@ class FeedManager(
         val (covered, listed) = synchronized(lock) {
             (loadState.value == ListLoad.LOADED && item.seq <= cursor) to byId[item.itemId]
         }
-        if (!covered) onItem(item) else if (listed?.status == STATUS_ACTIVE) arrivalFlow.tryEmit(listed)
+        if (!covered) onItem(item) else if (listed?.status == STATUS_ACTIVE) emitArrival(listed)
     }
 
     private fun onItem(item: FeedItem) {
@@ -211,7 +211,7 @@ class FeedManager(
             if (next) cursor = item.seq
             next
         }
-        if (item.status == STATUS_ACTIVE) arrivalFlow.tryEmit(item)
+        if (item.status == STATUS_ACTIVE) emitArrival(item)
         if (!inOrder) catchUp()
     }
 
@@ -252,7 +252,7 @@ class FeedManager(
                 cursor = maxOf(if (full) 0 else cursor, seq)
                 if (full) emptyList() else newUnread(changed, before)
             }
-            arrived.distinctBy { it.itemId }.forEach { arrivalFlow.tryEmit(byIdNow(it.itemId) ?: it) }
+            arrived.distinctBy { it.itemId }.forEach { emitArrival(byIdNow(it.itemId) ?: it) }
             loadState.value = ListLoad.LOADED
         } catch (e: VaultFailure) {
             if (full && synchronized(lock) { gen == generation }) loadState.value = ListLoad.FAILED
@@ -286,6 +286,11 @@ class FeedManager(
 
     private fun byIdNow(id: String): FeedItem? = synchronized(lock) { byId[id] }
 
+    /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
+    private fun emitArrival(item: FeedItem) {
+        if (!FeedKinds.historyOnly(item.kind)) arrivalFlow.tryEmit(item)
+    }
+
     /** Replaces each item by id, removes the deleted ones, drops what is past retention, and publishes. Under [lock]. */
     private fun apply(changed: List<FeedItem>) {
         if (changed.isEmpty()) {
@@ -294,7 +299,8 @@ class FeedManager(
         }
         val m = byId.toMutableMap()
         for (item in changed) {
-            if (item.status == STATUS_DELETED) m.remove(item.itemId) else m[item.itemId] = item
+            // The History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles") are neither listed nor counted.
+            if (item.status == STATUS_DELETED || FeedKinds.historyOnly(item.kind)) m.remove(item.itemId) else m[item.itemId] = item
         }
         byId = m
         publish()

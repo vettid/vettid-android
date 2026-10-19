@@ -285,14 +285,14 @@ fun HistoryScreen(
                             actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) } },
                         )
                     }
-                    state.entries.isEmpty() && state.filter.isEmpty -> EmptyState(
+                    state.emptyHistory -> EmptyState(
                         icon = Icons.Outlined.History,
                         title = stringResource(R.string.history_empty_title),
                         body = stringResource(R.string.history_empty_body),
                         modifier = Modifier.testTag("history_empty"),
                     )
                     // The one way to clear is "✕ Clear" in the filter row above (owner request 2026-10-09).
-                    state.entries.isEmpty() && state.end -> EmptyState(
+                    state.shown.isEmpty() && state.end -> EmptyState(
                         icon = Icons.Outlined.Search,
                         title = stringResource(R.string.history_no_match_title),
                         body = stringResource(R.string.history_no_match_body),
@@ -543,7 +543,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     // LazyColumn keeps its first visible key in place when rows are inserted above it, so they would sit above the
     // screen's top (owner, 2026-10-09). A list that showed its top shows the new top. Asked during composition, before
     // the list measures the new rows (requestScrollToItem's purpose), so no frame shows the old position.
-    val head = state.entries.firstOrNull()?.seq
+    val head = state.shown.firstOrNull()?.seq
     val shownHead = remember { arrayOf(head) }
     if (head != shownHead[0]) {
         if (list.firstVisibleItemIndex == 0) list.requestScrollToItem(0)
@@ -560,7 +560,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
         if (nearEnd && !state.end) actions.onLoadMore()
     }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("history_list")) {
-        items(state.entries, key = { it.seq }) { e ->
+        items(state.shown, key = { it.seq }) { e ->
             EntryRow(e, RowNames(state.connectionNames, state.itemNames, state.deviceNames), actions.onOpen)
         }
         item(key = "footer") {
@@ -609,8 +609,10 @@ private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
         ?: AuditKinds.signerDetail(e.kind, e.ref)?.let { HistorySigner.text(LocalContext.current, it) }
     // ANDROID-PLAN 0.1.27: the device's name (`vault.unlocked`, a device's `vault.locked`, any entry with `device_id`).
     val device = HistoryDevice.name(e.deviceId, names.devices, stringResource(R.string.history_device_removed))
+    // ANDROID-PLAN 0.1.52 §4 "Event titles": some titles name the connection, device or item.
+    val itemName = AuditKinds.itemOf(e.kind, e.ref)?.let { names.items[it] }
     VettIdListRow(
-        title = HistoryText.title(e.kind),
+        title = HistoryText.title(e.kind, e.ref, EntryNames(connection, device, itemName)),
         supporting = HistoryDevice.supporting(listOf(item, connection, device), stringResource(AuditKinds.categoryLabel(e.category))),
         meta = e.at?.let { Times.short(it) },
         tileIcon = categoryIcon(e.category),

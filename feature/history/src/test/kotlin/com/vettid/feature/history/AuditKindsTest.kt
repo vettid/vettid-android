@@ -37,6 +37,9 @@ class AuditKindsTest {
         "location.history.deleted", "location.history.shared", "location.history.received", "wallet.created",
         "wallet.deleted", "wallet.address_issued", "wallet.signed", "drop.suppressed", "audit.exported",
         "device.signer_bound", "device.signer_changed", "device.signer_refused",
+        // VAULT-MESSAGING 0.49.1, ANDROID-PLAN 0.1.52 §4 "Event titles": the fixed titles.
+        "vault.pin_changed", "device.secret_renewed", "recovery.armed", "recovery.presence_unrecorded",
+        "identity.rotation_failed", "connection.request.approved", "connection.request.declined",
     )
 
     @Test
@@ -133,8 +136,8 @@ class AuditKindsTest {
 
     @Test
     fun droppedSummaryAndUnknown() {
-        assertEquals(AuditKinds.Title.Dropped("rate limited"), AuditKinds.title("drop.rate_limited"))
-        assertEquals(AuditKinds.Title.Dropped("owner check"), AuditKinds.title("drop.owner_check"))
+        assertEquals(AuditKinds.Title.Dropped("peer unknown"), AuditKinds.title("drop.peer_unknown"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_drop_owner_check), AuditKinds.title("drop.owner_check"))
         assertEquals(AuditKinds.Title.Summary(R.string.history_kind_leash_item_read), AuditKinds.title("leash.item.read.summary"))
         assertEquals(AuditKinds.Title.Unknown("zebra.new"), AuditKinds.title("zebra.new"))
         assertEquals(AuditKinds.Title.Unknown("drop."), AuditKinds.title("drop."))

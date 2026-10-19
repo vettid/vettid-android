@@ -215,7 +215,14 @@ class HistoryExportViewModel @Inject constructor(
 
     private fun row(r: AuditRecord, c: ExportContext, devices: Map<String, String>?): ExportRow = ExportRow(
         record = r,
-        label = HistoryText.title(context, r.kind),
+        label = HistoryText.title(
+            context, r.kind, r.ref,
+            EntryNames(
+                connection = r.connectionId?.let { c.connectionNames[it] },
+                device = r.deviceId?.let { id -> devices?.get(id) },
+                item = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] },
+            ),
+        ),
         category = r.category.id,
         connectionName = r.connectionId?.let { c.connectionNames[it] ?: context.getString(R.string.history_connection_removed) },
         deviceName = r.deviceId?.let { id -> devices?.let { it[id] ?: context.getString(R.string.history_device_removed) } },

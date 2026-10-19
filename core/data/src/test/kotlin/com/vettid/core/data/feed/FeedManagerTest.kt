@@ -142,6 +142,33 @@ class FeedManagerTest {
         job.cancel()
     }
 
+    /**
+     * ANDROID-PLAN 0.1.52 §4 "Event titles" (de-duplication): one recovery raises one notification, `recovery.completed`;
+     * `credential.recovered`, `recovery.device_paired` and a PIN change are neither listed, counted nor notified, and the
+     * cursor still moves past them.
+     */
+    @Test
+    fun theHistoryOnlyKindsAreNeitherListedCountedNorArrivals() = runTest {
+        val ops = Ops()
+        val m = opened(ops, item("i1", 1, kind = "vault.pin_changed"), item("i2", 2, kind = "message.received"))
+        assertEquals(listOf("i2"), m.items.value.map { it.itemId })
+        assertEquals(1, m.badge.value.unread)
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i3", 3, kind = "credential.recovered")))
+        m.onEvent(event(item("i4", 4, kind = "recovery.device_paired")))
+        m.onEvent(event(item("i5", 5, kind = "recovery.completed")))
+        assertEquals(5L, m.seq)
+        assertEquals(1, ops.lists.size) // in order: no catch-up
+        assertEquals(listOf("i5"), arrived.map { it.itemId })
+        assertEquals(setOf("i2", "i5"), m.items.value.map { it.itemId }.toSet())
+        assertEquals(2, m.badge.value.unread)
+        // A held-back one does not arrive either.
+        m.replay(event(item("i6", 6, kind = "vault.pin_changed")))
+        assertEquals(listOf("i5"), arrived.map { it.itemId })
+        job.cancel()
+    }
+
     @Test
     fun theOpenReadIsPagedFromTheLastSeqAndDropsDeletedItems() = runTest {
         val ops = Ops()

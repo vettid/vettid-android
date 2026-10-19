@@ -72,13 +72,13 @@ class HistoryDeviceTest {
         assertEquals(1, rule.onAllNodesWithText("Removed device").fetchSemanticsNodes().size)
         // No device: unchanged, the category, no placeholder.
         rule.onNodeWithTag("history_list").performScrollToNode(hasTestTag("history_entry_2"))
-        rule.onNodeWithTag("history_entry_2").assertTextContains("Unlocks and owner checks")
+        rule.onNodeWithTag("history_entry_2").assertTextContains("Unlocks and daily checks")
     }
 
     @Test
     fun withoutTheDeviceListRowsNameNoDevice() {
         list(null)
-        rule.onNodeWithTag("history_entry_4").assertTextContains("Unlocks and owner checks")
+        rule.onNodeWithTag("history_entry_4").assertTextContains("Unlocks and daily checks")
         assertEquals(0, rule.onAllNodesWithText("Removed device").fetchSemanticsNodes().size)
         rule.onNodeWithTag("history_entry_5").assertTextContains("Ada Lovelace")
         assertEquals(0, rule.onAllNodesWithText("Desktop", substring = true).fetchSemanticsNodes().size)

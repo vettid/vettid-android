@@ -16,7 +16,7 @@
     <string name="history_end">Start of your history</string>
 
     <string name="history_category_all">All</string>
-    <string name="history_category_vault_access">Unlocks and owner checks</string>
+    <string name="history_category_vault_access">Unlocks and daily checks</string>
     <string name="history_category_security">Security</string>
     <string name="history_category_devices">Devices</string>
     <string name="history_category_connections">Connections</string>

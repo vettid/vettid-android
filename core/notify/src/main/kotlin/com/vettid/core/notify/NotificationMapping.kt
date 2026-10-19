@@ -28,6 +28,8 @@ object NotificationMapping {
     /** The channel [item] notifies on; null when it does not notify. */
     fun channel(item: FeedItem): String? = when {
         item.priority == FeedManager.PRIORITY_LOW || item.kind == "guide" -> null
+        // ANDROID-PLAN 0.1.52 §4 "Event titles": one notification per recovery; a PIN change is History only.
+        FeedKinds.historyOnly(item.kind) -> null
         item.kind in MESSAGES -> Channels.MESSAGES
         item.kind in REQUESTS -> Channels.REQUESTS
         item.kind in CALLS -> Channels.CALLS
