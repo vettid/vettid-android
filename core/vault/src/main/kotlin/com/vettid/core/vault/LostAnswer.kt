@@ -110,7 +110,8 @@ suspend fun VaultApi.credentialVersionAt(): Pair<CredentialInfo, Instant> {
 }
 
 /**
- * (§11.14.9 step 2) How many PIN or password changes and renews this client has sent ([CredentialOps.secretGeneration]).
+ * (§11.14.9 step 2) How many PIN or password changes, renews and resets this client has sent
+ * ([CredentialOps.secretGeneration]; a reset counts as it goes out and again once it ended).
  * Read before the phone's epoch and the typed secrets are used, and passed as `since`: an operation is refused, with
  * nothing sent, when one went out in between.
  */

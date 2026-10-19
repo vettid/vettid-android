@@ -2327,6 +2327,91 @@ class VaultDeviceTest {
     }
 
     /**
+     * (VAULT-MESSAGING 0.48.0 §11.14.9 step 2) A `credential.reset` counts as a secret sent, as it goes out and again once
+     * it ended: an owner check that read the count before the reset went out, and one that read it while the reset was
+     * out, are both refused with nothing sent once the reset is answered, although no gate is set. Typed again afterwards,
+     * an operation goes as usual.
+     */
+    @Test
+    fun anOperationQueuedBehindAResetIsRefused() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            val gen = api.credentialGeneration
+            val reset = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            // Read before the reset goes out (it holds the lock, waiting for its UTK).
+            val before = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "old password") } }
+            kotlinx.coroutines.delay(200)
+            assertEquals(gen, api.credentialGeneration)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445568d1", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            assertEquals("credential.reset", req.type)
+            assertEquals("counted as it went out", gen + 1, api.credentialGeneration)
+            // Read while the reset is out.
+            val during = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "old password") } }
+            kotlinx.coroutines.delay(200)
+            d.handle(v.seal(req.type, """{"credential":"TkVX","version":1,"key":"key-two","utks":[]}""", re = req.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            assertTrue(reset.await().isSuccess)
+            assertEquals("counted again once it ended", gen + 2, api.credentialGeneration)
+            assertTrue(before.await().exceptionOrNull() is CredentialUnsettledException)
+            assertTrue(during.await().exceptionOrNull() is CredentialUnsettledException)
+            assertNull("neither owner check sent", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertEquals("key-two", d.credentialKey)
+            val again = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "new password!") } }
+            assertEquals("credential.utk.get", v.open(nextDeposit().second).type)
+            again.cancel()
+        }
+    }
+
+    /**
+     * A reset that is refused, or gets no answer, also ended: an operation queued behind it is refused with nothing sent.
+     * A reset stopped before it went out (no UTK) counts nothing.
+     */
+    @Test
+    fun aResetThatEndedWithoutOkStillRefusesWhatWaitedBehindIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(400))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            val gen = api.credentialGeneration
+            // Refused: counted out and back.
+            val reset = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445568e1", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            assertEquals("credential.reset", req.type)
+            val waiting = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "old password") } }
+            kotlinx.coroutines.delay(100)
+            d.handle(v.error(req.id, req.type, "bad_password"))
+            assertEquals("bad_password", (reset.await().exceptionOrNull() as VaultOpException).code)
+            assertTrue(waiting.await().exceptionOrNull() is CredentialUnsettledException)
+            assertEquals(gen + 2, api.credentialGeneration)
+            assertNull("the owner check not sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // Unanswered: counted out and back as well.
+            val lost = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            val get2 = v.open(nextDeposit().second)
+            d.handle(v.seal(get2.type, """{"utks":[${utkJson("00112233445568e2", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
+            val sends = (1..3).map { v.open(nextDeposit().second) }
+            assertTrue(sends.all { it.type == "credential.reset" })
+            assertTrue(lost.await().isFailure)
+            assertEquals(gen + 4, api.credentialGeneration)
+            // Stopped before it went out (the UTK fetch refused): nothing counted.
+            val stopped = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            val get3 = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get3.type)
+            d.handle(v.error(get3.id, get3.type, "busy"))
+            assertTrue(stopped.await().isFailure)
+            assertEquals(gen + 4, api.credentialGeneration)
+        }
+    }
+
+    /**
      * (The PIN change's own reads) The caller reads [credentialGeneration] before it reads the phone's epoch; a renew
      * that goes out after that read refuses the change under the lock with nothing sent.
      */

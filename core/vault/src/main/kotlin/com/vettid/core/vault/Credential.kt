@@ -208,11 +208,40 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> = serialized(payload, null) {
         try {
-            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered, onRefused)
+            sentCounted(type, onSending) { sending ->
+                sealedWith(type, takeUtk(), true, payload, reply, extra, sending, onAnswered, onRefused)
+            }
         } catch (e: VaultOpException) {
             if (e.code != CODE_STALE || type in ChangeTypes.ALL) throw e
             fetch()
-            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered, onRefused)
+            sentCounted(type, onSending) { sending ->
+                sealedWith(type, takeUtk(), true, payload, reply, extra, sending, onAnswered, onRefused)
+            }
+        }
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.48.0 §11.14.9 step 2) A `credential.reset` replaces the password and the credential key, so it
+     * counts as a secret sent ([secretGeneration]): once as it goes out (after [onSending] stored it) and again once it
+     * ended (answered, refused or unanswered), both under [VaultDevice.credentialLock]. An operation that read the count
+     * before the reset went out, or while it was out, is then refused with nothing sent when it gets the lock. A reset
+     * stopped before it went out counts nothing. Any other [type] runs [send] with [onSending] as it is.
+     */
+    private suspend fun <T> sentCounted(
+        type: String,
+        onSending: (suspend (SentRequest) -> Unit)?,
+        send: suspend (onSending: (suspend (SentRequest) -> Unit)?) -> T,
+    ): T {
+        if (type != TYPE_RESET) return send(onSending)
+        var sent = false
+        try {
+            return send { r ->
+                onSending?.invoke(r)
+                secretGeneration++
+                sent = true
+            }
+        } finally {
+            if (sent) secretGeneration++
         }
     }
 
@@ -387,7 +416,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
 
     /**
      * (§11.14.9 step 2) How many PIN or password changes and renews this client has sent (counted once each is stored
-     * and about to go out, under [VaultDevice.credentialLock]). An operation whose PIN or password was typed, or whose
+     * and about to go out, under [VaultDevice.credentialLock]); a `credential.reset` counts as it goes out and again
+     * once it ended ([sentCounted], 0.48.0). An operation whose PIN or password was typed, or whose
      * phone epoch was read, before one of them went out may carry what is no longer current: it is refused with nothing
      * sent ([serialized]), so that it never spends a failed owner check or a password attempt.
      */
@@ -521,7 +551,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         const val TYPE_ROTATE = "credential.rotate"
 
         /** Operations whose answer carries a credential under a new key (or one this phone has not held before). */
-        val KEY_REPLACING = setOf(TYPE_ROTATE, "credential.reset", "credential.create", "credential.recover")
+        const val TYPE_RESET = "credential.reset"
+        val KEY_REPLACING = setOf(TYPE_ROTATE, TYPE_RESET, "credential.create", "credential.recover")
 
         /** The first send and the two automatic resends of §8.6. */
         const val CHANGE_SENDS = 3
