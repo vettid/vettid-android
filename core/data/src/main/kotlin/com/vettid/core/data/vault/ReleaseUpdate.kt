@@ -337,15 +337,18 @@ class ReleaseUpdateManager(
         // The PIN as the keypad took it: whatever moves which PIN the vault expects before an unlock goes out stops it.
         val typed = taken(pin, generation)
         progressFlow.value = UpdateProgress(UpdateStep.LOCKING, offer.current, offer.target)
-        job = scope.launch {
-            try {
-                ops.lock()
-            } catch (e: VaultFailure) {
-                // Nothing changed: the vault was not locked, or not everywhere; the member decides again.
-                set { it.copy(step = UpdateStep.FAILED, failure = e.kind, failureCode = e.code, vaultOpen = true) }
-                return@launch
+        // Checked before the lock too: a PIN taken before a change neither locks the vault nor is sent.
+        if (!refusedAsTakenBefore(typed, vaultOpen = true)) {
+            job = scope.launch {
+                try {
+                    ops.lock()
+                } catch (e: VaultFailure) {
+                    // Nothing changed: the vault was not locked, or not everywhere; the member decides again.
+                    set { it.copy(step = UpdateStep.FAILED, failure = e.kind, failureCode = e.code, vaultOpen = true) }
+                    return@launch
+                }
+                approve(typed)
             }
-            approve(typed)
         }
         return true
     }
@@ -358,6 +361,7 @@ class ReleaseUpdateManager(
             UpdateStep.BAD_PIN -> launch { approve(typed) }
             UpdateStep.FAILED -> launch {
                 if (p.vaultOpen) {
+                    if (refusedAsTakenBefore(typed, vaultOpen = true)) return@launch
                     try {
                         set { it.copy(step = UpdateStep.LOCKING, failure = null, failureCode = null) }
                         ops.lock()
@@ -397,6 +401,21 @@ class ReleaseUpdateManager(
     }
 
     private fun running(): Boolean = job?.isActive == true
+
+    /**
+     * (§11.14.9 step 2; chosen) [typed] was taken before something moved which PIN the vault expects: the step fails at
+     * once, before any lock, with nothing sent ([CODE_PIN_TAKEN_BEFORE]); [vaultOpen]: the vault is as it was.
+     */
+    private fun refusedAsTakenBefore(typed: TakenPin, vaultOpen: Boolean): Boolean {
+        if (typed.generation == ops.pinGeneration()) return false
+        set {
+            it.copy(
+                step = UpdateStep.FAILED, failure = FailureKind.CREDENTIAL_UNSETTLED, failureCode = CODE_PIN_TAKEN_BEFORE,
+                vaultOpen = vaultOpen,
+            )
+        }
+        return true
+    }
 
     /** [pin] with [generation], the [pinGeneration] when the keypad became usable; else read as the screen hands it over. */
     private fun taken(pin: String, generation: Int?): TakenPin = TakenPin(pin, generation ?: ops.pinGeneration())

@@ -433,17 +433,23 @@ class ReleaseUpdateManagerTest {
         ops.generation++ // a PIN change began while the PIN was typed
         assertTrue(m.start("2468", offer, reading))
         runCurrent()
-        assertEquals(listOf("lock", "refused"), ops.log)
-        assertTrue("no unlock sent", ops.unlocks.isEmpty())
+        assertTrue("refused before the lock: nothing locked, nothing sent", ops.log.isEmpty())
+        assertTrue(ops.taken.isEmpty())
         val p = m.progress.value!!
         assertEquals(UpdateStep.FAILED, p.step)
         assertEquals(FailureKind.CREDENTIAL_UNSETTLED, p.failure)
         assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, p.failureCode)
+        assertTrue("the vault is as it was", p.vaultOpen)
         assertTrue(p.waiting)
+        // "Try again" with the same old reading: refused again before the lock.
+        m.retry("2468", reading)
+        runCurrent()
+        assertTrue(ops.log.isEmpty())
         m.retry("1357", m.pinGeneration)
         runCurrent()
+        assertEquals(listOf("lock", "unlock"), ops.log)
         assertEquals(listOf(Call("1357", 5, false)), ops.unlocks)
-        assertEquals(listOf(0, 1), ops.taken)
+        assertEquals(listOf(1), ops.taken)
     }
 
     /** The reopen after `moved` goes with the approval's reading: a change decided in between stops it too. */

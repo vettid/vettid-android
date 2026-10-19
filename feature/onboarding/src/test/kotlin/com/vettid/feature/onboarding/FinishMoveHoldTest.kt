@@ -50,8 +50,8 @@ class FinishMoveHoldTest {
         val vm = FinishMoveViewModel(vault)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.pinAllowed)
-        vault.pinGeneration = 6 // a PIN change began while the member typed
         vm.setPin("40281795")
+        vault.pinGeneration = 6 // a PIN change began while the member typed
         vm.finish()
         advanceUntilIdle()
         assertEquals(FailureKind.CREDENTIAL_UNSETTLED, vm.uiState.value.failure)

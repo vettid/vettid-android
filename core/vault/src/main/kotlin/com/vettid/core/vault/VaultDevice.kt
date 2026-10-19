@@ -545,15 +545,32 @@ class VaultDevice private constructor(
         val recovering = st.vault == null && st.recovery != null
         if (st.vault == null && !recovering) throw VaultStateException("not paired with a vault")
         // A recovering app does not know the vault's relay key yet: an open token for its mailbox (§11.11.5).
+        val issuedBefore = st.issuedExpMs
         val tok = if (recovering) own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES)) else mintForVault()
         // §11.7.1 (0.27.0): the device key's chain goes with every unlock until the vault has shown this app its
         // signer in device.list ([signerSeen]); a vault that has recorded one ignores it.
         val opts = options.copy(sendChain = !st.signerSeen)
         val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), opts, now())
         pendingUnlock = b.pending
+        discardable = b to issuedBefore
         save()
         b
     }
+
+    /** The unlock last built and the standing token's issue before it ([discardUnlock]). */
+    private var discardable: Pair<BuiltUnlock, Long>? = null
+
+    override suspend fun discardUnlock(built: BuiltUnlock) = lock.withLock {
+        val (b, issuedBefore) = discardable ?: return@withLock
+        if (b !== built) return@withLock
+        discardable = null
+        if (pendingUnlock === built.pending) pendingUnlock = null
+        st.issuedExpMs = issuedBefore
+        save()
+    }
+
+    /** (Tests) When the standing token this device last issued to the vault expires, as recorded; 0 for none. */
+    internal val issuedTokenExpMs: Long get() = st.issuedExpMs
 
     override suspend fun openUnlockResult(raw: ByteArray): UnlockResult = lock.withLock {
         val p = pendingUnlock ?: throw VaultStateException("no pending unlock")

@@ -78,8 +78,9 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
     /** Every change of the state, with the keypad's reading following whether the PIN field can be used. */
     private fun set(f: (FinishMoveUiState) -> FinishMoveUiState) {
         // Digits typed while held were typed before the hold's decision: they go with it.
+        val wasEmpty = state.value.pin.isEmpty()
         state.update { s -> f(s).let { n -> if (n.held != null && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
-        keypad.follow(state.value.pinAllowed)
+        keypad.follow(state.value.pinAllowed, wasEmpty)
     }
 
     init {

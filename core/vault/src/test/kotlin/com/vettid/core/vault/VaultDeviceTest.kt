@@ -1128,6 +1128,58 @@ class VaultDeviceTest {
      * app a signer in `device.list`; it stops once it has (kept across a restart), and starts again after a new
      * attestation (a new key) and after an unlock answered `signer_refused`.
      */
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2) An unlock built and then not posted (its PIN may no longer be the one the vault
+     * expects) leaves nothing behind: the standing token's issue goes back to what it was, kept across a restart, and no
+     * pending unlock remains.
+     */
+    @Test
+    fun aDiscardedUnlockLeavesNothingRecorded() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, _) = pairedDevice(this, store, secrets)
+            val pcr0 = "a3".repeat(48)
+            val etk = KemPrivateKey.generate()
+            val pair = java.security.KeyPairGenerator.getInstance("EC").apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+            val entry = JsonBuilder().uint("release", 3).string("pcr0", pcr0).string("pcr1", "13".repeat(48)).string("pcr2", "23".repeat(48))
+                .string("seal_key", "arn:aws:kms:us-east-1:111122223333:key/test").string("status", "active")
+                .string("published_at", "2026-10-01T00:00:00Z").string("notes", "https://vettid.org/releases/3").build()
+            val doc = JsonBuilder().uint("v", 1).uint("serial", 7).string("issued_at", "2026-10-01T00:00:00Z").raw("releases", "[$entry]").bytes()
+            val der = java.security.Signature.getInstance("SHA256withECDSA").run {
+                initSign(pair.private)
+                update(com.vettid.core.attestation.manifest.ReleaseManifest.LABEL.toByteArray())
+                update(0)
+                update(doc)
+                sign()
+            }
+            val raw = org.bouncycastle.asn1.ASN1Sequence.getInstance(der).let { seq ->
+                seq.map { org.bouncycastle.util.BigIntegers.asUnsignedByteArray(32, (it as org.bouncycastle.asn1.ASN1Integer).value) }.reduce { a, b -> a + b }
+            }
+            val key = com.vettid.core.attestation.manifest.ManifestKey(pair.public.encoded)
+            val served = JsonBuilder().string("manifest", Base64s.encodeStd(doc)).base64("sig", raw).string("key_id", key.keyId).bytes()
+            val manifest = com.vettid.core.attestation.manifest.ManifestVerifier(listOf(key)).verify(served)
+            val enclave = com.vettid.core.attestation.VerifiedEnclave(
+                com.vettid.core.crypto.altchan.Descriptor.parse(
+                    com.vettid.core.crypto.altchan.Descriptor.marshal("inst-a", etk.publicKey, pcr0, Instant.now().plusSeconds(3600)),
+                ),
+                com.vettid.core.attestation.nitro.Measurements(pcr0, "13".repeat(48), "23".repeat(48)),
+                manifest.byPcr0(pcr0)!!,
+            )
+            val att = ChainAttester().apply { attest(ByteArray(32)) }
+
+            val options = com.vettid.core.altchan.UnlockOptions()
+            val before = d.issuedTokenExpMs
+            val b = d.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)
+            assertTrue("the build issued a standing token", d.issuedTokenExpMs != before)
+            d.discardUnlock(b)
+            assertEquals(before, d.issuedTokenExpMs)
+            assertEquals(before, VaultDevice.load(config(store), secrets)!!.issuedTokenExpMs)
+            val e = runCatching { d.openUnlockResult(ByteArray(8)) }.exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.message!!.contains("no pending unlock"))
+        }
+    }
+
     @Test
     fun unlocksCarryTheChainUntilTheVaultShowsASigner() = runBlocking<Unit> {
         withTimeout(30_000) {

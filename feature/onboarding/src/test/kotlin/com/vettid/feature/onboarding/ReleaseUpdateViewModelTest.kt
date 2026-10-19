@@ -185,8 +185,8 @@ class ReleaseUpdateViewModelTest {
         val first = FakeReleaseUpdates(offer).apply { pinGeneration = 3 }
         val open = ReleaseUpdateViewModel(first, vault, FakeReleaseNotes())
         advanceUntilIdle()
-        first.pinGeneration = 4
         open.setPin("2468")
+        first.pinGeneration = 4 // while the PIN is typed
         open.approve()
         assertEquals(listOf<Int?>(3), first.generations)
 
@@ -199,8 +199,8 @@ class ReleaseUpdateViewModelTest {
         updates.changeHold.value = null
         advanceUntilIdle()
         assertTrue(held.uiState.value.pinAllowed)
-        updates.pinGeneration = 5
         held.setPin("1357")
+        updates.pinGeneration = 5
         held.approve()
         assertEquals(listOf("start:1357:5"), updates.calls)
         assertEquals(listOf<Int?>(4), updates.generations)
@@ -234,12 +234,12 @@ class ReleaseUpdateViewModelTest {
         updates.progress.value =
             UpdateProgress(UpdateStep.NEW_RELEASE_FAILED, rel(4), rel(5), failure = FailureKind.NO_RESPONSE, canAbandon = true)
         advanceUntilIdle()
-        updates.pinGeneration = 3
         vm.setPin("2468")
+        updates.pinGeneration = 3
         vm.retry()
         // Read again as the keypad empties (it stays open: the fake's step does not move).
-        updates.pinGeneration = 4
         vm.setPin("2468")
+        updates.pinGeneration = 4
         vm.askAbandon()
         vm.confirmAbandon()
         assertEquals(listOf("retry:2468", "abandon:2468"), updates.calls)
@@ -253,11 +253,23 @@ class ReleaseUpdateViewModelTest {
         val vm = ReleaseUpdateFlowViewModel(updates)
         updates.progress.value = UpdateProgress(UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NETWORK)
         advanceUntilIdle()
-        updates.pinGeneration = 1
         vm.setPin("2468")
+        updates.pinGeneration = 1
         vm.retry()
         vm.setPin("2468")
         vm.retry()
         assertEquals(listOf<Int?>(0, 1), updates.generations)
+    }
+
+    /** A change after the keypad opened but before the first digit: the reading is taken again as typing starts. */
+    @Test
+    fun theReadingIsRenewedWhileTheKeypadIsEmpty() = runTest {
+        val updates = FakeReleaseUpdates(offer).apply { pinGeneration = 3 }
+        val vm = ReleaseUpdateViewModel(updates, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        updates.pinGeneration = 4
+        vm.setPin("2468")
+        vm.approve()
+        assertEquals(listOf<Int?>(4), updates.generations)
     }
 }

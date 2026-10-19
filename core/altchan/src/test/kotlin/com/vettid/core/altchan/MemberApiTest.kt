@@ -221,6 +221,8 @@ class MemberApiTest {
         var state = AltState()
         var vaultId: String? = null
         var pending: PendingUnlock? = null
+        var built = 0
+        val discarded = mutableListOf<BuiltUnlock>()
         val ik = Ed25519PrivateKey.generate()
         private val relayKey = Ed25519PrivateKey.generate()
         val app = AppIdentity(ik.publicKey, kem.publicKey, RelayAddr("https://relay.vettid.test", Mailbox.id(relayKey.publicKey), relayKey.publicKey), "phone")
@@ -257,7 +259,13 @@ class MemberApiTest {
         ): BuiltUnlock {
             val b = AltRequests.buildUnlock(userGuid, vaultId!!, pin, enclave, manifest, attester, ik, "v4.public.tok", state, options, Instant.now())
             pending = b.pending
+            built++
             return b
+        }
+
+        override suspend fun discardUnlock(built: BuiltUnlock) {
+            discarded += built
+            if (pending == built.pending) pending = null
         }
 
         override suspend fun openUnlockResult(raw: ByteArray): UnlockResult {
@@ -304,9 +312,9 @@ class MemberApiTest {
     }
 
     /**
-     * (VAULT-MESSAGING §11.14.9 step 2) The unlock's `beforePost` runs right before the request is posted: a throw stops
-     * it with nothing posted (a PIN typed on the update's or the move's own screen before a change); otherwise once per
-     * post, and the unlock goes as usual.
+     * (VAULT-MESSAGING §11.14.9 step 2) The unlock's `beforePost` runs before the request is built and again right before
+     * it is posted: a throw before the build builds nothing (no token minted, nothing recorded); a throw between the build
+     * and the post posts nothing and discards what the build recorded; otherwise the unlock goes as usual.
      */
     @Test
     fun beforePostRunsBeforeEachUnlockPostAndAThrowPostsNothing() = runBlocking<Unit> {
@@ -320,9 +328,19 @@ class MemberApiTest {
         }
         assertEquals("pin taken before a change", e.message)
         assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        assertEquals("nothing built", 0, p.built)
+        // Moved while the request was built: not posted, and what the build recorded is discarded.
+        var calls = 0
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { check(++calls < 2) { "moved" } }) }
+        }
+        assertEquals(1, p.built)
+        assertEquals(1, p.discarded.size)
+        assertEquals(null, p.pending)
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
         var checks = 0
         assertTrue(f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { checks++ }).ok)
-        assertEquals(1, checks)
+        assertEquals("before the build and before the post", 2, checks)
         assertEquals(1, log.count { it == "POST /api/vault/unlock" })
     }
 

@@ -86,8 +86,9 @@ class ReleaseUpdateViewModel @Inject constructor(
 
     /** Every change of the state, with the keypad's reading following whether the PIN field can be used. */
     private fun set(f: (ReleaseUpdateUiState) -> ReleaseUpdateUiState) {
+        val wasEmpty = state.value.pin.isEmpty()
         state.update { s -> f(s).let { n -> if (!n.pinAllowed && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
-        keypad.follow(state.value.pinAllowed)
+        keypad.follow(state.value.pinAllowed, wasEmpty)
     }
 
     init {
@@ -183,8 +184,9 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
 
     /** Every change of the state, with the keypad's reading following whether the PIN can be typed. */
     private fun set(f: (ReleaseUpdateFlowUiState) -> ReleaseUpdateFlowUiState) {
+        val wasEmpty = state.value.pin.isEmpty()
         state.update { s -> f(s).let { n -> if (!n.pinAllowed && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
-        keypad.follow(state.value.pinAllowed)
+        keypad.follow(state.value.pinAllowed, wasEmpty)
     }
 
     init {
@@ -270,11 +272,15 @@ internal class KeypadReading(private val read: () -> Int) {
         return taken
     }
 
-    /** The keypad can be used ([allowed]) or not. */
-    fun follow(allowed: Boolean) {
+    /**
+     * The keypad can be used ([allowed]) or not. [wasEmpty]: no digit was typed before this change, so the reading is
+     * taken afresh (the PIN is typed from here on): a change between the keypad's opening and the first digit is then
+     * not counted against the PIN.
+     */
+    fun follow(allowed: Boolean, wasEmpty: Boolean = false) {
         if (!allowed) {
             generation = null
-        } else if (generation == null) {
+        } else if (generation == null || wasEmpty) {
             generation = read()
         }
     }

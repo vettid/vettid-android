@@ -1710,7 +1710,9 @@ class VaultManager(
             )
             val a = o.attempt
             if (abandon && a is UnlockAttempt.Failed && a.code == MemberApiException.VAULT_BUSY) {
-                // §11.10.5: an instance of the new release holds the vault; lock it first, then return.
+                // §11.10.5: an instance of the new release holds the vault; lock it first, then return. Not with a PIN
+                // taken before a change: nothing is locked or sent then.
+                pinTakenBefore(pin.generation)?.let { return UpdateStepResult.Failed(it.kind, it.code) }
                 runCatching { this@VaultManager.lock() }
                 o = unlockStep(
                     pin.pin, opts, followMove = false, holderApp = true, release = release, onStarting = onStarting,
@@ -2536,11 +2538,14 @@ class VaultManager(
 
     override fun acknowledgeFinishMoveFailure() = finishMoveRunner.clearFailure()
 
+    @Suppress("ReturnCount") // nothing sent: held, or a PIN taken before a change
     override suspend fun finishMove(pin: String, taken: Int?): UnlockAttempt {
         // (0.45.0 §11.14.9 step 2; N2) No lock and unlock with a PIN typed outside the two-step unlock while a PIN or
         // password change is unresolved or the PIN uncertain: nothing is sent, and "still checking" is said.
         changeHoldFlow.value?.let { return UnlockAttempt.Failed(it, ChangeResolver.CODE_UNRESOLVED) }
-        // (§11.14.9 step 2; chosen) The PIN as the screen's keypad took it; without a reading, taken now.
+        // (§11.14.9 step 2; chosen) The PIN as the screen's keypad took it; without a reading, taken now. A PIN taken
+        // before a change neither locks the vault nor is sent (checked again inside the unlock, after the lock).
+        pinTakenBefore(taken)?.let { return UnlockAttempt.Failed(it.kind, it.code) }
         return finishMoveRunner.run(pin, taken ?: record.pinGeneration)
     }
 
