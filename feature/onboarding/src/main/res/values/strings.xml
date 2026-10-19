@@ -42,7 +42,7 @@
     <string name="onboarding_elsewhere_transfer_body">Move VettID with a direct transfer: the other phone shows a code, this phone scans it, and you approve there with your PIN and credential password. No waiting.</string>
     <string name="onboarding_elsewhere_transfer">Move from my old phone</string>
     <string name="onboarding_elsewhere_recovery_title">Lost it?</string>
-    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After %1$s it shows a code that this phone scans; then your PIN and credential password move the vault here, and the old phone erases VettID the next time it reaches your vault.</string>
+    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After 24 hours it shows a code that this phone scans; then your PIN and credential password move the vault here, and the old phone erases VettID the next time it reaches your vault.</string>
     <string name="onboarding_elsewhere_recover">Recover my vault</string>
     <string name="onboarding_elsewhere_open">Open the account site</string>
     <string name="onboarding_elsewhere_anyway">Set up a new vault anyway</string>

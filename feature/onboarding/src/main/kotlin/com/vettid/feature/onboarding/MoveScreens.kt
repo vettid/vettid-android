@@ -55,6 +55,7 @@ import com.vettid.core.ui.components.visibleSecretKeyboard
 import com.vettid.core.ui.components.rememberCameraPermission
 import com.vettid.core.ui.format.Durations
 import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -129,7 +130,7 @@ private fun Failure(kind: FailureKind?, text: String? = null, modifier: Modifier
     NoticeCard(
         NoticeKind.URGENT,
         stringResource(R.string.recover_failed_title),
-        text ?: stringResource(kind!!.messageRes()),
+        text ?: failureText(kind!!.messageRes()),
         modifier.testTag("error"),
     )
 }
@@ -417,7 +418,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                 NoticeCard(
                     if (blocked) NoticeKind.URGENT else NoticeKind.WARNING,
                     stringResource(R.string.recover_pin_title),
-                    stringResource(it.messageRes()),
+                    failureText(it.messageRes()),
                     Modifier.testTag("preflight_error"),
                 )
             }

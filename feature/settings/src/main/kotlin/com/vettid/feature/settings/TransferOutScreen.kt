@@ -51,6 +51,7 @@ import com.vettid.core.ui.components.SafetyCode
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.StagingTimeNote
 import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 import kotlinx.coroutines.launch
@@ -332,7 +333,7 @@ private fun TransferError(state: TransferOutUiState) {
     val text = when {
         state.errorCode == "exists" -> stringResource(R.string.settings_transfer_exists)
         kind == FailureKind.CREDENTIAL_FROZEN || kind == FailureKind.ROTATION_REQUIRED -> stringResource(R.string.settings_transfer_alarm)
-        else -> stringResource(kind.messageRes())
+        else -> failureText(kind.messageRes())
     }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(NoticeKind.URGENT, stringResource(R.string.settings_transfer_title), text, Modifier.testTag("transfer_error"))

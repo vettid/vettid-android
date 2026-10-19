@@ -36,6 +36,7 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PasswordRuleLine
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.StrengthMeter
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -186,7 +187,7 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.password, actions.setPassword, stringResource(R.string.credential_password_new),
-            error = if (state.newRules) null else state.problem?.let { stringResource(it.messageRes()) },
+            error = if (state.newRules) null else state.problem?.let { failureText(it.messageRes()) },
             imeAction = ImeAction.Next,
         )
         Spacer(Modifier.height(Spacing.s))
@@ -216,7 +217,7 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
         state.error?.let {
             Spacer(Modifier.height(Spacing.l))
             val title = stringResource(R.string.credential_new_title)
-            NoticeCard(NoticeKind.URGENT, title, stringResource(it.messageRes()), Modifier.testTag("error"))
+            NoticeCard(NoticeKind.URGENT, title, failureText(it.messageRes()), Modifier.testTag("error"))
         }
     }
     if (state.confirming) {

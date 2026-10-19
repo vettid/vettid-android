@@ -29,6 +29,7 @@ import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.components.SettingsSwitchRow
 import com.vettid.core.ui.format.StagingTimeNote
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledSettingText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -200,7 +201,7 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
     state.error?.let {
         ConfirmDialog(
             title = stringResource(R.string.settings_owner_check),
-            text = stringResource(it.messageRes()),
+            text = failureText(it.messageRes()),
             confirmLabel = stringResource(R.string.settings_done),
             onConfirm = actions.dismissError,
             onDismiss = actions.dismissError,

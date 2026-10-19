@@ -1,5 +1,6 @@
 package com.vettid.core.ui.format
 
+import androidx.annotation.StringRes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -13,8 +14,8 @@ import com.vettid.core.ui.R
 /**
  * Durations in words, computed from seconds (STAGING-TIME-SCALE §5.2, ANDROID-PLAN 0.1.44): no text hard-codes "24
  * hours" or "7 days" for a wait the vault's time scale divides. Two or more whole days are days, whole hours hours (so
- * a day is "24 hours", as the texts always said); anything else is in minutes, rounded up (2.5 minutes is "3
- * minutes"), and under a minute in seconds.
+ * a day is "24 hours", as the texts always said); from 10 minutes anything else is in whole minutes, rounded up; under
+ * 10 minutes in seconds (2.5 minutes is "150 seconds").
  */
 object Durations {
     enum class Unit { DAYS, HOURS, MINUTES, SECONDS }
@@ -25,11 +26,13 @@ object Durations {
         return when {
             s >= 2 * DAY && s % DAY == 0L -> Unit.DAYS to s / DAY
             s >= HOUR && s % HOUR == 0L -> Unit.HOURS to s / HOUR
-            s >= MINUTE -> Unit.MINUTES to (s + MINUTE - 1) / MINUTE
+            s >= SECONDS_UP_TO -> Unit.MINUTES to (s + MINUTE - 1) / MINUTE
             else -> Unit.SECONDS to s
         }
     }
 
+    /** Under 10 minutes a duration is said in seconds ("150 seconds"), as on iOS. */
+    const val SECONDS_UP_TO = 600L
     const val MINUTE = 60L
     const val HOUR = 3_600L
     const val DAY = 86_400L
@@ -55,13 +58,33 @@ val LocalTimeScale = compositionLocalOf { UiTimeScale() }
 @Composable
 fun scaledDurationText(realSeconds: Long): String = durationText(LocalTimeScale.current.runs(realSeconds))
 
+/**
+ * The staging note as a paragraph to add to a text that cannot hold the composable (a dialog's, a banner's): "" unless a
+ * staging build shows it.
+ */
+@Composable
+fun stagingNoteSuffix(): String =
+    if (LocalTimeScale.current.stagingNote) "\n\n" + stringResource(R.string.core_ui_time_scale_staging) else ""
+
 /** [StagingTimeNote] when the app's root says a staging build shows it ([UiTimeScale.stagingNote]). */
 @Composable
 fun StagingTimeNoteIfShown(modifier: Modifier = Modifier) {
     if (LocalTimeScale.current.stagingNote) StagingTimeNote(modifier)
 }
 
-/** [seconds] in words: "7 days", "1 hour", "3 minutes". */
+/**
+ * A failure's text ([res]: `FailureKind.messageRes()`), with the recovery's waits a text may name: the code delay
+ * (`%1$s`, 24 hours) and the end of the quiet period (`%2$s`, 3 days), both divided by the vault's time scale. A text
+ * without them ignores them.
+ */
+@Composable
+fun failureText(@StringRes res: Int): String =
+    stringResource(res, scaledDurationText(Durations.DAY), scaledDurationText(RECOVERY_QUIET_S))
+
+/** The recovery quiet period in real time (VAULT-MESSAGING §11.14.5: 72 h), a wait the time scale divides (S7). */
+const val RECOVERY_QUIET_S = 259_200L
+
+/** [seconds] in words: "7 days", "24 hours", "150 seconds". */
 @Composable
 fun durationText(seconds: Long): String {
     val (unit, n) = Durations.parts(seconds)

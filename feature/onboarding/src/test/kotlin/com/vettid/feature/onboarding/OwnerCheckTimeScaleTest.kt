@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onNodeWithText
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.TimeScaleView
+import com.vettid.core.data.vault.messageRes
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +41,23 @@ class OwnerCheckTimeScaleTest {
         show(TimeScaleView(scale = 24, known = true, stagingBuild = true))
         rule.onNodeWithText("Your next check is then due 1 hour from now.", substring = true).assertExists()
         rule.onNodeWithTag("staging_time_note").assertExists()
+    }
+
+    /** The lost-keys text names the recovery's waits from seconds: "24 hours to 3 days", "1 hour to 3 hours" at 24. */
+    @Test
+    fun theLostKeysTextComputesTheRecoveryWaits() {
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.vettid.core.ui.format.LocalTimeScale provides com.vettid.core.ui.format.UiTimeScale(24, stagingNote = true),
+            ) {
+                androidx.compose.material3.Text(
+                    com.vettid.core.ui.format.failureText(com.vettid.core.data.vault.FailureKind.DEVICE_SECRET.messageRes()) +
+                        com.vettid.core.ui.format.stagingNoteSuffix(),
+                )
+            }
+        }
+        rule.onNodeWithText("It takes 1 hour to 3 hours, and you need", substring = true).assertExists()
+        rule.onNodeWithText("Staging: 1 day = 1 hour", substring = true).assertExists()
     }
 
     @Test

@@ -52,6 +52,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -176,7 +177,7 @@ fun HistoryExportContent(step: ExportStep, words: ExportFilterWords, actions: Hi
             val body = if (step.saveFailed) {
                 stringResource(R.string.history_export_save_failed)
             } else {
-                stringResource((step.kind ?: FailureKind.OTHER).messageRes())
+                failureText((step.kind ?: FailureKind.OTHER).messageRes())
             }
             val extra = if (step.kind == FailureKind.OWNER_CHECK_REQUIRED) {
                 stringResource(R.string.history_export_owner_check) to actions.onOwnerCheck
@@ -313,7 +314,7 @@ private fun PinStep(step: ExportStep.Pin, actions: HistoryExportActions, modifie
             waiting > 0 -> stringResource(R.string.history_export_pin_backoff, waiting)
             step.error == FailureKind.BAD_PIN -> stringResource(R.string.history_export_pin_wrong)
             step.error == FailureKind.BACKOFF -> stringResource(R.string.history_export_pin_backoff_undated)
-            step.error != null -> stringResource(step.error.messageRes())
+            step.error != null -> failureText(step.error.messageRes())
             else -> null
         }
         SecretField(

@@ -15,7 +15,10 @@ class DurationsTest {
         assertEquals(Durations.Unit.HOURS to 7L, Durations.parts(25_200)) // 7 days at 24
         assertEquals(Durations.Unit.HOURS to 3L, Durations.parts(10_800)) // the quiet period at 24
         assertEquals(Durations.Unit.HOURS to 1L, Durations.parts(3_600)) // 24 h at 24
-        assertEquals(Durations.Unit.MINUTES to 3L, Durations.parts(150)) // 1 h at 24: 2.5 minutes, rounded up
+        assertEquals(Durations.Unit.SECONDS to 150L, Durations.parts(150)) // 1 h at 24: under 10 minutes, in seconds
+        assertEquals(Durations.Unit.SECONDS to 599L, Durations.parts(599))
+        assertEquals(Durations.Unit.MINUTES to 10L, Durations.parts(600))
+        assertEquals(Durations.Unit.MINUTES to 11L, Durations.parts(601)) // whole minutes, rounded up
         assertEquals(Durations.Unit.MINUTES to 90L, Durations.parts(5_400))
         assertEquals(Durations.Unit.SECONDS to 24L, Durations.parts(24))
         assertEquals(Durations.Unit.SECONDS to 0L, Durations.parts(-5))

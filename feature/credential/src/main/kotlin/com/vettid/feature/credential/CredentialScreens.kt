@@ -73,6 +73,7 @@ import com.vettid.core.ui.components.SettingsSwitchRow
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.StrengthMeter
 import com.vettid.core.ui.components.TopLevelScaffold
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdTheme
 import kotlinx.serialization.Serializable
@@ -206,7 +207,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                 Modifier.fillMaxSize().padding(Spacing.xl),
                 verticalArrangement = Arrangement.Center,
             ) {
-                NoticeCard(NoticeKind.WARNING, stringResource(R.string.credential_title), stringResource(state.error.messageRes()))
+                NoticeCard(NoticeKind.WARNING, stringResource(R.string.credential_title), failureText(state.error.messageRes()))
                 Spacer(Modifier.height(Spacing.l))
                 SecondaryButton(stringResource(R.string.credential_retry), actions.retry)
             }
@@ -233,7 +234,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                     if (state.error != null || state.notice != null) {
                         Spacer(Modifier.height(Spacing.s))
                         val (kind, text) = when {
-                            state.error != null -> NoticeKind.URGENT to stringResource(state.error.messageRes())
+                            state.error != null -> NoticeKind.URGENT to failureText(state.error.messageRes())
                             state.notice == CredentialNotice.BACKUP_ON ->
                                 NoticeKind.SUCCESS to stringResource(R.string.credential_backup_on_done)
                             state.notice == CredentialNotice.BACKUP_OFF ->
@@ -396,7 +397,7 @@ fun PasswordDialog(
                     value = password,
                     onValueChange = onPassword,
                     label = stringResource(R.string.credential_password_label),
-                    error = error?.let { stringResource(it.messageRes()) },
+                    error = error?.let { failureText(it.messageRes()) },
                     onImeAction = onConfirm,
                     enabled = !busy,
                     modifier = Modifier.testTag("dialog_password"),
@@ -490,7 +491,7 @@ fun BackupOffDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 private fun ErrorCard(error: FailureKind?) {
     if (error == null) return
     Spacer(Modifier.height(Spacing.l))
-    NoticeCard(NoticeKind.URGENT, stringResource(R.string.credential_title), stringResource(error.messageRes()), Modifier.testTag("error"))
+    NoticeCard(NoticeKind.URGENT, stringResource(R.string.credential_title), failureText(error.messageRes()), Modifier.testTag("error"))
 }
 
 /** The password change (stateless). */
@@ -525,7 +526,7 @@ fun ChangePasswordContent(
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.password, onPassword, stringResource(R.string.credential_password_new),
-            error = state.problem?.takeIf { !state.newRules }?.let { stringResource(it.messageRes()) }
+            error = state.problem?.takeIf { !state.newRules }?.let { failureText(it.messageRes()) }
                 ?: if (state.same) stringResource(R.string.credential_password_same) else null,
             imeAction = androidx.compose.ui.text.input.ImeAction.Next,
         )

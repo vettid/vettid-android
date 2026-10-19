@@ -14,9 +14,11 @@ import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.UrgentBanner
+import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
@@ -168,8 +170,8 @@ fun OwnerCheckBanners(
             stringResource(com.vettid.feature.onboarding.R.string.ownercheck_presence_title) + " " +
                 stringResource(
                     com.vettid.feature.onboarding.R.string.ownercheck_presence_body,
-                    scaledDurationText(com.vettid.feature.onboarding.RECOVERY_QUIET_S),
-                ),
+                    scaledDurationText(RECOVERY_QUIET_S),
+                ) + stagingNoteSuffix(),
             Modifier.testTag("owner_check_presence_banner"),
             statusBarPadding = top,
         )

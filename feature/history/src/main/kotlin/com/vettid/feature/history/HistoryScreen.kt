@@ -74,6 +74,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.vault.AuditCategory
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
 import com.vettid.core.ui.theme.categoryColor
 import com.vettid.core.data.vault.AuditFilter
@@ -279,7 +280,7 @@ fun HistoryScreen(
                         NoticeCard(
                             kind = NoticeKind.WARNING,
                             title = stringResource(R.string.history_error_title),
-                            body = stringResource(error.messageRes()),
+                            body = failureText(error.messageRes()),
                             modifier = Modifier.padding(Spacing.xl),
                             actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) } },
                         )

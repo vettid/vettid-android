@@ -38,9 +38,12 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.StagingTimeNote
 import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
 
@@ -168,7 +171,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 m is OwnerCheckMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
                     title,
-                    stringResource(m.kind.messageRes()),
+                    failureText(m.kind.messageRes()),
                     modifier = Modifier.testTag("owner_check_failed"),
                 )
                 else -> Unit
@@ -179,19 +182,13 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 
 private const val WARN_LEFT = 3
 
-/**
- * The recovery quiet period (VAULT-MESSAGING §11.14.5: 72 h in real time), which the presence notice names: a wait the
- * time scale divides (STAGING-TIME-SCALE S7).
- */
-const val RECOVERY_QUIET_S = 259_200L
-
 /** ANDROID-PLAN "Owner check and status" (release R): the vault could not record that the member was here. */
 @Composable
 private fun PresenceNotice() {
     NoticeCard(
         NoticeKind.WARNING,
         stringResource(R.string.ownercheck_presence_title),
-        stringResource(R.string.ownercheck_presence_body, scaledDurationText(RECOVERY_QUIET_S)),
+        stringResource(R.string.ownercheck_presence_body, scaledDurationText(RECOVERY_QUIET_S)) + stagingNoteSuffix(),
         modifier = Modifier.testTag("owner_check_presence"),
         announce = androidx.compose.ui.semantics.LiveRegionMode.Polite,
     )

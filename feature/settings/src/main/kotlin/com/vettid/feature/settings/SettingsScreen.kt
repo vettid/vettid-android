@@ -76,6 +76,7 @@ import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.components.SettingsSectionHeader
 import com.vettid.core.ui.components.SettingsSwitchRow
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
@@ -440,7 +441,7 @@ fun SettingsContent(
             SettingsGroup { AccountCard(state, actions.account) }
             state.error?.let {
                 NoticeCard(
-                    NoticeKind.URGENT, stringResource(R.string.settings_title), stringResource(it.messageRes()),
+                    NoticeKind.URGENT, stringResource(R.string.settings_title), failureText(it.messageRes()),
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
                     actions = { TextButton(onClick = actions.dismissError) { Text(stringResource(R.string.settings_done)) } },
                 )

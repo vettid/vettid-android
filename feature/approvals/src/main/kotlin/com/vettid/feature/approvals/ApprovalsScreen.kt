@@ -60,6 +60,7 @@ import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 import kotlinx.serialization.Serializable
@@ -151,7 +152,7 @@ fun ApprovalsScreen(
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.approvals_error_title),
-                    body = stringResource(error.messageRes()),
+                    body = failureText(error.messageRes()),
                     actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } },
                 )
             }
@@ -417,7 +418,7 @@ private fun failureText(
     val resources = androidx.compose.ui.platform.LocalResources.current
     val named = limit?.takeIf { kind == com.vettid.core.data.vault.FailureKind.LIMIT }?.message(resources)
     if (named != null || kind != com.vettid.core.data.vault.FailureKind.BACKOFF || retryUntil == null) {
-        return named ?: stringResource(kind.messageRes())
+        return named ?: failureText(kind.messageRes())
     }
     var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(retryUntil) {

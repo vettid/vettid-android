@@ -34,6 +34,7 @@ import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 
 /** An audit entry (§10.9), read-only: what, when, the connection, device and references the vault recorded. */
@@ -55,7 +56,7 @@ fun HistoryEntryScreen(
             error != null -> NoticeCard(
                 NoticeKind.WARNING,
                 stringResource(R.string.history_error_title),
-                stringResource(error.messageRes()),
+                failureText(error.messageRes()),
                 modifier = Modifier.padding(Spacing.xl),
                 actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.history_retry)) } },
             )
