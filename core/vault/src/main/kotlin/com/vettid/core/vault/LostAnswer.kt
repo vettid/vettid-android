@@ -78,9 +78,11 @@ class ChangeUnansweredException(val kept: KeptChange, cause: Throwable? = null) 
 /**
  * (§11.14.9, M1) A credential operation of this phone may still reach the vault (unanswered, before its `exp`): no PIN or
  * password change is sent until it is settled, so that "version + 1" can only mean that the change applied. Nothing
- * was sent.
+ * was sent. (0.47.0) Also: the vault's credential version differs from the held blob's and the latest blob could not be
+ * fetched, or came with another version (an earlier operation applied without its answer).
  */
-class CredentialUnsettledException : IOException("vault client: an earlier credential operation is not settled")
+class CredentialUnsettledException(cause: Throwable? = null) :
+    IOException("vault client: an earlier credential operation is not settled", cause)
 
 // --- the client's side (VaultApi extensions, as ReleaseRApi.kt) ---
 

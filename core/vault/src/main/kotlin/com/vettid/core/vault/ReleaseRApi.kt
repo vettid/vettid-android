@@ -49,19 +49,21 @@ suspend fun VaultApi.pinChange(
 
 /**
  * `vault.secret.renew`: a new phone secret with the PIN unchanged; the DEK is replaced. (0.45.0 §11.14.9) [onSending]
- * stores the renew before it is sent, so that a lost answer can be decided ([SentRequest]).
+ * stores the renew before it is sent, so that a lost answer can be decided ([SentRequest]). (0.47.0) Sent only once every
+ * earlier credential request is settled and with the vault's current blob, both checked before [onSending]
+ * ([CredentialOps.renew]); a `stale_credential` is not retried.
  */
 suspend fun VaultApi.secretRenew(
     pin: String,
     password: String,
     newUnlockSecret: ByteArray,
-    onSending: (suspend (SentRequest) -> Unit)? = null,
+    onSending: suspend (SentRequest) -> Unit = {},
     /** (Q1) The renew's own answer was `ok` (before its blob is kept and acknowledged). */
     onAnswered: (suspend (innerId: String) -> Unit)? = null,
     /** (R1) The renew's own answer was a refusal (`stale_credential` included): it did not apply and never will. */
     onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
 ) {
-    credentialOps.credOp("vault.secret.renew", {
+    credentialOps.renew("vault.secret.renew", {
         put("pin", pin)
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))

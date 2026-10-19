@@ -181,4 +181,65 @@ class RenewRunnerTest {
         assertEquals(1, f.fetches)
         f.scope.cancel()
     }
+
+    /**
+     * (VAULT-MESSAGING 0.47.0 §11.14.9 step 1) A renew refused before anything was stored or sent, because an earlier
+     * request may still apply or the vault's blob could not be made current: the "earlier request" text, nothing stored.
+     */
+    @Test
+    fun aRenewRefusedBeforeItIsStoredIsTheEarlierRequestText() = runTest {
+        val f = Fixture(testScheduler)
+        val r = runCatching {
+            f.runner.send { _, _, _ ->
+                throw com.vettid.core.vault.CredentialUnsettledException(VaultOpException("credential.get", "busy"))
+            }
+        }
+        val e = r.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.CREDENTIAL_UNSETTLED, e.kind)
+        assertEquals(ChangeSender.CODE_UNSETTLED, e.code)
+        assertNull("nothing stored", f.record.value.unconfirmedRenew)
+        assertEquals(3L, f.record.value.phoneEpoch)
+        f.scope.cancel()
+    }
+
+    /**
+     * (0.47.0) A renew's own refusal decides it as not applied, whatever the code, `stale_credential` included: the record
+     * goes, the epoch stays, and a later `credential.version` has nothing to decide.
+     */
+    @Test
+    fun aRenewRefusedInAnyWayIsNotApplied() = runTest {
+        for (code in listOf("stale_credential", "bad_pin", "bad_password", "backoff", "device_secret", "owner_check_required")) {
+            val f = Fixture(testScheduler)
+            val r = runCatching {
+                f.runner.send { onSending, _, onRefused ->
+                    onSending(req)
+                    onRefused(req.innerId, code)
+                    throw VaultOpException(RenewRunner.TYPE_RENEW, code)
+                }
+            }
+            assertEquals(code, (r.exceptionOrNull() as VaultOpException).code)
+            assertNull(code, f.record.value.unconfirmedRenew)
+            assertEquals(code, 3L, f.record.value.phoneEpoch)
+            // Whatever the version says afterwards, the refused renew is not read from it.
+            f.version = ChangeResolver.Version(true, 7, false, exp.plusSeconds(600))
+            assertEquals(code, RenewRunner.State.NONE, f.runner.settle())
+            assertEquals(code, 3L, f.record.value.phoneEpoch)
+            assertEquals(code, 0, f.fetches)
+            f.scope.cancel()
+        }
+    }
+
+    /**
+     * Why the request carries the vault's current version (0.47.0): an earlier operation that applied without its answer
+     * moved the version from 6 to 7. A request sent with the stale blob (6) and then lost would read 7 as "applied"; sent
+     * with the refreshed blob (7), an unchanged 7 after its `exp` is "not applied", and only 8 is "applied".
+     */
+    @Test
+    fun theRefreshedVersionKeepsAnEarlierOperationFromReadingAsTheRequest() {
+        val expMs = exp.toEpochMilli()
+        val after = exp.plusSeconds(120)
+        assertEquals(ChangeDecision.Verdict.APPLIED, ChangeDecision.of(6, expMs, true, 7, false, after))
+        assertEquals(ChangeDecision.Verdict.NOT_APPLIED, ChangeDecision.of(7, expMs, true, 7, false, after))
+        assertEquals(ChangeDecision.Verdict.APPLIED, ChangeDecision.of(7, expMs, true, 8, false, after))
+    }
 }

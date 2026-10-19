@@ -18,7 +18,9 @@ import kotlinx.coroutines.async
  * - No answer, or anything else that goes wrong after the marker, is not a failure: the request is kept in memory, the
  *   check starts, and [FailureKind.CHANGE_CHECKING] tells the screen to keep the entries.
  * - An earlier credential operation that may still reach the vault refuses the change before anything is stored
- *   ([FailureKind.CREDENTIAL_UNSETTLED]).
+ *   ([FailureKind.CREDENTIAL_UNSETTLED]); so does (0.47.0) a vault whose credential version differs from the held
+ *   blob's when the latest blob cannot be fetched or comes with another version. No answer to that
+ *   `credential.version` is its no-answer failure; nothing is stored or sent either way.
  */
 internal class ChangeSender(
     private val scope: CoroutineScope,

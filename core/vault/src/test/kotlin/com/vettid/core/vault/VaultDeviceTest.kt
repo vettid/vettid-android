@@ -206,6 +206,16 @@ class VaultDeviceTest {
     @Volatile
     private var elapsed = 0L
 
+    /** How far the phone's wall clock is ahead of real time (milliseconds), for a vault answer stamped minutes later. */
+    @Volatile
+    private var clockAheadMs = 0L
+
+    private val phoneClock = object : java.time.Clock() {
+        override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+        override fun withZone(zone: java.time.ZoneId?): java.time.Clock = this
+        override fun instant(): Instant = Instant.now().plusMillis(clockAheadMs)
+    }
+
     private fun config(
         store: DeviceStateStore,
         timeout: java.time.Duration = java.time.Duration.ofSeconds(5),
@@ -213,6 +223,7 @@ class VaultDeviceTest {
     ) =
         DeviceConfig(
             name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = timeout,
+            clock = phoneClock,
             elapsedMs = { elapsed },
             settleWait = java.time.Duration.ofMillis(800),
             trust = trust,
@@ -632,10 +643,13 @@ class VaultDeviceTest {
         d: VaultDevice,
         v: FakeVault,
         utkId: String,
+        /** (0.47.0) A change or a renew asks `credential.version` first: answered with this version. */
+        version: Long? = null,
         op: suspend () -> Unit,
     ): com.vettid.core.crypto.json.JsonObject {
         val utk = KemPrivateKey.generate()
         val job = async(Dispatchers.IO) { runCatching { op() } }
+        if (version != null) answerVersion(d, v, version)
         val get = v.open(nextDeposit().second)
         assertEquals("credential.utk.get", get.type)
         val utkJson = """{"utk_id":"$utkId","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
@@ -707,11 +721,11 @@ class VaultDeviceTest {
             assertEquals(nfc, p1.string("password"))
             assertEquals("975310", p1.string("pin"))
             d.keepCredential("QkxPQg==", 3)
-            val p2 = sealedPayloadOf(d, v, "00112233445566a3") { before.credentialChangePassword(nfd, nfd + "!") }
+            val p2 = sealedPayloadOf(d, v, "00112233445566a3", version = 3) { before.credentialChangePassword(nfd, nfd + "!") }
             assertEquals(nfd, p2.string("password"))
             assertEquals("$nfd!", p2.string("new_password"))
             assertFalse(p2.has("pin"))
-            val p3 = sealedPayloadOf(d, v, "00112233445566a4") { r.credentialChangePassword(nfd, nfd + "!", "975310") }
+            val p3 = sealedPayloadOf(d, v, "00112233445566a4", version = 3) { r.credentialChangePassword(nfd, nfd + "!", "975310") }
             assertEquals(nfc, p3.string("password"))
             assertEquals("$nfc!", p3.string("new_password"))
             assertEquals("975310", p3.string("pin"))
@@ -1546,6 +1560,17 @@ class VaultDeviceTest {
     private fun utkJson(id: String, utk: KemPrivateKey) =
         """{"utk_id":"$id","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
 
+    /**
+     * (0.47.0 §11.14.9 step 1) The `credential.version` a change or a renew asks first, under the credential lock, once
+     * every earlier request is settled; answered [version] (null: answered without one).
+     */
+    private suspend fun answerVersion(d: VaultDevice, v: FakeVault, version: Long?, ts: Instant = Instant.now()) {
+        val q = v.open(nextDeposit().second)
+        assertEquals("credential.version", q.type)
+        val body = if (version == null) """{"exists":false}""" else """{"exists":true,"version":$version}"""
+        d.handle(v.msg(v.keyring.current()!!.seal(Inner(id = Ulid.new(), type = q.type, ts = ts, re = q.id, status = Inner.STATUS_OK, body = body.toByteArray()))))
+    }
+
     private fun FakeVault.error(re: String, type: String, code: String): RelayMessage = msg(
         keyring.current()!!.seal(
             Inner(id = Ulid.new(), type = type, ts = Instant.now(), re = re, status = Inner.STATUS_ERROR,
@@ -1577,6 +1602,7 @@ class VaultDeviceTest {
                     }
                 }
             }
+            answerVersion(d, v, 3)
             val get = v.open(nextDeposit().second)
             assertEquals("credential.utk.get", get.type)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c1", utk)}]}""", re = get.id, status = Inner.STATUS_OK))
@@ -1632,6 +1658,7 @@ class VaultDeviceTest {
             val change = async(Dispatchers.IO) {
                 runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) }
             }
+            answerVersion(d, v, 3)
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c2", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             val first = (1..3).map { v.open(nextDeposit().second) }.first()
@@ -1658,6 +1685,7 @@ class VaultDeviceTest {
             val change = async(Dispatchers.IO) {
                 runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) }
             }
+            answerVersion(d, v, 3)
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             val pc = v.open(nextDeposit().second)
@@ -1685,6 +1713,7 @@ class VaultDeviceTest {
             val change = async(Dispatchers.IO) {
                 runCatching { api.credentialChangePassword("old password", "new password!", "975310") { throw java.io.IOException("not stored") } }
             }
+            answerVersion(d, v, 3)
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c4", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             assertEquals("not stored", change.await().exceptionOrNull()?.message)
@@ -1803,6 +1832,7 @@ class VaultDeviceTest {
                     }, onAnswered = { answered += it })
                 }
             }
+            answerVersion(d, v, 3)
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c6", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             val req = v.open(nextDeposit().second)
@@ -1821,6 +1851,7 @@ class VaultDeviceTest {
             val refused = async(Dispatchers.IO) {
                 runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { throw java.io.IOException("not stored") }) }
             }
+            answerVersion(d, v, 4)
             val get2 = v.open(nextDeposit().second)
             d.handle(v.seal(get2.type, """{"utks":[${utkJson("00112233445566c7", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
             assertEquals("not stored", refused.await().exceptionOrNull()?.message)
@@ -1898,7 +1929,8 @@ class VaultDeviceTest {
 
     /**
      * (Q1, R1) A renew answered `stale_credential` whose blob fetch is refused: its own answer was never `ok`, and its
-     * refusal is reported under its id before the fetch.
+     * refusal is reported under its id before the fetch. (0.47.0) The renew's own refusal is what is thrown, and it is
+     * not retried: no second renew is sent.
      */
     @Test
     fun aStaleRenewWithARefusedFetchIsNotAnswered() = runBlocking<Unit> {
@@ -1916,6 +1948,7 @@ class VaultDeviceTest {
                     )
                 }
             }
+            answerVersion(d, v, 3)
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566ca", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             val req = v.open(nextDeposit().second)
@@ -1924,8 +1957,291 @@ class VaultDeviceTest {
             assertEquals("credential.get", fetch.type)
             assertEquals("reported before the fetch", listOf(req.id to "stale_credential"), refused)
             d.handle(v.error(fetch.id, fetch.type, "busy"))
-            assertEquals("credential.get", (renew.await().exceptionOrNull() as VaultOpException).type)
+            val e = renew.await().exceptionOrNull() as VaultOpException
+            assertEquals("vault.secret.renew", e.type)
+            assertEquals("stale_credential", e.code)
             assertTrue(answered.isEmpty())
+            assertNull("no second renew", deposits.poll(500, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    // --- (VAULT-MESSAGING 0.47.0 §11.14.9 step 1, ANDROID-PLAN 0.1.48) sent with the vault's current blob ---
+
+    /** The outer `credential` (the blob) a request carried. */
+    private fun blobOf(r: Inner): String = StrictJson.parseObject(r.body).string("credential")
+
+    /**
+     * The versions agree: the change goes with the held blob and carries its version; `credential.version` is asked
+     * before the UTK, the marker and anything of the change.
+     */
+    @Test
+    fun aChangeGoesWithTheHeldBlobWhenTheVersionsAgree() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val markers = mutableListOf<ChangeMarker>()
+            val change = async(Dispatchers.IO) {
+                runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) { markers += it } }
+            }
+            answerVersion(d, v, 3)
+            assertTrue("no marker before the check's answer", markers.isEmpty())
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d1", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val pc = v.open(nextDeposit().second)
+            assertEquals(ChangeTypes.PIN_CHANGE, pc.type)
+            assertEquals("QkxPQg==", blobOf(pc))
+            assertEquals(3L, markers.single().sentVersion)
+            d.handle(v.seal(pc.type, """{"credential":"TkVX","version":4,"utks":[],"epoch_advanced":true}""", re = pc.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            assertTrue(change.await().isSuccess)
+            assertEquals(4L, d.credentialVersion)
+        }
+    }
+
+    /**
+     * An owner check, a name change and a `credential.unlock` whose answers are lost (each applied: 3 → 6). Once they are
+     * settled by the vault's clock, a PIN change asks `credential.version` (6), fetches the blob (6), and goes with it:
+     * its marker carries 6, so "version + 1" can only be the change, and a version of 6 after its `exp` is "not
+     * applied", never the earlier operations read as the change.
+     */
+    @Test
+    fun afterLostAnswersAChangeGoesWithTheRefreshedBlob() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(400))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            val utks = (1..3).joinToString(",") { utkJson("00112233445566e$it", KemPrivateKey.generate()) }
+            d.handle(v.seal(get.type, """{"utks":[$utks]}""", re = get.id, status = Inner.STATUS_OK))
+            val lost = mutableListOf<String>()
+            repeat(3) { lost += v.open(nextDeposit().second).type }
+            assertTrue(check.await().isFailure)
+            val name = async(Dispatchers.IO) { runCatching { api.accountNameSet("975310", "password one", "Ada", "Lovelace") } }
+            repeat(3) { lost += v.open(nextDeposit().second).type }
+            assertTrue(name.await().isFailure)
+            val unlock = async(Dispatchers.IO) { runCatching { api.credentialUnlock("password one") } }
+            repeat(3) { lost += v.open(nextDeposit().second).type }
+            assertTrue(unlock.await().isFailure)
+            assertEquals(listOf(VaultApi.TYPE_OWNER_CHECK, VaultApi.TYPE_ACCOUNT_NAME_SET, "credential.unlock"), lost.distinct())
+            assertFalse(d.credentialSettled())
+
+            // 12 minutes on: every lost request is past its exp; the vault's stamped time settles them.
+            clockAheadMs = 12 * 60_000L
+            elapsed += 12 * 60_000L
+            val markers = mutableListOf<ChangeMarker>()
+            val change = async(Dispatchers.IO) {
+                runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) { markers += it } }
+            }
+            answerVersion(d, v, 6, ts = Instant.now().plusMillis(clockAheadMs)) // the probe for a vault time
+            answerVersion(d, v, 6, ts = Instant.now().plusMillis(clockAheadMs)) // the check before the change
+            val fetch = v.open(nextDeposit().second)
+            assertEquals("credential.get", fetch.type)
+            assertTrue("nothing stored before the blob is current", markers.isEmpty())
+            d.handle(v.seal(fetch.type, """{"credential":"U0lY","version":6,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            val get2 = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get2.type)
+            d.handle(v.seal(get2.type, """{"utks":[${utkJson("00112233445566e4", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
+            val sends = (1..3).map { v.open(nextDeposit().second) }
+            assertEquals(ChangeTypes.PIN_CHANGE, sends[0].type)
+            assertEquals("U0lY", blobOf(sends[0]))
+            val m = markers.single()
+            assertEquals(6L, m.sentVersion)
+            val e = change.await().exceptionOrNull() as ChangeUnansweredException
+            assertEquals(m, e.kept.marker)
+        }
+    }
+
+    /**
+     * The versions differ and the blob cannot be made current: a fetch that is refused, one that gives another version,
+     * or a `credential.version` answered without a version. Each refuses the change with nothing of it sent, no UTK
+     * taken and no marker stored.
+     */
+    @Test
+    fun aBlobThatCannotBeMadeCurrentRefusesTheChange() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val markers = mutableListOf<ChangeMarker>()
+            suspend fun attempt(answer: suspend () -> Unit) {
+                val change = async(Dispatchers.IO) {
+                    runCatching { api.credentialChangePassword("old password", "new password!", "975310") { markers += it } }
+                }
+                answer()
+                assertTrue(change.await().exceptionOrNull() is CredentialUnsettledException)
+                assertNull("nothing of the change sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            }
+            // The fetch refused.
+            attempt {
+                answerVersion(d, v, 5)
+                val fetch = v.open(nextDeposit().second)
+                assertEquals("credential.get", fetch.type)
+                d.handle(v.error(fetch.id, fetch.type, "busy"))
+            }
+            assertEquals(3L, d.credentialVersion)
+            // The fetch gives another version than the vault said.
+            attempt {
+                answerVersion(d, v, 5)
+                val fetch = v.open(nextDeposit().second)
+                d.handle(v.seal(fetch.type, """{"credential":"Rk9VUg==","version":4,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+                val ack = v.open(nextDeposit().second)
+                d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            }
+            assertEquals("the fetched blob is kept", 4L, d.credentialVersion)
+            // No version in the answer (no credential): not the held one; the fetch cannot make it current.
+            attempt {
+                answerVersion(d, v, null)
+                val fetch = v.open(nextDeposit().second)
+                d.handle(v.error(fetch.id, fetch.type, "not_found"))
+            }
+            // An error answer to credential.version carries no version either.
+            attempt {
+                val q = v.open(nextDeposit().second)
+                assertEquals("credential.version", q.type)
+                d.handle(v.error(q.id, q.type, "busy"))
+                val fetch = v.open(nextDeposit().second)
+                d.handle(v.seal(fetch.type, """{"credential":"Rk9VUg==","version":4,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+                val ack = v.open(nextDeposit().second)
+                d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            }
+            assertTrue(markers.isEmpty())
+            assertEquals("no UTK taken", 0, d.utkCount)
+            assertTrue(d.credentialSettled())
+        }
+    }
+
+    /** No answer to `credential.version`: the change is refused with nothing sent (its no-answer failure, as it is). */
+    @Test
+    fun noAnswerToTheVersionRefusesTheChange() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            var marked = false
+            val change = async(Dispatchers.IO) {
+                runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) { marked = true } }
+            }
+            repeat(3) { assertEquals("credential.version", v.open(nextDeposit().second).type) }
+            val e = change.await().exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.message!!.contains("no response"))
+            assertFalse(marked)
+            assertNull("nothing else sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(0, d.utkCount)
+        }
+    }
+
+    /**
+     * A renew follows the same rule: the version differs, the blob is fetched, and the renew goes with it, reported
+     * (stored) only after the check with the refreshed version. A blob that cannot be made current, or an earlier
+     * request that is not settled, sends nothing and stores nothing.
+     */
+    @Test
+    fun aRenewGoesWithTheVaultsCurrentBlobOrNotAtAll() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val seen = mutableListOf<SentRequest>()
+            val renew = async(Dispatchers.IO) {
+                runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { seen += it }) }
+            }
+            answerVersion(d, v, 4)
+            val fetch = v.open(nextDeposit().second)
+            assertEquals("credential.get", fetch.type)
+            d.handle(v.seal(fetch.type, """{"credential":"Rk9VUg==","version":4,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            assertTrue(seen.isEmpty())
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566f1", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.secret.renew", req.type)
+            assertEquals("Rk9VUg==", blobOf(req))
+            assertEquals(4L, seen.single().sentVersion)
+            d.handle(v.seal(req.type, """{"credential":"RklWRQ==","version":5,"utks":[]}""", re = req.id, status = Inner.STATUS_OK))
+            val ack2 = v.open(nextDeposit().second)
+            d.handle(v.seal(ack2.type, "{}", re = ack2.id, status = Inner.STATUS_OK))
+            assertTrue(renew.await().isSuccess)
+
+            // The fetch refused: nothing stored, nothing sent.
+            val refused = async(Dispatchers.IO) {
+                runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { seen += it }) }
+            }
+            answerVersion(d, v, 6)
+            val f2 = v.open(nextDeposit().second)
+            d.handle(v.error(f2.id, f2.type, "busy"))
+            assertTrue(refused.await().exceptionOrNull() is CredentialUnsettledException)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, seen.size)
+
+            // An earlier credential request that may still reach the vault: refused before anything, not even the check.
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
+            val get3 = v.open(nextDeposit().second)
+            d.handle(v.seal(get3.type, """{"utks":[${utkJson("00112233445566f2", KemPrivateKey.generate())}]}""", re = get3.id, status = Inner.STATUS_OK))
+            repeat(3) { v.open(nextDeposit().second) }
+            assertTrue(check.await().isFailure)
+            val unsettled = runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { seen += it }) }
+            assertTrue(unsettled.exceptionOrNull() is CredentialUnsettledException)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, seen.size)
+        }
+    }
+
+    /**
+     * A renew's own refusal decides it, whatever the code: reported under its id, never retried; `stale_credential`
+     * fetches the latest blob (the other refusals do not), and is thrown as the renew's refusal.
+     */
+    @Test
+    fun aRenewsOwnRefusalIsNeverRetried() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            var n = 0
+            for (code in listOf("stale_credential", "bad_pin", "bad_password", "backoff", "device_secret")) {
+                val refusals = mutableListOf<Pair<String, String>>()
+                val answered = mutableListOf<String>()
+                val renew = async(Dispatchers.IO) {
+                    runCatching {
+                        api.secretRenew(
+                            "975310", "password one", ByteArray(32) { 5 }, onSending = {}, onAnswered = { answered += it },
+                            onRefused = { id, c -> refusals += id to c },
+                        )
+                    }
+                }
+                answerVersion(d, v, d.credentialVersion)
+                val get = v.open(nextDeposit().second)
+                assertEquals("credential.utk.get", get.type)
+                d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445567%02d".format(n++), KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+                val req = v.open(nextDeposit().second)
+                assertEquals("vault.secret.renew", req.type)
+                d.handle(v.error(req.id, req.type, code))
+                if (code == "stale_credential") {
+                    val fetch = v.open(nextDeposit().second)
+                    assertEquals("credential.get", fetch.type)
+                    d.handle(v.seal(fetch.type, """{"credential":"Rk9VUg==","version":4,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+                    val ack = v.open(nextDeposit().second)
+                    d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+                }
+                val e = renew.await().exceptionOrNull() as VaultOpException
+                assertEquals("vault.secret.renew", e.type)
+                assertEquals(code, e.code)
+                assertEquals(listOf(req.id to code), refusals)
+                assertTrue(answered.isEmpty())
+                assertNull("$code: no retry, no fetch", deposits.poll(300, TimeUnit.MILLISECONDS))
+            }
+            assertEquals(4L, d.credentialVersion)
+            assertTrue(d.credentialSettled())
         }
     }
 
