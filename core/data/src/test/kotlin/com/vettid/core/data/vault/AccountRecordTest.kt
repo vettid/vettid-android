@@ -279,4 +279,61 @@ class AccountRecordTest {
         f.record.saveDecision(SavedDecision.of(ChangeCheck.NotApplied(ChangeKind.PIN)))
         assertFalse(f.disk!!.changeDecision!!.notified)
     }
+
+    // --- (§11.14.9 step 2; chosen) which PIN the vault expects ---
+
+    /** [f] moves [AccountRecord.pinGeneration] by exactly one. */
+    private fun Fixture.moves(what: String, f: AccountRecord.() -> Unit) {
+        val before = record.pinGeneration
+        record.f()
+        assertEquals(what, before + 1, record.pinGeneration)
+    }
+
+    /** [f] leaves [AccountRecord.pinGeneration] as it is. */
+    private fun Fixture.keeps(what: String, f: AccountRecord.() -> Unit) {
+        val before = record.pinGeneration
+        record.f()
+        assertEquals(what, before, record.pinGeneration)
+    }
+
+    /**
+     * Every write that may change which PIN the vault expects moves the generation: a change's marker stored, a change
+     * decided (applied, not applied or refused, ended), a renew stored and decided, the uncertain PIN settled, a reset,
+     * a wipe. An unlock's own confirmation of a candidate or of the current record, a lock, and a write that finds
+     * nothing to do leave it.
+     */
+    @Test
+    fun thePinGenerationMovesWithWhatMayChangeThePin() {
+        val f = Fixture(old.copy(phoneKeyVault = "kv", phoneEpoch = 3))
+        val since = f.record.recordGeneration
+        val password = pinChange.copy(type = com.vettid.core.vault.ChangeTypes.PASSWORD_CHANGE, innerId = "01JPWD")
+        f.moves("a PIN change's marker") { assertEquals(AccountRecord.ChangeStored.STORED, storeChange(since, pinChange)) }
+        f.moves("a change applied") { assertTrue(confirmChange(pinChange)) }
+        f.keeps("no such marker any more") { assertFalse(confirmChange(pinChange)) }
+        f.moves("a password change's marker") { storeChange(since, password) }
+        f.moves("a change not applied or refused") { assertTrue(clearChange(password)) }
+        val pin2 = pinChange.copy(innerId = "01JPIN2", fromEpoch = 4)
+        f.moves("a PIN change's marker") { storeChange(since, pin2) }
+        f.moves("a change ended: the PIN uncertain") { assertTrue(endChange(pin2)) }
+        f.moves("the uncertain PIN settled by an unlock") { assertTrue(settlePin(since)) }
+        val renew = UnconfirmedRenew("01JRENEW", 6, 1_000, 4)
+        f.moves("a renew stored") { assertTrue(storeRenew(since, renew)) }
+        f.moves("a renew decided") { assertTrue(decideRenew(renew.innerId, applied = true)) }
+        f.keeps("an unlock's own confirmation of a candidate") { assertTrue(settlePin(since, epoch = 6)) }
+        f.keeps("an unlock with the current record") { settlePin(since) }
+        f.keeps("a lock") { bumpGeneration() }
+        f.moves("a reset") { reset(LocalAccount()) }
+        val before = f.record.pinGeneration
+        f.wipe()
+        assertTrue("a wipe", f.record.pinGeneration > before)
+    }
+
+    /** A marker refused (another change unresolved) or not written moves nothing: nothing was sent. */
+    @Test
+    fun aRefusedMarkerKeepsThePinGeneration() {
+        val f = Fixture(old.copy(phoneKeyVault = "kv", phoneEpoch = 3, unresolvedChange = pinChange))
+        f.keeps("another change unresolved") {
+            assertEquals(AccountRecord.ChangeStored.CONFLICT, storeChange(recordGeneration, pinChange.copy(innerId = "01JOTHER")))
+        }
+    }
 }

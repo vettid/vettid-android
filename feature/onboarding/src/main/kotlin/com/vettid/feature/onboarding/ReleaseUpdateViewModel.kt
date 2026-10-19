@@ -41,7 +41,10 @@ data class ReleaseUpdateUiState(
 ) {
     val changeUnresolved: Boolean get() = changeHold != null
 
-    val submitAllowed: Boolean get() = offer != null && !checkDue && !changeUnresolved && pin.length >= MIN_PIN_LENGTH
+    /** The PIN field can be used: an offer, and neither the owner check nor a change comes first. */
+    val pinAllowed: Boolean get() = offer != null && !checkDue && !changeUnresolved
+
+    val submitAllowed: Boolean get() = pinAllowed && pin.length >= MIN_PIN_LENGTH
 
     override fun toString(): String = "ReleaseUpdateUiState(loading=$loading, offer=${offer?.target?.number}, checkDue=$checkDue)"
 
@@ -78,42 +81,53 @@ class ReleaseUpdateViewModel @Inject constructor(
     )
     val uiState: StateFlow<ReleaseUpdateUiState> = state.asStateFlow()
 
+    /** (§11.14.9 step 2; chosen) Which PIN the vault expects, read when the PIN field becomes usable. */
+    private val keypad = KeypadReading { updates.pinGeneration }
+
+    /** Every change of the state, with the keypad's reading following whether the PIN field can be used. */
+    private fun set(f: (ReleaseUpdateUiState) -> ReleaseUpdateUiState) {
+        val wasEmpty = state.value.pin.isEmpty()
+        state.update { s -> f(s).let { n -> if (!n.pinAllowed && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
+        keypad.follow(state.value.pinAllowed, wasEmpty)
+    }
+
     init {
-        viewModelScope.launch { updates.offer.collect { o -> state.update { it.copy(offer = o) } } }
+        keypad.follow(state.value.pinAllowed)
+        viewModelScope.launch { updates.offer.collect { o -> set { it.copy(offer = o) } } }
         // What's new for the offered release (number and PCR0); a new target loads again. Each visit retries.
         viewModelScope.launch {
             updates.offer.map { it?.let { o -> o.target to o.between } }
                 .distinctUntilChanged { a, b -> a?.first?.number == b?.first?.number && a?.first?.pcr0 == b?.first?.pcr0 }
                 .collectLatest { t ->
-                    state.update { it.copy(notes = null) }
+                    set { it.copy(notes = null) }
                     if (t != null) {
                         val n = releaseNotes.whatsNew(t.first, t.second)
-                        state.update { it.copy(notes = n) }
+                        set { it.copy(notes = n) }
                     }
                 }
         }
         // (N6) Followed, so that the PIN field opens again once the change is decided, and the text is the gate's.
-        viewModelScope.launch { updates.changeHold.collect { h -> state.update { it.copy(changeHold = h) } } }
+        viewModelScope.launch { updates.changeHold.collect { h -> set { it.copy(changeHold = h) } } }
         viewModelScope.launch {
             updates.refreshOffer()
-            state.update { it.copy(loading = false) }
+            set { it.copy(loading = false) }
         }
         viewModelScope.launch {
             combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> v?.gated(Instant.now()) == true || locked }
-                .collect { due -> state.update { it.copy(checkDue = due) } }
+                .collect { due -> set { it.copy(checkDue = due) } }
         }
     }
 
-    override fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN)) }
+    override fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN)) }
 
     override fun approve() {
         val s = state.value
         val offer = s.offer ?: return
         if (!s.submitAllowed) return
-        if (updates.start(s.pin, offer)) {
-            state.update { it.copy(pin = "") }
+        if (updates.start(s.pin, offer, keypad.take(s.pinAllowed))) {
+            set { it.copy(pin = "") }
         } else {
-            state.update { it.copy(checkDue = updates.ownerCheckDue(), changeHold = updates.changeHold.value) }
+            set { it.copy(checkDue = updates.ownerCheckDue(), changeHold = updates.changeHold.value) }
         }
     }
 
@@ -165,11 +179,22 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
     val uiState: StateFlow<ReleaseUpdateFlowUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
+    /** (§11.14.9 step 2; chosen) Which PIN the vault expects, read when a step waits for the PIN. */
+    private val keypad = KeypadReading { updates.pinGeneration }
+
+    /** Every change of the state, with the keypad's reading following whether the PIN can be typed. */
+    private fun set(f: (ReleaseUpdateFlowUiState) -> ReleaseUpdateFlowUiState) {
+        val wasEmpty = state.value.pin.isEmpty()
+        state.update { s -> f(s).let { n -> if (!n.pinAllowed && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
+        keypad.follow(state.value.pinAllowed, wasEmpty)
+    }
+
     init {
+        keypad.follow(state.value.pinAllowed)
         viewModelScope.launch {
             var last: UpdateProgress? = null
             updates.progress.collect { p ->
-                state.update { it.copy(progress = p) }
+                set { it.copy(progress = p) }
                 // A new answer with a backoff (not the same one again): count it down.
                 val before = last
                 val changed = before == null || before.copy(starting = p?.starting ?: false) != p
@@ -179,43 +204,45 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
         }
     }
 
-    override fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN)) }
+    override fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN)) }
 
     override fun retry() {
         val s = state.value
         if (!s.retryAllowed) return
-        state.update { it.copy(pin = "") }
-        updates.retry(s.pin)
+        val taken = keypad.take(s.pinAllowed)
+        set { it.copy(pin = "") }
+        updates.retry(s.pin, taken)
     }
 
-    override fun askAbandon() = state.update { if (it.progress?.canAbandon == true) it.copy(abandonConfirm = true) else it }
+    override fun askAbandon() = set { if (it.progress?.canAbandon == true) it.copy(abandonConfirm = true) else it }
 
-    override fun dismissAbandon() = state.update { it.copy(abandonConfirm = false) }
+    override fun dismissAbandon() = set { it.copy(abandonConfirm = false) }
 
     override fun confirmAbandon() {
         val s = state.value
-        state.update { it.copy(abandonConfirm = false) }
+        set { it.copy(abandonConfirm = false) }
         if (!s.retryAllowed || s.progress?.step != UpdateStep.NEW_RELEASE_FAILED) return
-        state.update { it.copy(pin = "") }
-        updates.abandon(s.pin)
+        val taken = keypad.take(s.pinAllowed)
+        set { it.copy(pin = "") }
+        updates.abandon(s.pin, taken)
     }
 
     override fun finish() {
-        state.update { it.copy(pin = "", abandonConfirm = false) }
+        set { it.copy(pin = "", abandonConfirm = false) }
         updates.finish()
     }
 
     override fun onCleared() {
-        state.update { it.copy(pin = "") }
+        set { it.copy(pin = "") }
     }
 
     private fun startWait(seconds: Long) {
         ticker?.cancel()
-        state.update { it.copy(waitSeconds = seconds) }
+        set { it.copy(waitSeconds = seconds) }
         ticker = viewModelScope.launch {
             while (state.value.waitSeconds > 0) {
                 delay(TICK_MS)
-                state.update { it.copy(waitSeconds = (it.waitSeconds - 1).coerceAtLeast(0)) }
+                set { it.copy(waitSeconds = (it.waitSeconds - 1).coerceAtLeast(0)) }
             }
         }
     }
@@ -223,5 +250,38 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
     private companion object {
         const val MAX_PIN = 32
         const val TICK_MS = 1000L
+    }
+}
+
+/**
+ * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects ([read]: the repository's
+ * `pinGeneration`), read when the keypad becomes usable: a change sent or decided while the member types moves it, and
+ * the PIN is then not sent but asked for again. Dropped while the keypad cannot be used; read again each time it can.
+ * Used once: handing a PIN over empties the keypad and takes a fresh reading for the next PIN at once (a step refused
+ * without the keypad ever closing, as a PIN taken before a change is, then goes with a new one).
+ */
+internal class KeypadReading(private val read: () -> Int) {
+    var generation: Int? = null
+        private set
+
+    /** The reading for the PIN handed over now, and a fresh one for the next PIN when the keypad stays usable ([allowed]). */
+    fun take(allowed: Boolean): Int? {
+        val taken = generation
+        generation = null
+        follow(allowed)
+        return taken
+    }
+
+    /**
+     * The keypad can be used ([allowed]) or not. [wasEmpty]: no digit was typed before this change, so the reading is
+     * taken afresh (the PIN is typed from here on): a change between the keypad's opening and the first digit is then
+     * not counted against the PIN.
+     */
+    fun follow(allowed: Boolean, wasEmpty: Boolean = false) {
+        if (!allowed) {
+            generation = null
+        } else if (generation == null || wasEmpty) {
+            generation = read()
+        }
     }
 }

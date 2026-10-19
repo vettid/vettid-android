@@ -92,6 +92,13 @@ interface AltParty {
     ): BuiltUnlock
 
     suspend fun openUnlockResult(raw: ByteArray): UnlockResult
+
+    /**
+     * [built] was not posted (VAULT-MESSAGING §11.14.9 step 2: its PIN may no longer be the one the vault expects): what
+     * [prepareUnlock] recorded for it goes, as if it had never been built (the pending unlock, the standing token's
+     * issue). Nothing of it reached the vault.
+     */
+    suspend fun discardUnlock(built: BuiltUnlock) {}
 }
 
 /** The opened vault.enroll.result, the vault id the API assigned and where it ran. */
@@ -245,6 +252,12 @@ class AltChannelFlow(
         options: UnlockOptions = UnlockOptions(),
         release: String? = null,
         onStarting: ((Long) -> Unit)? = null,
+        /**
+         * Runs before each request is built and again right before it is posted (retries included); a throw stops it
+         * with nothing posted, and a request already built is discarded ([AltParty.discardUnlock]). For a PIN typed on a
+         * flow's own screen that may no longer be the one the vault expects (VAULT-MESSAGING §11.14.9 step 2).
+         */
+        beforePost: () -> Unit = {},
         /** (0.34.0, release R) As for [enroll]: the request's shape from the routed instance's capabilities. */
         unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { options.unlockSecret?.copyOf() },
     ): UnlockOutcome {
@@ -253,6 +266,8 @@ class AltChannelFlow(
         var refetched = false
         var attempt = 1
         while (true) {
+            // Before anything is built: building mints the standing token and records the pending unlock.
+            beforePost()
             val (info, e) = enclaveFor(release, m, enroll = false, onStarting)
             val secret = unlockSecretFor(e.descriptor.traits)
             val built = try {
@@ -262,6 +277,11 @@ class AltChannelFlow(
             }
             var err: MemberApiException? = null
             var slot: Slot? = null
+            // Right before the post as well: what moved while the request was built leaves nothing of it behind.
+            runCatching { beforePost() }.onFailure { x ->
+                party.discardUnlock(built)
+                throw x
+            }
             try {
                 api.unlock(vaultId, info.instanceId, built.request)
                 slot = api.poll(built.request.requestId)

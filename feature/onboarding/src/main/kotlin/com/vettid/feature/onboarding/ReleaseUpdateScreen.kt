@@ -106,7 +106,7 @@ fun ReleaseUpdateContent(state: ReleaseUpdateUiState, actions: ReleaseUpdateActi
                         onValueChange = actions::setPin,
                         label = stringResource(R.string.unlock_pin_label),
                         isPin = true,
-                        enabled = !state.checkDue && !state.changeUnresolved,
+                        enabled = state.pinAllowed,
                         onImeAction = actions::approve,
                         modifier = Modifier.testTag("release_update_pin"),
                     )

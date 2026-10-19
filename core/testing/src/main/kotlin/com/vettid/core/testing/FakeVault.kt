@@ -211,6 +211,20 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override fun acknowledgeFinishMoveFailure() {
         finishMoveFailure.value = null
     }
+
+    /** What [pinGeneration] reads; [finishMoveTaken] records the reading each "Finish the move" PIN came with. */
+    override var pinGeneration = 0
+    val finishMoveTaken = mutableListOf<Int?>()
+
+    /** As the vault manager: nothing is sent once [pinGeneration] moved since [taken]; otherwise lock, then unlock. */
+    override suspend fun finishMove(pin: String, taken: Int?): UnlockAttempt {
+        finishMoveTaken += taken
+        if (taken != null && taken != pinGeneration) {
+            return UnlockAttempt.Failed(FailureKind.CREDENTIAL_UNSETTLED, "pin_taken_before_change")
+        }
+        lock()
+        return unlock(pin)
+    }
     override val movedBack = MutableStateFlow(false)
 
     override val moveNotDone = MutableStateFlow(false)

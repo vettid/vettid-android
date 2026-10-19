@@ -178,6 +178,31 @@ internal class AccountRecord(
 
     fun bumpGeneration() = store.bumpGeneration()
 
+    private val pinGen = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Moves with everything that may change which PIN the vault
+     * expects: a PIN change's or a password change's marker stored, a change decided (applied, not applied or refused, or
+     * ended with the PIN uncertain), a renew stored or decided, the uncertain PIN settled, the record reset or wiped, and
+     * ([pinMoved]) a PIN change or renew beginning and the unlock's PIN step changing. A flow that unlocks with a PIN typed
+     * on its own screen (the release update, "Finish the move") reads it when its keypad becomes usable and sends nothing
+     * once it moved. In memory only, for the manager's life: a restart asks for the PIN again. Not moved by what leaves
+     * the PIN as it is: an unlock's own confirmation of a candidate or of the current record (unless it settles an
+     * uncertain PIN), the epoch-1 records of an enrollment, a transfer or a recovery, a lock, and the other writes here.
+     */
+    val pinGeneration: Int get() = pinGen.get()
+
+    /** Something that may change which PIN the vault expects happened ([pinGeneration]). */
+    fun pinMoved() {
+        pinGen.incrementAndGet()
+    }
+
+    /** [ok], with [pinGeneration] moved when it is true. */
+    private fun movedIf(ok: Boolean): Boolean {
+        if (ok) pinMoved()
+        return ok
+    }
+
     /** A wipe runs, or the last one did not finish: no session is opened, nothing is written ([RecordStore.closed]). */
     val closed: Boolean get() = store.closed
 
@@ -196,7 +221,7 @@ internal class AccountRecord(
         rotateOfferFlow.value = a.rotateOffered
         // Nothing of the lock's legacy fields goes into the new record; whether the lock's file is in use stays.
         a.copy(lockAskedAtMs = null, relayLockUntilMs = null, lockFileInUse = cur.lockFileInUse)
-    }
+    }.also { pinMoved() }
 
     /**
      * The lock's record was saved in its own file for the first time: the legacy fields go and the file is in use from
@@ -286,7 +311,7 @@ internal class AccountRecord(
         }
         return when {
             conflict -> ChangeStored.CONFLICT
-            ok -> ChangeStored.STORED
+            ok -> ChangeStored.STORED.also { pinMoved() }
             else -> {
                 // A persist that failed after the value was set in memory: nothing of it stays.
                 if (store.value.unresolvedChange == u) store.reload(before, readable = true)
@@ -314,7 +339,7 @@ internal class AccountRecord(
             false
         }
         if (ok) setRotateOffer(true, recordGeneration)
-        return ok
+        return movedIf(ok)
     }
 
     /**
@@ -322,11 +347,13 @@ internal class AccountRecord(
      * uncertain until a two-step unlock settles it ([settlePin]).
      */
     fun endChange(m: UnresolvedChange): Boolean = try {
-        update(RecordStore.UNBOUND) { cur ->
-            if (cur.unresolvedChange?.innerId != m.innerId) return@update null
-            val uncertain = if (m.kind == ChangeKind.PIN) m.fromEpoch else cur.uncertainPinFromEpoch
-            cur.copy(unresolvedChange = null, uncertainPinFromEpoch = uncertain)
-        }
+        movedIf(
+            update(RecordStore.UNBOUND) { cur ->
+                if (cur.unresolvedChange?.innerId != m.innerId) return@update null
+                val uncertain = if (m.kind == ChangeKind.PIN) m.fromEpoch else cur.uncertainPinFromEpoch
+                cur.copy(unresolvedChange = null, uncertainPinFromEpoch = uncertain)
+            },
+        )
     } catch (_: com.vettid.core.keystore.KeystoreException) {
         false
     } catch (_: java.io.IOException) {
@@ -339,18 +366,24 @@ internal class AccountRecord(
      * unconfirmed renew go (the vault holds the current record, or the candidate is now current); an unresolved change
      * stays (§11.14.9 step 5: `ok` does not decide it).
      */
-    fun settlePin(since: Int, epoch: Long? = null): Boolean = update(since) { cur ->
-        val e = epoch ?: cur.phoneEpoch
-        if (cur.uncertainPinFromEpoch == null && !cur.renewUnconfirmed && e == cur.phoneEpoch) {
-            null
-        } else {
-            cur.copy(phoneEpoch = e, uncertainPinFromEpoch = null, unconfirmedRenew = null)
+    fun settlePin(since: Int, epoch: Long? = null): Boolean {
+        var settled = false
+        val ok = update(since) { cur ->
+            val e = epoch ?: cur.phoneEpoch
+            if (cur.uncertainPinFromEpoch == null && !cur.renewUnconfirmed && e == cur.phoneEpoch) {
+                null
+            } else {
+                settled = cur.uncertainPinFromEpoch != null
+                cur.copy(phoneEpoch = e, uncertainPinFromEpoch = null, unconfirmedRenew = null)
+            }
         }
+        // Only the uncertain PIN settled moves [pinGeneration]: an unlock's own confirmation of a candidate does not.
+        return if (settled) movedIf(ok) else ok
     }
 
     /** (N1) The renew [r], stored before it is sent; false: not written, and nothing may be sent. */
     fun storeRenew(since: Int, r: UnconfirmedRenew): Boolean = try {
-        update(since) { it.copy(unconfirmedRenew = r) }
+        movedIf(update(since) { it.copy(unconfirmedRenew = r) })
     } catch (_: com.vettid.core.keystore.KeystoreException) {
         false
     } catch (_: java.io.IOException) {
@@ -361,11 +394,13 @@ internal class AccountRecord(
      * The renew [innerId] applied ([applied]: its answer, or `credential.version` one above the version it carried): the
      * phone moves to its candidate (only from the epoch it was sent from); or it did not apply. Either way it goes.
      */
-    fun decideRenew(innerId: String, applied: Boolean): Boolean = update(RecordStore.UNBOUND) { cur ->
-        val r = cur.unconfirmedRenew?.takeIf { it.innerId == innerId } ?: return@update null
-        val epoch = if (applied && cur.phoneEpoch == r.fromEpoch) r.fromEpoch + 1 else cur.phoneEpoch
-        cur.copy(phoneEpoch = epoch, unconfirmedRenew = null)
-    }
+    fun decideRenew(innerId: String, applied: Boolean): Boolean = movedIf(
+        update(RecordStore.UNBOUND) { cur ->
+            val r = cur.unconfirmedRenew?.takeIf { it.innerId == innerId } ?: return@update null
+            val epoch = if (applied && cur.phoneEpoch == r.fromEpoch) r.fromEpoch + 1 else cur.phoneEpoch
+            cur.copy(phoneEpoch = epoch, unconfirmedRenew = null)
+        },
+    )
 
     /** (N5) The decision the member has not seen yet ([d]), or none once seen. */
     fun saveDecision(d: SavedDecision?): Boolean = update(RecordStore.UNBOUND) { cur ->
@@ -381,19 +416,21 @@ internal class AccountRecord(
 
     /** The change [m] did not apply, was refused, or the check ended: its marker goes; the epoch stays. */
     fun clearChange(m: UnresolvedChange): Boolean = try {
-        update(RecordStore.UNBOUND) { cur ->
-            if (cur.unresolvedChange?.innerId == m.innerId) cur.copy(unresolvedChange = null) else null
-        }
+        movedIf(
+            update(RecordStore.UNBOUND) { cur ->
+                if (cur.unresolvedChange?.innerId == m.innerId) cur.copy(unresolvedChange = null) else null
+            },
+        )
     } catch (_: com.vettid.core.keystore.KeystoreException) {
         false
     } catch (_: java.io.IOException) {
         false
     }
 
-    fun beginWipe() = store.beginWipe()
+    fun beginWipe() = store.beginWipe().also { pinMoved() }
 
     /** The end of the wipe ([RecordStore.endWipe]): no offer, whether or not it completed. */
-    fun endWipe(complete: Boolean) = store.endWipe(complete) { rotateOfferFlow.value = false }
+    fun endWipe(complete: Boolean) = store.endWipe(complete) { rotateOfferFlow.value = false }.also { pinMoved() }
 
     private fun LocalAccount.withLockOf(cur: LocalAccount) =
         copy(lockAskedAtMs = cur.lockAskedAtMs, relayLockUntilMs = cur.relayLockUntilMs, lockFileInUse = cur.lockFileInUse)

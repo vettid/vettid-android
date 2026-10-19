@@ -238,11 +238,23 @@ interface VaultRepository {
      * While it runs, [finishingMove] is true: the phone counts as locked (as after any lock) but the screen that asked
      * stays, so that the member sees the move finish instead of the unlock screen and the notice of a lock in doubt
      * that the vault, still in the middle of the move, may not answer at once.
+     *
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) [taken]: [pinGeneration] as the screen read it when its
+     * keypad became usable (null: read now). Once it moved, nothing is sent: [UnlockAttempt.Failed] with
+     * [FailureKind.CREDENTIAL_UNSETTLED] and `pin_taken_before_change`, and the PIN is asked for again.
      */
-    suspend fun finishMove(pin: String): UnlockAttempt {
+    suspend fun finishMove(pin: String, taken: Int? = null): UnlockAttempt {
         lock()
         return unlock(pin)
     }
+
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects, as a generation that moves
+     * with every change of it (a PIN or password change sent or decided, a renew, the uncertain PIN set or settled, the
+     * unlock's PIN step, the records reset). A screen that unlocks with a PIN typed on it reads it when its keypad becomes
+     * usable and hands it over with the PIN ([finishMove]).
+     */
+    val pinGeneration: Int get() = 0
 
     /** (Release R) True while [finishMove] runs, for at most a bounded time. */
     val finishingMove: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH

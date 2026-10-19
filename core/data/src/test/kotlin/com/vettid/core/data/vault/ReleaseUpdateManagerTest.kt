@@ -50,9 +50,21 @@ class ReleaseUpdateManagerTest {
             lockFails?.let { throw it }
         }
 
-        override suspend fun unlock(pin: String, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+        /** What [pinGeneration] reads; [taken] records the reading each unlock's PIN came with. */
+        var generation = 0
+        val taken = mutableListOf<Int>()
+
+        override fun pinGeneration() = generation
+
+        override suspend fun unlock(pin: TakenPin, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+            // As the vault manager: nothing is sent with a PIN taken before which PIN the vault expects moved.
+            taken += pin.generation
+            if (pin.generation != generation) {
+                log += "refused"
+                return UpdateStepResult.Failed(FailureKind.CREDENTIAL_UNSETTLED, ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE)
+            }
             log += "unlock"
-            unlocks += Call(pin, approve?.number, abandon)
+            unlocks += Call(pin.pin, approve?.number, abandon)
             if (startingCallbacks > 0) {
                 startingCallbacks--
                 onStarting(5)
@@ -404,5 +416,91 @@ class ReleaseUpdateManagerTest {
         runCurrent()
         assertEquals(sent2, ops.log.size)
         assertEquals(FailureKind.CHANGE_UNRESOLVED, m.progress.value!!.failure)
+    }
+
+    // --- (VAULT-MESSAGING §11.14.9 step 2; chosen) a PIN taken before which PIN the vault expects moved ---
+
+    /**
+     * A PIN change (or anything that moves which PIN the vault expects) while the member typed: the approval's unlock
+     * sends nothing, the step fails with the "earlier request" text and `pin_taken_before_change`, and the PIN typed again
+     * with a fresh reading goes as usual.
+     */
+    @Test
+    fun aPinTakenBeforeAChangeSendsNothingAndIsAskedAgain() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val reading = m.pinGeneration
+        ops.generation++ // a PIN change began while the PIN was typed
+        assertTrue(m.start("2468", offer, reading))
+        runCurrent()
+        assertTrue("refused before the lock: nothing locked, nothing sent", ops.log.isEmpty())
+        assertTrue(ops.taken.isEmpty())
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.FAILED, p.step)
+        assertEquals(FailureKind.CREDENTIAL_UNSETTLED, p.failure)
+        assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, p.failureCode)
+        assertTrue("the vault is as it was", p.vaultOpen)
+        assertTrue(p.waiting)
+        // "Try again" with the same old reading: refused again before the lock.
+        m.retry("2468", reading)
+        runCurrent()
+        assertTrue(ops.log.isEmpty())
+        m.retry("1357", m.pinGeneration)
+        runCurrent()
+        assertEquals(listOf("lock", "unlock"), ops.log)
+        assertEquals(listOf(Call("1357", 5, false)), ops.unlocks)
+        assertEquals(listOf(1), ops.taken)
+    }
+
+    /** The reopen after `moved` goes with the approval's reading: a change decided in between stops it too. */
+    @Test
+    fun theReopenAfterAMoveChecksTheSameReading() = runTest {
+        val ops = Ops()
+        ops.results += UpdateStepResult.Moved
+        val m = manager(ops)
+        ops.whileStarting = { ops.generation++ }
+        ops.startingCallbacks = 1 // the approval's unlock: a change decided while it is on its way
+        assertTrue(m.start("2468", offer, m.pinGeneration))
+        runCurrent()
+        assertEquals(listOf("lock", "unlock", "refused"), ops.log)
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
+        assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, p.failureCode)
+        // Typed again: the reopen goes, and so does the way back.
+        ops.results += UpdateStepResult.Opened
+        m.retry("2468", m.pinGeneration)
+        runCurrent()
+        assertEquals(UpdateStep.DONE, m.progress.value!!.step)
+    }
+
+    /** Without a reading from the keypad, the PIN's generation is read as it is handed over. */
+    @Test
+    fun withoutAReadingThePinIsTakenAtHandover() = runTest {
+        val ops = Ops()
+        ops.generation = 7
+        val m = manager(ops)
+        assertTrue(m.start("2468", offer))
+        runCurrent()
+        assertEquals(listOf(7), ops.taken)
+        assertEquals(UpdateStep.REFUSED, m.progress.value!!.step)
+    }
+
+    /** "Return to release N" with a PIN taken before a change sends nothing either. */
+    @Test
+    fun anAbandonWithAPinTakenBeforeAChangeSendsNothing() = runTest {
+        val ops = Ops()
+        ops.results += UpdateStepResult.Moved
+        ops.results += UpdateStepResult.Failed(FailureKind.NETWORK, null)
+        val m = manager(ops)
+        assertTrue(m.start("2468", offer, m.pinGeneration))
+        runCurrent()
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
+        val reading = m.pinGeneration
+        ops.generation++
+        m.abandon("2468", reading)
+        runCurrent()
+        assertEquals("refused", ops.log.last())
+        assertTrue(ops.unlocks.none { it.abandon })
+        assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, m.progress.value!!.failureCode)
     }
 }
