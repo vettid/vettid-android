@@ -67,7 +67,14 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
             } catch (e: VaultOpException) {
                 // Its own refusal was decided as it came (onRefused); an error of a step around it decides nothing,
                 // unless the renew had already been answered `ok`.
-                if (answered == null) throw e
+                if (answered == null) {
+                    // (0.47.0) Its own `stale_credential`: an earlier operation moved the blob after the check. Not applied,
+                    // nothing to retry with the typed secrets: the "earlier request" text, not "did not answer".
+                    if (e.code == CODE_STALE && e.type == TYPE_RENEW) {
+                        throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, ChangeSender.CODE_UNSETTLED, cause = e)
+                    }
+                    throw e
+                }
             }
             answered?.let { ops.decide(it, applied = true) }
             Unit
@@ -103,5 +110,6 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
     companion object {
         const val TYPE_RENEW = "vault.secret.renew"
         const val CODE_NOT_STORED = "renew_not_stored"
+        private const val CODE_STALE = "stale_credential"
     }
 }

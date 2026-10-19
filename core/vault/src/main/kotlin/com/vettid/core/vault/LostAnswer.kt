@@ -109,6 +109,13 @@ suspend fun VaultApi.credentialVersionAt(): Pair<CredentialInfo, Instant> {
     return VaultJson.decode(CredentialInfo.serializer(), r.body) to r.ts
 }
 
+/**
+ * (§11.14.9 step 2) How many PIN or password changes and renews this client has sent ([CredentialOps.secretGeneration]).
+ * Read before the phone's epoch and the typed secrets are used, and passed as `since`: an operation is refused, with
+ * nothing sent, when one went out in between.
+ */
+val VaultApi.credentialGeneration: Long get() = credentialOps.secretGeneration
+
 /** Fetches a pool of UTKs when none is left. */
 suspend fun VaultApi.credentialTopUpUtks() = credentialOps.topUpUtks()
 

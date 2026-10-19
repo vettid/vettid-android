@@ -37,6 +37,8 @@ suspend fun VaultApi.pinChange(
     newPin: String,
     password: String,
     newUnlockSecret: ByteArray,
+    /** [credentialGeneration] as read before the phone's epoch: refused if a change or a renew went out since. */
+    since: Long? = null,
     onMarker: suspend (ChangeMarker) -> Unit = {},
 ) {
     credentialOps.change(ChangeTypes.PIN_CHANGE, {
@@ -44,7 +46,7 @@ suspend fun VaultApi.pinChange(
         put("new_pin", newPin)
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))
-    }, onMarker)
+    }, onMarker, since)
 }
 
 /**
@@ -62,12 +64,14 @@ suspend fun VaultApi.secretRenew(
     onAnswered: (suspend (innerId: String) -> Unit)? = null,
     /** (R1) The renew's own answer was a refusal (`stale_credential` included): it did not apply and never will. */
     onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
+    /** [credentialGeneration] as read before the phone's epoch: refused if a change or a renew went out since. */
+    since: Long? = null,
 ) {
     credentialOps.renew("vault.secret.renew", {
         put("pin", pin)
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))
-    }, onSending = onSending, onAnswered = onAnswered, onRefused = onRefused)
+    }, onSending = onSending, onAnswered = onAnswered, onRefused = onRefused, since = since)
 }
 
 /**
@@ -80,11 +84,13 @@ suspend fun VaultApi.credentialChangePassword(
     password: String,
     newPassword: String,
     pin: String? = null,
+    /** [credentialGeneration] as read when the change began: refused if a change or a renew went out since. */
+    since: Long? = null,
     onMarker: suspend (ChangeMarker) -> Unit = {},
 ) {
     credentialOps.change(ChangeTypes.PASSWORD_CHANGE, {
         pin?.let { put("pin", it) }
         put("password", password)
         put("new_password", newPassword)
-    }, onMarker)
+    }, onMarker, since)
 }

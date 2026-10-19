@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.data.R
 import com.vettid.core.vault.SentRequest
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.VaultStateException
@@ -217,7 +218,15 @@ class RenewRunnerTest {
                     throw VaultOpException(RenewRunner.TYPE_RENEW, code)
                 }
             }
-            assertEquals(code, (r.exceptionOrNull() as VaultOpException).code)
+            when (val e = r.exceptionOrNull()) {
+                // Its own stale_credential: the "earlier request" text, not "did not answer".
+                is VaultFailure -> {
+                    assertEquals("stale_credential", code)
+                    assertEquals(FailureKind.CREDENTIAL_UNSETTLED, e.kind)
+                    assertEquals(R.string.data_failure_credential_unsettled, e.kind.messageRes())
+                }
+                else -> assertEquals(code, (e as VaultOpException).code)
+            }
             assertNull(code, f.record.value.unconfirmedRenew)
             assertEquals(code, 3L, f.record.value.phoneEpoch)
             // Whatever the version says afterwards, the refused renew is not read from it.

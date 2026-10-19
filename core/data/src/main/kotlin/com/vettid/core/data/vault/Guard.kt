@@ -55,6 +55,10 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
     throw VaultFailure(if (e.expired) FailureKind.INVITE_EXPIRED else FailureKind.INVITE_INVALID, "not_transfer", cause = e)
 } catch (e: RelayException) {
     throw VaultFailure(FailureKind.NETWORK, cause = e)
+} catch (e: com.vettid.core.vault.CredentialUnsettledException) {
+    // (§11.14.9) Refused before anything was sent: an earlier credential request may still apply, a change or a renew
+    // went out while this operation waited, or the vault's blob could not be made current.
+    throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, ChangeSender.CODE_UNSETTLED, cause = e)
 } catch (e: IOException) {
     throw VaultFailure(FailureKind.NETWORK, cause = e)
 } catch (e: KeystoreException) {
