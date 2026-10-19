@@ -247,9 +247,20 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     var recoveryOfferedValue = true
     override val recoveryOffered: Boolean get() = recoveryOfferedValue
 
+    /**
+     * Whether setup was finished on this phone (`finishSetup`); a recovered phone is a new install, so false. Like the
+     * account record's `setupComplete`.
+     */
+    var setupComplete = false
+
+    /**
+     * As the vault's own unlock ends (`afterUnlocked`): the open app when setup is complete, otherwise
+     * [SetupStage.FINISHING]. (VaultManager then finishes setup itself; the fake leaves that to the screens' own
+     * finish, so that a screen that only waits for the phase to change cannot pass here.)
+     */
     override suspend fun finishRecoveryOpen() {
         call("finishRecoveryOpen")
-        phase.value = AppPhase.Unlocked
+        phase.value = if (setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
     }
 
     override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit, pin: String?) {
@@ -272,6 +283,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     override suspend fun finishSetup() {
         call("finishSetup")
+        setupComplete = true
         phase.value = AppPhase.Unlocked
     }
 

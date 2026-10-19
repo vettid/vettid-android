@@ -208,7 +208,8 @@ fun RecoverContent(
         RecoverStep.PIN -> if (state.phoneSecret) {
             val open: RecoveryOpenViewModel = hiltViewModel()
             val openState by open.uiState.collectAsStateWithLifecycle()
-            RecoveryOpenPane(openState, open, onStartOver = actions::askStartOver)
+            // The `ok` text is the recovered phone's last setup screen: once the vault opened, setup is finished.
+            RecoveryOpenPane(openState, open, onStartOver = actions::askStartOver, onOpened = actions::finish)
         } else {
             RecoverPin(state, actions)
         }

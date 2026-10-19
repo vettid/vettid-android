@@ -3,6 +3,7 @@ package com.vettid.feature.onboarding
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.RecoveryOpenOutcome
+import com.vettid.core.data.vault.RecoveryStage
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeVault
@@ -48,6 +49,56 @@ class RecoveryOpenViewModelTest {
         vm.openApp()
         advanceUntilIdle()
         assertTrue("finishRecoveryOpen" in vault.calls)
+        // A recovered phone is a new install: the vault's unlock ends in FINISHING, and the screen is told it opened,
+        // to finish setup ([RecoveryOpenPane]'s onOpened).
+        assertEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
+        assertTrue(vm.uiState.value.opened)
+    }
+
+    /**
+     * The release-R recovery end to end over one vault, as the screens run it: onboarding at RECOVER, the recovery flow
+     * at its PIN, the open answered `ok`, Continue. The open's FINISHING is ignored by the onboarding while it shows
+     * the recovery (as it must be for the earlier path's own last screen), so only the recovery screen's hand-over to
+     * the end of setup opens the app; and it does.
+     */
+    @Test
+    fun okThenContinueOpensTheAppFromTheRecoveryScreens() = runTest {
+        vault.recoveryStageValue = RecoveryStage.PIN
+        val onboarding = OnboardingViewModel(vault, vault, com.vettid.core.data.account.SetupLinkInbox())
+        val recover = RecoverViewModel(vault, vault, vault, com.vettid.core.testing.FakeReleaseNotes())
+        val open = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.RECOVER, onboarding.uiState.value.step)
+        assertEquals(RecoverStep.PIN, recover.uiState.value.step)
+        assertTrue("the release-R pane", recover.uiState.value.phoneSecret)
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        open.enterAndSend()
+        advanceUntilIdle()
+        assertEquals(OpenStep.DONE, open.uiState.value.step)
+        open.openApp()
+        advanceUntilIdle()
+        // The phase the bug left the phone in: FINISHING, ignored under the recovery screen.
+        assertEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
+        assertEquals(OnboardingStep.RECOVER, onboarding.uiState.value.step)
+        // What RecoveryOpenPane does once opened (MoveScreens: onOpened = the recovery flow's finish).
+        assertTrue(open.uiState.value.opened)
+        recover.finish()
+        advanceUntilIdle()
+        assertTrue("finishSetup" in vault.calls)
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+    }
+
+    /** A phone whose setup was complete (a recovery on the same, set-up phone) opens at once. */
+    @Test
+    fun aSetUpPhoneOpensAtOnce() = runTest {
+        vault.setupComplete = true
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 0))
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.enterAndSend()
+        advanceUntilIdle()
+        vm.openApp()
+        advanceUntilIdle()
         assertEquals(AppPhase.Unlocked, vault.phase.value)
     }
 
