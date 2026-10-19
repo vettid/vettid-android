@@ -98,6 +98,13 @@ data object CredentialAlarmRoute
 @Serializable
 data object CredentialNewRoute
 
+/**
+ * (ANDROID-PLAN 0.1.51, owner decision 2026-10-19) "New credential" (`credential.reset`) is hidden: Settings → Security →
+ * Credential does not show its row and [CredentialNewRoute] is not registered, until §4 "A lost answer to New
+ * credential" (VAULT-MESSAGING 0.48.0 §11.14.9) is implemented and tested. The screen and the repository method stay.
+ */
+internal const val NEW_CREDENTIAL_SHOWN = false
+
 /** Registers the Credential destinations. [navigate] opens a route; [onBack] pops one. */
 fun NavGraphBuilder.credentialDestination(
     chrome: ShellChrome,
@@ -124,7 +131,7 @@ fun NavGraphBuilder.credentialDestination(
                 changePassword = { navigate(CredentialPasswordRoute) },
                 rotate = { navigate(CredentialRotateRoute) },
                 reviewAlarm = { navigate(CredentialAlarmRoute) },
-                newCredential = { navigate(CredentialNewRoute) },
+                newCredential = { if (NEW_CREDENTIAL_SHOWN) navigate(CredentialNewRoute) },
             ),
         )
         LaunchedEffect(state.notice) { if (state.notice == CredentialNotice.BACKUP_ON) onOwnerCheck() }
@@ -139,16 +146,18 @@ fun NavGraphBuilder.credentialDestination(
         val state by vm.uiState.collectAsStateWithLifecycle()
         RotateContent(state, vm::setPassword, vm::submit, onBack)
     }
-    composable<CredentialNewRoute> {
-        val vm: NewCredentialViewModel = hiltViewModel()
-        val state by vm.uiState.collectAsStateWithLifecycle()
-        NewCredentialContent(
-            state,
-            NewCredentialActions(
-                vm::setPin, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::setAcknowledged,
-                vm::submit, vm::cancelConfirm, vm::confirm, onBack,
-            ),
-        )
+    if (NEW_CREDENTIAL_SHOWN) {
+        composable<CredentialNewRoute> {
+            val vm: NewCredentialViewModel = hiltViewModel()
+            val state by vm.uiState.collectAsStateWithLifecycle()
+            NewCredentialContent(
+                state,
+                NewCredentialActions(
+                    vm::setPin, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::setAcknowledged,
+                    vm::submit, vm::cancelConfirm, vm::confirm, onBack,
+                ),
+            )
+        }
     }
     composable<CredentialAlarmRoute> {
         val vm: AlarmViewModel = hiltViewModel()
@@ -336,15 +345,17 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             ),
                             modifier = Modifier.testTag("backup_switch"),
                         )
-                        SettingsDivider()
-                        SettingsRow(
-                            stringResource(R.string.credential_new_title),
-                            actions.newCredential,
-                            icon = Icons.Outlined.RestartAlt,
-                            iconTint = MaterialTheme.colorScheme.error,
-                            supporting = stringResource(R.string.credential_new_supporting),
-                            modifier = Modifier.testTag("new_credential_row"),
-                        )
+                        if (NEW_CREDENTIAL_SHOWN) {
+                            SettingsDivider()
+                            SettingsRow(
+                                stringResource(R.string.credential_new_title),
+                                actions.newCredential,
+                                icon = Icons.Outlined.RestartAlt,
+                                iconTint = MaterialTheme.colorScheme.error,
+                                supporting = stringResource(R.string.credential_new_supporting),
+                                modifier = Modifier.testTag("new_credential_row"),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(Spacing.xxl))
                 }
