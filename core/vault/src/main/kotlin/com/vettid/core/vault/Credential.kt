@@ -98,6 +98,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         reply: Boolean,
         extra: JsonObjectBuilder.() -> Unit,
         onSending: (suspend (SentRequest) -> Unit)? = null,
+        onAnswered: (suspend (innerId: String) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> {
         val rk = if (reply) KemPrivateKey.generate() else null
         val id = d.newId()
@@ -129,6 +130,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             // The error's body: `backoff` carries `retry_after` (§10.1, 0.17.0).
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
+        // (Q1) The operation's own answer was `ok`: said before anything that follows it (keeping the blob, its ack).
+        onAnswered?.invoke(id)
         keep(r.body)
         lastTs = r.ts
         return Triple(r.body, rk, id)
@@ -193,13 +196,14 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         reply: Boolean = false,
         extra: JsonObjectBuilder.() -> Unit = {},
         onSending: (suspend (SentRequest) -> Unit)? = null,
+        onAnswered: (suspend (innerId: String) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> = gated(payload).credentialLock.withLock {
         try {
-            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending)
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered)
         } catch (e: VaultOpException) {
             if (e.code != CODE_STALE || type in ChangeTypes.ALL) throw e
             fetch()
-            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending)
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered)
         }
     }
 

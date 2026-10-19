@@ -1758,12 +1758,13 @@ class VaultDeviceTest {
             d.keepCredential("QkxPQg==", 3)
             val seen = mutableListOf<SentRequest>()
             val depositsAtReport = mutableListOf<Int>()
+            val answered = mutableListOf<String>()
             val renew = async(Dispatchers.IO) {
                 runCatching {
-                    api.secretRenew("975310", "password one", ByteArray(32) { 5 }) { r ->
+                    api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { r ->
                         seen += r
                         depositsAtReport += deposits.size
-                    }
+                    }, onAnswered = { answered += it })
                 }
             }
             val get = v.open(nextDeposit().second)
@@ -1776,11 +1777,13 @@ class VaultDeviceTest {
             assertEquals(req.exp, seen.single().exp)
             d.handle(v.seal(req.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = req.id, status = Inner.STATUS_OK))
             val ack = v.open(nextDeposit().second)
-            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
-            assertTrue(renew.await().isSuccess)
+            assertEquals("said before the ack (Q1)", listOf(req.id), answered)
+            d.handle(v.error(ack.id, ack.type, "bad_request"))
+            assertTrue("the ack refused", renew.await().isFailure)
+            assertEquals(listOf(req.id), answered)
             // Not stored: nothing sent, the UTK back in the pool.
             val refused = async(Dispatchers.IO) {
-                runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }) { throw java.io.IOException("not stored") } }
+                runCatching { api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = { throw java.io.IOException("not stored") }) }
             }
             val get2 = v.open(nextDeposit().second)
             d.handle(v.seal(get2.type, """{"utks":[${utkJson("00112233445566c7", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
@@ -1854,6 +1857,31 @@ class VaultDeviceTest {
             refuseDeposits = null
             assertTrue("still unsettled", savedState(store).unsettled.containsKey(first.id))
             assertFalse(d.credentialSettled())
+        }
+    }
+
+    /** (Q1) A renew answered `stale_credential` whose blob fetch is refused: its own answer was never `ok`, so no hook. */
+    @Test
+    fun aStaleRenewWithARefusedFetchIsNotAnswered() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val answered = mutableListOf<String>()
+            val renew = async(Dispatchers.IO) {
+                runCatching {
+                    api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = {}, onAnswered = { answered += it })
+                }
+            }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566ca", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            d.handle(v.error(req.id, req.type, "stale_credential"))
+            val fetch = v.open(nextDeposit().second)
+            assertEquals("credential.get", fetch.type)
+            d.handle(v.error(fetch.id, fetch.type, "busy"))
+            assertEquals("credential.get", (renew.await().exceptionOrNull() as VaultOpException).type)
+            assertTrue(answered.isEmpty())
         }
     }
 

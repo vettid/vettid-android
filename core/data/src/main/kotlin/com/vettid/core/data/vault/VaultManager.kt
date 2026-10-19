@@ -222,8 +222,10 @@ class VaultManager(
 
             override fun saveDecision(c: ChangeCheck?) {
                 // (P4) Off the caller's thread (an acknowledgement comes from the main thread); always the newest wish.
-                decisionToSave = SavedDecision.of(c)
-                scope.launch(Dispatchers.IO) { decisionWrite.withLock { runCatching { record.saveDecision(decisionToSave) } } }
+                val d = SavedDecision.of(c)
+                if (d == null || !d.sameAs(decisionToSave)) notifiedWanted = false
+                decisionToSave = d
+                writeDecision()
             }
         },
     )
@@ -232,7 +234,10 @@ class VaultManager(
 
     /** (P4) The decision to keep on the phone, written off the main thread, the newest each time. */
     @Volatile
-    private var decisionToSave: SavedDecision? = null
+    private var decisionToSave: SavedDecision? = record.value.changeDecision
+
+    @Volatile
+    private var notifiedWanted = record.value.changeDecision?.notified == true
     private val decisionWrite = Mutex()
 
     /**
@@ -1917,7 +1922,20 @@ class VaultManager(
     override fun changeDecisionNotified(): Boolean = local.changeDecision?.notified == true
 
     override fun markChangeDecisionNotified() {
-        scope.launch(Dispatchers.IO) { decisionWrite.withLock { runCatching { record.decisionNotified() } } }
+        notifiedWanted = true
+        writeDecision()
+    }
+
+    /** (P4) One writer: the decision as wanted now, then (in the same step) that it was notified, never the reverse. */
+    private fun writeDecision() {
+        scope.launch(Dispatchers.IO) {
+            decisionWrite.withLock {
+                runCatching {
+                    record.saveDecision(decisionToSave)
+                    if (notifiedWanted && decisionToSave != null) record.decisionNotified()
+                }
+            }
+        }
     }
 
     override val pinChangeUnresolved: StateFlow<Boolean> = pinChangeUnresolvedFlow.asStateFlow()
@@ -1936,15 +1954,15 @@ class VaultManager(
         val s = session()
         // In this manager's scope (N1): a screen that goes away does not stop it, and its outcome is kept.
         try {
-            renewRunner.send { onSending ->
+            renewRunner.send { onSending, onAnswered ->
                 val next = phoneSecrets.secret(phone, ahead = 1)
                 try {
-                    s.openApi.secretRenew(pin, password, next) { req ->
+                    s.openApi.secretRenew(pin, password, next, onSending = { req ->
                         // Stored before the send (§11.14.9 step 5, N1); the record of [rec].
                         renewEpoch = phone.epoch
                         renewSince = rec
                         onSending(req)
-                    }
+                    }, onAnswered = onAnswered)
                 } finally {
                     next.fill(0)
                 }

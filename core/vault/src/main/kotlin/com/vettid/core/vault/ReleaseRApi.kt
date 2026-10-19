@@ -56,12 +56,14 @@ suspend fun VaultApi.secretRenew(
     password: String,
     newUnlockSecret: ByteArray,
     onSending: (suspend (SentRequest) -> Unit)? = null,
+    /** (Q1) The renew's own answer was `ok` (before its blob is kept and acknowledged). */
+    onAnswered: (suspend (innerId: String) -> Unit)? = null,
 ) {
     credentialOps.credOp("vault.secret.renew", {
         put("pin", pin)
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))
-    }, onSending = onSending)
+    }, onSending = onSending, onAnswered = onAnswered)
 }
 
 /**

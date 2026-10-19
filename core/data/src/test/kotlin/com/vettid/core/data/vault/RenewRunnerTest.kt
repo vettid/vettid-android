@@ -56,9 +56,10 @@ class RenewRunnerTest {
     fun anAnsweredRenewIsDecidedByItsAnswer() = runTest {
         val f = Fixture(testScheduler)
         var storedBeforeSend = false
-        f.runner.send { onSending ->
+        f.runner.send { onSending, onAnswered ->
             onSending(req)
             storedBeforeSend = f.record.value.unconfirmedRenew?.innerId == req.innerId
+            onAnswered(req.innerId)
         }
         assertTrue(storedBeforeSend)
         assertNull(f.record.value.unconfirmedRenew)
@@ -66,12 +67,15 @@ class RenewRunnerTest {
         f.scope.cancel()
     }
 
-    /** A refusal of the renew itself: not applied. A refused acknowledgement after its answer (P1): applied. */
+    /**
+     * A refusal of the renew itself: not applied. A refused acknowledgement after its `ok` answer (P1): applied. A
+     * `stale_credential` whose blob fetch is refused (Q1): nothing decided, left for the version check.
+     */
     @Test
-    fun onlyTheRenewsOwnRefusalMeansNotApplied() = runTest {
+    fun onlyTheRenewsOwnAnswerDecidesIt() = runTest {
         val f = Fixture(testScheduler)
         val r = runCatching {
-            f.runner.send { onSending ->
+            f.runner.send { onSending, _ ->
                 onSending(req)
                 throw VaultOpException(RenewRunner.TYPE_RENEW, "bad_pin")
             }
@@ -79,16 +83,30 @@ class RenewRunnerTest {
         assertEquals("bad_pin", (r.exceptionOrNull() as VaultOpException).code)
         assertNull(f.record.value.unconfirmedRenew)
         assertEquals(3L, f.record.value.phoneEpoch)
+        // Renew ok, then credential.ack refused: applied.
         val ack = runCatching {
-            f.runner.send { onSending ->
+            f.runner.send { onSending, onAnswered ->
                 onSending(req.copy(innerId = "01JRENEW2"))
+                onAnswered("01JRENEW2")
                 throw VaultOpException("credential.ack", "bad_request")
             }
         }
         assertTrue("the renew succeeded", ack.isSuccess)
         assertNull(f.record.value.unconfirmedRenew)
         assertEquals(4L, f.record.value.phoneEpoch)
+        // Stale, then credential.get refused: no answer of the renew itself, so nothing is decided.
+        val g = Fixture(testScheduler)
+        val stale = runCatching {
+            g.runner.send { onSending, _ ->
+                onSending(req)
+                throw VaultOpException("credential.get", "busy")
+            }
+        }
+        assertEquals("busy", (stale.exceptionOrNull() as VaultOpException).code)
+        assertEquals("left for the version check", req.innerId, g.record.value.unconfirmedRenew?.innerId)
+        assertEquals("the epoch does not move", 3L, g.record.value.phoneEpoch)
         f.scope.cancel()
+        g.scope.cancel()
     }
 
     /** No answer: it stays stored, to be decided; a store that fails sends nothing. */
@@ -96,7 +114,7 @@ class RenewRunnerTest {
     fun aLostAnswerStaysAndAFailedStoreSendsNothing() = runTest {
         val f = Fixture(testScheduler)
         val lost = runCatching {
-            f.runner.send { onSending ->
+            f.runner.send { onSending, _ ->
                 onSending(req)
                 throw VaultStateException("vault.secret.renew: no response")
             }
@@ -107,7 +125,7 @@ class RenewRunnerTest {
         g.storeWorks = false
         var sent = false
         val r = runCatching {
-            g.runner.send { onSending ->
+            g.runner.send { onSending, _ ->
                 onSending(req)
                 sent = true
             }

@@ -35,30 +35,40 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
     enum class State { NONE, UNSETTLED, UNDECIDABLE }
 
     /**
-     * Sends a renew through [send], which calls its argument with the request just before it goes out. Its answer decides
-     * it: success applied; a refusal of `vault.secret.renew` itself did not apply. A later step that fails after the renew
-     * was answered (its `credential.ack`) does not undo it: applied. No answer leaves it stored, to be decided.
+     * Sends a renew through [send], which calls `onSending` with the request just before it goes out and `onAnswered` when
+     * the renew's own answer is `ok`. Only that answer decides "applied", and only a refusal of `vault.secret.renew`
+     * itself decides "not applied". Anything else (no answer, or an error of a step around it: the blob fetched after a
+     * `stale_credential`, a refused `credential.ack`) leaves it stored, to be decided by [settle] (Q1); a failure after
+     * an `ok` answer does not undo it.
      */
     @Suppress("ThrowsCount")
-    suspend fun send(send: suspend (onSending: suspend (SentRequest) -> Unit) -> Unit) {
+    suspend fun send(
+        send: suspend (onSending: suspend (SentRequest) -> Unit, onAnswered: suspend (String) -> Unit) -> Unit,
+    ) {
         scope.async {
             var sent: SentRequest? = null
+            var answered: String? = null
             try {
-                send { req ->
-                    if (!ops.store(req)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_NOT_STORED)
-                    sent = req
-                }
-                sent?.let { ops.decide(it.innerId, applied = true) }
-                Unit
+                send(
+                    { req ->
+                        if (!ops.store(req)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_NOT_STORED)
+                        sent = req
+                    },
+                    { id -> answered = id },
+                )
             } catch (e: VaultOpException) {
                 val s = sent ?: throw e
-                if (e.type == TYPE_RENEW) {
-                    ops.decide(s.innerId, applied = false)
-                    throw e
+                when {
+                    answered != null -> Unit // decided below: applied
+                    e.type == TYPE_RENEW -> {
+                        ops.decide(s.innerId, applied = false)
+                        throw e
+                    }
+                    else -> throw e // a step around the renew failed: left for [settle]
                 }
-                // (P1) The renew's answer applied it; what failed came after (its acknowledgement).
-                ops.decide(s.innerId, applied = true)
             }
+            answered?.let { ops.decide(it, applied = true) }
+            Unit
         }.await()
     }
 
