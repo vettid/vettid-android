@@ -294,6 +294,8 @@
     <!-- ANDROID-PLAN "Change PIN" (release R), verbatim -->
     <string name="settings_pin_password_too">Changing only the PIN gives whoever is guessing ten new tries at the same password. Change your password too.</string>
     <!-- ANDROID-PLAN "Owner check and status" (release R), verbatim -->
-    <string name="settings_recovery_unknown_day">For %1$s your vault has not been able to check its recovery attempts or record that you were here. If this goes on for %2$s, your vault is no longer protected against a recovery started by someone else, and until it ends you cannot change your PIN or password. This is a fault of the VettID service or an attack on it. Contact VettID.</string>
+    <string name="settings_recovery_unknown_day">For a day your vault has not been able to check its recovery attempts or record that you were here. If this goes on for three days, your vault is no longer protected against a recovery started by someone else, and until it ends you cannot change your PIN or password. This is a fault of the VettID service or an attack on it. Contact VettID.</string>
+    <!-- STAGING-TIME-SCALE S8: the same notice on a vault with a time scale; %1$s the clock's period, %2$s the quiet period as it runs. -->
+    <string name="settings_recovery_unknown_day_scaled">For %1$s your vault has not been able to check its recovery attempts or record that you were here. If this goes on for %2$s, your vault is no longer protected against a recovery started by someone else, and until it ends you cannot change your PIN or password. This is a fault of the VettID service or an attack on it. Contact VettID.</string>
     <string name="settings_recovery_change_password">Change password</string>
 </resources>
