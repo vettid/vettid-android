@@ -169,8 +169,11 @@ object UnlockEpoch {
 
 /** The old phone's keys after a transfer it approved (release R, §11.14.10; owner decision 2026-10-15). */
 object KeptTransfer {
-    /** At most this long after the approval. */
+    /** At most this long after the approval (in real time; divided by the vault's time scale when the approval starts it). */
     const val KEEP_MS = 7L * 24 * 60 * 60 * 1000
+
+    /** (STAGING-TIME-SCALE, S10) The keep period an approval starts on a vault of [timeScale]. */
+    fun keepMs(timeScale: Long): Long = TimeScales.divideMs(KEEP_MS, timeScale)
 
     sealed interface Decision {
         /** The 7 days are over: this phone's keys go. */
@@ -206,15 +209,16 @@ object KeptTransfer {
     fun mayHaveReached(kind: FailureKind): Boolean = kind == FailureKind.NO_RESPONSE
 
     /**
-     * [approvedAtMs] and [nowMs] are wall-clock times. A clock set before the approval counts from now, so that it never
-     * lengthens the keep beyond 7 days from the moment it is noticed.
+     * [approvedAtMs] and [nowMs] are wall-clock times; [keepMs] the keep period the approval started ([keepMs], kept
+     * with it: a scale learnt later does not change it). A clock set before the approval counts from now, so that it
+     * never lengthens the keep beyond the period from the moment it is noticed.
      */
-    fun decide(approvedAtMs: Long, nowMs: Long): Decision {
+    fun decide(approvedAtMs: Long, nowMs: Long, keepMs: Long = KEEP_MS): Decision {
         val elapsed = nowMs - approvedAtMs
         return when {
-            elapsed >= KEEP_MS -> Decision.Erase
-            elapsed < 0 -> Decision.Keep(KEEP_MS)
-            else -> Decision.Keep(KEEP_MS - elapsed)
+            elapsed >= keepMs -> Decision.Erase
+            elapsed < 0 -> Decision.Keep(keepMs)
+            else -> Decision.Keep(keepMs - elapsed)
         }
     }
 }

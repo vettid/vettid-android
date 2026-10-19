@@ -65,23 +65,35 @@ data class ReleaseUpdateOffer(
     }
 }
 
-/** The member dismissed the notice of [release] ([kind]) at [at]. */
-data class ReleaseDismissal(val release: Long, val kind: UpdateNoticeKind, val at: Instant)
+/**
+ * The member dismissed the notice of [release] ([kind]) at [at], for [duration] ([ReleaseNotices.DISMISS_FOR], divided by
+ * the vault's time scale when it was dismissed: STAGING-TIME-SCALE, S16).
+ */
+data class ReleaseDismissal(
+    val release: Long,
+    val kind: UpdateNoticeKind,
+    val at: Instant,
+    val duration: Duration = ReleaseNotices.DISMISS_FOR,
+)
 
 /** When the shell shows the release banner and when the app posts its local notification. */
 object ReleaseNotices {
     /** A dismissed banner comes back after 24 h, whatever the kind (owner decision 2026-10-09). */
     val DISMISS_FOR: Duration = Duration.ofHours(24)
 
+    /** (STAGING-TIME-SCALE, S16) How long a dismissal made now lasts on a vault of [timeScale]. */
+    fun dismissFor(timeScale: Long): Duration = Duration.ofSeconds(TimeScales.divide(DISMISS_FOR.seconds, timeScale))
+
     /**
      * Whether the banner shows for [offer] at [now]: always without a dismissal of this release and kind (a notice
-     * that turns from "available" into an end-date warning shows again), and again [DISMISS_FOR] after one. A
+     * that turns from "available" into an end-date warning shows again), and again [DISMISS_FOR] after one (the
+     * dismissal's own [ReleaseDismissal.duration]). A
      * dismissal "in the future" (the clock was set back) does not hide it either.
      */
     fun bannerVisible(offer: ReleaseUpdateOffer?, dismissal: ReleaseDismissal?, now: Instant): Boolean = when {
         offer == null -> false
         dismissal == null || dismissal.release != offer.target.number || dismissal.kind != offer.kind -> true
-        else -> now.isBefore(dismissal.at) || !now.isBefore(dismissal.at.plus(DISMISS_FOR))
+        else -> now.isBefore(dismissal.at) || !now.isBefore(dismissal.at.plus(dismissal.duration))
     }
 
     /** One local notification per release: only for a target newer than the last one notified. */

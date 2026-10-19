@@ -59,6 +59,7 @@ import com.vettid.core.ui.components.PasswordRuleLine
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.visibleSecretKeyboard
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
@@ -152,7 +153,7 @@ fun OnboardingContent(
 @Composable
 private fun ErrorText(state: OnboardingUiState, override: FailureKind? = null, overrideText: String? = null) {
     val kind = state.error ?: return
-    val text = if (override != null && kind == override && overrideText != null) overrideText else stringResource(kind.messageRes())
+    val text = if (override != null && kind == override && overrideText != null) overrideText else failureText(kind.messageRes())
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(NoticeKind.URGENT, stringResource(R.string.onboarding_progress_failed), text, Modifier.testTag("error"))
 }
@@ -343,6 +344,7 @@ fun VaultElsewhereScreen(state: OnboardingUiState, actions: OnboardingActions, o
         NoticeCard(
             NoticeKind.WARNING,
             stringResource(R.string.onboarding_elsewhere_recovery_title),
+            // No vault on this screen yet, so no time scale: the real wait.
             stringResource(R.string.onboarding_elsewhere_recovery_body),
             modifier = Modifier.testTag("elsewhere_recovery"),
             actions = {

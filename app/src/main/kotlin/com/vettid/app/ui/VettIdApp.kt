@@ -184,6 +184,7 @@ fun VettIdApp(
                                 clearFailed = clearFailed,
                                 longUnreachable = unreachable?.longUnreachable == true,
                                 onRecover = { uri.openUri(portal) },
+                                unreachableAfterSeconds = unreachable?.unreachableAfterSeconds,
                             )
                         }
                         composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }

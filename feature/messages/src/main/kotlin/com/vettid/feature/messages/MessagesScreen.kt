@@ -76,6 +76,7 @@ import com.vettid.core.ui.components.rememberTopBarSearch
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -277,7 +278,7 @@ internal fun ErrorState(kind: FailureKind, onRetry: () -> Unit) {
         NoticeCard(
             kind = NoticeKind.WARNING,
             title = stringResource(R.string.messages_error_title),
-            body = stringResource(kind.messageRes()),
+            body = failureText(kind.messageRes()),
             actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
         )
     }
@@ -344,7 +345,7 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.messages_error_title),
-                    body = stringResource(error.messageRes()),
+                    body = failureText(error.messageRes()),
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.messages_ok)) } },
                 )

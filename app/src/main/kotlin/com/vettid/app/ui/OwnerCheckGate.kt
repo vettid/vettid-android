@@ -10,10 +10,15 @@ import com.vettid.app.R
 import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckView
+import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.UrgentBanner
+import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
@@ -29,8 +34,10 @@ import javax.inject.Inject
 data class OwnerCheckGateState(
     /** Past the deadline: the check comes before any other use of the app (never over an action in progress). */
     val gated: Boolean = false,
-    /** Within the hour before the deadline: the early warning, with "check now". */
+    /** Within the hour before the deadline (divided by the time scale): the early warning, with "check now". */
     val warning: Boolean = false,
+    /** How long before the deadline the warning starts, in seconds (1 h, divided by the vault's time scale). */
+    val warningSeconds: Long = OwnerCheckView.WARNING.seconds,
     val deadline: Instant? = null,
     /** The hold is off (§3.6.7): the persistent indicator, with its end date if any. */
     val holdOff: Boolean = false,
@@ -45,9 +52,11 @@ data class OwnerCheckGateState(
             notices: List<OwnerCheckNotice>,
             now: Instant,
             presenceUnrecorded: Boolean = false,
+            timeScale: Long = 1,
         ): OwnerCheckGateState = OwnerCheckGateState(
             gated = v?.gated(now) == true,
-            warning = v?.warning(now) == true,
+            warning = v?.warning(now, timeScale) == true,
+            warningSeconds = OwnerCheckView.warningFor(timeScale).seconds,
             deadline = v?.deadline,
             holdOff = v?.holdOff(now) == true,
             holdOffUntil = v?.holdOffUntil,
@@ -59,7 +68,10 @@ data class OwnerCheckGateState(
 
 /** The shell's view of the owner check: re-evaluated as time passes, so that the deadline gates on its own. */
 @HiltViewModel
-class OwnerCheckGateViewModel @Inject constructor(private val repo: OwnerCheckRepository) : ViewModel() {
+class OwnerCheckGateViewModel @Inject constructor(
+    private val repo: OwnerCheckRepository,
+    private val timeScale: TimeScaleSource = TimeScaleSource.RealTime,
+) : ViewModel() {
     private val clock = flow {
         while (true) {
             emit(Instant.now())
@@ -68,11 +80,19 @@ class OwnerCheckGateViewModel @Inject constructor(private val repo: OwnerCheckRe
     }
 
     val gate: StateFlow<OwnerCheckGateState> =
-        combine(repo.ownerCheck, repo.notices, clock, repo.presenceUnrecorded) { v, n, now, p -> OwnerCheckGateState.of(v, n, now, p) }
+        combine(repo.ownerCheck, repo.notices, clock, repo.presenceUnrecorded, timeScale.timeScale) { v, n, now, p, t ->
+            OwnerCheckGateState.of(v, n, now, p, t.scale)
+        }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(STOP_MS),
-                OwnerCheckGateState.of(repo.ownerCheck.value, repo.notices.value, Instant.now(), repo.presenceUnrecorded.value),
+                OwnerCheckGateState.of(
+                    repo.ownerCheck.value,
+                    repo.notices.value,
+                    Instant.now(),
+                    repo.presenceUnrecorded.value,
+                    timeScale.timeScale.value.scale,
+                ),
             )
 
     /** (Release R) The owner check right after an unlock that cancelled a recovery did not pass: show the check screen. */
@@ -133,7 +153,7 @@ fun OwnerCheckBanners(
     }
     if (gate.warning && !gate.gated) {
         val text = gate.deadline?.let { stringResource(R.string.owner_check_warning, Times.time(it)) }
-            ?: stringResource(R.string.owner_check_warning_soon)
+            ?: stringResource(R.string.owner_check_warning_soon, durationText(gate.warningSeconds))
         InfoBanner(text, Modifier.testTag("owner_check_warning"), stringResource(R.string.owner_check_now), onCheckNow, top)
         top = false
     }
@@ -148,7 +168,10 @@ fun OwnerCheckBanners(
     if (gate.presenceUnrecorded) {
         InfoBanner(
             stringResource(com.vettid.feature.onboarding.R.string.ownercheck_presence_title) + " " +
-                stringResource(com.vettid.feature.onboarding.R.string.ownercheck_presence_body),
+                stringResource(
+                    com.vettid.feature.onboarding.R.string.ownercheck_presence_body,
+                    scaledDurationText(RECOVERY_QUIET_S),
+                ) + stagingNoteSuffix(),
             Modifier.testTag("owner_check_presence_banner"),
             statusBarPadding = top,
         )

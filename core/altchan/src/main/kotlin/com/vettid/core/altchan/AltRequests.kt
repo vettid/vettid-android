@@ -32,6 +32,12 @@ class AltRefusedException(val reason: Reason) : IOException("alternate channel: 
 
         /** The device is not paired with a vault. */
         NOT_PAIRED,
+
+        /**
+         * (STAGING-TIME-SCALE §4 item 4) The vault's release has a time scale this build does not accept (a production
+         * build: any but 1): nothing is sent to it.
+         */
+        TIME_SCALE,
     }
 }
 

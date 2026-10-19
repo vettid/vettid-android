@@ -48,6 +48,12 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNote
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -116,9 +122,11 @@ fun UnlockContent(
                 NoticeCard(
                     NoticeKind.INFO,
                     stringResource(R.string.onboarding_move_didnt_finish),
-                    stringResource(R.string.onboarding_kept_transfer) + "\n\n" + stringResource(R.string.onboarding_move_didnt_finish_body),
+                    stringResource(R.string.onboarding_kept_transfer, durationText(state.keptForSeconds)) + "\n\n" +
+                        stringResource(R.string.onboarding_move_didnt_finish_body),
                     modifier = Modifier.testTag("kept_transfer"),
                 )
+                if (state.stagingNote) StagingTimeNote()
             }
             state.preflightError?.let {
                 NoticeCard(
@@ -131,7 +139,7 @@ fun UnlockContent(
                             else -> R.string.unlock_title
                         },
                     ),
-                    stringResource(it.messageRes()),
+                    failureText(it.messageRes()),
                     modifier = Modifier.testTag("unlock_preflight_error"),
                 )
             }
@@ -207,7 +215,7 @@ fun UnlockContent(
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.onboarding_finish_move_title),
-                    stringResource(f.messageRes()),
+                    failureText(f.messageRes()),
                     modifier = Modifier.testTag("unlock_move_failure"),
                     announce = LiveRegionMode.Polite,
                     actions = { TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) } },
@@ -313,7 +321,7 @@ fun UnlockContent(
                             when (m.code) {
                                 UnlockViewModel.CODE_UNREADABLE -> stringResource(R.string.unlock_unreadable)
                                 UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
-                                else -> stringResource(m.kind.messageRes())
+                                else -> failureText(m.kind.messageRes())
                             },
                             modifier = Modifier.testTag("unlock_failed"),
                         )
@@ -337,7 +345,9 @@ fun UnlockContent(
             text = stringResource(
                 if (state.keysGone && !state.notRecognised) com.vettid.core.ui.R.string.core_ui_erase_phone_body
                 else R.string.unlock_erase_confirm_body,
-            ),
+                // The erase text's recovery wait (unused by the other text).
+                scaledDurationText(Durations.DAY),
+            ) + stagingNoteSuffix(),
             confirmLabel = stringResource(R.string.unlock_erase_confirm),
             onConfirm = actions::confirmErase,
             onDismiss = actions::dismissErase,
@@ -459,7 +469,7 @@ private fun SignerRefusedNotice(help: Boolean, onHelp: (Boolean) -> Unit) {
         NoticeCard(
             NoticeKind.INFO,
             stringResource(R.string.unlock_signer_refused_help_title),
-            stringResource(R.string.unlock_signer_refused_help_body),
+            stringResource(R.string.unlock_signer_refused_help_body, scaledDurationText(Durations.DAY)),
             modifier = Modifier.testTag("signer_refused_help_text"),
         )
     }

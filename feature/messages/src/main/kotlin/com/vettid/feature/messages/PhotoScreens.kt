@@ -92,6 +92,7 @@ import com.vettid.core.ui.components.PhotoCamera
 import com.vettid.core.ui.components.SecureWindow
 import com.vettid.core.ui.components.rememberCameraAccess
 import com.vettid.core.ui.components.rememberPhotoCameraHandle
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -510,7 +511,7 @@ private fun androidx.compose.foundation.layout.BoxScope.ViewerBody(
             NoticeCard(
                 kind = NoticeKind.WARNING,
                 title = stringResource(R.string.messages_error_title),
-                body = state.problemText?.let { stringResource(it) } ?: stringResource(failure.messageRes()),
+                body = state.problemText?.let { stringResource(it) } ?: failureText(failure.messageRes()),
                 actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
             )
         }

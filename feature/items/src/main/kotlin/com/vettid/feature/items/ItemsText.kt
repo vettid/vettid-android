@@ -16,6 +16,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultLimit
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.message
+import com.vettid.core.ui.format.failureText
 
 /** The member-facing names of sensitivities, kinds and categories, and the Vault screens' messages. */
 object ItemsText {
@@ -114,7 +115,7 @@ object ItemsText {
         kind == FailureKind.CONFLICT -> stringResource(R.string.items_error_conflict)
         kind == FailureKind.NOT_FOUND -> stringResource(R.string.items_error_not_found)
         kind == FailureKind.OTHER -> stringResource(R.string.items_error_refused)
-        else -> stringResource(kind.messageRes())
+        else -> failureText(kind.messageRes())
     }
 
     /** A named limit (VAULT-MESSAGING 0.21.0 §10.1) in the member's words, with its bound. */

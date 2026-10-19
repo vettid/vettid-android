@@ -70,6 +70,10 @@ import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsSectionHeader
 import com.vettid.core.ui.components.excludeFromAutofill
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdTheme
 import java.time.Instant
@@ -85,7 +89,7 @@ private fun formatDate(s: String?): String? = s?.let {
 @Composable
 private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?) {
     Column(Modifier.padding(Spacing.gutter)) {
-        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), stringResource(error.messageRes()))
+        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), failureText(error.messageRes()))
         if (retry != null) {
             Spacer(Modifier.height(Spacing.l))
             SecondaryButton(stringResource(R.string.settings_retry), retry)
@@ -119,7 +123,7 @@ private fun SignerDetails(signer: SignerView) {
     NoticeCard(
         NoticeKind.INFO,
         stringResource(signer.signerClass.installedFromRes()),
-        stringResource(R.string.settings_signer_explanation) + "\n\n" +
+        stringResource(R.string.settings_signer_explanation, scaledDurationText(Durations.DAY)) + "\n\n" +
             stringResource(R.string.settings_signer_digest, signer.digest.chunked(DIGEST_GROUP).joinToString(" ")),
         modifier = Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s).testTag("signer_details"),
     )
@@ -392,7 +396,7 @@ fun ChangePinContent(
             NoticeCard(
                 NoticeKind.URGENT,
                 stringResource(R.string.settings_pin_title),
-                stringResource(it.messageRes()),
+                failureText(it.messageRes()),
                 Modifier.testTag("error"),
                 // (0.45.0 §11.14.9) An uncertain PIN or an unconfirmed new phone secret: settled by a lock and unlock.
                 actions = if (it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) {
@@ -430,7 +434,7 @@ fun RecoveryContent(
     }
     FormScaffold(
         title = stringResource(R.string.settings_recovery_title),
-        body = stringResource(R.string.settings_recovery_body),
+        body = stringResource(R.string.settings_recovery_body, scaledDurationText(Durations.DAY)),
         primaryLabel = stringResource(R.string.settings_recovery_open),
         onPrimary = onOpenAccountSite,
         busy = state.busy || state.loading,
@@ -438,6 +442,7 @@ fun RecoveryContent(
         secondaryLabel = if (active) null else stringResource(R.string.settings_recovery_transfer),
         onSecondary = onTransfer,
     ) {
+        StagingTimeNoteIfShown()
         if (state.backupOff) {
             NoticeCard(
                 NoticeKind.WARNING,
@@ -461,7 +466,7 @@ fun RecoveryContent(
         }
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
-            NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_recovery_title), stringResource(it.messageRes()))
+            NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_recovery_title), failureText(it.messageRes()))
         }
     }
 }
@@ -652,7 +657,7 @@ fun DeleteVaultContent(state: DeleteVaultUiState, actions: DeleteVaultActions) {
             NoticeCard(
                 NoticeKind.URGENT,
                 stringResource(R.string.settings_delete_title),
-                stringResource(it.messageRes()),
+                failureText(it.messageRes()),
                 Modifier.testTag("error"),
             )
         }

@@ -18,6 +18,7 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -116,7 +117,7 @@ fun NewPhoneSecretContent(
             NoticeCard(
                 NoticeKind.URGENT,
                 stringResource(R.string.settings_security_new_secret),
-                stringResource(it.messageRes()),
+                failureText(it.messageRes()),
                 Modifier.testTag("error"),
             )
         }

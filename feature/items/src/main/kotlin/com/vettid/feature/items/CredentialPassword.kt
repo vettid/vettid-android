@@ -23,6 +23,7 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -110,7 +111,7 @@ fun CredentialPasswordContent(
             waiting > 0 -> stringResource(R.string.items_password_backoff, waiting)
             prompt.error == FailureKind.BAD_PASSWORD -> stringResource(R.string.items_password_wrong)
             prompt.error == FailureKind.BACKOFF -> stringResource(R.string.items_password_backoff_undated)
-            prompt.error != null -> stringResource(prompt.error.messageRes())
+            prompt.error != null -> failureText(prompt.error.messageRes())
             else -> null
         }
         SecretField(

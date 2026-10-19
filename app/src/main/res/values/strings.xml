@@ -65,7 +65,7 @@
     <!-- Draft text for the owner (erase-or-recover on a screen that could not be left). -->
     <string name="root_recover">Recover your vault</string>
     <string name="root_recover_line">Before you erase VettID here, check on your account site that your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose \"I lost my phone: recover my vault\".</string>
-    <string name="root_long_unreachable">VettID has not reached your vault for 7 days or more.</string>
+    <string name="root_long_unreachable">VettID has not reached your vault for %1$s or more.</string>
     <string name="root_clear_data_failed">VettID could not erase its data. Clear VettID\'s storage in Android Settings, or uninstall and reinstall VettID.</string>
     <string name="root_local_state_title">VettID cannot read its keys on this phone</string>
     <string name="root_start_over">Start over on this phone</string>

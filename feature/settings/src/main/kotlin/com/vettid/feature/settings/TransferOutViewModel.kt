@@ -3,6 +3,7 @@ package com.vettid.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
@@ -50,6 +51,8 @@ enum class TransferOutStep {
     MOVED,
 }
 
+private const val KEPT_MS_PER_SECOND = 1_000L
+
 /** Immutable UI state of the transfer on the old phone. The PIN and password live here only until the approval. */
 data class TransferOutUiState(
     val step: TransferOutStep = TransferOutStep.INTRO,
@@ -78,6 +81,10 @@ data class TransferOutUiState(
      * at most 7 days ([TransferOutStep.MOVED] says so); false: it erases itself once the vault confirms.
      */
     val keptKeys: Boolean = false,
+    /** (STAGING-TIME-SCALE, S10) How long it keeps them at most (7 days, divided by the time scale at the approval). */
+    val keptForSeconds: Long = KeptTransfer.KEEP_MS / KEPT_MS_PER_SECOND,
+    /** (STAGING-TIME-SCALE) A staging build adds its note to that text. */
+    val stagingNote: Boolean = false,
 ) {
     val canApprove: Boolean get() = pin.length >= MIN_PIN && password.isNotEmpty() && waitSeconds == 0L && !busy
 
@@ -238,6 +245,8 @@ class TransferOutViewModel @Inject constructor(
                     it.copy(
                         step = if (wiped) it.step else TransferOutStep.MOVED, busy = false, pin = "", password = "", offer = null,
                         keptKeys = kept,
+                        keptForSeconds = vault.transferKeepSeconds,
+                        stagingNote = vault.timeScale.value.stagingNote,
                     )
                 }
             } catch (e: VaultFailure) {

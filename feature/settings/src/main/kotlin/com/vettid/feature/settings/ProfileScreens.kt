@@ -53,6 +53,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
 import java.time.Instant
@@ -209,7 +210,7 @@ fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActi
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.settings_profile_error),
-                    limit ?: stringResource(it.messageRes()),
+                    limit ?: failureText(it.messageRes()),
                     actions = { TextButton(onClick = actions.onDismiss) { Text(stringResource(R.string.settings_done)) } },
                 )
             }
@@ -447,7 +448,7 @@ private fun ConfirmStep(state: ChangeNameUiState, actions: ChangeNameActions) {
                 m is ChangeNameMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
                     stringResource(R.string.settings_name_title),
-                    stringResource(m.kind.messageRes()),
+                    failureText(m.kind.messageRes()),
                     modifier = Modifier.testTag("name_failed"),
                 )
                 else -> Unit

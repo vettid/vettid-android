@@ -47,6 +47,12 @@ internal data class LocalAccount(
      */
     val lastContactAtMs: Long? = null,
     /**
+     * (STAGING-TIME-SCALE, S12) How long without contact before erase-or-recover is offered, set when [lastContactAtMs]
+     * was written: [StuckScreens.LONG_UNREACHABLE] divided by the vault's time scale then. Null: 7 days (written before
+     * the scale, or at scale 1).
+     */
+    val unreachableAfterMs: Long? = null,
+    /**
      * The inner `ts` of the last successful unlock result (epoch ms, the enclave's clock): a `vault.locking`
      * from before it is stale also after a process start ([LockNotices]).
      */
@@ -60,6 +66,11 @@ internal data class LocalAccount(
      * ms): it keeps its keys until `device.unlinked{transferred}` or for 7 days, and says so at every start.
      */
     val transferApprovedAtMs: Long? = null,
+    /**
+     * (STAGING-TIME-SCALE, S10) How long this phone keeps its keys after [transferApprovedAtMs], set with it: 7 days
+     * divided by the vault's time scale at the approval. Null: 7 days (approved before the scale was known).
+     */
+    val transferKeepMs: Long? = null,
     /**
      * (Release R, §11.14.6) A `vault.recovery.open` the member API took got no answer (the relay, a timeout, the
      * app stopped): the next answer may be that of a right entry that could not be completed. Cleared by the
@@ -93,6 +104,11 @@ internal data class LocalAccount(
     val recoveryRSeen: Boolean = false,
     /** (0.34.0) The capabilities of the vault's instance this phone last verified (`recovery_offered` for the status). */
     val capabilities: List<String> = emptyList(),
+    /**
+     * (VAULT-MESSAGING 0.43.0 §11.10.9, STAGING-TIME-SCALE §5.2) The time scale of the vault's instance this phone last
+     * verified (a descriptor, or a transfer bundle); null until one was read, which counts as 1.
+     */
+    val timeScale: Long? = null,
     /**
      * (VAULT-MESSAGING 0.44.0 §11.14.9) A `pin.change` or `credential.password.change` that was sent and is not decided
      * yet: written before the send, cleared when an answer or the check decides it. No PIN, password or secret.
@@ -203,9 +219,20 @@ internal class AccountRecord(
         if (cur.rotateOffered) null else cur.copy(rotateOffered = true)
     }
 
-    /** A `vault.status` read reached the vault service at [nowMs] ([LocalAccount.lastContactAtMs]), for the record of [since]. */
-    fun contacted(since: Int, nowMs: Long): Boolean =
-        update(since) { if (StuckScreens.writeContact(it.lastContactAtMs, nowMs)) it.copy(lastContactAtMs = nowMs) else null }
+    /**
+     * A `vault.status` read reached the vault service at [nowMs] ([LocalAccount.lastContactAtMs]), for the record of
+     * [since]; the long-unreachable bound starts from it, divided by the vault's time scale now.
+     */
+    fun contacted(since: Int, nowMs: Long): Boolean = update(since) {
+        val scale = it.timeScale ?: com.vettid.core.crypto.altchan.TimeScale.REAL
+        val after = StuckScreens.unreachableAfterMs(scale)
+        val span = it.unreachableAfterMs ?: StuckScreens.LONG_UNREACHABLE.toMillis()
+        if (StuckScreens.writeContact(it.lastContactAtMs, nowMs, span) || span != after) {
+            it.copy(lastContactAtMs = nowMs, unreachableAfterMs = after.takeIf { a -> a != StuckScreens.LONG_UNREACHABLE.toMillis() })
+        } else {
+            null
+        }
+    }
 
     /** The inner `ts` of an unlock that opened the vault ([LockNotices]), for the record that unlock started with. */
     fun opened(since: Int, atMs: Long): Boolean = update(since) { it.copy(lastOpenedAtMs = maxOf(it.lastOpenedAtMs ?: 0, atMs)) }

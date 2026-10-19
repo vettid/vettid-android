@@ -14,10 +14,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.vettid.app.R
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.StuckScreens
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.wipe.AppDataClear
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 
 /**
  * The phase could not be read ([com.vettid.core.data.vault.AppPhase.Unreachable]): why, and "Try again". Three
@@ -45,12 +52,14 @@ internal fun UnreachableScreen(
     clearFailed: Boolean = false,
     longUnreachable: Boolean = false,
     onRecover: () -> Unit = {},
+    /** How long nothing reached the vault service before [longUnreachable] (7 days, divided by the time scale). */
+    unreachableAfterSeconds: Long? = null,
 ) {
     val way = WayOut.of(kind, longUnreachable)
     var confirm by rememberSaveable(kind, way) { mutableStateOf(confirming) }
     FormScaffold(
         title = stringResource(titleOf(kind)),
-        body = kind?.let { stringResource(it.messageRes()) },
+        body = kind?.let { failureText(it.messageRes()) },
         // Erase-or-recover: recovery first (check on the account site that one is possible), the erase second.
         primaryLabel = stringResource(if (way == WayOut.ERASE_OR_RECOVER) R.string.root_recover else R.string.root_retry),
         onPrimary = if (way == WayOut.ERASE_OR_RECOVER) onRecover else onRetry,
@@ -62,11 +71,15 @@ internal fun UnreachableScreen(
         if (way == WayOut.ERASE_OR_RECOVER) {
             if (longUnreachable) {
                 Text(
-                    stringResource(R.string.root_long_unreachable),
+                    stringResource(
+                        R.string.root_long_unreachable,
+                        durationText(unreachableAfterSeconds ?: StuckScreens.LONG_UNREACHABLE.seconds),
+                    ),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.testTag("long_unreachable"),
                 )
             }
+            StagingTimeNoteIfShown()
             Text(stringResource(R.string.root_recover_line), style = MaterialTheme.typography.bodyMedium)
             TextButton(onClick = onRetry, enabled = !busy, modifier = Modifier.testTag("retry_button")) {
                 Text(stringResource(R.string.root_retry))
@@ -84,7 +97,8 @@ internal fun UnreachableScreen(
     if (confirm && way != null) {
         ConfirmDialog(
             title = stringResource(way.title),
-            text = stringResource(way.body),
+            // The erase text's recovery wait (the other ways' texts have no argument).
+            text = stringResource(way.body, scaledDurationText(Durations.DAY)) + stagingNoteSuffix(),
             confirmLabel = stringResource(way.confirm),
             onConfirm = {
                 confirm = false

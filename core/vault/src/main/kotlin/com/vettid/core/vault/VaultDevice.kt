@@ -708,11 +708,12 @@ class VaultDevice private constructor(
         link: String,
         attester: Attester,
         /**
-         * (0.34.0, release R §11.14.10, §11.10.9) Given the bundle's capabilities (empty when it has none), the new phone
-         * key's secret of epoch 1 for release R's `hs.init`, null for the earlier one; it may throw, and then nothing is
-         * sent. The secret is zeroed once the `hs.init` is sealed.
+         * (0.34.0, release R §11.14.10, §11.10.9) Given the bundle's capabilities (empty when it has none) and time scale
+         * (1 when it has none), the new phone key's secret of epoch 1 for release R's `hs.init`, null for the earlier one;
+         * it may throw, and then nothing is sent. The secret is zeroed once the `hs.init` is sealed. A bundle whose time
+         * scale this build does not accept (STAGING-TIME-SCALE §4 item 4) is refused before it is asked.
          */
-        unlockSecretFor: suspend (capabilities: List<String>) -> ByteArray? = { null },
+        unlockSecretFor: suspend (traits: com.vettid.core.crypto.altchan.ReleaseTraits) -> ByteArray? = { null },
     ) {
         val q = try {
             InviteQr.parseLink(link)
@@ -733,7 +734,9 @@ class VaultDevice private constructor(
                 throw NotATransferCodeException(expired = true).also { it.initCause(e) }
             }
             if (b.kind != InviteKind.APP) throw NotATransferCodeException()
-            val unlockSecret = unlockSecretFor(b.capabilities.orEmpty())
+            val traits = b.traits
+            (cfg.trust ?: AltTrust(emptyList(), emptyList())).checkTimeScale(traits.timeScale)
+            val unlockSecret = unlockSecretFor(traits)
             setVault(b.vault)
             st.vaultId = null
             sasState.value = null

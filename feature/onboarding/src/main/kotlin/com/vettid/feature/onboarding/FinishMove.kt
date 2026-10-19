@@ -28,6 +28,7 @@ import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.excludeFromAutofill
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -120,7 +121,7 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             NoticeCard(
                 kind = NoticeKind.WARNING,
                 title = stringResource(R.string.onboarding_finish_move_title),
-                body = stringResource(it.messageRes()),
+                body = failureText(it.messageRes()),
                 modifier = Modifier.testTag("finish_move_held"),
             )
         }
@@ -128,7 +129,7 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             NoticeCard(
                 kind = NoticeKind.WARNING,
                 title = stringResource(R.string.onboarding_finish_move_title),
-                body = stringResource(it.messageRes()),
+                body = failureText(it.messageRes()),
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {

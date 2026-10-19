@@ -12,6 +12,8 @@ val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
 /** No failed "Finish the move" ([VaultRepository.finishMoveFailure]'s default). */
 val NO_FINISH_MOVE_FAILURE: StateFlow<FailureKind?> = MutableStateFlow(null)
 
+private const val KEEP_MS_PER_SECOND = 1_000L
+
 /** No move to finish ([VaultRepository.finishMovePending]'s default). */
 val NO_MOVE_TO_FINISH: StateFlow<Boolean> = MutableStateFlow(false)
 
@@ -215,6 +217,15 @@ interface VaultRepository {
      * first unlock, at most 7 days); null otherwise. The shell shows "Finish the move on your new phone".
      */
     val transferKeptSince: StateFlow<Instant?> get() = NO_KEPT_TRANSFER
+
+    /** (STAGING-TIME-SCALE §5.2) The vault's time scale as this phone knows it ([TimeScaleSource]). */
+    val timeScale: StateFlow<TimeScaleView> get() = TimeScaleSource.RealTime.timeScale
+
+    /**
+     * (STAGING-TIME-SCALE, S10) How long this phone keeps its keys after the approval, for the texts: 7 days, divided by
+     * the vault's time scale when the approval started it.
+     */
+    val transferKeepSeconds: Long get() = KeptTransfer.KEEP_MS / KEEP_MS_PER_SECOND
 
     /**
      * (Release R, §11.14.10) This new phone received a transfer and has not yet finished the move (an unlock from

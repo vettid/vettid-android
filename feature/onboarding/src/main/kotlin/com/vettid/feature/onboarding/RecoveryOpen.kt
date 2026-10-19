@@ -39,6 +39,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.SecureWindow
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -452,7 +453,7 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     if (o != null && o.opened) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(openAnswerText(o, false).res))
     } else if (failure != null) {
-        NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(failure.messageRes()))
+        NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), failureText(failure.messageRes()))
     }
     Button(onClick = vm::send, enabled = state.pinValid, modifier = Modifier.testTag("open_finish")) {
         Text(stringResource(R.string.onboarding_open_finish_go))
@@ -493,7 +494,7 @@ private fun OpenDone(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     @Suppress("SpreadOperator") // a string's arguments
     val body = stringResource(t.res, *t.args.toTypedArray())
     NoticeCard(NoticeKind.INFO, stringResource(R.string.onboarding_open_answer_title), body, Modifier.testTag("open_answer_ok"))
-    state.failure?.let { Text(stringResource(it.messageRes()), style = MaterialTheme.typography.bodyMedium) }
+    state.failure?.let { Text(failureText(it.messageRes()), style = MaterialTheme.typography.bodyMedium) }
     Button(onClick = vm::openApp, modifier = Modifier.testTag("open_app")) { Text(stringResource(R.string.onboarding_open_continue)) }
 }
 
@@ -602,7 +603,7 @@ private fun OpenNoAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, 
     NoticeCard(
         kind = NoticeKind.WARNING,
         title = stringResource(R.string.onboarding_open_answer_title),
-        body = stringResource(if (unreadable) R.string.onboarding_open_unreadable else (failure ?: FailureKind.OTHER).messageRes()),
+        body = failureText(if (unreadable) R.string.onboarding_open_unreadable else (failure ?: FailureKind.OTHER).messageRes()),
     )
     // The answer may have been a lost `ok` (§11.14.6): the PIN finishes it, without an attempt.
     if (unreadable || failure == FailureKind.NO_RESPONSE) {

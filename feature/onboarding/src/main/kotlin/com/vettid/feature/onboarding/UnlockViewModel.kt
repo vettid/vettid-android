@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
@@ -53,6 +54,8 @@ internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean)
     if (keptTransfer && r.kind !in TRANSIENT_FAILURES) UnlockMessage.MoveBackFailed else UnlockMessage.Failed(r.kind, r.code)
 
 /** Immutable UI state of the unlock screen. */
+private const val KEPT_MS_PER_SECOND = 1_000L
+
 data class UnlockUiState(
     val loading: Boolean = true,
     /**
@@ -60,6 +63,10 @@ data class UnlockUiState(
      * move: the screen says so, and its unlock is "The move didn't finish".
      */
     val keptTransfer: Boolean = false,
+    /** (STAGING-TIME-SCALE, S10) How long the kept transfer lasts at most: 7 days, divided by the time scale at the approval. */
+    val keptForSeconds: Long = KeptTransfer.KEEP_MS / KEPT_MS_PER_SECOND,
+    /** (STAGING-TIME-SCALE) A staging build adds its note to the kept transfer's text. */
+    val stagingNote: Boolean = false,
     val email: String? = null,
     val preflight: PreflightInfo? = null,
     val preflightError: FailureKind? = null,
@@ -257,7 +264,12 @@ class UnlockViewModel @Inject constructor(
         retryPreflight()
         viewModelScope.launch { vault.refusedByVault.collect { r -> state.update { it.copy(refused = r) } } }
         viewModelScope.launch { vault.lockNotice.collect { n -> state.update { it.copy(lock = n) } } }
-        viewModelScope.launch { vault.transferKeptSince.collect { k -> state.update { it.copy(keptTransfer = k != null) } } }
+        viewModelScope.launch {
+            vault.transferKeptSince.collect { k ->
+                state.update { it.copy(keptTransfer = k != null, keptForSeconds = vault.transferKeepSeconds) }
+            }
+        }
+        viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(stagingNote = t.stagingNote) } } }
         viewModelScope.launch { vault.finishMoveFailure.collect { f -> state.update { it.copy(moveFailure = f) } } }
         // §11.14.9 step 5: which PIN is asked for follows the vault manager's state, so that the PIN typed is always the
         // one the next unlock sends with the matching record (also on a screen made afresh).

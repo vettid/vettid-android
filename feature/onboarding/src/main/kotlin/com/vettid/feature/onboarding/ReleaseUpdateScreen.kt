@@ -41,6 +41,7 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.StepList
 import com.vettid.core.ui.components.StepState
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
 import java.time.Instant
@@ -96,7 +97,7 @@ fun ReleaseUpdateContent(state: ReleaseUpdateUiState, actions: ReleaseUpdateActi
                         NoticeCard(
                             NoticeKind.WARNING,
                             stringResource(R.string.release_update_title),
-                            stringResource(why.messageRes()),
+                            failureText(why.messageRes()),
                             modifier = Modifier.testTag("release_update_change_unresolved"),
                         )
                     }
@@ -342,7 +343,7 @@ private fun failureText(p: UpdateProgress): String = when {
     p.failure == FailureKind.BAD_PIN -> stringResource(R.string.unlock_bad_pin)
     p.failure == FailureKind.BACKOFF -> stringResource(R.string.release_update_backoff)
     p.failureCode == ReleaseUpdateManager.CODE_RELEASE_STARTING -> stringResource(R.string.release_update_start_failed)
-    else -> stringResource((p.failure ?: FailureKind.OTHER).messageRes())
+    else -> failureText((p.failure ?: FailureKind.OTHER).messageRes())
 }
 
 /** The refusal codes of §11.10.4 step 4, and a step 6 write failure, in the member's words. */

@@ -269,8 +269,13 @@ class Descriptor private constructor(
     private val raw: ByteArray,
     /** (0.34.0, release R) The release's capabilities (§11.10.9); empty for a release before R. */
     val capabilities: List<String> = emptyList(),
+    /** (0.43.0, STAGING-TIME-SCALE) The release's time scale (§11.10.8); 1 for a release before the scale. */
+    val timeScale: Long = TimeScale.REAL,
 ) {
     fun bytes(): ByteArray = raw.copyOf()
+
+    /** The capabilities and the time scale, as the app chooses from them (§11.10.9). */
+    val traits: ReleaseTraits get() = ReleaseTraits(capabilities, timeScale)
 
     companion object {
         private const val MAX = 4096
@@ -295,16 +300,20 @@ class Descriptor private constructor(
             val release = o.string("release")
             if (!isValidPcr(release)) throw CryptoException.Format("descriptor release")
             val notAfter = Timestamps.parseSeconds(o.string("not_after"))
-            return Descriptor(instanceId, kid, etk, release, notAfter, b.copyOf(), Capabilities.parse(o))
+            return Descriptor(instanceId, kid, etk, release, notAfter, b.copyOf(), Capabilities.parse(o), TimeScale.parse(o))
         }
 
-        /** Writes a descriptor in §11.2 member order (tests and tooling); [capabilities] only when given (release R). */
+        /**
+         * Writes a descriptor in §11.2 member order (tests and tooling); [capabilities] only when given (release R),
+         * [timeScale] only when given (a release with the scale).
+         */
         fun marshal(
             instanceId: String,
             etk: KemPublicKey,
             release: String,
             notAfter: Instant,
             capabilities: List<String>? = null,
+            timeScale: Long? = null,
         ): ByteArray = JsonBuilder()
             .uint("v", 1)
             .uint("suite", Suite.SUITE_2.toLong())
@@ -314,6 +323,7 @@ class Descriptor private constructor(
             .string("release", release)
             .string("not_after", Timestamps.formatSeconds(notAfter))
             .also { b -> capabilities?.let { Capabilities.write(b, it) } }
+            .also { b -> timeScale?.let { TimeScale.write(b, it) } }
             .bytes()
     }
 }

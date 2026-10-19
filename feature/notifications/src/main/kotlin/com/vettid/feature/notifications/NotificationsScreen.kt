@@ -108,6 +108,7 @@ import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.rememberProfilePhoto
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.categoryColor
@@ -212,7 +213,7 @@ fun NotificationsScreen(state: NotificationsUiState, actions: NotificationsActio
     val snackbar = remember { SnackbarHostState() }
     val archivedText = stringResource(R.string.notifications_archived_snackbar)
     val undoText = stringResource(R.string.notifications_undo)
-    val errorText = state.error?.let { stringResource(it.messageRes()) }
+    val errorText = state.error?.let { failureText(it.messageRes()) }
     LaunchedEffect(state.undo) {
         if (state.undo == null) return@LaunchedEffect
         val r = snackbar.showSnackbar(archivedText, undoText, duration = SnackbarDuration.Short)

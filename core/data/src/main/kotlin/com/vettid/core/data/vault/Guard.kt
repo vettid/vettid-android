@@ -35,7 +35,11 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
 } catch (e: VaultOpException) {
     throw VaultFailure(VaultManager.opFailure(e.code), e.code, retryAfterOf(e), e, limitOf(e))
 } catch (e: AltRefusedException) {
-    val kind = if (e.reason == AltRefusedException.Reason.ROLLBACK_RELEASE) FailureKind.ROLLBACK else FailureKind.MANIFEST
+    val kind = when (e.reason) {
+        AltRefusedException.Reason.ROLLBACK_RELEASE -> FailureKind.ROLLBACK
+        AltRefusedException.Reason.TIME_SCALE -> FailureKind.TIME_SCALE
+        else -> FailureKind.MANIFEST
+    }
     throw VaultFailure(kind, e.reason.name.lowercase(), cause = e)
 } catch (e: AttestationException) {
     throw VaultFailure(enclaveFailure(e), "enclave", cause = e)
