@@ -58,12 +58,14 @@ suspend fun VaultApi.secretRenew(
     onSending: (suspend (SentRequest) -> Unit)? = null,
     /** (Q1) The renew's own answer was `ok` (before its blob is kept and acknowledged). */
     onAnswered: (suspend (innerId: String) -> Unit)? = null,
+    /** (R1) The renew's own answer was a refusal (`stale_credential` included): it did not apply and never will. */
+    onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
 ) {
     credentialOps.credOp("vault.secret.renew", {
         put("pin", pin)
         put("password", password)
         put("new_unlock_secret", Base64s.encodeStd(newUnlockSecret))
-    }, onSending = onSending, onAnswered = onAnswered)
+    }, onSending = onSending, onAnswered = onAnswered, onRefused = onRefused)
 }
 
 /**

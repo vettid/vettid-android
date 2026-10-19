@@ -1954,7 +1954,7 @@ class VaultManager(
         val s = session()
         // In this manager's scope (N1): a screen that goes away does not stop it, and its outcome is kept.
         try {
-            renewRunner.send { onSending, onAnswered ->
+            renewRunner.send { onSending, onAnswered, onRefused ->
                 val next = phoneSecrets.secret(phone, ahead = 1)
                 try {
                     s.openApi.secretRenew(pin, password, next, onSending = { req ->
@@ -1962,7 +1962,7 @@ class VaultManager(
                         renewEpoch = phone.epoch
                         renewSince = rec
                         onSending(req)
-                    }, onAnswered = onAnswered)
+                    }, onAnswered = onAnswered, onRefused = onRefused)
                 } finally {
                     next.fill(0)
                 }

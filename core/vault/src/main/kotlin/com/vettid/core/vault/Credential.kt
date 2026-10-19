@@ -99,6 +99,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         extra: JsonObjectBuilder.() -> Unit,
         onSending: (suspend (SentRequest) -> Unit)? = null,
         onAnswered: (suspend (innerId: String) -> Unit)? = null,
+        onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> {
         val rk = if (reply) KemPrivateKey.generate() else null
         val id = d.newId()
@@ -127,6 +128,9 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             rk?.destroy()
             // §6.7.1 step 3 (0.27.0): refused before the UTK was spent; the retry uses the same one.
             if (r.inner.error?.code == CODE_SIGNER_UNCONFIRMED) d.returnUtk(utk)
+            // (R1) Refused under this id (`stale_credential` included): the vault caches that answer, so no copy of this
+            // request can apply. Said before anything follows (a fetch and a retry, which is a new request).
+            onRefused?.invoke(id, r.inner.error?.code ?: "error")
             // The error's body: `backoff` carries `retry_after` (§10.1, 0.17.0).
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
@@ -197,13 +201,14 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         extra: JsonObjectBuilder.() -> Unit = {},
         onSending: (suspend (SentRequest) -> Unit)? = null,
         onAnswered: (suspend (innerId: String) -> Unit)? = null,
+        onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> = gated(payload).credentialLock.withLock {
         try {
-            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered)
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered, onRefused)
         } catch (e: VaultOpException) {
             if (e.code != CODE_STALE || type in ChangeTypes.ALL) throw e
             fetch()
-            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered)
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered, onRefused)
         }
     }
 

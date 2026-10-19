@@ -1860,7 +1860,10 @@ class VaultDeviceTest {
         }
     }
 
-    /** (Q1) A renew answered `stale_credential` whose blob fetch is refused: its own answer was never `ok`, so no hook. */
+    /**
+     * (Q1, R1) A renew answered `stale_credential` whose blob fetch is refused: its own answer was never `ok`, and its
+     * refusal is reported under its id before the fetch.
+     */
     @Test
     fun aStaleRenewWithARefusedFetchIsNotAnswered() = runBlocking<Unit> {
         withTimeout(30_000) {
@@ -1868,9 +1871,13 @@ class VaultDeviceTest {
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
             val answered = mutableListOf<String>()
+            val refused = mutableListOf<Pair<String, String>>()
             val renew = async(Dispatchers.IO) {
                 runCatching {
-                    api.secretRenew("975310", "password one", ByteArray(32) { 5 }, onSending = {}, onAnswered = { answered += it })
+                    api.secretRenew(
+                        "975310", "password one", ByteArray(32) { 5 }, onSending = {}, onAnswered = { answered += it },
+                        onRefused = { id, code -> refused += id to code },
+                    )
                 }
             }
             val get = v.open(nextDeposit().second)
@@ -1879,6 +1886,7 @@ class VaultDeviceTest {
             d.handle(v.error(req.id, req.type, "stale_credential"))
             val fetch = v.open(nextDeposit().second)
             assertEquals("credential.get", fetch.type)
+            assertEquals("reported before the fetch", listOf(req.id to "stale_credential"), refused)
             d.handle(v.error(fetch.id, fetch.type, "busy"))
             assertEquals("credential.get", (renew.await().exceptionOrNull() as VaultOpException).type)
             assertTrue(answered.isEmpty())

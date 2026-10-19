@@ -35,37 +35,33 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
     enum class State { NONE, UNSETTLED, UNDECIDABLE }
 
     /**
-     * Sends a renew through [send], which calls `onSending` with the request just before it goes out and `onAnswered` when
-     * the renew's own answer is `ok`. Only that answer decides "applied", and only a refusal of `vault.secret.renew`
-     * itself decides "not applied". Anything else (no answer, or an error of a step around it: the blob fetched after a
-     * `stale_credential`, a refused `credential.ack`) leaves it stored, to be decided by [settle] (Q1); a failure after
-     * an `ok` answer does not undo it.
+     * Sends a renew through [send], which calls `onSending` with each request just before it goes out, `onAnswered` when
+     * a renew's own answer is `ok`, and `onRefused` when it is a refusal. Only those answers decide: `ok` applied (a
+     * failure after it, a refused `credential.ack`, does not undo it); any refusal under the renew's id, `stale_credential`
+     * included, not applied (R1: the vault caches that answer under the id, so no copy can apply), at once, before a
+     * fetch and a retry, which is a new request stored on its own. Anything else (no answer, an error of a step around it)
+     * leaves the stored renew for [settle].
      */
     @Suppress("ThrowsCount")
     suspend fun send(
-        send: suspend (onSending: suspend (SentRequest) -> Unit, onAnswered: suspend (String) -> Unit) -> Unit,
+        send: suspend (
+            onSending: suspend (SentRequest) -> Unit,
+            onAnswered: suspend (String) -> Unit,
+            onRefused: suspend (String, String) -> Unit,
+        ) -> Unit,
     ) {
         scope.async {
-            var sent: SentRequest? = null
             var answered: String? = null
             try {
                 send(
-                    { req ->
-                        if (!ops.store(req)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_NOT_STORED)
-                        sent = req
-                    },
+                    { req -> if (!ops.store(req)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_NOT_STORED) },
                     { id -> answered = id },
+                    { id, _ -> ops.decide(id, applied = false) },
                 )
             } catch (e: VaultOpException) {
-                val s = sent ?: throw e
-                when {
-                    answered != null -> Unit // decided below: applied
-                    e.type == TYPE_RENEW -> {
-                        ops.decide(s.innerId, applied = false)
-                        throw e
-                    }
-                    else -> throw e // a step around the renew failed: left for [settle]
-                }
+                // Its own refusal was decided as it came (onRefused); an error of a step around it decides nothing,
+                // unless the renew had already been answered `ok`.
+                if (answered == null) throw e
             }
             answered?.let { ops.decide(it, applied = true) }
             Unit
