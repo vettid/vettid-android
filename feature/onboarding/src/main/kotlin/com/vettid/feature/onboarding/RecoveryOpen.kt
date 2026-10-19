@@ -39,7 +39,10 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.SecureWindow
+import com.vettid.core.ui.format.LocalTimeScale
+import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -573,16 +576,36 @@ private fun ShowHide(shown: Boolean, onToggle: () -> Unit) {
     TextButton(onClick = onToggle) { Text(stringResource(if (shown) R.string.onboarding_open_hide else R.string.onboarding_open_show)) }
 }
 
+/**
+ * The warning before a send. The second attempt's: in real time (production, and every vault at scale 1) the approved
+ * words ("you can try again in 24 hours", the wait after a wrong second attempt, W(2) = one wait unit of 86,400 s);
+ * on a vault with a time scale (staging) the wait as it runs there, [RECOVERY_WAIT_UNIT_SCALED_S], with the staging
+ * note (STAGING-TIME-SCALE §5.2: no text hard-codes "24 hours" for a wait a staging vault shortens).
+ */
+@Composable
+internal fun openWarningText(w: OpenWarning, used: Int?): String = when (w) {
+    OpenWarning.SECOND -> if (LocalTimeScale.current.scale <= 1) {
+        stringResource(R.string.onboarding_open_second)
+    } else {
+        stringResource(R.string.onboarding_open_second_scaled, durationText(RECOVERY_WAIT_UNIT_SCALED_S)) + stagingNoteSuffix()
+    }
+    OpenWarning.FEW_LEFT -> stringResource(R.string.onboarding_open_few_left, RecoveryOpenOutcome.ATTEMPTS - (used ?: 0))
+}
+
+/**
+ * The recovery's wait unit on a vault with a time scale (STAGING-TIME-SCALE §2.1 and T6: `recovery_wait_unit_seconds` is
+ * 600 on staging, and the time scale does not divide it again; 86,400 in production). The vault does not tell the app
+ * its unit; a vault with a time scale other than 1 is a staging vault, so this is its unit.
+ */
+internal const val RECOVERY_WAIT_UNIT_SCALED_S = 600L
+
 @Composable
 private fun OpenCheck(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     state.warning?.let { w ->
         NoticeCard(
             kind = NoticeKind.WARNING,
             title = stringResource(R.string.onboarding_open_warning_title),
-            body = when (w) {
-                OpenWarning.SECOND -> stringResource(R.string.onboarding_open_second)
-                OpenWarning.FEW_LEFT -> stringResource(R.string.onboarding_open_few_left, RecoveryOpenOutcome.ATTEMPTS - (state.used ?: 0))
-            },
+            body = openWarningText(w, state.used),
         )
     }
     Text(stringResource(R.string.onboarding_open_check, state.pin, state.password), style = MaterialTheme.typography.bodyLarge)
