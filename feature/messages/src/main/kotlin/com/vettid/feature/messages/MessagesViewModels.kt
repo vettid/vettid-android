@@ -16,7 +16,9 @@ import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,7 +54,10 @@ internal fun ConversationSummary.matches(query: String): Boolean {
 
 /** Messages (ANDROID-PLAN §4, Proton's inbox): conversations by connection, the Unread chip. */
 @HiltViewModel
-class MessagesViewModel @Inject constructor(private val repo: MessagesRepository) : ViewModel() {
+class MessagesViewModel @Inject constructor(
+    private val repo: MessagesRepository,
+    private val ownerCheck: OwnerCheckRepository,
+) : ViewModel() {
     private val local = MutableStateFlow(MessagesUiState())
 
     val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations) { s, all ->
@@ -65,6 +70,12 @@ class MessagesViewModel @Inject constructor(private val repo: MessagesRepository
 
     init {
         refresh()
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        viewModelScope.launch {
+            ownerCheck.checkCleared().collect {
+                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+            }
+        }
     }
 
     fun refresh() {

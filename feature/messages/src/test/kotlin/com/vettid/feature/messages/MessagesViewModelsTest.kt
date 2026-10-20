@@ -6,8 +6,11 @@ package com.vettid.feature.messages
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -37,7 +40,7 @@ class MessagesViewModelsTest {
 
     @Test
     fun listsConversationsAndFiltersUnread() = runTest {
-        val vm = MessagesViewModel(social)
+        val vm = MessagesViewModel(social, FakeVault())
         advanceUntilIdle()
         val s = vm.uiState.value
         assertFalse(s.loading)
@@ -52,7 +55,7 @@ class MessagesViewModelsTest {
     @Test
     fun theSearchFiltersByNameAndTheLatestMessage() = runTest {
         // Owner request 2026-10-08: a local filter, by the connection's name and the latest message's text.
-        val vm = MessagesViewModel(social)
+        val vm = MessagesViewModel(social, FakeVault())
         advanceUntilIdle()
         assertTrue(vm.uiState.value.searchable)
         vm.setQuery("sam")
@@ -73,9 +76,67 @@ class MessagesViewModelsTest {
     @Test
     fun aFailedRefreshShowsTheError() = runTest {
         social.fail["refreshConversations"] = VaultFailure(FailureKind.NO_RESPONSE)
-        val vm = MessagesViewModel(social)
+        val vm = MessagesViewModel(social, FakeVault())
         advanceUntilIdle()
         assertEquals(FailureKind.NO_RESPONSE, vm.uiState.value.error)
+    }
+
+    private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    /**
+     * Staging, release 19: the list loaded while the daily check was due ("Your daily check is due"); the member passed
+     * the check and the error stayed until Try again. It reads again by itself when the vault leaves held or due.
+     */
+    @Test
+    fun aListRefusedForTheDailyCheckReloadsWhenTheCheckPasses() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        social.fail["refreshConversations"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        val vm = MessagesViewModel(social, vault)
+        advanceUntilIdle()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.error)
+        assertEquals(2, social.calls.count { it == "refreshConversations" })
+        assertEquals(listOf("c2", "c1"), vm.uiState.value.conversations.map { it.connection.id })
+    }
+
+    @Test
+    fun aDueVaultWhoseHoldIsOffReloadsToo() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.DUE) }
+        social.fail["refreshConversations"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        val vm = MessagesViewModel(social, vault)
+        advanceUntilIdle()
+        // Locked meanwhile (no view): nothing yet.
+        vault.ownerCheck.value = null
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "refreshConversations" })
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.error)
+        assertEquals(2, social.calls.count { it == "refreshConversations" })
+    }
+
+    @Test
+    fun otherFailuresAndOkToOkDoNotReload() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.OK) }
+        social.fail["refreshConversations"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        val vm = MessagesViewModel(social, vault)
+        advanceUntilIdle()
+        // Still ok (a new deadline): no transition from held or due, no reload.
+        vault.ownerCheck.value = check(OwnerCheckState.OK).copy(intervalSeconds = 3_600)
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "refreshConversations" })
+        // A failure that is not the daily check stays until Try again.
+        social.fail["refreshConversations"] = VaultFailure(FailureKind.NO_RESPONSE)
+        vm.refresh()
+        advanceUntilIdle()
+        vault.ownerCheck.value = check(OwnerCheckState.HELD)
+        advanceUntilIdle()
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertEquals(FailureKind.NO_RESPONSE, vm.uiState.value.error)
+        assertEquals(2, social.calls.count { it == "refreshConversations" })
     }
 
     @Test

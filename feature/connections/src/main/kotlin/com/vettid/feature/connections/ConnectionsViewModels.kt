@@ -23,7 +23,9 @@ import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -71,6 +73,7 @@ internal fun ConnectionInfo.matches(query: String): Boolean {
 class ConnectionsViewModel @Inject constructor(
     private val repo: ConnectionsRepository,
     private val approvals: ApprovalsRepository,
+    private val ownerCheck: OwnerCheckRepository,
 ) : ViewModel() {
     private val local = MutableStateFlow(ConnectionsUiState())
 
@@ -85,6 +88,12 @@ class ConnectionsViewModel @Inject constructor(
 
     init {
         refresh()
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        viewModelScope.launch {
+            ownerCheck.checkCleared().collect {
+                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+            }
+        }
     }
 
     fun refresh() {

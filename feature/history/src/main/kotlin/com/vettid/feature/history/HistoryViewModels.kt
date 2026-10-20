@@ -15,7 +15,9 @@ import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.AuditRequest
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HistoryRepository
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -112,6 +114,7 @@ class HistoryViewModel @Inject constructor(
     private val connections: ConnectionsRepository,
     @param:ApplicationContext private val context: Context,
     private val items: ItemsRepository,
+    private val ownerCheck: OwnerCheckRepository,
 ) : ViewModel() {
     private val state = MutableStateFlow(HistoryUiState(filter = AuditFilter(connectionId = saved.get<String>("connectionId"))))
     val uiState: StateFlow<HistoryUiState> = state.asStateFlow()
@@ -133,6 +136,12 @@ class HistoryViewModel @Inject constructor(
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         loadDevices(refresh = false)
         reload()
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        viewModelScope.launch {
+            ownerCheck.checkCleared().collect {
+                if (state.value.error == FailureKind.OWNER_CHECK_REQUIRED) retry()
+            }
+        }
     }
 
     /** The device names (ANDROID-PLAN 0.1.27), best effort: without them rows name no device. */

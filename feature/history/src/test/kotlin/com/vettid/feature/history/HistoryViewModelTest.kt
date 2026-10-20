@@ -6,8 +6,11 @@ import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.vault.AuditOps
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HistoryManager
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.testing.FakeItems
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.testing.FakeVault
 import com.vettid.core.vault.AuditEntry
 import com.vettid.core.vault.AuditPage
 import com.vettid.core.vault.VaultOpException
@@ -70,12 +73,13 @@ class HistoryViewModelTest {
         seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE)))
     }
 
-    private fun vm(vault: Vault, connectionId: String? = "c1") = HistoryViewModel(
+    private fun vm(vault: Vault, connectionId: String? = "c1", owner: FakeVault = FakeVault()) = HistoryViewModel(
         SavedStateHandle(listOfNotNull(connectionId?.let { "connectionId" to it }).toMap()),
         HistoryManager { vault },
         social,
         RuntimeEnvironment.getApplication(),
         FakeItems(),
+        owner,
     )
 
     /** Runs the test dispatcher until [done] (the vault call itself runs on the IO dispatcher). */
@@ -189,6 +193,22 @@ class HistoryViewModelTest {
         assertEquals("audit.exported", s.entries.first().kind)
         assertTrue(s.end)
     }
+
+    /** Refused because the daily check was due: History reads again once the check passes (staging, release 19). */
+    @Test
+    fun aListRefusedForTheDailyCheckReloadsWhenTheCheckPasses() = runTest(main.dispatcher) {
+        val owner = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        val vault = Vault({ throw VaultOpException("connection.audit.list", "owner_check_required") }, { page(900) })
+        val model = vm(vault, owner = owner)
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, settle(model, ::idle).error)
+        owner.ownerCheck.value = check(OwnerCheckState.OK)
+        val s = settle(model) { idle(it) && it.entries.isNotEmpty() }
+        assertNull(s.error)
+        assertEquals(listOf(900L), s.entries.map { it.seq })
+        assertEquals(2, vault.calls.size)
+    }
+
+    private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
     @Test
     fun aFailureIsShownNotSpunOn() = runTest(main.dispatcher) {

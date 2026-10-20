@@ -7,8 +7,11 @@ import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.data.items.FieldValue
 import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeItems
+import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -34,12 +37,28 @@ class ItemsViewModelsTest {
 
     private fun detail(id: String) = ItemDetailViewModel(SavedStateHandle(mapOf(ItemDetailRoute.ARG to id)), items)
 
+    private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    /** Refused because the daily check was due: the Vault list reads again once the check passes (staging, release 19). */
+    @Test
+    fun aListRefusedForTheDailyCheckReloadsWhenTheCheckPasses() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.DUE) }
+        items.fail["refresh"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        val vm = ItemsViewModel(items, vault)
+        advanceUntilIdle()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.error)
+        assertEquals(2, items.calls.count { it == "refresh" })
+    }
+
     @Test
     fun theCategoryFilterIncludesTheMembersOwnCategories() = runTest {
         // §10.7: any [a-z][a-z0-9_]{0,31} category; the recommended ones first, then the member's own.
         items.add(FakeItems.item("01K", "Coffee card", category = "loyalty_cards"))
         items.add(FakeItems.item("01G", "Gym card", category = "gym"))
-        val vm = ItemsViewModel(items)
+        val vm = ItemsViewModel(items, FakeVault())
         advanceUntilIdle()
         assertEquals(listOf("identity_document", "login", "crypto_wallet", "gym", "loyalty_cards"), vm.uiState.value.categories)
         vm.setCategory("loyalty_cards")
@@ -49,7 +68,7 @@ class ItemsViewModelsTest {
 
     @Test
     fun theListFiltersOnThePhone() = runTest {
-        val vm = ItemsViewModel(items)
+        val vm = ItemsViewModel(items, FakeVault())
         advanceUntilIdle()
         assertTrue("refresh" in items.calls)
         assertEquals(listOf("Bank login", "Passport", "Recovery phrase"), vm.uiState.value.visible.map { it.name })
@@ -74,7 +93,7 @@ class ItemsViewModelsTest {
     @Test
     fun aFailedListShowsTheError() = runTest {
         items.fail["refresh"] = VaultFailure(FailureKind.NETWORK)
-        val vm = ItemsViewModel(items)
+        val vm = ItemsViewModel(items, FakeVault())
         advanceUntilIdle()
         assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
         vm.refresh()
