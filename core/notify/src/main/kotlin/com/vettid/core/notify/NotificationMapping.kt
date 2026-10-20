@@ -48,8 +48,9 @@ object NotificationMapping {
     private fun urgentRecovery(item: FeedItem): Boolean = when (item.kind) {
         "recovery.counter_unavailable", "recovery.change_required" -> true
         "recovery.attempt" -> item.priority == FeedManager.PRIORITY_URGENT && RecoveryRefs.attempt(item.ref)?.success != true
-        // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a host served an older recovery record.
-        RecoveryRefs.KIND_CLOSED -> RecoveryRefs.rollback(item.kind, item.ref)
+        // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a host served an older recovery record; the vault makes
+        // this feed item only for `rollback`.
+        RecoveryRefs.KIND_CLOSED -> true
         else -> false
     }
 

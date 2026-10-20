@@ -31,7 +31,7 @@ class FeedEventTitlesTest {
         assertEquals(FeedText(R.string.data_feed_recovery_completed), title(item("recovery.completed", "01REC")))
         assertEquals(FeedText(R.string.data_feed_counter_unavailable), title(item("recovery.counter_unavailable", priority = "urgent")))
         assertEquals(FeedText(R.string.data_feed_recovery_rollback), title(item("recovery.generation_closed", "4/rollback", "urgent")))
-        assertEquals(FeedText(R.string.data_feed_unknown, listOf("recovery.generation_closed")), title(item("recovery.generation_closed", "4/stale")))
+
         assertEquals(FeedText(R.string.data_feed_rotation_failed), title(item("identity.rotation_failed", "recovery", "high")))
         assertEquals(
             FeedText(R.string.data_feed_rotate_conflict, listOf(FeedText(literal = "Sam Lee"))),
@@ -92,7 +92,7 @@ class FeedEventTitlesTest {
         val added = listOf(
             "vault.pin_changed", "device.secret_renewed", "credential.recovered", "recovery.device_paired", "recovery.completed",
             "recovery.attempt", "recovery.change_required", "recovery.counter_unavailable", "identity.rotation_failed",
-            "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
+            "identity.rotate_conflict", "leash.item.run", "leash.item.proxy", "recovery.generation_closed",
         )
         for (k in added) {
             assertTrue(k, FeedKinds.known(k))

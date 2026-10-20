@@ -165,7 +165,7 @@
     <string name="history_kind_recovery_closed_exhausted">Recovery turned off: all 10 attempts used</string>
     <string name="history_kind_recovery_closed_delete">Recovery ended</string>
     <string name="history_kind_recovery_closed">Recovery attempts reset</string>
-    <!-- VAULT-MESSAGING 0.50.0 rollback (owner decision of 2026-10-20); draft text awaiting approval. -->
+    <!-- VAULT-MESSAGING 0.50.0 rollback (owner decisions of 2026-10-20; approved) -->
     <string name="history_kind_recovery_closed_rollback">Your vault was given an older recovery record</string>
     <string name="history_kind_recovery_presence_unrecorded">Your vault could not record that you were here</string>
     <string name="history_kind_identity_rotation_failed">Key update failed</string>
@@ -220,7 +220,7 @@
     <string name="history_detail_recovery_closed_backup_off">You turned off the credential backup.</string>
     <string name="history_detail_recovery_closed_exhausted">Change your PIN or your password to turn it back on.</string>
     <string name="history_detail_recovery_closed_delete">Your vault is being deleted.</string>
-    <!-- Draft texts awaiting approval (owner decisions of 2026-10-20). -->
+    <!-- Owner decisions of 2026-10-20 (approved) -->
     <string name="history_detail_recovery_closed_rollback">A host may have served an older copy of your vault\'s recovery record, one on which recovery attempts had already been used. Your vault moved past it. If you did not try to recover your vault, change your PIN and your password now, and contact VettID.</string>
     <string name="history_detail_attempt_phone">From a phone that calls itself “%1$s”.</string>
     <string name="history_detail_recovery_closed_unconfirmed">The service could not confirm this step.</string>

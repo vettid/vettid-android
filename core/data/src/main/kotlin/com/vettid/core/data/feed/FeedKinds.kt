@@ -117,6 +117,8 @@ object FeedKinds {
         "vault.pin_changed", "device.secret_renewed", "credential.recovered", "recovery.device_paired",
         "recovery.completed", "recovery.attempt", "recovery.change_required", "recovery.counter_unavailable",
         "identity.rotation_failed", "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
+        // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a `rollback` closure's urgent item.
+        "recovery.generation_closed",
     )
 
     /**
@@ -261,10 +263,8 @@ object FeedKinds {
                 if (item.ref == REF_PASSWORD) R.string.data_feed_change_required_password else R.string.data_feed_change_required,
             )
             "recovery.counter_unavailable" -> FeedText(R.string.data_feed_counter_unavailable)
-            // VAULT-MESSAGING 0.50.0 (proposed, pending the owner): a `rollback` closure's urgent item. Not in [KNOWN]
-            // until a vault sends it; any other closure reads as an unknown kind.
-            "recovery.generation_closed" ->
-                if (RecoveryRefs.rollback(item.kind, item.ref)) FeedText(R.string.data_feed_recovery_rollback) else unknown(item.kind)
+            // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): the vault makes this item only for `rollback`.
+            "recovery.generation_closed" -> FeedText(R.string.data_feed_recovery_rollback)
             "identity.rotation_failed" -> FeedText(R.string.data_feed_rotation_failed)
             "identity.rotate_conflict" -> FeedText(R.string.data_feed_rotate_conflict, listOf(who))
             "leash.item.run", "leash.item.proxy" -> thing?.let { FeedText(R.string.data_feed_leash_item_used, listOf(it)) }

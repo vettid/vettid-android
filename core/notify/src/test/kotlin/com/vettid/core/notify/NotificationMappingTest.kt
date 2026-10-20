@@ -25,6 +25,8 @@ class NotificationMappingTest {
             "credential.reset", "device.replaced", "device.transferred", "device.signer_changed",
             // ANDROID-PLAN 0.1.52 (owner decision of 2026-10-19): the urgent recovery notifications.
             "recovery.change_required", "recovery.counter_unavailable",
+            // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a `rollback` closure's urgent item.
+            "recovery.generation_closed",
         ),
         Channels.ACTIVITY to listOf(
             "connection.added", "connection.request.peer_declined", "connection.asks_paused", "connection.stale", "connection.removed",
@@ -70,7 +72,7 @@ class NotificationMappingTest {
         assertEquals(Channels.ACTIVITY, NotificationMapping.channel(item("identity.rotation_failed", "high")))
         // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a host served an older recovery record.
         assertEquals(Channels.SECURITY, NotificationMapping.channel(item("recovery.generation_closed", "urgent").copy(ref = "4/rollback")))
-        assertEquals(Channels.ACTIVITY, NotificationMapping.channel(item("recovery.generation_closed", "urgent").copy(ref = "4/stale")))
+
     }
 
     @Test

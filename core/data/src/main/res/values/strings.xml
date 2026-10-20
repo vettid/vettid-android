@@ -208,7 +208,7 @@
     <string name="data_feed_change_required">Change your PIN or password to turn recovery back on</string>
     <string name="data_feed_change_required_body">Recovery attempts were used. A change gives you 10 new attempts.</string>
     <string name="data_feed_counter_unavailable">Your vault cannot check its recovery attempts</string>
-    <!-- VAULT-MESSAGING 0.50.0 rollback (owner decision of 2026-10-20); draft text awaiting approval. -->
+    <!-- VAULT-MESSAGING 0.50.0 rollback (owner decisions of 2026-10-20; approved) -->
     <string name="data_feed_recovery_rollback">Your vault was given an older recovery record</string>
     <string name="data_feed_rotation_failed">Your vault could not update its keys</string>
     <string name="data_feed_rotation_failed_body">Your connections still know your old keys. VettID will offer the update again.</string>
