@@ -36,6 +36,13 @@ class ChangeResolverTest {
         var resendAnswer: ChangeResolver.Answer? = null
         var resends = 0
 
+        /** (0.1.55) What a resend throws instead of answering (a vault error answer, or a failure to reach it). */
+        var resendThrows: Exception? = null
+
+        /** (0.1.55) What the fetch after "applied" throws. */
+        var fetchThrows: Exception? = null
+        val ended = mutableListOf<UnresolvedChange>()
+
         /** `credential.version`'s answers in order (the last repeats); an [IOException] for no answer. */
         val versions = ArrayDeque<Any>()
         var versionCalls = 0
@@ -51,18 +58,20 @@ class ChangeResolverTest {
 
         override suspend fun resend(m: UnresolvedChange): ChangeResolver.Answer? {
             resends++
+            resendThrows?.let { throw it }
             return resendAnswer
         }
 
         override suspend fun version(): ChangeResolver.Version {
             versionCalls++
             val v = if (versions.size > 1) versions.removeFirst() else versions.first()
-            if (v is IOException) throw v
+            if (v is Exception) throw v
             return v as ChangeResolver.Version
         }
 
         override suspend fun fetch() {
             fetches++
+            fetchThrows?.let { throw it }
             if (fetchFails) throw IOException("no answer")
         }
 
@@ -75,6 +84,11 @@ class ChangeResolverTest {
         override fun clear(m: UnresolvedChange) {
             cleared += m
             marker = null
+        }
+
+        override fun end(m: UnresolvedChange) {
+            ended += m
+            clear(m)
         }
     }
 
@@ -357,5 +371,72 @@ class ChangeResolverTest {
         assertNull(saved)
         assertNull(ChangeResolver(scope, ops).check.value)
         scope.cancel()
+    }
+
+    private fun forbidden(type: String) = com.vettid.core.vault.VaultOpException(type, "forbidden", "not the holder")
+
+    /**
+     * ANDROID-PLAN 0.1.55 "Another phone became the holder": the vault's own `forbidden` to the resend, to
+     * `credential.version`, or to `credential.get` after "applied" ends the change: the marker and the candidate
+     * cleared (never ended, so the PIN is not uncertain), the gate open, the one-time notice "moved". Nothing is erased.
+     */
+    @Test
+    fun aForbiddenFromTheVaultEndsTheChange() = runTest {
+        val cases = listOf<Pair<UnresolvedChange, FakeOps.() -> Unit>>(
+            pinChange to { resendThrows = forbidden(ChangeTypes.PIN_CHANGE) },
+            passwordChange to { versions += forbidden("credential.version") },
+            pinChange to {
+                versions += version(8, exp.minusSeconds(500))
+                fetchThrows = forbidden("credential.get")
+            },
+        )
+        for ((m, setup) in cases) {
+            val ops = FakeOps(m).apply(setup)
+            val (r, scope) = resolver(testScheduler, ops)
+            assertEquals(ChangeCheck.Moved(m.kind), r.decide())
+            assertEquals(listOf(m), ops.cleared)
+            assertTrue(ops.ended.isEmpty())
+            assertTrue(ops.confirmed.isEmpty())
+            assertNull(ops.marker)
+            assertEquals(ChangeCheck.Moved(m.kind), r.check.value)
+            // The gate is open again: nothing is refused for this change.
+            r.gate(carriesPin = true)
+            // Said once: acknowledged, it goes.
+            r.acknowledge()
+            assertNull(r.check.value)
+            scope.cancel()
+        }
+    }
+
+    /**
+     * Only the vault's own answer counts (0.1.55): an HTTP 403 of the member API, a `forbidden` from the relay or the
+     * host, and a timeout are no answer. The marker stays and the check is "unreachable".
+     */
+    @Test
+    fun aForbiddenThatIsNotTheVaultsAnswerIsUnreachable() = runTest {
+        val failures = listOf<Exception>(
+            com.vettid.core.altchan.MemberApiException(403, "forbidden"),
+            com.vettid.core.relay.RelayException(403, "forbidden", ""),
+            com.vettid.core.vault.VaultStateException("credential.version: no response"),
+            IOException("timeout"),
+        )
+        for (f in failures) {
+            val ops = FakeOps(pinChange).apply {
+                resendThrows = f
+                versions += f
+            }
+            val (r, scope) = resolver(testScheduler, ops)
+            assertEquals(f.toString(), ChangeCheck.Unreachable(ChangeKind.PIN), r.decide())
+            assertEquals(pinChange, ops.marker)
+            assertTrue(ops.cleared.isEmpty() && ops.ended.isEmpty())
+            scope.cancel()
+        }
+    }
+
+    /** A decided "moved" is kept on the phone until it is seen, as any decision (N5). */
+    @Test
+    fun aMovedDecisionIsKept() {
+        val saved = SavedDecision.of(ChangeCheck.Moved(ChangeKind.PASSWORD))
+        assertEquals(ChangeCheck.Moved(ChangeKind.PASSWORD), saved?.toCheck())
     }
 }

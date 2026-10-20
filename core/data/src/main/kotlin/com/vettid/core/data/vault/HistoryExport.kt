@@ -132,7 +132,7 @@ class HistoryExportManager(
     override suspend fun export(filter: AuditFilter, format: ExportFormat, uptoSeq: Long, pin: String): ExportAnswer {
         val f = filter.exportFilters()
         val send: suspend () -> ExportAnswer = {
-            vaultGuard { ops().export(f, format.wire, uptoSeq, pin).let { (a, at) -> ExportAnswer.of(a, at) } }
+            vaultGuard(resend = false) { ops().export(f, format.wire, uptoSeq, pin).let { (a, at) -> ExportAnswer.of(a, at) } }
         }
         return try {
             send()

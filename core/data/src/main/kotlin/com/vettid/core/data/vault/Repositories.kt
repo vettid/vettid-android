@@ -196,6 +196,18 @@ interface VaultRepository {
     /** The member has read the decided state of [changeCheck]. */
     fun acknowledgeChangeCheck() {}
 
+    /**
+     * (ANDROID-PLAN 0.1.57 (1), 0.1.58 (3)) The vault answered `credential_required`: "This phone can't use your vault"
+     * is shown while this is not null ([CredentialRequired]).
+     */
+    val credentialRequired: StateFlow<CredentialRequired.Refusal?> get() = CredentialRequired.state
+
+    /** **Try again** on "This phone can't use your vault": the request that failed is sent again. */
+    suspend fun retryCredentialRequired() = CredentialRequired.tryAgain()
+
+    /** The screen goes (**Lock vault**, which also locks; or the vault no longer open). */
+    fun clearCredentialRequired() = CredentialRequired.clear()
+
     /** (P4) The decided state kept on the phone was already posted as a notification. */
     fun changeDecisionNotified(): Boolean = false
 

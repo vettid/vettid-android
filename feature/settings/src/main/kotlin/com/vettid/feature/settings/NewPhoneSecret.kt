@@ -14,6 +14,8 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -34,6 +36,8 @@ data class NewPhoneSecretUiState(
     val password: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
 ) {
     val canSubmit: Boolean get() = !busy && pin.length >= MIN_PIN && password.isNotEmpty()
@@ -69,7 +73,7 @@ class NewPhoneSecretViewModel @Inject constructor(private val vault: VaultReposi
                 state.value = NewPhoneSecretUiState(done = true)
             } catch (e: VaultFailure) {
                 // Neither entry is kept after an answer.
-                state.update { it.copy(busy = false, error = e.kind, pin = "", password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, pin = "", password = "") }
             }
         }
     }
@@ -116,8 +120,8 @@ fun NewPhoneSecretContent(
             Spacer(Modifier.height(Spacing.l))
             NoticeCard(
                 NoticeKind.URGENT,
-                stringResource(R.string.settings_security_new_secret),
-                failureText(it.messageRes()),
+                stringResource(it.titleRes(R.string.settings_security_new_secret)),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode), com.vettid.core.data.R.string.error_vault_code),
                 Modifier.testTag("error"),
             )
         }

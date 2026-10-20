@@ -211,7 +211,8 @@ sealed interface ChangeNameMessage {
     /** The vault (or VettID) did not accept the names. */
     data object Invalid : ChangeNameMessage
 
-    data class Failed(val kind: FailureKind) : ChangeNameMessage
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names, or null. */
+    data class Failed(val kind: FailureKind, val shownCode: String? = null) : ChangeNameMessage
 }
 
 /** Immutable UI state of the change-name flow. */
@@ -329,7 +330,7 @@ class ChangeNameViewModel @Inject constructor(
             val r = try {
                 profiles.changeName(s.pin, s.password, s.first, s.last)
             } catch (e: VaultFailure) {
-                NameChangeOutcome.Failed(e.kind, e.code)
+                NameChangeOutcome.Failed(e.kind, e.code, e.shownCode)
             }
             // Neither secret is kept beyond the answer (as for the owner check, §3.6.5).
             state.update { it.copy(busy = false, pin = "", password = "") }
@@ -349,7 +350,7 @@ class ChangeNameViewModel @Inject constructor(
                 state.update { it.copy(message = ChangeNameMessage.Backoff) }
                 startBackoff(r.retryAfterSeconds)
             }
-            is NameChangeOutcome.Failed -> state.update { it.copy(message = ChangeNameMessage.Failed(r.kind)) }
+            is NameChangeOutcome.Failed -> state.update { it.copy(message = ChangeNameMessage.Failed(r.kind, r.shownCode)) }
         }
     }
 

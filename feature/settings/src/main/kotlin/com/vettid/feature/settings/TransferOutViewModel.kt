@@ -69,13 +69,16 @@ data class TransferOutUiState(
     /** The member confirmed the change of signer ([TransferOutStep.SIGNER]): the approval names the new app's class. */
     val signerConfirmed: Boolean = false,
     /**
-     * The vault answered `signer_unconfirmed`: it wants the confirmation this app had not sent. Nothing was spent
-     * or counted and the transfer is still open; the confirmation is shown, then the PIN and password again.
+     * The vault answered `signer_unconfirmed`: it wants the confirmation this app had not sent. Nothing was counted
+     * and the transfer is still open (the UTK of that attempt is spent, ANDROID-PLAN 0.1.58); the confirmation is
+     * shown, then the PIN and password again.
      */
     val signerUnconfirmed: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorShown: String? = null,
     /**
      * (Release R, §11.14.10) After the approval this phone keeps its keys until the new phone has finished the move, for
      * at most 7 days ([TransferOutStep.MOVED] says so); false: it erases itself once the vault confirms.
@@ -143,7 +146,9 @@ class TransferOutViewModel @Inject constructor(
             val offer = try {
                 move.transferCreate()
             } catch (e: VaultFailure) {
-                state.update { it.copy(step = TransferOutStep.INTRO, busy = false, error = e.kind, errorCode = e.code) }
+                state.update {
+                    it.copy(step = TransferOutStep.INTRO, busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
+                }
                 return@launch
             }
             state.update { it.copy(step = TransferOutStep.SHOWING, busy = false, offer = offer, deadline = offer.expiresAt) }
@@ -151,7 +156,7 @@ class TransferOutViewModel @Inject constructor(
             val pending = try {
                 move.awaitTransferPending(offer.transferId, offer.expiresAt)
             } catch (e: VaultFailure) {
-                state.update { it.copy(error = e.kind, errorCode = e.code) }
+                state.update { it.copy(error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
                 null
             }
             if (pending == null) {
@@ -213,7 +218,7 @@ class TransferOutViewModel @Inject constructor(
                 move.transferReject(id)
                 state.update { TransferOutUiState(step = TransferOutStep.REJECTED) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
             }
         }
     }
@@ -254,21 +259,27 @@ class TransferOutViewModel @Inject constructor(
                     signerUnconfirmed()
                     return@launch
                 }
-                state.update { it.copy(busy = false, pin = "", password = "", error = e.kind, errorCode = e.code) }
+                state.update {
+                    it.copy(busy = false, pin = "", password = "", error = e.kind, errorCode = e.code, errorShown = e.shownCode)
+                }
                 if (e.retryAfterSeconds > 0) startBackoff(e.retryAfterSeconds)
             }
         }
     }
 
     /**
-     * `signer_unconfirmed` (§6.7.1 step 3, §11.7.1): the vault refused the approval before it spent the UTK or
-     * tried the PIN, and the transfer stays open. Not a wrong PIN and no wait: the confirmation is shown (again,
-     * if the vault's view of the signer changed since the pending) and the next approval names the class. When
-     * the vault never named a class there is nothing to confirm with: the failure is shown as it is.
+     * `signer_unconfirmed` (§6.7.1 step 3, §11.7.1): the vault refused the approval before it tried the PIN, and the
+     * transfer stays open; (ANDROID-PLAN 0.1.58) the UTK of that attempt is spent, and the next approval takes a fresh
+     * one. Not a wrong PIN and no wait: the confirmation is shown (again, if the vault's view of the signer changed since
+     * the pending) and the next approval names the class. When the vault never named a class there is nothing to confirm
+     * with: the failure is shown as it is, named by `error_vault_code` (0.1.57 (2)).
      */
     private fun signerUnconfirmed() = state.update {
         if (it.pending?.signer == null) {
-            it.copy(busy = false, pin = "", password = "", error = FailureKind.OTHER, errorCode = CODE_SIGNER_UNCONFIRMED)
+            it.copy(
+                busy = false, pin = "", password = "", error = FailureKind.OTHER, errorCode = CODE_SIGNER_UNCONFIRMED,
+                errorShown = CODE_SIGNER_UNCONFIRMED,
+            )
         } else {
             it.copy(
                 step = TransferOutStep.SIGNER, busy = false, pin = "", password = "", signerConfirmed = false,

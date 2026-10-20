@@ -31,10 +31,16 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
 
         /** Applied without its answer: the latest blob fetched, the UTKs topped up. */
         suspend fun fetch()
+
+        /** (ANDROID-PLAN 0.1.55) Another phone became the holder while the renew was being decided: the one-time notice. */
+        fun moved() = Unit
     }
 
-    /** What [settle] found. */
-    enum class State { NONE, UNSETTLED, UNDECIDABLE }
+    /**
+     * What [settle] found. [MOVED] (ANDROID-PLAN 0.1.55): the vault answered `forbidden` to `credential.version` or the
+     * fetch: another phone became the holder, and the renew was ended as not applied (nothing erased).
+     */
+    enum class State { NONE, UNSETTLED, UNDECIDABLE, MOVED }
 
     /**
      * Sends a renew through [send], which calls `onSending` with each request just before it goes out, `onAnswered` when
@@ -91,10 +97,10 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
     suspend fun settle(): State {
         val r = ops.unconfirmed() ?: return State.NONE
         if (!ops.awaitSettled()) return State.UNSETTLED
-        val v = ops.version()
+        val v = movedOr(r) { ops.version() } ?: return State.MOVED
         return when (ChangeDecision.of(r.sentVersion, r.expMs, v.exists, v.version, v.alarm, v.ts)) {
             ChangeDecision.Verdict.APPLIED -> {
-                ops.fetch()
+                movedOr(r) { ops.fetch() } ?: return State.MOVED
                 ops.decide(r.innerId, applied = true)
                 State.NONE
             }
@@ -105,6 +111,19 @@ internal class RenewRunner(private val scope: CoroutineScope, private val ops: O
             ChangeDecision.Verdict.UNDECIDED -> State.UNSETTLED
             ChangeDecision.Verdict.ENDED -> State.UNDECIDABLE
         }
+    }
+
+    /**
+     * [block]'s result; null once the vault's own `forbidden` answered it (ANDROID-PLAN 0.1.55): the renew [r] is decided
+     * as not applied (its marker and candidate go) and the one-time notice is said. Any other failure is thrown as it is.
+     */
+    private suspend fun <T : Any> movedOr(r: UnconfirmedRenew, block: suspend () -> T): T? = try {
+        block()
+    } catch (e: VaultOpException) {
+        if (e.code != VaultCodes.FORBIDDEN) throw e
+        ops.decide(r.innerId, applied = false)
+        ops.moved()
+        null
     }
 
     companion object {

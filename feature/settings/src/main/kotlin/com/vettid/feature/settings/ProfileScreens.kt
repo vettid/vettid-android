@@ -47,6 +47,8 @@ import com.vettid.core.data.vault.NameRequestState
 import com.vettid.core.data.vault.NameRequestView
 import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -447,8 +449,8 @@ private fun ConfirmStep(state: ChangeNameUiState, actions: ChangeNameActions) {
                 m == ChangeNameMessage.Backoff -> Text(stringResource(R.string.settings_name_backoff))
                 m is ChangeNameMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
-                    stringResource(R.string.settings_name_title),
-                    failureText(m.kind.messageRes()),
+                    stringResource(m.kind.titleRes(R.string.settings_name_title)),
+                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode), com.vettid.core.data.R.string.error_vault_code),
                     modifier = Modifier.testTag("name_failed"),
                 )
                 else -> Unit

@@ -48,7 +48,7 @@ class OwnerCheckManagerTest {
 
         override suspend fun check(pin: String, password: String, hold: Boolean?, holdOffUntil: String?): OwnerCheckPassed {
             checks += listOf(pin, password, hold, holdOffUntil)
-            checkError?.let { throw VaultOpException("vault.owner_check", it, body = checkErrorBody) }
+            checkError?.let { throw VaultOpException("vault.owner-check", it, body = checkErrorBody) }
             return OwnerCheckPassed(
                 answerDeadline, 86_400, hold = hold ?: true, holdOffUntil = holdOffUntil,
                 recovery = presentRecorded?.let { com.vettid.core.vault.OwnerCheckRecovery("armed", it) },
@@ -216,6 +216,35 @@ class OwnerCheckManagerTest {
         m.turnHoldOn()
         assertEquals(mapOf<String, JsonElement>("owner_check.hold" to JsonPrimitive(true)), ops.sets.single())
         assertFalse(m.ownerCheck.value!!.holdOff(now))
+    }
+
+    /**
+     * ANDROID-PLAN 0.1.57: `credential_required` raises "This phone can't use your vault" (never the PIN and password
+     * kept for Try again); `forbidden` is "not the holder"; another code is named. Nothing on the phone changes.
+     */
+    @Test
+    fun aCheckRefusedForTheHolderChangesNothingOnThePhone() = runTest {
+        CredentialRequired.clear()
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 0) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        val before = stored?.copyOf()
+        val view = m.ownerCheck.value
+        ops.checkError = "credential_required"
+        ops.checkErrorBody = JsonObject(mapOf("reason" to JsonPrimitive("no_holder")))
+        assertEquals(OwnerCheckOutcome.Failed(FailureKind.CREDENTIAL_REQUIRED, "credential_required"), m.check("975310", "pw"))
+        assertTrue(CredentialRequired.state.value != null)
+        CredentialRequired.tryAgain()
+        assertEquals(1, ops.checks.size) // the daily check asks for the PIN and the password again
+        ops.checkErrorBody = null
+        ops.checkError = "forbidden"
+        assertEquals(OwnerCheckOutcome.Failed(FailureKind.NOT_HOLDER, "forbidden"), m.check("975310", "pw"))
+        ops.checkError = "internal"
+        assertEquals(OwnerCheckOutcome.Failed(FailureKind.OTHER, "internal", "internal"), m.check("975310", "pw"))
+        assertTrue(before.contentEquals(stored))
+        assertEquals(view, m.ownerCheck.value)
+        assertFalse(m.lockedByOwnerCheck.value)
+        CredentialRequired.clear()
     }
 
     @Test

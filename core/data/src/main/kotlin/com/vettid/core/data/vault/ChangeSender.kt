@@ -26,7 +26,7 @@ internal class ChangeSender(
     private val scope: CoroutineScope,
     private val resolver: ChangeResolver,
     private val ops: Ops,
-    private val failureOf: (String) -> FailureKind,
+    private val failureOf: (VaultOpException) -> VaultFailure,
 ) {
     interface Ops {
         /** Stores the marker for [m] (throws [VaultFailure] when it cannot be stored, or another change is unresolved). */
@@ -67,7 +67,8 @@ internal class ChangeSender(
                 resolver.publish(ChangeCheck.NotApplied(kind))
                 throw VaultFailure(FailureKind.CHANGE_CHECKING, CODE_CHECKING, cause = e)
             }
-            resolver.publish(ChangeCheck.Refused(kind, failureOf(e.code)))
+            val f = failureOf(e)
+            resolver.publish(ChangeCheck.Refused(kind, f.kind, f.shownCode))
             throw e
         }
         marker?.let { ops.confirm(it) }

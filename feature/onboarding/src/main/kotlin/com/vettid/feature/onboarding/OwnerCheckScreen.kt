@@ -30,10 +30,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.WaitingCounts
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -169,10 +172,11 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 )
                 m is OwnerCheckMessage.Backoff ->
                     Text(stringResource(R.string.ownercheck_backoff), style = MaterialTheme.typography.bodyMedium)
+                // (ANDROID-PLAN 0.1.57) "Not the holder" under "Your vault moved to a new phone"; an unmapped code named.
                 m is OwnerCheckMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
-                    title,
-                    failureText(m.kind.messageRes()),
+                    if (m.kind == FailureKind.NOT_HOLDER) stringResource(m.kind.titleRes(0)) else title,
+                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode), com.vettid.core.data.R.string.error_vault_code),
                     modifier = Modifier.testTag("owner_check_failed"),
                 )
                 else -> Unit

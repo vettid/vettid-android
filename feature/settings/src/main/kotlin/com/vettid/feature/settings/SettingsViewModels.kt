@@ -247,6 +247,8 @@ data class ChangePinUiState(
     val same: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
     /**
      * (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) `pin.change` is a credential operation: the password too, and the
@@ -323,8 +325,12 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
         when (c) {
             is ChangeCheck.Checking, is ChangeCheck.Unreachable -> state.update { it.copy(busy = false, error = null, check = c) }
             is ChangeCheck.Applied -> state.update { ChangePinUiState(done = true, withPassword = it.withPassword) }
-            is ChangeCheck.NotApplied, is ChangeCheck.Ended -> state.update { it.copy(busy = false, error = null, check = c) }
-            is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure).afterRefusal(c.failure) }
+            // (ANDROID-PLAN 0.1.55) Moved: another phone became the holder; said here as the one-time notice.
+            is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
+                state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.Refused -> state.update {
+                it.copy(busy = false, check = null, error = c.failure, errorCode = c.shownCode).afterRefusal(c.failure)
+            }
         }
         if (!c.open) {
             following = false
@@ -368,7 +374,7 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
                             state.update { it.copy(busy = false, error = null) }
                             vault.changeCheck.value?.takeIf { it.kind == ChangeKind.PIN }?.let(::onCheck)
                         } else {
-                            state.update { it.copy(busy = false, error = e.kind).afterRefusal(e.kind) }
+                            state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode).afterRefusal(e.kind) }
                             following = false
                             vault.acknowledgeChangeCheck()
                         }
@@ -389,6 +395,8 @@ data class DeleteVaultUiState(
     val phraseWrong: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 ) {
     val ready: Boolean get() = DeletePhrase.matches(phrase) && pin.length >= MIN_PIN && password.isNotEmpty() && acknowledged
 
@@ -437,7 +445,7 @@ class DeleteVaultViewModel @Inject constructor(private val vault: VaultRepositor
                 vault.deleteVault(s.pin, s.password)
                 state.update { DeleteVaultUiState() }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, pin = "", password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, pin = "", password = "") }
             }
         }
     }

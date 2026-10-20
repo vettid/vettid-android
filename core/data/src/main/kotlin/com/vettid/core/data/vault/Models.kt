@@ -499,6 +499,19 @@ enum class FailureKind {
      * is answered or can no longer apply, so that its decision can only be its own. Nothing was sent.
      */
     CREDENTIAL_UNSETTLED,
+
+    /**
+     * (ANDROID-PLAN 0.1.57 (1), 0.1.58 (3)) `credential_required`: the vault has no credential, or a credential but no
+     * holder (`{"reason": "no_holder"}`), and refused before testing any PIN or password. Shown as the full screen
+     * "This phone can't use your vault" ([CredentialRequired]). Not a proof for an erase: nothing is erased.
+     */
+    CREDENTIAL_REQUIRED,
+
+    /**
+     * (ANDROID-PLAN 0.1.57 (3)) `forbidden` to a holder-only type ([VaultCodes.HOLDER_ONLY], outside an unresolved
+     * change): another app holds the vault's credential. `vault_not_holder`. Not a proof for an erase.
+     */
+    NOT_HOLDER,
     OTHER,
 }
 
@@ -529,8 +542,18 @@ sealed interface ChangeCheck {
     /** The change did not apply and never will: "Your PIN was not changed. You can try again." */
     data class NotApplied(override val kind: ChangeKind) : ChangeCheck
 
-    /** An answer to the request came at last and refused the change ([failure], shown as it is). */
-    data class Refused(override val kind: ChangeKind, val failure: FailureKind) : ChangeCheck
+    /**
+     * An answer to the request came at last and refused the change ([failure], shown as it is; [shownCode] the code
+     * `error_vault_code` names, ANDROID-PLAN 0.1.57 (2), when this phone saw it).
+     */
+    data class Refused(override val kind: ChangeKind, val failure: FailureKind, val shownCode: String? = null) : ChangeCheck
+
+    /**
+     * (ANDROID-PLAN 0.1.55, VAULT-MESSAGING 0.51.1 §11.14.9 "Another phone became the holder") The vault answered a
+     * request of the resolution `forbidden`: the change ended (the marker and the candidate cleared, the PIN not left
+     * uncertain) and the one-time notice is "Your vault moved to a new phone". Nothing is erased.
+     */
+    data class Moved(override val kind: ChangeKind) : ChangeCheck
 
     /** The check ended without a decision (no credential, another version, a clone alarm): that answer's own path. */
     data class Ended(override val kind: ChangeKind) : ChangeCheck
@@ -550,6 +573,15 @@ class VaultFailure(
     /** `weak_password`'s `reason` (§11.14.7): `short`, `repeated`, `common`, `same_as_pin` or `guessable`. */
     val weakPasswordReason: String?
         get() = (cause as? com.vettid.core.vault.VaultOpException)?.body?.let { com.vettid.core.vault.VaultJson.str(it, "reason") }
+
+    /**
+     * (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names: for a vault error answer the app does not map
+     * ([FailureKind.OTHER] from the vault's own error response), its code checked by [VaultCodes.shown]; null for a
+     * mapped code and for every failure that is not a vault answer (network, relay, member API, host, no answer), which
+     * keep their own texts.
+     */
+    val shownCode: String?
+        get() = if (kind == FailureKind.OTHER) (cause as? com.vettid.core.vault.VaultOpException)?.code?.let(VaultCodes::shown) else null
 }
 
 /**

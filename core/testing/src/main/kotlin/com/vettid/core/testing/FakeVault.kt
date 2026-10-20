@@ -55,6 +55,19 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     /** (VAULT-MESSAGING 0.44.0 §11.14.9) The decision of a change whose answer was lost, as a test sets it. */
     override val changeCheck = MutableStateFlow<ChangeCheck?>(null)
+
+    /** (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault"; Try again and clear recorded in [calls]. */
+    override val credentialRequired = MutableStateFlow<com.vettid.core.data.vault.CredentialRequired.Refusal?>(null)
+
+    override suspend fun retryCredentialRequired() {
+        calls += "retryCredentialRequired"
+        credentialRequired.value = null
+    }
+
+    override fun clearCredentialRequired() {
+        calls += "clearCredentialRequired"
+        credentialRequired.value = null
+    }
     var changeCheckAcknowledged = 0
 
     override fun acknowledgeChangeCheck() {

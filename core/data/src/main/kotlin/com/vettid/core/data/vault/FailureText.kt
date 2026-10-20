@@ -9,7 +9,11 @@ import com.vettid.core.data.R
  * time, each with its `_scaled` variant for a vault with a time scale, where the durations are computed: for the app's
  * root to hand to `UiTimeScale.scaledTexts`.
  */
-val SCALED_FAILURE_TEXTS: Map<Int, Int> = mapOf(R.string.data_failure_device_secret to R.string.data_failure_device_secret_scaled)
+val SCALED_FAILURE_TEXTS: Map<Int, Int> = mapOf(
+    R.string.data_failure_device_secret to R.string.data_failure_device_secret_scaled,
+    // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault": "one to three days".
+    R.string.vault_credential_required_body to R.string.vault_credential_required_body_scaled,
+)
 
 /** The member-facing message of a failure (strings in this module, `data_failure_*`). */
 @Suppress("CyclomaticComplexMethod") // one string per kind
@@ -74,8 +78,26 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.PIN_UNCERTAIN -> R.string.data_failure_pin_uncertain
     FailureKind.RENEW_UNCONFIRMED -> R.string.data_failure_renew_unconfirmed
     FailureKind.CREDENTIAL_UNSETTLED -> R.string.data_failure_credential_unsettled
+    // (ANDROID-PLAN 0.1.57) The full screen shows the title with its body ([CredentialRequired]); inline, the title.
+    FailureKind.CREDENTIAL_REQUIRED -> R.string.vault_credential_required_title
+    // Its title is "Your vault moved to a new phone" (data_feed_device_replaced) where a screen shows one.
+    FailureKind.NOT_HOLDER -> R.string.vault_not_holder
     FailureKind.OTHER -> R.string.data_failure_other
 }
+
+/**
+ * (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names for this failure: [shownCode] ([VaultFailure.shownCode])
+ * for an unmapped vault code ([FailureKind.OTHER]); null otherwise, and [messageRes] applies.
+ */
+fun FailureKind.vaultCode(shownCode: String?): String? = shownCode?.takeIf { this == FailureKind.OTHER }
+
+/**
+ * (ANDROID-PLAN 0.1.57 (3)) The title a screen's failure notice takes: "Your vault moved to a new phone" for
+ * [FailureKind.NOT_HOLDER], otherwise [screenTitle].
+ */
+@StringRes
+fun FailureKind.titleRes(@StringRes screenTitle: Int): Int =
+    if (this == FailureKind.NOT_HOLDER) R.string.data_feed_device_replaced else screenTitle
 
 /** A limit's member-facing text: [res] formatted with [args] (counts, or kilobytes for a size; at most two). */
 data class LimitText(@param:StringRes val res: Int, val args: List<Long> = emptyList()) {

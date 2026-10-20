@@ -87,6 +87,14 @@ fun failureText(@StringRes res: Int): String {
     return stringResource(shown, scaledDurationText(Durations.DAY), scaledDurationText(RECOVERY_QUIET_S))
 }
 
+/**
+ * (ANDROID-PLAN 0.1.57 (2)) [res] as [failureText] says it, or, for a vault error code the app does not map, [codeRes]
+ * (`error_vault_code`) naming [code] alone.
+ */
+@Composable
+fun failureText(@StringRes res: Int, code: String?, @StringRes codeRes: Int): String =
+    if (code != null) stringResource(codeRes, code) else failureText(res)
+
 /** The recovery quiet period in real time (VAULT-MESSAGING §11.14.5: 72 h), a wait the time scale divides (S7). */
 const val RECOVERY_QUIET_S = 259_200L
 

@@ -213,7 +213,7 @@ class OwnerCheckManager(
     override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
         val until = holdOff?.until?.let { clampHoldOff(it) }
         val outcome = try {
-            val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
+            val r = vaultGuard(resend = false) { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
             locked.value = false
             heldTs = null
             presenceFromCheck(r)
@@ -239,7 +239,7 @@ class OwnerCheckManager(
         CODE_BAD_PIN -> OwnerCheckOutcome.BadPin(checksLeftAfterFailure())
         CODE_BAD_PASSWORD -> OwnerCheckOutcome.BadPassword(checksLeftAfterFailure())
         CODE_BACKOFF -> OwnerCheckOutcome.Backoff(retryAfter(e))
-        else -> OwnerCheckOutcome.Failed(e.kind, e.code)
+        else -> OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
     }
 
     /** A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). */

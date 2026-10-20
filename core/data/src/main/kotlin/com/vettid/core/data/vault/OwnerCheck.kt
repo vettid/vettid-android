@@ -90,7 +90,8 @@ sealed interface OwnerCheckOutcome {
     /** A PIN or password backoff runs; [retryAfterSeconds] 0 when the vault did not say how long. */
     data class Backoff(val retryAfterSeconds: Long) : OwnerCheckOutcome
 
-    data class Failed(val kind: FailureKind, val code: String?) : OwnerCheckOutcome
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names ([VaultFailure.shownCode]), or null. */
+    data class Failed(val kind: FailureKind, val code: String?, val shownCode: String? = null) : OwnerCheckOutcome
 }
 
 /** An `owner_check.*` activity-feed item (§3.6.4, §3.6.7) the app shows once the vault is open. */

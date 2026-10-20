@@ -226,6 +226,8 @@ fun VettIdApp(
                 }
             }
         }
+        // ANDROID-PLAN 0.1.57 (1): "This phone can't use your vault", over the open app (never over the app lock).
+        CredentialRequiredOverlay(lock)
         if (lock == AppLockState.PENDING) FullScreenProgress(stringResource(R.string.root_starting))
 
         // A canary manifest shared to the app (VAULT-RELEASES §10.1 step 9): asked about only while the app is open.
@@ -337,6 +339,8 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
 internal fun changeDecidedText(c: ChangeCheck): Int {
     val pin = c.kind == ChangeKind.PIN
     return when (c) {
+        // (ANDROID-PLAN 0.1.55) Another phone became the holder: the existing title, alone.
+        is ChangeCheck.Moved -> com.vettid.core.data.R.string.data_feed_device_replaced
         is ChangeCheck.Applied -> if (pin) R.string.root_change_pin_applied else R.string.root_change_password_applied
         is ChangeCheck.Ended -> if (pin) R.string.root_change_pin_ended else R.string.root_change_password_ended
         else -> if (pin) R.string.root_change_pin_not_changed else R.string.root_change_password_not_changed

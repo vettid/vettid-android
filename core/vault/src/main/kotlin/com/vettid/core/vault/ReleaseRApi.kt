@@ -12,7 +12,8 @@ import kotlinx.serialization.json.put
  * `{"unlink": "after_new_unlock"}` ([TransferApproved]).
  * [signer] (0.27.0, §6.7.1 step 3): the new app's signer class, the holder's explicit confirmation, sent when
  * the pending said `signer_changed`; null sends no member. Without it the vault answers `signer_unconfirmed`
- * before it spends the UTK or tries the PIN, and the transfer stays open.
+ * before it tries the PIN, and the transfer stays open; (0.52.0) the UTK is spent all the same, and the next approval
+ * takes a fresh one.
  */
 suspend fun VaultApi.transferApprove(transferId: String, pin: String, password: String, signer: String? = null): TransferApproved =
     TransferApproved.of(

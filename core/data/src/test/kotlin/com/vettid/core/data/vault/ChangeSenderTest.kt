@@ -66,7 +66,7 @@ class ChangeSenderTest {
                     kept = k
                 }
             },
-            failureOf = { if (it == "bad_pin") FailureKind.BAD_PIN else FailureKind.OTHER },
+            failureOf = { e -> VaultFailure(if (e.code == "bad_pin") FailureKind.BAD_PIN else FailureKind.OTHER, e.code, cause = e) },
         )
 
         suspend fun send(block: suspend (suspend (ChangeMarker) -> Unit) -> Unit): Result<Unit> =

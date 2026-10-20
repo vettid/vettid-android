@@ -80,14 +80,28 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         d.op("credential.ack", buildJsonObject { put("version", v) })
     }
 
-    /** An unexpired UTK, fetching a pool (`credential.utk.get`) when empty. */
+    /**
+     * An unexpired UTK, fetching a pool (`credential.utk.get`) when empty. It leaves the pool here and never goes back
+     * once the request that presents it is sent, whatever the answer (VAULT-MESSAGING 0.52.0 §3.5.4, ANDROID-PLAN
+     * 0.1.58 point 1: the vault spends a presented UTK before any check). (0.1.58 point 2) When `credential.utk.get`
+     * returns no UTK while this pool is empty, the vault's pool for this phone holds UTKs the phone no longer has: one
+     * `credential.utk.get{"resync": true}`, never repeated for this request. Its refusal (`too_soon` within 10 minutes of
+     * the last resync) is thrown as it is; an empty list again throws [CODE_UTK_EMPTY].
+     */
     suspend fun takeUtk(): UtkRecord {
-        repeat(2) {
-            d.takeUtkOrNull()?.let { return it }
-            keep(d.op("credential.utk.get"))
-        }
-        throw VaultStateException("no UTK")
+        d.takeUtkOrNull()?.let { return it }
+        val fetched = d.op(TYPE_UTK_GET)
+        keep(fetched)
+        d.takeUtkOrNull()?.let { return it }
+        if (utkCountIn(fetched) > 0) throw VaultStateException("no UTK")
+        val resynced = d.op(TYPE_UTK_GET, buildJsonObject { put("resync", true) })
+        keep(resynced)
+        d.takeUtkOrNull()?.let { return it }
+        if (utkCountIn(resynced) > 0) throw VaultStateException("no UTK")
+        throw VaultOpException(TYPE_UTK_GET, CODE_UTK_EMPTY)
     }
+
+    private fun utkCountIn(o: JsonObject): Int = (o["utks"] as? JsonArray)?.size ?: 0
 
     /**
      * Sends [type] with [payload] sealed to [utk] (plus the blob when
@@ -130,8 +144,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         d.settleCredential(id)
         if (r.inner.status != Inner.STATUS_OK) {
             rk?.destroy()
-            // §6.7.1 step 3 (0.27.0): refused before the UTK was spent; the retry uses the same one.
-            if (r.inner.error?.code == CODE_SIGNER_UNCONFIRMED) d.returnUtk(utk)
+            // (VAULT-MESSAGING 0.52.0, ANDROID-PLAN 0.1.58) The UTK is spent whatever the answer, `signer_unconfirmed`
+            // included: the next attempt takes a fresh one.
             // (R1) Refused under this id (`stale_credential` included): the vault caches that answer, so no copy of this
             // request can apply. Said before anything follows (a fetch and a retry, which is a new request).
             onRefused?.invoke(id, r.inner.error?.code ?: "error")
@@ -527,7 +541,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
 
     /** Fetches a pool of UTKs when none is left (after a change whose answer, which carried new ones, was lost). */
     suspend fun topUpUtks() {
-        if (d.utkCount == 0) keep(d.op("credential.utk.get"))
+        if (d.utkCount == 0) keep(d.op(TYPE_UTK_GET))
     }
 
     /** Fetches the latest blob the vault holds (the holder only). */
@@ -543,18 +557,24 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         }
     }
 
-    private companion object {
-        const val CODE_SIGNER_UNCONFIRMED = "signer_unconfirmed"
-        const val CODE_STALE = "stale_credential"
-        const val CODE_ROTATION_REQUIRED = "rotation_required"
-        const val CODE_FROZEN = "credential_frozen"
-        const val TYPE_ROTATE = "credential.rotate"
+    companion object {
+        const val TYPE_UTK_GET = "credential.utk.get"
+
+        /**
+         * (ANDROID-PLAN 0.1.58 point 2) The app's own code when a resync also returned no UTK: shown with
+         * `error_vault_code`, as a vault code is.
+         */
+        const val CODE_UTK_EMPTY = "utk_empty"
+        private const val CODE_STALE = "stale_credential"
+        private const val CODE_ROTATION_REQUIRED = "rotation_required"
+        private const val CODE_FROZEN = "credential_frozen"
+        private const val TYPE_ROTATE = "credential.rotate"
 
         /** Operations whose answer carries a credential under a new key (or one this phone has not held before). */
-        const val TYPE_RESET = "credential.reset"
-        val KEY_REPLACING = setOf(TYPE_ROTATE, TYPE_RESET, "credential.create", "credential.recover")
+        private const val TYPE_RESET = "credential.reset"
+        private val KEY_REPLACING = setOf(TYPE_ROTATE, TYPE_RESET, "credential.create", "credential.recover")
 
         /** The first send and the two automatic resends of §8.6. */
-        const val CHANGE_SENDS = 3
+        private const val CHANGE_SENDS = 3
     }
 }

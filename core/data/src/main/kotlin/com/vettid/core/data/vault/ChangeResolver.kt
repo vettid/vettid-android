@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.vault.ChangeTypes
+import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -63,6 +64,7 @@ internal data class SavedDecision(
             APPLIED -> ChangeCheck.Applied(k)
             NOT_APPLIED -> ChangeCheck.NotApplied(k)
             ENDED -> ChangeCheck.Ended(k)
+            MOVED -> ChangeCheck.Moved(k)
             REFUSED -> ChangeCheck.Refused(k, failure?.let { runCatching { FailureKind.valueOf(it) }.getOrNull() } ?: FailureKind.OTHER)
             else -> null
         }
@@ -72,6 +74,7 @@ internal data class SavedDecision(
         private const val APPLIED = "applied"
         private const val NOT_APPLIED = "not_applied"
         private const val ENDED = "ended"
+        private const val MOVED = "moved"
         private const val REFUSED = "refused"
 
         /** The decided [c] to keep; null for none or an undecided state. */
@@ -79,6 +82,7 @@ internal data class SavedDecision(
             is ChangeCheck.Applied -> SavedDecision(c.kind.name, APPLIED)
             is ChangeCheck.NotApplied -> SavedDecision(c.kind.name, NOT_APPLIED)
             is ChangeCheck.Ended -> SavedDecision(c.kind.name, ENDED)
+            is ChangeCheck.Moved -> SavedDecision(c.kind.name, MOVED)
             is ChangeCheck.Refused -> SavedDecision(c.kind.name, REFUSED, c.failure.name)
             else -> null
         }
@@ -136,8 +140,11 @@ internal class ChangeResolver(
         /** `epoch_advanced` or the new blob: the change applied. */
         data object Ok : Answer
 
-        /** A refusal ([failure]); [stale]: `stale_credential`, answered before any secret was tested. */
-        data class Refused(val failure: FailureKind, val stale: Boolean = false) : Answer
+        /**
+         * A refusal ([failure]); [stale]: `stale_credential`, answered before any secret was tested. [shownCode]: the
+         * code `error_vault_code` names (ANDROID-PLAN 0.1.57 (2)), or null.
+         */
+        data class Refused(val failure: FailureKind, val stale: Boolean = false, val shownCode: String? = null) : Answer
     }
 
     /** `credential.version`'s answer and its `ts` (the vault's clock). */
@@ -207,7 +214,8 @@ internal class ChangeResolver(
 
     /**
      * One round of §11.14.9 step 3. Null: nothing is unresolved. Never throws (but cancellation): a failure to reach the
-     * vault is [ChangeCheck.Unreachable].
+     * vault is [ChangeCheck.Unreachable]. (ANDROID-PLAN 0.1.55) A `forbidden` from the vault to any request of the round
+     * ends the change: [ChangeCheck.Moved].
      */
     suspend fun decide(): ChangeCheck? = mutex.withLock {
         val m = ops.marker()
@@ -216,8 +224,19 @@ internal class ChangeResolver(
             return@withLock null
         }
         if (state.value?.open != true) set(ChangeCheck.Checking(m.kind))
-        round(m).also { set(it) }
+        val c = try {
+            round(m)
+        } catch (_: HolderMoved) {
+            // Not a proof for an erase: the marker and the candidate go, the PIN is not uncertain, nothing else changes.
+            ops.clear(m)
+            ChangeCheck.Moved(m.kind)
+        }
+        set(c)
+        c
     }
+
+    /** (0.1.55) The vault's own `forbidden` answered a request of the resolution: another phone became the holder. */
+    private class HolderMoved : Exception()
 
     @Suppress("ReturnCount")
     private suspend fun round(m: UnresolvedChange): ChangeCheck {
@@ -244,12 +263,20 @@ internal class ChangeResolver(
         }
     }
 
-    /** [block]'s result, or null when it failed (no answer, the vault unreachable); cancellation goes through. */
+    /**
+     * [block]'s result, or null when it failed (no answer, the vault unreachable); cancellation goes through.
+     * (ANDROID-PLAN 0.1.55) The vault's own error answer `forbidden` ([VaultOpException]: an error response opened under
+     * the device's session with the vault, answering that request) throws [HolderMoved]. Every other failure (the
+     * network, a timeout, the relay, the member API or the host, an answer that does not open) is no answer.
+     */
     @Suppress("TooGenericExceptionCaught")
     private suspend fun <T> attempt(block: suspend () -> T): T? = try {
         block()
     } catch (e: CancellationException) {
         throw e
+    } catch (e: VaultOpException) {
+        if (e.code == VaultCodes.FORBIDDEN) throw HolderMoved()
+        null
     } catch (_: Exception) {
         null
     }
@@ -263,7 +290,7 @@ internal class ChangeResolver(
         is Answer.Refused -> {
             ops.clear(m)
             // stale_credential: refused before any secret was tested, so this request did not apply.
-            if (a.stale) ChangeCheck.NotApplied(m.kind) else ChangeCheck.Refused(m.kind, a.failure)
+            if (a.stale) ChangeCheck.NotApplied(m.kind) else ChangeCheck.Refused(m.kind, a.failure, a.shownCode)
         }
     }
 

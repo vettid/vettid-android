@@ -57,6 +57,9 @@ import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.data.R as DataR
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.FullScreenProgress
@@ -216,7 +219,11 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                 Modifier.fillMaxSize().padding(Spacing.xl),
                 verticalArrangement = Arrangement.Center,
             ) {
-                NoticeCard(NoticeKind.WARNING, stringResource(R.string.credential_title), failureText(state.error.messageRes()))
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(state.error.titleRes(R.string.credential_title)),
+                    failureText(state.error.messageRes(), state.error.vaultCode(state.errorCode), DataR.string.error_vault_code),
+                )
                 Spacer(Modifier.height(Spacing.l))
                 SecondaryButton(stringResource(R.string.credential_retry), actions.retry)
             }
@@ -243,7 +250,11 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                     if (state.error != null || state.notice != null) {
                         Spacer(Modifier.height(Spacing.s))
                         val (kind, text) = when {
-                            state.error != null -> NoticeKind.URGENT to failureText(state.error.messageRes())
+                            state.error != null -> NoticeKind.URGENT to failureText(
+                                state.error.messageRes(),
+                                state.error.vaultCode(state.errorCode),
+                                DataR.string.error_vault_code,
+                            )
                             state.notice == CredentialNotice.BACKUP_ON ->
                                 NoticeKind.SUCCESS to stringResource(R.string.credential_backup_on_done)
                             state.notice == CredentialNotice.BACKUP_OFF ->
@@ -251,7 +262,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             else -> NoticeKind.SUCCESS to ""
                         }
                         NoticeCard(
-                            kind, stringResource(R.string.credential_title), text,
+                            kind, stringResource(state.error?.titleRes(R.string.credential_title) ?: R.string.credential_title), text,
                             modifier = Modifier.padding(horizontal = Spacing.gutter),
                             actions = { TextButton(onClick = actions.dismissNotice) { Text(stringResource(R.string.credential_done)) } },
                         )
@@ -371,6 +382,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
             confirmLabel = stringResource(R.string.credential_open),
             busy = state.busy,
             error = state.windowError,
+            errorCode = state.windowErrorCode,
             onConfirm = actions.openWindow,
             onDismiss = { actions.showWindowDialog(false) },
         )
@@ -395,6 +407,8 @@ fun PasswordDialog(
     error: FailureKind?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    errorCode: String? = null,
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -408,7 +422,7 @@ fun PasswordDialog(
                     value = password,
                     onValueChange = onPassword,
                     label = stringResource(R.string.credential_password_label),
-                    error = error?.let { failureText(it.messageRes()) },
+                    error = error?.let { failureText(it.messageRes(), it.vaultCode(errorCode), DataR.string.error_vault_code) },
                     onImeAction = onConfirm,
                     enabled = !busy,
                     modifier = Modifier.testTag("dialog_password"),
@@ -499,10 +513,15 @@ fun BackupOffDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun ErrorCard(error: FailureKind?) {
+private fun ErrorCard(error: FailureKind?, code: String? = null) {
     if (error == null) return
     Spacer(Modifier.height(Spacing.l))
-    NoticeCard(NoticeKind.URGENT, stringResource(R.string.credential_title), failureText(error.messageRes()), Modifier.testTag("error"))
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(error.titleRes(R.string.credential_title)),
+        failureText(error.messageRes(), error.vaultCode(code), DataR.string.error_vault_code),
+        Modifier.testTag("error"),
+    )
 }
 
 /** The password change (stateless). */
@@ -553,7 +572,7 @@ fun ChangePasswordContent(
             error = if (state.mismatch) stringResource(R.string.credential_password_mismatch) else null,
             onImeAction = onSubmit,
         )
-        ErrorCard(state.error)
+        ErrorCard(state.error, state.errorCode)
     }
 }
 
@@ -565,10 +584,12 @@ private fun ChangeCheckNotice(c: ChangeCheck?) {
         is ChangeCheck.Unreachable -> R.string.credential_change_unreachable
         is ChangeCheck.NotApplied -> R.string.credential_change_not_changed
         is ChangeCheck.Ended -> R.string.credential_change_ended
+        // (ANDROID-PLAN 0.1.55) "Your vault moved to a new phone", no "Try again".
+        is ChangeCheck.Moved -> DataR.string.data_feed_device_replaced
         else -> return
     }
     NoticeCard(
-        if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended) NoticeKind.WARNING else NoticeKind.INFO,
+        if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended || c is ChangeCheck.Moved) NoticeKind.WARNING else NoticeKind.INFO,
         stringResource(R.string.credential_change_title),
         stringResource(text),
         Modifier.testTag("password_change_check"),
@@ -606,7 +627,7 @@ fun RotateContent(state: RotateUiState, onPassword: (String) -> Unit, onSubmit: 
             onImeAction = onSubmit,
             modifier = Modifier.testTag("password"),
         )
-        ErrorCard(state.error)
+        ErrorCard(state.error, state.errorCode)
     }
 }
 

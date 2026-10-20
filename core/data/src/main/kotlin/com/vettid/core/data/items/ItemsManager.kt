@@ -166,7 +166,7 @@ class ItemsManager(
     override suspend fun revealCritical(itemId: String, password: String): ItemDetail {
         // The metadata (names, labels, kinds) first: the values come only as {field_id, value}.
         val meta = detail(vaultGuard { ops().get(itemId) })
-        val pt = vaultGuard { ops().revealCritical(password, itemId) }
+        val pt = vaultGuard(resend = false) { ops().revealCritical(password, itemId) }
         return try {
             openValues(meta, pt)
         } finally {
@@ -184,7 +184,7 @@ class ItemsManager(
 
     override suspend fun createCritical(draft: ItemDraft, password: String): String {
         val (content, tags) = content(draft.copy(sensitivity = Sensitivity.CRITICAL))
-        val ref = vaultGuard { ops().putCritical(password, content, tags, null, null) }
+        val ref = vaultGuard(resend = false) { ops().putCritical(password, content, tags, null, null) }
         afterWrite()
         return ref.itemId
     }
@@ -211,7 +211,7 @@ class ItemsManager(
         if (unsure && d.fields.none { it.kept }) return putCriticalMerged(itemId, version, d, password)
         val (content, tags) = content(d)
         val ref = try {
-            vaultGuard { ops().putCritical(password, content, tags, itemId, version) }
+            vaultGuard(resend = false) { ops().putCritical(password, content, tags, itemId, version) }
         } catch (e: VaultFailure) {
             if (!(unsure && e.kind == FailureKind.OTHER && e.code == CODE_BAD_REQUEST)) throw e
             return putCriticalMerged(itemId, version, d, password)
@@ -224,14 +224,14 @@ class ItemsManager(
     private suspend fun putCriticalMerged(itemId: String, version: Long, d: ItemDraft, password: String): Long {
         val full = merged(d, revealCritical(itemId, password))
         val (content, tags) = content(full)
-        val ref = vaultGuard { ops().putCritical(password, content, tags, itemId, version) }
+        val ref = vaultGuard(resend = false) { ops().putCritical(password, content, tags, itemId, version) }
         afterWrite()
         return ref.version
     }
 
     override suspend fun delete(itemId: String, sensitivity: Sensitivity, password: String?) {
         if (sensitivity == Sensitivity.CRITICAL && password == null) throw VaultFailure(FailureKind.BAD_PASSWORD, "password_required")
-        vaultGuard { ops().delete(itemId, password.takeIf { sensitivity == Sensitivity.CRITICAL }) }
+        vaultGuard(resend = false) { ops().delete(itemId, password.takeIf { sensitivity == Sensitivity.CRITICAL }) }
         list.update { l -> l.filterNot { it.itemId == itemId } }
     }
 
@@ -245,7 +245,7 @@ class ItemsManager(
     override suspend fun setSensitivity(itemId: String, version: Long, from: Sensitivity, to: Sensitivity, password: String?): Long {
         val credential = from == Sensitivity.CRITICAL || to == Sensitivity.CRITICAL
         if (credential && password == null) throw VaultFailure(FailureKind.BAD_PASSWORD, "password_required")
-        val v = vaultGuard { ops().sensitivity(itemId, version, to.wire, password.takeIf { credential }) }
+        val v = vaultGuard(resend = false) { ops().sensitivity(itemId, version, to.wire, password.takeIf { credential }) }
         afterWrite()
         return v
     }
