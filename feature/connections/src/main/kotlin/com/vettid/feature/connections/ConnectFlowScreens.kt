@@ -178,7 +178,7 @@ private fun ChooseTtl(state: InviteUiState, actions: InviteActions, modifier: Mo
                 body = stringResource(R.string.connections_remote_body),
             )
         }
-        FailureText(state.error, Modifier.padding(top = Spacing.l))
+        FailureText(state.error, Modifier.padding(top = Spacing.l), state.errorCode)
     }
 }
 
@@ -282,7 +282,7 @@ private fun ShowInvite(state: InviteUiState, actions: InviteActions, modifier: M
             Spacer(Modifier.size(Spacing.m))
             Text(stringResource(R.string.connections_waiting_scan), style = MaterialTheme.typography.bodyMedium)
         }
-        FailureText(state.error, Modifier.padding(top = Spacing.l))
+        FailureText(state.error, Modifier.padding(top = Spacing.l), state.errorCode)
     }
 }
 
@@ -298,6 +298,7 @@ private fun Request(state: InviteUiState, actions: InviteActions, modifier: Modi
         autoApproved = state.autoApproved,
         busy = state.busy,
         error = state.error,
+        errorCode = state.errorCode,
         onApprove = actions.onApprove,
         onDecline = actions.onDecline,
         onBlock = { actions.onAskBlock(true) },
@@ -354,6 +355,8 @@ fun ConnectionRequestContent(
     approved: Boolean = false,
     autoApproved: Boolean = false,
     displayName: String? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    errorCode: String? = null,
 ) {
     val who = name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.connections_request_them)
     FormScaffold(
@@ -424,7 +427,7 @@ fun ConnectionRequestContent(
             enabled = !busy,
             modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("block_request"),
         ) { Text(stringResource(R.string.connections_block_request), color = MaterialTheme.colorScheme.error) }
-        FailureText(error, Modifier.padding(top = Spacing.s))
+        FailureText(error, Modifier.padding(top = Spacing.s), errorCode)
     }
 }
 
@@ -493,7 +496,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
                 maxLines = 6,
                 modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("invite_input"),
             )
-            FailureText(state.error, Modifier.padding(top = Spacing.s))
+            FailureText(state.error, Modifier.padding(top = Spacing.s), state.errorCode)
         }
         AcceptStep.WAITING -> FormScaffold(
             title = state.name?.let { stringResource(R.string.connections_waiting_title, it) }
@@ -508,7 +511,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             modifier = modifier.testTag("accept_waiting"),
         ) {
             WaitingRow(stringResource(R.string.connections_waiting_handshake))
-            FailureText(state.error, Modifier.padding(top = Spacing.s))
+            FailureText(state.error, Modifier.padding(top = Spacing.s), state.errorCode)
         }
         AcceptStep.COMPARE, AcceptStep.APPROVED -> {
             val approved = state.step == AcceptStep.APPROVED
@@ -539,7 +542,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
                     Spacer(Modifier.height(Spacing.xl))
                     WaitingRow(stringResource(R.string.connections_waiting_peer, who))
                 }
-                FailureText(state.error, Modifier.padding(top = Spacing.s))
+                FailureText(state.error, Modifier.padding(top = Spacing.s), state.errorCode)
             }
         }
         AcceptStep.CONNECTED -> Connected(

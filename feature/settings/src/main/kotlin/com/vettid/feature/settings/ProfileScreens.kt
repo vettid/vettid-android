@@ -212,7 +212,7 @@ fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActi
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.settings_profile_error),
-                    limit ?: failureText(it.messageRes()),
+                    limit ?: failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                     actions = { TextButton(onClick = actions.onDismiss) { Text(stringResource(R.string.settings_done)) } },
                 )
             }
@@ -450,7 +450,7 @@ private fun ConfirmStep(state: ChangeNameUiState, actions: ChangeNameActions) {
                 m is ChangeNameMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
                     stringResource(m.kind.titleRes(R.string.settings_name_title)),
-                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode), com.vettid.core.data.R.string.error_vault_code),
+                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode)),
                     modifier = Modifier.testTag("name_failed"),
                 )
                 else -> Unit

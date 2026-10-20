@@ -54,9 +54,12 @@ internal data class SavedDecision(
     val failure: String? = null,
     /** (P4) Already posted as a notification: not posted again after a restart in the background. */
     val notified: Boolean = false,
+    /** (ANDROID-PLAN 0.1.57 (2)) A refusal's code as `error_vault_code` names it, or null. */
+    val shownCode: String? = null,
 ) {
     /** The same decision, whatever [notified] says. */
-    fun sameAs(o: SavedDecision?): Boolean = o != null && kind == o.kind && verdict == o.verdict && failure == o.failure
+    fun sameAs(o: SavedDecision?): Boolean =
+        o != null && kind == o.kind && verdict == o.verdict && failure == o.failure && shownCode == o.shownCode
 
     fun toCheck(): ChangeCheck? {
         val k = runCatching { ChangeKind.valueOf(kind) }.getOrNull() ?: return null
@@ -65,7 +68,11 @@ internal data class SavedDecision(
             NOT_APPLIED -> ChangeCheck.NotApplied(k)
             ENDED -> ChangeCheck.Ended(k)
             MOVED -> ChangeCheck.Moved(k)
-            REFUSED -> ChangeCheck.Refused(k, failure?.let { runCatching { FailureKind.valueOf(it) }.getOrNull() } ?: FailureKind.OTHER)
+            REFUSED -> ChangeCheck.Refused(
+                k,
+                failure?.let { runCatching { FailureKind.valueOf(it) }.getOrNull() } ?: FailureKind.OTHER,
+                shownCode?.let(VaultCodes::shown),
+            )
             else -> null
         }
     }
@@ -83,7 +90,7 @@ internal data class SavedDecision(
             is ChangeCheck.NotApplied -> SavedDecision(c.kind.name, NOT_APPLIED)
             is ChangeCheck.Ended -> SavedDecision(c.kind.name, ENDED)
             is ChangeCheck.Moved -> SavedDecision(c.kind.name, MOVED)
-            is ChangeCheck.Refused -> SavedDecision(c.kind.name, REFUSED, c.failure.name)
+            is ChangeCheck.Refused -> SavedDecision(c.kind.name, REFUSED, c.failure.name, shownCode = c.shownCode)
             else -> null
         }
     }

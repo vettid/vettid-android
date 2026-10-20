@@ -178,8 +178,23 @@ internal class PhaseHolder(initial: AppPhase) {
     var value: AppPhase
         get() = flow.value
         set(v) = synchronized(this) {
-            if (held == null) flow.value = v
+            if (held == null) publish(v)
         }
+
+    /**
+     * (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault" goes when the vault stops being this phone's open vault:
+     * a lock, a sign-out or wipe, a setup, a deletion. Only on a move into one of those phases: a refusal raised while
+     * an unlock is still opening the vault (its owner check) stays, and shows once the app opens.
+     */
+    private fun publish(v: AppPhase) {
+        val was = flow.value
+        flow.value = v
+        val ends = when (v) {
+            AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true
+            else -> false
+        }
+        if (ends && v != was) CredentialRequired.clear()
+    }
 
     /** Whether "being deleted" holds. */
     val deleting: Boolean @Synchronized get() = held != null
@@ -192,13 +207,13 @@ internal class PhaseHolder(initial: AppPhase) {
     @Synchronized
     fun deleting(d: AppPhase.Deleting) {
         held = d
-        flow.value = d
+        publish(d)
     }
 
     /** The hold ends with [next] ("no vault"). */
     @Synchronized
     fun endDeleting(next: AppPhase) {
         held = null
-        flow.value = next
+        publish(next)
     }
 }

@@ -247,6 +247,21 @@ class OwnerCheckManagerTest {
         CredentialRequired.clear()
     }
 
+    /** The check an unlock sends before the app opens (§3.6.5): its `credential_required` raises the full screen too. */
+    @Test
+    fun theUnlocksCheckRaisesCredentialRequired() = runTest {
+        CredentialRequired.clear()
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 0)
+            checkError = "credential_required"
+            checkErrorBody = JsonObject(mapOf("reason" to JsonPrimitive("no_holder")))
+        }
+        val m = manager(ops)
+        m.afterUnlock("975310", "pw")
+        assertEquals(false, CredentialRequired.state.value?.resends)
+        CredentialRequired.clear()
+    }
+
     @Test
     fun failedChecksSayWhichEntryAndHowManyAreLeft() = runTest {
         val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 0) }

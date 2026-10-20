@@ -136,13 +136,13 @@ class VaultCodesTest {
         assertNull(CredentialRequired.state.value)
     }
 
-    /** **Try again** resends the request that failed: a vault that gained a holder in between answers `ok`. */
+    /** **Try again** resends an idempotent read that failed: a vault that gained a holder in between answers `ok`. */
     @Test
     fun tryAgainResends() = runTest {
         var sends = 0
         var holder = false
         val first = runCatching {
-            vaultGuard {
+            vaultGuard(resend = true) {
                 sends++
                 if (!holder) throw answer("credential_required", "account.get")
             }
@@ -159,17 +159,20 @@ class VaultCodesTest {
         assertNull(CredentialRequired.state.value)
     }
 
-    /** A request that carried a PIN or a password is not kept: Try again sends nothing, its screen asks for them again. */
+    /**
+     * By default nothing is kept (a request that carried a PIN or a password, or a write): Try again sends nothing, and
+     * the screen that sent it asks for them again.
+     */
     @Test
-    fun tryAgainNeverResendsTypedSecrets() = runTest {
+    fun tryAgainNeverResendsByDefault() = runTest {
         var sends = 0
         runCatching {
-            vaultGuard(resend = false) {
+            vaultGuard {
                 sends++
                 throw answer("credential_required")
             }
         }
-        assertNotNull(CredentialRequired.state.value)
+        assertEquals(false, CredentialRequired.state.value?.resends)
         CredentialRequired.tryAgain()
         assertEquals(1, sends)
         assertNull(CredentialRequired.state.value)
@@ -181,5 +184,27 @@ class VaultCodesTest {
         assertTrue(CredentialRequired.state.value != null)
         CredentialRequired.clear()
         assertNull(CredentialRequired.state.value)
+    }
+
+    /**
+     * The owner check an unlock sends before the app opens (unlockWithCheck, unlockCancellingRecovery) runs while the
+     * phase is still Locked: its refusal stays and shows once the app opens. A lock, a sign-out or wipe, a setup or a
+     * deletion takes it away.
+     */
+    @Test
+    fun aRefusalDuringTheUnlocksCheckStaysUntilTheVaultIsNoLongerOpen() = runTest {
+        val phase = PhaseHolder(AppPhase.Locked)
+        failureOf(answer("credential_required"))
+        phase.value = AppPhase.Locked // the unlock's own writes: still locked, no move
+        assertNotNull(CredentialRequired.state.value)
+        phase.value = AppPhase.Unlocked
+        assertNotNull(CredentialRequired.state.value)
+        for (end in listOf(AppPhase.Locked, AppPhase.SignedOut, AppPhase.Setup(SetupStage.NEW_VAULT), AppPhase.Deleting())) {
+            phase.value = AppPhase.Unlocked
+            failureOf(answer("credential_required"))
+            if (end is AppPhase.Deleting) phase.deleting(end) else phase.value = end
+            assertNull(end.toString(), CredentialRequired.state.value)
+            if (end is AppPhase.Deleting) phase.endDeleting(AppPhase.Unlocked)
+        }
     }
 }

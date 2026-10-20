@@ -80,6 +80,7 @@ import com.vettid.core.ui.theme.categoryColor
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FilterChipRow
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.EmptyState
@@ -280,7 +281,7 @@ fun HistoryScreen(
                         NoticeCard(
                             kind = NoticeKind.WARNING,
                             title = stringResource(R.string.history_error_title),
-                            body = failureText(error.messageRes()),
+                            body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                             modifier = Modifier.padding(Spacing.xl),
                             actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) } },
                         )

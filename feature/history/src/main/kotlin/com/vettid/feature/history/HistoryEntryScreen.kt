@@ -27,6 +27,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.CenteredTitle
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
@@ -56,7 +57,7 @@ fun HistoryEntryScreen(
             error != null -> NoticeCard(
                 NoticeKind.WARNING,
                 stringResource(R.string.history_error_title),
-                failureText(error.messageRes()),
+                failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                 modifier = Modifier.padding(Spacing.xl),
                 actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.history_retry)) } },
             )

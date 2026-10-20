@@ -93,9 +93,9 @@ private fun formatDate(s: String?): String? = s?.let {
 }
 
 @Composable
-private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?) {
+private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?, shownCode: String? = null) {
     Column(Modifier.padding(Spacing.gutter)) {
-        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), failureText(error.messageRes()))
+        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), failureText(error.messageRes(), error.vaultCode(shownCode)))
         if (retry != null) {
             Spacer(Modifier.height(Spacing.l))
             SecondaryButton(stringResource(R.string.settings_retry), retry)
@@ -155,7 +155,7 @@ fun VaultStatusContent(
             var signerOpen by rememberSaveable { mutableStateOf(signerDetails) }
             when {
                 state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
-                v == null -> LoadFailure(state.error ?: FailureKind.OTHER, retry)
+                v == null -> LoadFailure(state.error ?: FailureKind.OTHER, retry, state.errorCode)
                 else -> {
                     v.release?.let { r ->
                         releaseNotice(r)?.let {
@@ -420,7 +420,7 @@ fun ChangePinContent(
             NoticeCard(
                 NoticeKind.URGENT,
                 stringResource(it.titleRes(R.string.settings_pin_title)),
-                failureText(it.messageRes(), it.vaultCode(state.errorCode), com.vettid.core.data.R.string.error_vault_code),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
                 // (0.45.0 §11.14.9) An uncertain PIN or an unconfirmed new phone secret: settled by a lock and unlock.
                 actions = if (it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) {
@@ -490,7 +490,11 @@ fun RecoveryContent(
         }
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
-            NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_recovery_title), failureText(it.messageRes()))
+            NoticeCard(
+                NoticeKind.WARNING,
+                stringResource(R.string.settings_recovery_title),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
+            )
         }
     }
 }
@@ -515,7 +519,7 @@ fun AttestationContent(
             val a = state.value
             when {
                 state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
-                a == null -> LoadFailure(state.error ?: FailureKind.OTHER, null)
+                a == null -> LoadFailure(state.error ?: FailureKind.OTHER, null, state.errorCode)
                 else -> {
                     SettingsSectionHeader(stringResource(R.string.settings_attestation_device))
                     SettingsGroup {
@@ -681,7 +685,7 @@ fun DeleteVaultContent(state: DeleteVaultUiState, actions: DeleteVaultActions) {
             NoticeCard(
                 NoticeKind.URGENT,
                 stringResource(it.titleRes(R.string.settings_delete_title)),
-                failureText(it.messageRes(), it.vaultCode(state.errorCode), com.vettid.core.data.R.string.error_vault_code),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
             )
         }

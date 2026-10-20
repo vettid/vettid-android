@@ -49,6 +49,7 @@ import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.needsDecision
 import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
@@ -152,7 +153,7 @@ fun ApprovalsScreen(
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.approvals_error_title),
-                    body = failureText(error.messageRes()),
+                    body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                     actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } },
                 )
             }
@@ -390,7 +391,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
             Text(
-                failureText(it, state.retryUntil, state.limit),
+                failureText(it, state.retryUntil, state.limit, state.errorCode),
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("failure"),
             )
@@ -414,11 +415,13 @@ private fun failureText(
     kind: com.vettid.core.data.vault.FailureKind,
     retryUntil: java.time.Instant?,
     limit: com.vettid.core.data.vault.VaultLimit? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names, or null. */
+    shownCode: String? = null,
 ): String {
     val resources = androidx.compose.ui.platform.LocalResources.current
     val named = limit?.takeIf { kind == com.vettid.core.data.vault.FailureKind.LIMIT }?.message(resources)
     if (named != null || kind != com.vettid.core.data.vault.FailureKind.BACKOFF || retryUntil == null) {
-        return named ?: failureText(kind.messageRes())
+        return named ?: failureText(kind.messageRes(), kind.vaultCode(shownCode))
     }
     var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(retryUntil) {

@@ -352,6 +352,8 @@ data class AlarmUiState(
     val password: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 ) {
     override fun toString(): String = "AlarmUiState(step=$step, busy=$busy, error=$error)"
 }
@@ -401,7 +403,7 @@ class AlarmViewModel @Inject constructor(private val repo: CredentialRepository)
                 repo.confirmAlarm(mine)
                 state.update { it.copy(busy = false, step = AlarmStep.ROTATE) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, step = AlarmStep.ASK) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, step = AlarmStep.ASK) }
             }
         }
     }
@@ -417,7 +419,7 @@ class AlarmViewModel @Inject constructor(private val repo: CredentialRepository)
                 repo.rotate(pw)
                 state.update { it.copy(busy = false, password = "", step = AlarmStep.RESOLVED) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, password = "") }
             }
         }
     }

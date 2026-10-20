@@ -1433,7 +1433,7 @@ class VaultManager(
 
     // --- VaultRepository ---
 
-    override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard(resend = false) {
+    override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
         val rec = record.recordGeneration
         val s = session()
         onStep(EnrollStep.ENROLL)
@@ -1461,7 +1461,7 @@ class VaultManager(
         backup: Boolean,
         onStep: (EnrollStep) -> Unit,
         pin: String?,
-    ) = guard(resend = false) {
+    ) = guard {
         val s = session()
         if (s.device.deviceId == null) {
             onStep(EnrollStep.HANDSHAKE)
@@ -1969,7 +1969,7 @@ class VaultManager(
         locking.run(lock = { lockKeeper.ask(mine) }, after = {})
     }
 
-    override suspend fun overview(): VaultOverview = guard {
+    override suspend fun overview(): VaultOverview = guard(resend = true) {
         val rec = record.recordGeneration
         val s = session()
         val st = vaultStatus(s)
@@ -2017,7 +2017,7 @@ class VaultManager(
         )
     }
 
-    override suspend fun changePin(pin: String, newPin: String) = guard(resend = false) {
+    override suspend fun changePin(pin: String, newPin: String) = guard {
         session().openApi.pinChange(pin, newPin)
     }
 
@@ -2069,7 +2069,7 @@ class VaultManager(
         // operation's exp is 10 minutes after it is sent, ChangeTypes.EXP; taken here on this phone's clock).
         deleteExpMs = System.currentTimeMillis() + com.vettid.core.vault.ChangeTypes.EXP.toMillis()
         try {
-            guard(resend = false) { session().openApi.deleteVault(pin, password) }
+            guard { session().openApi.deleteVault(pin, password) }
         } catch (e: VaultFailure) {
             // Not answered or refused: no deletion of this phone's to bound (the vault's own event still starts one).
             if (!phaseFlow.deleting) deleteExpMs = null
@@ -2247,7 +2247,7 @@ class VaultManager(
         return n
     }
 
-    override suspend fun openUnlockWindow(password: String) = guard(resend = false) {
+    override suspend fun openUnlockWindow(password: String) = guard {
         val exp = session().openApi.credentialUnlock(password)
         windowFlow.value = try {
             Instant.parse(exp)
@@ -2264,7 +2264,7 @@ class VaultManager(
     override suspend fun changePassword(password: String, newPassword: String) = changePassword(password, newPassword, null)
 
     /** (Release R, §11.14.9) With the PIN, which the vault verifies; the change closes the recovery generation. */
-    override suspend fun changePassword(password: String, newPassword: String, pin: String?) = guard(resend = false) {
+    override suspend fun changePassword(password: String, newPassword: String, pin: String?) = guard {
         val rec = record.recordGeneration
         // §11.14.9 step 2: an earlier change is decided first.
         changes.gate(carriesPin = pin != null && local.phone.inUse)
@@ -2284,7 +2284,7 @@ class VaultManager(
      * phone moves to the next epoch only with the answer, or when a lost answer is decided as applied (0.44.0: the
      * change is decided, not repeated; [ChangeSender]).
      */
-    override suspend fun changePin(pin: String, newPin: String, password: String) = guard(resend = false) {
+    override suspend fun changePin(pin: String, newPin: String, password: String) = guard {
         val rec = record.recordGeneration
         val phone = local.phone
         if (!phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
@@ -2350,7 +2350,7 @@ class VaultManager(
     override val newPinAsked: StateFlow<Boolean> = newPinAskedFlow.asStateFlow()
 
     /** `vault.secret.renew` (release R, §11.14.9): a new phone secret, the PIN unchanged. */
-    override suspend fun renewPhoneSecret(pin: String, password: String): Unit = guard(resend = false) {
+    override suspend fun renewPhoneSecret(pin: String, password: String): Unit = guard {
         val rec = record.recordGeneration
         if (!local.phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
         // §11.14.9 step 2 (also gated as a credential operation): an unresolved change is decided first.
@@ -2425,7 +2425,7 @@ class VaultManager(
 
     override val recoveryOffered: Boolean get() = ReleasePath.recoveryOffered(local.capabilities)
 
-    override suspend fun rotate(password: String) = guard(resend = false) {
+    override suspend fun rotate(password: String) = guard {
         val rec = record.recordGeneration
         val s = session()
         // vettid.org #358: while a clone alarm is open, the held blob is checked (and refreshed) before the rotation.
@@ -2435,7 +2435,7 @@ class VaultManager(
         refreshAlarm(s)
     }
 
-    override suspend fun newCredential(pin: String, password: String, newPassword: String) = guard(resend = false) {
+    override suspend fun newCredential(pin: String, password: String, newPassword: String) = guard {
         val s = session()
         s.openApi.credentialResetHolder(pin, password, newPassword)
         windowFlow.value = null
@@ -2528,7 +2528,7 @@ class VaultManager(
      * `no_recovery`) but finishes the one that succeeded ([finishOpened]). An open the member API took that got no
      * answer is remembered across a restart ([LocalAccount.recoveryOpenUnanswered]) and reported with the next answer.
      */
-    override suspend fun recoveryOpen(pin: String, password: String): RecoveryOpenOutcome = guard(resend = false) {
+    override suspend fun recoveryOpen(pin: String, password: String): RecoveryOpenOutcome = guard {
         val rec = record.recordGeneration
         val s = session()
         val phone = local.phone
@@ -2565,7 +2565,7 @@ class VaultManager(
      * before its first handshake; the bundle pins the vault, and the handshake is sent again (the unlock dropped any that
      * was under way), then `credential.get`. No attempt is used. Without a bundle the recovery did not complete here.
      */
-    override suspend fun resumeLostOk(pin: String): RecoveryOpenOutcome = guard(resend = false) {
+    override suspend fun resumeLostOk(pin: String): RecoveryOpenOutcome = guard {
         val s = session()
         val d = s.device
         if (!local.phone.inUse || !d.recovering) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_recovery")
@@ -2701,7 +2701,7 @@ class VaultManager(
         phaseFlow.value = AppPhase.SignedOut
     }
 
-    override suspend fun recoverCredential(password: String): RecoverOutcome = guard(resend = false) {
+    override suspend fun recoverCredential(password: String): RecoverOutcome = guard {
         val s = session()
         val outcome = try {
             s.openApi.credentialRecover(password)
@@ -2818,7 +2818,7 @@ class VaultManager(
         val restore: (LocalAccount) -> LocalAccount = { it.copy(transferApprovedAtMs = before, transferKeepMs = keepBefore) }
         val moved = try {
             holder.approveTransfer(if (r) 0 else UNLINK_WAIT_MS) {
-                keep = guard(resend = false) { session().openApi.transferApprove(transferId, pin, password, signer) }.keepUntilNewUnlock
+                keep = guard { session().openApi.transferApprove(transferId, pin, password, signer) }.keepUntilNewUnlock
                 openTransferId = null
             }
         } catch (e: VaultFailure) {
@@ -3207,10 +3207,10 @@ class VaultManager(
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
     /**
-     * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. [resend]: false for a request that
-     * carries a PIN or a password ([vaultGuard]).
+     * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. [resend]: only for an idempotent
+     * read without secrets ([vaultGuard]).
      */
-    private suspend fun <T> guard(resend: Boolean = true, block: suspend () -> T): T = try {
+    private suspend fun <T> guard(resend: Boolean = false, block: suspend () -> T): T = try {
         vaultGuard(resend, block)
     } catch (e: VaultFailure) {
         // MEMBER-API 1.2.0: a refusal while paused also shows the banner (status may not have been read yet).

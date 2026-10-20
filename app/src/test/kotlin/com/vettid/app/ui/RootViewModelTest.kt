@@ -227,9 +227,23 @@ class RootViewModelTest {
         assertTrue("lock" in vault.calls)
         assertFalse(vm.shown.value)
         assertTrue(vault.calls.none { it.contains("wipe", ignoreCase = true) || it.contains("erase", ignoreCase = true) })
-        // Not over a vault that is not open: a refusal left from before is taken away.
+        // Never over a vault that is not open.
         vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
         advanceUntilIdle()
         assertFalse(vm.shown.value)
+    }
+
+    /** A refusal raised by the owner check an unlock sends before the app opens shows once the app opens. */
+    @Test
+    fun aRefusalFromTheUnlocksCheckShowsOnceTheAppOpens() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Locked)
+        val vm = CredentialRequiredViewModel(vault, vault)
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertFalse(vm.shown.value)
+        assertFalse("clearCredentialRequired" in vault.calls)
+        vault.phase.value = AppPhase.Unlocked
+        advanceUntilIdle()
+        assertTrue(vm.shown.value)
     }
 }

@@ -110,6 +110,8 @@ data class OnboardingUiState(
     val progress: List<Pair<EnrollStep, StepState>> = emptyList(),
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorShown: String? = null,
     val errorCode: String? = null,
     val devHint: String? = null,
 ) {
@@ -240,7 +242,7 @@ class OnboardingViewModel @Inject constructor(
             block()
             state.update { it.copy(busy = false) }
         } catch (e: VaultFailure) {
-            state.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+            state.update { it.copy(busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
         }
     }
 
@@ -442,7 +444,7 @@ class OnboardingViewModel @Inject constructor(
             } catch (e: VaultFailure) {
                 state.update {
                     it.copy(
-                        busy = false, error = e.kind, errorCode = e.code,
+                        busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode,
                         progress = it.progress.map { (st, ps) -> st to if (ps == StepState.ACTIVE) StepState.FAILED else ps },
                     )
                 }

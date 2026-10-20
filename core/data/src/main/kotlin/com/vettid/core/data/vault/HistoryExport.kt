@@ -132,7 +132,7 @@ class HistoryExportManager(
     override suspend fun export(filter: AuditFilter, format: ExportFormat, uptoSeq: Long, pin: String): ExportAnswer {
         val f = filter.exportFilters()
         val send: suspend () -> ExportAnswer = {
-            vaultGuard(resend = false) { ops().export(f, format.wire, uptoSeq, pin).let { (a, at) -> ExportAnswer.of(a, at) } }
+            vaultGuard { ops().export(f, format.wire, uptoSeq, pin).let { (a, at) -> ExportAnswer.of(a, at) } }
         }
         return try {
             send()
@@ -154,7 +154,7 @@ class HistoryExportManager(
         while (before != null && out.size < want && pages < MAX_PAGES) {
             currentCoroutineContext().ensureActive()
             val cursor: Long = before
-            val page = vaultGuard { audit().auditList(f.connectionId, f.kinds, cursor, pageSize, f.q, f.since, f.until) }
+            val page = vaultGuard(resend = true) { audit().auditList(f.connectionId, f.kinds, cursor, pageSize, f.q, f.since, f.until) }
             pages++
             for (e in page.entries) {
                 if (out.size >= want) break
@@ -170,7 +170,7 @@ class HistoryExportManager(
         return out
     }
 
-    override suspend fun deviceNames(): Map<String, String> = vaultGuard { ops().deviceNames() }
+    override suspend fun deviceNames(): Map<String, String> = vaultGuard(resend = true) { ops().deviceNames() }
 
     companion object {
         /** VAULT-MESSAGING 0.22.0 §10.9: `limit` 100 keeps each page well under the claim-check threshold. */

@@ -335,7 +335,7 @@ private fun TransferError(state: TransferOutUiState) {
     val text = when {
         state.errorCode == "exists" -> stringResource(R.string.settings_transfer_exists)
         kind == FailureKind.CREDENTIAL_FROZEN || kind == FailureKind.ROTATION_REQUIRED -> stringResource(R.string.settings_transfer_alarm)
-        else -> failureText(kind.messageRes(), kind.vaultCode(state.errorShown), com.vettid.core.data.R.string.error_vault_code)
+        else -> failureText(kind.messageRes(), kind.vaultCode(state.errorShown))
     }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(NoticeKind.URGENT, stringResource(kind.titleRes(R.string.settings_transfer_title)), text, Modifier.testTag("transfer_error"))

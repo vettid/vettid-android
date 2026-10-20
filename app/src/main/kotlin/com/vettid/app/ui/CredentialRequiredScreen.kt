@@ -30,7 +30,8 @@ import com.vettid.core.data.R as DataR
 
 /**
  * (ANDROID-PLAN 0.1.57 (1), 0.1.58 (3)) What the root follows of "This phone can't use your vault": shown over the open
- * app only, and taken away once the vault is no longer open (locked, signed out, being deleted).
+ * app only. The vault manager takes it away on a lock, a sign-out or wipe, or a deletion; one raised by the owner check
+ * an unlock sends before the app opens shows once it opens.
  */
 @HiltViewModel
 class CredentialRequiredViewModel @Inject constructor(
@@ -46,18 +47,10 @@ class CredentialRequiredViewModel @Inject constructor(
     /** **Try again** is sending the request again. */
     val retrying: StateFlow<Boolean> = retryingFlow.asStateFlow()
 
-    init {
-        viewModelScope.launch {
-            // A refusal left from an open vault goes once the vault is no longer open.
-            combine(vault.credentialRequired, accounts.phase) { r, p -> r != null && p !is AppPhase.Unlocked }
-                .collect { stale -> if (stale) vault.clearCredentialRequired() }
-        }
-    }
-
     /**
      * **Try again**: the screen closes, back to the screen that sent the request (its PIN and password fields empty: the
-     * member sends again from there), and a request without secrets is sent again; a new `credential_required` shows the
-     * screen again.
+     * member sends again from there); an idempotent read is sent again, and a new `credential_required` shows the screen
+     * again.
      */
     fun tryAgain() {
         if (retryingFlow.value) return

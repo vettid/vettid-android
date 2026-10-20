@@ -64,4 +64,6 @@
     <string name="core_ui_scanner_no_camera">This device has no camera that VettID can use. Type or paste the code instead.</string>
     <!-- "Erase VettID from this phone?": the root screen's and the unlock screen's (a phone without its vault's keys). -->
     <string name="core_ui_erase_phone_body">Everything VettID keeps on this phone is erased, including its keys for your vault, and VettID goes back to the start. Your vault itself is not changed.\n\nTo get back into it you then need a recovery from the account site (it takes %1$s and needs your PIN and credential password, and the credential backup must be on), or a move from another phone that still holds your vault.</string>
+    <!-- ANDROID-PLAN 0.1.57 (2) (approved by the owner 2026-10-20): a vault error code the app does not map. -->
+    <string name="error_vault_code">Something went wrong (code: %1$s). Try again. If it keeps happening, contact VettID and give this code.</string>
 </resources>

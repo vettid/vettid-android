@@ -121,7 +121,7 @@ fun NewPhoneSecretContent(
             NoticeCard(
                 NoticeKind.URGENT,
                 stringResource(it.titleRes(R.string.settings_security_new_secret)),
-                failureText(it.messageRes(), it.vaultCode(state.errorCode), com.vettid.core.data.R.string.error_vault_code),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
             )
         }

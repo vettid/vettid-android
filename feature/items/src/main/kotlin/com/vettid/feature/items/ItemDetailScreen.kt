@@ -180,7 +180,7 @@ fun ItemDetailScreen(state: ItemDetailUiState, actions: ItemDetailActions, modif
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.items_error_item),
-                    ItemsText.failure(state.error ?: com.vettid.core.data.vault.FailureKind.OTHER),
+                    ItemsText.failure(state.error ?: com.vettid.core.data.vault.FailureKind.OTHER, shownCode = state.errorCode),
                     modifier = Modifier.padding(Spacing.xl),
                     actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.items_retry)) } },
                 )
@@ -231,7 +231,7 @@ private fun DetailBody(item: ItemDetail, state: ItemDetailUiState, actions: Item
             NoticeCard(
                 NoticeKind.WARNING,
                 stringResource(R.string.items_error_item),
-                ItemsText.failure(e, limit = state.limit),
+                ItemsText.failure(e, limit = state.limit, shownCode = state.errorCode),
                 modifier = Modifier.padding(horizontal = Spacing.s).testTag("item_error"),
                 actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
             )

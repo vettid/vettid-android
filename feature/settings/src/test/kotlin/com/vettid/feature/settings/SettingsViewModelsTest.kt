@@ -164,7 +164,11 @@ class SettingsViewModelsTest {
             advanceUntilIdle()
             assertEquals(code, kind, vm.uiState.value.error)
             assertEquals(code, shown, vm.uiState.value.errorCode)
+            // No PIN or password is kept: the member sends again from this screen.
             assertEquals("", vm.uiState.value.current)
+            assertEquals("", vm.uiState.value.pin)
+            assertEquals("", vm.uiState.value.confirm)
+            assertEquals("", vm.uiState.value.password)
         }
         assertTrue(vault.calls.none { it.contains("wipe", ignoreCase = true) || it.contains("erase", ignoreCase = true) })
     }

@@ -222,7 +222,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(state.error.titleRes(R.string.credential_title)),
-                    failureText(state.error.messageRes(), state.error.vaultCode(state.errorCode), DataR.string.error_vault_code),
+                    failureText(state.error.messageRes(), state.error.vaultCode(state.errorCode)),
                 )
                 Spacer(Modifier.height(Spacing.l))
                 SecondaryButton(stringResource(R.string.credential_retry), actions.retry)
@@ -253,7 +253,6 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             state.error != null -> NoticeKind.URGENT to failureText(
                                 state.error.messageRes(),
                                 state.error.vaultCode(state.errorCode),
-                                DataR.string.error_vault_code,
                             )
                             state.notice == CredentialNotice.BACKUP_ON ->
                                 NoticeKind.SUCCESS to stringResource(R.string.credential_backup_on_done)
@@ -422,7 +421,7 @@ fun PasswordDialog(
                     value = password,
                     onValueChange = onPassword,
                     label = stringResource(R.string.credential_password_label),
-                    error = error?.let { failureText(it.messageRes(), it.vaultCode(errorCode), DataR.string.error_vault_code) },
+                    error = error?.let { failureText(it.messageRes(), it.vaultCode(errorCode)) },
                     onImeAction = onConfirm,
                     enabled = !busy,
                     modifier = Modifier.testTag("dialog_password"),
@@ -519,7 +518,7 @@ private fun ErrorCard(error: FailureKind?, code: String? = null) {
     NoticeCard(
         NoticeKind.URGENT,
         stringResource(error.titleRes(R.string.credential_title)),
-        failureText(error.messageRes(), error.vaultCode(code), DataR.string.error_vault_code),
+        failureText(error.messageRes(), error.vaultCode(code)),
         Modifier.testTag("error"),
     )
 }

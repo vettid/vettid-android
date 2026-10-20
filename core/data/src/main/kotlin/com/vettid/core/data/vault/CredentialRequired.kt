@@ -13,9 +13,12 @@ import kotlinx.coroutines.flow.asStateFlow
  * session is kept. An unresolved change being decided keeps its own rules ([ChangeResolver] does not raise this).
  */
 object CredentialRequired {
-    /** One refusal: [retry] sends the request that failed again; null for one that carried a PIN or a password. */
+    /** One refusal: [retry] sends an idempotent read that failed again; null for every other request. */
     class Refusal(retry: (suspend () -> Unit)? = null) {
         internal val retry: (suspend () -> Unit)? = retry
+
+        /** Whether **Try again** sends the request itself again (an idempotent read without secrets). */
+        val resends: Boolean get() = retry != null
     }
 
     private val flow = MutableStateFlow<Refusal?>(null)
@@ -33,9 +36,10 @@ object CredentialRequired {
     }
 
     /**
-     * **Try again**: the screen goes and the request that failed is sent again (nothing was counted). A new
-     * `credential_required` shows the screen again; any other failure is left to the screen that sent the request. A
-     * request that carried a PIN or a password is not kept: its screen asks for them again.
+     * **Try again**: the screen goes, back to the screen that sent the request. An idempotent read is sent again
+     * (nothing was counted); a new `credential_required` shows the screen again, and any other failure is left to that
+     * screen. Any other request (a write, or one that carried a PIN or a password) is not kept: the member sends it
+     * again from its screen, whose secret fields are empty.
      */
     suspend fun tryAgain() {
         val r = flow.value ?: return

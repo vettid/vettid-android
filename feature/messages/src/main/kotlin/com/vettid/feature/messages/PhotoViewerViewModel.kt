@@ -38,6 +38,8 @@ data class PhotoViewerUiState(
     /** The sender's name for it, sanitized; never a file name. */
     val name: String? = null,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     @StringRes val problemText: Int? = null,
 )
 
@@ -90,7 +92,9 @@ class PhotoViewerViewModel @Inject constructor(
                     "busy" -> R.string.messages_photo_busy
                     else -> null
                 }
-                state.update { PhotoViewerUiState(loading = false, name = name, error = e.kind, problemText = text) }
+                state.update {
+                    PhotoViewerUiState(loading = false, name = name, error = e.kind, errorCode = e.shownCode, problemText = text)
+                }
             }
         }
     }

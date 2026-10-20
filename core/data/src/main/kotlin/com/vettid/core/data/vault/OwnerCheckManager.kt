@@ -185,7 +185,7 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
-        val (st0, recovery, timeScale) = vaultGuard { ops().statusRead() }
+        val (st0, recovery, timeScale) = vaultGuard(resend = true) { ops().statusRead() }
         runCatching { onTimeScale(timeScale, since) }
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
@@ -213,7 +213,7 @@ class OwnerCheckManager(
     override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
         val until = holdOff?.until?.let { clampHoldOff(it) }
         val outcome = try {
-            val r = vaultGuard(resend = false) { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
+            val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
             locked.value = false
             heldTs = null
             presenceFromCheck(r)

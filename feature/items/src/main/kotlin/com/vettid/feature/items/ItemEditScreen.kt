@@ -242,6 +242,7 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                         critical = d.sensitivity == Sensitivity.CRITICAL,
                         profile = state.inProfile,
                         limit = state.limit,
+                        shownCode = state.errorCode,
                     ),
                     modifier = Modifier.testTag("item_edit_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },

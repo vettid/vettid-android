@@ -29,6 +29,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -65,6 +66,8 @@ data class NewCredentialUiState(
     val confirming: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
 ) {
     val filled: Boolean
@@ -138,7 +141,7 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
                     if (rule != null) {
                         it.copy(busy = false, error = null, rule = rule, refused = true, pin = "", current = "")
                     } else {
-                        it.copy(busy = false, error = e.kind, pin = "", current = "")
+                        it.copy(busy = false, error = e.kind, errorCode = e.shownCode, pin = "", current = "")
                     }
                 }
             }
@@ -217,7 +220,7 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
         state.error?.let {
             Spacer(Modifier.height(Spacing.l))
             val title = stringResource(R.string.credential_new_title)
-            NoticeCard(NoticeKind.URGENT, title, failureText(it.messageRes()), Modifier.testTag("error"))
+            NoticeCard(NoticeKind.URGENT, title, failureText(it.messageRes(), it.vaultCode(state.errorCode)), Modifier.testTag("error"))
         }
     }
     if (state.confirming) {

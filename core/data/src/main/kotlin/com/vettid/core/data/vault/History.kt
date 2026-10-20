@@ -262,7 +262,7 @@ class HistoryManager(
             kept != null && !refresh -> kept
             read == null -> null
             else -> try {
-                vaultGuard { read() }.also { deviceCache = it }
+                vaultGuard(resend = true) { read() }.also { deviceCache = it }
             } catch (_: VaultFailure) {
                 // Best effort, as in the export: an older list (or none) rather than a failed History.
                 kept
@@ -294,7 +294,7 @@ class HistoryManager(
         return AuditResult(records, page.nextBeforeSeq, searchSent = withSearch && !searchUnsupported, partial = page.partial)
     }
 
-    private suspend fun fetch(r: AuditRequest, search: Boolean): AuditPage = vaultGuard {
+    private suspend fun fetch(r: AuditRequest, search: Boolean): AuditPage = vaultGuard(resend = true) {
         ops().auditList(
             connectionId = r.connectionId,
             kinds = r.kinds,

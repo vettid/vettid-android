@@ -176,7 +176,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 m is OwnerCheckMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
                     if (m.kind == FailureKind.NOT_HOLDER) stringResource(m.kind.titleRes(0)) else title,
-                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode), com.vettid.core.data.R.string.error_vault_code),
+                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode)),
                     modifier = Modifier.testTag("owner_check_failed"),
                 )
                 else -> Unit

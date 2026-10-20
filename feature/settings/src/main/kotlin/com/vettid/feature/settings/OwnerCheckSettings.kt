@@ -205,7 +205,7 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
     state.error?.let {
         ConfirmDialog(
             title = stringResource(it.titleRes(R.string.settings_owner_check)),
-            text = failureText(it.messageRes(), it.vaultCode(state.errorCode), com.vettid.core.data.R.string.error_vault_code),
+            text = failureText(it.messageRes(), it.vaultCode(state.errorCode)),
             confirmLabel = stringResource(R.string.settings_done),
             onConfirm = actions.dismissError,
             onDismiss = actions.dismissError,

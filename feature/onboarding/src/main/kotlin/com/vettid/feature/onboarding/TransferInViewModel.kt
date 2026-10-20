@@ -65,6 +65,8 @@ data class TransferInUiState(
     val secondsLeft: Long = 0,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorShown: String? = null,
     val errorCode: String? = null,
     /**
      * [TransferInStep.DONE]: the vault gave this phone the member's `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), so it
@@ -180,7 +182,9 @@ class TransferInViewModel @Inject constructor(
                     when (e.kind) {
                         FailureKind.REJECTED -> it.copy(step = TransferInStep.REJECTED, sas = null)
                         FailureKind.NO_RESPONSE -> it.copy(step = TransferInStep.TIMED_OUT, sas = null)
-                        else -> it.copy(step = TransferInStep.INTRO, sas = null, error = e.kind, errorCode = e.code)
+                        else -> it.copy(
+                            step = TransferInStep.INTRO, sas = null, error = e.kind, errorCode = e.code, errorShown = e.shownCode,
+                        )
                     }
                 }
             }
@@ -194,7 +198,7 @@ class TransferInViewModel @Inject constructor(
             when {
                 bad -> it.copy(step = from, busy = false, inputProblem = e.kind)
                 e.code == MoveRepository.CODE_HS_UNANSWERED -> it.copy(step = TransferInStep.NOT_ANSWERED, busy = false)
-                else -> it.copy(step = from, busy = false, error = e.kind, errorCode = e.code)
+                else -> it.copy(step = from, busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
             }
         }
     }

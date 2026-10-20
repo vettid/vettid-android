@@ -266,7 +266,7 @@ class FeedManager(
         val changed = ArrayList<FeedItem>()
         var seq = from
         for (i in 0 until MAX_PAGES) {
-            val page = vaultGuard { ops().list(after, PAGE) }
+            val page = vaultGuard(resend = true) { ops().list(after, PAGE) }
             seq = maxOf(seq, page.seq)
             changed += page.items
             if (page.items.size < PAGE) break
@@ -276,7 +276,7 @@ class FeedManager(
     }
 
     private suspend fun readRetention() {
-        val d = runCatching { vaultGuard { ops().retentionDays() } }.getOrNull() ?: return
+        val d = runCatching { vaultGuard(resend = true) { ops().retentionDays() } }.getOrNull() ?: return
         if (d in 1..MAX_RETENTION_DAYS) retentionDays = d
     }
 

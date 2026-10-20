@@ -37,6 +37,8 @@ data class SharedProfileUiState(
     val busy: Boolean = false,
     val saved: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1: `profile_items`, `profile_size`). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
     /** A photo taken and encoded (base64 JPEG, at most 65,536 bytes), shown as a preview until saved or dropped. */
@@ -95,7 +97,7 @@ class SharedProfileViewModel @Inject constructor(
             try {
                 profiles.refreshProfile()
             } catch (e: VaultFailure) {
-                state.update { it.copy(error = e.kind) }
+                state.update { it.copy(error = e.kind, errorCode = e.shownCode) }
             }
         }
         viewModelScope.launch { accounts.refreshAccount() }
@@ -127,7 +129,7 @@ class SharedProfileViewModel @Inject constructor(
                 items.setTags(i.itemId, i.version, tags)
                 state.update { it.copy(itemsBusy = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(itemsBusy = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(itemsBusy = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -143,7 +145,7 @@ class SharedProfileViewModel @Inject constructor(
                 profiles.setDisplayName(s.displayName.trim())
                 state.update { it.copy(busy = false, edited = false, saved = true, displayName = s.displayName.trim()) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -182,7 +184,7 @@ class SharedProfileViewModel @Inject constructor(
                 profiles.setPhoto(photo)
                 state.update { it.copy(photoBusy = false, pendingPhoto = null, photoSaved = true) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(photoBusy = false, error = e.kind) }
+                state.update { it.copy(photoBusy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }

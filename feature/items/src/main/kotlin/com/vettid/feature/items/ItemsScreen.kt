@@ -183,7 +183,7 @@ fun ItemsScreen(state: ItemsUiState, chrome: ShellChrome, actions: ItemsActions,
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.items_error_list),
-                    body = ItemsText.failure(error),
+                    body = ItemsText.failure(error, shownCode = state.errorCode),
                     modifier = Modifier.padding(Spacing.xl),
                     actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.items_retry)) } },
                 )

@@ -40,6 +40,7 @@ import com.vettid.core.data.social.AuthenticationState
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
@@ -194,7 +195,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             NoticeCard(
                 kind = NoticeKind.WARNING,
                 title = stringResource(R.string.connections_error_title),
-                body = failureText(e.messageRes()),
+                body = failureText(e.messageRes(), e.vaultCode(state.errorCode)),
                 modifier = Modifier.padding(horizontal = Spacing.s),
                 actions = { TextButton(onClick = actions.onDismissNotice) { Text(stringResource(R.string.connections_ok)) } },
             )

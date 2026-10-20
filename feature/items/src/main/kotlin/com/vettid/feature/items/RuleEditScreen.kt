@@ -171,7 +171,7 @@ fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: M
         },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
-            SharingErrorNotice(state.error, state.limit, actions.onDismissError)
+            SharingErrorNotice(state.error, state.limit, actions.onDismissError, state.errorCode)
             if (state.atRuleLimit) RuleLimitNotice()
             if (state.readOnly) {
                 ReadOnlyRule(state)

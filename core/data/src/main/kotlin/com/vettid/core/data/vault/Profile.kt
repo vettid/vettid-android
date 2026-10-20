@@ -150,7 +150,7 @@ class ProfileManager(
     }
 
     override suspend fun refreshProfile() {
-        val p = vaultGuard { ops().profileGet() }
+        val p = vaultGuard(resend = true) { ops().profileGet() }
         state.value = OwnProfile(
             version = p.version,
             displayName = p.name,
@@ -188,7 +188,7 @@ class ProfileManager(
         val last = AccountNames.normalize(lastName) ?: return NameChangeOutcome.Invalid
         return try {
             val since = mark()
-            val r = vaultGuard(resend = false) { ops().accountNameSet(pin, password, first, last) }
+            val r = vaultGuard { ops().accountNameSet(pin, password, first, last) }
             val view = NameRequestView.of(r) ?: NameRequestView(r.seq, first, last, null, NameRequestState.PENDING)
             onRequest(view, since)
             NameChangeOutcome.Requested(view)

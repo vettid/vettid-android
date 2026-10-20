@@ -40,6 +40,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.CameraPermission
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
@@ -124,13 +125,13 @@ private fun Waiting(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun Failure(kind: FailureKind?, text: String? = null, modifier: Modifier = Modifier) {
+private fun Failure(kind: FailureKind?, text: String? = null, modifier: Modifier = Modifier, shownCode: String? = null) {
     if (kind == null && text == null) return
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(
         NoticeKind.URGENT,
         stringResource(R.string.recover_failed_title),
-        text ?: failureText(kind!!.messageRes()),
+        text ?: failureText(kind!!.messageRes(), kind.vaultCode(shownCode)),
         modifier.testTag("error"),
     )
 }
@@ -242,7 +243,7 @@ fun RecoverContent(
             )
             when {
                 state.errorCode == RecoverViewModel.CODE_REQUIRED -> Failure(null, stringResource(R.string.recover_required))
-                state.error != null && state.error != FailureKind.BAD_PASSWORD -> Failure(state.error)
+                state.error != null && state.error != FailureKind.BAD_PASSWORD -> Failure(state.error, shownCode = state.errorShown)
             }
         }
         RecoverStep.NO_BACKUP -> {
@@ -285,7 +286,7 @@ fun RecoverContent(
                 stringResource(R.string.recover_ended_next_title),
                 stringResource(R.string.recover_ended_next),
             )
-            if (state.error != null) Failure(state.error)
+            if (state.error != null) Failure(state.error, shownCode = state.errorShown)
         }
         RecoverStep.DONE -> MovedScreen(
             body = stringResource(R.string.onboarding_moved_recovered_body),
@@ -338,7 +339,7 @@ private fun ClaimFailure(state: RecoverUiState) {
     } else {
         null
     }
-    Failure(state.error, wait)
+    Failure(state.error, wait, shownCode = state.errorShown)
 }
 
 @Composable
@@ -439,7 +440,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                     modifier = Modifier.testTag("recover_pin"),
                 )
             }
-            if (state.error != null) Failure(state.error)
+            if (state.error != null) Failure(state.error, shownCode = state.errorShown)
         }
     }
 }
@@ -492,7 +493,11 @@ fun TransferInContent(
             onBack = back,
         ) {
             NoticeCard(NoticeKind.INFO, stringResource(R.string.recover_need_title), stringResource(R.string.transfer_in_need_body))
-            Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)
+            Failure(
+                state.error,
+                if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null,
+                shownCode = state.errorShown,
+            )
         }
         TransferInStep.SCAN -> FormScaffold(
             title = stringResource(R.string.transfer_in_scan_title),
@@ -505,7 +510,11 @@ fun TransferInContent(
         ) {
             ScannerBox(actions::scanned, camera)
             InputProblem(state.inputProblem)
-            Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)
+            Failure(
+                state.error,
+                if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null,
+                shownCode = state.errorShown,
+            )
         }
         TransferInStep.PASTE -> FormScaffold(
             title = stringResource(R.string.transfer_in_paste_title),
@@ -530,7 +539,11 @@ fun TransferInContent(
                 )
             }
             InputProblem(state.inputProblem)
-            Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)
+            Failure(
+                state.error,
+                if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null,
+                shownCode = state.errorShown,
+            )
         }
         TransferInStep.CONNECTING -> FormScaffold(
             title = stringResource(R.string.transfer_in_title),

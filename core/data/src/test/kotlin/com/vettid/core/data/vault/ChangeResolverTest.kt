@@ -439,4 +439,17 @@ class ChangeResolverTest {
         val saved = SavedDecision.of(ChangeCheck.Moved(ChangeKind.PASSWORD))
         assertEquals(ChangeCheck.Moved(ChangeKind.PASSWORD), saved?.toCheck())
     }
+
+    /** A refused change's code is kept with the decision, so the notice names it after a restart (0.1.57 (2)). */
+    @Test
+    fun aRefusedDecisionKeepsItsCode() {
+        val c = ChangeCheck.Refused(ChangeKind.PIN, FailureKind.OTHER, "internal")
+        val json = kotlinx.serialization.json.Json.encodeToString(SavedDecision.serializer(), SavedDecision.of(c)!!)
+        val back = kotlinx.serialization.json.Json.decodeFromString(SavedDecision.serializer(), json)
+        assertEquals(c, back.toCheck())
+        // A record written before the code was kept reads without one.
+        val earlier = """{"kind":"PIN","verdict":"refused","failure":"OTHER"}"""
+        val old = kotlinx.serialization.json.Json.decodeFromString(SavedDecision.serializer(), earlier)
+        assertEquals(ChangeCheck.Refused(ChangeKind.PIN, FailureKind.OTHER), old.toCheck())
+    }
 }

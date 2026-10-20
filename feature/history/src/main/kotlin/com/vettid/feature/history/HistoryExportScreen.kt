@@ -47,6 +47,7 @@ import com.vettid.core.data.vault.ExportAnswer
 import com.vettid.core.data.vault.ExportFormat
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -177,7 +178,8 @@ fun HistoryExportContent(step: ExportStep, words: ExportFilterWords, actions: Hi
             val body = if (step.saveFailed) {
                 stringResource(R.string.history_export_save_failed)
             } else {
-                failureText((step.kind ?: FailureKind.OTHER).messageRes())
+                val kind = step.kind ?: FailureKind.OTHER
+                failureText(kind.messageRes(), kind.vaultCode(step.shownCode))
             }
             val extra = if (step.kind == FailureKind.OWNER_CHECK_REQUIRED) {
                 stringResource(R.string.history_export_owner_check) to actions.onOwnerCheck
@@ -314,7 +316,7 @@ private fun PinStep(step: ExportStep.Pin, actions: HistoryExportActions, modifie
             waiting > 0 -> stringResource(R.string.history_export_pin_backoff, waiting)
             step.error == FailureKind.BAD_PIN -> stringResource(R.string.history_export_pin_wrong)
             step.error == FailureKind.BACKOFF -> stringResource(R.string.history_export_pin_backoff_undated)
-            step.error != null -> failureText(step.error.messageRes())
+            step.error != null -> failureText(step.error.messageRes(), step.error.vaultCode(step.errorCode))
             else -> null
         }
         SecretField(

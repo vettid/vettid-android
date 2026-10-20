@@ -153,6 +153,8 @@ data class RecoverUiState(
     val confirmStartOver: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorShown: String? = null,
     val errorCode: String? = null,
 ) {
     /** The PIN may be entered and sent now (§11.10.6: never to an older release; the enclave's backoff). */
@@ -363,7 +365,7 @@ class RecoverViewModel @Inject constructor(
                     is RecoveryRegistration.Refused -> refused(from, r.recoveryId ?: countKey, r.code)
                 }
             } catch (e: VaultFailure) {
-                state.update { it.copy(step = from, busy = false, error = e.kind, errorCode = e.code) }
+                state.update { it.copy(step = from, busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
                 if (e.kind == FailureKind.RATE_LIMITED) startRetryWait(e.retryAfterSeconds)
             }
         }
@@ -485,11 +487,11 @@ class RecoverViewModel @Inject constructor(
                     else -> state.update { it.copy(busy = false, pin = "", error = r.kind, errorCode = r.code) }
                 }
                 is UnlockAttempt.UpdateRefused -> state.update {
-                    it.copy(busy = false, pin = "", error = FailureKind.OTHER, errorCode = r.code)
+                    it.copy(busy = false, pin = "", error = FailureKind.OTHER, errorCode = r.code, errorShown = null)
                 }
                 // NewPinNeeded: never on a recovering phone (no PIN change of its own to decide).
                 UnlockAttempt.RecoveryPending, UnlockAttempt.StateRollback, UnlockAttempt.NewPinNeeded ->
-                    state.update { it.copy(busy = false, pin = "", error = FailureKind.OTHER) }
+                    state.update { it.copy(busy = false, pin = "", error = FailureKind.OTHER, errorShown = null) }
                 // §11.7.1 (0.27.0): the release does not pin this installation's signer; not a wrong PIN.
                 UnlockAttempt.SignerRefused -> state.update {
                     it.copy(busy = false, pin = "", error = FailureKind.SIGNER_REFUSED, errorCode = SIGNER_REFUSED)
@@ -541,11 +543,11 @@ class RecoverViewModel @Inject constructor(
                         noBackup()
                     }
                     RecoverOutcome.CREDENTIAL_REQUIRED -> state.update {
-                        it.copy(busy = false, password = "", error = FailureKind.OTHER, errorCode = CODE_REQUIRED)
+                        it.copy(busy = false, password = "", error = FailureKind.OTHER, errorCode = CODE_REQUIRED, errorShown = null)
                     }
                 }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, password = "", error = e.kind, errorCode = e.code) }
+                state.update { it.copy(busy = false, password = "", error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
                 if (e.kind == FailureKind.BACKOFF || e.kind == FailureKind.BAD_PASSWORD) startBackoff(e.retryAfterSeconds)
             }
         }
@@ -582,7 +584,7 @@ class RecoverViewModel @Inject constructor(
                 countedFor = null
                 state.value = RecoverUiState(step = RecoverStep.INTRO, startOverUrl = s.startOverUrl, accountHost = s.accountHost)
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
             }
         }
     }

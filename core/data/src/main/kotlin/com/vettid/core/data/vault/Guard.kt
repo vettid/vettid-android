@@ -22,12 +22,13 @@ import java.io.IOException
 
 /**
  * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. (ANDROID-PLAN 0.1.57 (1)) A vault
- * answer `credential_required` also raises "This phone can't use your vault" ([CredentialRequired]), whose **Try again**
- * runs [block] again; with [resend] false (a request that carries a PIN or a password) it does not keep [block], and
- * the screen that sent the request asks for them again.
+ * answer `credential_required` also raises "This phone can't use your vault" ([CredentialRequired]). [resend]: only for
+ * an idempotent read that carries no PIN or password, whose **Try again** runs [block] again. By default nothing is
+ * kept: Try again closes the screen, and the screen that sent the request (its secret fields empty) sends it again, so
+ * that no secret is ever held for a resend and no write is repeated unseen.
  */
 @Suppress("CyclomaticComplexMethod", "ThrowsCount")
-internal suspend fun <T> vaultGuard(resend: Boolean = true, block: suspend () -> T): T = try {
+internal suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T = try {
     withContext(Dispatchers.IO) { block() }
 } catch (e: VaultFailure) {
     throw e

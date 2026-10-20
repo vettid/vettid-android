@@ -79,6 +79,8 @@ data class NotificationsUiState(
     val undo: ArchiveUndo? = null,
     val markingAll: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** A screen to open (consumed by the screen through [NotificationsViewModel.targetTaken]). */
     val open: FeedTarget? = null,
     /**
@@ -276,7 +278,7 @@ class NotificationsViewModel @Inject constructor(
         try {
             block()
         } catch (e: VaultFailure) {
-            state.update { it.copy(error = e.kind) }
+            state.update { it.copy(error = e.kind, errorCode = e.shownCode) }
         }
     }
 
