@@ -37,6 +37,8 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.MANIFEST_UNAVAILABLE -> R.string.data_failure_manifest_unavailable
     FailureKind.RELEASE_UNKNOWN -> R.string.data_failure_release_unknown
     FailureKind.ENCLAVE -> R.string.data_failure_enclave
+    // The update and unlock screens say `release_update_route_pending`, which names the releases; elsewhere the generic text.
+    FailureKind.ROUTE_PENDING -> R.string.data_failure_vault_unavailable
     FailureKind.TIME_SCALE -> R.string.data_failure_time_scale
     FailureKind.NOT_FOUND -> R.string.data_failure_not_found
     FailureKind.CONNECTION_UNAVAILABLE -> R.string.data_failure_connection_unavailable

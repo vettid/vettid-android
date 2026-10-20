@@ -134,6 +134,14 @@ internal data class LocalAccount(
     val unconfirmedRenew: UnconfirmedRenew? = null,
     /** (0.45.0 step 7, N5) The decision of a lost answer not yet seen by the member: kept across a process death. */
     val changeDecision: SavedDecision? = null,
+    /**
+     * (ANDROID-PLAN 0.1.54) The non-secret marker `deleting {vault_id, since, until}`, stored when the vault sent
+     * `device.unlinked{vault_deleted}`: a process that finds it starts in "being deleted", before it reads anything.
+     * Deleted with the move to "no vault" and at a wipe.
+     */
+    val deleting: DeletingMarker? = null,
+    /** (0.1.54) "Your vault was deleted" is to be said once on "no vault" (a record of its own after the deletion). */
+    val deletedNotice: Boolean = false,
 ) {
     /** A renew may have applied without its answer ([unconfirmedRenew]). */
     val renewUnconfirmed: Boolean get() = unconfirmedRenew != null

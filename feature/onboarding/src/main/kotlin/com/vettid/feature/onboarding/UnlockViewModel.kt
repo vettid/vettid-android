@@ -6,6 +6,7 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.LockNotice
+import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseNotes
@@ -154,7 +155,25 @@ data class UnlockUiState(
      * went through. Enter your new PIN."), which the next unlock tries with the new record.
      */
     val newPinStep: Boolean = false,
+    /**
+     * (ANDROID-PLAN 0.1.54) The stored marker of a release move that is not confirmed; with `failed`, "Return to release N"
+     * is offered above the keypad at every start until the marker is cleared.
+     */
+    val move: MoveUnconfirmed? = null,
+    /** The "Return to release N?" confirmation is open. */
+    val returnConfirm: Boolean = false,
+    /** The member confirmed "Return" without a PIN typed: the keypad asks for it, and the PIN goes to the way back. */
+    val returnAsked: Boolean = false,
 ) {
+    /** (0.1.54 point 3) "Return to release N" is offered: the marker has `failed`. */
+    val returnOffered: Boolean get() = move?.failed == true
+
+    /** The PIN for the way back may be typed: offered, and nothing running or waiting. */
+    val returnPinAllowed: Boolean get() = returnOffered && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy && !erasing
+
+    /** The way back may be started with the PIN typed. */
+    val returnSubmitAllowed: Boolean get() = returnPinAllowed && pin.length >= MIN_PIN_LENGTH
+
     /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
     val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
 
@@ -230,6 +249,15 @@ interface UnlockActions {
 
     /** The member confirmed: erases this phone ([AccountRepository.eraseThisPhone]), then the welcome screen. */
     fun confirmErase()
+
+    /** (ANDROID-PLAN 0.1.54) "Return to release N": opens its confirmation (only when [UnlockUiState.returnOffered]). */
+    fun askReturn() = Unit
+
+    /** Closes it, and drops a "Return" waiting for its PIN; nothing is sent. */
+    fun dismissReturn() = Unit
+
+    /** "Return", confirmed: with the PIN typed the way back starts; without one the keypad asks for it first. */
+    fun confirmReturn() = Unit
 }
 
 /**
@@ -271,6 +299,15 @@ class UnlockViewModel @Inject constructor(
         }
         viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(stagingNote = t.stagingNote) } } }
         viewModelScope.launch { vault.finishMoveFailure.collect { f -> state.update { it.copy(moveFailure = f) } } }
+        // ANDROID-PLAN 0.1.54: the offer follows the stored marker (a cleared marker takes the offer, and its dialog, away).
+        viewModelScope.launch {
+            vault.moveUnconfirmed.collect { m ->
+                state.update {
+                    val offered = m?.failed == true
+                    it.copy(move = m, returnConfirm = it.returnConfirm && offered, returnAsked = it.returnAsked && offered)
+                }
+            }
+        }
         // §11.14.9 step 5: which PIN is asked for follows the vault manager's state, so that the PIN typed is always the
         // one the next unlock sends with the matching record (also on a screen made afresh).
         viewModelScope.launch {
@@ -318,7 +355,30 @@ class UnlockViewModel @Inject constructor(
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
 
-    override fun submit() = attempt(cancelRecovery = false)
+    override fun submit() = if (state.value.returnAsked) wayBack() else attempt(cancelRecovery = false)
+
+    override fun askReturn() = state.update { if (it.returnOffered && !it.busy && !it.erasing) it.copy(returnConfirm = true) else it }
+
+    override fun dismissReturn() = state.update { it.copy(returnConfirm = false, returnAsked = false) }
+
+    override fun confirmReturn() {
+        val s = state.value
+        if (!s.returnConfirm) return
+        state.update { it.copy(returnConfirm = false) }
+        // The unlock screen's PIN is used, or the keypad asks for it first (ANDROID-PLAN 0.1.54 point 3).
+        if (s.returnSubmitAllowed) wayBack() else state.update { it.copy(returnAsked = it.returnOffered, message = null) }
+    }
+
+    /**
+     * The way back, with the PIN typed, only after the member's confirmed "Return to release N": the release update's own
+     * steps run it and show it over this screen ([VaultRepository.returnToPreviousRelease]). The PIN is dropped here.
+     */
+    private fun wayBack() {
+        val s = state.value
+        if (!s.returnSubmitAllowed) return
+        state.update { it.copy(pin = "", returnAsked = false, message = null) }
+        vault.returnToPreviousRelease(s.pin)
+    }
 
     override fun cancelRecoveryAndUnlock() {
         if (!state.value.cancelAllowed) return

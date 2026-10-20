@@ -180,6 +180,40 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         phase.value = AppPhase.SignedOut
     }
 
+    // --- ANDROID-PLAN 0.1.54 ---
+
+    /** The stored marker of an unconfirmed release move, as a test sets it. */
+    override val moveUnconfirmed = MutableStateFlow<com.vettid.core.data.vault.MoveUnconfirmed?>(null)
+
+    /** What [returnToPreviousRelease] answers. */
+    var returnResult = true
+
+    override fun returnToPreviousRelease(pin: String): Boolean {
+        calls += "returnToPreviousRelease:$pin"
+        return returnResult
+    }
+
+    /** What each "Check again" answers in turn (then [com.vettid.core.data.vault.DeletionCheck.LISTED]). */
+    val deletionChecks = ArrayDeque<com.vettid.core.data.vault.DeletionCheck>()
+
+    /** When set, each "Check again" waits for it before answering. */
+    var deletionCheckGate: CompletableDeferred<Unit>? = null
+
+    override suspend fun checkDeletion(): com.vettid.core.data.vault.DeletionCheck {
+        calls += "checkDeletion"
+        deletionCheckGate?.await()
+        val r = deletionChecks.removeFirstOrNull() ?: com.vettid.core.data.vault.DeletionCheck.LISTED
+        if (r == com.vettid.core.data.vault.DeletionCheck.GONE) phase.value = AppPhase.SignedOut
+        return r
+    }
+
+    override val deletedNotice = MutableStateFlow(false)
+
+    override fun acknowledgeDeletedNotice() {
+        calls += "acknowledgeDeletedNotice"
+        deletedNotice.value = false
+    }
+
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) {
         call("enroll")
         lastPin = pin

@@ -9,6 +9,7 @@ import com.vettid.core.altchan.AppIdentity
 import com.vettid.core.altchan.Attester
 import com.vettid.core.altchan.BuiltUnlock
 import com.vettid.core.altchan.EnrollResult
+import com.vettid.core.altchan.MovedFrom
 import com.vettid.core.altchan.PendingUnlock
 import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.RecoveryResult
@@ -509,6 +510,31 @@ class VaultDevice private constructor(
     override fun manifestSerialSeen(): Long = alt().manifestSerial
 
     override fun vaultId(): String? = st.vaultId
+
+    override fun movedFrom(): MovedFrom? = alt().movedFrom
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 2) An unlock after the move failed on the new release for a reason not the member's:
+     * the stored marker's `failed` is set, and the unlock screen offers "Return to release N". Nothing without a marker.
+     */
+    suspend fun markMoveFailed() = lock.withLock {
+        val a = alt()
+        if (a.movedFrom == null || a.moveFailed) return@withLock
+        setAlt(a.copy(moveFailed = true))
+        save()
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 4) The way back is gone (the vault confirmed the move, or release N ended or left the
+     * manifest): the marker goes. [from], when given, must be the marker's own (a notice about another move is ignored).
+     */
+    suspend fun clearMove(from: MovedFrom? = null) = lock.withLock {
+        val a = alt()
+        val m = a.movedFrom ?: return@withLock
+        if (from != null && from != m) return@withLock
+        setAlt(a.withoutMove())
+        save()
+    }
 
     private fun appIdentity() = AppIdentity(secrets.identity.publicKey, secrets.kem.publicKey, relayAddr, st.name, secrets.apiKey)
 

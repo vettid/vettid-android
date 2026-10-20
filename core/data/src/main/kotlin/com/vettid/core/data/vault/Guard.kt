@@ -38,6 +38,7 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
     val kind = when (e.reason) {
         AltRefusedException.Reason.ROLLBACK_RELEASE -> FailureKind.ROLLBACK
         AltRefusedException.Reason.TIME_SCALE -> FailureKind.TIME_SCALE
+        AltRefusedException.Reason.ROUTE_PENDING -> FailureKind.ROUTE_PENDING
         else -> FailureKind.MANIFEST
     }
     throw VaultFailure(kind, e.reason.name.lowercase(), cause = e)

@@ -179,6 +179,25 @@ class AltRequestsTest {
         assertTrue(b.releaseChanged)
     }
 
+    /**
+     * ANDROID-PLAN 0.1.54: with the marker of an unconfirmed move stored, an unlock routed to the release the move left
+     * is still refused by the rollback check (the PIN goes there only through the way back, `abandon`).
+     */
+    @Test
+    fun theMarkerDoesNotOpenTheRollbackCheck() {
+        val att = TestSupport.SoftAttester()
+        val moved = AltState(release = "b1".repeat(48), releaseNumber = 4, previousRelease = TestSupport.pcr0, previousReleaseNumber = 3, moveFailed = true)
+        val e = assertThrows(AltRefusedException::class.java) {
+            AltRequests.buildUnlock("g", "v", "246802", enclave.verified(manifest), manifest, att, ik, "t", moved, UnlockOptions(), now)
+        }
+        assertEquals(AltRefusedException.Reason.ROLLBACK_RELEASE, e.reason)
+        assertThrows(AltRefusedException::class.java) {
+            AltRequests.buildUnlock(
+                "g", "v", "246802", enclave.verified(manifest), manifest, att, ik, "t", moved, UnlockOptions(approve = Approval(TestSupport.pcr0, 3)), now,
+            )
+        }
+    }
+
     @Test
     fun applyUnlockMovesFloorsAndRecordsMoves() {
         val p = PendingUnlock(Ulid.new(), TestSupport.pcr0, 3, 7, 4)

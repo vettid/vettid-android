@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.LockNotice
+import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
@@ -91,12 +92,18 @@ fun UnlockContent(
         title = stringResource(R.string.unlock_title),
         body = state.email?.let { stringResource(R.string.unlock_body_account, it) } ?: stringResource(R.string.unlock_body),
         primaryLabel = when {
+            // ANDROID-PLAN 0.1.54: "Return" was confirmed without a PIN; the PIN typed now goes to the way back.
+            state.returnAsked -> stringResource(R.string.release_update_return, state.move?.fromNumber?.toInt() ?: 0)
             state.preflightError != null && !blocked -> stringResource(R.string.unlock_retry)
             blocked || state.recoveryPending -> null
             else -> stringResource(R.string.unlock_submit)
         },
-        onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submit,
-        primaryEnabled = if (state.preflightError != null) state.retryAllowed else state.submitAllowed,
+        onPrimary = if (state.preflightError != null && !state.returnAsked) actions::retryPreflight else actions::submit,
+        primaryEnabled = when {
+            state.returnAsked -> state.returnSubmitAllowed
+            state.preflightError != null -> state.retryAllowed
+            else -> state.submitAllowed
+        },
         busy = state.busy || state.loading || state.erasing,
         header = {
             Spacer(Modifier.height(Spacing.l))
@@ -139,7 +146,11 @@ fun UnlockContent(
                             else -> R.string.unlock_title
                         },
                     ),
-                    failureText(it.messageRes()),
+                    if (it == FailureKind.ROUTE_PENDING) {
+                        stringResource(R.string.release_update_route_pending, state.move?.toNumber?.toInt() ?: 0)
+                    } else {
+                        failureText(it.messageRes())
+                    },
                     modifier = Modifier.testTag("unlock_preflight_error"),
                 )
             }
@@ -265,9 +276,11 @@ fun UnlockContent(
                     }
                 }
             }
-            // Never a PIN field while the last check of the vault's software failed.
+            state.move?.takeIf { state.returnOffered }?.let { m -> MoveUnconfirmedNotice(m, enabled = !state.busy, actions::askReturn) }
+            // Never a PIN field while the last check of the vault's software failed (the way back asks for its own PIN).
             val verified = p != null && state.preflightError == null
-            if (!blocked && !state.recoveryPending && verified) {
+            val unlockPin = !blocked && !state.recoveryPending && verified
+            if (unlockPin || state.returnAsked) {
                 // VAULT-MESSAGING 0.44.0 §11.14.9 step 5: an unresolved PIN change asks for the previous PIN first, and for
                 // the new one only after the vault showed that it holds the change.
                 if (state.newPinStep) {
@@ -293,14 +306,14 @@ fun UnlockContent(
                     onValueChange = actions::setPin,
                     label = stringResource(R.string.unlock_pin_label),
                     isPin = true,
-                    enabled = state.pinAllowed,
+                    enabled = state.pinAllowed || (state.returnAsked && state.returnPinAllowed),
                     error = if (state.message == UnlockMessage.BadPin) stringResource(R.string.unlock_bad_pin) else null,
                     supporting = waitText,
-                    imeAction = if (state.checkDue) ImeAction.Next else ImeAction.Done,
-                    onImeAction = if (state.checkDue) ({}) else actions::submit,
+                    imeAction = if (state.checkDue && !state.returnAsked) ImeAction.Next else ImeAction.Done,
+                    onImeAction = if (state.checkDue && !state.returnAsked) ({}) else actions::submit,
                     modifier = Modifier.testTag("unlock_pin"),
                 )
-                if (state.checkDue) {
+                if (state.checkDue && !state.returnAsked) {
                     // §3.6.5: a locked vault past its deadline asks for the PIN and the password on one screen.
                     SecretField(
                         value = state.password,
@@ -331,9 +344,12 @@ fun UnlockContent(
                             if (m.kind == FailureKind.SERVICE_PAUSED || m.kind == FailureKind.VAULT_UNAVAILABLE) NoticeKind.WARNING
                                 else NoticeKind.URGENT,
                             stringResource(R.string.unlock_title),
-                            when (m.code) {
-                                UnlockViewModel.CODE_UNREADABLE -> stringResource(R.string.unlock_unreadable)
-                                UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
+                            when {
+                                m.code == UnlockViewModel.CODE_UNREADABLE -> stringResource(R.string.unlock_unreadable)
+                                m.code == UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
+                                // ANDROID-PLAN 0.1.54 point 6: still routed to release N after the retries.
+                                m.kind == FailureKind.ROUTE_PENDING ->
+                                    stringResource(R.string.release_update_route_pending, state.move?.toNumber?.toInt() ?: 0)
                                 else -> failureText(m.kind.messageRes())
                             },
                             modifier = Modifier.testTag("unlock_failed"),
@@ -350,6 +366,16 @@ fun UnlockContent(
                 state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
             }
         }
+    }
+    state.move?.takeIf { state.returnConfirm }?.let { m ->
+        ConfirmDialog(
+            title = stringResource(R.string.release_update_return_confirm_title, m.fromNumber.toInt()),
+            text = stringResource(R.string.release_update_return_confirm_body, m.fromNumber.toInt(), m.toNumber.toInt()),
+            confirmLabel = stringResource(R.string.release_update_return, m.fromNumber.toInt()),
+            onConfirm = actions::confirmReturn,
+            onDismiss = actions::dismissReturn,
+            modifier = Modifier.testTag("unlock_return_confirm"),
+        )
     }
     if (state.eraseConfirm && state.eraseOffered) {
         ConfirmDialog(
@@ -368,6 +394,25 @@ fun UnlockContent(
             destructive = true,
         )
     }
+}
+
+/**
+ * (ANDROID-PLAN 0.1.54 point 3) The new release has not opened the vault since the move, and the move is not confirmed
+ * ([m] with `failed`): trying again with the PIN, or "Return to release N", which asks first.
+ */
+@Composable
+private fun MoveUnconfirmedNotice(m: MoveUnconfirmed, enabled: Boolean, onReturn: () -> Unit) {
+    NoticeCard(
+        NoticeKind.WARNING,
+        stringResource(R.string.release_update_new_failed_title, m.toNumber.toInt()),
+        stringResource(R.string.unlock_move_unconfirmed, m.toNumber.toInt(), m.fromNumber.toInt()),
+        modifier = Modifier.testTag("unlock_move_unconfirmed"),
+        actions = {
+            TextButton(onClick = onReturn, enabled = enabled, modifier = Modifier.testTag("unlock_return")) {
+                Text(stringResource(R.string.release_update_return, m.fromNumber.toInt()))
+            }
+        },
+    )
 }
 
 /**

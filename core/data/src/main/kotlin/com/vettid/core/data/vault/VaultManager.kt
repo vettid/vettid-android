@@ -147,6 +147,7 @@ class VaultManager(
         persist = { a ->
             accountFile.save(json.encodeToString(LocalAccount.serializer(), a).toByteArray())
             accountFlow.value = a.toInfo()
+            deletedNoticeFlow.value = a.deletedNotice
         },
         // A wipe's marker left over at the start (the start's resume could not finish it): shut until a wipe completes.
         eraseFailed = wiper.pending,
@@ -479,7 +480,46 @@ class VaultManager(
     /** Proofs that this phone was replaced, and the wipe they start. */
     val holder = HolderWatch(scope) { wipeThisPhone() }
 
-    private val phaseFlow = MutableStateFlow<AppPhase>(AppPhase.Starting)
+    /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
+    private val phaseFlow = PhaseHolder(AppPhase.Starting)
+
+    /**
+     * (ANDROID-PLAN 0.1.54 "A vault being deleted") The re-reads of the status after `device.unlinked{vault_deleted}`,
+     * through the member API alone (the app key, kept until the vault is gone): no session is opened meanwhile.
+     */
+    private val deletionWatch = DeletionWatch(
+        scope,
+        nowMs = System::currentTimeMillis,
+        read = { readDeletion() },
+        onGone = { finishDeleted() },
+        onSlow = { if (phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = true)) },
+    )
+
+    /** One move to "no vault" after a deletion, whichever read saw the vault gone. */
+    private val deletionEnd = Mutex()
+
+    /** (0.1.54) When this phone's own `vault.delete` expires (epoch ms), for the deletion's bound; in memory only. */
+    @Volatile
+    private var deleteExpMs: Long? = null
+
+    /** (0.1.54) "Your vault was deleted", once on "no vault": follows the account record. */
+    private val deletedNoticeFlow = MutableStateFlow(local.deletedNotice)
+
+    init {
+        // A process that finds the marker starts in "being deleted", before it reads anything (the watch starts with the
+        // first read of the phase, [evaluate]).
+        local.deleting?.let { m -> phaseFlow.deleting(AppPhase.Deleting(slow = System.currentTimeMillis() >= m.untilMs)) }
+    }
+
+    /** (ANDROID-PLAN 0.1.54) The stored marker of an unconfirmed release move, as the device last kept it. */
+    private val moveFlow = MutableStateFlow<MoveUnconfirmed?>(null)
+
+    override val moveUnconfirmed: StateFlow<MoveUnconfirmed?> = moveFlow.asStateFlow()
+
+    /** The marker as the device keeps it now ([moveFlow]); none without a session. */
+    private fun syncMove() {
+        moveFlow.value = session?.device?.altState?.let { MoveUnconfirmed.of(it) }
+    }
 
     /** (Release R, §11.14.10) When this old phone approved a transfer it still keeps the keys for. */
     private val transferKeptFlow = MutableStateFlow<Instant?>(null)
@@ -988,6 +1028,8 @@ class VaultManager(
     fun onBeforeLock(hook: suspend () -> Unit) = locking.addHook(hook)
 
     private suspend fun session(): Session = mutex.withLock {
+        // ANDROID-PLAN 0.1.54: a vault being deleted gets nothing more from this phone, and nothing of it is read.
+        if (phaseFlow.deleting) throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_DELETING)
         // Fail secure: while a wipe runs, and after one that did not finish, nothing of the old vault is opened again.
         // The only place a session is made: through the gate, by construction.
         SessionGate.open(record, session) {
@@ -1016,6 +1058,7 @@ class VaultManager(
                 session = it
                 // What the vault sends while a lock is pending is not handed on: on this phone it is locked.
                 eventsFlow.value = VaultEvents(it.device.events.filter { lockGuard.takesEvents() }, it.device.droppedForTime)
+                syncMove()
             }
         }
     }
@@ -1031,6 +1074,7 @@ class VaultManager(
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
         session = null
         eventsFlow.value = null
+        moveFlow.value = null
         refusals.clear()
         if (forget) {
             io {
@@ -1140,6 +1184,16 @@ class VaultManager(
                 scope.launch { refreshAccount() }
             } else if (VaultJson.str(m.body, "kind") == SYNC_PROFILE_CHANGED) {
                 scope.launch { runCatching { profile.refreshProfile() } }
+            } else if (VaultJson.str(m.body, "kind") == SYNC_VAULT_RELEASE) {
+                // ANDROID-PLAN 0.1.54: the vault first ran under N+1, which confirms the move; the way back is gone.
+                val d = session?.device
+                val named = VaultJson.str(m.body, "release") to VaultJson.long(m.body, "release_number")
+                if (d != null && MoveMarkers.confirmedBy(moveFlow.value, named.first, named.second)) {
+                    scope.launch {
+                        runCatching { d.clearMove() }
+                        syncMove()
+                    }
+                }
             } else if (VaultJson.str(m.body, "kind") == "credential.alarm") {
                 val state = VaultJson.str(m.body, "state")
                 val id = VaultJson.str(m.body, "alarm_id")
@@ -1152,8 +1206,13 @@ class VaultManager(
             }
             // §10.3: opened under the session, from the vault's relay key. `transferred` (§6.7.1 step 4) and
             // `replaced` (§11.11.5 step 3) wipe this phone (in another coroutine: the wipe cancels this observer);
-            // another reason (`vault_deleted`) is re-read like any change of the vault.
+            // `vault_deleted` (§12.5 step 1) closes the vault at once (ANDROID-PLAN 0.1.54); no reason is re-read like any
+            // change of the vault.
             HolderPolicy.DEVICE_UNLINKED -> {
+                if (VaultJson.str(m.body, "reason") == REASON_VAULT_DELETED) {
+                    startDeleting()
+                    return
+                }
                 // Release R (§11.14.10): `transferred` on an old phone that kept its keys is the end of the kept transfer.
                 val movedAway = local.transferApprovedAtMs != null && VaultJson.str(m.body, "reason") == HolderPolicy.REASON_TRANSFERRED
                 if (movedAway) wipeMovedAway = true
@@ -1173,6 +1232,11 @@ class VaultManager(
      * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
      */
     override fun onForeground() {
+        // ANDROID-PLAN 0.1.54: a vault being deleted is only read again (its status), nothing else runs.
+        if (phaseFlow.deleting) {
+            if (local.deleting != null) scope.launch { deletionWatch.check() }
+            return
+        }
         // Release R (§11.14.10): the 7 days of a kept transfer are also checked on return, not only at a start.
         if (local.transferApprovedAtMs != null) scope.launch { runCatching { checkKeptTransfer() } }
         val d = session?.device ?: return
@@ -1225,6 +1289,12 @@ class VaultManager(
             holder.wipeNow()
             return@guard AppPhase.SignedOut
         }
+        local.deleting?.let { m ->
+            // ANDROID-PLAN 0.1.54: "being deleted" before anything is read; the status is re-read at every start.
+            if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = System.currentTimeMillis() >= m.untilMs))
+            deletionWatch.start(m, readNow = true)
+            return@guard phaseFlow.value
+        }
         // Nothing redeemed or claimed on this phone (and nothing re-created after a wipe): the welcome screen.
         if (local.userGuid.isEmpty() && !local.transferIn) return@guard AppPhase.SignedOut
         val s = session()
@@ -1258,7 +1328,7 @@ class VaultManager(
         // never gets here: it fails as a malformed answer (MemberApiClient.vaultStatusAnswer).
         if (st == null) return@guard AppPhase.Unreachable(FailureKind.NO_VAULT)
         if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
-        if (st.state != STATE_UNLOCKED) AppPhase.Locked else afterUnlocked(s)
+        if (!VaultDeletion.statusUnlocked(st.state)) AppPhase.Locked else afterUnlocked(s)
     }
 
     @Suppress("ReturnCount")
@@ -1429,10 +1499,23 @@ class VaultManager(
         return true
     }
 
-    override suspend fun preflight(): PreflightInfo = guard {
-        val s = session()
-        val p = s.alt.preflight(s.device.altState)
-        PreflightInfo(view(p.routed), p.lastNumber, p.softwareUpdated, p.rollback, p.offer?.let { view(it) }, p.between.map { view(it) })
+    override suspend fun preflight(): PreflightInfo {
+        val s = guard { session() }
+        val p = try {
+            guard { s.alt.preflight(s.device.altState) }
+        } catch (e: VaultFailure) {
+            // ANDROID-PLAN 0.1.54 point 6: still routed to the release the vault moved from, after the retries.
+            noteNewReleaseFailure(e.kind, e.code, sealed = false)
+            throw e
+        }
+        // (0.1.54 point 4) The release an unconfirmed move left is no longer in the trusted manifest: no way back.
+        if (!p.movedFromListed) {
+            runCatching { s.device.clearMove() }
+            syncMove()
+        }
+        return PreflightInfo(
+            view(p.routed), p.lastNumber, p.softwareUpdated, p.rollback, p.offer?.let { view(it) }, p.between.map { view(it) },
+        )
     }
 
     override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
@@ -1492,7 +1575,7 @@ class VaultManager(
      * does; without it the move is reported and the vault stays locked. [release] routes to a given release (only
      * to abandon an unconfirmed move, §11.10.5). [onStarting] hears `503 release_starting`.
      */
-    @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongParameterList") // one answer per §11.4 result code
+    @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongParameterList", "LongMethod") // one answer per §11.4 result code
     private suspend fun unlockStep(
         pin: String,
         opts: UnlockOptions,
@@ -1548,10 +1631,15 @@ class VaultManager(
             }
         } catch (e: VaultFailure) {
             holder.onFailure(e) // never proof (a 503, paused or not, included)
+            // ANDROID-PLAN 0.1.54 point 2: after a move, N+1 failing for a reason not the member's offers the way back.
+            if (release == null && !opts.abandon) noteNewReleaseFailure(e.kind, e.code, sealed = false) else syncMove()
             return StepOutcome(UnlockAttempt.Failed(e.kind, e.code, e.retryAfterSeconds))
         }
         val r = outcome.result
+        // The result may have stored, cleared or kept the marker of an unconfirmed move (AltRequests.applyUnlock).
+        syncMove()
         if (!r.ok) {
+            if (release == null && !opts.abandon) noteNewReleaseFailure(FailureKind.OTHER, r.code, sealed = true)
             if (holderApp && holder.onSealedUnlockResult(r)) return StepOutcome(UnlockAttempt.Failed(FailureKind.OTHER, r.code))
             return StepOutcome(
                 when (r.code) {
@@ -1727,6 +1815,12 @@ class VaultManager(
             val st = s.device.altState
             if (st.releaseNumber == 0L) return@guard null
             val m = s.alt.manifest(st.manifestSerial)
+            // ANDROID-PLAN 0.1.54 point 4: the release an unconfirmed move left is no longer in the trusted manifest.
+            val from = st.movedFrom
+            if (from != null && m.byPcr0(from.pcr0) == null) {
+                runCatching { s.device.clearMove() }
+                syncMove()
+            }
             val sealed = (st.release.takeIf { it.isNotEmpty() }?.let { m.byPcr0(it) } ?: m.byNumber(st.releaseNumber))
                 ?.takeIf { it.number == st.releaseNumber }
             val newest = m.newest()
@@ -1785,10 +1879,31 @@ class VaultManager(
                     pinTaken = pin.generation,
                 )
             }
+            val failed = o.attempt
+            if (abandon && failed is UnlockAttempt.Failed && failed.kind == FailureKind.RELEASE_ENDED) {
+                // ANDROID-PLAN 0.1.54 point 4: `410 release_unavailable` for N's PCR0: release N ended, no way back.
+                session?.device?.let { d -> runCatching { d.clearMove() } }
+                syncMove()
+            }
             return o.toStepResult()
         }
 
         override fun canAbandon(): Boolean = session?.device?.altState?.previousRelease?.isNotEmpty() == true
+
+        override fun moveMarker(): MoveUnconfirmed? = session?.device?.altState?.let { MoveUnconfirmed.of(it) }
+    }
+
+    override fun returnToPreviousRelease(pin: String): Boolean = releaseUpdate.returnToPrevious(pin)
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 2) An unlock after the move failed with [kind] and [code] ([sealed]: the enclave's own
+     * answer): the marker's `failed` is set when the reason is not the member's ([MoveMarkers.setsFailed]).
+     */
+    private suspend fun noteNewReleaseFailure(kind: FailureKind, code: String?, sealed: Boolean) {
+        val d = session?.device ?: return
+        if (d.altState.movedFrom == null || !MoveMarkers.setsFailed(kind, code, sealed)) return
+        runCatching { d.markMoveFailed() }
+        syncMove()
     }
 
     private fun StepOutcome.toStepResult(): UpdateStepResult = when {
@@ -1929,15 +2044,94 @@ class VaultManager(
     }
 
     override suspend fun deleteVault(pin: String, password: String) {
+        // ANDROID-PLAN 0.1.54: the deletion's bound is at least this request's `exp` plus 2 minutes (a credential
+        // operation's exp is 10 minutes after it is sent, ChangeTypes.EXP; taken here on this phone's clock).
+        deleteExpMs = System.currentTimeMillis() + com.vettid.core.vault.ChangeTypes.EXP.toMillis()
         guard { session().openApi.deleteVault(pin, password) }
-        afterVaultDeleted()
+        // The vault's `{}` follows its step 1 (§12.5), as `device.unlinked{vault_deleted}` does: "being deleted" until
+        // the member API no longer lists the vault; then the welcome screen (a new vault needs a new setup code).
+        startDeleting()
     }
 
-    /** A new vault needs a new setup code (its redeem makes the pending key, MEMBER-API 2.0.0): the welcome screen. */
-    private suspend fun afterVaultDeleted() {
+    // --- a vault being deleted (ANDROID-PLAN 0.1.54) ---
+
+    /**
+     * `device.unlinked{vault_deleted}` (or this phone's own `vault.delete` answered): at once, over every screen, the open
+     * vault closes and "Your vault is being deleted" shows ([PhaseHolder]); a release update or an operation in progress
+     * stops. Then, in another coroutine (this may run in the event observer, which it ends): the marker, nothing more sent
+     * to the vault or read from it, the vault's data and PIN dropped from memory, and the re-reads of the status.
+     */
+    private fun startDeleting() {
+        if (phaseFlow.deleting) return
+        val since = System.currentTimeMillis()
+        val marker = DeletingMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.untilMs(since, deleteExpMs))
+        // What was on its way (a refresh, the end of an unlock) publishes nothing after this.
+        record.bumpGeneration()
+        phaseFlow.deleting(AppPhase.Deleting())
+        releaseUpdate.close()
+        scope.launch { closeForDeletion(marker) }
+    }
+
+    private suspend fun closeForDeletion(marker: DeletingMarker) {
+        val rec = record.recordGeneration
+        // The marker first: a process that dies from here on starts in "being deleted".
+        runCatching { io { updateLocal(rec) { it.copy(deleting = marker) } } }
+            .onFailure { android.util.Log.w("VaultManager", "the deletion's marker could not be saved: ${it.javaClass.simpleName}") }
+        // Nothing more is sent to the vault (no lock either) and nothing more is read from it; the app key and the device
+        // keys stay until the vault is gone (the status is read with the app key).
+        lockKeeper.abandon()
+        dropSession(forget = false)
+        keptChange = null
+        windowFlow.value = null
+        alarmFlow.value = null
+        lockedElsewhereFlow.value = false
+        social.clear()
+        attachments.reset()
+        ownerCheck.clear()
+        profile.clear()
+        history.clear()
+        items.clear()
+        sharing.clear()
+        feed.clear()
+        deletionWatch.start(marker, readNow = false)
+    }
+
+    /** One read of `GET /api/vault/status` with the app key, without a session ([VaultDeletion.ofStatus]). */
+    @Suppress("TooGenericExceptionCaught") // whatever the read throws concludes nothing
+    private suspend fun readDeletion(): DeletionCheck = try {
+        val a = vaultGuard { gateway.member().vaultStatusAnswer() }
+        pausedFlow.value = a.servicePaused
+        VaultDeletion.ofStatus(vaultListed = a.vault != null)
+    } catch (e: VaultFailure) {
+        VaultDeletion.ofFailure(e.kind)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: RuntimeException) {
+        DeletionCheck.UNREACHABLE
+    }
+
+    /**
+     * The vault is gone: what the app does when a vault is gone (its keys and local data forgotten, a fresh app key), the
+     * marker deleted with the record, "no vault", and the one-time notice.
+     */
+    private suspend fun finishDeleted(): Unit = deletionEnd.withLock {
+        if (!phaseFlow.deleting) return@withLock
+        deletionWatch.stop()
         dropSession(forget = true)
-        io { resetLocal(LocalAccount()) }
-        phaseFlow.value = AppPhase.SignedOut
+        io { resetLocal(LocalAccount(deletedNotice = true)) }
+        deleteExpMs = null
+        phaseFlow.endDeleting(AppPhase.SignedOut)
+    }
+
+    override suspend fun checkDeletion(): DeletionCheck =
+        if (phaseFlow.deleting && local.deleting != null) deletionWatch.check() else DeletionCheck.GONE
+
+    override val deletedNotice: StateFlow<Boolean> = deletedNoticeFlow.asStateFlow()
+
+    override fun acknowledgeDeletedNotice() {
+        deletedNoticeFlow.value = false
+        val rec = record.recordGeneration
+        scope.launch { runCatching { io { updateLocal(rec) { if (it.deletedNotice) it.copy(deletedNotice = false) else null } } } }
     }
 
     override suspend fun recovery(): RecoveryView? = guard {
@@ -2799,7 +2993,10 @@ class VaultManager(
                 movedAwayFlow.value = runCatching { wiper.movedAway }.getOrDefault(false)
                 finishMoveRunner.clearFailure()
                 accountFlow.value = null
-                phaseFlow.value = phase
+                // A wipe ends "being deleted" too (its marker went with the record).
+                deletionWatch.stop()
+                deletedNoticeFlow.value = false
+                phaseFlow.endDeleting(phase)
             },
         ).run()
     }
@@ -3011,6 +3208,15 @@ class VaultManager(
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"
         private const val SYNC_PROFILE_CHANGED = "profile.changed"
+
+        /** (§10.1, §11.10.6) The vault first ran under a new release: `release`, `release_number` (ANDROID-PLAN 0.1.54). */
+        private const val SYNC_VAULT_RELEASE = "vault.release"
+
+        /** `device.unlinked`'s reason in a deletion's step 1 (§12.5). */
+        private const val REASON_VAULT_DELETED = "vault_deleted"
+
+        /** (ANDROID-PLAN 0.1.54) Refused: the vault is being deleted, and nothing more goes to it from this phone. */
+        const val CODE_DELETING = "vault_deleting"
         private const val CODE_NO_RECOVERY = "no_recovery"
         private const val UPDATE_MOVED = "moved"
         private const val UPDATE_ABANDONED = "abandoned"

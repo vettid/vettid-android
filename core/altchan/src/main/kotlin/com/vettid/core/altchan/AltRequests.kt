@@ -38,6 +38,12 @@ class AltRefusedException(val reason: Reason) : IOException("alternate channel: 
          * build: any but 1): nothing is sent to it.
          */
         TIME_SCALE,
+
+        /**
+         * (ANDROID-PLAN 0.1.54 point 6) After `update: moved` the member API still routes the vault to the release it
+         * moved from, past the waits of [RouteWait]: the PIN is not sent to it, and nothing else is either.
+         */
+        ROUTE_PENDING,
     }
 }
 
@@ -93,6 +99,9 @@ data class UnlockOptions(
  */
 object AltRequests {
     const val TYPE_RECOVERY_REGISTER = "vault.recovery.register"
+
+    /** The unlock result code of a release the vault has left for good (§11.10.4 "Confirmation at release N+1"). */
+    const val CODE_WRONG_RELEASE = "wrong_release"
 
     private fun ts(now: Instant): Instant = now.truncatedTo(ChronoUnit.MILLIS)
 
@@ -204,24 +213,32 @@ object AltRequests {
      * Applies an opened unlock result to the app state (§11.4, §11.10.4):
      * floors only move up; a result from another release than the attested
      * one is refused; a move records the previous release for abandonment.
+     *
+     * (ANDROID-PLAN 0.1.54) The marker of an unconfirmed move is stored with `update: moved`, in the same write that
+     * records the new release, and goes with every other unlock that opens the vault: one on N+1 confirms the move, and
+     * one on N is the way back (`abandoned`, or `refused` `downgrade`: no pending move was left), which records N. The
+     * way back answered `wrong_release` (N+1 has opened the vault, which is sealed to it for good) also clears it.
      */
     fun applyUnlock(state: AltState, p: PendingUnlock, r: UnlockResult): AltState {
         val hs = state.headerSeq.toMutableMap()
         if (!r.ok) {
             if (r.headerSeq > (hs[p.release] ?: 0)) hs[p.release] = r.headerSeq
-            return state.copy(headerSeq = hs)
+            val from = state.movedFrom
+            val wayBack = from != null && p.release == from.pcr0 && p.number == from.number
+            val s = state.copy(headerSeq = hs)
+            return if (wayBack && r.code == CODE_WRONG_RELEASE) s.withoutMove() else s
         }
         if (r.release != p.release || r.releaseNumber != p.number) throw AltResultException("result from another release")
         var s = state.copy(stateSeq = maxOf(state.stateSeq, r.stateSeq), manifestSerial = maxOf(state.manifestSerial, r.manifestSerial))
         var release = p.release
         var number = p.number
-        when (r.update?.result) {
-            "moved" -> {
-                s = s.copy(previousRelease = p.release, previousReleaseNumber = p.number)
-                release = r.update.to
-                number = p.toNumber
-            }
-            "abandoned" -> s = s.copy(previousRelease = "", previousReleaseNumber = 0)
+        if (r.update?.result == "moved") {
+            s = s.copy(previousRelease = p.release, previousReleaseNumber = p.number, moveFailed = false)
+            release = r.update.to
+            number = p.toNumber
+        } else {
+            // The vault opened on the release that answered: an unconfirmed move is confirmed (N+1) or abandoned (N).
+            s = s.withoutMove()
         }
         if (r.headerSeq > (hs[release] ?: 0)) hs[release] = r.headerSeq
         return s.copy(headerSeq = hs, release = release, releaseNumber = if (number != 0L) number else s.releaseNumber)
