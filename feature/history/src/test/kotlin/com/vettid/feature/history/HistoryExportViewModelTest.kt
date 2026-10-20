@@ -367,6 +367,24 @@ class HistoryExportViewModelTest {
     }
 
     @Test
+    fun aListedUnnamedDeviceIsNotRemovedInTheFile() = runTest(main.dispatcher) {
+        repo.previewResult = { preview }
+        repo.exportResults += { success() }
+        repo.entriesResult = { records(it) }
+        repo.devices = { mapOf("d1" to "") }
+        val vm = toPin(ExportFormat.JSON)
+        vm.setPin("123456")
+        vm.submitPin()
+        advanceUntilIdle()
+        vm.saveTo("content://docs/8")
+        advanceUntilIdle()
+        val e = Json.parseToJsonElement(String(docs.written.getValue("content://docs/8"), Charsets.UTF_8)).jsonObject["entries"]!!.jsonArray
+        assertEquals("d1", e[0].jsonObject["device_id"]!!.jsonPrimitive.content)
+        assertFalse(e[0].jsonObject.containsKey("device_name"))
+        assertEquals("Removed device", e[1].jsonObject["device_name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun thePinNeverShowsInTheState() {
         assertFalse(ExportStep.Pin(preview, ExportFormat.CSV, pin = "987654").toString().contains("987654"))
     }

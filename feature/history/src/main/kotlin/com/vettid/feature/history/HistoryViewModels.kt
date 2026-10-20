@@ -172,7 +172,7 @@ class HistoryViewModel @Inject constructor(
     private fun localText(r: AuditRecord): List<String> {
         val c = r.connectionId?.let { known[it] }
         val item = AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] }
-        val device = r.deviceId?.let { state.value.deviceNames?.get(it) }
+        val device = r.deviceId?.let { state.value.deviceNames?.get(it)?.ifEmpty { null } }
         return AuditFilter.kindText(r.kind) + listOfNotNull(
             HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item)),
             c?.name, c?.firstName, c?.lastName, c?.accountName,
@@ -302,6 +302,8 @@ data class HistoryEntryUiState(
     val deviceName: String? = null,
     /** The device list was read, so a device it does not hold was removed. */
     val devicesKnown: Boolean = false,
+    /** The entry's device is listed without a name: known, not removed. */
+    val deviceUnnamed: Boolean = false,
     /** The entry's device is this phone. */
     val thisDevice: Boolean = false,
     /** A `not_success` recovery attempt's outcome, from the matching `recovery.open` (ANDROID-PLAN 0.1.52). */
@@ -340,7 +342,8 @@ class HistoryEntryViewModel @Inject constructor(
                     it.copy(
                         entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
                         itemName = i?.name, itemExists = i != null,
-                        deviceName = e?.deviceId?.let { id -> devices?.get(id) }, devicesKnown = devices != null,
+                        deviceName = e?.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } }, devicesKnown = devices != null,
+                        deviceUnnamed = e?.deviceId?.let { id -> devices?.get(id)?.isEmpty() } == true,
                         thisDevice = e?.deviceId != null && e.deviceId == history.selfDeviceId(),
                     )
                 }

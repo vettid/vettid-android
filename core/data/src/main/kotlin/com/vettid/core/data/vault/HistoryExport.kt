@@ -104,12 +104,14 @@ internal class VaultAuditExportOps(private val api: VaultApi) : AuditExportOps {
     override suspend fun deviceNames(): Map<String, String> = devicesOf(api.deviceList())
 
     companion object {
-        /** `device.list`'s `{devices: [{id, name, …}]}` as id → name (unnamed devices left out). */
+        /**
+         * `device.list`'s `{devices: [{id, name, …}]}` as id → name. An unnamed device (the app's own peer) is kept
+         * with an empty name: it is listed, so never "Removed device" (ANDROID-PLAN 0.1.27).
+         */
         fun devicesOf(o: JsonObject): Map<String, String> = (o["devices"] as? JsonArray).orEmpty().mapNotNull { e ->
             val d = e as? JsonObject ?: return@mapNotNull null
             val id = (d["id"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return@mapNotNull null
-            val name = (d["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            id to name
+            id to (d["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
         }.toMap()
     }
 }

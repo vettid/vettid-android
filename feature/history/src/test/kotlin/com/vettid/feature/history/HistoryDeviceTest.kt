@@ -21,7 +21,8 @@ import java.time.Instant
 /**
  * The device of a History entry (VAULT-MESSAGING 0.23.2: `vault.unlocked` and a device's `vault.locked` carry
  * `device_id`; ANDROID-PLAN 0.1.27): its name from `device.list` on the row's second line and the entry page,
- * "Removed device" for a device no longer listed, nothing for an entry without a device, "(this phone)" for this one.
+ * "Removed device" for a device no longer listed, nothing for an entry without a device or a listed unnamed one,
+ * "(this phone)" for this one.
  */
 @RunWith(RobolectricTestRunner::class)
 class HistoryDeviceTest {
@@ -40,6 +41,7 @@ class HistoryDeviceTest {
         assertEquals("Removed device", HistoryDevice.name("d-gone", devices, "Removed device"))
         assertNull(HistoryDevice.name(null, devices, "Removed device"))
         assertNull(HistoryDevice.name("d-pixel", null, "Removed device"))
+        assertNull(HistoryDevice.name("d-self", devices + ("d-self" to ""), "Removed device"))
         assertEquals("Ada · Pixel 10 Pro", HistoryDevice.supporting(listOf(null, "Ada", "Pixel 10 Pro"), "Category"))
         assertEquals("Category", HistoryDevice.supporting(listOf(null, null, null), "Category"))
     }
@@ -73,6 +75,13 @@ class HistoryDeviceTest {
         // No device: unchanged, the category, no placeholder.
         rule.onNodeWithTag("history_list").performScrollToNode(hasTestTag("history_entry_2"))
         rule.onNodeWithTag("history_entry_2").assertTextContains("Unlocks and daily checks")
+    }
+
+    @Test
+    fun aListedUnnamedDeviceIsNotRemoved() {
+        list(devices + ("d-gone" to ""))
+        rule.onNodeWithTag("history_entry_3").assertTextContains("Unlocks and daily checks")
+        assertEquals(0, rule.onAllNodesWithText("Removed device").fetchSemanticsNodes().size)
     }
 
     @Test
@@ -110,6 +119,22 @@ class HistoryDeviceTest {
         detail(rec(3, "vault.locked", "d-gone"), HistoryEntryUiState(devicesKnown = true))
         rule.onNodeWithTag("history_entry_device").assertTextContains("Removed device")
         rule.onNodeWithText("d-gone").assertExists()
+    }
+
+    @Test
+    fun theEntryPageCallsThisPhoneUnnamedThisPhone() {
+        detail(rec(4, "owner_check.passed", "d-self"), HistoryEntryUiState(devicesKnown = true, deviceUnnamed = true, thisDevice = true))
+        rule.onNodeWithTag("history_entry_device").assertTextContains("This phone")
+        assertEquals(0, rule.onAllNodesWithText("Removed device", substring = true).fetchSemanticsNodes().size)
+        rule.onNodeWithText("d-self").assertExists()
+    }
+
+    @Test
+    fun theEntryPageShowsTheIdAloneForAnotherUnnamedDevice() {
+        detail(rec(4, "vault.unlocked", "d-other"), HistoryEntryUiState(devicesKnown = true, deviceUnnamed = true))
+        assertEquals(0, rule.onAllNodesWithTag("history_entry_device").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("Removed device", substring = true).fetchSemanticsNodes().size)
+        rule.onNodeWithText("d-other").assertExists()
     }
 
     @Test
