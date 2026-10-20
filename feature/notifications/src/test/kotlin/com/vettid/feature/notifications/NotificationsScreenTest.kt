@@ -77,6 +77,15 @@ class NotificationsScreenTest {
         rule.onNodeWithTag("feed_sheet_second_line").assertDoesNotExist()
     }
 
+    /** A guide's second line is its body's first line: the sheet shows the body alone, in full. */
+    @Test
+    fun aGuideShowsItsBodyWithoutTheSecondLine() {
+        val guide = FeedItem("g", 5, "guide", now.toString(), "active", title = "Welcome", body = "First line\nSecond line")
+        rule.setContent { VettIdTheme { DetailSheetContent(guide, names, gone = false) } }
+        rule.onNodeWithTag("feed_sheet_second_line").assertDoesNotExist()
+        rule.onNodeWithText("First line\nSecond line").assertExists()
+    }
+
     @Test
     fun emptyStates() {
         var unreadOnly = true

@@ -648,7 +648,8 @@ fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.semantics { heading() },
         )
-        FeedKinds.supporting(item, names)?.let { line ->
+        // A guide's second line is its body's first line, and the sheet shows the whole body below.
+        FeedKinds.supporting(item, names)?.takeIf { item.kind != "guide" }?.let { line ->
             Spacer(Modifier.height(Spacing.xs))
             Text(line.text(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("feed_sheet_second_line"))
         }
