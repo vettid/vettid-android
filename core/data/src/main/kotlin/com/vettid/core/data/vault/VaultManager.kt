@@ -562,6 +562,53 @@ class VaultManager(
     private var pauseWanted = false
 
     /**
+     * The window between an unlock's result and its phase, while relay requests go out before the app opens (the owner
+     * check after a cancelled recovery, §3.6.5's check): the collection runs, a pause waits, the vault's events are held.
+     */
+    private val opening = OpeningWindow(
+        object : OpeningWindow.Port {
+            override val phase: AppPhase get() = phaseFlow.value
+            override val relayPaused: Boolean get() = this@VaultManager.relayPaused
+
+            override fun holdEvents() {
+                session?.device?.holdEvents()
+            }
+
+            override suspend fun endHold(deliver: Boolean): List<VaultMessage> {
+                val d = session?.device ?: return emptyList()
+                val out = d.endHold(deliver)
+                if (!d.holdingEvents && d.leftOnRelay > 0) {
+                    android.util.Log.i("VaultManager", "${d.leftOnRelay} events left on the relay before the open")
+                }
+                return out
+            }
+
+            override suspend fun startCollecting() {
+                val d = session?.device ?: return
+                // As after every unlock: a lock left in the outbox by an earlier version of the app is dropped before the
+                // collection's start flushes the outbox; and nothing is flushed while a lock is pending.
+                runCatching { d.dropFromOutbox(TYPE_VAULT_LOCK) }
+                if (lockGuard.admits()) d.start(scope)
+            }
+
+            override fun pauseAgain() {
+                // Through pauseRelay, which keeps the connection while a lock is pending (its answer and `vault.locking`
+                // come over it) and pauses it once that lock is confirmed; and which leaves a phase that is not Locked
+                // (unreachable, starting) to the notification service, which pauses once the phase is known to be Locked.
+                this@VaultManager.relayPaused = false
+                pauseRelay()
+            }
+
+            override suspend fun takeState(events: List<VaultMessage>) {
+                for (m in events) {
+                    if (lockNotices.stale(m)) continue
+                    runCatching { onEvent(m) }
+                }
+            }
+        },
+    )
+
+    /**
      * The vault locked without the member locking it on this phone (`vault.locking` from another device or by
      * itself, an unsignalled lock found by a status read): ANDROID-PLAN 0.1.23, "Your vault is locked".
      */
@@ -1421,7 +1468,8 @@ class VaultManager(
         twoStepScreen: Boolean = false,
         /** A PIN typed on a flow's own screen ("Finish the move"), taken at this [pinGeneration] ([unlockStep]). */
         pinTaken: Int? = null,
-        beforeOpen: suspend () -> Unit = {},
+        /** Relay requests before the app opens (the owner check); run in the [opening] window. */
+        beforeOpen: (suspend () -> Unit)? = null,
     ): UnlockAttempt = unlockStep(
         pin,
         UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, cancelRecovery = cancelRecovery),
@@ -1452,7 +1500,7 @@ class VaultManager(
         holderApp: Boolean = false,
         release: String? = null,
         onStarting: ((Long) -> Unit)? = null,
-        beforeOpen: suspend () -> Unit = {},
+        beforeOpen: (suspend () -> Unit)? = null,
         /** The unlock screen, which asks for the previous PIN and then the new one (§11.14.9 step 5). */
         twoStepScreen: Boolean = false,
         /**
@@ -1552,10 +1600,7 @@ class VaultManager(
             // (Not after a wipe, which also bumps the generation and has said SignedOut.)
             if (lockedSince) phaseFlow.value = AppPhase.Locked
         } else {
-            if (!s.device.recovering) beforeOpen()
-            val p = afterUnlocked(s)
-            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
-            if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
+            openAfterUnlock(s, gen, beforeOpen?.takeUnless { s.device.recovering })
         }
         // "The move didn't finish" (release R, §11.14.10): this phone opened the vault with its own keys after it
         // approved a transfer, so it is the vault's phone again.
@@ -1567,6 +1612,27 @@ class VaultManager(
         }
         val attempt = if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
         return StepOutcome(attempt, abandoned = r.update?.result == UPDATE_ABANDONED)
+    }
+
+    /**
+     * The open after an unlock that was not overtaken: [before] (relay requests before the app opens), then the phase.
+     * [before]'s requests are answered while this phone is still locked ([OpeningWindow]): the collection runs, and what
+     * else the vault sends is held back until the app opens.
+     */
+    private suspend fun openAfterUnlock(s: Session, gen: Int, before: (suspend () -> Unit)?) {
+        val openApp: suspend () -> Unit = {
+            val p = afterUnlocked(s)
+            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
+            if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
+        }
+        if (before == null) {
+            openApp()
+        } else {
+            opening.run {
+                before()
+                openApp()
+            }
+        }
     }
 
     /**
@@ -2774,13 +2840,21 @@ class VaultManager(
     override fun held(): Boolean = ownerCheck.ownerCheck.value?.let { it.state != OwnerCheckState.OK } == true
 
     override fun pauseRelay() {
-        if (phaseFlow.value != AppPhase.Locked || relayPaused) return
-        // A lock is on its way: the vault's answer to it, and its `vault.locking`, are collected over this
-        // connection. It is paused when the lock is confirmed (below, in init).
-        pauseWanted = lockKeeper.pending
-        val d = session?.device?.takeUnless { pauseWanted } ?: return
-        relayPaused = true
-        d.stop()
+        // Requests before the app opens wait for their answers over this connection (OpeningWindow): paused, if the
+        // phone is still locked, when they are done.
+        if (phaseFlow.value != AppPhase.Locked || relayPaused || opening.deferPause()) return
+        when (RelayPause.step(locked = true, paused = false, lockPending = lockKeeper.pending)) {
+            RelayPause.Step.NONE -> Unit
+            // A lock is on its way: the vault's answer to it, and its `vault.locking`, are collected over this
+            // connection. It is paused when the lock is confirmed (below, in init).
+            RelayPause.Step.AFTER_LOCK -> pauseWanted = true
+            RelayPause.Step.STOP -> {
+                pauseWanted = false
+                val d = session?.device ?: return
+                relayPaused = true
+                d.stop()
+            }
+        }
     }
 
     override fun resumeRelay() {

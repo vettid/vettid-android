@@ -251,6 +251,19 @@ fun UnlockContent(
                         modifier = Modifier.testTag("unlock_cancel_password"),
                     )
                 }
+                if (state.busy) {
+                    // The screen has no primary button here, so its busy indicator is not shown: the cancel, and the owner
+                    // check that follows it, show their progress here.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+                            .testTag("unlock_recovery_cancelling"),
+                    ) {
+                        CircularProgressIndicator(Modifier.height(20.dp).width(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(Spacing.m))
+                        Text(stringResource(R.string.unlock_recovery_cancelling), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
             // Never a PIN field while the last check of the vault's software failed.
             val verified = p != null && state.preflightError == null
