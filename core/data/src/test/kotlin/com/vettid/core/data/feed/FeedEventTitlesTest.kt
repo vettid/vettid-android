@@ -30,6 +30,8 @@ class FeedEventTitlesTest {
         assertEquals(FeedText(R.string.data_feed_secret_renewed), title(item("device.secret_renewed")))
         assertEquals(FeedText(R.string.data_feed_recovery_completed), title(item("recovery.completed", "01REC")))
         assertEquals(FeedText(R.string.data_feed_counter_unavailable), title(item("recovery.counter_unavailable", priority = "urgent")))
+        assertEquals(FeedText(R.string.data_feed_recovery_rollback), title(item("recovery.generation_closed", "4/rollback", "urgent")))
+        assertEquals(FeedText(R.string.data_feed_unknown, listOf("recovery.generation_closed")), title(item("recovery.generation_closed", "4/stale")))
         assertEquals(FeedText(R.string.data_feed_rotation_failed), title(item("identity.rotation_failed", "recovery", "high")))
         assertEquals(
             FeedText(R.string.data_feed_rotate_conflict, listOf(FeedText(literal = "Sam Lee"))),

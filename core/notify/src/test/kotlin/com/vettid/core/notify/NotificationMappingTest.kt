@@ -68,6 +68,9 @@ class NotificationMappingTest {
         }
         assertEquals(Channels.SECURITY, NotificationMapping.channel(item("recovery.counter_unavailable", "urgent")))
         assertEquals(Channels.ACTIVITY, NotificationMapping.channel(item("identity.rotation_failed", "high")))
+        // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a host served an older recovery record.
+        assertEquals(Channels.SECURITY, NotificationMapping.channel(item("recovery.generation_closed", "urgent").copy(ref = "4/rollback")))
+        assertEquals(Channels.ACTIVITY, NotificationMapping.channel(item("recovery.generation_closed", "urgent").copy(ref = "4/stale")))
     }
 
     @Test

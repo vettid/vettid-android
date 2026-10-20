@@ -119,19 +119,21 @@ object AuditKinds {
         "backup_off" -> R.string.history_kind_recovery_closed_backup_off
         "exhausted" -> R.string.history_kind_recovery_closed_exhausted
         "delete" -> R.string.history_kind_recovery_closed_delete
-        "stale" -> R.string.history_kind_recovery_closed_stale
+        RecoveryRefs.REASON_ROLLBACK -> R.string.history_kind_recovery_closed_rollback
         else -> R.string.history_kind_recovery_closed
     }
 
     /**
      * Entries History does not list (ANDROID-PLAN 0.1.52 §4 "Event titles", decision 4): `recovery.open` (its outcome is
-     * the matching attempt's detail), `device.unlinked_sent` and `drop.call_glare`. They stay in the log, in the chain check
-     * and in an export. A generation closed as `stale` is shown, pending the owner's decision: it can be the only trace of
-     * attempts on an older timeline a host served.
+     * the matching attempt's detail), `device.unlinked_sent`, `drop.call_glare`, and (owner decision of 2026-10-20) a
+     * generation closed as `stale`, the harmless case. They stay in the log, in the chain check and in an export. A
+     * generation closed as `rollback` (a host served an older recovery record) is shown.
      */
-    @Suppress("UNUSED_PARAMETER", "UnusedParameter") // [ref]: a later decision may hide one `stale` case only
-    fun hidden(kind: String, ref: String?): Boolean = kind == RecoveryRefs.KIND_OPEN || kind == "device.unlinked_sent" ||
-        kind == "drop.call_glare"
+    fun hidden(kind: String, ref: String?): Boolean = when (kind) {
+        RecoveryRefs.KIND_OPEN, "device.unlinked_sent", "drop.call_glare" -> true
+        KIND_CLOSED -> RecoveryRefs.closure(ref)?.reason == RecoveryRefs.REASON_STALE
+        else -> false
+    }
 
     /** One line of an entry's **Details**. */
     sealed interface Detail {
@@ -142,11 +144,15 @@ object AuditKinds {
          * [realSeconds] as the vault runs it (STAGING-TIME-SCALE).
          */
         data class Scaled(@param:StringRes val res: Int, @param:StringRes val scaledRes: Int, val realSeconds: Long) : Detail
+
+        /** [res] with a name the vault recorded ([name]). */
+        data class Named(@param:StringRes val res: Int, val name: String) : Detail
     }
 
     /** What is known of a `not_success` attempt's outcome (the matching `recovery.open`, [RecoveryRefs.outcomes]). */
     sealed interface Outcome {
-        data class Matched(val outcome: String) : Outcome
+        /** [phoneName]: the attempting phone's self-reported name, shown only as such; null when the entry has none. */
+        data class Matched(val outcome: String, val phoneName: String? = null) : Outcome
 
         /** The entries were read and none matches: "Details not available." */
         data object None : Outcome
@@ -197,7 +203,9 @@ object AuditKinds {
             Outcome.None -> Detail.Line(R.string.history_detail_attempt_no_details)
             Outcome.Unknown, Outcome.LaterSuccessful -> null
         }
-        return listOfNotNull(Detail.Line(R.string.history_detail_attempt_not_success), line)
+        // Self-reported: shown in that form only, and never changing the title, the priority or the channel.
+        val phone = (outcome as? Outcome.Matched)?.phoneName?.let { Detail.Named(R.string.history_detail_attempt_phone, it) }
+        return listOfNotNull(Detail.Line(R.string.history_detail_attempt_not_success), line, phone)
     }
 
     /** A counted open's outcome in words (§11.14.11); null for one this app does not know. */
@@ -219,7 +227,7 @@ object AuditKinds {
             "backup_off" -> R.string.history_detail_recovery_closed_backup_off
             "exhausted" -> R.string.history_detail_recovery_closed_exhausted
             "delete" -> R.string.history_detail_recovery_closed_delete
-            "stale" -> R.string.history_detail_recovery_closed_stale
+            RecoveryRefs.REASON_ROLLBACK -> R.string.history_detail_recovery_closed_rollback
             else -> return emptyList()
         }
         return listOfNotNull(Detail.Line(first), Detail.Line(R.string.history_detail_recovery_closed_unconfirmed).takeIf { c.unconfirmed })

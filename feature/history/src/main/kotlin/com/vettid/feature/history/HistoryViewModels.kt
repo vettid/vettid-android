@@ -379,7 +379,8 @@ class HistoryEntryViewModel @Inject constructor(
         val entries = if (near.any { it.seq == e.seq }) near else near + e
         val outcome = when {
             RecoveryRefs.laterSuccessful(e, entries) -> AuditKinds.Outcome.LaterSuccessful
-            else -> RecoveryRefs.outcomes(entries)[e.seq]?.let { AuditKinds.Outcome.Matched(it) } ?: AuditKinds.Outcome.None
+            else -> RecoveryRefs.matches(entries)[e.seq]?.let { AuditKinds.Outcome.Matched(it.outcome, it.phoneName) }
+                ?: AuditKinds.Outcome.None
         }
         state.update { it.copy(outcome = outcome) }
     }

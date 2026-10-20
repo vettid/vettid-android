@@ -2,6 +2,7 @@ package com.vettid.core.data.vault
 
 import java.time.Duration
 import java.time.Instant
+import java.util.Base64
 
 /**
  * The `ref`s of release R's recovery entries as the vault writes them (VAULT-MESSAGING 0.49.1 §10.9, §11.14.11), read
@@ -52,15 +53,36 @@ object RecoveryRefs {
         return p[1].takeIf { it.isNotEmpty() }?.let { Closure(g, it, unconfirmed) }
     }
 
-    /** `recovery.open`: `<recovery_id>/<outcome>`, the details a host can drop (§11.14.11). */
-    data class Open(val recoveryId: String, val outcome: String)
+    /**
+     * `recovery.open`: `<recovery_id>/<outcome>`, or (VAULT-MESSAGING 0.50.0) `<recovery_id>/<outcome>/<name>`, the
+     * details a host can drop (§11.14.11). [phoneName] is the attempting phone's **self-reported** name (base64url in
+     * the `ref`), null when the `ref` has none or it does not decode; it never affects urgency or any decision.
+     */
+    data class Open(val recoveryId: String, val outcome: String, val phoneName: String? = null)
 
     @Suppress("ReturnCount")
     fun open(ref: String?): Open? {
-        val i = ref?.lastIndexOf('/') ?: return null
-        if (i <= 0 || i == ref.length - 1) return null
-        return Open(ref.substring(0, i), ref.substring(i + 1))
+        val p = ref?.split('/')?.takeIf { it.size == 2 || it.size == OPEN_PARTS_NAMED } ?: return null
+        if (p[0].isEmpty() || p[1].isEmpty()) return null
+        return Open(p[0], p[1], p.getOrNull(2)?.let { phoneName(it) })
     }
+
+    /** The name's UTF-8 from base64url (no padding), without control or direction-changing characters; null if empty. */
+    private fun phoneName(b64: String): String? {
+        val bytes = try {
+            Base64.getUrlDecoder().decode(b64)
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val text = String(bytes, Charsets.UTF_8)
+        return text.filterNot { Character.isISOControl(it) || it in BIDI || it == '\uFFFD' }.trim()
+            .take(MAX_NAME_CHARS).ifEmpty { null }
+    }
+
+    /** Embedding, override and isolate controls: a name must not reorder the text around it. */
+    private val BIDI = setOf(
+        '\u200E', '\u200F', '\u202A', '\u202B', '\u202C', '\u202D', '\u202E', '\u2066', '\u2067', '\u2068', '\u2069',
+    )
 
     /** The open outcomes that counted an attempt; `busy` and `wrong_again` did not, so no attempt shows them. */
     val COUNTED = setOf("wrong", "attempt_lost", "quiet", "wait", "exhausted", "closed")
@@ -73,7 +95,10 @@ object RecoveryRefs {
      * of `at`, the nearest `recovery.open` within [WINDOW] whose outcome counted an attempt, each open used once. The
      * result maps an attempt's `seq` to its outcome; an attempt without a match is absent.
      */
-    fun outcomes(entries: List<AuditRecord>): Map<Long, String> {
+    fun outcomes(entries: List<AuditRecord>): Map<Long, String> = matches(entries).mapValues { it.value.outcome }
+
+    /** As [outcomes], with the whole matched open (its outcome and the phone's self-reported name). */
+    fun matches(entries: List<AuditRecord>): Map<Long, Open> {
         val succeeded = succeeded(entries)
         val attempts = entries.filter { e ->
             val a = attempt(e.ref)
@@ -81,11 +106,11 @@ object RecoveryRefs {
         }
             .sortedWith(compareBy<AuditRecord> { it.at }.thenBy { it.seq })
         val opens = entries.mapNotNull { e ->
-            val o = open(e.ref)?.outcome?.takeIf { e.kind == KIND_OPEN && it in COUNTED }
+            val o = open(e.ref)?.takeIf { e.kind == KIND_OPEN && it.outcome in COUNTED }
             if (o != null && e.at != null) Triple(e.seq, e.at, o) else null
-        }.sortedWith(compareBy<Triple<Long, Instant, String>> { it.second }.thenBy { it.first })
+        }.sortedWith(compareBy<Triple<Long, Instant, Open>> { it.second }.thenBy { it.first })
         val used = HashSet<Long>()
-        val out = HashMap<Long, String>()
+        val out = HashMap<Long, Open>()
         for (a in attempts) {
             val best = a.at?.let { at ->
                 opens.filter { it.first !in used }
@@ -113,8 +138,23 @@ object RecoveryRefs {
             .mapTo(HashSet()) { it.generation to it.n }
 
     const val KIND_ATTEMPT = "recovery.attempt"
+    const val KIND_CLOSED = "recovery.generation_closed"
+
+    /** A next generation only already closed (the harmless case; hidden). */
+    const val REASON_STALE = "stale"
+
+    /**
+     * (VAULT-MESSAGING 0.50.0, owner decision of 2026-10-20) A next generation that already showed used attempts: a host
+     * may have served an older copy of the recovery record. Shown, and routed as an urgent recovery alarm.
+     */
+    const val REASON_ROLLBACK = "rollback"
+
+    /** Whether [kind] with [ref] is a `rollback` closure. */
+    fun rollback(kind: String, ref: String?): Boolean = kind == KIND_CLOSED && closure(ref)?.reason == REASON_ROLLBACK
     const val KIND_OPEN = "recovery.open"
     private const val ATTEMPT_PARTS = 4
+    private const val OPEN_PARTS_NAMED = 3
+    private const val MAX_NAME_CHARS = 64
     private const val CLOSURE_PARTS_UNCONFIRMED = 3
     private const val SOURCE_COUNTER = "counter"
     private const val UNCONFIRMED = "unconfirmed"

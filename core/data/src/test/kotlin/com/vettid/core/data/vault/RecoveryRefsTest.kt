@@ -59,6 +59,17 @@ class RecoveryRefsTest {
         assertNull(RecoveryRefs.open("wrong"))
         assertNull(RecoveryRefs.open("/wrong"))
         assertNull(RecoveryRefs.open("01JREC/"))
+        // VAULT-MESSAGING 0.50.0: the attempting phone's self-reported name, base64url without padding.
+        assertEquals(RecoveryRefs.Open("01JREC", "wrong", "Pixel 7"), RecoveryRefs.open("01JREC/wrong/UGl4ZWwgNw"))
+        // A name with a slash, controls or direction overrides: decoded, then cleaned.
+        val tricky = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString("a/b\u0007\u202Ec".toByteArray())
+        assertEquals(RecoveryRefs.Open("01JREC", "wrong", "a/bc"), RecoveryRefs.open("01JREC/wrong/$tricky"))
+        // Not base64url, or empty after cleaning: no name, the outcome still reads.
+        assertEquals(RecoveryRefs.Open("01JREC", "wrong", null), RecoveryRefs.open("01JREC/wrong/!!!"))
+        assertNull(RecoveryRefs.open("01JREC/wrong/UGl4ZWwgNw/x"))
+        assertTrue(RecoveryRefs.rollback("recovery.generation_closed", "4/rollback"))
+        assertFalse(RecoveryRefs.rollback("recovery.generation_closed", "4/stale"))
+        assertFalse(RecoveryRefs.rollback("recovery.attempt", "4/rollback"))
         assertNull(RecoveryRefs.open(null))
     }
 

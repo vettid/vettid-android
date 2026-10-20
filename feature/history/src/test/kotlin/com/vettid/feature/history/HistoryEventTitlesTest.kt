@@ -41,6 +41,7 @@ class HistoryEventTitlesTest {
             when (it) {
                 is AuditKinds.Detail.Line -> context.getString(it.res)
                 is AuditKinds.Detail.Scaled -> context.getString(it.res)
+                is AuditKinds.Detail.Named -> context.getString(it.res, it.name)
             }
         }
 
@@ -68,7 +69,7 @@ class HistoryEventTitlesTest {
             Triple("recovery.generation_closed", "2/delete", "Recovery ended"),
             Triple("recovery.generation_closed", "2/delete/unconfirmed", "Recovery ended"),
             Triple("recovery.generation_closed", "2/newer", "Recovery attempts reset"),
-            Triple("recovery.generation_closed", "4/stale", "Recovery record replaced"),
+            Triple("recovery.generation_closed", "4/rollback", "Your vault was given an older recovery record"),
             Triple("recovery.presence_unrecorded", null, "Your vault could not record that you were here"),
             Triple("identity.rotation_failed", "recovery", "Key update failed"),
             Triple("connection.request.approved", "p1", "You accepted a connection request"),
@@ -138,8 +139,21 @@ class HistoryEventTitlesTest {
         assertEquals(emptyList<String>(), lines("recovery.attempt", "garbled", AuditKinds.Outcome.None))
         assertEquals(listOf("Later successful."), lines("recovery.attempt", "2/3/not_success/counter", AuditKinds.Outcome.LaterSuccessful))
         assertEquals(
-            listOf("Your vault found an older recovery record and replaced it. If you did not change your PIN or password, contact VettID."),
-            lines("recovery.generation_closed", "4/stale"),
+            listOf(
+                "A host may have served an older copy of your vault's recovery record, one on which recovery attempts had already been used. " +
+                    "Your vault moved past it. If you did not try to recover your vault, change your PIN and your password now, and contact VettID.",
+            ),
+            lines("recovery.generation_closed", "4/rollback"),
+        )
+        assertEquals(emptyList<String>(), lines("recovery.generation_closed", "4/stale"))
+        // The attempting phone's self-reported name, only in that form; nothing without one.
+        assertEquals(
+            listOf(notYou, "Wrong PIN or password.", "From a phone that calls itself “Pixel 7”."),
+            lines("recovery.attempt", "2/3/not_success/counter", AuditKinds.Outcome.Matched("wrong", "Pixel 7")),
+        )
+        assertEquals(
+            listOf(notYou, "Wrong PIN or password."),
+            lines("recovery.attempt", "2/3/not_success/counter", AuditKinds.Outcome.Matched("wrong")),
         )
         assertEquals(listOf("If that was not you, change your password now, and your PIN as well."), lines("recovery.attempts_used", "2/4"))
         assertEquals(listOf("It works with your current PIN and password, with 10 attempts."), lines("recovery.armed", "3"))
@@ -181,8 +195,9 @@ class HistoryEventTitlesTest {
     @Test
     fun theHiddenKindsAreNotShown() {
         assertTrue(AuditKinds.hidden("recovery.open", "01JREC/wrong"))
-        // Shown, pending the owner's decision: it can be the only trace of attempts on an older timeline.
-        assertFalse(AuditKinds.hidden("recovery.generation_closed", "4/stale"))
+        // Owner decision of 2026-10-20: the harmless `stale` is hidden; `rollback` is shown.
+        assertTrue(AuditKinds.hidden("recovery.generation_closed", "4/stale"))
+        assertFalse(AuditKinds.hidden("recovery.generation_closed", "4/rollback"))
         assertTrue(AuditKinds.hidden("device.unlinked_sent", "01JTRANSFER"))
         assertTrue(AuditKinds.hidden("drop.call_glare", "call1"))
         assertFalse(AuditKinds.hidden("recovery.generation_closed", "4/pin"))
@@ -197,7 +212,7 @@ class HistoryEventTitlesTest {
             AuditRecord("e1", 1, null, "drop.call_glare"),
         )
         val s = HistoryUiState(entries = entries)
-        assertEquals(listOf(5L, 3L), s.shown.map { it.seq })
+        assertEquals(listOf(5L), s.shown.map { it.seq })
         assertEquals(5, s.entries.size)
     }
 
@@ -249,10 +264,11 @@ class HistoryEventTitlesTest {
         val vault = Vault(
             { AuditPage(listOf(attempt), seq = 30) },
             // The vault's answer for the hour around it: a counted open 40 s before, an uncounted one nearer.
-            { AuditPage(listOf(attempt, entry(12, "recovery.open", "01JREC/busy", -5), entry(11, "recovery.open", "01JREC/wrong", -40)), seq = 30) },
+            // The open names its phone ("Pixel 7", base64url), as VAULT-MESSAGING 0.50.0 records it.
+            { AuditPage(listOf(attempt, entry(12, "recovery.open", "01JREC/busy", -5), entry(11, "recovery.open", "01JREC/wrong/UGl4ZWwgNw", -40)), seq = 30) },
         )
         val s = settle(entryVm(vault)) { it.outcome != AuditKinds.Outcome.Unknown }
-        assertEquals(AuditKinds.Outcome.Matched("wrong"), s.outcome)
+        assertEquals(AuditKinds.Outcome.Matched("wrong", "Pixel 7"), s.outcome)
         val read = vault.calls[1]
         assertEquals(listOf("recovery.open", "recovery.attempt"), read["kinds"])
         assertEquals("2026-10-19T11:00:00Z", Instant.parse(read["since"] as String).toString())

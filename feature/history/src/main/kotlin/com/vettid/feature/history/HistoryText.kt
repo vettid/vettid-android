@@ -61,6 +61,7 @@ object HistoryText {
                 is AuditKinds.Detail.Line -> stringResource(d.res)
                 is AuditKinds.Detail.Scaled ->
                     if (scale <= 1) stringResource(d.res) else stringResource(d.scaledRes, scaledDurationText(d.realSeconds))
+                is AuditKinds.Detail.Named -> stringResource(d.res, d.name)
             }
         }
     }
