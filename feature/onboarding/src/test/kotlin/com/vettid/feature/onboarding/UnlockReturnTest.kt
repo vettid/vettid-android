@@ -91,6 +91,38 @@ class UnlockReturnTest {
     }
 
     @Test
+    fun aReturnWaitingForItsPinCanBeCancelled() = runTest {
+        vault.moveUnconfirmed.value = failed
+        val vm = vm()
+        advanceUntilIdle()
+        vm.askReturn()
+        vm.confirmReturn()
+        assertTrue(vm.uiState.value.returnAsked)
+        vm.dismissReturn()
+        assertFalse(vm.uiState.value.returnAsked)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+        assertTrue(vault.calls.none { it.startsWith("returnToPreviousRelease") })
+    }
+
+    @Test
+    fun aWayBackThatCannotStartIsSaid() = runTest {
+        vault.moveUnconfirmed.value = failed
+        vault.returnResult = false
+        val vm = vm()
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.askReturn()
+        vm.confirmReturn()
+        val s = vm.uiState.value
+        assertEquals(UnlockMessage.Failed(FailureKind.OTHER, UnlockViewModel.CODE_RETURN_NOT_STARTED), s.message)
+        assertTrue(s.returnAsked) // the message shows where the PIN for the way back is asked
+        assertEquals("", s.pin)
+    }
+
+    @Test
     fun dismissingSendsNothing() = runTest {
         vault.moveUnconfirmed.value = failed
         val vm = vm()

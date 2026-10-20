@@ -376,8 +376,16 @@ class UnlockViewModel @Inject constructor(
     private fun wayBack() {
         val s = state.value
         if (!s.returnSubmitAllowed) return
-        state.update { it.copy(pin = "", returnAsked = false, message = null) }
-        vault.returnToPreviousRelease(s.pin)
+        val started = vault.returnToPreviousRelease(s.pin)
+        state.update {
+            if (started) {
+                it.copy(pin = "", returnAsked = false, message = null)
+            } else {
+                // Nothing was sent (an update is shown, or the offer just went): said, and the member chooses again.
+                val why = UnlockMessage.Failed(FailureKind.OTHER, CODE_RETURN_NOT_STARTED)
+                it.copy(pin = "", returnAsked = it.returnOffered, message = why)
+            }
+        }
     }
 
     override fun cancelRecoveryAndUnlock() {
@@ -509,6 +517,9 @@ class UnlockViewModel @Inject constructor(
     }
 
     companion object {
+        /** (ANDROID-PLAN 0.1.54) The way back could not start; nothing was sent. */
+        const val CODE_RETURN_NOT_STARTED = "return_not_started"
+
         /** The unlock result this phone could not read ([com.vettid.core.data.vault.VaultFailure] code). */
         const val CODE_UNREADABLE = "unreadable_result"
 

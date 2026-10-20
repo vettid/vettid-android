@@ -72,8 +72,34 @@ object VaultDeletion {
 
     private const val STATE_UNLOCKED = "unlocked"
 
-    /** What a status answer says: [vaultListed] false is `{vault: null}`. */
-    fun ofStatus(vaultListed: Boolean): DeletionCheck = if (vaultListed) DeletionCheck.LISTED else DeletionCheck.GONE
+    /**
+     * What a status answer says: [vaultListed] false is `{vault: null}`. While the service is paused ([servicePaused]) an
+     * answer concludes nothing (MEMBER-API 1.2.0): the vault is not taken as gone.
+     */
+    fun ofStatus(vaultListed: Boolean, servicePaused: Boolean = false): DeletionCheck = when {
+        servicePaused -> DeletionCheck.UNREACHABLE
+        vaultListed -> DeletionCheck.LISTED
+        else -> DeletionCheck.GONE
+    }
+
+    /**
+     * Stores the deletion's marker with [write] (true when written), tried up to [attempts] times: a write dropped because
+     * a reset or a persist failed is tried again with the record as it is then. False when it was never written.
+     */
+    @Suppress("TooGenericExceptionCaught") // a failed persist is one more try, never a crash of the deletion
+    fun saveMarker(attempts: Int = MARKER_ATTEMPTS, write: () -> Boolean): Boolean {
+        repeat(attempts) {
+            val ok = try {
+                write()
+            } catch (_: Exception) {
+                false
+            }
+            if (ok) return true
+        }
+        return false
+    }
+
+    private const val MARKER_ATTEMPTS = 3
 
     /** What a failed read says: `401 unauthorized` to the app key is the row removed; anything else concludes nothing. */
     fun ofFailure(kind: FailureKind): DeletionCheck =

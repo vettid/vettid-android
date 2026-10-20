@@ -498,6 +498,17 @@ class VaultManager(
     /** One move to "no vault" after a deletion, whichever read saw the vault gone. */
     private val deletionEnd = Mutex()
 
+    /**
+     * (0.1.54) The deletion's marker as this process knows it: set with "being deleted", whether or not the record took it
+     * ([closeForDeletion]), so that "Check again", a return to the foreground and a refresh still read the status.
+     */
+    @Volatile
+    private var deletingMarker: DeletingMarker? = local.deleting
+
+    /** (0.1.54) The device stopped for a deletion, kept until the vault is gone, when its stored state is forgotten. */
+    @Volatile
+    private var deletingDevice: com.vettid.core.vault.VaultDevice? = null
+
     /** (0.1.54) When this phone's own `vault.delete` expires (epoch ms), for the deletion's bound; in memory only. */
     @Volatile
     private var deleteExpMs: Long? = null
@@ -1234,7 +1245,7 @@ class VaultManager(
     override fun onForeground() {
         // ANDROID-PLAN 0.1.54: a vault being deleted is only read again (its status), nothing else runs.
         if (phaseFlow.deleting) {
-            if (local.deleting != null) scope.launch { deletionWatch.check() }
+            scope.launch { deletionWatch.check() }
             return
         }
         // Release R (§11.14.10): the 7 days of a kept transfer are also checked on return, not only at a start.
@@ -1289,7 +1300,7 @@ class VaultManager(
             holder.wipeNow()
             return@guard AppPhase.SignedOut
         }
-        local.deleting?.let { m ->
+        (local.deleting ?: deletingMarker)?.let { m ->
             // ANDROID-PLAN 0.1.54: "being deleted" before anything is read; the status is re-read at every start.
             if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = System.currentTimeMillis() >= m.untilMs))
             deletionWatch.start(m, readNow = true)
@@ -2047,7 +2058,13 @@ class VaultManager(
         // ANDROID-PLAN 0.1.54: the deletion's bound is at least this request's `exp` plus 2 minutes (a credential
         // operation's exp is 10 minutes after it is sent, ChangeTypes.EXP; taken here on this phone's clock).
         deleteExpMs = System.currentTimeMillis() + com.vettid.core.vault.ChangeTypes.EXP.toMillis()
-        guard { session().openApi.deleteVault(pin, password) }
+        try {
+            guard { session().openApi.deleteVault(pin, password) }
+        } catch (e: VaultFailure) {
+            // Not answered or refused: no deletion of this phone's to bound (the vault's own event still starts one).
+            if (!phaseFlow.deleting) deleteExpMs = null
+            throw e
+        }
         // The vault's `{}` follows its step 1 (§12.5), as `device.unlinked{vault_deleted}` does: "being deleted" until
         // the member API no longer lists the vault; then the welcome screen (a new vault needs a new setup code).
         startDeleting()
@@ -2067,20 +2084,27 @@ class VaultManager(
         val marker = DeletingMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.untilMs(since, deleteExpMs))
         // What was on its way (a refresh, the end of an unlock) publishes nothing after this.
         record.bumpGeneration()
+        deletingMarker = marker
         phaseFlow.deleting(AppPhase.Deleting())
         releaseUpdate.close()
         scope.launch { closeForDeletion(marker) }
     }
 
     private suspend fun closeForDeletion(marker: DeletingMarker) {
-        val rec = record.recordGeneration
-        // The marker first: a process that dies from here on starts in "being deleted".
-        runCatching { io { updateLocal(rec) { it.copy(deleting = marker) } } }
-            .onFailure { android.util.Log.w("VaultManager", "the deletion's marker could not be saved: ${it.javaClass.simpleName}") }
+        // The marker first: a process that dies from here on starts in "being deleted". A write the record drops (a persist
+        // that failed) is tried again; this process goes on from [deletingMarker] whatever becomes of it.
+        val saved = io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deleting = marker) } } }
+        syncTimeScale()
+        if (!saved) android.util.Log.w("VaultManager", "the deletion's marker could not be saved")
         // Nothing more is sent to the vault (no lock either) and nothing more is read from it; the app key and the device
-        // keys stay until the vault is gone (the status is read with the app key).
+        // keys stay until the vault is gone (the status is read with the app key). The session keys leave memory now.
         lockKeeper.abandon()
+        val device = session?.device
         dropSession(forget = false)
+        device?.let { d ->
+            deletingDevice = d
+            runCatching { d.dropKeysFromMemory() }
+        }
         keptChange = null
         windowFlow.value = null
         alarmFlow.value = null
@@ -2101,7 +2125,7 @@ class VaultManager(
     private suspend fun readDeletion(): DeletionCheck = try {
         val a = vaultGuard { gateway.member().vaultStatusAnswer() }
         pausedFlow.value = a.servicePaused
-        VaultDeletion.ofStatus(vaultListed = a.vault != null)
+        VaultDeletion.ofStatus(vaultListed = a.vault != null, servicePaused = a.servicePaused)
     } catch (e: VaultFailure) {
         VaultDeletion.ofFailure(e.kind)
     } catch (e: CancellationException) {
@@ -2117,14 +2141,17 @@ class VaultManager(
     private suspend fun finishDeleted(): Unit = deletionEnd.withLock {
         if (!phaseFlow.deleting) return@withLock
         deletionWatch.stop()
+        // The device stopped for the deletion is forgotten (its keys and stored state); then what a gone vault leaves.
+        deletingDevice?.let { d -> runCatching { d.forget() } }
+        deletingDevice = null
         dropSession(forget = true)
         io { resetLocal(LocalAccount(deletedNotice = true)) }
         deleteExpMs = null
+        deletingMarker = null
         phaseFlow.endDeleting(AppPhase.SignedOut)
     }
 
-    override suspend fun checkDeletion(): DeletionCheck =
-        if (phaseFlow.deleting && local.deleting != null) deletionWatch.check() else DeletionCheck.GONE
+    override suspend fun checkDeletion(): DeletionCheck = if (phaseFlow.deleting) deletionWatch.check() else DeletionCheck.GONE
 
     override val deletedNotice: StateFlow<Boolean> = deletedNoticeFlow.asStateFlow()
 
@@ -2995,6 +3022,8 @@ class VaultManager(
                 accountFlow.value = null
                 // A wipe ends "being deleted" too (its marker went with the record).
                 deletionWatch.stop()
+                deletingMarker = null
+                deletingDevice = null
                 deletedNoticeFlow.value = false
                 phaseFlow.endDeleting(phase)
             },

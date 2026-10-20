@@ -1719,6 +1719,15 @@ class VaultDevice private constructor(
     }
 
     /** Forgets the vault and every key's state on this device (sign-out, transfer away). */
+    /**
+     * (ANDROID-PLAN 0.1.54) The vault is being deleted: collection stops and the session keys leave memory now; the stored
+     * state goes with [forget] once the vault is gone. Nothing is saved after it.
+     */
+    suspend fun dropKeysFromMemory() = lock.withLock {
+        stop()
+        keyring.destroy()
+    }
+
     suspend fun forget() = lock.withLock {
         stop()
         keyring.destroy()

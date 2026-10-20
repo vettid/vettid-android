@@ -105,6 +105,9 @@ fun UnlockContent(
             else -> state.submitAllowed
         },
         busy = state.busy || state.loading || state.erasing,
+        // ANDROID-PLAN 0.1.54: a "Return" waiting for its PIN can be left for the ordinary unlock.
+        secondaryLabel = if (state.returnAsked) stringResource(com.vettid.core.ui.R.string.core_ui_cancel) else null,
+        onSecondary = actions::dismissReturn,
         header = {
             Spacer(Modifier.height(Spacing.l))
             Icon(

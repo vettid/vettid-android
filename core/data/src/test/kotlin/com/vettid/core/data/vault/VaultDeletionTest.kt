@@ -41,6 +41,22 @@ class VaultDeletionTest {
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.NETWORK))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.CLOCK)) // a 401 for the clock is not the row gone
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.SERVICE_PAUSED))
+        // `{vault: null}` while the service is paused concludes nothing.
+        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = false, servicePaused = true))
+        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = true, servicePaused = true))
+    }
+
+    @Test
+    fun aDroppedMarkerWriteIsTriedAgain() {
+        var calls = 0
+        assertTrue(VaultDeletion.saveMarker { ++calls == 3 })
+        assertEquals(3, calls)
+        calls = 0
+        assertTrue(VaultDeletion.saveMarker { calls++; if (calls == 1) throw java.io.IOException("persist") else true })
+        assertEquals(2, calls)
+        calls = 0
+        assertFalse(VaultDeletion.saveMarker { calls++; false })
+        assertEquals(3, calls)
     }
 
     /**
