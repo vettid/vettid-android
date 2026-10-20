@@ -75,6 +75,11 @@ class RootViewModel @Inject constructor(
 
     fun acknowledgeMovedAway() = vault.acknowledgeMovedAway()
 
+    /** (ANDROID-PLAN 0.1.54) "Your vault was deleted": told once on "no vault" after the deletion's state. */
+    val deletedNotice: StateFlow<Boolean> = accounts.deletedNotice
+
+    fun acknowledgeDeletedNotice() = accounts.acknowledgeDeletedNotice()
+
     /**
      * (VAULT-MESSAGING 0.44.0 §11.14.9) A PIN or password change whose answer was lost has been decided: said once,
      * wherever the member is, until dismissed (a change screen that follows it says it there and dismisses it).

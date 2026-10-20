@@ -74,6 +74,11 @@ class ReleaseUpdateManagerTest {
         }
 
         override fun canAbandon() = abandonable
+
+        /** The stored marker of an unconfirmed move (ANDROID-PLAN 0.1.54). */
+        var marker: MoveUnconfirmed? = null
+
+        override fun moveMarker() = marker
     }
 
     private fun TestScope.manager(ops: Ops) = ReleaseUpdateManager(backgroundScope, ops)
@@ -502,5 +507,115 @@ class ReleaseUpdateManagerTest {
         assertEquals("refused", ops.log.last())
         assertTrue(ops.unlocks.none { it.abandon })
         assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, m.progress.value!!.failureCode)
+    }
+
+    // --- ANDROID-PLAN 0.1.54 "The way back to release N after leaving or a restart" ---
+
+    private val failedMarker = MoveUnconfirmed(4, rel(4).pcr0, 5, rel(5).pcr0, failed = true)
+
+    @Test
+    fun theUnlockScreensReturnRunsTheWayBackFromTheMarkerAndRecordsN() = runTest {
+        val ops = Ops()
+        ops.marker = failedMarker
+        ops.results += UpdateStepResult.Abandoned
+        val m = manager(ops)
+        assertTrue(m.returnToPrevious("2468"))
+        runCurrent()
+        assertEquals(listOf(Call("2468", null, true)), ops.unlocks)
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.ABANDONED, p.step)
+        assertEquals(4L, p.from.number)
+        assertEquals(5L, p.to.number)
+        assertTrue(p.vaultOpen)
+        assertFalse(p.canAbandon)
+    }
+
+    @Test
+    fun noWayBackWithoutAFailedMarkerOrWhileAnUpdateIsShown() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        assertFalse(m.returnToPrevious("2468")) // no marker
+        ops.marker = failedMarker.copy(failed = false)
+        assertFalse(m.returnToPrevious("2468")) // before `failed`: the unlock screen unlocks as usual
+        ops.marker = failedMarker
+        assertFalse(m.returnToPrevious("")) // no PIN
+        ops.abandonable = false
+        assertFalse(m.returnToPrevious("2468"))
+        ops.abandonable = true
+        ops.results += UpdateStepResult.Failed(FailureKind.NO_RESPONSE, null)
+        assertTrue(m.returnToPrevious("2468"))
+        runCurrent()
+        assertFalse(m.returnToPrevious("2468")) // its outcome is shown
+        assertEquals(1, ops.unlocks.size)
+        runCurrent()
+        assertTrue(ops.unlocks.all { it.abandon && it.approve == null })
+    }
+
+    @Test
+    fun theWayBackRefusedAsADowngradeIsBackOnN() = runTest {
+        val ops = Ops()
+        ops.marker = failedMarker
+        ops.results += UpdateStepResult.Refused("downgrade")
+        val m = manager(ops)
+        m.returnToPrevious("2468")
+        runCurrent()
+        assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
+        assertTrue(m.progress.value!!.vaultOpen)
+    }
+
+    @Test
+    fun theWayBackAnsweredWrongReleaseOr410EndsTheOfferWithItsText() = runTest {
+        for ((r, code) in listOf(
+            UpdateStepResult.Failed(FailureKind.OTHER, "wrong_release") to ReleaseUpdateManager.CODE_RETURN_CONFIRMED,
+            UpdateStepResult.Failed(FailureKind.RELEASE_ENDED, "release_unavailable") to ReleaseUpdateManager.CODE_RETURN_UNAVAILABLE,
+        )) {
+            val ops = Ops()
+            ops.marker = failedMarker
+            ops.results += r
+            val m = manager(ops)
+            m.returnToPrevious("2468")
+            ops.abandonable = false // the vault manager cleared the marker with that answer
+            runCurrent()
+            val p = m.progress.value!!
+            assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
+            assertEquals(code, p.failureCode)
+            assertFalse(p.canAbandon)
+            assertFalse(p.vaultOpen)
+        }
+    }
+
+    @Test
+    fun theUpdateScreensWayBackAlsoTakesADowngradeAsBackOnN() = runTest {
+        val ops = Ops()
+        ops.results += UpdateStepResult.Moved
+        ops.results += UpdateStepResult.Failed(FailureKind.ROUTE_PENDING, "route_pending")
+        ops.results += UpdateStepResult.Refused("downgrade")
+        val m = manager(ops)
+        m.start("2468", offer)
+        runCurrent()
+        // Still routed to N after the retries (point 6): the neutral failure, with "Try again" and "Return to release N".
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
+        assertEquals(FailureKind.ROUTE_PENDING, p.failure)
+        assertTrue(p.canAbandon)
+        m.abandon("2468")
+        runCurrent()
+        assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
+    }
+
+    @Test
+    fun closeStopsTheStepAndShowsNothing() = runTest {
+        val ops = Ops()
+        ops.startingCallbacks = 1
+        ops.results += UpdateStepResult.Failed(FailureKind.VAULT_UNAVAILABLE, ReleaseUpdateManager.CODE_RELEASE_STARTING, 30)
+        val m = manager(ops)
+        m.start("2468", offer)
+        runCurrent()
+        m.close()
+        assertNull(m.progress.value)
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertNull(m.progress.value)
+        assertEquals(1, ops.unlocks.size) // the wait for the starting release was stopped: nothing more sent
     }
 }

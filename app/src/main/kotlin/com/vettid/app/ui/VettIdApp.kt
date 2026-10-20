@@ -46,6 +46,7 @@ import com.vettid.feature.onboarding.FinishMoveViewModel
 import com.vettid.feature.onboarding.OnboardingFlow
 import com.vettid.feature.onboarding.ReleaseUpdateFlowRoute
 import com.vettid.feature.onboarding.UnlockRoute
+import com.vettid.feature.onboarding.VaultDeletingRoute
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -63,6 +64,10 @@ private data object UnlockDest
 @Serializable
 private data object MainDest
 
+/** (ANDROID-PLAN 0.1.54) "Your vault is being deleted": above every phase, the release update included. */
+@Serializable
+private data object DeletingDest
+
 /** The one-step release update (owner decision 2026-10-09): it locks and unlocks the vault, so it is above the phases. */
 @Serializable
 private data object UpdateDest
@@ -73,7 +78,15 @@ private fun destinationOf(phase: AppPhase): Any = when (phase) {
     AppPhase.SignedOut, is AppPhase.Setup -> OnboardingDest
     AppPhase.Locked -> UnlockDest
     AppPhase.Unlocked -> MainDest
+    is AppPhase.Deleting -> DeletingDest
 }
+
+/** The root destination: the release update over every phase but "being deleted" (ANDROID-PLAN 0.1.54), which is above it. */
+private fun rootTarget(phase: AppPhase, updateShown: Boolean): Any =
+    if (updateShown && phase !is AppPhase.Deleting) UpdateDest else destinationOf(phase)
+
+/** "Finish the move" holds the screen it runs on, but never over a vault being deleted. */
+private fun holdsRoot(phase: AppPhase, finishingMove: Boolean): Boolean = finishingMove && phase !is AppPhase.Deleting
 
 /**
  * Makes [target] the only root destination, when it is not the one showing already. The effect runs again in every
@@ -129,13 +142,13 @@ fun VettIdApp(
     val portal = viewModel.portalUrl
     val nav = rememberNavController()
     val update by viewModel.updateProgress.collectAsStateWithLifecycle()
-    val target = if (update != null) UpdateDest else destinationOf(phase)
+    val target = rootTarget(phase, updateShown = update != null)
 
     val locked = lock == AppLockState.LOCKED
     // "Finish the move" locks and then unlocks the vault (§11.14.10): the screen it runs on stays until the unlock has
     // answered, instead of the unlock screen in between (the phone is locked all the same; a failure then shows it).
     val finishingMove by viewModel.finishingMove.collectAsStateWithLifecycle()
-    RootDestinationEffect(nav, target, locked, hold = finishingMove)
+    RootDestinationEffect(nav, target, locked, hold = holdsRoot(phase, finishingMove))
 
     // Debug builds expose test tags as resource ids, so that adb (uiautomator) can drive two phones at once.
     val root = if (BuildConfig.DEBUG) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
@@ -190,6 +203,10 @@ fun VettIdApp(
                         composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
                         composable<UnlockDest> { UnlockRoute(onOpenAccountSite = { uri.openUri(portal) }) }
                         composable<UpdateDest> { ReleaseUpdateFlowRoute() }
+                        composable<DeletingDest> {
+                            val slow = (phase as? AppPhase.Deleting)?.slow == true
+                            VaultDeletingRoute(slow = slow, onOpenAccountSite = { uri.openUri(portal) })
+                        }
                         composable<MainDest> {
                             // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).
                             TagColorsHost {
@@ -230,6 +247,7 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
     val movedBack by viewModel.movedBack.collectAsStateWithLifecycle()
     val moveNotDone by viewModel.moveNotDone.collectAsStateWithLifecycle()
     val movedAway by viewModel.movedAway.collectAsStateWithLifecycle()
+    val deleted by viewModel.deletedNotice.collectAsStateWithLifecycle()
     var finishMoveOpen by rememberSaveable { mutableStateOf(false) }
     val askFinishMove = finishMove && unlocked
     if (askFinishMove) {
@@ -270,6 +288,16 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone,
         )
     }
+    // ANDROID-PLAN 0.1.54: the vault was deleted; said once, on "no vault", until dismissed.
+    if (deleted) {
+        InfoBanner(
+            stringResource(R.string.vault_deleted_notice),
+            Modifier.testTag("vault_deleted_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeDeletedNotice,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway,
+        )
+    }
     // VAULT-MESSAGING 0.44.0 §11.14.9: the decision of a change whose answer was lost, wherever the member is.
     val changeDecided by viewModel.changeDecided.collectAsStateWithLifecycle()
     changeDecided?.let { c ->
@@ -281,7 +309,7 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             Modifier.testTag("change_decided_banner"),
             actionLabel = stringResource(if (lockUnlock) R.string.root_change_lock_unlock else R.string.root_preferences_reset_ok),
             onAction = if (lockUnlock) viewModel::lockAndUnlockForPin else viewModel::acknowledgeChangeDecided,
-            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway && !deleted,
         )
     }
     // Kept open through the lock and unlock it sends (and never dismissed while they run); never over the app lock. Once
@@ -301,7 +329,7 @@ private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: 
             }
         }
     }
-    return askFinishMove || movedBack || moveNotDone || movedAway || changeDecided != null
+    return askFinishMove || movedBack || moveNotDone || movedAway || deleted || changeDecided != null
 }
 
 /** The decided change's notice (ANDROID-PLAN 0.1.45; the applied and ended texts are drafts for the owner). */

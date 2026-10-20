@@ -93,6 +93,9 @@ interface AltParty {
 
     suspend fun openUnlockResult(raw: ByteArray): UnlockResult
 
+    /** (ANDROID-PLAN 0.1.54) The release an unconfirmed move left, from the stored marker ([AltState.movedFrom]); null for none. */
+    fun movedFrom(): MovedFrom? = null
+
     /**
      * [built] was not posted (VAULT-MESSAGING §11.14.9 step 2: its PIN may no longer be the one the vault expects): what
      * [prepareUnlock] recorded for it goes, as if it had never been built (the pending unlock, the standing token's
@@ -268,7 +271,14 @@ class AltChannelFlow(
         while (true) {
             // Before anything is built: building mints the standing token and records the pending unlock.
             beforePost()
-            val (info, e) = enclaveFor(release, m, enroll = false, onStarting)
+            // ANDROID-PLAN 0.1.54 point 6: a route still naming the release the vault moved from gets no PIN; it is fetched
+            // again for about a minute. Not for the way back, which asks for that release by its PCR0.
+            val routed = enclaveFor(release, m, enroll = false, onStarting)
+            val (info, e) = if (release == null && !options.abandon) {
+                RouteWait.awayFrom(party.movedFrom(), routed, { it.second.release }) { enclaveFor(null, m, enroll = false, onStarting) }
+            } else {
+                routed
+            }
             val secret = unlockSecretFor(e.descriptor.traits)
             val built = try {
                 party.prepareUnlock(userGuid, pin, e, m, attester, options.copy(unlockSecret = secret))
@@ -309,11 +319,17 @@ class AltChannelFlow(
      * to, compared with the release this device last unlocked into
      * ([state]). Throws [MemberApiException] `release_unavailable` (410) when
      * the vault's release has ended, and the verification errors of the
-     * manifest and the enclave.
+     * manifest and the enclave. A route naming the release an unconfirmed
+     * move left is fetched again as for the unlock ([RouteWait]).
      */
     suspend fun preflight(state: AltState, release: String? = null): UnlockPreflight {
         val m = manifest(state.manifestSerial)
-        val (_, e) = enclaveFor(release, m, enroll = false)
+        val routed = enclaveFor(release, m, enroll = false)
+        val (_, e) = if (release == null) {
+            RouteWait.awayFrom(state.movedFrom, routed, { it.second.release }) { enclaveFor(null, m, enroll = false) }
+        } else {
+            routed
+        }
         return UnlockPreflight.of(state, e.release, m)
     }
 
@@ -406,6 +422,8 @@ class AltChannelFlow(
  *   one; the member may approve the move in this unlock (§11.10.3).
  * - [between]: the manifest's releases between the routed one and [offer]
  *   (What's new lists their summaries, ANDROID-PLAN 0.1.31).
+ * - [movedFromListed]: (ANDROID-PLAN 0.1.54) false when an unconfirmed move's
+ *   previous release is no longer in this manifest (the way back is gone).
  */
 data class UnlockPreflight(
     val routed: Release,
@@ -413,6 +431,7 @@ data class UnlockPreflight(
     val manifestSerial: Long,
     val offer: Release?,
     val between: List<Release> = emptyList(),
+    val movedFromListed: Boolean = true,
 ) {
     val rollback: Boolean get() = lastNumber != 0L && routed.number < lastNumber
     val softwareUpdated: Boolean get() = lastNumber != 0L && routed.number > lastNumber
@@ -422,7 +441,8 @@ data class UnlockPreflight(
             val newest = m.newest()
             val offer = newest?.takeIf { it.number > routed.number }
             val between = offer?.let { o -> m.releases.filter { it.number > routed.number && it.number < o.number } }.orEmpty()
-            return UnlockPreflight(routed, state.releaseNumber, m.serial, offer, between)
+            val listed = state.movedFrom?.let { m.byPcr0(it.pcr0) != null } ?: true
+            return UnlockPreflight(routed, state.releaseNumber, m.serial, offer, between, listed)
         }
     }
 }

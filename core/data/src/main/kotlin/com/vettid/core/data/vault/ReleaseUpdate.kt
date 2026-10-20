@@ -178,6 +178,9 @@ interface ReleaseUpdateOps {
 
     /** An unconfirmed move can be abandoned: this phone knows the release it moved from. */
     fun canAbandon(): Boolean
+
+    /** (ANDROID-PLAN 0.1.54) The stored marker of an unconfirmed move; null for none. */
+    fun moveMarker(): MoveUnconfirmed? = null
 }
 
 /** Where the one-step update stands (owner decision 2026-10-09). */
@@ -227,7 +230,7 @@ data class UpdateProgress(
     val waitSeconds: Long = 0,
     /** The vault is open (on [from] after a refusal or an abandonment, on [to] when done). */
     val vaultOpen: Boolean = false,
-    /** "Return to release N" is offered (only while the move is unconfirmed). */
+    /** "Return to release N" is offered (only while the move is unconfirmed: the stored marker, ANDROID-PLAN 0.1.54). */
     val canAbandon: Boolean = false,
 ) {
     /** A step that waits for the member (a PIN, a choice, or "Continue"). */
@@ -286,8 +289,21 @@ interface ReleaseUpdateRepository {
      */
     fun abandon(pin: String, generation: Int? = null)
 
+    /**
+     * (ANDROID-PLAN 0.1.54 point 3) The unlock screen's "Return to release N", confirmed by the member: while the stored
+     * marker has `failed` and no update is shown, the way back runs as from the update screen, whose screens then show
+     * it. False when it cannot start. [generation] as for [start].
+     */
+    fun returnToPrevious(pin: String, generation: Int? = null): Boolean = false
+
     /** Leaves the outcome (or gives up): the app follows the vault's phase again. Ignored while a step runs. */
     fun finish()
+
+    /**
+     * (ANDROID-PLAN 0.1.54 "A vault being deleted") The vault is being deleted: whatever step runs is stopped where it is
+     * (its PIN goes with it) and nothing is shown any more.
+     */
+    fun close() {}
 }
 
 /**
@@ -382,14 +398,53 @@ class ReleaseUpdateManager(
         val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon() && pin.isNotEmpty()
         if (running() || !offered || refusedWhileChangeUnresolved()) return
         val typed = taken(pin, generation)
-        launch {
-            set { it.copy(step = UpdateStep.ABANDONING, failure = null, failureCode = null) }
-            when (val r = withStart { s -> ops.unlock(typed, approve = null, abandon = true, onStarting = s) }) {
-                UpdateStepResult.Abandoned, UpdateStepResult.Opened ->
-                    set { it.copy(step = UpdateStep.ABANDONED, vaultOpen = true, canAbandon = false) }
-                else -> newReleaseFailed(r)
-            }
+        launch { wayBack(typed) }
+    }
+
+    override fun returnToPrevious(pin: String, generation: Int?): Boolean {
+        val m = ops.moveMarker()?.takeIf { it.failed && ops.canAbandon() }
+        val idle = !running() && progressFlow.value == null
+        if (!idle || pin.isEmpty() || m == null) return false
+        // The update's screens take over (the root shows them over every phase), as if the move had just failed there.
+        progressFlow.value = UpdateProgress(UpdateStep.NEW_RELEASE_FAILED, m.from, m.to, vaultOpen = false, canAbandon = true)
+        if (!refusedWhileChangeUnresolved()) {
+            val typed = taken(pin, generation)
+            launch { wayBack(typed) }
         }
+        return true
+    }
+
+    /**
+     * The way back (§11.10.4 "Abandoning an unconfirmed move"): the unlock routed to N with `release_update.to` = N.
+     * `abandoned`, or `refused` `downgrade` (no pending move was left: it had already been abandoned), leave the vault open
+     * on N. `wrong_release` (N+1 has already opened the vault) and `410` for N (N ended) end the offer with their texts.
+     */
+    private suspend fun wayBack(typed: TakenPin) {
+        set { it.copy(step = UpdateStep.ABANDONING, failure = null, failureCode = null) }
+        val r = withStart { s -> ops.unlock(typed, approve = null, abandon = true, onStarting = s) }
+        when {
+            r == UpdateStepResult.Abandoned || r == UpdateStepResult.Opened ->
+                set { it.copy(step = UpdateStep.ABANDONED, vaultOpen = true, canAbandon = false) }
+            r is UpdateStepResult.Refused && r.code == CODE_REFUSED_DOWNGRADE ->
+                set { it.copy(step = UpdateStep.ABANDONED, vaultOpen = true, canAbandon = false) }
+            r is UpdateStepResult.Failed && r.code == CODE_WRONG_RELEASE -> wayBackEnded(CODE_RETURN_CONFIRMED)
+            r is UpdateStepResult.Failed && r.kind == FailureKind.RELEASE_ENDED -> wayBackEnded(CODE_RETURN_UNAVAILABLE)
+            else -> newReleaseFailed(r)
+        }
+    }
+
+    /** The way back is gone ([code]): the vault stays on N+1, locked; the PIN unlocks it there. */
+    private fun wayBackEnded(code: String) = set {
+        it.copy(
+            step = UpdateStep.NEW_RELEASE_FAILED, failure = FailureKind.OTHER, failureCode = code, waitSeconds = 0, vaultOpen = false,
+            canAbandon = ops.canAbandon(),
+        )
+    }
+
+    override fun close() {
+        job?.cancel()
+        job = null
+        progressFlow.value = null
     }
 
     override fun finish() {
@@ -525,6 +580,18 @@ class ReleaseUpdateManager(
 
         /** [UpdateProgress.refusal] when the vault opened without saying anything of the update. */
         const val CODE_NOT_MOVED = "not_moved"
+
+        /** The way back refused as a downgrade: no pending move was left, and the vault is open on N (§11.10.4 step 4). */
+        const val CODE_REFUSED_DOWNGRADE = "downgrade"
+
+        /** An unlock result of a release the vault has left for good ([com.vettid.core.altchan.AltRequests.CODE_WRONG_RELEASE]). */
+        const val CODE_WRONG_RELEASE = "wrong_release"
+
+        /** (ANDROID-PLAN 0.1.54) The way back answered `wrong_release`: `release_update_return_confirmed`. */
+        const val CODE_RETURN_CONFIRMED = "return_confirmed"
+
+        /** (ANDROID-PLAN 0.1.54) Release N answered `410 release_unavailable` for the way back: `release_update_return_unavailable`. */
+        const val CODE_RETURN_UNAVAILABLE = "return_unavailable"
 
         /** Further waits after the API client's own (10 minutes): a release that cannot start is a failure. */
         const val MAX_START_RETRIES = 5

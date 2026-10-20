@@ -108,6 +108,17 @@ interface AccountRepository {
      * is as freshly installed ([phase] [AppPhase.SignedOut]); it runs to the end even if the caller is cancelled.
      */
     suspend fun eraseThisPhone()
+
+    /**
+     * (ANDROID-PLAN 0.1.54 "A vault being deleted") "Check again" on the "still finishing" screen: one read of `GET
+     * /api/vault/status`; a tap while one runs waits for it. [DeletionCheck.GONE] has moved the app to "no vault".
+     */
+    suspend fun checkDeletion(): DeletionCheck = DeletionCheck.LISTED
+
+    /** (0.1.54) "Your vault was deleted": said once on "no vault" after the deletion's state, until [acknowledgeDeletedNotice]. */
+    val deletedNotice: StateFlow<Boolean> get() = NEVER_PAUSED
+
+    fun acknowledgeDeletedNotice() {}
 }
 
 /** [AccountRepository.servicePaused] of a repository that does not follow the service switch. */
@@ -150,6 +161,18 @@ interface VaultRepository {
 
     /** Cancels the pending start-over (`POST /api/vault/deletion/cancel`, signed by the app key). True when cancelled. */
     suspend fun cancelDeletion(): Boolean = false
+
+    /**
+     * (ANDROID-PLAN 0.1.54) The stored marker of a release move that is not confirmed yet ([MoveUnconfirmed]); with
+     * `failed`, the unlock screen offers "Return to release N".
+     */
+    val moveUnconfirmed: StateFlow<MoveUnconfirmed?> get() = NO_MOVE_UNCONFIRMED
+
+    /**
+     * (0.1.54 point 3) The unlock screen's "Return to release N", confirmed, with [pin]: the way back runs as on the update
+     * screen ([ReleaseUpdateRepository.returnToPrevious]), whose screens show it. False when it cannot start.
+     */
+    fun returnToPreviousRelease(pin: String): Boolean = false
 
     /** Creates the Protean Credential (§3.5.5), sets the backup (§3.5.6) and confirms the vault. */
     suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit)

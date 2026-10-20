@@ -33,6 +33,13 @@ sealed interface AppPhase {
     /** The vault is open and this app is its holder. */
     data object Unlocked : AppPhase
 
+    /**
+     * (ANDROID-PLAN 0.1.54) The vault sent `device.unlinked{vault_deleted}` (VAULT-MESSAGING §12.5 step 1): "Your vault is
+     * being deleted", over every other phase, until the member API no longer lists the vault ([VaultDeletion]). [slow]:
+     * still listed at the bound, "Still finishing" with "Check again".
+     */
+    data class Deleting(val slow: Boolean = false) : AppPhase
+
     // A phone that a transfer or a recovery replaced has no phase of its own: it erases itself and is
     // SignedOut, as freshly installed (owner decision, 2026-10-05; VaultManager, HolderWatch).
 }
@@ -357,6 +364,13 @@ enum class FailureKind {
 
     /** The ENCLAVE's attestation document or descriptor did not verify: nothing was sent to it. */
     ENCLAVE,
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 6) After `update: moved` the member API still routes the vault to the release it moved
+     * from, after about a minute of fetching the route again: nothing was sent; the screens say
+     * `release_update_route_pending` and offer "Try again" and "Return to release N".
+     */
+    ROUTE_PENDING,
 
     /**
      * (STAGING-TIME-SCALE §4 item 4) The vault's release has a time scale this build does not accept (a production build:

@@ -341,6 +341,20 @@
     <string name="release_update_return_confirm_body">Your vault goes back to release %1$d and opens there. You can approve release %2$d again later.</string>
     <string name="release_update_abandoned_title">Back on release %1$d</string>
     <string name="release_update_abandoned_body">Your vault runs release %1$d again and is open. You can update to release %2$d later.</string>
+    <!-- ANDROID-PLAN 0.1.54 "The way back to release N after leaving or a restart" (approved by the owner, 2026-10-20). -->
+    <string name="unlock_move_unconfirmed">Your vault moved to release %1$d and has not opened there yet. You can try again with your PIN, or return to release %2$d.</string>
+    <string name="release_update_route_pending">Your vault moved to release %1$d, but VettID is not ready to open it there yet. Try again in a minute.</string>
+    <string name="release_update_return_confirmed">Release %1$d has already opened your vault, so it can\'t go back to release %2$d. Unlock it with your PIN.</string>
+    <string name="release_update_return_unavailable">Release %1$d is no longer available, so your vault can\'t go back to it. Try again with your PIN, or contact VettID.</string>
+    <!-- ANDROID-PLAN 0.1.54 "A vault being deleted" (approved by the owner, 2026-10-20). -->
+    <string name="vault_deleting_title">Your vault is being deleted</string>
+    <string name="vault_deleting_body">VettID is erasing everything in your vault. This usually takes a few minutes. Nothing in it can be opened or restored. You will get an email when it is done.</string>
+    <string name="vault_deleting_slow_title">Still finishing</string>
+    <string name="vault_deleting_slow_body">Your vault can no longer be opened, but VettID has not finished deleting it yet. Check back later.</string>
+    <string name="vault_deleting_check_again">Check again</string>
+    <string name="vault_deleting_still">Not finished yet. Try again later.</string>
+    <string name="vault_deleting_unreachable">VettID couldn\'t be reached. Check your connection and try again.</string>
+    <string name="vault_deleting_account_site">Open the account site</string>
     <!-- Release R (ANDROID-PLAN 0.1.40, VAULT-MESSAGING 0.33.0 §11.14.6): draft texts for the owner's wording. -->
     <string name="recover_not_offered">This vault\'s release does not offer recovery.</string>
     <string name="onboarding_open_title">Your PIN and your password</string>

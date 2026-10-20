@@ -51,6 +51,17 @@ class FakeReleaseUpdates(offer: ReleaseUpdateOffer? = null) : ReleaseUpdateRepos
         generations += generation
     }
 
+    override fun returnToPrevious(pin: String, generation: Int?): Boolean {
+        calls += "return:$pin"
+        generations += generation
+        return true
+    }
+
+    override fun close() {
+        calls += "close"
+        progress.value = null
+    }
+
     override fun finish() {
         calls += "finish"
         progress.value = null
