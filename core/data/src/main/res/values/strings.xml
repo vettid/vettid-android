@@ -192,5 +192,30 @@
     <string name="data_feed_location_shared">%1$s shared a location</string>
     <string name="data_feed_location_request">%1$s asks for your location</string>
     <string name="data_feed_wallet_signed">A wallet transaction was signed</string>
+    <!-- ANDROID-PLAN 0.1.52 §4 "Event titles" (approved by the owner 2026-10-19) -->
+    <string name="data_feed_pin_changed">Your PIN was changed</string>
+    <string name="data_feed_secret_renewed">Your phone now uses a new secret for your vault</string>
+    <string name="data_feed_credential_recovered">Your credential was restored from its backup</string>
+    <string name="data_feed_recovery_device_paired">Your new phone was connected to your vault</string>
+    <string name="data_feed_recovery_completed">Recovery finished: your vault is on your new phone</string>
+    <string name="data_feed_recovery_attempt_someone">Someone tried to recover your vault (attempt %1$d of %2$d)</string>
+    <string name="data_feed_recovery_attempt_someone_any">Someone tried to recover your vault</string>
+    <string name="data_feed_recovery_attempt_recovered">Your vault was recovered (attempt %1$d of %2$d)</string>
+    <string name="data_feed_recovery_attempt">Recovery attempt %1$d of %2$d</string>
+    <string name="data_feed_recovery_attempt_any">Recovery attempt</string>
+    <string name="data_feed_change_required_password">Choose a stronger password to keep recovery on</string>
+    <string name="data_feed_change_required_password_body">Your password is too weak for recovery. Recovery stays off until you change it.</string>
+    <string name="data_feed_change_required">Change your PIN or password to turn recovery back on</string>
+    <string name="data_feed_change_required_body">Recovery attempts were used. A change gives you 10 new attempts.</string>
+    <string name="data_feed_counter_unavailable">Your vault cannot check its recovery attempts</string>
+    <!-- VAULT-MESSAGING 0.50.0 rollback (owner decisions of 2026-10-20; approved) -->
+    <string name="data_feed_recovery_rollback">Your vault was given an older recovery record</string>
+    <string name="data_feed_recovery_rollback_body">A host may have served an older copy of your vault\'s recovery record, one on which recovery attempts had already been used. Your vault moved past it. If you did not try to recover your vault, change your PIN and your password now, and contact VettID.</string>
+    <string name="data_feed_rotation_failed">Your vault could not update its keys</string>
+    <string name="data_feed_rotation_failed_body">Your connections still know your old keys. VettID will offer the update again.</string>
+    <string name="data_feed_rotate_conflict">%1$s: verify again</string>
+    <string name="data_feed_rotate_conflict_body">This connection\'s vault announced two different new keys. That can mean someone holds an old copy of their vault. Nothing is sent or received until you check.</string>
+    <string name="data_feed_leash_item_used">An agent used %1$s</string>
+    <string name="data_feed_leash_item_used_any">An agent used an item</string>
     <string name="data_feed_unknown">Activity: %1$s</string>
 </resources>

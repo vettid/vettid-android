@@ -14,7 +14,7 @@ import java.time.Instant
  * a History export file (ANDROID-PLAN 0.1.17).
  */
 enum class AuditCategory(val id: String, val prefixes: List<String>) {
-    /** Unlocks and owner checks. */
+    /** Unlocks and daily checks. */
     VAULT_ACCESS("unlocks", listOf("vault", "owner_check")),
 
     /** 0.1.17: `audit` (`audit.exported`, a History export) belongs here. */

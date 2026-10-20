@@ -86,11 +86,22 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
             icon = categoryIcon(e.category),
             colors = com.vettid.core.ui.theme.categoryColor(categoryHue(e.category)),
         )
-        CenteredTitle(HistoryText.title(e.kind), Modifier.testTag("history_entry_title"))
+        val itemName = AuditKinds.itemOf(e.kind, e.ref)?.let { state.itemName }
+        val removedDevice = stringResource(R.string.history_device_removed)
+        val deviceName = state.deviceName ?: removedDevice.takeIf { state.devicesKnown && e.deviceId != null }
+        CenteredTitle(
+            HistoryText.title(e.kind, e.ref, EntryNames(state.connectionName, deviceName, itemName)),
+            Modifier.testTag("history_entry_title"),
+        )
+        // ANDROID-PLAN 0.1.52 §4 "Event titles": the detail lines.
+        val details = HistoryText.details(e.kind, e.ref, state.outcome)
         DetailCard(Modifier.padding(horizontal = Spacing.s)) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
                 Field(R.string.history_detail_when, e.at?.let { Times.full(it) } ?: stringResource(R.string.history_detail_unknown_time))
                 Field(R.string.history_detail_category, stringResource(AuditKinds.categoryLabel(e.category)))
+                if (details.isNotEmpty()) {
+                    Field(R.string.history_detail_details, details.joinToString("\n"), Modifier.testTag("history_entry_details"))
+                }
                 e.connectionId?.let { id ->
                     Field(R.string.history_detail_connection, state.connectionName ?: stringResource(R.string.history_connection_removed))
                     if (state.connectionExists) {
