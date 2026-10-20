@@ -75,6 +75,11 @@ class FeedEventTitlesTest {
             FeedKinds.supporting(item("identity.rotate_conflict", connectionId = "c1"), names),
         )
         assertNull(FeedKinds.supporting(item("recovery.counter_unavailable"), names))
+        // The rollback notification's approved second line.
+        assertEquals(
+            FeedText(R.string.data_feed_recovery_rollback_body),
+            FeedKinds.supporting(item("recovery.generation_closed", "4/rollback", "urgent"), names),
+        )
     }
 
     /** Decision 8: "An agent used <item>" for a run and a proxy; without details (Names only), no item name. */

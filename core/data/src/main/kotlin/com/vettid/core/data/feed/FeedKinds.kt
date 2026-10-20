@@ -352,6 +352,7 @@ object FeedKinds {
         )
         "identity.rotation_failed" -> FeedText(R.string.data_feed_rotation_failed_body)
         "identity.rotate_conflict" -> FeedText(R.string.data_feed_rotate_conflict_body)
+        "recovery.generation_closed" -> FeedText(R.string.data_feed_recovery_rollback_body)
         else -> null
     }
 

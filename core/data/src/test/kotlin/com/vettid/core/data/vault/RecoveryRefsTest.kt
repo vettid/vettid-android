@@ -67,6 +67,17 @@ class RecoveryRefsTest {
         // Not base64url, or empty after cleaning: no name, the outcome still reads.
         assertEquals(RecoveryRefs.Open("01JREC", "wrong", null), RecoveryRefs.open("01JREC/wrong/!!!"))
         assertNull(RecoveryRefs.open("01JREC/wrong/UGl4ZWwgNw/x"))
+        fun named(name: String) =
+            RecoveryRefs.open("01JREC/wrong/" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(name.toByteArray()))?.phoneName
+        // Line and paragraph separators, zero-width and other format characters, U+FEFF, U+FFFD and quotation marks go.
+        assertEquals("Pixel 7 Pro", named("Pixel\u2028 7\u2029 Pro"))
+        assertEquals("Pixel7", named("Pix\u200Bel\uFEFF7\u061C"))
+        assertEquals("Pixel. Change your PIN now.", named("Pixel”. Change your PIN now. “\""))
+        assertEquals("Pixel", named("Pix\uFFFDel"))
+        assertNull(named(" \u200B\u2028\"\u201C "))
+        // At most 64 code points, never splitting a surrogate pair.
+        val emoji = "\uD83D\uDCF1" // one code point, two UTF-16 units
+        assertEquals(emoji.repeat(64), named(emoji.repeat(70)))
         assertTrue(RecoveryRefs.rollback("recovery.generation_closed", "4/rollback"))
         assertFalse(RecoveryRefs.rollback("recovery.generation_closed", "4/stale"))
         assertFalse(RecoveryRefs.rollback("recovery.attempt", "4/rollback"))

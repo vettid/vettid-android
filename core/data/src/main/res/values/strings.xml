@@ -210,6 +210,7 @@
     <string name="data_feed_counter_unavailable">Your vault cannot check its recovery attempts</string>
     <!-- VAULT-MESSAGING 0.50.0 rollback (owner decisions of 2026-10-20; approved) -->
     <string name="data_feed_recovery_rollback">Your vault was given an older recovery record</string>
+    <string name="data_feed_recovery_rollback_body">A host may have served an older copy of your vault\'s recovery record, one on which recovery attempts had already been used. Your vault moved past it. If you did not try to recover your vault, change your PIN and your password now, and contact VettID.</string>
     <string name="data_feed_rotation_failed">Your vault could not update its keys</string>
     <string name="data_feed_rotation_failed_body">Your connections still know your old keys. VettID will offer the update again.</string>
     <string name="data_feed_rotate_conflict">%1$s: verify again</string>

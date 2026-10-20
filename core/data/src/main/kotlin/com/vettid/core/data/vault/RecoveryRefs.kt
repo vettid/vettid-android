@@ -67,22 +67,35 @@ object RecoveryRefs {
         return Open(p[0], p[1], p.getOrNull(2)?.let { phoneName(it) })
     }
 
-    /** The name's UTF-8 from base64url (no padding), without control or direction-changing characters; null if empty. */
+    /**
+     * The name's UTF-8 from base64url (no padding), cleaned for display (ANDROID-PLAN 0.1.52 §4 "Event titles"): without
+     * control characters, Unicode format characters (category Cf: direction controls, ALM, zero-width characters,
+     * U+FEFF), line and paragraph separators, U+FFFD and the quotation marks “ ” " (a name must not close the quote and
+     * fake a sentence after it); trimmed, and at most 64 code points. Null if nothing is left.
+     */
     private fun phoneName(b64: String): String? {
         val bytes = try {
             Base64.getUrlDecoder().decode(b64)
         } catch (_: IllegalArgumentException) {
             return null
         }
-        val text = String(bytes, Charsets.UTF_8)
-        return text.filterNot { Character.isISOControl(it) || it in BIDI || it == '\uFFFD' }.trim()
-            .take(MAX_NAME_CHARS).ifEmpty { null }
+        val kept = String(bytes, Charsets.UTF_8).codePoints().filter { !hidden(it) }.toArray()
+        val trimmed = String(kept, 0, kept.size).trim()
+        val capped = trimmed.codePoints().limit(MAX_NAME_CODE_POINTS.toLong()).toArray()
+        return String(capped, 0, capped.size).trim().ifEmpty { null }
     }
 
-    /** Embedding, override and isolate controls: a name must not reorder the text around it. */
-    private val BIDI = setOf(
-        '\u200E', '\u200F', '\u202A', '\u202B', '\u202C', '\u202D', '\u202E', '\u2066', '\u2067', '\u2068', '\u2069',
-    )
+    private fun hidden(cp: Int): Boolean {
+        val type = Character.getType(cp)
+        return Character.isISOControl(cp) || cp == REPLACEMENT || cp in QUOTES ||
+            type == Character.FORMAT.toInt() || type == Character.LINE_SEPARATOR.toInt() ||
+            type == Character.PARAGRAPH_SEPARATOR.toInt()
+    }
+
+    private const val REPLACEMENT = 0xFFFD
+
+    /** “ ” and ". */
+    private val QUOTES = setOf(0x201C, 0x201D, 0x22)
 
     /** The open outcomes that counted an attempt; `busy` and `wrong_again` did not, so no attempt shows them. */
     val COUNTED = setOf("wrong", "attempt_lost", "quiet", "wait", "exhausted", "closed")
@@ -154,7 +167,7 @@ object RecoveryRefs {
     const val KIND_OPEN = "recovery.open"
     private const val ATTEMPT_PARTS = 4
     private const val OPEN_PARTS_NAMED = 3
-    private const val MAX_NAME_CHARS = 64
+    private const val MAX_NAME_CODE_POINTS = 64
     private const val CLOSURE_PARTS_UNCONFIRMED = 3
     private const val SOURCE_COUNTER = "counter"
     private const val UNCONFIRMED = "unconfirmed"
