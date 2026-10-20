@@ -574,7 +574,14 @@ class VaultManager(
                 session?.device?.holdEvents()
             }
 
-            override suspend fun endHold(deliver: Boolean): List<VaultMessage> = session?.device?.endHold(deliver).orEmpty()
+            override suspend fun endHold(deliver: Boolean): List<VaultMessage> {
+                val d = session?.device ?: return emptyList()
+                val out = d.endHold(deliver)
+                if (!d.holdingEvents && d.leftOnRelay > 0) {
+                    android.util.Log.i("VaultManager", "${d.leftOnRelay} events left on the relay before the open")
+                }
+                return out
+            }
 
             override suspend fun startCollecting() {
                 val d = session?.device ?: return
@@ -585,7 +592,11 @@ class VaultManager(
             }
 
             override fun pauseAgain() {
-                if (relayPaused) session?.device?.stop() else pauseRelay()
+                // Through pauseRelay, which keeps the connection while a lock is pending (its answer and `vault.locking`
+                // come over it) and pauses it once that lock is confirmed; and which leaves a phase that is not Locked
+                // (unreachable, starting) to the notification service, which pauses once the phase is known to be Locked.
+                this@VaultManager.relayPaused = false
+                pauseRelay()
             }
 
             override suspend fun takeState(events: List<VaultMessage>) {
@@ -2832,12 +2843,18 @@ class VaultManager(
         // Requests before the app opens wait for their answers over this connection (OpeningWindow): paused, if the
         // phone is still locked, when they are done.
         if (phaseFlow.value != AppPhase.Locked || relayPaused || opening.deferPause()) return
-        // A lock is on its way: the vault's answer to it, and its `vault.locking`, are collected over this
-        // connection. It is paused when the lock is confirmed (below, in init).
-        pauseWanted = lockKeeper.pending
-        val d = session?.device?.takeUnless { pauseWanted } ?: return
-        relayPaused = true
-        d.stop()
+        when (RelayPause.step(locked = true, paused = false, lockPending = lockKeeper.pending)) {
+            RelayPause.Step.NONE -> Unit
+            // A lock is on its way: the vault's answer to it, and its `vault.locking`, are collected over this
+            // connection. It is paused when the lock is confirmed (below, in init).
+            RelayPause.Step.AFTER_LOCK -> pauseWanted = true
+            RelayPause.Step.STOP -> {
+                pauseWanted = false
+                val d = session?.device ?: return
+                relayPaused = true
+                d.stop()
+            }
+        }
     }
 
     override fun resumeRelay() {

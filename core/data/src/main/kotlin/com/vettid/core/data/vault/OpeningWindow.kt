@@ -19,10 +19,16 @@ import kotlinx.coroutines.withContext
  *
  * At its end, by the phase then:
  * - open ([AppPhase.Unlocked], or a [AppPhase.Setup] stage): the held events are handed on as if they came now;
- * - still locked (a lock asked for in the window): only the vault's state is taken from them ([Port.takeState]: a lock
- *   notice, the owner check, a replacement), as while a lock is pending; the lists are read again at the next unlock.
- *   The relay is closed again if it was paused, or if a pause was asked for in the window;
- * - anything else (signed out, a wipe): they are dropped.
+ * - not open (still locked: a lock asked for in the window; or not known: unreachable, starting): the relay is paused
+ *   again, as [VaultManager.pauseRelay] decides (a pending lock keeps it until confirmed), if it was paused or a pause
+ *   was asked for in the window; then the vault's state is taken from the held events ([Port.takeState]: a lock
+ *   notice, the owner check, a replacement, the credential alarm);
+ * - signed out (a wipe): they are dropped.
+ *
+ * Only the vault's state events are held ([com.vettid.core.vault.VaultDevice.HELD_TYPES]); every other event (messages,
+ * feed items, requests, grants, `sync.event`) is left on the relay, unacked and unseen, and handled when the relay
+ * delivers it again after the window: nothing is lost if the phone stays locked or the process ends, and nothing is
+ * handed to the lists while it is locked.
  */
 internal class OpeningWindow(private val port: Port) {
     /** What the window needs of the vault manager and the device. */
@@ -41,7 +47,10 @@ internal class OpeningWindow(private val port: Port) {
         /** Starts the collection for the window (the relay stays marked paused: the open resumes it). */
         suspend fun startCollecting()
 
-        /** Closes the relay again after a window that did not open, when it was paused or a pause was asked for in it. */
+        /**
+         * Pauses the relay again after a window that did not open, when it was paused or a pause was asked for in it: as
+         * [VaultManager.pauseRelay] does (not while a lock is pending: its answer and `vault.locking` come over it).
+         */
         fun pauseAgain()
 
         /** What the vault's state needs of events held while the phone stayed locked. */
@@ -82,15 +91,43 @@ internal class OpeningWindow(private val port: Port) {
             if (depth > 0) false to false else true to pauseAsked.also { pauseAsked = false }
         }
         val p = port.phase
-        val opened = opens(p)
-        val held = port.endHold(deliver = opened)
-        if (!last || opened || p != AppPhase.Locked) return
-        port.takeState(held)
+        if (!last || opens(p)) {
+            port.endHold(deliver = last)
+            return
+        }
+        // Not opened. Signed out (a wipe): nothing of the vault is kept, and nothing is left to pause.
+        if (p == AppPhase.SignedOut) {
+            port.endHold(deliver = false)
+            return
+        }
+        // Still locked, or not known (unreachable, starting): the relay first, as the phase wants it (a pending lock keeps
+        // it until its confirmation), then the held state events, before anything collected after them.
         if (wasPaused || asked) port.pauseAgain()
+        port.takeState(port.endHold(deliver = false))
     }
 
     companion object {
         /** Whether events may be handed on in [phase]: the vault is open on this phone. */
         fun opens(phase: AppPhase): Boolean = phase == AppPhase.Unlocked || phase is AppPhase.Setup
+    }
+}
+
+/** What a pause of the relay asked for while the vault is locked does ([VaultManager.pauseRelay]). */
+internal object RelayPause {
+    enum class Step {
+        /** Nothing: the phase is not Locked, or the relay is already paused. */
+        NONE,
+
+        /** Not yet: a lock is pending, and its answer and `vault.locking` come over the relay; paused once it is confirmed. */
+        AFTER_LOCK,
+
+        /** The collection stops. */
+        STOP,
+    }
+
+    fun step(locked: Boolean, paused: Boolean, lockPending: Boolean): Step = when {
+        !locked || paused -> Step.NONE
+        lockPending -> Step.AFTER_LOCK
+        else -> Step.STOP
     }
 }

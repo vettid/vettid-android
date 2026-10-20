@@ -1097,29 +1097,62 @@ class VaultDevice private constructor(
             found
         }
 
-    /** Events collected while [holdEvents] is in force, oldest first; handed on or given back by [endHold]. */
+    /**
+     * State events ([HELD_TYPES]) collected while [holdEvents] is in force, oldest first; handed on or given back by
+     * [endHold]. Every other event is left on the relay meanwhile ([leaveForLater]).
+     */
     private val held = ArrayDeque<VaultMessage>()
 
     /** How many [holdEvents] are in force (guarded by [inbox]). */
     private var holds = 0
 
+    /** Events left on the relay during the current hold (guarded by [inbox]); for the caller's log. */
+    private var leftCount = 0
+
     /** Whether events are being held back now ([holdEvents]). */
     val holdingEvents: Boolean get() = synchronized(inbox) { holds > 0 }
 
     /**
+     * How many events the last hold to end left on the relay (redelivered after the relay's visibility timeout, and
+     * handled then as any event).
+     */
+    @Volatile
+    var leftOnRelay: Int = 0
+        private set
+
+    /**
      * Holds back every event the collection brings from now on: none reaches [events] or the inbox until [endHold].
      * Answers to requests ([request], [op]) and the session's own messages (tokens, rekeys, `device.paired`) are handled
-     * as always. For the app's opening of a vault that is still locked on this phone: the requests sent before the app
-     * opens get their answers, and nothing else the vault sent is handed on while it is locked here.
+     * as always. The vault's state events ([HELD_TYPES], at most [HELD_MAX]) are kept here; every other event (messages,
+     * feed items, requests, grants, `sync.event`) is not acked and stays on the relay, unseen, so that it is handled when
+     * the relay delivers it again, after the hold, whatever happens to this process. For the app's opening of a vault
+     * that is still locked on this phone: the requests sent before the app opens get their answers, nothing else the
+     * vault sent is handed on while it is locked here, and nothing is lost.
      */
     fun holdEvents() {
-        synchronized(inbox) { holds++ }
+        synchronized(inbox) {
+            if (holds == 0) leftCount = 0
+            holds++
+        }
     }
 
     /**
-     * Ends one [holdEvents]. When it was the last one: with [deliver], the held events are handed on in the order they
-     * came, ahead of anything collected after them, and nothing is returned; without it, they are handed on to nobody
-     * and returned to the caller. While another hold is in force, nothing changes and nothing is returned.
+     * Whether an event of [type] is left on the relay now: during a hold, every type but the state types, and those too
+     * once [HELD_MAX] are held (none is ever evicted).
+     */
+    private fun leaveForLater(type: String): Boolean = synchronized(inbox) {
+        if (holds == 0) return@synchronized false
+        val leave = type !in HELD_TYPES || held.size >= HELD_MAX
+        if (leave) leftCount++
+        leave
+    }
+
+    /**
+     * Ends one [holdEvents]. When it was the last one: with [deliver], the held state events are handed on in the order
+     * they came, ahead of anything collected after them, and nothing is returned; without it, they are handed on to
+     * nobody and returned to the caller (which takes the vault's state from them). While another hold is in force,
+     * nothing changes and nothing is returned. At most [HELD_MAX] (the events flow's buffer) are held, so none is dropped
+     * on its way out.
      */
     suspend fun endHold(deliver: Boolean): List<VaultMessage> = lock.withLock {
         // Under the device's lock, which every collected message is handled under: no message can come between the
@@ -1128,6 +1161,7 @@ class VaultDevice private constructor(
             if (holds == 0) return@withLock emptyList()
             holds--
             if (holds > 0) return@withLock emptyList()
+            leftOnRelay = leftCount
             val all = held.toList()
             held.clear()
             if (deliver) all.forEach { addToInbox(it) }
@@ -1146,9 +1180,9 @@ class VaultDevice private constructor(
 
     private fun publish(m: VaultMessage) {
         synchronized(inbox) {
+            // During a hold only what [leaveForLater] let through reaches here (and a sealed `vault.enrolled`): kept.
             if (holds > 0) {
                 held.addLast(m)
-                while (held.size > HELD_MAX) held.removeFirst()
                 return
             }
             addToInbox(m)
@@ -1173,6 +1207,11 @@ class VaultDevice private constructor(
             st.seen.remove(m.msgId)
             save()
             throw LeaveUnacked(e.message ?: "early").apply { initCause(e) }
+        } catch (e: LeftForLater) {
+            // An event during a hold ([holdEvents]): neither seen nor acked, so the relay delivers it again after the hold.
+            st.seen.remove(m.msgId)
+            save()
+            throw LeaveUnacked("held").apply { initCause(e) }
         } catch (_: CryptoException) {
             // dropped (§13.6: a message that does not verify changes nothing)
         } catch (_: AttestationException) {
@@ -1233,6 +1272,9 @@ class VaultDevice private constructor(
         }
         noteVaultTime(inner.ts)
         if (st.seenInner.containsKey(inner.id)) return
+        // During a hold, an event (not an answer, not the session's own messages) is left on the relay: nothing of it is
+        // recorded, so it is handled in full when it comes again.
+        if (inner.re == null && inner.type !in SESSION_TYPES && leaveForLater(inner.type)) throw LeftForLater()
         st.seenInner[inner.id] = t.toEpochMilli()
         prune(st.seenInner, t)
         when (inner.type) {
@@ -1262,6 +1304,9 @@ class VaultDevice private constructor(
         }
         maintain(t)
     }
+
+    /** An event left on the relay during a hold ([leaveForLater]). */
+    private class LeftForLater : Exception("left for later")
 
     /**
      * `device.pair.rejected` (§6.7, 0.10.5): stop waiting, drop the handshake's epoch
@@ -1671,8 +1716,22 @@ class VaultDevice private constructor(
         const val CODE_OWNER_CHECK_REQUIRED = "owner_check_required"
         private const val INBOX_MAX = 500
 
-        /** At most this many events are held back ([holdEvents]); beyond it the oldest go. */
-        private const val HELD_MAX = 500
+        /**
+         * At most this many state events are kept during a hold ([holdEvents]), the events flow's buffer, so that handing
+         * them on drops none; beyond it they too stay on the relay. None is ever evicted.
+         */
+        private const val HELD_MAX = EVENT_BUFFER
+
+        /**
+         * The vault's state events, kept during a hold: their whole handling is the app's state (the lock notice, the
+         * owner check's hold, a replacement, the credential alarm), taken even while the phone stays locked. Everything
+         * else, `sync.event` included (it also feeds the lists), stays on the relay until the hold ends.
+         */
+        val HELD_TYPES = setOf("vault.locking", "vault.held", "device.unlinked", "credential.alarm")
+
+        /** The session's own messages, handled as they come whatever is held. */
+        private val SESSION_TYPES =
+            setOf("device.paired", TYPE_PAIR_REJECTED, "relay.token.issued", "relay.token.refresh", "identity.rotate")
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
 

@@ -2880,6 +2880,15 @@ class VaultDeviceTest {
         }
     }
 
+    /** Whether the relay saw [msgId] acked within a few seconds (other acks may come first). */
+    private fun ackedSoon(msgId: String): Boolean {
+        val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < until) {
+            if (acked.poll(100, TimeUnit.MILLISECONDS) == msgId) return true
+        }
+        return false
+    }
+
     /** Takes the device's next request, checks its [type], and queues the vault's answer in the device's own mailbox. */
     private fun answerByMailbox(v: FakeVault, type: String, body: String): Inner {
         val req = v.open(nextDeposit().second)
@@ -2892,7 +2901,8 @@ class VaultDeviceTest {
      * The unlock's owner check on a phone whose notification service closed the relay while the vault was locked: with the
      * collection stopped, the answer waits in the mailbox unread and the request ends with "no response" after its
      * retries (the 90 s on a phone). Started for the window before the app opens, with the events held back, the same
-     * request is answered at once, and nothing the vault sent besides reaches the app until the hold ends.
+     * request is answered at once. A message from the vault meanwhile is not handed on, not acked and not seen: it stays
+     * on the relay and is handled in full when the relay delivers it again after the open.
      */
     @Test
     fun requestsBeforeTheOpenAreAnsweredWhileTheEventsAreHeld() = runBlocking<Unit> {
@@ -2913,19 +2923,25 @@ class VaultDeviceTest {
             // The window: events held, the collection started.
             d.holdEvents()
             assertTrue(d.holdingEvents)
-            queued.add(v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"held","sent_at":"x"}"""))
+            val message = v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"held","sent_at":"x"}""")
+            queued.add(message)
             d.start(scope)
             val read = async(Dispatchers.IO) { api.status() }
             answerByMailbox(v, "vault.status", status)
             assertEquals("due", read.await().ownerCheck!!.state)
-            // Nothing of the vault's events reached the app meanwhile.
+            // Nothing of the vault's events reached the app meanwhile, and the message was not acked.
             assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
                 runBlocking { d.awaitEvent("message.new", java.time.Duration.ofMillis(500)) }
             }
-            // The app opened: handed on, in order.
+            assertFalse(acked.contains(message.msgId))
+            // The app opened: nothing was kept in memory for it.
             assertEquals(emptyList<VaultMessage>(), d.endHold(deliver = true))
             assertFalse(d.holdingEvents)
+            assertEquals(1, d.leftOnRelay)
+            // The relay delivers it again (after its visibility timeout): handled now, and acked.
+            queued.add(message)
             assertEquals("held", VaultJson.str(d.awaitEvent("message.new", java.time.Duration.ofSeconds(5)).body, "text"))
+            assertTrue(ackedSoon(message.msgId))
             d.stop()
             serveMailbox = false
             scope.cancel()
@@ -2934,10 +2950,11 @@ class VaultDeviceTest {
 
     /**
      * Release R's cancel: the owner check (UTKs, the check, its ack) answered over the collection the window started; the
-     * phone stayed locked (a lock came meanwhile), so the held events go back to the caller and to nobody else.
+     * phone stayed locked (a lock came meanwhile). The held state event goes back to the caller and to nobody else; the
+     * feed item stayed on the relay and arrives, in full, at the next delivery (the phone's next open).
      */
     @Test
-    fun anOwnerCheckInTheWindowIsAnsweredAndHeldEventsOfALockedPhoneAreHandedToNobody() = runBlocking<Unit> {
+    fun anOwnerCheckInTheWindowIsAnsweredAndAPhoneThatStaysLockedLosesNothing() = runBlocking<Unit> {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this)
             val api = VaultApi(d)
@@ -2949,7 +2966,9 @@ class VaultDeviceTest {
             d.start(scope)
             val seen = java.util.Collections.synchronizedList(mutableListOf<VaultMessage>())
             val watcher = scope.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { d.events.collect { seen += it } }
-            queued.add(v.seal("feed.event", """{"item_id":"f1","kind":"message.received","seq":1}"""))
+            val feed = v.seal("feed.event", """{"item_id":"f1","kind":"message.received","seq":1}""")
+            queued.add(feed)
+            queued.add(v.seal("vault.locking", """{"reason":"member"}"""))
             val check = async(Dispatchers.IO) { api.ownerCheck("975310", "password one") }
             val utk = KemPrivateKey.generate()
             answerByMailbox(
@@ -2966,19 +2985,38 @@ class VaultDeviceTest {
             assertEquals(emptyList<VaultMessage>(), d.endHold(deliver = false)) // the inner end: still held
             assertTrue(d.holdingEvents)
             val back = d.endHold(deliver = false)
-            assertEquals(listOf("feed.event"), back.map { it.type })
+            assertEquals(listOf("vault.locking"), back.map { it.type })
             assertFalse(d.holdingEvents)
-            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
-                runBlocking { d.awaitEvent("feed.event", java.time.Duration.ofMillis(300)) }
-            }
+            assertFalse(acked.contains(feed.msgId))
             assertEquals(emptyList<VaultMessage>(), seen.toList())
-            // After the hold, events flow as before.
-            queued.add(v.seal("message.new", """{"connection_id":"c1","message_id":"m10","direction":"in","text":"later","sent_at":"x"}"""))
-            assertEquals("later", VaultJson.str(d.awaitEvent("message.new", java.time.Duration.ofSeconds(5)).body, "text"))
+            // The relay delivers the feed item again: handed on and acked like any event.
+            queued.add(feed)
+            assertEquals("f1", VaultJson.str(d.awaitEvent("feed.event", java.time.Duration.ofSeconds(5)).body, "item_id"))
+            assertTrue(ackedSoon(feed.msgId))
             watcher.cancel()
             d.stop()
             serveMailbox = false
             scope.cancel()
+        }
+    }
+
+    /**
+     * The hold keeps at most the events flow's buffer of state events, and never evicts one: beyond it they too stay on the
+     * relay (redelivered later), and every event that is not a state event stays there from the first.
+     */
+    @Test
+    fun aHoldNeverEvictsAStateEvent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            d.holdEvents()
+            val kept = (1..256).map { i -> v.seal("vault.held", """{"deadline":"2026-10-21T00:00:00.000Z","n":$i}""") }
+            kept.forEach { d.handle(it) }
+            assertThrows(LeaveUnacked::class.java) { runBlocking { d.handle(v.seal("device.unlinked", """{"reason":"replaced"}""")) } }
+            assertThrows(LeaveUnacked::class.java) { runBlocking { d.handle(v.seal("sync.event", """{"kind":"feed.updated"}""")) } }
+            val back = d.endHold(deliver = false)
+            assertEquals(256, back.size)
+            assertEquals((1..256).map { "$it" }, back.map { VaultJson.long(it.body, "n").toString() })
+            assertEquals(2, d.leftOnRelay)
         }
     }
 

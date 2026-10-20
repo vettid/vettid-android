@@ -27,6 +27,9 @@ class OpeningWindowTest {
         val state = mutableListOf<VaultMessage>()
         var collecting = !paused
 
+        /** A lock is pending (LockKeeper): a pause waits for its confirmation. */
+        var lockPending = false
+
         override val relayPaused: Boolean get() = paused
 
         override fun holdEvents() {
@@ -49,10 +52,14 @@ class OpeningWindowTest {
             collecting = true
         }
 
+        /** As the vault manager does it: through its pauseRelay ([RelayPause]). */
         override fun pauseAgain() {
             log += "pause"
-            collecting = false
-            paused = true
+            paused = false
+            if (RelayPause.step(phase == AppPhase.Locked, paused, lockPending) == RelayPause.Step.STOP) {
+                collecting = false
+                paused = true
+            }
         }
 
         override suspend fun takeState(events: List<VaultMessage>) {
@@ -103,8 +110,9 @@ class OpeningWindowTest {
             // A lock asked for meanwhile: the phase is not published, the phone stays locked.
         }
         assertEquals(emptyList<VaultMessage>(), port.delivered)
-        assertEquals(listOf(locking, message), port.state) // the lock notice, the owner check, a replacement: state only
-        assertEquals(listOf("hold", "start", "end(false)", "pause"), port.log)
+        assertEquals(listOf(locking, message), port.state) // given back for the state (the device holds state types only)
+        // The relay first, then the held state events: before anything collected after them.
+        assertEquals(listOf("hold", "start", "pause", "end(false)"), port.log)
         assertFalse(port.collecting)
     }
 
@@ -114,7 +122,7 @@ class OpeningWindowTest {
         val w = OpeningWindow(port)
         assertFalse(w.deferPause()) // no window: the pause runs at once
         w.run { assertTrue(w.deferPause()) }
-        assertEquals(listOf("hold", "end(false)", "pause"), port.log)
+        assertEquals(listOf("hold", "pause", "end(false)"), port.log)
 
         // The same pause, then an open: no pause after it (the relay stays up while the vault is open).
         val open = Port(paused = false)
@@ -131,13 +139,53 @@ class OpeningWindowTest {
     fun aFailedOpenStillEndsTheWindow() = runBlocking {
         val port = Port(paused = true)
         val w = OpeningWindow(port)
-        port.held += event("message.new")
+        val locking = event("vault.locking")
+        port.held += locking
         val thrown = runCatching { w.run { error("the check threw") } }
         assertTrue(thrown.isFailure)
         assertFalse(w.open)
         assertEquals(0, port.holds)
         assertEquals(emptyList<VaultMessage>(), port.delivered)
-        assertEquals(listOf("hold", "start", "end(false)", "pause"), port.log)
+        assertEquals(listOf(locking), port.state)
+        assertEquals(listOf("hold", "start", "pause", "end(false)"), port.log)
+    }
+
+    /**
+     * A lock asked for in the window, with the relay paused before it: the relay is not closed while the lock is pending
+     * (its answer and `vault.locking` come over it); the vault manager pauses it once the lock is confirmed.
+     */
+    @Test
+    fun aLockPendingAtTheEndKeepsTheCollectionUntilItIsConfirmed() = runBlocking {
+        val port = Port(paused = true)
+        port.lockPending = true
+        OpeningWindow(port).run { /* the lock overtook the open: the phase stays Locked */ }
+        assertEquals(listOf("hold", "start", "pause", "end(false)"), port.log)
+        assertTrue(port.collecting)
+        assertFalse(port.paused)
+        // Confirmed: pauseRelay runs again (VaultManager's init) and closes it.
+        assertEquals(RelayPause.Step.STOP, RelayPause.step(locked = true, paused = port.paused, lockPending = false))
+        assertEquals(RelayPause.Step.AFTER_LOCK, RelayPause.step(locked = true, paused = false, lockPending = true))
+        assertEquals(RelayPause.Step.NONE, RelayPause.step(locked = false, paused = false, lockPending = false))
+        assertEquals(RelayPause.Step.NONE, RelayPause.step(locked = true, paused = true, lockPending = false))
+    }
+
+    /**
+     * A window that ends neither open nor locked (a refresh found the service unreachable): the held state is taken and
+     * the relay is not left running as paused-but-collecting: unpaused, for the notification service to pause once the
+     * phase is Locked again.
+     */
+    @Test
+    fun aWindowEndingUnreachableTakesTheStateAndHandsTheRelayBack() = runBlocking {
+        val port = Port(paused = true)
+        val held = event("vault.held")
+        OpeningWindow(port).run {
+            port.collected(held)
+            port.phase = AppPhase.Unreachable(FailureKind.NETWORK)
+        }
+        assertEquals(listOf("hold", "start", "pause", "end(false)"), port.log)
+        assertEquals(listOf(held), port.state)
+        assertEquals(emptyList<VaultMessage>(), port.delivered)
+        assertFalse(port.paused) // not marked paused while collecting
     }
 
     @Test
