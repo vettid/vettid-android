@@ -139,6 +139,7 @@
     <string name="unlock_recovery_title">A recovery is in progress</string>
     <string name="unlock_recovery_body">Someone started a recovery of this vault from the account site, so it is locked for this phone. If that was you on a new phone, let it finish there. If it was not you, cancel it now: unlocking here with your PIN cancels the recovery.</string>
     <string name="unlock_recovery_cancel">Cancel the recovery and unlock</string>
+    <string name="unlock_recovery_cancelling">Cancelling the recovery…</string>
     <string name="unlock_rollback_state_title">Your vault\'s state is older than expected</string>
     <string name="unlock_rollback_state_body">The vault\'s stored state is older than state this phone has already seen. Someone may have restored an old copy. Contact VettID support before you continue.</string>
     <string name="unlock_update_refused">The update was refused (%1$s). Your vault stayed on its current release.</string>

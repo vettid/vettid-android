@@ -2091,7 +2091,7 @@ class VaultDeviceTest {
     @Test
     fun afterLostAnswersAChangeGoesWithTheRefreshedBlob() = runBlocking<Unit> {
         withTimeout(60_000) {
-            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(400))
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(800))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
             val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "password one") } }
@@ -2456,7 +2456,7 @@ class VaultDeviceTest {
     @Test
     fun aResetThatEndedWithoutOkStillRefusesWhatWaitedBehindIt() = runBlocking<Unit> {
         withTimeout(30_000) {
-            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(400))
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(800))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3, "key-one")
             val gen = api.credentialGeneration
@@ -2877,6 +2877,108 @@ class VaultDeviceTest {
             assertEquals(6L, d.credentialVersion)
             assertNull(d.credentialKey)
             assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** Takes the device's next request, checks its [type], and queues the vault's answer in the device's own mailbox. */
+    private fun answerByMailbox(v: FakeVault, type: String, body: String): Inner {
+        val req = v.open(nextDeposit().second)
+        assertEquals(type, req.type)
+        queued.add(v.seal(type, body, re = req.id, status = Inner.STATUS_OK))
+        return req
+    }
+
+    /**
+     * The unlock's owner check on a phone whose notification service closed the relay while the vault was locked: with the
+     * collection stopped, the answer waits in the mailbox unread and the request ends with "no response" after its
+     * retries (the 90 s on a phone). Started for the window before the app opens, with the events held back, the same
+     * request is answered at once, and nothing the vault sent besides reaches the app until the hold ends.
+     */
+    @Test
+    fun requestsBeforeTheOpenAreAnsweredWhileTheEventsAreHeld() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(800))
+            val api = VaultApi(d)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            serveMailbox = true
+            d.start(scope)
+            d.stop() // the relay paused while locked
+            val status = """{"vault_id":"${v.vaultId}","state_seq":5,"owner_check":{"state":"due","failures":0,"hold":false}}"""
+            val stalled = async(Dispatchers.IO) { runCatching { api.status() } }
+            answerByMailbox(v, "vault.status", status)
+            assertTrue(stalled.await().exceptionOrNull() is VaultStateException)
+            // Its two resends (same id) are not the next request; its answer is still in the mailbox, drained below.
+            deposits.clear()
+
+            // The window: events held, the collection started.
+            d.holdEvents()
+            assertTrue(d.holdingEvents)
+            queued.add(v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"held","sent_at":"x"}"""))
+            d.start(scope)
+            val read = async(Dispatchers.IO) { api.status() }
+            answerByMailbox(v, "vault.status", status)
+            assertEquals("due", read.await().ownerCheck!!.state)
+            // Nothing of the vault's events reached the app meanwhile.
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("message.new", java.time.Duration.ofMillis(500)) }
+            }
+            // The app opened: handed on, in order.
+            assertEquals(emptyList<VaultMessage>(), d.endHold(deliver = true))
+            assertFalse(d.holdingEvents)
+            assertEquals("held", VaultJson.str(d.awaitEvent("message.new", java.time.Duration.ofSeconds(5)).body, "text"))
+            d.stop()
+            serveMailbox = false
+            scope.cancel()
+        }
+    }
+
+    /**
+     * Release R's cancel: the owner check (UTKs, the check, its ack) answered over the collection the window started; the
+     * phone stayed locked (a lock came meanwhile), so the held events go back to the caller and to nobody else.
+     */
+    @Test
+    fun anOwnerCheckInTheWindowIsAnsweredAndHeldEventsOfALockedPhoneAreHandedToNobody() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.keepCredential("QkxPQg==", 3)
+            serveMailbox = true
+            d.holdEvents()
+            d.holdEvents() // nested: only the last end decides
+            d.start(scope)
+            val seen = java.util.Collections.synchronizedList(mutableListOf<VaultMessage>())
+            val watcher = scope.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { d.events.collect { seen += it } }
+            queued.add(v.seal("feed.event", """{"item_id":"f1","kind":"message.received","seq":1}"""))
+            val check = async(Dispatchers.IO) { api.ownerCheck("975310", "password one") }
+            val utk = KemPrivateKey.generate()
+            answerByMailbox(
+                v, "credential.utk.get",
+                """{"utks":[{"utk_id":"00112233445566cc","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}]}""",
+            )
+            answerByMailbox(
+                v, VaultApi.TYPE_OWNER_CHECK,
+                """{"credential":"TkVX","version":4,"utks":[],"deadline":"2026-10-21T00:00:00.000Z","interval_seconds":86400,"hold":false}""",
+            )
+            answerByMailbox(v, "credential.ack", "{}")
+            assertEquals("2026-10-21T00:00:00.000Z", check.await().deadline)
+            assertEquals(4L, d.credentialVersion)
+            assertEquals(emptyList<VaultMessage>(), d.endHold(deliver = false)) // the inner end: still held
+            assertTrue(d.holdingEvents)
+            val back = d.endHold(deliver = false)
+            assertEquals(listOf("feed.event"), back.map { it.type })
+            assertFalse(d.holdingEvents)
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("feed.event", java.time.Duration.ofMillis(300)) }
+            }
+            assertEquals(emptyList<VaultMessage>(), seen.toList())
+            // After the hold, events flow as before.
+            queued.add(v.seal("message.new", """{"connection_id":"c1","message_id":"m10","direction":"in","text":"later","sent_at":"x"}"""))
+            assertEquals("later", VaultJson.str(d.awaitEvent("message.new", java.time.Duration.ofSeconds(5)).body, "text"))
+            watcher.cancel()
+            d.stop()
+            serveMailbox = false
+            scope.cancel()
         }
     }
 

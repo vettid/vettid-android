@@ -1097,10 +1097,61 @@ class VaultDevice private constructor(
             found
         }
 
+    /** Events collected while [holdEvents] is in force, oldest first; handed on or given back by [endHold]. */
+    private val held = ArrayDeque<VaultMessage>()
+
+    /** How many [holdEvents] are in force (guarded by [inbox]). */
+    private var holds = 0
+
+    /** Whether events are being held back now ([holdEvents]). */
+    val holdingEvents: Boolean get() = synchronized(inbox) { holds > 0 }
+
+    /**
+     * Holds back every event the collection brings from now on: none reaches [events] or the inbox until [endHold].
+     * Answers to requests ([request], [op]) and the session's own messages (tokens, rekeys, `device.paired`) are handled
+     * as always. For the app's opening of a vault that is still locked on this phone: the requests sent before the app
+     * opens get their answers, and nothing else the vault sent is handed on while it is locked here.
+     */
+    fun holdEvents() {
+        synchronized(inbox) { holds++ }
+    }
+
+    /**
+     * Ends one [holdEvents]. When it was the last one: with [deliver], the held events are handed on in the order they
+     * came, ahead of anything collected after them, and nothing is returned; without it, they are handed on to nobody
+     * and returned to the caller. While another hold is in force, nothing changes and nothing is returned.
+     */
+    suspend fun endHold(deliver: Boolean): List<VaultMessage> = lock.withLock {
+        // Under the device's lock, which every collected message is handled under: no message can come between the
+        // held ones and those that follow.
+        val out = synchronized(inbox) {
+            if (holds == 0) return@withLock emptyList()
+            holds--
+            if (holds > 0) return@withLock emptyList()
+            val all = held.toList()
+            held.clear()
+            if (deliver) all.forEach { addToInbox(it) }
+            all
+        }
+        if (!deliver) return@withLock out
+        if (out.isNotEmpty()) inboxVersion.value++
+        out.forEach { eventFlow.tryEmit(it) }
+        emptyList()
+    }
+
+    private fun addToInbox(m: VaultMessage) {
+        inbox.add(m)
+        while (inbox.size > INBOX_MAX) inbox.removeAt(0)
+    }
+
     private fun publish(m: VaultMessage) {
         synchronized(inbox) {
-            inbox.add(m)
-            while (inbox.size > INBOX_MAX) inbox.removeAt(0)
+            if (holds > 0) {
+                held.addLast(m)
+                while (held.size > HELD_MAX) held.removeFirst()
+                return
+            }
+            addToInbox(m)
         }
         inboxVersion.value++
         eventFlow.tryEmit(m)
@@ -1619,6 +1670,9 @@ class VaultDevice private constructor(
         /** §10.1 (0.13.0): the vault is past its owner-check deadline (§3.6.3). */
         const val CODE_OWNER_CHECK_REQUIRED = "owner_check_required"
         private const val INBOX_MAX = 500
+
+        /** At most this many events are held back ([holdEvents]); beyond it the oldest go. */
+        private const val HELD_MAX = 500
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
 
