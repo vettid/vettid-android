@@ -31,7 +31,7 @@ object HistoryText {
         is AuditKinds.Title.Counted -> stringResource(t.res, t.n, t.of)
         is AuditKinds.Title.Named -> {
             val name = when (t.who) {
-                AuditKinds.Who.CONNECTION -> names.connection ?: stringResource(R.string.history_connection_removed)
+                AuditKinds.Who.CONNECTION -> names.connection
                 AuditKinds.Who.DEVICE -> names.device
                 AuditKinds.Who.ITEM -> names.item
             }
@@ -39,10 +39,10 @@ object HistoryText {
         }
     }
 
-    /** A connection without a name reads "Removed connection", as the row does; a device or an item the title's own words. */
+    /** Without the name (gone or not known), the title drops it. */
     private fun named(context: Context, t: AuditKinds.Title.Named, names: EntryNames): String {
         val name = when (t.who) {
-            AuditKinds.Who.CONNECTION -> names.connection ?: context.getString(R.string.history_connection_removed)
+            AuditKinds.Who.CONNECTION -> names.connection
             AuditKinds.Who.DEVICE -> names.device
             AuditKinds.Who.ITEM -> names.item
         }

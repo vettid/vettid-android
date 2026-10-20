@@ -68,6 +68,7 @@ class HistoryEventTitlesTest {
             Triple("recovery.generation_closed", "2/delete", "Recovery ended"),
             Triple("recovery.generation_closed", "2/delete/unconfirmed", "Recovery ended"),
             Triple("recovery.generation_closed", "2/newer", "Recovery attempts reset"),
+            Triple("recovery.generation_closed", "4/stale", "Recovery record replaced"),
             Triple("recovery.presence_unrecorded", null, "Your vault could not record that you were here"),
             Triple("identity.rotation_failed", "recovery", "Key update failed"),
             Triple("connection.request.approved", "p1", "You accepted a connection request"),
@@ -103,11 +104,14 @@ class HistoryEventTitlesTest {
         assertEquals("An agent used GitHub token", title("leash.item.run", "01ITEM", n))
         assertEquals("An agent used GitHub token", title("leash.item.proxy", "01ITEM", n))
         assertEquals("You changed how an agent may use GitHub token", title("leash.item.changed", "01ITEM", n))
-        // Without the name: a connection is "Removed connection", as the row says; the others their own words.
-        assertEquals("Connection with Removed connection paused", title("identity.rotate_conflict"))
+        // Without the name (gone or not known), the title drops it.
+        assertEquals("Connection paused", title("identity.rotate_conflict"))
+        assertEquals("Connection checked and resumed", title("identity.rotate_resolved"))
+        assertEquals("Calls turned off", title("call.permission_off"))
+        assertEquals("Calls turned on", title("call.permission_on"))
         assertEquals("Notifications turned on", title("push.registered", "fcm"))
         assertEquals("Notifications turned off", title("push.unregistered", "app"))
-        assertEquals("Notifications stopped reaching a phone", title("push.token_gone"))
+        assertEquals("Notifications stopped", title("push.token_gone"))
         assertEquals("An agent used an item", title("leash.item.run", "01GONE"))
         assertEquals("You changed how an agent may use an item", title("leash.item.changed"))
         assertEquals("01ITEM", AuditKinds.itemOf("leash.item.run", "01ITEM"))
@@ -132,6 +136,11 @@ class HistoryEventTitlesTest {
             assertEquals(o, listOf(notYou, text), lines("recovery.attempt", "2/3/not_success/counter", AuditKinds.Outcome.Matched(o)))
         }
         assertEquals(emptyList<String>(), lines("recovery.attempt", "garbled", AuditKinds.Outcome.None))
+        assertEquals(listOf("Later successful."), lines("recovery.attempt", "2/3/not_success/counter", AuditKinds.Outcome.LaterSuccessful))
+        assertEquals(
+            listOf("Your vault found an older recovery record and replaced it. If you did not change your PIN or password, contact VettID."),
+            lines("recovery.generation_closed", "4/stale"),
+        )
         assertEquals(listOf("If that was not you, change your password now, and your PIN as well."), lines("recovery.attempts_used", "2/4"))
         assertEquals(listOf("It works with your current PIN and password, with 10 attempts."), lines("recovery.armed", "3"))
         for (r in listOf("pin", "password", "reset")) assertEquals(listOf("Earlier attempts no longer count."), lines("recovery.generation_closed", "2/$r"))
@@ -172,7 +181,8 @@ class HistoryEventTitlesTest {
     @Test
     fun theHiddenKindsAreNotShown() {
         assertTrue(AuditKinds.hidden("recovery.open", "01JREC/wrong"))
-        assertTrue(AuditKinds.hidden("recovery.generation_closed", "4/stale"))
+        // Shown, pending the owner's decision: it can be the only trace of attempts on an older timeline.
+        assertFalse(AuditKinds.hidden("recovery.generation_closed", "4/stale"))
         assertTrue(AuditKinds.hidden("device.unlinked_sent", "01JTRANSFER"))
         assertTrue(AuditKinds.hidden("drop.call_glare", "call1"))
         assertFalse(AuditKinds.hidden("recovery.generation_closed", "4/pin"))
@@ -187,7 +197,7 @@ class HistoryEventTitlesTest {
             AuditRecord("e1", 1, null, "drop.call_glare"),
         )
         val s = HistoryUiState(entries = entries)
-        assertEquals(listOf(5L), s.shown.map { it.seq })
+        assertEquals(listOf(5L, 3L), s.shown.map { it.seq })
         assertEquals(5, s.entries.size)
     }
 
@@ -258,6 +268,22 @@ class HistoryEventTitlesTest {
         )
         val s = settle(entryVm(vault)) { it.outcome != AuditKinds.Outcome.Unknown }
         assertEquals(AuditKinds.Outcome.None, s.outcome)
+    }
+
+    /** The vault wrote the attempt again as `success` (same `at`): the older row says "Later successful.". */
+    @Test
+    fun anAttemptWrittenAgainAsSuccessIsLaterSuccessful() = runTest(main.dispatcher) {
+        val vault = Vault(
+            { AuditPage(listOf(attempt), seq = 30) },
+            {
+                AuditPage(
+                    listOf(entry(25, "recovery.attempt", "2/3/success/counter", 0), attempt, entry(11, "recovery.open", "01JREC/wrong", -40)),
+                    seq = 30,
+                )
+            },
+        )
+        val s = settle(entryVm(vault)) { it.outcome != AuditKinds.Outcome.Unknown }
+        assertEquals(AuditKinds.Outcome.LaterSuccessful, s.outcome)
     }
 
     @Test

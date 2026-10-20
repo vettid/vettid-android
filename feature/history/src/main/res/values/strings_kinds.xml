@@ -165,10 +165,14 @@
     <string name="history_kind_recovery_closed_exhausted">Recovery turned off: all 10 attempts used</string>
     <string name="history_kind_recovery_closed_delete">Recovery ended</string>
     <string name="history_kind_recovery_closed">Recovery attempts reset</string>
+    <!-- Pending the owner's decision (hiding was approved on an incomplete description); draft text. -->
+    <string name="history_kind_recovery_closed_stale">Recovery record replaced</string>
     <string name="history_kind_recovery_presence_unrecorded">Your vault could not record that you were here</string>
     <string name="history_kind_identity_rotation_failed">Key update failed</string>
     <string name="history_kind_rotate_conflict">Connection with %1$s paused</string>
     <string name="history_kind_rotate_resolved">Connection with %1$s checked and resumed</string>
+    <string name="history_kind_rotate_conflict_any">Connection paused</string>
+    <string name="history_kind_rotate_resolved_any">Connection checked and resumed</string>
     <string name="history_kind_connection_request_approved">You accepted a connection request</string>
     <string name="history_kind_connection_request_declined">You declined a connection request</string>
     <string name="history_kind_push_registered">Notifications turned on for %1$s</string>
@@ -176,9 +180,11 @@
     <string name="history_kind_push_unregistered">Notifications turned off for %1$s</string>
     <string name="history_kind_push_unregistered_any">Notifications turned off</string>
     <string name="history_kind_push_token_gone">Notifications stopped reaching %1$s</string>
-    <string name="history_kind_push_token_gone_any">Notifications stopped reaching a phone</string>
+    <string name="history_kind_push_token_gone_any">Notifications stopped</string>
     <string name="history_kind_call_permission_off">Calls from %1$s turned off</string>
     <string name="history_kind_call_permission_on">Calls from %1$s turned on</string>
+    <string name="history_kind_call_permission_off_any">Calls turned off</string>
+    <string name="history_kind_call_permission_on_any">Calls turned on</string>
     <string name="history_kind_leash_item_secret_used">An agent used %1$s</string>
     <string name="history_kind_leash_item_secret_used_any">An agent used an item</string>
     <string name="history_kind_leash_item_changed">You changed how an agent may use %1$s</string>
@@ -200,6 +206,7 @@
     <string name="history_detail_attempt_success">Successful.</string>
     <string name="history_detail_attempt_not_success">Not successful. If this was not you, change your PIN or your password now.</string>
     <string name="history_detail_attempt_no_details">Details not available.</string>
+    <string name="history_detail_attempt_later_success">Later successful.</string>
     <string name="history_detail_outcome_wrong">Wrong PIN or password.</string>
     <string name="history_detail_outcome_attempt_lost">Counted as an attempt, but it did not finish.</string>
     <string name="history_detail_outcome_quiet">Refused: you used your vault in the last 3 days.</string>
@@ -213,6 +220,7 @@
     <string name="history_detail_recovery_closed_backup_off">You turned off the credential backup.</string>
     <string name="history_detail_recovery_closed_exhausted">Change your PIN or your password to turn it back on.</string>
     <string name="history_detail_recovery_closed_delete">Your vault is being deleted.</string>
+    <string name="history_detail_recovery_closed_stale">Your vault found an older recovery record and replaced it. If you did not change your PIN or password, contact VettID.</string>
     <string name="history_detail_recovery_closed_unconfirmed">The service could not confirm this step.</string>
     <string name="history_detail_presence_unrecorded">If this lasts three days, your vault is no longer protected against a recovery started by someone else.</string>
     <string name="history_detail_presence_unrecorded_scaled">If this lasts %1$s, your vault is no longer protected against a recovery started by someone else.</string>

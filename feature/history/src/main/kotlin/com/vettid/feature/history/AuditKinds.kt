@@ -80,8 +80,8 @@ object AuditKinds {
         data class Counted(@param:StringRes val res: Int, val n: Int, val of: Int = RecoveryRefs.ATTEMPTS) : Title
 
         /**
-         * [res] with the name of the entry's connection, device or item ([who]); [anyRes] when that name is not known
-         * (0 for a connection: "Removed connection" then, as the row says).
+         * [res] with the name of the entry's connection, device or item ([who]); [anyRes] when that name is not known or
+         * the connection, device or item is gone (the title drops the name).
          */
         data class Named(@param:StringRes val res: Int, @param:StringRes val anyRes: Int, val who: Who) : Title
     }
@@ -119,19 +119,19 @@ object AuditKinds {
         "backup_off" -> R.string.history_kind_recovery_closed_backup_off
         "exhausted" -> R.string.history_kind_recovery_closed_exhausted
         "delete" -> R.string.history_kind_recovery_closed_delete
+        "stale" -> R.string.history_kind_recovery_closed_stale
         else -> R.string.history_kind_recovery_closed
     }
 
     /**
      * Entries History does not list (ANDROID-PLAN 0.1.52 §4 "Event titles", decision 4): `recovery.open` (its outcome is
-     * the matching attempt's detail), a generation closed as `stale`, `device.unlinked_sent` and `drop.call_glare`. They
-     * stay in the log, in the chain check and in an export.
+     * the matching attempt's detail), `device.unlinked_sent` and `drop.call_glare`. They stay in the log, in the chain check
+     * and in an export. A generation closed as `stale` is shown, pending the owner's decision: it can be the only trace of
+     * attempts on an older timeline a host served.
      */
-    fun hidden(kind: String, ref: String?): Boolean = when (kind) {
-        RecoveryRefs.KIND_OPEN, "device.unlinked_sent", "drop.call_glare" -> true
-        KIND_CLOSED -> RecoveryRefs.closure(ref)?.reason == "stale"
-        else -> false
-    }
+    @Suppress("UNUSED_PARAMETER", "UnusedParameter") // [ref]: a later decision may hide one `stale` case only
+    fun hidden(kind: String, ref: String?): Boolean = kind == RecoveryRefs.KIND_OPEN || kind == "device.unlinked_sent" ||
+        kind == "drop.call_glare"
 
     /** One line of an entry's **Details**. */
     sealed interface Detail {
@@ -153,6 +153,9 @@ object AuditKinds {
 
         /** Not read (yet), or the read failed: no outcome line. */
         data object Unknown : Outcome
+
+        /** The vault wrote this attempt again as `success`: "Later successful." instead of the not-success lines. */
+        data object LaterSuccessful : Outcome
     }
 
     /** The detail lines of ANDROID-PLAN 0.1.52 §4 "Event titles" for the entry of [kind] with [ref]. */
@@ -188,10 +191,11 @@ object AuditKinds {
     private fun attemptDetails(ref: String?, outcome: Outcome): List<Detail> {
         val a = RecoveryRefs.attempt(ref) ?: return emptyList()
         if (a.success) return listOf(Detail.Line(R.string.history_detail_attempt_success))
+        if (outcome == Outcome.LaterSuccessful) return listOf(Detail.Line(R.string.history_detail_attempt_later_success))
         val line = when (outcome) {
             is Outcome.Matched -> outcomeLine(outcome.outcome)
             Outcome.None -> Detail.Line(R.string.history_detail_attempt_no_details)
-            Outcome.Unknown -> null
+            Outcome.Unknown, Outcome.LaterSuccessful -> null
         }
         return listOfNotNull(Detail.Line(R.string.history_detail_attempt_not_success), line)
     }
@@ -215,6 +219,7 @@ object AuditKinds {
             "backup_off" -> R.string.history_detail_recovery_closed_backup_off
             "exhausted" -> R.string.history_detail_recovery_closed_exhausted
             "delete" -> R.string.history_detail_recovery_closed_delete
+            "stale" -> R.string.history_detail_recovery_closed_stale
             else -> return emptyList()
         }
         return listOfNotNull(Detail.Line(first), Detail.Line(R.string.history_detail_recovery_closed_unconfirmed).takeIf { c.unconfirmed })
@@ -233,10 +238,14 @@ object AuditKinds {
 
     /** The titles that name the entry's connection, device or item (ANDROID-PLAN 0.1.52 §4 "Event titles"). */
     private val NAMED: Map<String, Title.Named> = mapOf(
-        "identity.rotate_conflict" to Title.Named(R.string.history_kind_rotate_conflict, 0, Who.CONNECTION),
-        "identity.rotate_resolved" to Title.Named(R.string.history_kind_rotate_resolved, 0, Who.CONNECTION),
-        "call.permission_off" to Title.Named(R.string.history_kind_call_permission_off, 0, Who.CONNECTION),
-        "call.permission_on" to Title.Named(R.string.history_kind_call_permission_on, 0, Who.CONNECTION),
+        "identity.rotate_conflict" to
+            Title.Named(R.string.history_kind_rotate_conflict, R.string.history_kind_rotate_conflict_any, Who.CONNECTION),
+        "identity.rotate_resolved" to
+            Title.Named(R.string.history_kind_rotate_resolved, R.string.history_kind_rotate_resolved_any, Who.CONNECTION),
+        "call.permission_off" to
+            Title.Named(R.string.history_kind_call_permission_off, R.string.history_kind_call_permission_off_any, Who.CONNECTION),
+        "call.permission_on" to
+            Title.Named(R.string.history_kind_call_permission_on, R.string.history_kind_call_permission_on_any, Who.CONNECTION),
         "push.registered" to Title.Named(R.string.history_kind_push_registered, R.string.history_kind_push_registered_any, Who.DEVICE),
         "push.unregistered" to
             Title.Named(R.string.history_kind_push_unregistered, R.string.history_kind_push_unregistered_any, Who.DEVICE),

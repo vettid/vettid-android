@@ -74,7 +74,11 @@ object RecoveryRefs {
      * result maps an attempt's `seq` to its outcome; an attempt without a match is absent.
      */
     fun outcomes(entries: List<AuditRecord>): Map<Long, String> {
-        val attempts = entries.filter { it.kind == KIND_ATTEMPT && it.at != null && attempt(it.ref)?.success == false }
+        val succeeded = succeeded(entries)
+        val attempts = entries.filter { e ->
+            val a = attempt(e.ref)
+            e.kind == KIND_ATTEMPT && e.at != null && a?.success == false && (a.generation to a.n) !in succeeded
+        }
             .sortedWith(compareBy<AuditRecord> { it.at }.thenBy { it.seq })
         val opens = entries.mapNotNull { e ->
             val o = open(e.ref)?.outcome?.takeIf { e.kind == KIND_OPEN && it in COUNTED }
@@ -94,6 +98,19 @@ object RecoveryRefs {
         }
         return out
     }
+
+    /**
+     * Whether [entry], an attempt first written as `not_success`, was written again as `success` among [entries] (the
+     * vault rewrites an attempt the counter later shows succeeded, §11.14.11): History then says "Later successful.".
+     */
+    fun laterSuccessful(entry: AuditRecord, entries: List<AuditRecord>): Boolean {
+        val a = attempt(entry.ref)?.takeIf { entry.kind == KIND_ATTEMPT && !it.success } ?: return false
+        return (a.generation to a.n) in succeeded(entries)
+    }
+
+    private fun succeeded(entries: List<AuditRecord>): Set<Pair<Long, Int>> =
+        entries.filter { it.kind == KIND_ATTEMPT }.mapNotNull { attempt(it.ref) }.filter { it.success }
+            .mapTo(HashSet()) { it.generation to it.n }
 
     const val KIND_ATTEMPT = "recovery.attempt"
     const val KIND_OPEN = "recovery.open"

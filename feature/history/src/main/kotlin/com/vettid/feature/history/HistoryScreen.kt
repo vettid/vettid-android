@@ -612,7 +612,7 @@ private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
     // ANDROID-PLAN 0.1.52 §4 "Event titles": some titles name the connection, device or item.
     val itemName = AuditKinds.itemOf(e.kind, e.ref)?.let { names.items[it] }
     VettIdListRow(
-        title = HistoryText.title(e.kind, e.ref, EntryNames(connection, device, itemName)),
+        title = HistoryText.title(e.kind, e.ref, EntryNames(e.connectionId?.let { names.connections[it] }, device, itemName)),
         supporting = HistoryDevice.supporting(listOf(item, connection, device), stringResource(AuditKinds.categoryLabel(e.category))),
         meta = e.at?.let { Times.short(it) },
         tileIcon = categoryIcon(e.category),

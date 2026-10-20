@@ -4,6 +4,8 @@
 package com.vettid.core.data.vault
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.Instant
@@ -85,6 +87,20 @@ class RecoveryRefsTest {
             open(15, 135, "wait"),
         )
         assertEquals(mapOf(20L to "wrong", 21L to "attempt_lost", 22L to "quiet"), RecoveryRefs.outcomes(entries))
+    }
+
+    /** An attempt the vault wrote again as `success` (same generation and number) takes no outcome and is "later successful". */
+    @Test
+    fun anAttemptWrittenAgainAsSuccessIsNotMatched() {
+        val first = attempt(40, 0, 3)
+        val again = attempt(41, 0, 3, success = true)
+        val other = attempt(42, 20, 4)
+        val entries = listOf(first, again, other, open(43, 0, "wrong"), open(44, 20, "attempt_lost"))
+        assertEquals(mapOf(42L to "attempt_lost"), RecoveryRefs.outcomes(entries))
+        assertTrue(RecoveryRefs.laterSuccessful(first, entries))
+        assertFalse(RecoveryRefs.laterSuccessful(other, entries))
+        assertFalse(RecoveryRefs.laterSuccessful(again, entries))
+        assertFalse(RecoveryRefs.laterSuccessful(first, listOf(first)))
     }
 
     @Test
