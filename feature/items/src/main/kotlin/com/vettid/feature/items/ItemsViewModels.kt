@@ -22,8 +22,10 @@ import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultLimit
+import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -66,7 +68,10 @@ data class ItemsUiState(
 
 /** The Vault list (ANDROID-PLAN §4): every item's metadata, searched and filtered on the phone. */
 @HiltViewModel
-class ItemsViewModel @Inject constructor(private val items: ItemsRepository) : ViewModel() {
+class ItemsViewModel @Inject constructor(
+    private val items: ItemsRepository,
+    private val ownerCheck: OwnerCheckRepository,
+) : ViewModel() {
     private val filter = MutableStateFlow(ItemFilter())
     private val error = MutableStateFlow<FailureKind?>(null)
 
@@ -76,6 +81,12 @@ class ItemsViewModel @Inject constructor(private val items: ItemsRepository) : V
 
     init {
         refresh()
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        viewModelScope.launch {
+            ownerCheck.checkCleared().collect {
+                if (error.value == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+            }
+        }
     }
 
     fun refresh() {

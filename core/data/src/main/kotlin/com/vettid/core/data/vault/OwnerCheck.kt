@@ -1,6 +1,8 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 import java.time.Duration
 import java.time.Instant
 
@@ -156,3 +158,18 @@ private val NOT_SET: StateFlow<Boolean> = kotlinx.coroutines.flow.MutableStateFl
 
 /** Turning the hold off (§3.6.7): [until] at most 30 days ahead, or null. */
 data class HoldOff(val until: Instant?)
+
+/**
+ * Emits each time the vault goes from held or due (§3.6.3) to ok: the check passed, here or on another device, or the
+ * hold otherwise ended. A list that failed with [FailureKind.OWNER_CHECK_REQUIRED] reads again on it, instead of
+ * keeping "Your daily check is due" until the member taps Try again. No view (locked, signed out) changes nothing.
+ */
+fun OwnerCheckRepository.checkCleared(): Flow<Unit> = flow {
+    var held = false
+    ownerCheck.collect { v ->
+        if (v == null) return@collect
+        val now = v.state != OwnerCheckState.OK
+        if (held && !now) emit(Unit)
+        held = now
+    }
+}

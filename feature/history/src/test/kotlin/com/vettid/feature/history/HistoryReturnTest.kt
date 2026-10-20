@@ -21,6 +21,7 @@ import com.vettid.core.data.vault.HistoryExportRepository
 import com.vettid.core.data.vault.HistoryManager
 import com.vettid.core.testing.FakeItems
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.testing.FakeVault
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.vault.AuditEntry
 import com.vettid.core.vault.AuditPage
@@ -137,7 +138,9 @@ class HistoryReturnTest {
                 composable("messages") { Text("Messages") }
                 composable("history") {
                     val vm = viewModel {
-                        HistoryViewModel(createSavedStateHandle(), repo, FakeSocial(), RuntimeEnvironment.getApplication(), FakeItems())
+                        HistoryViewModel(
+                            createSavedStateHandle(), repo, FakeSocial(), RuntimeEnvironment.getApplication(), FakeItems(), FakeVault(),
+                        )
                     }
                     val ex = viewModel { HistoryExportViewModel(Exports, NoDocuments, RuntimeEnvironment.getApplication()) }
                     history = vm
