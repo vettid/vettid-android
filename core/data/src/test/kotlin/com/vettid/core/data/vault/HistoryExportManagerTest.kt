@@ -204,7 +204,8 @@ class HistoryExportManagerTest {
             JsonObject.serializer(),
             """{"devices":[{"id":"d1","kind":"app","name":"Pixel 7"},{"id":"d2","name":""},{"id":"d3"},{"name":"x"}]}""",
         )
-        assertEquals(mapOf("d1" to "Pixel 7"), VaultAuditExportOps.devicesOf(o))
+        // A listed device without a name (the app's own peer) is kept, unnamed: it was not removed.
+        assertEquals(mapOf("d1" to "Pixel 7", "d2" to "", "d3" to ""), VaultAuditExportOps.devicesOf(o))
         assertFalse(VaultAuditExportOps.devicesOf(JsonObject(emptyMap())).isNotEmpty())
     }
 }

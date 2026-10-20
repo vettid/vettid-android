@@ -88,7 +88,7 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
         )
         val itemName = AuditKinds.itemOf(e.kind, e.ref)?.let { state.itemName }
         val removedDevice = stringResource(R.string.history_device_removed)
-        val deviceName = state.deviceName ?: removedDevice.takeIf { state.devicesKnown && e.deviceId != null }
+        val deviceName = state.deviceName ?: removedDevice.takeIf { state.devicesKnown && !state.deviceUnnamed && e.deviceId != null }
         CenteredTitle(
             HistoryText.title(e.kind, e.ref, EntryNames(state.connectionName, deviceName, itemName)),
             Modifier.testTag("history_entry_title"),
@@ -138,8 +138,9 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
                 Field(R.string.history_detail_kind, e.kind, mono = true)
                 e.deviceId?.let { id ->
                     // ANDROID-PLAN 0.1.27: the device's name ("Removed device" once unlisted), "(this phone)" for
-                    // this one; the id stays below. Without the device list, the id alone, as before.
-                    val name = state.deviceName ?: if (state.devicesKnown) stringResource(R.string.history_device_removed) else null
+                    // this one; the id stays below. Without the device list, or listed unnamed, the id alone.
+                    val removed = state.devicesKnown && !state.deviceUnnamed
+                    val name = state.deviceName ?: if (removed) stringResource(R.string.history_device_removed) else null
                     val shown = when {
                         state.thisDevice && name != null -> stringResource(R.string.history_device_this_phone, name)
                         state.thisDevice -> stringResource(R.string.history_device_this_phone_alone)

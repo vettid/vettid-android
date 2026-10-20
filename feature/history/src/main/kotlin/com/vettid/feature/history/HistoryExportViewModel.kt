@@ -219,13 +219,13 @@ class HistoryExportViewModel @Inject constructor(
             context, r.kind, r.ref,
             EntryNames(
                 connection = r.connectionId?.let { c.connectionNames[it] },
-                device = r.deviceId?.let { id -> devices?.get(id) },
+                device = r.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } },
                 item = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] },
             ),
         ),
         category = r.category.id,
         connectionName = r.connectionId?.let { c.connectionNames[it] ?: context.getString(R.string.history_connection_removed) },
-        deviceName = r.deviceId?.let { id -> devices?.let { it[id] ?: context.getString(R.string.history_device_removed) } },
+        deviceName = HistoryDevice.name(r.deviceId, devices, context.getString(R.string.history_device_removed)),
         itemName = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] ?: context.getString(R.string.history_item_deleted) },
     )
 

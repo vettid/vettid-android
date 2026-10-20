@@ -87,11 +87,11 @@ object HistorySigner {
 object HistoryDevice {
     /**
      * The name to show for [deviceId]: null for an entry without a device, or while the device list is not known
-     * ([names] null: nothing rather than calling every device removed); [removed] for a device the list no longer
-     * holds.
+     * ([names] null: nothing rather than calling every device removed) or a listed device without a name; [removed]
+     * for a device the list no longer holds.
      */
     fun name(deviceId: String?, names: Map<String, String>?, removed: String): String? =
-        if (deviceId == null || names == null) null else names[deviceId] ?: removed
+        if (deviceId == null || names == null) null else names[deviceId].let { if (it == null) removed else it.ifEmpty { null } }
 
     /** A row's second line: the item, connection and device names where the entry has them, else [fallback]. */
     fun supporting(parts: List<String?>, fallback: String): String = parts.filterNotNull().joinToString(" · ").ifEmpty { fallback }
