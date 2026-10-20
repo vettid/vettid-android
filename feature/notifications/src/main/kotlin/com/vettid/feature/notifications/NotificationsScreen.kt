@@ -518,7 +518,7 @@ fun FeedRow(
                         supporting,
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (attention) colors.onErrorContainer else colors.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = secondLineMaxLines(item),
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -558,6 +558,14 @@ fun FeedRow(
 }
 
 private val ATTENTION_BAR = 4.dp
+
+/**
+ * How many lines of its second line a row shows (ANDROID-PLAN 0.1.56): up to 3 for an `urgent` item, in Needs attention
+ * and in its day, 1 for every other; a longer line is cut with an ellipsis and shown in full in the detail sheet.
+ */
+internal fun secondLineMaxLines(item: FeedItem): Int = if (item.priority == FeedManager.PRIORITY_URGENT) URGENT_SECOND_LINES else 1
+
+private const val URGENT_SECOND_LINES = 3
 private val LIST_BOTTOM = 96.dp
 
 /** The connection's tile where the item names one; else the kind's icon in its History category colour. */
@@ -616,9 +624,10 @@ object FeedIcons {
 }
 
 /**
- * The detail sheet (ANDROID-PLAN 0.1.23, 4): the label, the exact time, the connection or item as History resolves
- * them; "This is no longer waiting" for an ask that is gone; "Not available in this version of the app" for kinds
- * that come later; an unknown kind shows the kind itself; a guide its body.
+ * The detail sheet (ANDROID-PLAN 0.1.23, 4): the label and under it the row's second line in full (0.1.56), the
+ * exact time, the connection or item as History resolves them; "This is no longer waiting" for an ask that is gone;
+ * "Not available in this version of the app" for kinds that come later; an unknown kind shows the kind itself; a
+ * guide its body.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -639,6 +648,10 @@ fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.semantics { heading() },
         )
+        FeedKinds.supporting(item, names)?.let { line ->
+            Spacer(Modifier.height(Spacing.xs))
+            Text(line.text(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("feed_sheet_second_line"))
+        }
         Spacer(Modifier.height(Spacing.s))
         FeedManager.at(item)?.let { SheetLine(stringResource(R.string.notifications_sheet_time), Times.full(it)) }
         if (item.connectionId != null) {

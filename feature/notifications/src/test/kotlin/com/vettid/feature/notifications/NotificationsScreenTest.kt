@@ -3,6 +3,7 @@ package com.vettid.feature.notifications
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -52,6 +53,28 @@ class NotificationsScreenTest {
         custom.first().action?.invoke()
         rule.onNodeWithTag("feed_row_m").performClick()
         assertEquals(listOf("archive:a", "open:m"), done)
+    }
+
+    @Test
+    fun secondLineLengthAndSheetShowsItInFull() {
+        val rollback = FeedItem("r", 3, "recovery.generation_closed", now.toString(), "active", "urgent", ref = "g1/rollback")
+        val rotation = FeedItem("i", 4, "identity.rotation_failed", now.toString(), "active", "high")
+        assertEquals(3, secondLineMaxLines(rollback))
+        assertEquals(3, secondLineMaxLines(rollback.copy(status = "read")))
+        assertEquals(1, secondLineMaxLines(rotation))
+        assertEquals(1, secondLineMaxLines(message))
+        rule.setContent { VettIdTheme { DetailSheetContent(rollback, names, gone = false) } }
+        rule.onNodeWithTag("feed_sheet_second_line").assertTextEquals(
+            "A host may have served an older copy of your vault's recovery record, one on which recovery attempts had " +
+                "already been used. Your vault moved past it. If you did not try to recover your vault, change your PIN " +
+                "and your password now, and contact VettID.",
+        )
+    }
+
+    @Test
+    fun sheetWithoutSecondLine() {
+        rule.setContent { VettIdTheme { DetailSheetContent(alarm, names, gone = false) } }
+        rule.onNodeWithTag("feed_sheet_second_line").assertDoesNotExist()
     }
 
     @Test
