@@ -49,6 +49,7 @@ import com.vettid.core.data.policy.messageRes
 import com.vettid.core.data.vault.EnrollStep
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -153,7 +154,11 @@ fun OnboardingContent(
 @Composable
 private fun ErrorText(state: OnboardingUiState, override: FailureKind? = null, overrideText: String? = null) {
     val kind = state.error ?: return
-    val text = if (override != null && kind == override && overrideText != null) overrideText else failureText(kind.messageRes())
+    val text = if (override != null && kind == override && overrideText != null) {
+        overrideText
+    } else {
+        failureText(kind.messageRes(), kind.vaultCode(state.errorShown))
+    }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(NoticeKind.URGENT, stringResource(R.string.onboarding_progress_failed), text, Modifier.testTag("error"))
 }

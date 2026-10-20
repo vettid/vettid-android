@@ -147,7 +147,7 @@ class ItemsManager(
             val out = mutableListOf<ItemSummary>()
             var after: String? = null
             do {
-                val page = vaultGuard { ops().list(after, PAGE) }
+                val page = vaultGuard(resend = true) { ops().list(after, PAGE) }
                 page.items.mapTo(out) { summary(it) }
                 after = page.next?.takeIf { it.isNotEmpty() && page.items.isNotEmpty() }
             } while (after != null && out.size <= ItemChecks.MAX_ITEMS)
@@ -159,7 +159,7 @@ class ItemsManager(
         }
     }
 
-    override suspend fun get(itemId: String): ItemDetail = detail(vaultGuard { ops().get(itemId) }).also(::remember)
+    override suspend fun get(itemId: String): ItemDetail = detail(vaultGuard(resend = true) { ops().get(itemId) }).also(::remember)
 
     override suspend fun reveal(itemId: String): ItemDetail = detail(vaultGuard { ops().reveal(itemId) }).copy(revealed = true)
 

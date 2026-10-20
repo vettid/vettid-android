@@ -42,9 +42,12 @@ class ProfileManagerTest {
             return version + 1
         }
 
+        /** The type whose answer refused: the name change's own, or (0.1.58) the UTK resync before it. */
+        var errorType = "account.name.set"
+
         override suspend fun accountNameSet(pin: String, password: String, firstName: String, lastName: String): NameRequest {
             nameSets += listOf(pin, password, firstName, lastName)
-            error?.let { throw VaultOpException("account.name.set", it, body = errorBody) }
+            error?.let { throw VaultOpException(errorType, it, body = errorBody) }
             return NameRequest(7, firstName, lastName, "2026-10-07T12:00:00.000Z", "pending")
         }
     }
@@ -115,6 +118,25 @@ class ProfileManagerTest {
         assertEquals(NameChangeOutcome.TooSoon(Instant.parse("2026-11-01T00:00:00Z")), m.changeName("246810", "pw", "Ada", "King"))
         ops.errorBody = null
         assertEquals(NameChangeOutcome.TooSoon(null), m.changeName("246810", "pw", "Ada", "King"))
+        assertTrue(requests.isEmpty())
+    }
+
+    /**
+     * ANDROID-PLAN 0.1.58 point 2: a resync refused `too_soon` before the name change was sent is the resync's, named by
+     * `error_vault_code`; an empty resync is `utk_empty`. 0.1.57: `forbidden` is "not the holder".
+     */
+    @Test
+    fun aRefusedResyncIsNotTheNamesTooSoon() = runTest {
+        ops.errorType = "credential.utk.get"
+        ops.error = "too_soon"
+        ops.errorBody = o("""{"allowed_after":"2026-11-01T00:00:00Z"}""")
+        assertEquals(NameChangeOutcome.Failed(FailureKind.OTHER, "too_soon", "too_soon"), m.changeName("246810", "pw", "Ada", "King"))
+        ops.errorBody = null
+        ops.error = "utk_empty"
+        assertEquals(NameChangeOutcome.Failed(FailureKind.OTHER, "utk_empty", "utk_empty"), m.changeName("246810", "pw", "Ada", "King"))
+        ops.errorType = "account.name.set"
+        ops.error = "forbidden"
+        assertEquals(NameChangeOutcome.Failed(FailureKind.NOT_HOLDER, "forbidden"), m.changeName("246810", "pw", "Ada", "King"))
         assertTrue(requests.isEmpty())
     }
 

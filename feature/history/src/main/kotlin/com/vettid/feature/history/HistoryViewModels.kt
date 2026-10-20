@@ -67,6 +67,8 @@ data class HistoryUiState(
     /** The unfiltered log did not chain (§10.9): the red banner. */
     val chainBroken: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 ) {
     val connections: List<ConnectionOption>
         get() = connectionNames.map { (id, name) -> ConnectionOption(id, name) }.sortedBy { it.name.lowercase() }
@@ -279,7 +281,7 @@ class HistoryViewModel @Inject constructor(
                 )
             }
         } catch (e: VaultFailure) {
-            state.update { it.copy(loading = false, loadingMore = false, error = e.kind) }
+            state.update { it.copy(loading = false, loadingMore = false, error = e.kind, errorCode = e.shownCode) }
         }
     }
 
@@ -311,6 +313,8 @@ data class HistoryEntryUiState(
     val loading: Boolean = true,
     val missing: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 )
 
 /** One audit entry (read-only): from the entries History read, else `audit.list{before_seq: seq + 1, limit: 1}`. */
@@ -349,7 +353,7 @@ class HistoryEntryViewModel @Inject constructor(
                 }
                 if (e != null) loadOutcome(e)
             } catch (f: VaultFailure) {
-                state.update { it.copy(loading = false, error = f.kind) }
+                state.update { it.copy(loading = false, error = f.kind, errorCode = f.shownCode) }
             }
         }
     }

@@ -65,6 +65,13 @@
     <!-- VAULT-MESSAGING 0.45.0 §11.14.9 step 5 (approved by the owner 2026-10-18): a new phone secret without an answer that the version cannot decide. -->
     <string name="data_failure_renew_unconfirmed">VettID couldn\'t confirm your last new phone secret. Before you change your PIN, lock your vault and unlock it again: your PIN hasn\'t changed, so this doesn\'t use an attempt.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
+    <!-- ANDROID-PLAN 0.1.57 §4 "Vault error codes the app does not map" (approved by the owner 2026-10-20). -->
+    <string name="vault_credential_required_title">This phone can\'t use your vault</string>
+    <string name="vault_credential_required_body">Your vault does not count this phone as the one that holds its credential, so it refused the request. Nothing was disclosed, and your PIN and password were not checked. This usually means a recovery of your vault was started and has not finished. If you recovered your vault on another phone, open VettID on that phone and unlock it to finish. Otherwise, start a recovery on the account site: it takes one to three days, and you need your PIN and your password. If another phone of yours now opens your vault, use \'Move to a new phone\' there instead.</string>
+    <!-- STAGING-TIME-SCALE §5.2: on a vault with a time scale, the recovery's waits computed. -->
+    <string name="vault_credential_required_body_scaled">Your vault does not count this phone as the one that holds its credential, so it refused the request. Nothing was disclosed, and your PIN and password were not checked. This usually means a recovery of your vault was started and has not finished. If you recovered your vault on another phone, open VettID on that phone and unlock it to finish. Otherwise, start a recovery on the account site: it takes %1$s to %2$s, and you need your PIN and your password. If another phone of yours now opens your vault, use \'Move to a new phone\' there instead.</string>
+    <!-- The body; its title is data_feed_device_replaced ("Your vault moved to a new phone"). -->
+    <string name="vault_not_holder">Another phone now holds your vault\'s credential, so this phone can\'t do this. Nothing was disclosed. Use VettID on the phone that holds it now. If you no longer have that phone, start a recovery on the account site.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>
     <string name="data_pin_problem_short">Use at least %1$d digits.</string>
     <string name="data_pin_problem_long">Use at most %1$d digits.</string>

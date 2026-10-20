@@ -20,9 +20,15 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.io.IOException
 
-/** Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. */
+/**
+ * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. (ANDROID-PLAN 0.1.57 (1)) A vault
+ * answer `credential_required` also raises "This phone can't use your vault" ([CredentialRequired]). [resend]: only for
+ * an idempotent read that carries no PIN or password, whose **Try again** runs [block] again. By default nothing is
+ * kept: Try again closes the screen, and the screen that sent the request (its secret fields empty) sends it again, so
+ * that no secret is ever held for a resend and no write is repeated unseen.
+ */
 @Suppress("CyclomaticComplexMethod", "ThrowsCount")
-internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
+internal suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T = try {
     withContext(Dispatchers.IO) { block() }
 } catch (e: VaultFailure) {
     throw e
@@ -33,7 +39,9 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
 } catch (e: MemberApiException) {
     throw VaultFailure(VaultManager.memberFailure(e), e.code, e.retryAfterSeconds.toLong(), e)
 } catch (e: VaultOpException) {
-    throw VaultFailure(VaultManager.opFailure(e.code), e.code, retryAfterOf(e), e, limitOf(e))
+    val kind = VaultManager.opFailure(e.code, e.type)
+    if (kind == FailureKind.CREDENTIAL_REQUIRED) CredentialRequired.raise(if (resend) suspend { vaultGuard(true, block) } else null)
+    throw VaultFailure(kind, e.code, retryAfterOf(e), e, limitOf(e))
 } catch (e: AltRefusedException) {
     val kind = when (e.reason) {
         AltRefusedException.Reason.ROLLBACK_RELEASE -> FailureKind.ROLLBACK

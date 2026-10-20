@@ -1525,8 +1525,9 @@ class VaultDevice private constructor(
     }
 
     /**
-     * Puts back a UTK the vault did not spend (`signer_unconfirmed`, §6.7.1 step 3: refused before the UTK is
-     * spent), first in the pool, so that the retry is sealed to the same one.
+     * Puts back a UTK that never left the phone (the request that would have presented it was not sent), first in the
+     * pool. A UTK that was sent is spent whatever the answer (VAULT-MESSAGING 0.52.0, ANDROID-PLAN 0.1.58) and never
+     * comes back here.
      */
     internal suspend fun returnUtk(u: UtkRecord) = lock.withLock {
         if (st.utks.none { it.id == u.id }) st.utks.add(0, u)

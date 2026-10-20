@@ -145,6 +145,52 @@ class SettingsViewModelsTest {
         assertEquals("", vm.uiState.value.current)
     }
 
+    /**
+     * ANDROID-PLAN 0.1.57: `forbidden` to `pin.change` is "not the holder"; an unmapped code is named; `credential_required`
+     * leaves the PIN and password empty for the screen to send again. Nothing is erased (no wipe is asked of the vault).
+     */
+    @Test
+    fun aPinChangeRefusedForTheHolderSaysWhy() = runTest {
+        val vm = ChangePinViewModel(vault)
+        val cases = listOf(
+            Triple("forbidden", FailureKind.NOT_HOLDER, null),
+            Triple("internal", FailureKind.OTHER, "internal"),
+            Triple("credential_required", FailureKind.CREDENTIAL_REQUIRED, null),
+        )
+        for ((code, kind, shown) in cases) {
+            vault.fail["changePin"] = VaultFailure(kind, code, cause = com.vettid.core.vault.VaultOpException("pin.change", code))
+            vm.typed()
+            vm.submit()
+            advanceUntilIdle()
+            assertEquals(code, kind, vm.uiState.value.error)
+            assertEquals(code, shown, vm.uiState.value.errorCode)
+            // No PIN or password is kept: the member sends again from this screen.
+            assertEquals("", vm.uiState.value.current)
+            assertEquals("", vm.uiState.value.pin)
+            assertEquals("", vm.uiState.value.confirm)
+            assertEquals("", vm.uiState.value.password)
+        }
+        assertTrue(vault.calls.none { it.contains("wipe", ignoreCase = true) || it.contains("erase", ignoreCase = true) })
+    }
+
+    /** ANDROID-PLAN 0.1.55: a change being decided ends with "moved": said on the screen, nothing more to decide. */
+    @Test
+    fun aPinChangeEndedByAnotherHolderSaysMoved() = runTest {
+        vault.fail["changePin"] = VaultFailure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = ChangePinViewModel(vault)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PIN)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Moved(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertEquals(ChangeCheck.Moved(ChangeKind.PIN), vm.uiState.value.check)
+        assertFalse(vm.uiState.value.checking)
+        assertNull(vm.uiState.value.error)
+        assertEquals(1, vault.changeCheckAcknowledged)
+    }
+
     private fun ChangePinViewModel.typed() {
         setCurrent("40281795")
         setPin("59173048")

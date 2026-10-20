@@ -52,7 +52,8 @@ sealed interface OwnerCheckMessage {
 
     data object Backoff : OwnerCheckMessage
 
-    data class Failed(val kind: FailureKind, val code: String?) : OwnerCheckMessage
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names, or null. */
+    data class Failed(val kind: FailureKind, val code: String?, val shownCode: String? = null) : OwnerCheckMessage
 }
 
 /** Immutable UI state of the owner-check screen. */
@@ -168,7 +169,7 @@ class OwnerCheckViewModel @Inject constructor(
             val r = try {
                 repo.check(s.pin, s.password, holdOff)
             } catch (e: VaultFailure) {
-                OwnerCheckOutcome.Failed(e.kind, e.code)
+                OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
             }
             // §3.6.5: neither entry is kept beyond the answer. §11.14.5: a check that passed without the presence recorded
             // keeps the screen, with the notice, until the member goes on.
@@ -201,7 +202,7 @@ class OwnerCheckViewModel @Inject constructor(
         is OwnerCheckOutcome.BadPin -> OwnerCheckMessage.BadPin(r.checksLeft)
         is OwnerCheckOutcome.BadPassword -> OwnerCheckMessage.BadPassword(r.checksLeft)
         is OwnerCheckOutcome.Backoff -> OwnerCheckMessage.Backoff
-        is OwnerCheckOutcome.Failed -> OwnerCheckMessage.Failed(r.kind, r.code)
+        is OwnerCheckOutcome.Failed -> OwnerCheckMessage.Failed(r.kind, r.code, r.shownCode)
     }
 
     private fun startBackoff(seconds: Long) {

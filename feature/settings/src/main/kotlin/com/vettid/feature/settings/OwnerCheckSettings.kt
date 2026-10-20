@@ -23,6 +23,8 @@ import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.TimeScaleView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsRow
@@ -49,6 +51,8 @@ data class OwnerCheckSettingsUiState(
     val view: OwnerCheckView? = null,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The interval was shortened: offer a check with the change (§3.6.2). */
     val offerCheck: Boolean = false,
     /** (STAGING-TIME-SCALE) The vault's time scale: the interval also as it runs, and the staging note. */
@@ -107,7 +111,7 @@ class OwnerCheckSettingsViewModel @Inject constructor(
                 block()
                 local.update { it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind) }
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -200,8 +204,8 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
     }
     state.error?.let {
         ConfirmDialog(
-            title = stringResource(R.string.settings_owner_check),
-            text = failureText(it.messageRes()),
+            title = stringResource(it.titleRes(R.string.settings_owner_check)),
+            text = failureText(it.messageRes(), it.vaultCode(state.errorCode)),
             confirmLabel = stringResource(R.string.settings_done),
             onConfirm = actions.dismissError,
             onDismiss = actions.dismissError,

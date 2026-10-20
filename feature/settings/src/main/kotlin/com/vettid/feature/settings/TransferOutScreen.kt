@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.textClip
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
@@ -333,8 +335,8 @@ private fun TransferError(state: TransferOutUiState) {
     val text = when {
         state.errorCode == "exists" -> stringResource(R.string.settings_transfer_exists)
         kind == FailureKind.CREDENTIAL_FROZEN || kind == FailureKind.ROTATION_REQUIRED -> stringResource(R.string.settings_transfer_alarm)
-        else -> failureText(kind.messageRes())
+        else -> failureText(kind.messageRes(), kind.vaultCode(state.errorShown))
     }
     Spacer(Modifier.height(Spacing.l))
-    NoticeCard(NoticeKind.URGENT, stringResource(R.string.settings_transfer_title), text, Modifier.testTag("transfer_error"))
+    NoticeCard(NoticeKind.URGENT, stringResource(kind.titleRes(R.string.settings_transfer_title)), text, Modifier.testTag("transfer_error"))
 }

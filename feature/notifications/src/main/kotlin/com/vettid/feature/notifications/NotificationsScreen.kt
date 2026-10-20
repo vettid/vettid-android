@@ -97,6 +97,7 @@ import com.vettid.core.data.feed.FeedText
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ClearFiltersChip
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailScaffold
@@ -213,7 +214,7 @@ fun NotificationsScreen(state: NotificationsUiState, actions: NotificationsActio
     val snackbar = remember { SnackbarHostState() }
     val archivedText = stringResource(R.string.notifications_archived_snackbar)
     val undoText = stringResource(R.string.notifications_undo)
-    val errorText = state.error?.let { failureText(it.messageRes()) }
+    val errorText = state.error?.let { failureText(it.messageRes(), it.vaultCode(state.errorCode)) }
     LaunchedEffect(state.undo) {
         if (state.undo == null) return@LaunchedEffect
         val r = snackbar.showSnackbar(archivedText, undoText, duration = SnackbarDuration.Short)

@@ -7,6 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
@@ -16,6 +17,7 @@ import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.UiTimeScale
 import com.vettid.core.ui.format.failureText
 import com.vettid.feature.onboarding.presenceBody
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -105,5 +107,28 @@ class ApprovedWordsTest {
         show(1) { OwnerCheckBanners(g, first = true, onCheckNow = {}, onHoldOn = {}, onDismissNotices = {}) }
         rule.onNodeWithTag("owner_check_warning").assertExists()
         rule.onNodeWithText("within the hour", substring = true).assertDoesNotExist()
+    }
+
+    /**
+     * ANDROID-PLAN 0.1.57 (1): "This phone can't use your vault" says "one to three days" in real time and the computed
+     * waits on a vault with a time scale; Try again and Lock vault.
+     */
+    @Test
+    fun theCredentialRequiredScreenFollowsTheTimeScale() {
+        var tries = 0
+        var locks = 0
+        show(1) { CredentialRequiredScreen(busy = false, onTryAgain = { tries++ }, onLockVault = { locks++ }) }
+        rule.onNodeWithText("This phone can't use your vault").assertExists()
+        rule.onNodeWithText("on the account site: it takes one to three days, and you need", substring = true).assertExists()
+        rule.onNodeWithText("Try again").performClick()
+        rule.onNodeWithText("Lock vault").performClick()
+        assertEquals(1, tries)
+        assertEquals(1, locks)
+    }
+
+    @Test
+    fun theCredentialRequiredScreenComputesTheWaitsOnAScaledVault() {
+        show(24) { CredentialRequiredScreen(busy = false, onTryAgain = {}, onLockVault = {}) }
+        rule.onNodeWithText("it takes 1 hour to 3 hours, and you need", substring = true).assertExists()
     }
 }

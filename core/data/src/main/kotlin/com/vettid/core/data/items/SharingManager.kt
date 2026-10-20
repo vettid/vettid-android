@@ -189,7 +189,7 @@ class SharingManager(
         var version = 0L
         var after: String? = null
         do {
-            val page = vaultGuard { ops().tagList(after) }
+            val page = vaultGuard(resend = true) { ops().tagList(after) }
             version = page.version
             out += page.tags.map { TagView(it.tag, it.items, it.rules, it.color, it.description, it.icon) }
             after = page.next?.takeIf { page.tags.isNotEmpty() }
@@ -274,7 +274,7 @@ class SharingManager(
         val out = mutableListOf<ShareRule>()
         var after: String? = null
         do {
-            val page = vaultGuard { ops().ruleList(connectionId, after) }
+            val page = vaultGuard(resend = true) { ops().ruleList(connectionId, after) }
             val list = arr(page, "rules").mapNotNull(::rule)
             out += list
             after = VaultJson.str(page, "next")?.takeIf { list.isNotEmpty() }
@@ -308,7 +308,7 @@ class SharingManager(
     }
 
     override suspend fun grants(): GrantLists {
-        val o = vaultGuard { ops().grantList() }
+        val o = vaultGuard(resend = true) { ops().grantList() }
         return GrantLists(
             given = arr(o, "given").mapNotNull { grant(it, GrantDirection.GIVEN) },
             received = arr(o, "received").mapNotNull { grant(it, GrantDirection.RECEIVED) },

@@ -1013,11 +1013,11 @@ class VaultDeviceTest {
 
     /**
      * VAULT-MESSAGING 0.27.0 §6.7.1 step 3, §11.7.1: `device.transfer.pending` brings the new app's signer class and
-     * `signer_changed`; an approval without `signer` is answered `signer_unconfirmed` before the UTK is spent, so the
-     * retry is sealed to the same UTK and names the class.
+     * `signer_changed`; an approval without `signer` is answered `signer_unconfirmed`. (0.52.0, ANDROID-PLAN 0.1.58)
+     * Its UTK is spent all the same: the retry, which names the class, is sealed to a fresh one.
      */
     @Test
-    fun aTransferApprovalNamesTheSignerAndAnUnconfirmedOneKeepsItsUtk() = runBlocking<Unit> {
+    fun aTransferApprovalNamesTheSignerAndAnUnconfirmedOneSpendsItsUtk() = runBlocking<Unit> {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this)
             val api = VaultApi(d)
@@ -1051,23 +1051,175 @@ class VaultDeviceTest {
             )
             val e = first.await().exceptionOrNull() as VaultOpException
             assertEquals("signer_unconfirmed", e.code)
-            // The vault did not spend the UTK: it is back in the pool, first.
-            assertEquals(1, d.utkCount)
+            // The UTK is spent: it never goes back to the pool.
+            assertEquals(0, d.utkCount)
 
-            // The retry, with the member's confirmation: the same UTK (no credential.utk.get), and the class.
+            // The retry, with the member's confirmation: a fresh UTK (the pool is empty: credential.utk.get), and the class.
             val second = async(Dispatchers.IO) { api.transferApprove("t-1", "246802", "password one", signer = "google_play") }
+            val get2 = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get2.type)
+            val utk2 = KemPrivateKey.generate()
+            d.handle(v.seal(get2.type, """{"utks":[${utkEntry("00112233445566dd", utk2)}]}""", re = get2.id, status = Inner.STATUS_OK))
             val a2 = v.open(nextDeposit().second)
             assertEquals("device.transfer.approve", a2.type)
             val b2 = StrictJson.parseObject(a2.body)
-            assertEquals("00112233445566cc", b2.string("utk_id"))
+            assertEquals("00112233445566dd", b2.string("utk_id"))
             assertEquals("google_play", b2.string("signer"))
             assertEquals("t-1", b2.string("transfer_id"))
             val payload = StrictJson.parseObject(
-                com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, "00112233445566cc", a2.type, a2.id, b2.base64("sealed")),
+                com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk2, v.vaultId, "00112233445566dd", a2.type, a2.id, b2.base64("sealed")),
             )
             assertEquals("246802", payload.string("pin"))
             assertEquals("password one", payload.string("password"))
             assertTrue("signer" !in payload.members) // an outer member, as transfer_id
+            d.handle(v.seal(a2.type, "{}", re = a2.id, status = Inner.STATUS_OK))
+            second.await()
+            assertEquals(0, d.utkCount)
+        }
+    }
+
+    private fun utkEntry(id: String, k: KemPrivateKey = KemPrivateKey.generate()) =
+        """{"utk_id":"$id","ek":"${Base64s.encodeStd(k.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
+
+    /** [n] UTKs with distinct ids from [first] (hex, 16 digits). */
+    private fun utksJson(n: Int, first: Long = 0x1000) = (0 until n).joinToString(",", "[", "]") { utkEntry("%016x".format(first + it)) }
+
+    private suspend fun refuse(d: VaultDevice, v: FakeVault, req: Inner, code: String) = d.handle(
+        v.msg(
+            v.keyring.current()!!.seal(
+                Inner(id = Ulid.new(), type = req.type, ts = Instant.now(), re = req.id, status = Inner.STATUS_ERROR,
+                    error = com.vettid.core.crypto.envelope.InnerError(code)),
+            ),
+        ),
+    )
+
+    /**
+     * VAULT-MESSAGING 0.52.0 §3.5.4, ANDROID-PLAN 0.1.58 point 1: a UTK is spent when it is sent. After each refusal the
+     * pool is one UTK smaller and the next attempt presents another `utk_id`.
+     */
+    @Test
+    fun aRefusalSpendsTheUtkAndTheNextAttemptTakesAnother() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            withCredential(d, v, api)
+            val codes = listOf(
+                "forbidden", "credential_required", "owner_check_required", "credential_frozen", "rotation_required", "signer_unconfirmed",
+            )
+            val first = async(Dispatchers.IO) { runCatching { api.transferApprove("t-1", "246802", "password one") } }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            d.handle(v.seal(get.type, """{"utks":${utksJson(codes.size)}}""", re = get.id, status = Inner.STATUS_OK))
+            val seen = mutableSetOf<String>()
+            var pending = first
+            codes.forEachIndexed { i, code ->
+                val a = v.open(nextDeposit().second)
+                assertEquals("device.transfer.approve", a.type)
+                assertTrue(seen.add(StrictJson.parseObject(a.body).string("utk_id")))
+                refuse(d, v, a, code)
+                assertEquals(code, (pending.await().exceptionOrNull() as VaultOpException).code)
+                assertEquals(code, codes.size - i - 1, d.utkCount)
+                if (i < codes.size - 1) {
+                    pending = async(Dispatchers.IO) { runCatching { api.transferApprove("t-1", "246802", "password one") } }
+                }
+            }
+            assertEquals(codes.size, seen.size)
+        }
+    }
+
+    /** ANDROID-PLAN 0.1.58 point 1: a retransmission of the same request (the same inner id) carries the same UTK. */
+    @Test
+    fun aRetransmissionCarriesTheSameUtk() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofSeconds(1))
+            val api = VaultApi(d)
+            withCredential(d, v, api)
+            val approve = async(Dispatchers.IO) { api.transferApprove("t-1", "246802", "password one") }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":${utksJson(2)}}""", re = get.id, status = Inner.STATUS_OK))
+            val a1 = v.open(nextDeposit().second)
+            // No answer: the same request goes again after the timeout.
+            val a2 = v.open(nextDeposit().second)
+            assertEquals(a1.id, a2.id)
+            assertEquals(StrictJson.parseObject(a1.body).string("utk_id"), StrictJson.parseObject(a2.body).string("utk_id"))
+            d.handle(v.seal(a2.type, "{}", re = a2.id, status = Inner.STATUS_OK))
+            approve.await()
+            assertEquals(1, d.utkCount)
+        }
+    }
+
+    /**
+     * ANDROID-PLAN 0.1.58 point 2: `credential.utk.get` returns no UTK while the pool is empty: exactly one
+     * `{"resync": true}`, and the pool keeps the 20 UTKs it returns (one of them presented at once).
+     */
+    @Test
+    fun anEmptyPoolOnBothSidesResyncsOnce() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            withCredential(d, v, api)
+            val approve = async(Dispatchers.IO) { api.transferApprove("t-1", "246802", "password one") }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            assertFalse(StrictJson.parseObject(get.body).has("resync"))
+            d.handle(v.seal(get.type, """{"utks":[]}""", re = get.id, status = Inner.STATUS_OK))
+            val resync = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", resync.type)
+            assertTrue(StrictJson.parseObject(resync.body).bool("resync"))
+            d.handle(v.seal(resync.type, """{"utks":${utksJson(20)}}""", re = resync.id, status = Inner.STATUS_OK))
+            val a = v.open(nextDeposit().second)
+            assertEquals("device.transfer.approve", a.type)
+            assertEquals("%016x".format(0x1000), StrictJson.parseObject(a.body).string("utk_id"))
+            d.handle(v.seal(a.type, "{}", re = a.id, status = Inner.STATUS_OK))
+            approve.await()
+            assertEquals(19, d.utkCount)
+        }
+    }
+
+    /** A resync answered `too_soon`, or with an empty list again: no second resync; the code is thrown. */
+    @Test
+    fun aFailedResyncIsNotRepeated() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            withCredential(d, v, api)
+            for (answer in listOf("too_soon", "empty")) {
+                val approve = async(Dispatchers.IO) { runCatching { api.transferApprove("t-1", "246802", "password one") } }
+                val get = v.open(nextDeposit().second)
+                d.handle(v.seal(get.type, """{"utks":[]}""", re = get.id, status = Inner.STATUS_OK))
+                val resync = v.open(nextDeposit().second)
+                assertTrue(StrictJson.parseObject(resync.body).bool("resync"))
+                if (answer == "too_soon") {
+                    refuse(d, v, resync, "too_soon")
+                } else {
+                    d.handle(v.seal(resync.type, """{"utks":[]}""", re = resync.id, status = Inner.STATUS_OK))
+                }
+                val e = approve.await().exceptionOrNull() as VaultOpException
+                assertEquals("credential.utk.get", e.type)
+                assertEquals(if (answer == "too_soon") "too_soon" else "utk_empty", e.code)
+                // Nothing more was sent for that request.
+                assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+                assertEquals(0, d.utkCount)
+            }
+        }
+    }
+
+    /** UTKs left in the pool: the request presents one of them; no `credential.utk.get`, no resync. */
+    @Test
+    fun aPoolThatStillHoldsUtksIsNotResynced() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            withCredential(d, v, api)
+            val first = async(Dispatchers.IO) { api.transferApprove("t-1", "246802", "password one") }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":${utksJson(2)}}""", re = get.id, status = Inner.STATUS_OK))
+            val a1 = v.open(nextDeposit().second)
+            d.handle(v.seal(a1.type, "{}", re = a1.id, status = Inner.STATUS_OK))
+            first.await()
+            val second = async(Dispatchers.IO) { api.transferApprove("t-1", "246802", "password one") }
+            val a2 = v.open(nextDeposit().second)
+            assertEquals("device.transfer.approve", a2.type)
             d.handle(v.seal(a2.type, "{}", re = a2.id, status = Inner.STATUS_OK))
             second.await()
             assertEquals(0, d.utkCount)

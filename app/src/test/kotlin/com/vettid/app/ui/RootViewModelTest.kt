@@ -202,4 +202,48 @@ class RootViewModelTest {
         assertFalse(vm.preferencesReset.value)
         assertFalse(prefs.current.value.wasReset)
     }
+
+    /**
+     * ANDROID-PLAN 0.1.57 (1): "This phone can't use your vault" shows over the open app only; Lock vault locks and takes
+     * it away; Try again sends a request without secrets again; nothing is erased.
+     */
+    @Test
+    fun theCredentialRequiredScreenFollowsTheOpenVault() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unlocked)
+        val vm = CredentialRequiredViewModel(vault, vault)
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertTrue(vm.shown.value)
+        vm.tryAgain()
+        advanceUntilIdle()
+        assertTrue("retryCredentialRequired" in vault.calls)
+        assertFalse(vm.shown.value)
+        // Again, and Lock vault.
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertTrue(vm.shown.value)
+        vm.lockVault()
+        advanceUntilIdle()
+        assertTrue("lock" in vault.calls)
+        assertFalse(vm.shown.value)
+        assertTrue(vault.calls.none { it.contains("wipe", ignoreCase = true) || it.contains("erase", ignoreCase = true) })
+        // Never over a vault that is not open.
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertFalse(vm.shown.value)
+    }
+
+    /** A refusal raised by the owner check an unlock sends before the app opens shows once the app opens. */
+    @Test
+    fun aRefusalFromTheUnlocksCheckShowsOnceTheAppOpens() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Locked)
+        val vm = CredentialRequiredViewModel(vault, vault)
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertFalse(vm.shown.value)
+        assertFalse("clearCredentialRequired" in vault.calls)
+        vault.phase.value = AppPhase.Unlocked
+        advanceUntilIdle()
+        assertTrue(vm.shown.value)
+    }
 }

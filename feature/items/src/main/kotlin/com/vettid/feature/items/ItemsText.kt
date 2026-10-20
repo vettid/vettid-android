@@ -15,6 +15,7 @@ import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultLimit
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.data.vault.message
 import com.vettid.core.ui.format.failureText
 
@@ -106,6 +107,8 @@ object ItemsText {
         critical: Boolean = false,
         profile: Boolean = false,
         limit: VaultLimit? = null,
+        /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names, or null; an item's `bad_request` keeps its text. */
+        shownCode: String? = null,
     ): String = when {
         kind == FailureKind.LIMIT && limit != null -> limit(limit)
         kind == FailureKind.LIMIT && profile -> stringResource(R.string.items_error_limit_profile)
@@ -114,9 +117,13 @@ object ItemsText {
         kind == FailureKind.LIMIT -> stringResource(R.string.items_error_limit)
         kind == FailureKind.CONFLICT -> stringResource(R.string.items_error_conflict)
         kind == FailureKind.NOT_FOUND -> stringResource(R.string.items_error_not_found)
+        kind == FailureKind.OTHER && shownCode != null && shownCode != CODE_BAD_REQUEST ->
+            failureText(kind.messageRes(), kind.vaultCode(shownCode))
         kind == FailureKind.OTHER -> stringResource(R.string.items_error_refused)
         else -> failureText(kind.messageRes())
     }
+
+    private const val CODE_BAD_REQUEST = "bad_request"
 
     /** A named limit (VAULT-MESSAGING 0.21.0 §10.1) in the member's words, with its bound. */
     @Composable

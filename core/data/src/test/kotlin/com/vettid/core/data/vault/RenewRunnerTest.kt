@@ -34,7 +34,10 @@ class RenewRunnerTest {
         })
         var settled = true
         var version = ChangeResolver.Version(true, 6, false, Instant.EPOCH)
+        var versionThrows: Exception? = null
+        var fetchThrows: Exception? = null
         var fetches = 0
+        var moved = 0
         val runner = RenewRunner(
             scope,
             object : RenewRunner.Ops {
@@ -45,9 +48,16 @@ class RenewRunnerTest {
                 }
                 override fun unconfirmed() = record.value.unconfirmedRenew
                 override suspend fun awaitSettled() = settled
-                override suspend fun version() = version
+                override suspend fun version(): ChangeResolver.Version {
+                    versionThrows?.let { throw it }
+                    return version
+                }
                 override suspend fun fetch() {
                     fetches++
+                    fetchThrows?.let { throw it }
+                }
+                override fun moved() {
+                    moved++
                 }
             },
         )
@@ -250,5 +260,34 @@ class RenewRunnerTest {
         assertEquals(ChangeDecision.Verdict.APPLIED, ChangeDecision.of(6, expMs, true, 7, false, after))
         assertEquals(ChangeDecision.Verdict.NOT_APPLIED, ChangeDecision.of(7, expMs, true, 7, false, after))
         assertEquals(ChangeDecision.Verdict.APPLIED, ChangeDecision.of(7, expMs, true, 8, false, after))
+    }
+
+    /**
+     * ANDROID-PLAN 0.1.55: the vault's own `forbidden` to `credential.version`, or to the fetch after "applied", ends an
+     * unconfirmed renew as not applied (the epoch stays) and says "moved" once; anything else is thrown as it is.
+     */
+    @Test
+    fun aForbiddenWhileDecidingARenewEndsIt() = runTest {
+        for (whereForbidden in listOf("version", "fetch")) {
+            val f = Fixture(testScheduler)
+            assertTrue(f.record.storeRenew(f.record.recordGeneration, UnconfirmedRenew("01JRENEW", 6, exp.toEpochMilli(), 3)))
+            if (whereForbidden == "version") {
+                f.versionThrows = VaultOpException("credential.version", "forbidden")
+            } else {
+                f.version = ChangeResolver.Version(true, 7, false, Instant.EPOCH)
+                f.fetchThrows = VaultOpException("credential.get", "forbidden")
+            }
+            assertEquals(RenewRunner.State.MOVED, f.runner.settle())
+            assertNull(f.record.value.unconfirmedRenew)
+            assertEquals(3, f.record.value.phoneEpoch)
+            assertEquals(1, f.moved)
+            f.scope.cancel()
+        }
+        val other = Fixture(testScheduler)
+        other.record.storeRenew(other.record.recordGeneration, UnconfirmedRenew("01JRENEW", 6, exp.toEpochMilli(), 3))
+        other.versionThrows = VaultOpException("credential.version", "internal")
+        assertEquals("internal", runCatching { other.runner.settle() }.exceptionOrNull().let { (it as VaultOpException).code })
+        assertEquals("01JRENEW", other.record.value.unconfirmedRenew?.innerId)
+        other.scope.cancel()
     }
 }

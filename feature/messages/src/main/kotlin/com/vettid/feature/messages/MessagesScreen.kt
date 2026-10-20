@@ -59,6 +59,7 @@ import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.CenteredTitle
 import com.vettid.core.ui.components.ConfirmDialog
@@ -216,7 +217,7 @@ fun MessagesScreen(
         val error = state.error
         when {
             state.loading && state.conversations.isEmpty() -> Loading()
-            error != null && state.conversations.isEmpty() -> ErrorState(error, onRetry)
+            error != null && state.conversations.isEmpty() -> ErrorState(error, onRetry, state.errorCode)
             state.conversations.isEmpty() && state.query.isNotBlank() -> EmptyState(
                 icon = Icons.Outlined.Search,
                 title = stringResource(R.string.messages_no_match_title),
@@ -273,12 +274,12 @@ internal fun Loading() {
 }
 
 @Composable
-internal fun ErrorState(kind: FailureKind, onRetry: () -> Unit) {
+internal fun ErrorState(kind: FailureKind, onRetry: () -> Unit, shownCode: String? = null) {
     Column(Modifier.fillMaxSize().padding(Spacing.xl), verticalArrangement = Arrangement.Center) {
         NoticeCard(
             kind = NoticeKind.WARNING,
             title = stringResource(R.string.messages_error_title),
-            body = failureText(kind.messageRes()),
+            body = failureText(kind.messageRes(), kind.vaultCode(shownCode)),
             actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
         )
     }
@@ -345,7 +346,7 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.messages_error_title),
-                    body = failureText(error.messageRes()),
+                    body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.messages_ok)) } },
                 )

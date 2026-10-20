@@ -35,11 +35,14 @@ data class CredentialUiState(
     val windowUntil: Instant? = null,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val notice: CredentialNotice? = null,
     /** The unlock-window password dialog. */
     val windowDialog: Boolean = false,
     val windowPassword: String = "",
     val windowError: FailureKind? = null,
+    val windowErrorCode: String? = null,
 ) {
     override fun toString(): String = "CredentialUiState(loading=$loading, busy=$busy, error=$error, alarm=${alarm?.state})"
 }
@@ -67,7 +70,7 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
                 val st = repo.status()
                 local.update { it.copy(loading = false, status = st) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -85,7 +88,7 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
                 repo.openUnlockWindow(pw)
                 local.update { it.copy(busy = false, windowDialog = false, windowPassword = "") }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, windowError = e.kind, windowPassword = "") }
+                local.update { it.copy(busy = false, windowError = e.kind, windowErrorCode = e.shownCode, windowPassword = "") }
             }
         }
     }
@@ -113,7 +116,7 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
                 block()
                 local.update { it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind) }
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -144,6 +147,8 @@ data class ChangePasswordUiState(
     val same: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
     /**
      * (VAULT-MESSAGING 0.44.0 §11.14.9) The change got no answer and VettID is deciding it ([ChangeCheck.Checking],
@@ -227,7 +232,7 @@ class ChangePasswordViewModel @Inject constructor(
                 return
             }
             rule != null -> state.update { it.copy(busy = false, error = null, rule = rule, refused = true, current = "", pin = "") }
-            else -> state.update { it.copy(busy = false, error = e.kind).afterRefusal(e.kind) }
+            else -> state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode).afterRefusal(e.kind) }
         }
         following = false
         vault.acknowledgeChangeCheck()
@@ -244,10 +249,13 @@ class ChangePasswordViewModel @Inject constructor(
         // Not this screen's change, or its own answer is still on its way (handled where it returns).
         if (!following || !c.open && state.value.busy) return
         when (c) {
-            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied, is ChangeCheck.Ended ->
+            // (ANDROID-PLAN 0.1.55) Moved: another phone became the holder; said here as the one-time notice.
+            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
                 state.update { it.copy(busy = false, error = null, check = c) }
             is ChangeCheck.Applied -> state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
-            is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure).afterRefusal(c.failure) }
+            is ChangeCheck.Refused -> state.update {
+                it.copy(busy = false, check = null, error = c.failure, errorCode = c.shownCode).afterRefusal(c.failure)
+            }
         }
         if (!c.open) {
             following = false
@@ -303,6 +311,8 @@ data class RotateUiState(
     val password: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
 ) {
     override fun toString(): String = "RotateUiState(busy=$busy, error=$error, done=$done)"
@@ -325,7 +335,7 @@ class RotateViewModel @Inject constructor(private val repo: CredentialRepository
                 repo.rotate(pw)
                 state.update { RotateUiState(done = true) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, password = "") }
             }
         }
     }
@@ -342,6 +352,8 @@ data class AlarmUiState(
     val password: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 ) {
     override fun toString(): String = "AlarmUiState(step=$step, busy=$busy, error=$error)"
 }
@@ -391,7 +403,7 @@ class AlarmViewModel @Inject constructor(private val repo: CredentialRepository)
                 repo.confirmAlarm(mine)
                 state.update { it.copy(busy = false, step = AlarmStep.ROTATE) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, step = AlarmStep.ASK) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, step = AlarmStep.ASK) }
             }
         }
     }
@@ -407,7 +419,7 @@ class AlarmViewModel @Inject constructor(private val repo: CredentialRepository)
                 repo.rotate(pw)
                 state.update { it.copy(busy = false, password = "", step = AlarmStep.RESOLVED) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, password = "") }
             }
         }
     }

@@ -35,6 +35,8 @@ data class ApprovalsUiState(
     /** Requests the other member declined (0.10.5): told once, until dismissed. */
     val peerDeclines: List<PeerDecline> = emptyList(),
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** Connections whose asks are paused after several declines (0.23.0 §10.4.1): resume, or remove the connection. */
     val paused: List<ConnectionInfo> = emptyList(),
     /** A paused connection the member asked to remove (confirmed first). */
@@ -76,7 +78,7 @@ class ApprovalsViewModel @Inject constructor(
                 repo.refreshApprovals()
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -100,7 +102,7 @@ class ApprovalsViewModel @Inject constructor(
                 block()
                 local.update { it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind) }
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -111,7 +113,7 @@ class ApprovalsViewModel @Inject constructor(
             try {
                 repo.dismissPeerDecline(requestId)
             } catch (e: VaultFailure) {
-                local.update { it.copy(error = e.kind) }
+                local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -132,6 +134,8 @@ data class ApprovalDetailUiState(
     /** It left the list without a decision here (decided on another device, or expired). */
     val gone: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** A share decision's items the member unticked: declined, the rest included (§10.12). */
     val shareExcluded: Set<String> = emptySet(),
     /** The member's `data` and `secret` items (§10.12: only they are granted), to name and answer grant entries. */
@@ -211,7 +215,7 @@ class ApprovalDetailViewModel @Inject constructor(
                 try {
                     repo.loadCriticalUse(a.requestId)
                 } catch (e: VaultFailure) {
-                    local.update { it.copy(error = e.kind) }
+                    local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
                 }
             }
         }
@@ -313,7 +317,9 @@ class ApprovalDetailViewModel @Inject constructor(
             } catch (e: VaultFailure) {
                 val backoff = e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0
                 val until = if (backoff) java.time.Instant.now().plusSeconds(e.retryAfterSeconds) else null
-                local.update { it.copy(busy = false, error = e.kind, limit = e.limit, password = "", retryUntil = until) }
+                local.update {
+                    it.copy(busy = false, error = e.kind, errorCode = e.shownCode, limit = e.limit, password = "", retryUntil = until)
+                }
             }
         }
     }

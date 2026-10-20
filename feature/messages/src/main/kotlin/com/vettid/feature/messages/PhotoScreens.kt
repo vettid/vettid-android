@@ -78,6 +78,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.media.ImageType
 import com.vettid.core.media.PhotoLimits
 import com.vettid.core.media.Photos
@@ -511,7 +512,8 @@ private fun androidx.compose.foundation.layout.BoxScope.ViewerBody(
             NoticeCard(
                 kind = NoticeKind.WARNING,
                 title = stringResource(R.string.messages_error_title),
-                body = state.problemText?.let { stringResource(it) } ?: failureText(failure.messageRes()),
+                body = state.problemText?.let { stringResource(it) }
+                    ?: failureText(failure.messageRes(), failure.vaultCode(state.errorCode)),
                 actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
             )
         }

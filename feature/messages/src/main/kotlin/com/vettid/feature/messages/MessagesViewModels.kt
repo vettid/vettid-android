@@ -39,6 +39,8 @@ data class MessagesUiState(
     /** True when the member has no active connection at all (the empty state then suggests an invite). */
     val noConnections: Boolean = true,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The top bar's search (owner request 2026-10-08): connection names and the latest message, on this phone. */
     val query: String = "",
     /** Whether there is any conversation at all (the search is offered then). */
@@ -85,7 +87,7 @@ class MessagesViewModel @Inject constructor(
                 repo.refreshConversations()
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -109,6 +111,8 @@ data class ConversationUiState(
     /** The message the member long-pressed: delete is confirmed first. */
     val deleting: MessageInfo? = null,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** Older messages remain in the vault (VAULT-MESSAGING 0.32.0 §10.5.2): scrolling to the top loads them. */
     val olderAvailable: Boolean = false,
     /** An older page is being read. */
@@ -168,7 +172,7 @@ class ConversationViewModel @Inject constructor(
                 messages.load(connectionId)
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
         viewModelScope.launch {
@@ -209,7 +213,7 @@ class ConversationViewModel @Inject constructor(
                 local.update { it.copy(sending = false, draft = "") }
             } catch (e: VaultFailure) {
                 // The draft stays so that the member can retry.
-                local.update { it.copy(sending = false, error = e.kind) }
+                local.update { it.copy(sending = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -226,7 +230,7 @@ class ConversationViewModel @Inject constructor(
                 messages.loadOlder(connectionId)
                 local.update { it.copy(loadingOlder = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loadingOlder = false, error = e.kind) }
+                local.update { it.copy(loadingOlder = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -240,7 +244,7 @@ class ConversationViewModel @Inject constructor(
             try {
                 messages.delete(connectionId, m.messageId)
             } catch (e: VaultFailure) {
-                local.update { it.copy(error = e.kind) }
+                local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -431,6 +435,8 @@ data class NewMessageUiState(
     val loading: Boolean = true,
     val connections: List<ConnectionInfo> = emptyList(),
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 )
 
 /** The compose button: pick an active connection to write to. */
@@ -451,7 +457,7 @@ class NewMessageViewModel @Inject constructor(private val repo: ConnectionsRepos
                 repo.refresh()
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }

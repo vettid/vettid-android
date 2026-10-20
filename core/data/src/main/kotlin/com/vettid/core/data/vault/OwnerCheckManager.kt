@@ -185,7 +185,7 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
-        val (st0, recovery, timeScale) = vaultGuard { ops().statusRead() }
+        val (st0, recovery, timeScale) = vaultGuard(resend = true) { ops().statusRead() }
         runCatching { onTimeScale(timeScale, since) }
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
@@ -239,7 +239,7 @@ class OwnerCheckManager(
         CODE_BAD_PIN -> OwnerCheckOutcome.BadPin(checksLeftAfterFailure())
         CODE_BAD_PASSWORD -> OwnerCheckOutcome.BadPassword(checksLeftAfterFailure())
         CODE_BACKOFF -> OwnerCheckOutcome.Backoff(retryAfter(e))
-        else -> OwnerCheckOutcome.Failed(e.kind, e.code)
+        else -> OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
     }
 
     /** A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). */

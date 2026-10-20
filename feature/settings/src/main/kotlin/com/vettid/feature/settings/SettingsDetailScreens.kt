@@ -55,6 +55,8 @@ import com.vettid.core.data.vault.ReleaseInfoView
 import com.vettid.core.data.vault.SignerView
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.components.DetailScaffold
@@ -91,9 +93,9 @@ private fun formatDate(s: String?): String? = s?.let {
 }
 
 @Composable
-private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?) {
+private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?, shownCode: String? = null) {
     Column(Modifier.padding(Spacing.gutter)) {
-        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), failureText(error.messageRes()))
+        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), failureText(error.messageRes(), error.vaultCode(shownCode)))
         if (retry != null) {
             Spacer(Modifier.height(Spacing.l))
             SecondaryButton(stringResource(R.string.settings_retry), retry)
@@ -153,7 +155,7 @@ fun VaultStatusContent(
             var signerOpen by rememberSaveable { mutableStateOf(signerDetails) }
             when {
                 state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
-                v == null -> LoadFailure(state.error ?: FailureKind.OTHER, retry)
+                v == null -> LoadFailure(state.error ?: FailureKind.OTHER, retry, state.errorCode)
                 else -> {
                     v.release?.let { r ->
                         releaseNotice(r)?.let {
@@ -355,11 +357,17 @@ fun ChangePinContent(
                 is ChangeCheck.Unreachable -> R.string.settings_pin_unreachable
                 is ChangeCheck.NotApplied -> R.string.settings_pin_not_changed
                 is ChangeCheck.Ended -> R.string.settings_pin_ended
+                // (ANDROID-PLAN 0.1.55) "Your vault moved to a new phone", no "Try again".
+                is ChangeCheck.Moved -> com.vettid.core.data.R.string.data_feed_device_replaced
                 else -> null
             }
             if (text != null) {
                 NoticeCard(
-                    if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended) NoticeKind.WARNING else NoticeKind.INFO,
+                    if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended || c is ChangeCheck.Moved) {
+                        NoticeKind.WARNING
+                    } else {
+                        NoticeKind.INFO
+                    },
                     stringResource(R.string.settings_pin_title),
                     stringResource(text),
                     Modifier.testTag("pin_change_check"),
@@ -411,8 +419,8 @@ fun ChangePinContent(
             Spacer(Modifier.height(Spacing.l))
             NoticeCard(
                 NoticeKind.URGENT,
-                stringResource(R.string.settings_pin_title),
-                failureText(it.messageRes()),
+                stringResource(it.titleRes(R.string.settings_pin_title)),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
                 // (0.45.0 §11.14.9) An uncertain PIN or an unconfirmed new phone secret: settled by a lock and unlock.
                 actions = if (it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) {
@@ -482,7 +490,11 @@ fun RecoveryContent(
         }
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
-            NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_recovery_title), failureText(it.messageRes()))
+            NoticeCard(
+                NoticeKind.WARNING,
+                stringResource(R.string.settings_recovery_title),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
+            )
         }
     }
 }
@@ -507,7 +519,7 @@ fun AttestationContent(
             val a = state.value
             when {
                 state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
-                a == null -> LoadFailure(state.error ?: FailureKind.OTHER, null)
+                a == null -> LoadFailure(state.error ?: FailureKind.OTHER, null, state.errorCode)
                 else -> {
                     SettingsSectionHeader(stringResource(R.string.settings_attestation_device))
                     SettingsGroup {
@@ -672,8 +684,8 @@ fun DeleteVaultContent(state: DeleteVaultUiState, actions: DeleteVaultActions) {
             Spacer(Modifier.height(Spacing.l))
             NoticeCard(
                 NoticeKind.URGENT,
-                stringResource(R.string.settings_delete_title),
-                failureText(it.messageRes()),
+                stringResource(it.titleRes(R.string.settings_delete_title)),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
             )
         }

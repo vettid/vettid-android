@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.failureText
@@ -41,6 +42,8 @@ data class PasswordPrompt(
     val password: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val retryUntil: Instant? = null,
 ) {
     fun canSend(now: Instant): Boolean = password.isNotEmpty() && !busy && (retryUntil == null || !now.isBefore(retryUntil))
@@ -50,6 +53,7 @@ data class PasswordPrompt(
         password = "",
         busy = false,
         error = e.kind,
+        errorCode = e.shownCode,
         retryUntil = if (e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0) now.plusSeconds(e.retryAfterSeconds) else null,
     )
 
@@ -111,7 +115,7 @@ fun CredentialPasswordContent(
             waiting > 0 -> stringResource(R.string.items_password_backoff, waiting)
             prompt.error == FailureKind.BAD_PASSWORD -> stringResource(R.string.items_password_wrong)
             prompt.error == FailureKind.BACKOFF -> stringResource(R.string.items_password_backoff_undated)
-            prompt.error != null -> failureText(prompt.error.messageRes())
+            prompt.error != null -> failureText(prompt.error.messageRes(), prompt.error.vaultCode(prompt.errorCode))
             else -> null
         }
         SecretField(

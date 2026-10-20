@@ -351,7 +351,7 @@ class SocialManager(
     }
 
     override suspend fun refreshRequests() {
-        val list = vaultGuard { api().requestList() }
+        val list = vaultGuard(resend = true) { api().requestList() }
         val t = now()
         fun entries(k: String) = (list[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         val parsed = entries("incoming").mapNotNull { ApprovalParser.incoming(it, t) } +
@@ -478,7 +478,7 @@ class SocialManager(
 
     // --- ConnectionsRepository ---
 
-    override suspend fun refresh(): Unit = vaultGuard {
+    override suspend fun refresh(): Unit = vaultGuard(resend = true) {
         val a = api()
         connectionsFlow.value = a.connectionList().filter { it.kind == "connection" }.map(ApprovalParser::connection)
         val states = try {
@@ -496,13 +496,13 @@ class SocialManager(
         }
     }
 
-    override suspend fun connection(id: String): ConnectionInfo = vaultGuard {
+    override suspend fun connection(id: String): ConnectionInfo = vaultGuard(resend = true) {
         val c = ApprovalParser.connection(api().connectionGet(id))
         connectionsFlow.update { l -> if (l.any { it.id == id }) l.map { if (it.id == id) c else it } else l + c }
         c
     }
 
-    override suspend fun inviteTtls(): List<InviteTtl> = ttls ?: vaultGuard {
+    override suspend fun inviteTtls(): List<InviteTtl> = ttls ?: vaultGuard(resend = true) {
         val l = api().relayLimits()
         val max = minOf(l.openTokenMaxLifetimeSeconds, l.claimTtlSeconds)
         InviteTtl.entries.filter { it.seconds <= max }.ifEmpty { listOf(InviteTtl.TEN_MINUTES) }
@@ -513,7 +513,7 @@ class SocialManager(
         InviteInfo(i.inviteId, i.link, InviteLinks.qrPayload(i.link), ApprovalParser.instant(i.exp) ?: InviteLinks.expiry(i.link), i.remote)
     }
 
-    override suspend fun outstandingInvites(): List<OutstandingInvite> = vaultGuard {
+    override suspend fun outstandingInvites(): List<OutstandingInvite> = vaultGuard(resend = true) {
         (api().inviteList()["invites"] as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e as? JsonObject ?: return@mapNotNull null
             val id = VaultJson.str(o, "invite_id") ?: return@mapNotNull null
@@ -632,7 +632,7 @@ class SocialManager(
      */
     override suspend fun load(connectionId: String) = load(connectionId, fresh = false)
 
-    private suspend fun load(connectionId: String, fresh: Boolean) = vaultGuard {
+    private suspend fun load(connectionId: String, fresh: Boolean) = vaultGuard(resend = true) {
         val page = pageFitting { limit -> api().messagePage(connectionId, limit) }
         val list = page.messages.map(ApprovalParser::message)
         pages.withLock {
@@ -651,7 +651,7 @@ class SocialManager(
     override suspend fun loadOlder(connectionId: String) {
         val before = pagingFlow.value[connectionId]?.nextBefore ?: return
         val page = try {
-            vaultGuard { pageFitting { limit -> api().messagePage(connectionId, limit, before) } }
+            vaultGuard(resend = true) { pageFitting { limit -> api().messagePage(connectionId, limit, before) } }
         } catch (e: VaultFailure) {
             if (e.kind != FailureKind.NOT_FOUND) throw e
             null
@@ -753,14 +753,14 @@ class SocialManager(
         var grantsOk = false
         var criticalOk = false
         try {
-            vaultGuard { a.grantList() }["pending"].let { it as? JsonArray }.orEmpty()
+            vaultGuard(resend = true) { a.grantList() }["pending"].let { it as? JsonArray }.orEmpty()
                 .mapNotNullTo(listed) { (it as? JsonObject)?.let { o -> ApprovalParser.grant(o, t) } }
             grantsOk = true
         } catch (_: VaultFailure) {
             // an older release without grants: nothing listed
         }
         try {
-            vaultGuard { a.criticalUseList() }["incoming"].let { it as? JsonArray }.orEmpty()
+            vaultGuard(resend = true) { a.criticalUseList() }["incoming"].let { it as? JsonArray }.orEmpty()
                 .mapNotNullTo(listed) { (it as? JsonObject)?.let { o -> ApprovalParser.critical(o, t) } }
             criticalOk = true
         } catch (_: VaultFailure) {
@@ -791,8 +791,8 @@ class SocialManager(
 
     /** The share decisions waiting (§10.12, [SharePending.decisions]). */
     private suspend fun pendingShares(a: VaultApi, t: Instant): List<Approval.ShareDecision> = SharePending.decisions(
-        pendingPage = { after -> vaultGuard { a.sharePendingList(after = after, limit = SharePending.PAGE) } },
-        rulePage = { after -> vaultGuard { a.shareRuleList(after = after) } },
+        pendingPage = { after -> vaultGuard(resend = true) { a.sharePendingList(after = after, limit = SharePending.PAGE) } },
+        rulePage = { after -> vaultGuard(resend = true) { a.shareRuleList(after = after) } },
         names = itemNames(),
         t = t,
     )

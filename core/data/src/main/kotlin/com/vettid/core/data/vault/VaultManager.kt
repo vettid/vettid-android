@@ -187,7 +187,10 @@ class VaultManager(
                         api.changeSettle(k, r)
                         ChangeResolver.Answer.Ok
                     } catch (e: VaultOpException) {
-                        ChangeResolver.Answer.Refused(opFailure(e.code), stale = e.code == CODE_STALE)
+                        // (ANDROID-PLAN 0.1.55) Another phone became the holder: the resolver ends the change.
+                        if (e.code == VaultCodes.FORBIDDEN) throw e
+                        val f = VaultFailure(opFailure(e.code, e.type), e.code, cause = e)
+                        ChangeResolver.Answer.Refused(f.kind, stale = e.code == CODE_STALE, shownCode = f.shownCode)
                     }
                 }
             }
@@ -344,7 +347,7 @@ class VaultManager(
                 keptChange = k
             }
         },
-        failureOf = { opFailure(it) },
+        failureOf = { e -> VaultFailure(opFailure(e.code, e.type), e.code, cause = e) },
     )
 
     /** Bumped by every wipe, reset and lock ([RecordStore.generation]): a phase computed before it is not published after it. */
@@ -1453,7 +1456,12 @@ class VaultManager(
         createCredential(password, backup, onStep, null)
 
     /** (Release R, §11.14.9) `credential.create` carries the PIN, which the vault verifies and with which it arms recovery. */
-    override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit, pin: String?) = guard {
+    override suspend fun createCredential(
+        password: String,
+        backup: Boolean,
+        onStep: (EnrollStep) -> Unit,
+        pin: String?,
+    ) = guard {
         val s = session()
         if (s.device.deviceId == null) {
             onStep(EnrollStep.HANDSHAKE)
@@ -1948,6 +1956,8 @@ class VaultManager(
      */
     override suspend fun lock() {
         lockedHere = true
+        // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault" goes with the open vault.
+        CredentialRequired.clear()
         // A phase being computed now (a refresh, the end of an unlock) is not published after this.
         record.bumpGeneration()
         windowFlow.value = null
@@ -1959,7 +1969,7 @@ class VaultManager(
         locking.run(lock = { lockKeeper.ask(mine) }, after = {})
     }
 
-    override suspend fun overview(): VaultOverview = guard {
+    override suspend fun overview(): VaultOverview = guard(resend = true) {
         val rec = record.recordGeneration
         val s = session()
         val st = vaultStatus(s)
@@ -2288,6 +2298,9 @@ class VaultManager(
             RenewRunner.State.NONE -> Unit
             RenewRunner.State.UNSETTLED -> throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, ChangeSender.CODE_UNSETTLED)
             RenewRunner.State.UNDECIDABLE -> throw VaultFailure(FailureKind.RENEW_UNCONFIRMED, CODE_RENEW_UNCONFIRMED)
+            // (ANDROID-PLAN 0.1.55, 0.1.57 (3)) Another phone became the holder: the renew ended, and this phone can't
+            // change the PIN either.
+            RenewRunner.State.MOVED -> throw VaultFailure(FailureKind.NOT_HOLDER, VaultCodes.FORBIDDEN)
         }
         val s = session()
         // Read again: a renew decided just above may have moved the phone to its candidate.
@@ -2400,6 +2413,9 @@ class VaultManager(
                 api.credentialFetch()
                 api.credentialTopUpUtks()
             }
+
+            // A renew changes the phone's secret, which goes with the PIN: its notice is the PIN's.
+            override fun moved() = changes.publish(ChangeCheck.Moved(ChangeKind.PIN))
         },
     )
 
@@ -3190,9 +3206,12 @@ class VaultManager(
 
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
-    /** Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. */
-    private suspend fun <T> guard(block: suspend () -> T): T = try {
-        vaultGuard(block)
+    /**
+     * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. [resend]: only for an idempotent
+     * read without secrets ([vaultGuard]).
+     */
+    private suspend fun <T> guard(resend: Boolean = false, block: suspend () -> T): T = try {
+        vaultGuard(resend, block)
     } catch (e: VaultFailure) {
         // MEMBER-API 1.2.0: a refusal while paused also shows the banner (status may not have been read yet).
         if (e.kind == FailureKind.SERVICE_PAUSED) pausedFlow.value = true
@@ -3348,6 +3367,13 @@ class VaultManager(
             else -> FailureKind.OTHER
         }
 
+        /**
+         * [code] of an error answer to a request of [type] (ANDROID-PLAN 0.1.57): `forbidden` to a holder-only type is
+         * [FailureKind.NOT_HOLDER]; to any other type, as every code [opFailure] does not map, [FailureKind.OTHER].
+         */
+        fun opFailure(code: String, type: String?): FailureKind =
+            if (code == VaultCodes.FORBIDDEN && type in VaultCodes.HOLDER_ONLY) FailureKind.NOT_HOLDER else opFailure(code)
+
         @Suppress("CyclomaticComplexMethod") // one branch per error code
         fun opFailure(code: String): FailureKind = when (code) {
             "bad_pin" -> FailureKind.BAD_PIN
@@ -3376,6 +3402,8 @@ class VaultManager(
             "device_secret" -> FailureKind.DEVICE_SECRET
             "transfer_incomplete" -> FailureKind.TRANSFER_INCOMPLETE
             "response_too_large" -> FailureKind.RESPONSE_TOO_LARGE
+            // (ANDROID-PLAN 0.1.57 (1), 0.1.58 (3)) With or without `{"reason": "no_holder"}`.
+            VaultCodes.CREDENTIAL_REQUIRED -> FailureKind.CREDENTIAL_REQUIRED
             else -> FailureKind.OTHER
         }
     }

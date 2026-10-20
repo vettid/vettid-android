@@ -93,7 +93,8 @@ sealed interface NameChangeOutcome {
     /** A PIN or password backoff runs ([retryAfterSeconds] 0 when the vault did not say how long). */
     data class Backoff(val retryAfterSeconds: Long) : NameChangeOutcome
 
-    data class Failed(val kind: FailureKind, val code: String?) : NameChangeOutcome
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names ([VaultFailure.shownCode]), or null. */
+    data class Failed(val kind: FailureKind, val code: String?, val shownCode: String? = null) : NameChangeOutcome
 }
 
 /** The member's shared profile and the account's names (§10.8). Failures other than [NameChangeOutcome] are [VaultFailure]s. */
@@ -149,7 +150,7 @@ class ProfileManager(
     }
 
     override suspend fun refreshProfile() {
-        val p = vaultGuard { ops().profileGet() }
+        val p = vaultGuard(resend = true) { ops().profileGet() }
         state.value = OwnProfile(
             version = p.version,
             displayName = p.name,
@@ -196,7 +197,7 @@ class ProfileManager(
         }
     }
 
-    private suspend fun failed(e: VaultFailure): NameChangeOutcome = when (e.code) {
+    private suspend fun failed(e: VaultFailure): NameChangeOutcome = when (e.code.takeIf { !fromUtkGet(e) }) {
         CODE_TOO_SOON -> NameChangeOutcome.TooSoon(
             parseInstant((e.cause as? VaultOpException)?.body?.let { com.vettid.core.vault.VaultJson.str(it, "allowed_after") }),
         )
@@ -204,8 +205,14 @@ class ProfileManager(
         CODE_BAD_PIN -> NameChangeOutcome.BadPin(runCatching { checksLeft() }.getOrNull())
         CODE_BAD_PASSWORD -> NameChangeOutcome.BadPassword(runCatching { checksLeft() }.getOrNull())
         CODE_BACKOFF -> NameChangeOutcome.Backoff(e.retryAfterSeconds)
-        else -> NameChangeOutcome.Failed(e.kind, e.code)
+        else -> NameChangeOutcome.Failed(e.kind, e.code, e.shownCode)
     }
+
+    /**
+     * (ANDROID-PLAN 0.1.58 point 2) The refusal of the UTK resync before the request (`too_soon` there is the resync's
+     * 10 minutes, not the name's): `error_vault_code`, never the name change's own texts.
+     */
+    private fun fromUtkGet(e: VaultFailure) = (e.cause as? VaultOpException)?.type == VaultCodes.TYPE_UTK_GET
 
     private companion object {
         const val CODE_TOO_SOON = "too_soon"

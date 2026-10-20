@@ -64,6 +64,7 @@ import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.LargeTitle
@@ -441,7 +442,7 @@ fun SettingsContent(
             SettingsGroup { AccountCard(state, actions.account) }
             state.error?.let {
                 NoticeCard(
-                    NoticeKind.URGENT, stringResource(R.string.settings_title), failureText(it.messageRes()),
+                    NoticeKind.URGENT, stringResource(R.string.settings_title), failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
                     actions = { TextButton(onClick = actions.dismissError) { Text(stringResource(R.string.settings_done)) } },
                 )

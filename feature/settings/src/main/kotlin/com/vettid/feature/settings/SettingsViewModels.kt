@@ -47,6 +47,8 @@ data class SettingsUiState(
     val appLockInvalidated: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The member's profile photo (§10.8) for the account card; null for none. */
     val photo: String? = null,
     /** How the app lock asks (0.1.19): the chosen method, also while the lock is off. */
@@ -130,14 +132,20 @@ class SettingsViewModel @Inject constructor(
                 block()
                 local.update { it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind) }
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
 }
 
 /** A screen that loads one value: loading, the value, or a failure. */
-data class LoadState<T>(val loading: Boolean = true, val value: T? = null, val error: FailureKind? = null)
+data class LoadState<T>(
+    val loading: Boolean = true,
+    val value: T? = null,
+    val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
+)
 
 /** Vault status (advisory member API status + the vault's own `vault.status`). */
 @HiltViewModel
@@ -155,7 +163,7 @@ class VaultStatusViewModel @Inject constructor(private val vault: VaultRepositor
             state.value = try {
                 LoadState(false, vault.overview())
             } catch (e: VaultFailure) {
-                LoadState(false, null, e.kind)
+                LoadState(false, null, e.kind, e.shownCode)
             }
         }
     }
@@ -186,7 +194,7 @@ class AttestationViewModel @Inject constructor(
             state.value = try {
                 LoadState(false, vault.attestationInfo())
             } catch (e: VaultFailure) {
-                LoadState(false, null, e.kind)
+                LoadState(false, null, e.kind, e.shownCode)
             }
         }
     }
@@ -201,6 +209,8 @@ data class RecoveryUiState(
     val offered: Boolean = true,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 )
 
 /**
@@ -231,7 +241,7 @@ class RecoveryViewModel @Inject constructor(
                 }
                 state.update { it.copy(loading = false, recovery = r, backupOff = backupOff) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, error = e.kind) }
+                state.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -247,6 +257,8 @@ data class ChangePinUiState(
     val same: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
     /**
      * (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) `pin.change` is a credential operation: the password too, and the
@@ -275,7 +287,8 @@ data class ChangePinUiState(
 }
 
 /**
- * (VAULT-MESSAGING 0.44.0 §11.14.9 step 4) A refused change: the entry that was wrong is cleared, the new ones are kept.
+ * (VAULT-MESSAGING 0.44.0 §11.14.9 step 4) A refused change: the entry that was wrong is cleared, the new ones are kept
+ * (a wrong PIN or password); any other refusal clears every entry.
  * [CHANGE_UNRESOLVED][FailureKind.CHANGE_UNRESOLVED] (an earlier change is undecided) keeps every entry.
  */
 internal fun ChangePinUiState.afterRefusal(kind: FailureKind): ChangePinUiState = when (kind) {
@@ -286,7 +299,9 @@ internal fun ChangePinUiState.afterRefusal(kind: FailureKind): ChangePinUiState 
     FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
     FailureKind.RENEW_UNCONFIRMED,
     -> this
-    else -> copy(current = "", password = "")
+    // Every other refusal (credential_required, "not the holder", an unmapped code): no PIN or password is kept, the new
+    // PIN and its confirmation included (ANDROID-PLAN 0.1.57: the member sends again from this screen).
+    else -> copy(current = "", pin = "", confirm = "", password = "")
 }
 
 /** `pin.change` (§10.6). */
@@ -323,8 +338,12 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
         when (c) {
             is ChangeCheck.Checking, is ChangeCheck.Unreachable -> state.update { it.copy(busy = false, error = null, check = c) }
             is ChangeCheck.Applied -> state.update { ChangePinUiState(done = true, withPassword = it.withPassword) }
-            is ChangeCheck.NotApplied, is ChangeCheck.Ended -> state.update { it.copy(busy = false, error = null, check = c) }
-            is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure).afterRefusal(c.failure) }
+            // (ANDROID-PLAN 0.1.55) Moved: another phone became the holder; said here as the one-time notice.
+            is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
+                state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.Refused -> state.update {
+                it.copy(busy = false, check = null, error = c.failure, errorCode = c.shownCode).afterRefusal(c.failure)
+            }
         }
         if (!c.open) {
             following = false
@@ -368,7 +387,7 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
                             state.update { it.copy(busy = false, error = null) }
                             vault.changeCheck.value?.takeIf { it.kind == ChangeKind.PIN }?.let(::onCheck)
                         } else {
-                            state.update { it.copy(busy = false, error = e.kind).afterRefusal(e.kind) }
+                            state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode).afterRefusal(e.kind) }
                             following = false
                             vault.acknowledgeChangeCheck()
                         }
@@ -389,6 +408,8 @@ data class DeleteVaultUiState(
     val phraseWrong: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 ) {
     val ready: Boolean get() = DeletePhrase.matches(phrase) && pin.length >= MIN_PIN && password.isNotEmpty() && acknowledged
 
@@ -437,7 +458,7 @@ class DeleteVaultViewModel @Inject constructor(private val vault: VaultRepositor
                 vault.deleteVault(s.pin, s.password)
                 state.update { DeleteVaultUiState() }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, pin = "", password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, pin = "", password = "") }
             }
         }
     }
