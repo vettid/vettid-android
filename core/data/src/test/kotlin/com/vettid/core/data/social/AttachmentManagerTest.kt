@@ -375,6 +375,7 @@ class AttachmentManagerTest {
     /**
      * A Cancel from another thread (the screen's Cancel, or an abandon when the screen goes) that lands while the request
      * is built: it waits for the request to be complete, so `message.send` carries the real key and thumbnail, never zeros.
+     * The answer still adds the message, but no thumbnail copied from the wiped photo is kept: it is fetched from the vault.
      */
     @Test
     fun aCancelDuringTheRequestsBuildWaitsForACompleteRequest() = runTest {
@@ -389,7 +390,9 @@ class AttachmentManagerTest {
                 assertTrue("the cancel waits for the build", t.isAlive)
             }
         }
-        runCatching { m.send(p) }
+        // The vault answers once the cancel went through (the photo wiped before the answer arrives).
+        ops.duringSend = { cancelling!!.join(5_000) }
+        assertEquals("M1", m.send(p).messageId)
         cancelling!!.join(5_000)
         assertFalse(cancelling.isAlive)
         val request = ops.requests.single().second
@@ -400,6 +403,9 @@ class AttachmentManagerTest {
         assertArrayEquals(jpeg, ClaimBlob.open(ops.uploads.single(), key, Base64s.decodeStd(blob["sha256"]!!.jsonPrimitive.content), blob["size"]!!.jsonPrimitive.content.toLong()))
         // The photo is wiped once the cancel went through.
         assertTrue(p.photo.wiped)
+        // The complete request went out and its message is added, without an all-zero thumbnail in memory.
+        assertEquals("M1", sent.single().messageId)
+        assertNull(m.cachedThumbnail("c1", "M1"))
     }
 
     @Test

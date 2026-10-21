@@ -279,7 +279,9 @@ class AttachmentManager(
         }
         val kept = synchronized(clearLock) {
             (p.clearMark == clearedFlow.value).also {
-                if (it) thumbs.put(cacheKey(p.connectionId, answer.messageId), p.photo.thumb.copyOf())
+                // A Cancel that waited out the build wiped the photo: no thumbnail is kept (a copy would be all zeros),
+                // so the conversation fetches it from the vault like a received photo's.
+                if (it && !p.photo.wiped) thumbs.put(cacheKey(p.connectionId, answer.messageId), p.photo.thumb.copyOf())
             }
         }
         if (!kept) {
