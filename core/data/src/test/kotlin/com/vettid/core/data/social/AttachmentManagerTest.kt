@@ -372,6 +372,36 @@ class AttachmentManagerTest {
         assertTrue(sent.isEmpty())
     }
 
+    /**
+     * A Cancel from another thread (the screen's Cancel, or an abandon when the screen goes) that lands while the request
+     * is built: it waits for the request to be complete, so `message.send` carries the real key and thumbnail, never zeros.
+     */
+    @Test
+    fun aCancelDuringTheRequestsBuildWaitsForACompleteRequest() = runTest {
+        val p = m.begin("c1", "", photo())
+        var cancelling: Thread? = null
+        m.testHook = { point ->
+            if (point == AttachmentManager.HOOK_BUILD) {
+                val t = Thread { kotlinx.coroutines.runBlocking { m.cancel(p) } }.apply { start() }
+                cancelling = t
+                // The cancel's wipe is blocked until the request is built.
+                t.join(200)
+                assertTrue("the cancel waits for the build", t.isAlive)
+            }
+        }
+        runCatching { m.send(p) }
+        cancelling!!.join(5_000)
+        assertFalse(cancelling.isAlive)
+        val request = ops.requests.single().second
+        val blob = request["blob"]!!.jsonObject
+        val key = Base64s.decodeStd(blob["key"]!!.jsonPrimitive.content)
+        assertFalse("a complete key, not zeros", key.all { it == 0.toByte() })
+        assertArrayEquals(thumb, Base64s.decodeStd(request["thumb"]!!.jsonPrimitive.content))
+        assertArrayEquals(jpeg, ClaimBlob.open(ops.uploads.single(), key, Base64s.decodeStd(blob["sha256"]!!.jsonPrimitive.content), blob["size"]!!.jsonPrimitive.content.toLong()))
+        // The photo is wiped once the cancel went through.
+        assertTrue(p.photo.wiped)
+    }
+
     @Test
     fun aThumbnailFromMessageNewReadAcrossAClearIsNotKept() {
         val b64 = Base64s.encodeStd(thumb)

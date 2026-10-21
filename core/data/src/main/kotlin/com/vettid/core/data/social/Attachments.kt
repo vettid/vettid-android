@@ -1,5 +1,6 @@
 package com.vettid.core.data.social
 
+import androidx.annotation.VisibleForTesting
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.ClaimBlob
 import com.vettid.core.data.vault.FailureKind
@@ -192,10 +193,14 @@ class AttachmentManager(
     private val photos = MemoryCache<String, FetchedPhoto>(PhotoLimits.PHOTO_CACHE_BYTES, { it.bytes.size.toLong() }) { it.bytes.fill(0) }
     private val pending = java.util.Collections.synchronizedSet(mutableSetOf<PendingPhoto>())
 
-    /** Held by [clear], by a fetch's check-and-cache ([keepUnlessCleared]) and by a send's last check ([sendLocked]). */
+    /**
+     * Held by [clear], by a fetch's check-and-cache ([keepUnlessCleared]), by a send's last check ([sendLocked]) and by
+     * every wipe of a pending photo ([finish]). Taken before [pending]'s monitor and the caches' monitors, never after.
+     */
     private val clearLock = Any()
 
     /** TEST hook: called with [HOOK_BUILD] while a send's request is built, and [HOOK_EVENT] before an inline thumbnail is kept. */
+    @VisibleForTesting
     @Volatile
     internal var testHook: ((String) -> Unit)? = null
 
@@ -346,9 +351,15 @@ class AttachmentManager(
         scope.launch { cancel(p) }
     }
 
+    /**
+     * Ends [p] and wipes it under [clearLock], like [clear]: a Cancel or an abandon landing while a send builds its
+     * request waits for the request to be complete, so `message.send` never carries a zeroed key or thumbnail.
+     */
     private fun finish(p: PendingPhoto) {
-        pending -= p
-        p.wipe()
+        synchronized(clearLock) {
+            pending -= p
+            p.wipe()
+        }
     }
 
     override fun cachedThumbnail(connectionId: String, messageId: String): ByteArray? =
