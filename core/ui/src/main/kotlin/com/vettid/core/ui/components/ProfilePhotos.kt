@@ -64,8 +64,15 @@ object ProfilePhotos {
         }
     }
 
-    /** [encode] as the standard base64 `profile.set` takes. */
-    fun encodeBase64(source: Bitmap): String = Base64.encodeToString(encode(source), Base64.NO_WRAP)
+    /** [encode] as the standard base64 `profile.set` takes; the JPEG bytes are zeroed once encoded. */
+    fun encodeBase64(source: Bitmap): String {
+        val jpeg = encode(source)
+        try {
+            return Base64.encodeToString(jpeg, Base64.NO_WRAP)
+        } finally {
+            jpeg.fill(0)
+        }
+    }
 
     /** The centred square of [b] (the whole bitmap when it is square already). */
     fun centreSquare(b: Bitmap): Bitmap {
@@ -93,10 +100,21 @@ object ProfilePhotos {
         }
     }
 
-    /** A photo from the vault for display, or null (absent, too large, not a JPEG or PNG, undecodable). */
-    @Suppress("ReturnCount")
+    /**
+     * A photo from the vault for display, or null (absent, too large, not a JPEG or PNG, undecodable). The decoded image
+     * bytes are zeroed once the bitmap is made (or refused): no copy of the photo's file stays in memory after it.
+     */
     fun decode(base64: String?): Bitmap? {
         val bytes = imageBytes(base64) ?: return null
+        try {
+            return decodeBytes(bytes)
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    @Suppress("ReturnCount")
+    private fun decodeBytes(bytes: ByteArray): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (!sane(bounds.outWidth) || !sane(bounds.outHeight)) return null
@@ -111,7 +129,7 @@ object ProfilePhotos {
 
     private fun sane(side: Int) = side in 1..MAX_DECODE_SIDE
 
-    /** The decoded bytes of a JPEG or PNG of at most [MAX_BYTES], else null. */
+    /** The decoded bytes of a JPEG or PNG of at most [MAX_BYTES], else null (and the refused bytes zeroed). */
     @Suppress("ReturnCount")
     private fun imageBytes(base64: String?): ByteArray? {
         // Base64 of 65,536 bytes is 87,384 characters: anything longer is over the limit, unread.
@@ -122,7 +140,9 @@ object ProfilePhotos {
             return null
         }
         val image = isJpeg(bytes) || isPng(bytes)
-        return bytes.takeIf { image && it.size <= MAX_BYTES }
+        if (image && bytes.size <= MAX_BYTES) return bytes
+        bytes.fill(0)
+        return null
     }
 
     fun isJpeg(b: ByteArray): Boolean = b.size > JPEG.size && JPEG.indices.all { b[it] == JPEG[it] }

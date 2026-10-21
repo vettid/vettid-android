@@ -97,6 +97,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -140,13 +141,27 @@ class VaultManager(
     @Volatile
     private var localUnreadable = false
 
+    /**
+     * The record read at the start still holds the account snapshot or the name request of an older build: it is
+     * written again without them (once, at the start), so that the own profile is on the phone only while the vault is
+     * open. Declared before [record], whose initializer reads the record ([loadLocal]).
+     */
+    @Volatile
+    private var legacyOwnAccount = false
+
+    /**
+     * The own account of the open vault, memory only ([OwnAccount]; ANDROID-PLAN §4 "The member's own profile"). Declared
+     * before [record], whose writes publish it.
+     */
+    private val ownAccount = OwnAccount()
+
     /** The account record, written only through updates under its lock, against a wipe on another thread ([AccountRecord]). */
     private val record = AccountRecord(
         loadLocal(),
         readable = !localUnreadable, // read just above, by loadLocal
         persist = { a ->
             accountFile.save(json.encodeToString(LocalAccount.serializer(), a).toByteArray())
-            accountFlow.value = a.toInfo()
+            ownAccount.publish { snap, req -> accountFlow.value = a.toInfo(snap, req) }
             deletedNoticeFlow.value = a.deletedNotice
         },
         // A wipe's marker left over at the start (the start's resume could not finish it): shut until a wipe completes.
@@ -804,8 +819,10 @@ class VaultManager(
      */
     val profile = ProfileManager(
         ops = { VaultProfileOps(openApi()) },
-        mark = { record.recordGeneration },
-        onRequest = { r, since -> io { updateLocal(since) { it.copy(nameRequest = r.toWire()) } } },
+        mark = { ownAccount.mark() },
+        // Memory only, like the snapshot ([OwnAccount]): dropped when the vault closed while the request was on its way.
+        onRequest = { r, since -> ownAccount.request(since, r.toWire(), ::ownProfileOpen) { publishAccount() } },
+        open = { ownProfileOpen() },
         checksLeft = {
             ownerCheck.refreshOwnerCheck()
             ownerCheck.ownerCheck.value?.checksLeft
@@ -852,6 +869,8 @@ class VaultManager(
         scope.launch { runCatching { canary.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
         scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
+        // An older build kept the account snapshot and the name request in the record until a wipe: written again without.
+        scope.launch { io { runCatching { if (legacyOwnAccount && record.rewrite()) legacyOwnAccount = false } } }
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             var previous: AppPhase = AppPhase.Starting
@@ -868,8 +887,7 @@ class VaultManager(
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
                     items.refreshQuietly()
                     feed.open()
-                    launch { refreshAccount() }
-                    launch { runCatching { profile.refreshProfile() } }
+                    readOwnProfile()
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
                 } else if (it != AppPhase.Starting) {
@@ -880,6 +898,7 @@ class VaultManager(
                     items.clear()
                     sharing.clear()
                     feed.clear()
+                    forgetOwnProfile() // the names, the full email and the photo: memory only, while the vault is open
                 }
             }
         }
@@ -893,8 +912,12 @@ class VaultManager(
                 if (now && !held) {
                     feed.clear()
                     attachments.clear() // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
+                    forgetOwnProfile() // nor the member's own names, full email or photo
                 }
-                if (!now && held && phaseFlow.value == AppPhase.Unlocked) feed.open()
+                if (!now && held && phaseFlow.value == AppPhase.Unlocked) {
+                    feed.open()
+                    readOwnProfile()
+                }
                 held = now
             }
         }
@@ -920,13 +943,48 @@ class VaultManager(
 
     // --- local account record (encrypted under a Keystore key) ---
 
+    /** Whether the record's JSON [raw] has the keys an older build kept the own account under. */
+    private fun holdsOwnAccount(raw: String): Boolean = try {
+        json.parseToJsonElement(raw).jsonObject.keys.any { it == LEGACY_SNAPSHOT_KEY || it == LEGACY_NAME_REQUEST_KEY }
+    } catch (_: IllegalArgumentException) {
+        false
+    }
+
+    /** What the app shows of the account now: the record's masked email and, while the vault is open, [ownAccount]. */
+    private fun publishAccount() {
+        ownAccount.publish { snap, req -> accountFlow.value = local.toInfo(snap, req) }
+    }
+
+    /**
+     * The vault is open for the own profile: unlocked, and neither held nor due (§3.6.3). Otherwise the member's names,
+     * full email and photo are not kept (ANDROID-PLAN §4 "The member's own profile").
+     */
+    private fun ownProfileOpen(): Boolean = isOwnProfileOpen(phaseFlow.value, ownerCheck.ownerCheck.value)
+
+    /**
+     * The vault is not open (a lock, the hold or the due state, a sign-out, a reset, a wipe, a deletion): the own account
+     * and the own profile (the names, the full email, the photo) leave memory, and the shell shows the initial tile.
+     */
+    private fun forgetOwnProfile() {
+        ownAccount.forget { accountFlow.value = local.toInfo() }
+        profile.clear()
+    }
+
+    /** The vault opened again (an unlock, a passed check): the own account and profile are read from it. */
+    private fun readOwnProfile() {
+        scope.launch { refreshAccount() }
+        scope.launch { runCatching { profile.refreshProfile() } }
+    }
+
     /**
      * The account record. One that cannot be decrypted or parsed is not taken for "no account" (it names the vault
      * this phone's keys belong to): [localUnreadable] makes [evaluate] say so instead of showing the welcome screen.
      */
     private fun loadLocal(): LocalAccount = try {
-        val a = accountFile.load()?.let { json.decodeFromString(LocalAccount.serializer(), String(it)) } ?: LocalAccount()
+        val raw = accountFile.load()?.let { String(it) }
+        val a = raw?.let { json.decodeFromString(LocalAccount.serializer(), it) } ?: LocalAccount()
         localUnreadable = false
+        legacyOwnAccount = raw != null && holdsOwnAccount(raw)
         a
     } catch (_: KeystoreException) {
         localUnreadable = true
@@ -1141,13 +1199,14 @@ class VaultManager(
             items.clear()
             feed.clear()
             ownerCheck.clear()
+            forgetOwnProfile()
             phoneSecrets.delete(local.phone)
             // UNBOUND: clears the vault's part of whatever record is current, which the forgotten device leaves nothing
             // to belong to. A forget that ends the account resets the record next; a fresh device before an enrolment
             // ([freshDeviceIfUnpaired]: a redeem, a transfer to this phone, a recovery) keeps its member's part.
             updateLocal(RecordStore.UNBOUND) {
                 it.copy(
-                    setupComplete = false, snapshot = null, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
+                    setupComplete = false, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
                     transferKeepMs = null, finishMovePending = false, movedIn = false, recoveryRSeen = false,
                     capabilities = emptyList(), timeScale = null, unreachableAfterMs = null,
                 )
@@ -1333,7 +1392,7 @@ class VaultManager(
             record.reload(a, readable = !localUnreadable)
             syncTimeScale()
             if (localUnreadable) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_KEYSTORE)
-            accountFlow.value = local.toInfo()
+            publishAccount()
         }
         if (local.replaced != null) {
             // A phone the build before the wipe marked replaced (its device keys already forgotten): erase it now.
@@ -1447,10 +1506,14 @@ class VaultManager(
         try {
             // The record this answer is for: after a wipe or a reset meanwhile, nothing of it is kept.
             val rec = record.recordGeneration
+            // And the own account's: an answer on its way when the vault closes is not kept ([OwnAccount]).
+            val mark = ownAccount.mark()
             val v = guard { session().openApi.accountGet() }
-            val stored = local.snapshot
-            val u = accountUpdate(stored, local.nameRequest, v) ?: return
+            val stored = ownAccount.snapshot
+            val u = accountUpdate(stored, ownAccount.nameRequest, v) ?: return
+            if (!ownAccount.keep(mark, u, ::ownProfileOpen)) return
             io { record.refreshed(rec, u) }
+            publishAccount()
             // An applied name change brings new names to the shared profile's core too.
             if (u.snapshot?.firstName != stored?.firstName || u.snapshot?.lastName != stored?.lastName) {
                 runCatching { profile.refreshProfile() }
@@ -2159,7 +2222,7 @@ class VaultManager(
         social.clear()
         attachments.reset()
         ownerCheck.clear()
-        profile.clear()
+        forgetOwnProfile()
         history.clear()
         items.clear()
         sharing.clear()
@@ -3097,7 +3160,7 @@ class VaultManager(
         social.clear()
         attachments.reset()
         ownerCheck.clear()
-        profile.clear()
+        forgetOwnProfile()
         history.clear()
         items.clear()
         sharing.clear()
@@ -3294,6 +3357,10 @@ class VaultManager(
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
+
+        /** The record's keys an older build kept the own account under ([LocalAccount]). */
+        private const val LEGACY_SNAPSHOT_KEY = "snapshot"
+        private const val LEGACY_NAME_REQUEST_KEY = "nameRequest"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"
         private const val SYNC_PROFILE_CHANGED = "profile.changed"
 
