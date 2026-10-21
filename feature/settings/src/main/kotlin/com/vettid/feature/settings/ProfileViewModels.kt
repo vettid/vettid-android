@@ -18,6 +18,9 @@ import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.shownInShell
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import javax.inject.Inject
 
@@ -200,7 +204,30 @@ class SharedProfileViewModel @Inject constructor(
 
     fun dismiss() = state.update { it.copy(saved = false, error = null, photoUnreadable = false, photoSaved = false) }
 
-    /** The taken photo is being encoded (off the main thread, by the screen). */
+    /**
+     * The photo the member accepted ("Use photo"): [encode] (blocking: `encodeShot`) runs on [encodeOn] in this view
+     * model's scope, then [photoTaken] takes the JPEG bytes on the main thread. The encoding always runs once started
+     * (it recycles the shot); if the scope ends meanwhile (the screen gone), the bytes are zeroed, never kept.
+     */
+    fun encodePhoto(encodeOn: CoroutineDispatcher = Dispatchers.Default, encode: () -> ByteArray?) {
+        photoEncoding()
+        viewModelScope.launch(encodeOn, CoroutineStart.ATOMIC) {
+            val jpeg = encode()
+            var handedOver = false
+            try {
+                // Not dispatched once the scope is cancelled; when it runs, photoTaken owns the bytes (zeroes or keeps
+                // them, and a kept photo is zeroed by onCleared).
+                withContext(Dispatchers.Main.immediate) {
+                    handedOver = true
+                    photoTaken(jpeg)
+                }
+            } finally {
+                if (!handedOver) jpeg?.fill(0)
+            }
+        }
+    }
+
+    /** The taken photo is being encoded (off the main thread, [encodePhoto]). */
     fun photoEncoding() {
         encodingSince = drops
         state.update { it.copy(photoBusy = true, photoUnreadable = false, photoSaved = false, error = null) }

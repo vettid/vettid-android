@@ -8,7 +8,9 @@ import com.vettid.core.data.vault.NameRequestState
 import com.vettid.core.data.vault.NameRequestView
 import com.vettid.core.data.vault.OwnProfile
 import com.vettid.core.testing.FakeVault
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -176,6 +178,64 @@ class ProfileViewModelsTest {
         vm.photoTaken(jpeg())
         advanceUntilIdle()
         assertEquals("/9j/4AAQ", vault.lastPhoto)
+    }
+
+    @Test
+    fun aPhotoEncodedInTheViewModelIsSent() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.encodePhoto(main.dispatcher) { jpeg() }
+        assertTrue(vm.uiState.value.photoBusy)
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+        assertTrue(vm.uiState.value.photoSaved)
+        assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun aLockDuringTheViewModelsEncodingZeroesTheBytes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) {
+            vault.profile.value = null
+            jpeg().also { encoded = it }
+        }
+        advanceUntilIdle()
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+        assertFalse(vm.uiState.value.photoBusy)
+    }
+
+    @Test
+    fun theScreenGoneDuringTheEncodingZeroesTheBytes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) {
+            // The view model's scope ends while the shot is encoded (the screen gone).
+            vm.viewModelScope.cancel()
+            jpeg().also { encoded = it }
+        }
+        advanceUntilIdle()
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+    }
+
+    @Test
+    fun theScreenGoneBeforeTheEncodingStillEncodesOnceAndZeroes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) { jpeg().also { encoded = it } }
+        vm.viewModelScope.cancel()
+        advanceUntilIdle()
+        // The encoding ran (it recycles the shot), and its bytes were zeroed, never kept or sent.
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
     }
 
     @Test
