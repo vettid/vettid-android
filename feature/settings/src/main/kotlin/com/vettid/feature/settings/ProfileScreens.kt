@@ -500,11 +500,14 @@ private const val WARN_LEFT = 3
 @Composable
 private fun rememberShownPhoto(state: SharedProfileUiState): androidx.compose.ui.graphics.ImageBitmap? {
     val pending = state.pendingPhoto
+    // A dropped photo (its bytes zeroed) is neither decoded nor shown, even from a state not yet replaced.
     val preview = androidx.compose.runtime.remember(pending) {
-        pending?.let { com.vettid.core.ui.components.ProfilePhotos.decodeImage(it.bytes)?.asImageBitmap() }
+        pending?.takeUnless { it.wiped }?.let {
+            com.vettid.core.ui.components.ProfilePhotos.decodeImage(it.bytes)?.asImageBitmap()
+        }
     }
     val shared = rememberProfilePhoto(state.profile?.photo)
-    return preview ?: shared
+    return preview?.takeUnless { pending?.wiped == true } ?: shared
 }
 
 /**

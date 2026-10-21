@@ -159,9 +159,10 @@ class PhotoCaptureTest {
         val r = Random(3)
         val px = IntArray(1600 * 1200) { (0xFF shl 24) or r.nextInt(0x1000000) }
         val big = Bitmap.createBitmap(px, 1600, 1200, Bitmap.Config.ARGB_8888)
-        val b64 = encodeShot(centredSelection(big))
-        assertNotNull(b64)
-        val bytes = Base64.decode(b64, Base64.DEFAULT)
+        val bytes = encodeShot(centredSelection(big))
+        assertNotNull(bytes)
+        bytes!!
+        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
         assertTrue("${bytes.size} bytes", bytes.size <= ProfilePhotos.MAX_BYTES)
         assertTrue(ProfilePhotos.isJpeg(bytes))
         // A JPEG re-encoded from pixels: no EXIF (APP1) segment right after SOI.
@@ -235,7 +236,7 @@ class PhotoCaptureTest {
         plain.retake()
         plain.shutter()
         plain.shot(marked())
-        val centred = ProfilePhotos.decode(encodeShot(plain.use()!!))!!
+        val centred = ProfilePhotos.decodeImage(encodeShot(plain.use()!!)!!)!!
         assertTrue(isGrey(centred.getPixel(centred.width * 3 / 4, centred.height * 3 / 4)))
         // Zoomed 2x (a 768 px square) and dragged to the top-left corner: all red.
         val m = granted()
@@ -246,9 +247,9 @@ class PhotoCaptureTest {
         m.frame { f, w, h -> PhotoCrop.gesture(f, w, h, 1000f, 500f, 500f, 5000f, 5000f, 1f) }
         val sel = m.use()!!
         assertEquals(CropRect(0, 0, 768), sel.crop)
-        val b64 = encodeShot(sel)
+        val bytes = encodeShot(sel)!!
         assertTrue(b.isRecycled)
-        val bytes = Base64.decode(b64, Base64.DEFAULT)
+        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
         assertTrue(bytes.size <= ProfilePhotos.MAX_BYTES)
         assertFalse(bytes[2] == 0xFF.toByte() && bytes[3] == 0xE1.toByte()) // no EXIF
         val out = ProfilePhotos.decode(b64)!!

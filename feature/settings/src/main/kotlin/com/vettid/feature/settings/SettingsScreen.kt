@@ -82,7 +82,6 @@ import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
-import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import androidx.navigation.toRoute
 
@@ -201,7 +200,6 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         val vm: SharedProfileViewModel = hiltViewModel()
         val capture: PhotoCaptureViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        val scope = androidx.compose.runtime.rememberCoroutineScope()
         // The profile photo is taken with the in-app camera, never chosen from the gallery (owner feedback
         // 2026-10-08). Saved across process death: the screen comes back to the live camera (the shot is never stored).
         var capturing by rememberSaveable { mutableStateOf(false) }
@@ -212,14 +210,8 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 onUse = { selection ->
                     capturing = false
                     // The square under the round frame, scaled and re-encoded off the main thread (VAULT-MESSAGING
-                    // §10.8: at most 65,536 bytes).
-                    vm.photoEncoding()
-                    scope.launch {
-                        val encoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                            encodeShot(selection)
-                        }
-                        vm.photoTaken(encoded)
-                    }
+                    // §10.8: at most 65,536 bytes), in the view model's scope: the bytes are zeroed if it ends first.
+                    vm.encodePhoto { encodeShot(selection) }
                 },
             )
             return@composable

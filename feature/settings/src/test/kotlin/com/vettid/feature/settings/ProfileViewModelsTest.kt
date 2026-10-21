@@ -8,7 +8,9 @@ import com.vettid.core.data.vault.NameRequestState
 import com.vettid.core.data.vault.NameRequestView
 import com.vettid.core.data.vault.OwnProfile
 import com.vettid.core.testing.FakeVault
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -34,6 +36,9 @@ class ProfileViewModelsTest {
 
     private val items = com.vettid.core.testing.FakeItems()
 
+    /** The JPEG bytes the screen hands over once the shot is encoded (`encodeShot`). */
+    private fun jpeg(): ByteArray = java.util.Base64.getDecoder().decode("/9j/4AAQ")
+
     // --- the shared profile ---
 
     @Test
@@ -43,7 +48,7 @@ class ProfileViewModelsTest {
         assertNull(vm.uiState.value.profile!!.photo)
         vm.photoEncoding()
         assertTrue(vm.uiState.value.photoBusy)
-        vm.photoTaken("/9j/4AAQ")
+        vm.photoTaken(jpeg())
         advanceUntilIdle()
         assertEquals("/9j/4AAQ", vault.lastPhoto)
         assertEquals("/9j/4AAQ", vault.profile.value!!.photo)
@@ -56,7 +61,7 @@ class ProfileViewModelsTest {
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
-        vm.photoTaken("/9j/4AAQ")
+        vm.photoTaken(jpeg())
         advanceUntilIdle()
         assertNull(vault.lastPhoto)
         assertEquals("/9j/4AAQ", vm.uiState.value.pendingPhoto!!.base64())
@@ -99,7 +104,7 @@ class ProfileViewModelsTest {
         advanceUntilIdle()
         vm.setDisplayName("Countess")
         vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
-        vm.photoTaken("/9j/4AAQ")
+        vm.photoTaken(jpeg())
         advanceUntilIdle()
         val pending = vm.uiState.value.pendingPhoto!!
         assertTrue(vm.uiState.value.edited)
@@ -115,6 +120,136 @@ class ProfileViewModelsTest {
         advanceUntilIdle()
         assertEquals("Ada", vm.uiState.value.displayName)
         assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun aLockDuringTheEncodingKeepsNothingAndSendsNothing() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.photoEncoding()
+        // The vault locks while the shot is encoded off the main thread: the drafts are dropped first.
+        vault.profile.value = null
+        advanceUntilIdle()
+        val encoded = jpeg()
+        vm.photoTaken(encoded)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(encoded.all { it == 0.toByte() })
+        assertNull(vault.lastPhoto)
+        assertFalse(vm.uiState.value.photoBusy)
+        assertFalse(vm.uiState.value.photoUnreadable)
+    }
+
+    @Test
+    fun theHoldDuringTheEncodingKeepsNothingAndSendsNothing() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.photoEncoding()
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        val encoded = jpeg()
+        vm.photoTaken(encoded)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(encoded.all { it == 0.toByte() })
+        assertNull(vault.lastPhoto)
+        assertFalse(vm.uiState.value.photoBusy)
+    }
+
+    @Test
+    fun aLockAndUnlockDuringTheEncodingStillKeepsNothing() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.photoEncoding()
+        val open = vault.profile.value
+        vault.profile.value = null
+        advanceUntilIdle()
+        // Unlocked again before the encoding ends: the photo was taken before the lock, so it is not kept.
+        vault.profile.value = open
+        advanceUntilIdle()
+        val encoded = jpeg()
+        vm.photoTaken(encoded)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(encoded.all { it == 0.toByte() })
+        assertNull(vault.lastPhoto)
+        // The next photo, taken with the vault open, is sent as usual.
+        vm.photoEncoding()
+        vm.photoTaken(jpeg())
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+    }
+
+    @Test
+    fun aPhotoEncodedInTheViewModelIsSent() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.encodePhoto(main.dispatcher) { jpeg() }
+        assertTrue(vm.uiState.value.photoBusy)
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+        assertTrue(vm.uiState.value.photoSaved)
+        assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun aLockDuringTheViewModelsEncodingZeroesTheBytes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) {
+            vault.profile.value = null
+            jpeg().also { encoded = it }
+        }
+        advanceUntilIdle()
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+        assertFalse(vm.uiState.value.photoBusy)
+    }
+
+    @Test
+    fun theScreenGoneDuringTheEncodingZeroesTheBytes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) {
+            // The view model's scope ends while the shot is encoded (the screen gone).
+            vm.viewModelScope.cancel()
+            jpeg().also { encoded = it }
+        }
+        advanceUntilIdle()
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+    }
+
+    @Test
+    fun theScreenGoneBeforeTheEncodingStillEncodesOnceAndZeroes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) { jpeg().also { encoded = it } }
+        vm.viewModelScope.cancel()
+        advanceUntilIdle()
+        // The encoding ran (it recycles the shot), and its bytes were zeroed, never kept or sent.
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+    }
+
+    @Test
+    fun aDroppedPhotoIsMarkedWiped() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.photoTaken(jpeg())
+        advanceUntilIdle()
+        val pending = vm.uiState.value.pendingPhoto!!
+        assertFalse(pending.wiped)
+        vault.profile.value = null
+        advanceUntilIdle()
+        assertTrue(pending.wiped)
     }
 
     @Test
@@ -134,13 +269,13 @@ class ProfileViewModelsTest {
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
-        vm.photoTaken("/9j/4AAQ")
+        vm.photoTaken(jpeg())
         advanceUntilIdle()
         val first = vm.uiState.value.pendingPhoto!!
         vm.discardPhoto()
         assertTrue(first.bytes.all { it == 0.toByte() })
         vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK) // taken once per call
-        vm.photoTaken("/9j/4AAQ")
+        vm.photoTaken(jpeg())
         advanceUntilIdle()
         val second = vm.uiState.value.pendingPhoto!!
         vm.savePhoto()

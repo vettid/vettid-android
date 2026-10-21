@@ -18,6 +18,9 @@ import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.shownInShell
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import javax.inject.Inject
 
@@ -84,7 +88,15 @@ class PendingPhoto(private val jpeg: ByteArray) {
     /** The standard base64 `profile.set{photo}` takes. */
     fun base64(): String = java.util.Base64.getEncoder().encodeToString(jpeg)
 
-    fun wipe() = jpeg.fill(0)
+    /** Whether [wipe] ran: the bytes are zeros, and the preview decodes nothing from them. */
+    @Volatile
+    var wiped: Boolean = false
+        private set
+
+    fun wipe() {
+        wiped = true
+        jpeg.fill(0)
+    }
 
     companion object {
         /** [base64] (`ProfilePhotos.encodeBase64`'s) as bytes, or null when it is not base64. */
@@ -113,6 +125,12 @@ class SharedProfileViewModel @Inject constructor(
 ) : ViewModel() {
     private val state = MutableStateFlow(SharedProfileUiState(account = accounts.account.value, profile = profiles.profile.value))
     val uiState: StateFlow<SharedProfileUiState> = state.asStateFlow()
+
+    /** How many times the drafts were dropped ([dropDrafts]); a photo encoded across a drop is not kept. */
+    private var drops = 0L
+
+    /** [drops] when the taken photo began encoding ([photoEncoding]), or null when none is being encoded. */
+    private var encodingSince: Long? = null
 
     init {
         viewModelScope.launch {
@@ -186,16 +204,53 @@ class SharedProfileViewModel @Inject constructor(
 
     fun dismiss() = state.update { it.copy(saved = false, error = null, photoUnreadable = false, photoSaved = false) }
 
-    /** The taken photo is being encoded (off the main thread, by the screen). */
-    fun photoEncoding() = state.update { it.copy(photoBusy = true, photoUnreadable = false, photoSaved = false, error = null) }
+    /**
+     * The photo the member accepted ("Use photo"): [encode] (blocking: `encodeShot`) runs on [encodeOn] in this view
+     * model's scope, then [photoTaken] takes the JPEG bytes on the main thread. The encoding always runs once started
+     * (it recycles the shot); if the scope ends meanwhile (the screen gone), the bytes are zeroed, never kept.
+     */
+    fun encodePhoto(encodeOn: CoroutineDispatcher = Dispatchers.Default, encode: () -> ByteArray?) {
+        photoEncoding()
+        viewModelScope.launch(encodeOn, CoroutineStart.ATOMIC) {
+            val jpeg = encode()
+            var handedOver = false
+            try {
+                // Not dispatched once the scope is cancelled; when it runs, photoTaken owns the bytes (zeroes or keeps
+                // them, and a kept photo is zeroed by onCleared).
+                withContext(Dispatchers.Main.immediate) {
+                    handedOver = true
+                    photoTaken(jpeg)
+                }
+            } finally {
+                if (!handedOver) jpeg?.fill(0)
+            }
+        }
+    }
+
+    /** The taken photo is being encoded (off the main thread, [encodePhoto]). */
+    fun photoEncoding() {
+        encodingSince = drops
+        state.update { it.copy(photoBusy = true, photoUnreadable = false, photoSaved = false, error = null) }
+    }
 
     /**
-     * The photo the member took and accepted ("Use photo"), encoded (`ProfilePhotos.encodeBase64`), sent with
-     * `profile.set{photo}`; it stays as a preview (with "Save photo") if the vault refuses. Null: it could not be
-     * encoded.
+     * The photo the member took and accepted ("Use photo"), encoded (`ProfilePhotos.encode`: the JPEG bytes, kept by
+     * the [PendingPhoto]), sent with `profile.set{photo}`; it stays as a preview (with "Save photo") if the vault
+     * refuses. Null: it could not be encoded.
+     *
+     * The encoding runs off the main thread, so the vault may have closed meanwhile (a lock, the hold or the due state),
+     * and the drafts were dropped before this answer: then the bytes are zeroed, nothing is kept or sent, even if the
+     * vault has opened again since.
      */
-    fun photoTaken(base64: String?) {
-        val photo = base64?.let { PendingPhoto.of(it) }
+    fun photoTaken(jpeg: ByteArray?) {
+        val since = encodingSince
+        encodingSince = null
+        if ((since != null && since != drops) || !vaultOpen()) {
+            jpeg?.fill(0)
+            state.update { it.copy(photoBusy = false, photoUnreadable = false) }
+            return
+        }
+        val photo = jpeg?.let { PendingPhoto(it) }
         val old = state.value.pendingPhoto
         state.update { it.copy(pendingPhoto = photo, photoBusy = false, photoUnreadable = photo == null) }
         if (old !== photo) old?.wipe()
@@ -219,10 +274,14 @@ class SharedProfileViewModel @Inject constructor(
      * kept for after the unlock.
      */
     private fun dropDrafts() {
+        drops++
         val old = state.value.pendingPhoto
         state.update { it.copy(displayName = "", edited = false, pendingPhoto = null, photoUnreadable = false, saved = false) }
         old?.wipe()
     }
+
+    /** The vault is open: the account is the open vault's and the profile is known (the opposite of [dropDrafts]'s). */
+    private fun vaultOpen(): Boolean = accounts.account.value.shownInShell() != null && profiles.profile.value != null
 
     override fun onCleared() {
         state.value.pendingPhoto?.wipe()
