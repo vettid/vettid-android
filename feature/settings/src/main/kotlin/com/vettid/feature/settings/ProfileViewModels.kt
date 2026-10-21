@@ -349,8 +349,13 @@ data class ChangeNameUiState(
     /** `too_soon` from the vault: when the next change may be applied (null: not said). */
     val tooSoon: Boolean = false,
     val allowedAfter: Instant? = null,
-    /** The request sent from this screen, updated from the account (`name_request`). */
+    /**
+     * The request sent from this screen, updated from the account (`name_request`); null whenever the vault is not
+     * open (its names are not kept, ANDROID-PLAN 0.1.63), and back from `account.get` after the unlock.
+     */
     val request: NameRequestView? = null,
+    /** The `seq` of the request sent from this screen (no names): finds it again in `account.get` after the unlock. */
+    val sentSeq: Long? = null,
 ) {
     val firstCheck: AccountNames.Check get() = AccountNames.check(first)
     val lastCheck: AccountNames.Check get() = AccountNames.check(last)
@@ -368,7 +373,8 @@ data class ChangeNameUiState(
     val submitAllowed: Boolean
         get() = step == ChangeNameStep.CONFIRM && !busy && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
 
-    override fun toString(): String = "ChangeNameUiState(step=$step, busy=$busy, message=$message, wait=$waitSeconds, request=$request)"
+    override fun toString(): String =
+        "ChangeNameUiState(step=$step, busy=$busy, message=$message, wait=$waitSeconds, request=${request?.state})"
 
     companion object {
         const val MIN_PIN = 6
@@ -386,7 +392,12 @@ data class ChangeNameUiState(
 /**
  * (ANDROID-PLAN 0.1.62, owner decision of 2026-10-21) The names typed, the PIN and the password are dropped whenever the
  * vault is not open (the account no longer from the open vault: a lock, the hold or the due state); the member types
- * them again after the unlock. A request already sent stays, to show its state.
+ * them again after the unlock.
+ *
+ * (ANDROID-PLAN 0.1.63, owner decision of 2026-10-21) The names of a request already sent are dropped too: while the
+ * vault is not open nothing about the request is shown. Only its `seq` stays, and after the unlock the request (its
+ * names and state) comes back from `account.get`'s `name_request`. An `account.name.set` answered after a drop is not
+ * kept.
  */
 @HiltViewModel
 class ChangeNameViewModel @Inject constructor(
@@ -397,14 +408,17 @@ class ChangeNameViewModel @Inject constructor(
     val uiState: StateFlow<ChangeNameUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
+    /** Counts the drops: an answer to a request sent before the latest drop is not kept. */
+    private var drops = 0
+
     init {
         viewModelScope.launch {
             accounts.account.collect { a ->
                 if (a.shownInShell() == null) dropDrafts()
+                val open = a.shownInShell()
                 state.update { s ->
-                    val ours = s.request
-                    val latest = a?.nameRequest?.takeIf { ours != null && it.seq == ours.seq }
-                    s.copy(account = a, request = latest ?: ours)
+                    val latest = open?.nameRequest?.takeIf { s.sentSeq != null && it.seq == s.sentSeq }
+                    s.copy(account = a, request = if (open == null) null else latest ?: s.request)
                 }
             }
         }
@@ -413,8 +427,12 @@ class ChangeNameViewModel @Inject constructor(
 
     private fun initial(a: AccountInfo?) = ChangeNameUiState(account = a, first = a?.firstName ?: "", last = a?.lastName ?: "")
 
-    /** The vault is not open: nothing typed is kept (the names, the PIN, the password). */
+    /**
+     * The vault is not open: nothing typed is kept (the names, the PIN, the password), nor the names of a request
+     * already sent; an answer still on its way is not kept either.
+     */
     private fun dropDrafts() {
+        drops++
         ticker?.cancel()
         state.update {
             it.copy(
@@ -424,8 +442,10 @@ class ChangeNameViewModel @Inject constructor(
                 checked = false,
                 pin = "",
                 password = "",
+                busy = false,
                 message = null,
                 waitSeconds = 0,
+                request = null,
             )
         }
     }
@@ -467,12 +487,16 @@ class ChangeNameViewModel @Inject constructor(
         val s = state.value
         if (!s.submitAllowed) return
         state.update { it.copy(busy = true, message = null) }
+        val sentAt = drops
         viewModelScope.launch {
             val r = try {
                 profiles.changeName(s.pin, s.password, s.first, s.last)
             } catch (e: VaultFailure) {
                 NameChangeOutcome.Failed(e.kind, e.code, e.shownCode)
             }
+            // A lock, the hold or the due state came while the request was on its way: the answer (and the names it
+            // carries) is not kept; after the unlock the request comes back from `account.get` (ANDROID-PLAN 0.1.63).
+            if (sentAt != drops || state.value.account.shownInShell() == null) return@launch
             // Neither secret is kept beyond the answer (as for the owner check, §3.6.5).
             state.update { it.copy(busy = false, pin = "", password = "") }
             apply(r)
@@ -481,7 +505,8 @@ class ChangeNameViewModel @Inject constructor(
 
     private fun apply(r: NameChangeOutcome) {
         when (r) {
-            is NameChangeOutcome.Requested -> state.update { it.copy(step = ChangeNameStep.SENT, request = r.request) }
+            is NameChangeOutcome.Requested ->
+                state.update { it.copy(step = ChangeNameStep.SENT, request = r.request, sentSeq = r.request.seq) }
             is NameChangeOutcome.TooSoon ->
                 state.update { it.copy(step = ChangeNameStep.NAMES, tooSoon = true, allowedAfter = r.allowedAfter) }
             NameChangeOutcome.Invalid -> state.update { it.copy(step = ChangeNameStep.NAMES, message = ChangeNameMessage.Invalid) }

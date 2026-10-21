@@ -310,6 +310,111 @@ class ProfileViewModelsTest {
         assertEquals("", vm.uiState.value.last)
     }
 
+    // --- the names of a request already sent go too (ANDROID-PLAN 0.1.63, owner decision 2026-10-21) ---
+
+    @Test
+    fun aLockDropsTheNamesOfASentRequestAndTheUnlockBringsThemBackFromTheVault() = runTest {
+        val vm = atConfirm()
+        vm.submit()
+        advanceUntilIdle()
+        val sent = vm.uiState.value.request!!
+        assertEquals("King", sent.lastName)
+        // Locked: nothing about the request is kept, not even in the state's text.
+        vault.account.value = null
+        advanceUntilIdle()
+        var s = vm.uiState.value
+        assertEquals(ChangeNameStep.SENT, s.step)
+        assertNull(s.request)
+        assertFalse("King" in s.toString())
+        // After the unlock, account.get's name_request brings the request back, with its state.
+        vault.account.value = AccountInfo(
+            "a***@example.org", state = "member", firstName = "Ada", lastName = "King",
+            nameRequest = NameRequestView(sent.seq, "Ada", "King", null, NameRequestState.APPLIED),
+        )
+        advanceUntilIdle()
+        s = vm.uiState.value
+        assertEquals(ChangeNameStep.SENT, s.step)
+        assertEquals(sent.seq, s.request!!.seq)
+        assertEquals("King", s.request!!.lastName)
+        assertEquals(NameRequestState.APPLIED, s.request!!.state)
+    }
+
+    @Test
+    fun theHoldOrTheDueStateDropsTheNamesOfASentRequestToo() = runTest {
+        val vm = atConfirm()
+        vm.submit()
+        advanceUntilIdle()
+        val seq = vm.uiState.value.request!!.seq
+        // Held or due: only the masked hint is left, and an account without the snapshot brings nothing back.
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.request)
+        vault.account.value = AccountInfo(
+            "a***@example.org",
+            nameRequest = NameRequestView(seq, "Ada", "King", null, NameRequestState.PENDING),
+        )
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.request)
+        // The passed check opens the vault: the request is read again.
+        vault.account.value = AccountInfo(
+            "a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace",
+            nameRequest = NameRequestView(seq, "Ada", "King", null, NameRequestState.PENDING),
+        )
+        advanceUntilIdle()
+        assertEquals(NameRequestState.PENDING, vm.uiState.value.request!!.state)
+    }
+
+    @Test
+    fun aRequestAnsweredAfterTheLockIsNotKept() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.changeNameGate = gate
+        val vm = atConfirm()
+        vm.submit()
+        runCurrent()
+        assertTrue(vm.uiState.value.busy)
+        // The vault locks while account.name.set is on its way.
+        vault.account.value = null
+        advanceUntilIdle()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        var s = vm.uiState.value
+        assertFalse(s.busy)
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertNull(s.request)
+        assertNull(s.sentSeq)
+        assertEquals("", s.first)
+        assertEquals("", s.last)
+        // Nor after the unlock: the answer was not this screen's to keep.
+        vault.account.value = AccountInfo(
+            "a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace",
+            nameRequest = NameRequestView(1, "Ada", "King", null, NameRequestState.PENDING),
+        )
+        advanceUntilIdle()
+        s = vm.uiState.value
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertNull(s.request)
+    }
+
+    @Test
+    fun aRequestAnsweredAfterALockAndAnUnlockIsNotKept() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.changeNameGate = gate
+        val vm = atConfirm()
+        vm.submit()
+        runCurrent()
+        // Locked and opened again before the answer came: the drop counter still turns it away.
+        vault.account.value = null
+        advanceUntilIdle()
+        vault.account.value = AccountInfo("a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace")
+        advanceUntilIdle()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertNull(s.request)
+        assertNull(s.sentSeq)
+    }
+
     @Test
     fun theTypedNamesAreFilledOnlyFromTheOpenVault() = runTest {
         val vm = ChangeNameViewModel(vault, vault)

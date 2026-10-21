@@ -113,4 +113,14 @@ class ChangeNameScreenTest {
         rule.onNodeWithTag("change_name_sent_refused").assertIsDisplayed()
         rule.onNodeWithText("Your account cannot change its name right now.").assertIsDisplayed()
     }
+
+    @Test
+    fun aSentRequestShowsNothingWhileTheVaultIsNotOpen() {
+        rule.setContent {
+            ChangeNameContent(ChangeNameUiState(ChangeNameStep.SENT, account = null, sentSeq = 3), ChangeNameActions(), now)
+        }
+        rule.onNodeWithTag("change_name_sent_hidden").assertIsDisplayed()
+        rule.onNodeWithText("Name change requested").assertDoesNotExist()
+        rule.onNodeWithText("Ada King", substring = true).assertDoesNotExist()
+    }
 }

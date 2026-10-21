@@ -463,8 +463,18 @@ private fun ConfirmStep(state: ChangeNameUiState, actions: ChangeNameActions) {
 @Composable
 private fun SentStep(state: ChangeNameUiState, actions: ChangeNameActions) {
     val r = state.request
-    val name = r?.let { AccountNames.isolate("${it.firstName} ${it.lastName}") } ?: AccountNames.isolate(state.requestedName)
-    val (title, body, icon) = when (r?.state) {
+    if (r == null) {
+        // The vault is not open (ANDROID-PLAN 0.1.63): nothing about the request, which comes back after the unlock.
+        FormScaffold(
+            title = stringResource(R.string.settings_name_title),
+            primaryLabel = stringResource(R.string.settings_name_done),
+            onPrimary = actions.onClose,
+            modifier = Modifier.testTag("change_name_sent_hidden"),
+        ) {}
+        return
+    }
+    val name = AccountNames.isolate("${r.firstName} ${r.lastName}")
+    val (title, body, icon) = when (r.state) {
         NameRequestState.APPLIED -> Triple(
             stringResource(R.string.settings_name_applied_title),
             stringResource(R.string.settings_name_applied_body, name),
@@ -486,7 +496,7 @@ private fun SentStep(state: ChangeNameUiState, actions: ChangeNameActions) {
         body = body,
         primaryLabel = stringResource(R.string.settings_name_done),
         onPrimary = actions.onClose,
-        modifier = Modifier.testTag("change_name_sent_${(r?.state ?: NameRequestState.PENDING).name.lowercase()}"),
+        modifier = Modifier.testTag("change_name_sent_${r.state.name.lowercase()}"),
         header = { HeaderGlyph(icon) },
     ) {}
 }
