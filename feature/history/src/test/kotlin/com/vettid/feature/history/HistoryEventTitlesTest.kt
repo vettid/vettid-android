@@ -72,6 +72,7 @@ class HistoryEventTitlesTest {
             Triple("recovery.generation_closed", "4/rollback", "Your vault was given an older recovery record"),
             Triple("recovery.presence_unrecorded", null, "Your vault could not record that you were here"),
             Triple("identity.rotation_failed", "recovery", "Key update failed"),
+            Triple("credential.utk_resync", null, "One-time keys renewed"),
             Triple("connection.request.approved", "p1", "You accepted a connection request"),
             Triple("connection.request.declined", "p1", "You declined a connection request"),
             Triple("drop.call_off", null, "Call refused: calls are off"),
@@ -170,6 +171,7 @@ class HistoryEventTitlesTest {
             lines("recovery.presence_unrecorded", null),
         )
         assertEquals(listOf("Your connections still know your old keys. VettID will offer the update again."), lines("identity.rotation_failed", "recovery"))
+        assertEquals(listOf("This phone's one-time keys were replaced with a fresh set."), lines("credential.utk_resync", null))
         assertEquals(
             listOf("This connection's vault announced two different new keys. That can mean someone holds an old copy of their vault. Nothing is sent or received until you check."),
             lines("identity.rotate_conflict", null),

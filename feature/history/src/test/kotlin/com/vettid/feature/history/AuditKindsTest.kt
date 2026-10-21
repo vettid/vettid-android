@@ -40,7 +40,16 @@ class AuditKindsTest {
         // VAULT-MESSAGING 0.49.1, ANDROID-PLAN 0.1.52 §4 "Event titles": the fixed titles.
         "vault.pin_changed", "device.secret_renewed", "recovery.armed", "recovery.presence_unrecorded",
         "identity.rotation_failed", "connection.request.approved", "connection.request.declined",
+        // ANDROID-PLAN 0.1.60.
+        "credential.utk_resync",
     )
+
+    /** ANDROID-PLAN 0.1.60: the one-time keys' resync is a Security entry with its own title. */
+    @Test
+    fun aUtkResyncIsUnderSecurity() {
+        assertEquals(AuditCategory.SECURITY, AuditCategory.of("credential.utk_resync"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_credential_utk_resync), AuditKinds.title("credential.utk_resync"))
+    }
 
     @Test
     fun aHistoryExportIsUnderSecurityWithItsSummary() {
