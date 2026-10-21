@@ -106,6 +106,14 @@ data class AccountInfo(
     }
 }
 
+/**
+ * What the top bar, the avatar sheet and the Settings card may show of the account (ANDROID-PLAN §4 "The member's own
+ * profile"; owner decision of 2026-10-21): the account only while it comes from the open vault's snapshot (kept in memory
+ * only while the vault is open); null otherwise, and they show only the initial tile: no name, no address, not even the
+ * masked hint (which only the unlock screen shows).
+ */
+fun AccountInfo?.shownInShell(): AccountInfo? = this?.takeIf { it.hasSnapshot }
+
 /** The member's subscription (§11.13): `trial`, `active`, `expired` or `canceled`. */
 data class SubscriptionInfo(val typeName: String?, val status: String?, val paid: Boolean, val expiresAt: Instant?) {
     /** The status to show at [now]: a trial (or any subscription) whose `expires_at` has passed reads `expired`. */

@@ -1,7 +1,10 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.vault.AccountSnapshot
+import com.vettid.core.vault.AccountView
 import com.vettid.core.vault.NameRequest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 
 /**
  * The member's own account as the open vault reported it (ANDROID-PLAN §4 "The member's own profile"): the snapshot of
@@ -29,19 +32,25 @@ internal class OwnAccount {
     var nameRequest: NameRequest? = null
         private set
 
+    /** What [keep] kept: the snapshot [before] it and the [update]. */
+    data class Kept(val before: AccountSnapshot?, val update: AccountUpdate)
+
     /** Read before a request whose answer is to be kept ([keep], [request]). */
     fun mark(): Int = generation
 
     /**
-     * Keeps [u] (`account.get`'s, [accountUpdate]) while no [forget] came after [mark] and [open] still says the vault is
-     * open; then [also], under the lock. True when kept.
+     * Keeps what is new in `account.get`'s [v] ([accountUpdate], against the snapshot and the request held now, under the
+     * lock: an older answer never replaces a newer one) while no [forget] came after [mark] and [open] still says the
+     * vault is open; then [also], under the lock. Null when nothing was kept.
      */
-    fun keep(mark: Int, u: AccountUpdate, open: () -> Boolean, also: () -> Unit = {}): Boolean = synchronized(lock) {
-        if (mark != generation || !open()) return false
+    fun keep(mark: Int, v: AccountView, open: () -> Boolean, also: () -> Unit = {}): Kept? = synchronized(lock) {
+        if (mark != generation || !open()) return null
+        val before = snapshot
+        val u = accountUpdate(before, nameRequest, v) ?: return null
         snapshot = u.snapshot
         nameRequest = u.nameRequest
         also()
-        true
+        Kept(before, u)
     }
 
     /** A name request the vault stored (`account.name.set`), under the same conditions as [keep]. */
@@ -72,3 +81,47 @@ internal class OwnAccount {
  */
 internal fun isOwnProfileOpen(phase: AppPhase, check: OwnerCheckView?): Boolean =
     phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK)
+
+/** What the vault manager does with the own profile when the phase or the owner check moves (ANDROID-PLAN §4). */
+internal enum class OwnProfileStep {
+    /** Forget the own account and profile (the vault is not open). */
+    FORGET,
+
+    /** Read them again from the vault (it opened again). */
+    READ,
+
+    NONE,
+    ;
+
+    companion object {
+        /** The phase moved to [phase]: unlocked reads, starting does nothing, every other phase forgets. */
+        fun onPhase(phase: AppPhase): OwnProfileStep = when (phase) {
+            AppPhase.Unlocked -> READ
+            AppPhase.Starting -> NONE
+            else -> FORGET
+        }
+
+        /** The owner check moved from [wasHeld] to [held] (held or due) during [phase]. */
+        fun onCheck(wasHeld: Boolean, held: Boolean, phase: AppPhase): OwnProfileStep = when {
+            held && !wasHeld -> FORGET
+            !held && wasHeld && phase == AppPhase.Unlocked -> READ
+            else -> NONE
+        }
+
+        /** Held or due (§3.6.3). */
+        fun held(v: OwnerCheckView?): Boolean = v != null && v.state != OwnerCheckState.OK
+    }
+}
+
+/** The account record's keys an older build kept the own account under ([LocalAccount]). */
+private val LEGACY_OWN_ACCOUNT_KEYS = setOf("snapshot", "nameRequest")
+
+/**
+ * Whether the account record's JSON [raw] still holds the own account of an older build (the snapshot or the name
+ * request): the vault manager then writes the record again without it at the start ([AccountRecord.rewrite]).
+ */
+internal fun holdsLegacyOwnAccount(raw: String, json: Json): Boolean = try {
+    json.parseToJsonElement(raw).jsonObject.keys.any { it in LEGACY_OWN_ACCOUNT_KEYS }
+} catch (_: IllegalArgumentException) {
+    false
+}

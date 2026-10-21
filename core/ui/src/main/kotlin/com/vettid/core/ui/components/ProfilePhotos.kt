@@ -113,6 +113,13 @@ object ProfilePhotos {
         }
     }
 
+    /**
+     * [bytes] of a JPEG or PNG of at most [MAX_BYTES] for display (a taken photo before it is saved), or null; the
+     * caller keeps (and zeroes) the bytes.
+     */
+    fun decodeImage(bytes: ByteArray): Bitmap? =
+        if ((isJpeg(bytes) || isPng(bytes)) && bytes.size <= MAX_BYTES) decodeBytes(bytes) else null
+
     @Suppress("ReturnCount")
     private fun decodeBytes(bytes: ByteArray): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

@@ -22,6 +22,7 @@ import androidx.compose.ui.res.stringResource
 import com.vettid.app.R
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.SubscriptionInfo
+import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.ui.components.AvatarSheet
 import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsGroup
@@ -53,16 +54,19 @@ fun AccountSheet(
     onSharedProfile: () -> Unit = {},
     photo: androidx.compose.ui.graphics.ImageBitmap? = null,
 ) {
+    // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise the initial tile, no name and
+    // no address (not even the masked hint).
+    val shown = account.shownInShell()
     AvatarSheet(
         photo = photo,
         // First and last name and the full address (owner feedback 2026-10-07; `email` from VAULT-MESSAGING 0.20.0,
         // the masked `email_hint` from an older vault).
-        name = account?.fullName ?: account?.displayEmail ?: stringResource(R.string.account_placeholder_name),
-        detail = account?.fullName?.let { account.displayEmail } ?: membershipLine(account),
+        name = shown?.fullName ?: shown?.displayEmail ?: stringResource(R.string.account_placeholder_name),
+        detail = shown?.fullName?.let { shown.displayEmail } ?: membershipLine(shown),
         onDismiss = onDismiss,
         optionsHeader = stringResource(R.string.account_options),
     ) {
-        AccountSheetOptions(account, portalUrl, onLockVault, now, onChangeName, onSharedProfile)
+        AccountSheetOptions(shown, portalUrl, onLockVault, now, onChangeName, onSharedProfile)
     }
 }
 
@@ -156,7 +160,8 @@ fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: () -> U
  */
 @Composable
 fun AccountEmailGroup(account: AccountInfo?) {
-    val email = account?.displayEmail ?: return
+    // Only while the vault is open: never the masked hint of the account record (ANDROID-PLAN §4 "The member's own profile").
+    val email = account.shownInShell()?.displayEmail ?: return
     SettingsGroup(Modifier.testTag("account_email")) {
         SettingsInfoRow(stringResource(R.string.account_email), email, icon = Icons.Outlined.Email)
         Text(

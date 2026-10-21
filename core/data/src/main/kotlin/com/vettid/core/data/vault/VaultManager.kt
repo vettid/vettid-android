@@ -97,7 +97,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -887,7 +886,6 @@ class VaultManager(
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
                     items.refreshQuietly()
                     feed.open()
-                    readOwnProfile()
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
                 } else if (it != AppPhase.Starting) {
@@ -898,7 +896,12 @@ class VaultManager(
                     items.clear()
                     sharing.clear()
                     feed.clear()
-                    forgetOwnProfile() // the names, the full email and the photo: memory only, while the vault is open
+                }
+                // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
+                when (OwnProfileStep.onPhase(it)) {
+                    OwnProfileStep.FORGET -> forgetOwnProfile()
+                    OwnProfileStep.READ -> readOwnProfile()
+                    OwnProfileStep.NONE -> Unit
                 }
             }
         }
@@ -908,15 +911,17 @@ class VaultManager(
         scope.launch {
             var held = false
             ownerCheck.ownerCheck.collect { v ->
-                val now = v != null && v.state != OwnerCheckState.OK
+                val now = OwnProfileStep.held(v)
                 if (now && !held) {
                     feed.clear()
                     attachments.clear() // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
-                    forgetOwnProfile() // nor the member's own names, full email or photo
                 }
-                if (!now && held && phaseFlow.value == AppPhase.Unlocked) {
-                    feed.open()
-                    readOwnProfile()
+                if (!now && held && phaseFlow.value == AppPhase.Unlocked) feed.open()
+                // Nor the member's own names, full email or photo; read again after the passed check.
+                when (OwnProfileStep.onCheck(wasHeld = held, held = now, phase = phaseFlow.value)) {
+                    OwnProfileStep.FORGET -> forgetOwnProfile()
+                    OwnProfileStep.READ -> readOwnProfile()
+                    OwnProfileStep.NONE -> Unit
                 }
                 held = now
             }
@@ -942,13 +947,6 @@ class VaultManager(
     }
 
     // --- local account record (encrypted under a Keystore key) ---
-
-    /** Whether the record's JSON [raw] has the keys an older build kept the own account under. */
-    private fun holdsOwnAccount(raw: String): Boolean = try {
-        json.parseToJsonElement(raw).jsonObject.keys.any { it == LEGACY_SNAPSHOT_KEY || it == LEGACY_NAME_REQUEST_KEY }
-    } catch (_: IllegalArgumentException) {
-        false
-    }
 
     /** What the app shows of the account now: the record's masked email and, while the vault is open, [ownAccount]. */
     private fun publishAccount() {
@@ -984,7 +982,7 @@ class VaultManager(
         val raw = accountFile.load()?.let { String(it) }
         val a = raw?.let { json.decodeFromString(LocalAccount.serializer(), it) } ?: LocalAccount()
         localUnreadable = false
-        legacyOwnAccount = raw != null && holdsOwnAccount(raw)
+        legacyOwnAccount = raw != null && holdsLegacyOwnAccount(raw, json)
         a
     } catch (_: KeystoreException) {
         localUnreadable = true
@@ -1509,9 +1507,10 @@ class VaultManager(
             // And the own account's: an answer on its way when the vault closes is not kept ([OwnAccount]).
             val mark = ownAccount.mark()
             val v = guard { session().openApi.accountGet() }
-            val stored = ownAccount.snapshot
-            val u = accountUpdate(stored, ownAccount.nameRequest, v) ?: return
-            if (!ownAccount.keep(mark, u, ::ownProfileOpen)) return
+            // What is new is decided under the own account's lock (`as_of`): an older answer never replaces a newer one.
+            val kept = ownAccount.keep(mark, v, ::ownProfileOpen) ?: return
+            val u = kept.update
+            val stored = kept.before
             io { record.refreshed(rec, u) }
             publishAccount()
             // An applied name change brings new names to the shared profile's core too.
@@ -3357,10 +3356,6 @@ class VaultManager(
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
-
-        /** The record's keys an older build kept the own account under ([LocalAccount]). */
-        private const val LEGACY_SNAPSHOT_KEY = "snapshot"
-        private const val LEGACY_NAME_REQUEST_KEY = "nameRequest"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"
         private const val SYNC_PROFILE_CHANGED = "profile.changed"
 

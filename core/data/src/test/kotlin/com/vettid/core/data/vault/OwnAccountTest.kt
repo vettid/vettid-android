@@ -1,10 +1,12 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.vault.AccountSnapshot
+import com.vettid.core.vault.AccountView
 import com.vettid.core.vault.NameRequest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,10 +28,12 @@ class OwnAccountTest {
     private val request = NameRequest(seq = 3, firstName = "Ada", lastName = "King", state = "pending")
     private val open = { true }
 
+    private fun view(s: AccountSnapshot?, r: NameRequest?) = AccountView(s, 1, nameRequest = r)
+
     @Test
     fun anAnswerIsKeptWhileTheVaultIsOpen() {
         val own = OwnAccount()
-        assertTrue(own.keep(own.mark(), AccountUpdate(snap, request), open))
+        assertNotNull(own.keep(own.mark(), view(snap, request), open))
         assertEquals(snap, own.snapshot)
         assertEquals(request, own.nameRequest)
     }
@@ -37,7 +41,7 @@ class OwnAccountTest {
     @Test
     fun aLockForgetsTheSnapshotAndTheNameRequest() {
         val own = OwnAccount()
-        own.keep(own.mark(), AccountUpdate(snap, request), open)
+        own.keep(own.mark(), view(snap, request), open)
         var published = false
         own.forget { published = true }
         assertNull(own.snapshot)
@@ -51,7 +55,7 @@ class OwnAccountTest {
         val mark = own.mark()
         // `account.get` was sent; the vault locks (or the check falls due) before its answer arrives.
         own.forget()
-        assertFalse(own.keep(mark, AccountUpdate(snap, request), open))
+        assertNull(own.keep(mark, view(snap, request), open))
         assertNull(own.snapshot)
         assertNull(own.nameRequest)
     }
@@ -59,7 +63,7 @@ class OwnAccountTest {
     @Test
     fun anAnswerArrivingWhileTheVaultIsNotOpenIsDropped() {
         val own = OwnAccount()
-        assertFalse(own.keep(own.mark(), AccountUpdate(snap, request), open = { false }))
+        assertNull(own.keep(own.mark(), view(snap, request), open = { false }))
         assertNull(own.snapshot)
         assertFalse(own.request(own.mark(), request, open = { false }))
         assertNull(own.nameRequest)
@@ -81,9 +85,9 @@ class OwnAccountTest {
     @Test
     fun theAnswerAfterTheNextUnlockBringsTheNamesBack() {
         val own = OwnAccount()
-        own.keep(own.mark(), AccountUpdate(snap, null), open)
+        own.keep(own.mark(), view(snap, null), open)
         own.forget()
-        assertTrue(own.keep(own.mark(), AccountUpdate(snap, null), open))
+        assertNotNull(own.keep(own.mark(), view(snap, null), open))
         val info = own.publish { s, r -> LocalAccount(emailHint = "a***@example.org").toInfo(s, r) }!!
         assertEquals("Ada Lovelace", info.fullName)
         assertEquals("ada@example.org", info.displayEmail)
@@ -92,7 +96,7 @@ class OwnAccountTest {
     @Test
     fun whileTheVaultIsNotOpenOnlyTheMaskedEmailIsShown() {
         val own = OwnAccount()
-        own.keep(own.mark(), AccountUpdate(snap, request), open)
+        own.keep(own.mark(), view(snap, request), open)
         own.forget()
         val info = own.publish { s, r -> LocalAccount(emailHint = "a***@example.org").toInfo(s, r) }!!
         assertNull(info.fullName)
@@ -153,5 +157,73 @@ class OwnAccountTest {
         disk = null
         assertFalse(record.refreshed(record.recordGeneration, AccountUpdate(snap, request)))
         assertNull(disk)
+    }
+    @Test
+    fun anOlderAnswerNeverReplacesANewerOne() {
+        val own = OwnAccount()
+        // Two `account.get`s on their way; the newer answer lands first.
+        val mark = own.mark()
+        val newer = snap.copy(asOf = "2026-10-21T12:00:00Z", lastName = "King")
+        assertNotNull(own.keep(mark, view(newer, null), open))
+        assertNull(own.keep(mark, view(snap, null), open))
+        assertEquals("King", own.snapshot!!.lastName)
+        // What a kept answer replaced is reported (the shell re-reads the profile when the names changed).
+        val newest = newer.copy(asOf = "2026-10-21T13:00:00Z", lastName = "Byron")
+        val kept = own.keep(mark, view(newest, null), open)!!
+        assertEquals(newer, kept.before)
+        assertEquals(newest, kept.update.snapshot)
+    }
+
+    @Test
+    fun aPhaseOtherThanUnlockedOrStartingForgetsAndAnUnlockReads() {
+        assertEquals(OwnProfileStep.READ, OwnProfileStep.onPhase(AppPhase.Unlocked))
+        assertEquals(OwnProfileStep.NONE, OwnProfileStep.onPhase(AppPhase.Starting))
+        assertEquals(OwnProfileStep.FORGET, OwnProfileStep.onPhase(AppPhase.Locked))
+        assertEquals(OwnProfileStep.FORGET, OwnProfileStep.onPhase(AppPhase.SignedOut))
+        assertEquals(OwnProfileStep.FORGET, OwnProfileStep.onPhase(AppPhase.Deleting()))
+    }
+
+    @Test
+    fun enteringTheHoldForgetsAndThePassedCheckReadsAgain() {
+        val deadline = Instant.parse("2026-10-22T00:00:00Z")
+        fun check(s: OwnerCheckState) = OwnerCheckView(s, deadline, 86_400, 0, hold = true, holdOffUntil = null)
+        assertTrue(OwnProfileStep.held(check(OwnerCheckState.HELD)))
+        assertTrue(OwnProfileStep.held(check(OwnerCheckState.DUE)))
+        assertFalse(OwnProfileStep.held(check(OwnerCheckState.OK)))
+        assertFalse(OwnProfileStep.held(null))
+        assertEquals(OwnProfileStep.FORGET, OwnProfileStep.onCheck(wasHeld = false, held = true, phase = AppPhase.Unlocked))
+        assertEquals(OwnProfileStep.READ, OwnProfileStep.onCheck(wasHeld = true, held = false, phase = AppPhase.Unlocked))
+        // Passed while locked: the unlock reads it ([OwnProfileStep.onPhase]).
+        assertEquals(OwnProfileStep.NONE, OwnProfileStep.onCheck(wasHeld = true, held = false, phase = AppPhase.Locked))
+        assertEquals(OwnProfileStep.NONE, OwnProfileStep.onCheck(wasHeld = true, held = true, phase = AppPhase.Unlocked))
+        assertEquals(OwnProfileStep.NONE, OwnProfileStep.onCheck(wasHeld = false, held = false, phase = AppPhase.Unlocked))
+    }
+
+    @Test
+    fun theStartFindsTheOwnAccountOfAnOlderBuildInTheRecord() {
+        val json = Json { ignoreUnknownKeys = true }
+        assertTrue(holdsLegacyOwnAccount("""{"userGuid":"u","snapshot":{"v":1}}""", json))
+        assertTrue(holdsLegacyOwnAccount("""{"userGuid":"u","nameRequest":{"seq":1}}""", json))
+        assertFalse(holdsLegacyOwnAccount("""{"userGuid":"u","emailHint":"a***@example.org"}""", json))
+        assertFalse(holdsLegacyOwnAccount("not json", json))
+        assertFalse(holdsLegacyOwnAccount("[1]", json))
+        // What the start writes back holds neither.
+        val read = json.decodeFromString(LocalAccount.serializer(), """{"userGuid":"u","snapshot":{"v":1}}""")
+        val rewritten = json.encodeToString(LocalAccount.serializer(), read)
+        assertFalse(holdsLegacyOwnAccount(rewritten, json))
+    }
+
+    @Test
+    fun theShellShowsTheAccountOnlyFromTheOpenVaultsSnapshot() {
+        val own = OwnAccount()
+        val record = LocalAccount(emailHint = "a***@example.org")
+        // Locked (nothing in memory): the masked hint is there for the unlock screen, not for the shell.
+        val locked = own.publish { s, r -> record.toInfo(s, r) }
+        assertEquals("a***@example.org", locked!!.emailHint)
+        assertNull(locked.shownInShell())
+        assertNull((null as AccountInfo?).shownInShell())
+        own.keep(own.mark(), view(snap, null), open)
+        val opened = own.publish { s, r -> record.toInfo(s, r) }
+        assertEquals("Ada Lovelace", opened.shownInShell()!!.fullName)
     }
 }

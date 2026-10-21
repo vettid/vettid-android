@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
@@ -83,5 +84,30 @@ class AccountSheetTest {
         show(onLock = { locked++ })
         rule.onNodeWithTag("account_lock_vault").performClick()
         assertEquals(1, locked)
+    }
+
+    /**
+     * While the vault is not open (owner decision 2026-10-21) the sheet shows no name and no address, not even the masked
+     * hint the account record keeps for the unlock screen.
+     */
+    @Test
+    fun whileTheVaultIsNotOpenTheSheetShowsNoAddressAndNoName() {
+        val locked = AccountInfo("s***@example.org")
+        rule.setContent {
+            Box(Modifier.height(640.dp)) {
+                AvatarSheetContent(name = "VettID member", detail = "", optionsHeader = "Options") {
+                    AccountSheetOptions(locked, "https://account.vettid.org", {}, now)
+                }
+            }
+        }
+        rule.onNodeWithTag("account_email").assertDoesNotExist()
+        rule.onNodeWithText("s***@example.org", substring = true).assertDoesNotExist()
+        rule.onNodeWithText("Sam", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun theOpenVaultsAddressIsShown() {
+        show()
+        rule.onNodeWithTag("account_email").performScrollTo().assertIsDisplayed()
     }
 }

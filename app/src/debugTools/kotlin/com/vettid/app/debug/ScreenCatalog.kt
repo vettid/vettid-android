@@ -1333,7 +1333,7 @@ object ScreenCatalog {
             SharedProfileContent(
                 SharedProfileUiState(
                     sampleAccount, OwnProfile(3, "Sam", "Sam", "Rivera", "9a1f bb7d 873e eafb 494b ef94 f072 7b25"), displayName = "Sam",
-                    pendingPhoto = SAMPLE_PHOTO,
+                    pendingPhoto = com.vettid.feature.settings.PendingPhoto.of(SAMPLE_PHOTO),
                 ),
                 SharedProfileActions(),
             )

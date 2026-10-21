@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -495,6 +496,17 @@ private fun waitText(seconds: Long): String = "%d:%02d".format(seconds / SECONDS
 private const val SECONDS_PER_MINUTE = 60L
 private const val WARN_LEFT = 3
 
+/** The photo being previewed (its bytes, zeroed when it is saved or dropped), else the vault's. */
+@Composable
+private fun rememberShownPhoto(state: SharedProfileUiState): androidx.compose.ui.graphics.ImageBitmap? {
+    val pending = state.pendingPhoto
+    val preview = androidx.compose.runtime.remember(pending) {
+        pending?.let { com.vettid.core.ui.components.ProfilePhotos.decodeImage(it.bytes)?.asImageBitmap() }
+    }
+    val shared = rememberProfilePhoto(state.profile?.photo)
+    return preview ?: shared
+}
+
 /**
  * The profile photo (§10.8): the vault's, or a taken one as a preview until it is saved; "Take a photo" ("Retake
  * photo" when one is shared) opens the in-app camera (owner feedback 2026-10-08: no picture is chosen from the
@@ -503,7 +515,7 @@ private const val WARN_LEFT = 3
 @Composable
 private fun PhotoCard(state: SharedProfileUiState, actions: SharedProfileActions) {
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
-    val photo = rememberProfilePhoto(state.shownPhoto)
+    val photo = rememberShownPhoto(state)
     val enabled = state.profile != null && !state.photoBusy && !state.busy
     val buttonModifier = Modifier.heightIn(min = Spacing.touchTarget)
     DetailCard(Modifier.testTag("profile_photo")) {

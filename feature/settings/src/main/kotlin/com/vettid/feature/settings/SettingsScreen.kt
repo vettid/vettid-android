@@ -64,6 +64,7 @@ import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailScaffold
@@ -391,8 +392,9 @@ data class SettingsActions(
  */
 @Composable
 private fun AccountCard(state: SettingsUiState, onClick: () -> Unit) {
-    val a = state.account
-    val membership = a?.takeIf { it.hasSnapshot }?.let {
+    // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise only the initial tile.
+    val a = state.account.shownInShell()
+    val membership = a?.let {
         stringResource(
             when {
                 it.canceled -> R.string.settings_account_canceled
