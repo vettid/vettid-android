@@ -208,7 +208,8 @@ class HistoryViewModelTest {
         val vault = Vault(
             { page(*first, next = 950) },
             { firstRefresh.await(); page(*first, next = 950) },
-            { secondRefresh.await(); page(*first, next = 950) },
+            // The second refresh finds a new entry: its end is seen in the list (1000 on top).
+            { secondRefresh.await(); page(1000L, *first, next = 950) },
             { page(949, 948) },
         )
         val model = vm(vault)
@@ -220,18 +221,17 @@ class HistoryViewModelTest {
         // The second refresh is reading: the first one has ended.
         settleCalls(vault, 3)
         advanceUntilIdle()
+        // The list's end comes into view: refused while the refresh reads (no load begun, nothing sent).
         model.loadMore()
-        advanceUntilIdle()
-        Thread.sleep(SETTLE_SLEEP_MS * 5)
+        assertFalse(model.uiState.value.loadingMore)
         advanceUntilIdle()
         assertEquals(3, vault.calls.size)
-        assertFalse(model.uiState.value.loadingMore)
         secondRefresh.countDown()
-        val s0 = settle(model, ::idle)
-        assertEquals(50, s0.entries.size)
+        val s0 = settle(model) { idle(it) && it.entries.firstOrNull()?.seq == 1000L }
+        assertEquals(51, s0.entries.size)
         model.loadMore()
         val s = settle(model) { idle(it) && it.end }
-        assertEquals(52, s.entries.size)
+        assertEquals(53, s.entries.size)
         assertEquals(listOf(null, null, null, 950L), vault.calls.map { it["before_seq"] })
     }
 
