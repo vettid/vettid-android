@@ -1,9 +1,12 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.crypto.Bytes
+import com.vettid.core.crypto.altchan.UnlockSecret
 import com.vettid.core.keystore.KeyLevel
 import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.keystore.PhoneKeyHandle
+import com.vettid.core.vault.ChangeTypes
+import com.vettid.core.vault.VaultOpException
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -316,5 +319,59 @@ class PhoneSecretsTest {
         assertFalse(UnlockEpoch.allowed(pinChangeUnresolved = true, twoStepScreen = false))
         assertTrue(UnlockEpoch.allowed(pinChangeUnresolved = true, twoStepScreen = true))
         assertTrue(UnlockEpoch.allowed(pinChangeUnresolved = false, twoStepScreen = false))
+    }
+
+    /**
+     * A refused or ended change never touches the phone key: the current record's secret still computes after the
+     * vault's `forbidden` to the resend, a cleared or ended change, and a renew that did not apply. (A guard: a design
+     * that gave a candidate its own key would have to keep the current one through all of these.)
+     */
+    @Test
+    fun theUnlockSecretStillComputesAfterARefusedOrEndedChange() = kotlinx.coroutines.runBlocking {
+        val pinChange = UnresolvedChange(ChangeTypes.PIN_CHANGE, "01JPIN", 7, 1_000, fromEpoch = 3)
+        val renew = UnconfirmedRenew("01JRENEW", 6, 1_000, 3)
+        val account = LocalAccount(
+            userGuid = "u1",
+            vaultId = "v1",
+            setupComplete = true,
+            phoneKeyVault = "kv",
+            phoneEpoch = 3,
+            unresolvedChange = pinChange,
+            unconfirmedRenew = renew,
+        )
+        val ends: List<Pair<String, suspend (AccountRecord) -> Unit>> = listOf(
+            "forbidden to the resend" to { record ->
+                val resolver = ChangeResolver(
+                    this,
+                    object : ChangeResolver.Ops {
+                        override fun marker() = record.value.unresolvedChange
+                        override suspend fun resend(m: UnresolvedChange): ChangeResolver.Answer? =
+                            throw VaultOpException(m.type, "forbidden", "not the holder")
+                        override suspend fun version(): ChangeResolver.Version = error("not asked")
+                        override suspend fun fetch() = error("not asked")
+                        override fun confirm(m: UnresolvedChange): Boolean = error("not confirmed")
+                        override fun clear(m: UnresolvedChange) {
+                            record.clearChange(m)
+                        }
+                        override fun end(m: UnresolvedChange) {
+                            record.endChange(m)
+                        }
+                    },
+                )
+                assertEquals(ChangeCheck.Moved(ChangeKind.PIN), resolver.decide())
+            },
+            "a cleared change" to { record -> assertTrue(record.clearChange(pinChange)) },
+            "an ended change" to { record -> assertTrue(record.endChange(pinChange)) },
+            "a renew that did not apply" to { record -> assertTrue(record.decideRenew(renew.innerId, applied = false)) },
+        )
+        for ((name, end) in ends) {
+            val key = SoftKey().apply { create() }
+            val phoneSecrets = PhoneSecrets { key }
+            val record = AccountRecord(account, readable = true, persist = {})
+            end(record)
+            assertTrue(name, key.exists())
+            assertEquals(name, PhoneSecretState("kv", 3), record.value.phone)
+            assertArrayEquals(name, UnlockSecret.compute("kv", 3, key::hmac), phoneSecrets.secret(record.value.phone))
+        }
     }
 }
