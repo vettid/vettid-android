@@ -26,7 +26,13 @@ class ProfileManagerTest {
         var error: String? = null
         var errorBody: JsonObject? = null
 
-        override suspend fun profileGet() = profile
+        /** Runs while a `profile.get` is on its way (a lock landing then). */
+        var onGet: () -> Unit = {}
+
+        override suspend fun profileGet(): Profile {
+            onGet()
+            return profile
+        }
 
         override suspend fun profileSet(version: Long, name: String): Long {
             sets += version to name
@@ -36,8 +42,12 @@ class ProfileManagerTest {
 
         val photoSets = mutableListOf<Pair<Long, String>>()
 
+        /** Runs while a `profile.set{photo}` is on its way. */
+        var onSetPhoto: () -> Unit = {}
+
         override suspend fun profileSetPhoto(version: Long, photo: String): Long {
             photoSets += version to photo
+            onSetPhoto()
             profile = profile.copy(version = version + 1, photo = photo.ifEmpty { null })
             return version + 1
         }
@@ -185,6 +195,56 @@ class ProfileManagerTest {
         assertEquals(5L to "", ops.photoSets.last())
         assertNull(m.profile.value!!.photo)
     }
+
+    // --- the own profile is memory only, forgotten whenever the vault is not open (ANDROID-PLAN §4) ---
+
+    @Test
+    fun clearForgetsTheNamesAndThePhoto() = runTest {
+        ops.profile = ops.profile.copy(photo = "/9j/photo")
+        m.refreshProfile()
+        assertEquals("/9j/photo", m.profile.value!!.photo)
+        m.clear()
+        assertNull(m.profile.value)
+    }
+
+    @Test
+    fun aReadOnItsWayWhenTheVaultLocksIsNotKept() = runTest {
+        ops.profile = ops.profile.copy(photo = "/9j/photo")
+        ops.onGet = { m.clear() }
+        m.refreshProfile()
+        assertNull(m.profile.value)
+        // After the unlock the next read brings the profile back.
+        ops.onGet = {}
+        m.refreshProfile()
+        assertEquals("Ada Lovelace", m.profile.value!!.fullName)
+        assertEquals("/9j/photo", m.profile.value!!.photo)
+    }
+
+    @Test
+    fun aReadWhileTheVaultIsNotOpenIsNotKept() = runTest {
+        var open = false
+        val gated = ProfileManager(ops = { ops }, onRequest = { _, _ -> }, checksLeft = { null }, open = { open })
+        gated.refreshProfile()
+        assertNull(gated.profile.value)
+        open = true
+        gated.refreshProfile()
+        assertEquals("Ada Lovelace", gated.profile.value!!.fullName)
+    }
+
+    @Test
+    fun aPhotoSetWhenTheVaultLocksDoesNotBringTheProfileBack() = runTest {
+        var open = true
+        val gated = ProfileManager(ops = { ops }, onRequest = { _, _ -> }, checksLeft = { null }, open = { open })
+        gated.refreshProfile()
+        ops.onSetPhoto = {
+            open = false
+            gated.clear()
+        }
+        gated.setPhoto("/9j/new")
+        assertEquals("/9j/new", ops.profile.photo) // the vault took it
+        assertNull(gated.profile.value) // the phone keeps nothing of it while the vault is not open
+    }
+
 }
 
 /** `account.get` after `sync.event{account.changed}` (VAULT-MESSAGING 0.19.0 §10.1, §10.2). */

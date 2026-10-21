@@ -132,53 +132,79 @@ interface ProfileOps {
 
 /**
  * [ProfileRepository] over [ProfileOps]. [onRequest] keeps a new name request with the account, with the [mark] read
- * before the request was sent (the account record it belongs to); [checksLeft] re-reads the owner check's count after a
+ * before the request was sent (the own account it belongs to); [checksLeft] re-reads the owner check's count after a
  * failed PIN or password (§3.6.4: a name change counts as a check).
+ *
+ * The profile read is the member's own (the names and the photo): **memory only**, forgotten by [clear] whenever the vault
+ * is not open (ANDROID-PLAN §4 "The member's own profile"). An answer is kept only while [open] says the vault is open and
+ * no [clear] came since its request was sent, so a read on its way when the vault locks never brings the profile back.
  */
 class ProfileManager(
     private val ops: suspend () -> ProfileOps,
     private val onRequest: suspend (NameRequestView, mark: Int) -> Unit,
     private val checksLeft: suspend () -> Int?,
     private val mark: () -> Int = { 0 },
+    private val open: () -> Boolean = { true },
 ) : ProfileRepository {
     private val state = MutableStateFlow<OwnProfile?>(null)
     override val profile: StateFlow<OwnProfile?> = state.asStateFlow()
 
-    /** Forgets the profile read (a wipe of this phone). */
+    private val lock = Any()
+
+    /** Moved by every [clear]: an answer to a request sent before it is dropped. */
+    @Volatile
+    private var generation = 0
+
+    /** Forgets the profile read (the vault is not open: a lock, the hold or the due state, a sign-out, a wipe). */
     fun clear() {
-        state.value = null
+        synchronized(lock) {
+            generation++
+            state.value = null
+        }
+    }
+
+    /** [f] of the profile now, kept while the vault is open and no [clear] came since [gen] was read. */
+    private fun keep(gen: Int, f: (OwnProfile?) -> OwnProfile?) {
+        synchronized(lock) {
+            if (gen == generation && open()) state.value = f(state.value)
+        }
     }
 
     override suspend fun refreshProfile() {
+        val gen = generation
         val p = vaultGuard(resend = true) { ops().profileGet() }
-        state.value = OwnProfile(
-            version = p.version,
-            displayName = p.name,
-            firstName = p.firstName?.takeIf { AccountNames.isValidCore(it) },
-            lastName = p.lastName?.takeIf { AccountNames.isValidCore(it) },
-            fingerprint = p.ik?.let { IkFingerprint.formatB64(it) },
-            photo = p.photo?.takeIf { it.isNotEmpty() },
-        )
+        keep(gen) {
+            OwnProfile(
+                version = p.version,
+                displayName = p.name,
+                firstName = p.firstName?.takeIf { AccountNames.isValidCore(it) },
+                lastName = p.lastName?.takeIf { AccountNames.isValidCore(it) },
+                fingerprint = p.ik?.let { IkFingerprint.formatB64(it) },
+                photo = p.photo?.takeIf { it.isNotEmpty() },
+            )
+        }
     }
 
     override suspend fun setPhoto(photo: String) {
+        val gen = generation
         val version = vaultGuard {
             val o = ops()
             val current = state.value?.version ?: o.profileGet().version
             o.profileSetPhoto(current, photo)
         }
-        state.value = state.value?.copy(version = version, photo = photo.takeIf { it.isNotEmpty() })
+        keep(gen) { it?.copy(version = version, photo = photo.takeIf { p -> p.isNotEmpty() }) }
         runCatching { refreshProfile() }
     }
 
     override suspend fun setDisplayName(name: String) {
         val trimmed = name.trim()
+        val gen = generation
         val version = vaultGuard {
             val o = ops()
             val current = state.value?.version ?: o.profileGet().version
             o.profileSet(current, trimmed)
         }
-        state.value = state.value?.copy(version = version, displayName = trimmed)
+        keep(gen) { it?.copy(version = version, displayName = trimmed) }
         runCatching { refreshProfile() }
     }
 

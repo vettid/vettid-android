@@ -40,7 +40,7 @@ class ProfileViewModelsTest {
     fun aTakenPhotoIsSentWithProfileSet() = runTest {
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
-        assertNull(vm.uiState.value.shownPhoto)
+        assertNull(vm.uiState.value.profile!!.photo)
         vm.photoEncoding()
         assertTrue(vm.uiState.value.photoBusy)
         vm.photoTaken("/9j/4AAQ")
@@ -59,7 +59,7 @@ class ProfileViewModelsTest {
         vm.photoTaken("/9j/4AAQ")
         advanceUntilIdle()
         assertNull(vault.lastPhoto)
-        assertEquals("/9j/4AAQ", vm.uiState.value.pendingPhoto)
+        assertEquals("/9j/4AAQ", vm.uiState.value.pendingPhoto!!.base64())
         assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
         vm.savePhoto()
         advanceUntilIdle()
@@ -84,11 +84,105 @@ class ProfileViewModelsTest {
         vault.profile.value = vault.profile.value!!.copy(photo = "/9j/old")
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
-        assertEquals("/9j/old", vm.uiState.value.shownPhoto)
+        assertEquals("/9j/old", vm.uiState.value.profile!!.photo)
         vm.removePhoto()
         advanceUntilIdle()
         assertEquals("", vault.lastPhoto)
         assertNull(vault.profile.value!!.photo)
+    }
+
+    // --- drafts are dropped whenever the vault is not open (owner decision 2026-10-21) ---
+
+    @Test
+    fun aLockDropsTheEditedDisplayNameAndThePendingPhotoZeroed() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.setDisplayName("Countess")
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.photoTaken("/9j/4AAQ")
+        advanceUntilIdle()
+        val pending = vm.uiState.value.pendingPhoto!!
+        assertTrue(vm.uiState.value.edited)
+        // The vault locks: the profile is forgotten.
+        vault.profile.value = null
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.displayName)
+        assertFalse(vm.uiState.value.edited)
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(pending.bytes.all { it == 0.toByte() })
+        // After the unlock nothing typed comes back: the vault's display name, no preview.
+        vault.profile.value = OwnProfile(3, "Ada", "Ada", "Lovelace", null)
+        advanceUntilIdle()
+        assertEquals("Ada", vm.uiState.value.displayName)
+        assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun theHoldDropsTheDraftsToo() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.setDisplayName("Countess")
+        // Held or due: the account is no longer the open vault's (only the masked hint is left).
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.displayName)
+        assertFalse(vm.uiState.value.edited)
+    }
+
+    @Test
+    fun aDiscardedOrSavedPhotoIsZeroed() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.photoTaken("/9j/4AAQ")
+        advanceUntilIdle()
+        val first = vm.uiState.value.pendingPhoto!!
+        vm.discardPhoto()
+        assertTrue(first.bytes.all { it == 0.toByte() })
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK) // taken once per call
+        vm.photoTaken("/9j/4AAQ")
+        advanceUntilIdle()
+        val second = vm.uiState.value.pendingPhoto!!
+        vm.savePhoto()
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+        assertTrue(second.bytes.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun aLockDropsTheTypedNamesPinAndPassword() = runTest {
+        val vm = ChangeNameViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setFirst("Ada")
+        vm.setLast("King")
+        vm.next()
+        vm.setPin("246810")
+        vm.setPassword("pw")
+        assertEquals(ChangeNameStep.CONFIRM, vm.uiState.value.step)
+        // Locked, held or due: the account is no longer the open vault's.
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertEquals("", s.first)
+        assertEquals("", s.last)
+        assertEquals("", s.pin)
+        assertEquals("", s.password)
+        // After the unlock the member types the names again.
+        vault.account.value = AccountInfo("a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace")
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.first)
+        assertEquals("", vm.uiState.value.last)
+    }
+
+    @Test
+    fun theTypedNamesAreFilledOnlyFromTheOpenVault() = runTest {
+        val vm = ChangeNameViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals("Ada", vm.uiState.value.first)
+        vault.account.value = null
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.first)
     }
 
     @Test

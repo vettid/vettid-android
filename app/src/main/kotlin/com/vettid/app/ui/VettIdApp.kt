@@ -38,6 +38,7 @@ import com.vettid.core.data.lock.AppLockState
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.ChangeKind
+import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.ui.components.FullScreenProgress
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.feature.onboarding.AppLockScreen
@@ -210,11 +211,14 @@ fun VettIdApp(
                         composable<MainDest> {
                             // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).
                             TagColorsHost {
+                                // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise the
+                                // top bar and the avatar sheet show only the initial tile, never the masked hint.
+                                val shown = account.shownInShell()
                                 AppShell(
                                     launchRoute = launchRoute,
-                                    accountName = account?.fullName ?: account?.displayEmail
+                                    accountName = shown?.fullName ?: shown?.displayEmail
                                         ?: stringResource(R.string.account_placeholder_name),
-                                    account = account,
+                                    account = shown,
                                     portalUrl = portal,
                                     alarm = alarm,
                                     onLockVault = viewModel::lockVault,

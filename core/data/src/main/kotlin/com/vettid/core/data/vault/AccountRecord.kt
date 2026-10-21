@@ -9,17 +9,16 @@ import kotlinx.serialization.Serializable
 
 /**
  * What this phone knows of its member without signing in: the `user_guid` and `vault_id` from the setup code's
- * redeem or the recovery's claim (§11.12.1, §11.11.7), the masked email to show, and the last account snapshot
- * the vault sent (§11.13). Fields of older builds (the signed-in member's email and names) are ignored.
+ * redeem or the recovery's claim (§11.12.1, §11.11.7), and the masked email to show. Fields of older builds (the
+ * signed-in member's email and names; the account snapshot and the name request, kept here until a wipe before the own
+ * profile became memory only) are ignored, and a record that still holds them is written again without them. The
+ * snapshot and the name request are [OwnAccount]'s now, in memory only while the vault is open.
  */
 @Serializable
 internal data class LocalAccount(
     val userGuid: String = "",
     val vaultId: String = "",
     val emailHint: String = "",
-    val snapshot: com.vettid.core.vault.AccountSnapshot? = null,
-    /** The latest name request (`account.get`'s `name_request`, VAULT-MESSAGING 0.18.0 §10.8). */
-    val nameRequest: com.vettid.core.vault.NameRequest? = null,
     /** A direct transfer to this phone started (§6.7.1): it has a vault to come without a redeem. */
     val transferIn: Boolean = false,
     val setupComplete: Boolean = false,
@@ -149,7 +148,15 @@ internal data class LocalAccount(
 
     /** Release R is known for this vault: the mark, or a phone secret for it. */
     val releaseRKnown: Boolean get() = recoveryRSeen || phone.inUse
-    fun toInfo(): AccountInfo? = when {
+
+    /**
+     * What the app shows of the account: the open vault's [snapshot] and [nameRequest] ([OwnAccount], null while the
+     * vault is not open), else only the masked email this record keeps (the unlock screen's).
+     */
+    fun toInfo(
+        snapshot: com.vettid.core.vault.AccountSnapshot? = null,
+        nameRequest: com.vettid.core.vault.NameRequest? = null,
+    ): AccountInfo? = when {
         snapshot != null -> snapshot.toInfo(emailHint)
         emailHint.isNotEmpty() -> AccountInfo(emailHint)
         else -> null
@@ -276,10 +283,20 @@ internal class AccountRecord(
     /** The inner `ts` of an unlock that opened the vault ([LockNotices]), for the record that unlock started with. */
     fun opened(since: Int, atMs: Long): Boolean = update(since) { it.copy(lastOpenedAtMs = maxOf(it.lastOpenedAtMs ?: 0, atMs)) }
 
-    /** What `account.get` brought ([accountUpdate]), for the record the request was sent for. */
+    /**
+     * What the record keeps of `account.get` ([accountUpdate]), for the record the request was sent for: the masked email
+     * only. The snapshot and the name request stay in memory ([OwnAccount]).
+     */
     fun refreshed(since: Int, u: AccountUpdate): Boolean = update(since) {
-        it.copy(snapshot = u.snapshot, emailHint = u.snapshot?.emailHint ?: it.emailHint, nameRequest = u.nameRequest)
+        val hint = u.snapshot?.emailHint?.takeIf { h -> h.isNotEmpty() } ?: it.emailHint
+        if (hint == it.emailHint) null else it.copy(emailHint = hint)
     }
+
+    /**
+     * The record written again as it is: a record of an older build that still holds the account snapshot or the name
+     * request ([LocalAccount]) loses them on the phone too. [RecordStore.UNBOUND]: it rewrites whatever record is current.
+     */
+    fun rewrite(): Boolean = update(RecordStore.UNBOUND) { it }
 
     // --- a lost answer to a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9) ---
 
