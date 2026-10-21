@@ -342,4 +342,48 @@ class AttachmentManagerTest {
         assertNull(m.cachedThumbnail("c1", "M1"))
         assertTrue(p.sent)
     }
+
+    /**
+     * A clear from another thread that lands while the request is built, after the last check: it waits for the request
+     * to be complete, so `message.send` carries the real key and thumbnail, never zeros; the answer then keeps nothing.
+     */
+    @Test
+    fun aClearDuringTheRequestsBuildWaitsForACompleteRequest() = runTest {
+        val p = m.begin("c1", "", photo())
+        var clearing: Thread? = null
+        m.testHook = { point ->
+            if (point == AttachmentManager.HOOK_BUILD) {
+                val t = Thread { m.clear() }.apply { start() }
+                clearing = t
+                // The clear is blocked until the request is built.
+                t.join(200)
+                assertTrue("the clear waits for the build", t.isAlive)
+            }
+        }
+        val e = runCatching { m.send(p) }.exceptionOrNull()
+        clearing!!.join(5_000)
+        val blob = ops.requests.single().second["blob"]!!.jsonObject
+        val key = Base64s.decodeStd(blob["key"]!!.jsonPrimitive.content)
+        assertFalse("a complete key, not zeros", key.all { it == 0.toByte() })
+        assertArrayEquals(thumb, Base64s.decodeStd(ops.requests.single().second["thumb"]!!.jsonPrimitive.content))
+        // What was sent opens with the reference sent.
+        assertArrayEquals(jpeg, ClaimBlob.open(ops.uploads.single(), key, Base64s.decodeStd(blob["sha256"]!!.jsonPrimitive.content), blob["size"]!!.jsonPrimitive.content.toLong()))
+        assertEquals(AttachmentManager.CODE_UNAVAILABLE, (e as VaultFailure).code)
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun aThumbnailFromMessageNewReadAcrossAClearIsNotKept() {
+        val b64 = Base64s.encodeStd(thumb)
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"connection_id":"c1","message_id":"M4","direction":"in","text":"","sent_at":"2026-10-15T10:00:00Z",""" +
+                """"attachment":{"att_id":"A4","kind":"photo","size":10,"width":320,"height":240,"state":"fetching","thumb":"$b64"}}""",
+        ).jsonObject
+        m.testHook = { point -> if (point == AttachmentManager.HOOK_EVENT) m.clear() }
+        m.onEvent("message.new", body)
+        assertNull(m.cachedThumbnail("c1", "M4"))
+        m.testHook = null
+        m.onEvent("message.new", body)
+        assertArrayEquals(thumb, m.cachedThumbnail("c1", "M4"))
+    }
 }

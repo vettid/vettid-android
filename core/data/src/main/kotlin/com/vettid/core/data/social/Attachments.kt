@@ -192,8 +192,12 @@ class AttachmentManager(
     private val photos = MemoryCache<String, FetchedPhoto>(PhotoLimits.PHOTO_CACHE_BYTES, { it.bytes.size.toLong() }) { it.bytes.fill(0) }
     private val pending = java.util.Collections.synchronizedSet(mutableSetOf<PendingPhoto>())
 
-    /** Held by [clear] and by a fetch's check-and-cache ([keepUnlessCleared]). */
+    /** Held by [clear], by a fetch's check-and-cache ([keepUnlessCleared]) and by a send's last check ([sendLocked]). */
     private val clearLock = Any()
+
+    /** TEST hook: called with [HOOK_BUILD] while a send's request is built, and [HOOK_EVENT] before an inline thumbnail is kept. */
+    @Volatile
+    internal var testHook: ((String) -> Unit)? = null
 
     /** `attachment_fetches`: at most 2 `content` fetches of this device at once (§10.5.1). */
     private val fetches = Semaphore(MAX_FETCHES)
@@ -235,24 +239,30 @@ class AttachmentManager(
     private suspend fun sendLocked(p: PendingPhoto): MessageInfo {
         if (p.sent) throw VaultFailure(FailureKind.CONFLICT, "already_sent")
         if (p.blobId == null) upload(p)
-        checkNotCleared(p)
-        val blobId = p.blobId ?: throw VaultFailure(FailureKind.OTHER, "no_upload")
-        val sealed = p.sealed ?: throw VaultFailure(FailureKind.OTHER, "no_upload")
-        val att = buildJsonObject {
-            put(
-                "blob",
-                buildJsonObject {
-                    put("id", blobId)
-                    put("key", Base64s.encodeStd(sealed.key))
-                    put("sha256", Base64s.encodeStd(sealed.sha256))
-                    put("size", sealed.size)
-                    put("mime", ImageType.JPEG.mime)
-                },
-            )
-            put("kind", "photo")
-            put("width", p.photo.width)
-            put("height", p.photo.height)
-            put("thumb", Base64s.encodeStd(p.photo.thumb))
+        // The last check and the request built from copies (its strings) in one step under [clearLock], which [clear]
+        // wipes the pending photos under: a clear either stops the send here or comes after the request is complete, so
+        // `message.send` never carries a zeroed key or thumbnail.
+        val (att, size) = synchronized(clearLock) {
+            checkNotCleared(p)
+            testHook?.invoke(HOOK_BUILD)
+            val blobId = p.blobId ?: throw VaultFailure(FailureKind.OTHER, "no_upload")
+            val sealed = p.sealed ?: throw VaultFailure(FailureKind.OTHER, "no_upload")
+            buildJsonObject {
+                put(
+                    "blob",
+                    buildJsonObject {
+                        put("id", blobId)
+                        put("key", Base64s.encodeStd(sealed.key))
+                        put("sha256", Base64s.encodeStd(sealed.sha256))
+                        put("size", sealed.size)
+                        put("mime", ImageType.JPEG.mime)
+                    },
+                )
+                put("kind", "photo")
+                put("width", p.photo.width)
+                put("height", p.photo.height)
+                put("thumb", Base64s.encodeStd(p.photo.thumb))
+            } to sealed.size
         }
         val answer = try {
             vaultGuard { ops.send(p.connectionId, p.caption.ifEmpty { null }, att, p.requestId) }
@@ -284,7 +294,7 @@ class AttachmentManager(
             attachment = AttachmentInfo(
                 attId = answer.attId,
                 state = AttachmentState.PREPARING,
-                size = sealed.size.toLong(),
+                size = size.toLong(),
                 width = p.photo.width,
                 height = p.photo.height,
             ),
@@ -367,14 +377,20 @@ class AttachmentManager(
      * that nothing is cached after a clear.
      */
     private inline fun keepUnlessCleared(mark: Long, arrived: ByteArray, keep: () -> Unit) {
+        if (keptUnlessCleared(mark, arrived, keep)) return
+        throw VaultFailure(FailureKind.OTHER, CODE_UNAVAILABLE)
+    }
+
+    /** [keepUnlessCleared] without the failure: false (and [arrived] zeroed) when a clear came since [mark]. */
+    private inline fun keptUnlessCleared(mark: Long, arrived: ByteArray, keep: () -> Unit): Boolean {
         synchronized(clearLock) {
             if (clearedFlow.value == mark) {
                 keep()
-                return
+                return true
             }
         }
         arrived.fill(0)
-        throw VaultFailure(FailureKind.OTHER, CODE_UNAVAILABLE)
+        return false
     }
 
     @Suppress("ThrowsCount")
@@ -433,9 +449,14 @@ class AttachmentManager(
     /** A thumbnail that arrived inline in `message.new` (§10.5.1), kept in memory. */
     fun onEvent(type: String, body: JsonObject) {
         if (type != "message.new") return
+        val mark = clearedFlow.value
         val m = runCatching { VaultJson.decode(Message.serializer(), body) }.getOrNull()
         val bytes = m?.attachment?.thumb?.let { t -> runCatching { Base64s.decodeStd(t) }.getOrNull() }
-        if (m != null && bytes != null && acceptableThumb(bytes)) thumbs.put(cacheKey(m.connectionId, m.messageId), bytes)
+        if (m != null && bytes != null && acceptableThumb(bytes)) {
+            testHook?.invoke(HOOK_EVENT)
+            // A clear while it was read: nothing of it is kept.
+            keptUnlessCleared(mark, bytes) { thumbs.put(cacheKey(m.connectionId, m.messageId), bytes) }
+        }
     }
 
     /** 1 to `thumb_max_bytes`, and JPEG, PNG or WebP by its bytes. */
@@ -446,12 +467,13 @@ class AttachmentManager(
             clearedFlow.value++
             thumbs.clear()
             photos.clear()
+            // Under the same lock as a send's last check: a send in that step completes its request first.
+            synchronized(pending) {
+                pending.forEach { it.wipe() }
+                pending.clear()
+            }
         }
         com.vettid.core.media.SharedPhotos.clear() // the share provider refuses every read from now on
-        synchronized(pending) {
-            pending.forEach { it.wipe() }
-            pending.clear()
-        }
     }
 
     /** Clears and forgets that the vault has attachments (signed out, or a new vault). */
@@ -472,6 +494,9 @@ class AttachmentManager(
 
         /** A clear (a lock, the hold or due state, a wipe, an unlink) came during the fetch or the send. */
         const val CODE_UNAVAILABLE = "unavailable"
+
+        internal const val HOOK_BUILD = "build"
+        internal const val HOOK_EVENT = "event"
         private const val MAX_FETCHES = 2
         private const val KEY_BYTES = 32
 

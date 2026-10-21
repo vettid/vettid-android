@@ -377,11 +377,13 @@ class VaultManager(
     }
 
     /**
-     * Before an enrolment on a device that is kept ([kept]): every other device of [liveDevices] saves and sends nothing
-     * more ([VaultDevice.dropKeysFromMemory]). Not [VaultDevice.forget]: the devices share one state file, which [kept]
-     * goes on using.
+     * Before an enrolment on the device that is kept (the session's): every other device of [liveDevices] saves and sends
+     * nothing more ([VaultDevice.dropKeysFromMemory]). Not [VaultDevice.forget]: the devices share one state file, which
+     * the kept one goes on using. Under [mutex], so that the session's device cannot change meanwhile ([dropSession],
+     * [session]).
      */
-    private suspend fun retireOtherDevices(kept: VaultDevice) {
+    private suspend fun retireOtherDevices() = mutex.withLock {
+        val kept = session?.device
         for (d in synchronized(liveDevices) { liveDevices.toList() }) {
             if (d === kept) continue
             runCatching { d.dropKeysFromMemory() }
@@ -2504,7 +2506,7 @@ class VaultManager(
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
         val d = session().device
-        if (d.deviceId == null && (d.hasVault || d.vaultId != null)) dropSession(forget = true) else retireOtherDevices(d)
+        if (d.deviceId == null && (d.hasVault || d.vaultId != null)) dropSession(forget = true) else retireOtherDevices()
     }
 
     override suspend fun recoveryStage(): RecoveryStage = guard {
