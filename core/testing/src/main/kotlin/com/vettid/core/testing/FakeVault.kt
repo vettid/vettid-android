@@ -711,8 +711,12 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         profile.value = profile.value?.let { it.copy(photo = photo.takeIf { p -> p.isNotEmpty() }, version = it.version + 1) }
     }
 
+    /** When set, [changeName] waits on it after it is called (an `account.name.set` still on its way). */
+    var changeNameGate: CompletableDeferred<Unit>? = null
+
     override suspend fun changeName(pin: String, password: String, firstName: String, lastName: String): NameChangeOutcome {
         call("changeName")
+        changeNameGate?.await()
         lastPin = pin
         lastPassword = password
         lastNames = firstName to lastName
