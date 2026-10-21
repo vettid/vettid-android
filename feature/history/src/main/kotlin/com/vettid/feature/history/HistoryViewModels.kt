@@ -137,6 +137,14 @@ class HistoryViewModel @Inject constructor(
     private var job: Job? = null
     private var refreshing = false
 
+    /**
+     * Bumped by every [refresh] and [reload]: a finishing refresh clears [refreshing] only while its generation is
+     * still the current one. Without it, an earlier refresh's end cleared the flag while a later refresh chained after
+     * it was still reading, and [loadMore] ran `pager.more()` next to `pager.refresh()` on the same pager, whose
+     * snapshot and cursor writes interleaved and lost entries (found while porting to iOS).
+     */
+    private var generation = 0L
+
     init {
         viewModelScope.launch {
             connections.connections.collect { list ->
@@ -222,6 +230,9 @@ class HistoryViewModel @Inject constructor(
 
     private fun reload(debounce: Boolean = false) {
         job?.cancel()
+        // A refresh it cancelled does not clear the flag (no longer current): the reload does, loading in its place.
+        generation++
+        refreshing = false
         state.update { it.copy(loading = true, error = null, entries = if (debounce) it.entries else emptyList()) }
         job = viewModelScope.launch {
             if (debounce) delay(SEARCH_DEBOUNCE_MS)
@@ -246,13 +257,14 @@ class HistoryViewModel @Inject constructor(
         // A device may have been paired or removed meanwhile.
         loadDevices(refresh = true)
         val before = job
+        val gen = ++generation
         refreshing = true
         job = viewModelScope.launch {
             try {
                 before?.join()
                 load { pager.refresh() }
             } finally {
-                refreshing = false
+                if (gen == generation) refreshing = false
             }
         }
     }
