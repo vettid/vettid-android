@@ -28,6 +28,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
 
 /**
  * The History screen's loads end (owner, 2026-10-08, staging S5): History of one connection, opened from its detail,
@@ -192,6 +193,56 @@ class HistoryViewModelTest {
         assertEquals(listOf(6L, 5L, 4L), s.entries.map { it.seq })
         assertEquals("audit.exported", s.entries.first().kind)
         assertTrue(s.end)
+    }
+
+    /**
+     * Two refreshes in a row (found while porting to iOS): the first one's end cleared `refreshing` while the second,
+     * chained after it, was still reading, so the list's end coming into view ran `pager.more()` next to
+     * `pager.refresh()` on the same pager and entries went missing. No older page is read until the last refresh ends.
+     */
+    @Test
+    fun noOlderPageIsReadWhileAChainedRefreshRuns() = runTest(main.dispatcher) {
+        val first = (999L downTo 950L).toList().toLongArray()
+        val firstRefresh = CountDownLatch(1)
+        val secondRefresh = CountDownLatch(1)
+        val vault = Vault(
+            { page(*first, next = 950) },
+            { firstRefresh.await(); page(*first, next = 950) },
+            { secondRefresh.await(); page(*first, next = 950) },
+            { page(949, 948) },
+        )
+        val model = vm(vault)
+        settle(model, ::idle)
+        model.refresh()
+        settleCalls(vault, 2)
+        model.refresh()
+        firstRefresh.countDown()
+        // The second refresh is reading: the first one has ended.
+        settleCalls(vault, 3)
+        advanceUntilIdle()
+        model.loadMore()
+        advanceUntilIdle()
+        Thread.sleep(SETTLE_SLEEP_MS * 5)
+        advanceUntilIdle()
+        assertEquals(3, vault.calls.size)
+        assertFalse(model.uiState.value.loadingMore)
+        secondRefresh.countDown()
+        val s0 = settle(model, ::idle)
+        assertEquals(50, s0.entries.size)
+        model.loadMore()
+        val s = settle(model) { idle(it) && it.end }
+        assertEquals(52, s.entries.size)
+        assertEquals(listOf(null, null, null, 950L), vault.calls.map { it["before_seq"] })
+    }
+
+    /** Runs the test dispatcher until the vault has had [n] requests. */
+    private fun TestScope.settleCalls(vault: Vault, n: Int) {
+        repeat(SETTLE_ROUNDS) {
+            advanceUntilIdle()
+            if (vault.calls.size >= n) return
+            Thread.sleep(SETTLE_SLEEP_MS)
+        }
+        throw AssertionError("the vault had ${vault.calls.size} requests, not $n")
     }
 
     /** Refused because the daily check was due: History reads again once the check passes (staging, release 19). */
