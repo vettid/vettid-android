@@ -190,6 +190,7 @@ object AuditKinds {
         "push.token_gone" -> listOf(Detail.Line(R.string.history_detail_push_token_gone))
         "leash.item.run" -> listOf(Detail.Line(R.string.history_detail_leash_item_run))
         "leash.item.proxy" -> listOf(Detail.Line(R.string.history_detail_leash_item_proxy))
+        "credential.utk_resync" -> listOf(Detail.Line(R.string.history_detail_credential_utk_resync))
         else -> emptyList()
     }
 
@@ -339,6 +340,8 @@ object AuditKinds {
         "credential.alarm.confirmed" to R.string.history_kind_credential_alarm_confirmed,
         "credential.alarm.resolved" to R.string.history_kind_credential_alarm_resolved,
         "credential.reset" to R.string.history_kind_credential_reset,
+        // ANDROID-PLAN 0.1.60 (VAULT-MESSAGING 0.52.0 §3.5.4): History only, no feed item.
+        "credential.utk_resync" to R.string.history_kind_credential_utk_resync,
         "audit.exported" to R.string.history_kind_audit_exported,
         "recovery.requested" to R.string.history_kind_recovery_requested,
         "recovery.replaced" to R.string.history_kind_recovery_replaced,
