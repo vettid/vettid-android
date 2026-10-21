@@ -216,6 +216,14 @@ class VaultDevice private constructor(
     private val st: DeviceState,
 ) : AltParty {
     private val lock = Mutex()
+
+    /**
+     * Set under [lock] by [forget] and [dropKeysFromMemory]: from then on nothing is saved ([save] throws) and nothing is
+     * sent to the vault ([checkLive]). A request that was waiting for [lock] when this device was forgotten (before an
+     * erase) cannot write the state file, or make its file key again, after the erase.
+     */
+    @Volatile
+    private var forgotten = false
     private val clock = cfg.clock
     private val relays = ConcurrentHashMap<String, RelayClient>()
     private val own: RelayClient = relayFor(cfg.relayUrl)
@@ -332,6 +340,11 @@ class VaultDevice private constructor(
     /** A copy of the alternate-channel state. */
     val altState: AltState get() = alt()
 
+    /** Throws once this device was forgotten ([forgotten]): nothing more is saved or sent. */
+    private fun checkLive() {
+        if (forgotten) throw VaultStateException("forgotten")
+    }
+
     private fun relayFor(url: String): RelayClient = relays.getOrPut(url.trimEnd('/')) { RelayClient(url, secrets.relay, cfg.http, clock) }
 
     private fun now(): Instant = Instant.now(clock)
@@ -339,6 +352,7 @@ class VaultDevice private constructor(
     // --- persistence ---
 
     private fun save() {
+        checkLive()
         st.vault?.let { v ->
             v.sessions = Base64s.encodeStd(keyring.export())
             v.awaiting = awaiting.mapNotNull { a ->
@@ -428,6 +442,7 @@ class VaultDevice private constructor(
      * shared storage). Returns the relay's `blob_id`.
      */
     suspend fun uploadBlobToVault(blob: ByteArray): String {
+        checkLive()
         val v = requireVault()
         if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
         val ref = try {
@@ -734,6 +749,7 @@ class VaultDevice private constructor(
                 responderRelayKey = Base64s.decodeStd(v.relayPk), policy = Policy.VAULT_TO_DEVICE, id = id, now = at,
             ),
         )
+        checkLive()
         relayFor(v.relayUrl).deposit(v.mailbox, depositToken, i.envelope())
         ini?.abort()
         ini = i
@@ -985,6 +1001,7 @@ class VaultDevice private constructor(
      * applied nothing, and every attempt is signed afresh, [RelayException.staleSignature]) keep it for the next flush.
      */
     private suspend fun deliver(e: OutboxEntry) {
+        checkLive()
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
             st.outbox.remove(e)
@@ -1020,6 +1037,7 @@ class VaultDevice private constructor(
 
     /** A deposit straight to the vault (handshake messages, outside the outbox), its refusal counted as [deliver]'s. */
     private suspend fun depositToVault(v: VaultRecord, payload: ByteArray) {
+        checkLive()
         try {
             relayFor(v.relayUrl).deposit(v.mailbox, v.token, payload)
         } catch (x: RelayException) {
@@ -1223,6 +1241,8 @@ class VaultDevice private constructor(
      * ([LeaveUnacked]): the relay delivers it again, and it is opened once `hs.fin` has arrived (§6.3, §8.4).
      */
     internal suspend fun handle(m: RelayMessage) = lock.withLock {
+        // Collected before this device was forgotten: nothing of it is kept, and nothing is answered.
+        if (forgotten) return@withLock
         val t = now()
         if (st.seen.containsKey(m.msgId)) return@withLock
         st.seen[m.msgId] = t.toEpochMilli()
@@ -1719,17 +1739,22 @@ class VaultDevice private constructor(
         k.release = null
     }
 
-    /** Forgets the vault and every key's state on this device (sign-out, transfer away). */
     /**
      * (ANDROID-PLAN 0.1.54) The vault is being deleted: collection stops and the session keys leave memory now; the stored
      * state goes with [forget] once the vault is gone. Nothing is saved after it.
      */
     suspend fun dropKeysFromMemory() = lock.withLock {
+        forgotten = true
         stop()
         keyring.destroy()
     }
 
+    /**
+     * Forgets the vault and every key's state on this device (a wipe, a deletion, a start-over, a new redeem). Taken under
+     * [lock], so it waits for a send in progress; after it, saves are refused and sends fail ([forgotten]).
+     */
     suspend fun forget() = lock.withLock {
+        forgotten = true
         stop()
         keyring.destroy()
         cfg.store.clear()

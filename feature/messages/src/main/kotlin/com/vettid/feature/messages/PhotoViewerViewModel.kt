@@ -64,12 +64,13 @@ class PhotoViewerViewModel @Inject constructor(
         viewModelScope.launch {
             attachments.cleared.drop(1).collect {
                 state.value.photo?.bytes?.fill(0)
-                state.update {
-                    PhotoViewerUiState(loading = false, error = FailureKind.OTHER, problemText = R.string.messages_photo_unavailable)
-                }
+                state.update { unavailable() }
             }
         }
     }
+
+    private fun unavailable() =
+        PhotoViewerUiState(loading = false, error = FailureKind.OTHER, problemText = R.string.messages_photo_unavailable)
 
     override fun onCleared() {
         state.value.photo?.bytes?.fill(0)
@@ -80,15 +81,23 @@ class PhotoViewerViewModel @Inject constructor(
     fun load() {
         state.update { it.copy(loading = true, error = null, problemText = null) }
         viewModelScope.launch {
+            // A clear that lands while the fetch is on its way (ANDROID-PLAN "Memory only, wiped at lock"): the photo
+            // that arrives after it is zeroed and never shown.
+            val generation = attachments.cleared.value
             val name = messages.messages(connectionId).first().firstOrNull { it.messageId == messageId }?.attachment?.name
             try {
                 val p = attachments.photo(connectionId, messageId)
+                if (attachments.cleared.value != generation) {
+                    p.bytes.fill(0)
+                    state.update { unavailable() }
+                    return@launch
+                }
                 state.update { PhotoViewerUiState(loading = false, photo = p, name = name) }
             } catch (e: VaultFailure) {
                 val text = when (e.code) {
                     AttachmentManager.CODE_TYPE -> R.string.messages_photo_in_type
                     AttachmentManager.CODE_BAD -> R.string.messages_photo_bad
-                    "unavailable" -> R.string.messages_photo_unavailable
+                    AttachmentManager.CODE_UNAVAILABLE -> R.string.messages_photo_unavailable
                     "busy" -> R.string.messages_photo_busy
                     else -> null
                 }

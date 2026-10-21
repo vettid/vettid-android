@@ -415,13 +415,23 @@ class ConversationViewModel @Inject constructor(
         s.copy(photoDraft = s.photoDraft?.takeIf { it.photos.isNotEmpty() }?.copy(problem = null))
     }
 
-    /** A message's thumbnail, from memory or fetched (`part: "thumb"`); null when it cannot be had. */
-    suspend fun thumbnail(messageId: String): ByteArray? =
-        attachments.cachedThumbnail(connectionId, messageId) ?: try {
+    /**
+     * A message's thumbnail, from memory or fetched (`part: "thumb"`); null when it cannot be had. One that arrives after
+     * a clear (ANDROID-PLAN "Memory only, wiped at lock") is zeroed and not shown.
+     */
+    suspend fun thumbnail(messageId: String): ByteArray? {
+        val generation = attachments.cleared.value
+        val t = attachments.cachedThumbnail(connectionId, messageId) ?: try {
             attachments.thumbnail(connectionId, messageId)
         } catch (_: VaultFailure) {
             null
         }
+        if (t != null && attachments.cleared.value != generation) {
+            t.fill(0)
+            return null
+        }
+        return t
+    }
 
     override fun onCleared() {
         // Leaving the conversation is a Cancel: an upload not sent is discarded at the vault.

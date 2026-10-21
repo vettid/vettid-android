@@ -71,14 +71,22 @@ class FakeAttachments : AttachmentsRepository {
         calls += "abandon:${p.requestId}"
     }
 
+    /** When set, [thumbnail] and [photo] wait for it (a fetch on its way). */
+    var fetchGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /** Every thumbnail and photo handed out, to check that one fetched across a clear was zeroed. */
+    val handedOut = mutableListOf<ByteArray>()
+
     override suspend fun thumbnail(connectionId: String, messageId: String): ByteArray {
         call("thumbnail")
-        return byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte())
+        fetchGate?.await()
+        return byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()).also { handedOut += it }
     }
 
     override suspend fun photo(connectionId: String, messageId: String): FetchedPhoto {
         call("photo")
-        return FetchedPhoto(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()), ImageType.JPEG)
+        fetchGate?.await()
+        return FetchedPhoto(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()).also { handedOut += it }, ImageType.JPEG)
     }
 
     override fun cachedThumbnail(connectionId: String, messageId: String): ByteArray? = null

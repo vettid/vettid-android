@@ -357,6 +357,38 @@ class VaultManager(
     @Volatile
     private var wipeDevice: VaultDevice? = null
 
+    /**
+     * Every device this process made and has not forgotten, weakly held: one that nothing refers to any more can send
+     * and save nothing, and drops out. Before anything is erased (a wipe, a deletion's end, a forget, a start-over, a new
+     * redeem's fresh device), each is forgotten ([forgetDevices]): its lock taken, so that a send in progress ends first,
+     * and from then on its saves refused and its sends failing ([VaultDevice.forget]). That includes a device whose
+     * session was already dropped (one stopped for a deletion), so no request still on its way writes the device's state
+     * file, or makes its file key again, after the erase.
+     */
+    private val liveDevices: MutableSet<VaultDevice> =
+        java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(java.util.WeakHashMap()))
+
+    /** Forgets every device of [liveDevices] ([VaultDevice.forget]); before an erase. */
+    private suspend fun forgetDevices() {
+        for (d in synchronized(liveDevices) { liveDevices.toList() }) {
+            runCatching { d.forget() }
+            liveDevices.remove(d)
+        }
+    }
+
+    /**
+     * Before an enrolment on a device that is kept ([kept]): every other device of [liveDevices] saves and sends nothing
+     * more ([VaultDevice.dropKeysFromMemory]). Not [VaultDevice.forget]: the devices share one state file, which [kept]
+     * goes on using.
+     */
+    private suspend fun retireOtherDevices(kept: VaultDevice) {
+        for (d in synchronized(liveDevices) { liveDevices.toList() }) {
+            if (d === kept) continue
+            runCatching { d.dropKeysFromMemory() }
+            liveDevices.remove(d)
+        }
+    }
+
     /** How a vault comes to this phone, each after an unfinished wipe is finished or refused while it is not ([Enrolments]). */
     private val enrolments = Enrolments(
         pending = { record.eraseFailed || wiper.pending },
@@ -1058,6 +1090,7 @@ class VaultManager(
                     elapsedMs = { android.os.SystemClock.elapsedRealtime() },
                 )
                 val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
+                liveDevices += device
                 val member = gateway.member()
                 // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
                 // before it compares the bytes as typed.
@@ -1086,6 +1119,8 @@ class VaultManager(
         observer?.cancel()
         observer = null
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
+        // Every other device too (one stopped for a deletion, or detached), before the device file and keys go below.
+        if (forget) forgetDevices()
         session = null
         eventsFlow.value = null
         moveFlow.value = null
@@ -2469,7 +2504,7 @@ class VaultManager(
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
         val d = session().device
-        if (d.deviceId == null && (d.hasVault || d.vaultId != null)) dropSession(forget = true)
+        if (d.deviceId == null && (d.hasVault || d.vaultId != null)) dropSession(forget = true) else retireOtherDevices(d)
     }
 
     override suspend fun recoveryStage(): RecoveryStage = guard {
@@ -3054,6 +3089,9 @@ class VaultManager(
             runCatching { d.forget() }
             wipeDevice = null
         }
+        // Every other device this process made (one stopped for a deletion, whose session was already dropped), before
+        // anything is erased: nothing still on its way saves after the erase.
+        forgetDevices()
         social.clear()
         attachments.reset()
         ownerCheck.clear()

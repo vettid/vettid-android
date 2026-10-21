@@ -12,6 +12,7 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -402,6 +403,48 @@ class MessagesViewModelsTest {
         advanceUntilIdle()
         assertNull(vm.uiState.value.photo)
         assertFalse(PhotoExport.intact(photo.bytes, photo.type))
+    }
+
+    /**
+     * (ANDROID-PLAN "Memory only, wiped at lock") A clear that lands while the photo is on its way, after the viewer
+     * already dropped what it held: the photo that arrives is zeroed and never shown (found while porting to iOS).
+     */
+    @Test
+    fun aPhotoFetchedAcrossAClearIsZeroedAndNeverShown() = runTest {
+        attachments.fetchGate = kotlinx.coroutines.CompletableDeferred()
+        val vm = PhotoViewerViewModel(
+            SavedStateHandle(mapOf(PhotoViewerRoute.ARG_CONNECTION to "c1", PhotoViewerRoute.ARG_MESSAGE to "m1")),
+            attachments,
+            social,
+        )
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.loading)
+        attachments.clear()
+        advanceUntilIdle()
+        attachments.fetchGate!!.complete(Unit)
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertNull(s.photo)
+        assertFalse(s.loading)
+        assertEquals(R.string.messages_photo_unavailable, s.problemText)
+        assertTrue(attachments.handedOut.single().all { it == 0.toByte() })
+    }
+
+    /** The same for a bubble's thumbnail: one fetched across a clear is zeroed and not shown. */
+    @Test
+    fun aThumbnailFetchedAcrossAClearIsZeroedAndNotShown() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        attachments.fetchGate = kotlinx.coroutines.CompletableDeferred()
+        val thumb = async { vm.thumbnail("m1") }
+        advanceUntilIdle()
+        attachments.clear()
+        attachments.fetchGate!!.complete(Unit)
+        assertNull(thumb.await())
+        assertTrue(attachments.handedOut.single().all { it == 0.toByte() })
+        // Without a clear meanwhile it is shown.
+        attachments.fetchGate = null
+        assertTrue(vm.thumbnail("m1") != null)
     }
 
     @Test

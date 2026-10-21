@@ -87,6 +87,11 @@ class VaultDeviceTest {
     @Volatile
     private var refuseStatus = 403
 
+    /** When set, a deposit waits for it (a send in progress); [depositsStarted] counts the deposits that arrived. */
+    @Volatile
+    private var depositGate: java.util.concurrent.CountDownLatch? = null
+    private val depositsStarted = java.util.concurrent.atomic.AtomicInteger()
+
     /** Deposits the relay refused (any code). */
     private val refused = java.util.concurrent.atomic.AtomicInteger()
 
@@ -185,6 +190,8 @@ class VaultDeviceTest {
                         MockResponse.Builder().code(204).build()
                     }
                     path.startsWith("/v1/mailbox/") && request.method == "POST" -> {
+                        depositsStarted.incrementAndGet()
+                        depositGate?.await(10, TimeUnit.SECONDS)
                         val o = StrictJson.parseObject(request.body!!.toByteArray())
                         deposits.add(path.removePrefix("/v1/mailbox/") to o.base64("payload"))
                         MockResponse.Builder().code(201).body("""{"msg_id":"${Ulid.new()}"}""").build()
@@ -3179,5 +3186,43 @@ class VaultDeviceTest {
         assertEquals(s, stateJson.decodeFromString(DeviceState.serializer(), b))
         val api = buildJsonObject { put("x", JsonPrimitive(1)) }
         assertEquals("{\"x\":1}", String(VaultJson.bytes(api)))
+    }
+
+    /**
+     * Before an erase (a wipe, a vault's deletion, a start-over): [VaultDevice.forget] takes the device's lock, so it waits
+     * for a send in progress; after it, a request that was waiting for the lock saves nothing (no state file written back
+     * after the erase) and sends nothing, and neither does anything collected or flushed later (found while porting to iOS).
+     */
+    @Test
+    fun aForgottenDeviceSavesAndSendsNothingMore() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val before = depositsStarted.get()
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            val inFlight = async(Dispatchers.IO) { d.send("vault.status") }
+            while (depositsStarted.get() == before) kotlinx.coroutines.delay(10)
+            val forgetting = async(Dispatchers.IO) { d.forget() }
+            kotlinx.coroutines.delay(200)
+            assertFalse("the forget waits for the send in progress", forgetting.isCompleted)
+            // Waiting for the lock behind the forget: it runs after it.
+            val late = async(Dispatchers.IO) { runCatching { d.send("vault.status") } }
+            val lateSave = async(Dispatchers.IO) { runCatching { d.markSignerSeen(!d.signerSeen) } }
+            kotlinx.coroutines.delay(200)
+            depositGate!!.countDown()
+            inFlight.await()
+            assertEquals("vault.status", v.open(nextDeposit().second).type)
+            forgetting.await()
+            assertTrue(late.await().exceptionOrNull() is VaultStateException)
+            assertTrue("a save after the forget is refused", lateSave.await().exceptionOrNull() is VaultStateException)
+            assertNull("nothing saved after the forget", store.load())
+            // Nothing collected or flushed later is kept or sent.
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"late","sent_at":"x"}"""))
+            d.flushOutbox()
+            assertTrue(runCatching { d.sendOnce("call.ice") }.exceptionOrNull() is VaultStateException)
+            assertNull(store.load())
+            assertNull("no deposit after the forget", deposits.poll(300, TimeUnit.MILLISECONDS))
+            depositGate = null
+        }
     }
 }

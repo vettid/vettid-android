@@ -13,8 +13,14 @@ import kotlin.math.roundToInt
 
 /** A photo prepared for sending, in memory only: the re-encoded JPEG, its thumbnail and its size in pixels. */
 class PreparedPhoto(val jpeg: ByteArray, val thumb: ByteArray, val width: Int, val height: Int) {
+    /** Whether [wipe] ran: the bytes are zeros, and nothing is sealed or sent from them. */
+    @Volatile
+    var wiped: Boolean = false
+        private set
+
     /** Zeroizes both encodings (after the answer to `message.send`, at Cancel and at a lock). */
     fun wipe() {
+        wiped = true
         jpeg.fill(0)
         thumb.fill(0)
     }
