@@ -197,4 +197,33 @@ class ManifestTest {
         val otherMs = NitroVerifier(listOf(nsm.ca.root)).verify(nsm3.attest(t0)).measurements
         assertThrows(AttestationException.Pcr::class.java) { ev.verifyEnrolled(enrolled, bundle, nonce, otherMs, t0) }
     }
+
+    /** VAULT-MESSAGING §11.2 "Lifetime and clock allowance": not_after at most 24 h + 5 min after the attestation. */
+    @Test
+    fun descriptorClockAllowance() {
+        val nsm = FakeNsm(pcr0 = "cd".repeat(48))
+        val ev = EnclaveVerifier(NitroVerifier(listOf(nsm.ca.root)))
+        val m7 = verifier.verify(serve(manifest(7, r3, r4)))
+        val etk = com.vettid.core.crypto.hpke.KemPrivateKey.generate().publicKey
+        val t0 = Instant.parse("2026-10-02T12:00:00Z")
+        fun check(attestedAt: Instant, notAfter: Instant) {
+            val desc = com.vettid.core.crypto.altchan.Descriptor.marshal("i-test-1", etk, "cd".repeat(48), notAfter)
+            val att = nsm.attest(attestedAt, userData = com.vettid.core.crypto.altchan.AltChannel.etkUserData(desc))
+            ev.verifyEnclave(desc, att, m7, enroll = true, now = attestedAt.plusSeconds(60))
+        }
+        val day = Duration.ofHours(24)
+        // An attestation timestamp with milliseconds, about a second behind the enclave's clock (the case that was refused).
+        check(Instant.parse("2026-10-02T12:00:00.822Z"), t0.plus(day).plusSeconds(2))
+        for (s in listOf(2L, 60L, 300L)) check(t0, t0.plus(day).plusSeconds(s))
+        assertThrows(AttestationException.Stale::class.java) { check(t0, t0.plus(day).plusSeconds(301)) }
+        // Exactly 24 h + 5 min verifies; 1 ms more is refused.
+        check(t0, t0.plus(day).plusSeconds(300))
+        assertThrows(AttestationException.Stale::class.java) { check(t0.minusMillis(1), t0.plus(day).plusSeconds(300)) }
+        assertThrows(AttestationException.Stale::class.java) { check(t0, t0.plus(Duration.ofHours(25))) }
+        // not_after not after the phone's current time is still refused, with no allowance.
+        val desc = com.vettid.core.crypto.altchan.Descriptor.marshal("i-test-1", etk, "cd".repeat(48), t0.plus(day))
+        val att = nsm.attest(t0, userData = com.vettid.core.crypto.altchan.AltChannel.etkUserData(desc))
+        assertThrows(AttestationException.Stale::class.java) { ev.verifyEnclave(desc, att, m7, true, t0.plus(day)) }
+        assertThrows(AttestationException.Stale::class.java) { ev.verifyEnclave(desc, att, m7, true, t0.plus(day).plusSeconds(1)) }
+    }
 }
