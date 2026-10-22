@@ -57,11 +57,12 @@ object ItemsText {
         else -> R.string.items_kind_other
     }
 
-    /** What a value of [kind] must look like, for an invalid one (§10.7). */
+    /** What a value of [kind] must look like, for an invalid one (§10.7); [monthYear]: a date entered as a month and year. */
     @StringRes
-    fun kindRule(kind: String): Int = when (kind) {
+    fun kindRule(kind: String, monthYear: Boolean = false): Int = when (kind) {
         FieldKinds.NUMBER -> R.string.items_rule_number
-        FieldKinds.DATE -> R.string.items_rule_date
+        // A month-and-year field names its own form for any invalid value, a full date included (VAULT-MESSAGING 0.55.5).
+        FieldKinds.DATE -> if (monthYear) R.string.items_rule_month else R.string.items_rule_date
         FieldKinds.EMAIL -> R.string.items_rule_email
         FieldKinds.PHONE -> R.string.items_rule_phone
         FieldKinds.URL -> R.string.items_rule_url
@@ -73,17 +74,17 @@ object ItemsText {
     @Composable
     fun category(id: String): String = ItemTemplates.category(id)?.let { stringResource(it.label) } ?: ItemTemplates.customLabel(id)
 
-    /** The message of one draft problem ([kind]: the field's, for an invalid value). */
+    /** The message of one draft problem ([kind] and [monthYear]: the field's, for an invalid value). */
     @Composable
     @Suppress("CyclomaticComplexMethod") // one message per problem
-    fun problem(p: DraftProblem, kind: String = FieldKinds.TEXT): String = when (p) {
+    fun problem(p: DraftProblem, kind: String = FieldKinds.TEXT, monthYear: Boolean = false): String = when (p) {
         DraftProblem.NAME_EMPTY -> stringResource(R.string.items_problem_name_empty)
         DraftProblem.NAME_TOO_LONG -> stringResource(R.string.items_problem_name_long)
         DraftProblem.BAD_CHARACTER -> stringResource(R.string.items_problem_bad_character)
         DraftProblem.CATEGORY_INVALID -> stringResource(R.string.items_problem_category)
         DraftProblem.LABEL_EMPTY -> stringResource(R.string.items_problem_label_empty)
         DraftProblem.LABEL_TOO_LONG -> stringResource(R.string.items_problem_label_long)
-        DraftProblem.VALUE_INVALID -> stringResource(kindRule(kind))
+        DraftProblem.VALUE_INVALID -> stringResource(kindRule(kind, monthYear))
         DraftProblem.VALUE_TOO_LONG -> stringResource(R.string.items_problem_value_long)
         DraftProblem.NOTES_TOO_LONG -> stringResource(R.string.items_problem_notes_long)
         DraftProblem.TOO_MANY_FIELDS -> stringResource(R.string.items_problem_fields)
