@@ -279,8 +279,11 @@ internal object PhoneInput {
 
     /** [raw] formatted as typed in [region] (a `+` and country code switch the region); [raw] when no format fits. */
     fun asYouType(raw: String, region: String): String {
-        if (raw.isEmpty()) return raw
-        if ('x' in raw) return asYouType(raw.substringBefore('x'), region) + " " + raw.substring(raw.indexOf('x'))
+        if ('x' in raw) return (asYouType(raw.substringBefore('x'), region) + " " + raw.substring(raw.indexOf('x'))).trim()
+        return formatted(raw, region)
+    }
+
+    private fun formatted(raw: String, region: String): String {
         val f = util.getAsYouTypeFormatter(region)
         var out = ""
         for (c in raw) out = f.inputDigit(c)
@@ -288,15 +291,15 @@ internal object PhoneInput {
     }
 
     /**
-     * What is saved for [text] in [region]: E.164 when it parses as a possible number without an extension (it always
+     * What is saved for [text] in [region]: E.164 when it parses and is possible (`IS_POSSIBLE`, not only locally; it always
      * fits §10.7), else its dialable characters ([raw]: a leading `+` if typed, then digits). An extension is dropped
      * (from its marker on) before either.
      */
     fun stored(text: String, region: String): String {
         val raw = main(text)
-        if (raw.isEmpty()) return if (raw(text).isEmpty()) text else raw
+        if (raw.none { it in '0'..'9' }) return ""
         val n = parse(raw, region)
-        val e164 = n?.takeIf { !it.hasExtension() && util.isPossibleNumber(it) }
+        val e164 = n?.takeIf { util.isPossibleNumberWithReason(it) == PhoneNumberUtil.ValidationResult.IS_POSSIBLE }
             ?.let { util.format(it, PhoneNumberUtil.PhoneNumberFormat.E164) }
         return e164?.takeIf { FieldInput.phone(it) == it } ?: raw
     }

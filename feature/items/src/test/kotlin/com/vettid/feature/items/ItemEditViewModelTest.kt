@@ -157,6 +157,25 @@ class ItemEditViewModelTest {
     }
 
     @Test
+    fun anUntouchedPhoneIsSentAsStoredAndAnEditedOneCanonically() = runTest {
+        val old = FakeItems.item("01P", "Mum").copy(
+            fields = listOf(com.vettid.core.data.items.ItemFieldView("f1", "Phone", "phone", FieldValue.Text("+44 20 7946 0958"))),
+        )
+        items.add(old)
+        val vm = vm(itemId = "01P")
+        advanceUntilIdle()
+        vm.setName("Mother")
+        vm.save()
+        advanceUntilIdle()
+        // Owner decision 2026-10-22: the older spaced value is not re-stored unless the member edits that field.
+        assertEquals(FieldValue.Text("+44 20 7946 0958"), items.stored.getValue("01P").fields.single().value)
+        vm.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 "))
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue("01P").fields.single().value)
+    }
+
+    @Test
     fun anOldContactCardStillEdits() = runTest {
         items.add(FakeItems.item("01K", "Contact details", category = "contact", tags = listOf("@profile"), fields = listOf("Email" to "sam@example.org")).copy(template = "contact_card"))
         val vm = vm(itemId = "01K")

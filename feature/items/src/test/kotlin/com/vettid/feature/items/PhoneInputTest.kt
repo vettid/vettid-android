@@ -113,7 +113,10 @@ class PhoneInputTest {
     /** Owner decision 2026-10-22: only the main number is saved; the extension is dropped, with a note. */
     @Test
     fun anExtensionIsDroppedWhenSavedAndTheEditorSaysSo() {
-        for (typed in listOf("+44 20 7946 0958 x123", "+442079460958 ext. 123", "+44 20 7946 0958;ext=123", "+44 20 7946 0958#123", "+442079460958,123")) {
+        val typedWithExtension = listOf(
+            "+44 20 7946 0958 x123", "+442079460958 ext. 123", "+44 20 7946 0958;ext=123", "+44 20 7946 0958#123", "+442079460958,123",
+        )
+        for (typed in typedWithExtension) {
             assertTrue(typed, PhoneInput.hasExtension(typed))
             assertEquals(typed, "+442079460958", PhoneInput.stored(PhoneInput.raw(typed), "US"))
             assertFalse(typed, PhoneInput.doubtful(typed, "US"))
@@ -123,5 +126,16 @@ class PhoneInputTest {
         assertEquals("55512", PhoneInput.stored("55512 x99", "US"))
         assertEquals("+55512", PhoneInput.stored("+555 12 ext 99", "US"))
         assertEquals("(650) 253-0000", PhoneInput.display("+16502530000", "US"))
+    }
+
+    @Test
+    fun noDigitLeftIsEmptyAndTheFallbackIsAtMost15Digits() {
+        assertEquals("", PhoneInput.stored("+", "US"))
+        assertEquals("", PhoneInput.stored("x123", "US"))
+        assertEquals("", PhoneInput.stored("abc", "US"))
+        assertEquals(15, PhoneInput.stored("1234567890123456789", "ZZ").length)
+        // Case does not matter for a marker.
+        assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 EXT. 7"), "US"))
+        assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 X7"), "US"))
     }
 }
