@@ -111,20 +111,28 @@ class ItemEditViewModelTest {
     }
 
     @Test
-    fun aPhoneIsStoredInInternationalFormatAndAnUnknownOneAsTyped() = runTest {
-        // Owner request 2026-10-09: the input holds the dialable characters; saving formats, never blocks.
+    fun aPhoneIsStoredInE164AndAnUnknownOneAsDialableCharacters() = runTest {
+        // Owner request 2026-10-09: the input holds the dialable characters; saving stores E.164 (owner decision 2026-10-22), never blocks.
         val vm = vm(template = "phone_number")
         vm.setFieldText(0, PhoneInput.raw("+44 20 7946 0958"))
         vm.save()
         advanceUntilIdle()
-        assertEquals(FieldValue.Text("+44 20 7946 0958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
+
+        val withExt = vm(template = "phone_number")
+        withExt.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 ext. 123"))
+        // The marker stays in the draft (and so the note shows) until the save drops it.
+        assertEquals("+442079460958ext. 123", withExt.uiState.value.draft.fields.single().text)
+        withExt.save()
+        advanceUntilIdle()
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(withExt.uiState.value.savedId!!).fields.single().value)
 
         val unknown = vm(template = "phone_number")
         unknown.setFieldText(0, "55512")
         unknown.save()
         advanceUntilIdle()
-        // Kept as the member saw it while typing.
-        assertEquals(FieldValue.Text("555-12"), items.stored.getValue(unknown.uiState.value.savedId!!).fields.single().value)
+        // Kept as its dialable characters only.
+        assertEquals(FieldValue.Text("55512"), items.stored.getValue(unknown.uiState.value.savedId!!).fields.single().value)
     }
 
     @Test
@@ -148,6 +156,25 @@ class ItemEditViewModelTest {
             assertEquals(emptyList<String>(), d.tags)
             assertEquals(listOf(kind), d.fields.map { it.kind })
         }
+    }
+
+    @Test
+    fun anUntouchedPhoneIsSentAsStoredAndAnEditedOneCanonically() = runTest {
+        val old = FakeItems.item("01P", "Mum").copy(
+            fields = listOf(com.vettid.core.data.items.ItemFieldView("f1", "Phone", "phone", FieldValue.Text("+44 20 7946 0958"))),
+        )
+        items.add(old)
+        val vm = vm(itemId = "01P")
+        advanceUntilIdle()
+        vm.setName("Mother")
+        vm.save()
+        advanceUntilIdle()
+        // Owner decision 2026-10-22: the older spaced value is not re-stored unless the member edits that field.
+        assertEquals(FieldValue.Text("+44 20 7946 0958"), items.stored.getValue("01P").fields.single().value)
+        vm.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 "))
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue("01P").fields.single().value)
     }
 
     @Test

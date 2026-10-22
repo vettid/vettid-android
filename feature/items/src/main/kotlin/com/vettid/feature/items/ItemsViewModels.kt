@@ -514,7 +514,9 @@ class ItemEditViewModel @Inject constructor(
         savedTags = d.tags
         contentDirty = false
         state.update { it.copy(loading = false, version = d.version, prompt = null) }
-        setDraft(ItemTemplates.withHints(ItemDraft.of(d), context), dirty = false)
+        val draft = ItemTemplates.withHints(ItemDraft.of(d), context)
+        storedPhones = draft.fields.filter { it.kind == FieldKinds.PHONE && it.fieldId != null }.associate { it.fieldId!! to it.text }
+        setDraft(draft, dirty = false)
     }
 
     private fun setDraft(d: ItemDraft, dirty: Boolean = true) {
@@ -530,7 +532,7 @@ class ItemEditViewModel @Inject constructor(
      * the size limit of the protection it will have (12 KiB for critical, §10.7).
      */
     private fun checkOf(d: ItemDraft, s: ItemEditUiState): DraftCheck =
-        ItemChecks.check(named(d, s).copy(sensitivity = s.protectionTo ?: d.sensitivity))
+        ItemChecks.check(phonesStored(named(d, s)).copy(sensitivity = s.protectionTo ?: d.sensitivity))
 
     /** The draft under the template's name when the member left the name empty. */
     private fun named(d: ItemDraft, s: ItemEditUiState = state.value): ItemDraft =
@@ -539,10 +541,22 @@ class ItemEditViewModel @Inject constructor(
     /** The phone's region, for numbers typed without `+` (owner request 2026-10-09). */
     private val phoneRegion: String by lazy { PhoneInput.region(context) }
 
-    /** Phone values as saved: international format when they parse, else as typed ([PhoneInput.stored]). */
+    /** The phone values as loaded, by field id: a field the member did not edit is sent exactly as stored. */
+    private var storedPhones: Map<String, String> = emptyMap()
+
+    /**
+     * Phone values as saved: E.164 when they parse, else the dialable characters ([PhoneInput.stored]); only for a
+     * new field or one the member edited.
+     */
     private fun phonesStored(d: ItemDraft): ItemDraft = d.copy(
         fields = d.fields.map { f ->
-            if (f.kind == FieldKinds.PHONE && f.text.isNotBlank()) f.copy(text = PhoneInput.stored(f.text, phoneRegion)) else f
+            val untouched = f.fieldId != null && storedPhones[f.fieldId] == f.text
+            val toStore = f.kind == FieldKinds.PHONE && f.text.isNotBlank() && !f.kept
+            if (toStore && !untouched) {
+                f.copy(text = PhoneInput.stored(f.text, phoneRegion))
+            } else {
+                f
+            }
         },
     )
 

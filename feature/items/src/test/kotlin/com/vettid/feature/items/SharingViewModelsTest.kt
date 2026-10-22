@@ -141,6 +141,22 @@ class SharingViewModelsTest {
     }
 
     @Test
+    fun savingADescriptionKeepsAColourStoredSinceTheFormOpened() = runTest {
+        sharing.registry = sharing.registry.copy(tags = sharing.registry.tags.map { if (it.tag == "travel") it.copy(color = null) else it })
+        val vm = TagsViewModel(sharing)
+        advanceUntilIdle()
+        vm.edit(vm.uiState.value.tags.first { it.tag == "travel" })
+        // The colour keeper assigns one while the form is open.
+        sharing.setTagColor("travel", TagColors.stored[3])
+        vm.setDescription("Trips")
+        vm.save()
+        advanceUntilIdle()
+        val saved = sharing.registry.tags.first { it.tag == "travel" }
+        assertEquals("Trips", saved.description)
+        assertEquals(TagColors.stored[3], saved.color)
+    }
+
+    @Test
     fun theSharedProfileSaysWhyItHasNoColourToPick() = runTest {
         val vm = TagsViewModel(sharing)
         advanceUntilIdle()

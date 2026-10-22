@@ -233,9 +233,12 @@ internal fun phoneRegion(): String {
 /**
  * A `phone` value (owner request 2026-10-09; §10.7 allows at most 32 digits, spaces and `+-().`): the input holds the
  * dialable characters (digits, a leading `+`) and draws libphonenumber's as-you-type format over them ([mask]), in
- * the phone's region until a `+` and country code switch it. Saved, a number that parses is stored in international
- * format ([stored], e.g. `+44 20 7946 0958`); one that does not keeps what was typed and only gets a "Check this
- * number" hint ([doubtful]), never a block. Shown, a stored number is formatted for the viewer's region ([display]).
+ * the phone's region until a `+` and country code switch it. Saved, a number that parses is stored in E.164
+ * ([stored], e.g. `+442079460958`; owner decision 2026-10-22); one that does not is stored as its dialable
+ * characters only ([raw]) and only gets a "Check this number" hint ([doubtful]), never a block. Shown, a stored number
+ * is formatted for the viewer's region ([display]). Values stored before that (the spaced international format, e.g.
+ * `+44 20 7946 0958`) are still read: [display], [doubtful] and the editor go through [raw], which drops the spaces;
+ * such a value is stored canonically only when the member saves that field (no bulk migration).
  */
 internal object PhoneInput {
     private val util: PhoneNumberUtil by lazy { PhoneNumberUtil.getInstance() }
@@ -251,16 +254,42 @@ internal object PhoneInput {
         return iso?.uppercase(Locale.ROOT) ?: UNKNOWN
     }
 
-    /** The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it starts with one. */
-    fun raw(typed: String): String {
-        val digits = typed.filter { it in '0'..'9' }
-        val plus = typed.trimStart().startsWith("+")
-        return (if (plus) "+" else "") + digits.take(MAX_DIGITS)
+    /** Where an extension starts: `x`, `ext`, `ext.`, `;ext=`, `#` or `,` (owner decision 2026-10-22). */
+    private val extensionMarker = Regex(";ext=|ext\\.?|[x#,]", RegexOption.IGNORE_CASE)
+
+    /** [typed] split at its extension: the number before it and the marker with all that follows, or null. */
+    private fun splitExtension(typed: String): Pair<String, String?> {
+        // A marker needs a digit before it ("Fax: +44 ..." has no extension).
+        val m = extensionMarker.findAll(typed).firstOrNull { r -> typed.take(r.range.first).any { it in '0'..'9' } }
+            ?: return typed to null
+        val tail = typed.substring(m.range.first).filterNot { it == '\n' || it == '\r' }
+        return typed.substring(0, m.range.first) to tail.take(MAX_EXTENSION)
     }
+
+    /**
+     * The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it starts with one.
+     * An extension stays as typed (its marker and what follows) after the number, so the editor can say it is not
+     * saved ([hasExtension]); [stored] and every parse leave it out ([main]).
+     */
+    fun raw(typed: String): String {
+        val (head, ext) = splitExtension(typed)
+        val plus = head.takeWhile { it !in '0'..'9' }.contains('+')
+        return (if (plus) "+" else "") + head.filter { it in '0'..'9' }.take(MAX_DIGITS) + (ext ?: "")
+    }
+
+    /** [raw] of [text] without its extension: the main number. */
+    fun main(text: String): String = raw(splitExtension(text).first)
+
+    /** Whether [text] has an extension, which is not saved (the editor says so). */
+    fun hasExtension(text: String): Boolean = splitExtension(text).second != null
 
     /** [raw] formatted as typed in [region] (a `+` and country code switch the region); [raw] when no format fits. */
     fun asYouType(raw: String, region: String): String {
-        if (raw.isEmpty()) return raw
+        val (head, ext) = splitExtension(raw)
+        return if (ext == null) formatted(raw, region) else (formatted(head, region) + " " + ext).trim()
+    }
+
+    private fun formatted(raw: String, region: String): String {
         val f = util.getAsYouTypeFormatter(region)
         var out = ""
         for (c in raw) out = f.inputDigit(c)
@@ -268,27 +297,28 @@ internal object PhoneInput {
     }
 
     /**
-     * What is saved for [text] in [region]: the international format when it parses as a possible number without an
-     * extension (it always fits §10.7), else the as-you-type text (what the member saw), within §10.7's characters.
+     * What is saved for [text] in [region]: E.164 when it parses and is possible (`IS_POSSIBLE`, not only locally; it always
+     * fits §10.7), else its dialable characters ([raw]: a leading `+` if typed, then digits). An extension is dropped
+     * (from its marker on) before either.
      */
     fun stored(text: String, region: String): String {
-        val raw = raw(text)
-        if (raw.isEmpty()) return text
+        val raw = main(text)
+        if (raw.none { it in '0'..'9' }) return ""
         val n = parse(raw, region)
-        val intl = n?.takeIf { !it.hasExtension() && util.isPossibleNumber(it) }
-            ?.let { util.format(it, PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL) }
-        return intl?.takeIf { FieldInput.phone(it) == it } ?: FieldInput.phone(asYouType(raw, region))
+        val e164 = n?.takeIf { util.isPossibleNumberWithReason(it) == PhoneNumberUtil.ValidationResult.IS_POSSIBLE }
+            ?.let { util.format(it, PhoneNumberUtil.PhoneNumberFormat.E164) }
+        return e164?.takeIf { FieldInput.phone(it) == it } ?: raw
     }
 
     /** Whether to show "Check this number" under [text]: there are digits, and it is not a valid number. */
     fun doubtful(text: String, region: String): Boolean {
-        val raw = raw(text)
+        val raw = main(text)
         return raw.any { it in '0'..'9' } && parse(raw, region)?.let { util.isValidNumber(it) } != true
     }
 
     /** A stored number as shown in [region]: national format there, international elsewhere; as stored if unparsed. */
     fun display(stored: String, region: String): String {
-        val n = parse(raw(stored), region)?.takeIf { util.isValidNumber(it) } ?: return stored
+        val n = parse(main(stored), region)?.takeIf { util.isValidNumber(it) } ?: return stored
         val same = util.getRegionCodeForNumber(n) == region
         return util.format(n, if (same) PhoneNumberUtil.PhoneNumberFormat.NATIONAL else PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL)
     }
@@ -336,5 +366,6 @@ internal object PhoneInput {
 
     /** E.164 holds at most 15 digits; §10.7 allows 32 characters. */
     private const val MAX_DIGITS = 15
+    private const val MAX_EXTENSION = 24
     private const val UNKNOWN = "ZZ"
 }
