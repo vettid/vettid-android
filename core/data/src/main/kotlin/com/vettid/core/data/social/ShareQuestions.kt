@@ -32,6 +32,24 @@ object ShareQuestions {
         }
     }
 
+    internal fun subjectOrNull(d: Approval.ShareDecision): String? = subjectOf(d)
+
     private fun subjectOf(d: Approval.ShareDecision): String? =
         d.subjectConnectionId?.let { "c:$it" } ?: d.subjectAgentId?.let { "a:$it" }
+
+    /** The subject a question is for; a rule of no known subject is its own. */
+    internal fun subjectKey(d: Approval.ShareDecision): String = subjectOf(d) ?: "rule:${d.ruleId}"
+
+    /**
+     * [batch] (a `share.pending` event's items) added to the [listed] ones: the batch's item wins, keeping the listed
+     * item's name, `ask_rule_id` and `shared` where the batch lacks them.
+     */
+    internal fun addBatch(listed: List<ShareItem>, batch: List<ShareItem>): List<ShareItem> {
+        val before = listed.associateBy { it.itemId }
+        val named = batch.mapTo(mutableSetOf()) { it.itemId }
+        return listed.filter { it.itemId !in named } + batch.map { n ->
+            val old = before[n.itemId] ?: return@map n
+            n.copy(name = n.name.ifBlank { old.name }, askRuleId = n.askRuleId ?: old.askRuleId, shared = n.shared || old.shared)
+        }
+    }
 }
