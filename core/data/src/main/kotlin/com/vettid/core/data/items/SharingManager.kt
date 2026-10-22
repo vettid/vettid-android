@@ -47,6 +47,13 @@ interface SharingRepository {
     suspend fun setTag(tag: String, description: String? = null, color: String? = null)
 
     /**
+     * Sets the description of an existing [tag] (`tag.set`), its colour and icon as the registry holds them in the
+     * same snapshot as the version sent, so a colour stored meanwhile is not cleared; after a `conflict` the registry
+     * is read again and it is sent once more.
+     */
+    suspend fun setTagDescription(tag: String, description: String)
+
+    /**
      * The member's choice of colour for [tag] (`tag.set`, owner decision 2026-10-09), its description and icon kept;
      * after a `conflict` (another device changed the registry) the registry is read again and the choice sent once
      * more. Never for an `@` tag (`@profile` is always the member's gold).
@@ -204,6 +211,23 @@ class SharingManager(
         val icon = registry.value?.tags?.firstOrNull { it.tag == n }?.icon
         vaultGuard { ops().tagSet(version(), n, color, icon, description?.takeIf { it.isNotBlank() }) }
         refreshTags()
+    }
+
+    override suspend fun setTagDescription(tag: String, description: String) {
+        val n = ItemChecks.normalizeTag(tag, reserved = false) ?: throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        try {
+            putDescription(registry.value ?: refreshTags(), n, description)
+        } catch (e: VaultFailure) {
+            if (e.kind != FailureKind.CONFLICT) throw e
+            putDescription(refreshTags(), n, description)
+        }
+        refreshTags()
+    }
+
+    /** `tag.set` of [tag] in [r] with [description], its colour and icon from the same [r]. */
+    private suspend fun putDescription(r: TagRegistry, tag: String, description: String) {
+        val t = r.tags.firstOrNull { it.tag == tag }
+        vaultGuard { ops().tagSet(r.version, tag, t?.color, t?.icon, description.takeIf { it.isNotBlank() }) }
     }
 
     override suspend fun setTagColor(tag: String, color: String) {

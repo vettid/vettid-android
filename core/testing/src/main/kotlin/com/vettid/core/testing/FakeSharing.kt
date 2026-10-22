@@ -70,6 +70,17 @@ class FakeSharing : SharingRepository {
         publish()
     }
 
+    override suspend fun setTagDescription(tag: String, description: String) {
+        call("setTagDescription:$tag")
+        val old = registry.tags.firstOrNull { it.tag == tag }
+        registry = registry.copy(
+            version = registry.version + 1,
+            tags = registry.tags.filterNot { it.tag == tag } +
+                TagView(tag, description = description.ifBlank { null }, color = old?.color, icon = old?.icon),
+        )
+        publish()
+    }
+
     override suspend fun setTagColor(tag: String, color: String) {
         call("setTagColor:$tag:$color")
         if (tag.startsWith("@")) throw VaultFailure(FailureKind.OTHER, "bad_request")

@@ -131,11 +131,47 @@ class PhoneInputTest {
     @Test
     fun noDigitLeftIsEmptyAndTheFallbackIsAtMost15Digits() {
         assertEquals("", PhoneInput.stored("+", "US"))
-        assertEquals("", PhoneInput.stored("x123", "US"))
+        assertEquals("123", PhoneInput.stored("x123", "US")) // no digit before the marker: not an extension
         assertEquals("", PhoneInput.stored("abc", "US"))
         assertEquals(15, PhoneInput.stored("1234567890123456789", "ZZ").length)
         // Case does not matter for a marker.
         assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 EXT. 7"), "US"))
         assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 X7"), "US"))
+    }
+
+    /** `IS_POSSIBLE_LOCAL_ONLY` is not enough for E.164: the dialable characters are kept, with the hint. */
+    @Test
+    fun aLocalOnlyNumberIsKeptAsDialableCharactersWithAHint() {
+        assertEquals("2530000", PhoneInput.stored("2530000", "US"))
+        assertTrue(PhoneInput.doubtful("2530000", "US"))
+    }
+
+    /** A marker needs a digit before it; the member's own marker text stays in the input until saved. */
+    @Test
+    fun aMarkerWithoutADigitBeforeItIsNotAnExtension() {
+        for (typed in listOf("Fax: +44 20 7946 0958", "Text 6502530000")) {
+            assertFalse(typed, PhoneInput.hasExtension(typed))
+        }
+        assertEquals("+442079460958", PhoneInput.stored("Fax: +44 20 7946 0958", "US"))
+        assertEquals("+16502530000", PhoneInput.stored("Text +1 650 253 0000", "US"))
+        assertEquals("123", PhoneInput.stored("123 ext 4", "US"))
+        assertTrue(PhoneInput.hasExtension("123 ext 4"))
+        for (typed in listOf(",123", "#123", "ext. 123", "x123")) {
+            val held = PhoneInput.raw("+442079460958$typed")
+            assertEquals("+442079460958$typed", held)
+            assertEquals("+442079460958", PhoneInput.stored(held, "US"))
+            // Typing on does not change what is held.
+            assertEquals(held, PhoneInput.raw(held))
+        }
+    }
+
+    @Test
+    fun aPlusBeforeTheFirstDigitCountsAndRegionsDecideLocalNumbers() {
+        assertEquals("+442079460958", PhoneInput.raw("Fax: +44 20 7946 0958"))
+        assertEquals("+442079460958", PhoneInput.stored("Fax: +44 20 7946 0958", "US"))
+        assertEquals("5550100", PhoneInput.stored("Text 555 0100", "US"))
+        assertEquals("+442079460958", PhoneInput.stored("+44 20 7946 0958 X123", "US"))
+        assertEquals("123", PhoneInput.stored("#123", "US"))
+        assertFalse(PhoneInput.hasExtension("#123"))
     }
 }

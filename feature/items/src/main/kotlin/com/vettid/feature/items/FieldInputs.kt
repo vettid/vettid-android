@@ -257,30 +257,36 @@ internal object PhoneInput {
     /** Where an extension starts: `x`, `ext`, `ext.`, `;ext=`, `#` or `,` (owner decision 2026-10-22). */
     private val extensionMarker = Regex(";ext=|ext\\.?|[x#,]", RegexOption.IGNORE_CASE)
 
+    /** [typed] split at its extension: the number before it and the marker with all that follows, or null. */
+    private fun splitExtension(typed: String): Pair<String, String?> {
+        // A marker needs a digit before it ("Fax: +44 ..." has no extension).
+        val m = extensionMarker.findAll(typed).firstOrNull { r -> typed.take(r.range.first).any { it in '0'..'9' } }
+            ?: return typed to null
+        val tail = typed.substring(m.range.first).filterNot { it == '\n' || it == '\r' }
+        return typed.substring(0, m.range.first) to tail.take(MAX_EXTENSION)
+    }
+
     /**
      * The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it starts with one.
-     * An extension is kept only as `x` and its digits, after the number, so the editor can say it is not saved
-     * ([hasExtension]); [stored] and every parse leave it out ([main]).
+     * An extension stays as typed (its marker and what follows) after the number, so the editor can say it is not
+     * saved ([hasExtension]); [stored] and every parse leave it out ([main]).
      */
     fun raw(typed: String): String {
-        val m = extensionMarker.find(typed)
-        val head = if (m == null) typed else typed.substring(0, m.range.first)
-        val plus = head.trimStart().startsWith("+")
-        val digits = head.filter { it in '0'..'9' }.take(MAX_DIGITS)
-        val ext = m?.let { typed.substring(it.range.last + 1).filter { c -> c in '0'..'9' } }
-        return (if (plus) "+" else "") + digits + (if (ext != null) "x" + ext.take(MAX_DIGITS - digits.length) else "")
+        val (head, ext) = splitExtension(typed)
+        val plus = head.takeWhile { it !in '0'..'9' }.contains('+')
+        return (if (plus) "+" else "") + head.filter { it in '0'..'9' }.take(MAX_DIGITS) + (ext ?: "")
     }
 
     /** [raw] of [text] without its extension: the main number. */
-    fun main(text: String): String = raw(text).substringBefore('x')
+    fun main(text: String): String = raw(splitExtension(text).first)
 
     /** Whether [text] has an extension, which is not saved (the editor says so). */
-    fun hasExtension(text: String): Boolean = 'x' in raw(text)
+    fun hasExtension(text: String): Boolean = splitExtension(text).second != null
 
     /** [raw] formatted as typed in [region] (a `+` and country code switch the region); [raw] when no format fits. */
     fun asYouType(raw: String, region: String): String {
-        if ('x' in raw) return (asYouType(raw.substringBefore('x'), region) + " " + raw.substring(raw.indexOf('x'))).trim()
-        return formatted(raw, region)
+        val (head, ext) = splitExtension(raw)
+        return if (ext == null) formatted(raw, region) else (formatted(head, region) + " " + ext).trim()
     }
 
     private fun formatted(raw: String, region: String): String {
@@ -360,5 +366,6 @@ internal object PhoneInput {
 
     /** E.164 holds at most 15 digits; §10.7 allows 32 characters. */
     private const val MAX_DIGITS = 15
+    private const val MAX_EXTENSION = 24
     private const val UNKNOWN = "ZZ"
 }

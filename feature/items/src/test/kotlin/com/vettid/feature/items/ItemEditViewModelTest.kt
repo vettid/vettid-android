@@ -120,7 +120,9 @@ class ItemEditViewModelTest {
         assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
 
         val withExt = vm(template = "phone_number")
-        withExt.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 x123"))
+        withExt.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 ext. 123"))
+        // The marker stays in the draft (and so the note shows) until the save drops it.
+        assertEquals("+442079460958ext. 123", withExt.uiState.value.draft.fields.single().text)
         withExt.save()
         advanceUntilIdle()
         assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(withExt.uiState.value.savedId!!).fields.single().value)

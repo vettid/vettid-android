@@ -209,9 +209,8 @@ class TagsViewModel @Inject constructor(private val sharing: SharingRepository) 
                     }
                 } else if (d.description != d.tag.description.orEmpty()) {
                     run {
-                        // The colour the registry holds now: the colour keeper may have stored one since the form opened.
-                        val current = sharing.tags.value?.tags?.firstOrNull { it.tag == d.tag.tag }?.color ?: d.tag.color
-                        sharing.setTag(n, d.description, current)
+                        // Colour and icon come from the registry as it is when sent (the colour keeper may have stored one).
+                        sharing.setTagDescription(n, d.description)
                         done()
                     }
                 } else {

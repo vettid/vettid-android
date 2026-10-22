@@ -496,6 +496,21 @@ class SharingManagerTest {
         assertTrue("tagSet:4:travel:#000001:plane:Holidays" in ops.calls)
     }
 
+    @Test
+    fun aDescriptionSaveKeepsAColourStoredWhileTheRegistryWasForgotten() = runTest {
+        ops.tagPages = ArrayDeque(
+            listOf(
+                page(4, TagInfo("travel", icon = "plane", description = "Trips")),
+                // The colour keeper stored one; the registry is read again because `tag.changed` forgot it.
+                page(5, TagInfo("travel", color = "#000003", icon = "plane", description = "Trips")),
+            ),
+        )
+        m.refreshTags()
+        m.onEvent(VaultMessage(Inner(id = Ulid.new(), type = "sync.event", ts = Instant.now(), body = """{"kind":"tag.changed","version":5}""".toByteArray())))
+        m.setTagDescription("travel", "Holidays")
+        assertTrue("tagSet:5:travel:#000003:plane:Holidays" in ops.calls)
+    }
+
     /** VAULT-MESSAGING 0.23.1 §10.8: an `auto` share an `ask` rule holds back stays pending, so it is asked, not shared. */
     @Test
     fun anAutoShareAnAskRuleHoldsBackIsAskedAndTheUnlistedAreCounted() {
