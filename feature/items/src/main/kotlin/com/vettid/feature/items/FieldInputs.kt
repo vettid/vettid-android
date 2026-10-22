@@ -254,22 +254,37 @@ internal object PhoneInput {
         return iso?.uppercase(Locale.ROOT) ?: UNKNOWN
     }
 
-    /** Where an extension starts: `x`, `ext`, `ext.`, `;ext=`, `#` or `,` (owner decision 2026-10-22). */
-    private val extensionMarker = Regex(";ext=|ext\\.?|[x#,]", RegexOption.IGNORE_CASE)
+    /** Where an extension starts: `x`, `ext`, `ext.`, `;ext=`, `#` or `,` (owner decision 2026-10-22); a `;` before `ext` goes with it. */
+    private val extensionMarker = Regex(";ext=|;?ext\\.?|[x#,]", RegexOption.IGNORE_CASE)
 
-    /** [typed] split at its extension: the number before it and the marker with all that follows, or null. */
-    private fun splitExtension(typed: String): Pair<String, String?> {
-        // A marker needs a digit before it ("Fax: +44 ..." has no extension).
-        val m = extensionMarker.findAll(typed).firstOrNull { r -> typed.take(r.range.first).any { it in '0'..'9' } }
-            ?: return typed to null
-        val tail = typed.substring(m.range.first).filterNot { it == '\n' || it == '\r' }
-        return typed.substring(0, m.range.first) to tail.take(MAX_EXTENSION)
-    }
+    /** What a marker is being typed as at the end of the text: `e`, `ex`, `;`, `;e` or `;ex` (then `ext` and `;ext=` complete it). */
+    private val partialMarker = Regex(";e?x?$|ex?$", RegexOption.IGNORE_CASE)
 
     /**
-     * The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it starts with one.
-     * An extension stays as typed (its marker and what follows) after the number, so the editor can say it is not
-     * saved ([hasExtension]); [stored] and every parse leave it out ([main]).
+     * [typed] split at its extension: the number before it and the marker with all that follows (null if none).
+     * [complete] is false for a marker still being typed (`e`, `ex`, `;`, `;e`, `;ex` at the end): it stays in the
+     * edit text, so that typing "ext" key by key works, but it is not an extension yet and the note does not show.
+     */
+    private class Split(val head: String, val tail: String?, val complete: Boolean)
+
+    @Suppress("ReturnCount")
+    private fun split(typed: String): Split {
+        // A marker needs a digit before it ("Fax: +44 ..." has no extension).
+        fun digitBefore(at: Int) = typed.take(at).any { it in '0'..'9' }
+        val m = extensionMarker.findAll(typed).firstOrNull { r -> digitBefore(r.range.first) }
+        val p = partialMarker.find(typed)?.takeIf { digitBefore(it.range.first) && (m == null || it.range.first <= m.range.first) }
+        if (p != null) return Split(typed.substring(0, p.range.first), p.value, false)
+        if (m == null) return Split(typed, null, false)
+        val tail = typed.substring(m.range.first).filterNot { it == '\n' || it == '\r' }
+        return Split(typed.substring(0, m.range.first), tail.take(MAX_EXTENSION), true)
+    }
+
+    private fun splitExtension(typed: String): Pair<String, String?> = split(typed).let { it.head to it.tail }
+
+    /**
+     * The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it comes before the
+     * first digit. An extension stays as typed (its marker and what follows, or the start of a marker) after the
+     * number, so the editor can say it is not saved ([hasExtension]); [stored] and every parse leave it out ([main]).
      */
     fun raw(typed: String): String {
         val (head, ext) = splitExtension(typed)
@@ -281,7 +296,7 @@ internal object PhoneInput {
     fun main(text: String): String = raw(splitExtension(text).first)
 
     /** Whether [text] has an extension, which is not saved (the editor says so). */
-    fun hasExtension(text: String): Boolean = splitExtension(text).second != null
+    fun hasExtension(text: String): Boolean = split(text).let { it.tail != null && it.complete }
 
     /** [raw] formatted as typed in [region] (a `+` and country code switch the region); [raw] when no format fits. */
     fun asYouType(raw: String, region: String): String {

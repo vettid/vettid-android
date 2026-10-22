@@ -177,6 +177,106 @@ class ItemEditViewModelTest {
         assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue("01P").fields.single().value)
     }
 
+    private fun view(id: String, label: String, kind: String, v: String) =
+        com.vettid.core.data.items.ItemFieldView(id, label, kind, FieldValue.Text(v))
+
+    /** An older item whose values are not in canonical form (written by an earlier build or another app). */
+    private fun oldItem() = FakeItems.item("01C", " Old  item ").copy(
+        fields = listOf(
+            view("f1", " Count ", "number", "007"),
+            view("f2", "Mail", "email", " Sam@Example.COM "),
+            view("f3", "Site", "url", "Example.com/A"),
+            view("f4", "Note", "text", "  padded  "),
+            view("f5", "Key", "otp", "jbsw y3dp ehpk 3pxp"),
+            com.vettid.core.data.items.ItemFieldView("f6", "Home", "address", FieldValue.Address(AddressValue(street = " 1  High St ", postalCode = "al1 1aa", country = "GB"))),
+            view("f7", "Pin", "password", "  keep  me  "),
+        ),
+        notes = "  notes as typed ",
+    )
+
+    @Test
+    fun olderValuesAreShownUnchangedAndSentAsStoredUntilTheirFieldIsEdited() = runTest {
+        items.add(oldItem())
+        val vm = vm(itemId = "01C")
+        advanceUntilIdle()
+        // Shown as stored: nothing is rewritten on loading.
+        assertEquals(listOf("007", " Sam@Example.COM ", "Example.com/A", "  padded  ", "jbsw y3dp ehpk 3pxp"), vm.uiState.value.draft.fields.take(5).map { it.text })
+        assertEquals(" Old  item ", vm.uiState.value.draft.name)
+        // A change elsewhere (the tags) saves every field byte for byte as stored, name and labels included.
+        vm.setTagInput("x")
+        vm.addTag()
+        vm.save()
+        advanceUntilIdle()
+        val stored = items.stored.getValue("01C")
+        assertEquals(oldItem().fields.map { it.label to it.value }, stored.fields.map { it.label to it.value })
+        assertEquals(" Old  item ", stored.name)
+        assertEquals("  notes as typed ", stored.notes)
+    }
+
+    @Test
+    fun aFieldTheMemberEditedIsStoredCanonicallyAndTheOthersAreNot() = runTest {
+        items.add(oldItem())
+        val vm = vm(itemId = "01C")
+        advanceUntilIdle()
+        vm.setFieldText(0, " +-0.50 ")
+        vm.setFieldText(1, " Sam@Example.COM")
+        vm.setFieldText(2, "HTTP://Example.COM/A")
+        vm.setFieldText(3, " x ")
+        vm.setFieldText(4, "jbsw y3dp ehpk 3pxq")
+        vm.setFieldAddress(5, AddressValue(street = " 2  High   St ", postalCode = "al1  1ab", country = "gb"))
+        vm.setFieldLabel(0, "  Count  ")
+        vm.setName("  Renamed  ")
+        vm.save()
+        advanceUntilIdle()
+        val stored = items.stored.getValue("01C")
+        assertEquals("Renamed", stored.name)
+        assertEquals("Count", stored.fields[0].label)
+        assertEquals(
+            listOf(
+                FieldValue.Text("-0.50"),
+                FieldValue.Text("Sam@example.com"),
+                FieldValue.Text("http://example.com/A"),
+                FieldValue.Text("x"),
+                FieldValue.Text("otpauth://totp/Key?secret=JBSWY3DPEHPK3PXQ&algorithm=SHA1&digits=6&period=30"),
+                FieldValue.Address(AddressValue(street = "2 High St", postalCode = "AL1 1AB", country = "GB")),
+                // The password was not touched: as stored, spaces and all.
+                FieldValue.Text("  keep  me  "),
+            ),
+            stored.fields.map { it.value },
+        )
+    }
+
+    @Test
+    fun aNewFieldIsStoredCanonicallyAndAFailingResultRefusesTheSave() = runTest {
+        val vm = vm()
+        vm.setName("  New  ")
+        vm.addField("Key & co", FieldKinds.OTP)
+        vm.addField("Site", FieldKinds.URL)
+        vm.addField("Count", FieldKinds.NUMBER)
+        vm.setFieldText(0, "JBSWY3DPEHPK3PXP")
+        vm.setFieldText(1, "Example.com/A")
+        vm.setFieldText(2, "SHORT")
+        vm.save()
+        advanceUntilIdle()
+        // A number that is not a number still shows the existing message, nothing is sent.
+        assertTrue(vm.uiState.value.showErrors)
+        assertNull(vm.uiState.value.savedId)
+        assertEquals(setOf(2), vm.uiState.value.check.fieldProblems.keys)
+        vm.setFieldText(2, " +007 ")
+        vm.save()
+        advanceUntilIdle()
+        val stored = items.stored.getValue(vm.uiState.value.savedId!!)
+        assertEquals("New", stored.name)
+        assertEquals(
+            listOf(
+                FieldValue.Text("otpauth://totp/Key%20%26%20co?secret=JBSWY3DPEHPK3PXP&algorithm=SHA1&digits=6&period=30"),
+                FieldValue.Text("https://example.com/A"),
+                FieldValue.Text("007"),
+            ),
+            stored.fields.map { it.value },
+        )
+    }
+
     @Test
     fun anOldContactCardStillEdits() = runTest {
         items.add(FakeItems.item("01K", "Contact details", category = "contact", tags = listOf("@profile"), fields = listOf("Email" to "sam@example.org")).copy(template = "contact_card"))

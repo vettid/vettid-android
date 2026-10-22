@@ -5,6 +5,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.items.AddressValue
+import com.vettid.core.data.items.CanonicalForms
 import com.vettid.core.data.items.DraftCheck
 import com.vettid.core.data.items.DraftField
 import com.vettid.core.data.items.FieldKinds
@@ -515,7 +516,8 @@ class ItemEditViewModel @Inject constructor(
         contentDirty = false
         state.update { it.copy(loading = false, version = d.version, prompt = null) }
         val draft = ItemTemplates.withHints(ItemDraft.of(d), context)
-        storedPhones = draft.fields.filter { it.kind == FieldKinds.PHONE && it.fieldId != null }.associate { it.fieldId!! to it.text }
+        storedName = draft.name
+        storedFields = draft.fields.filter { it.fieldId != null }.associateBy { it.fieldId!! }
         setDraft(draft, dirty = false)
     }
 
@@ -532,7 +534,7 @@ class ItemEditViewModel @Inject constructor(
      * the size limit of the protection it will have (12 KiB for critical, §10.7).
      */
     private fun checkOf(d: ItemDraft, s: ItemEditUiState): DraftCheck =
-        ItemChecks.check(phonesStored(named(d, s)).copy(sensitivity = s.protectionTo ?: d.sensitivity))
+        ItemChecks.check(canonical(named(d, s)).copy(sensitivity = s.protectionTo ?: d.sensitivity))
 
     /** The draft under the template's name when the member left the name empty. */
     private fun named(d: ItemDraft, s: ItemEditUiState = state.value): ItemDraft =
@@ -541,22 +543,28 @@ class ItemEditViewModel @Inject constructor(
     /** The phone's region, for numbers typed without `+` (owner request 2026-10-09). */
     private val phoneRegion: String by lazy { PhoneInput.region(context) }
 
-    /** The phone values as loaded, by field id: a field the member did not edit is sent exactly as stored. */
-    private var storedPhones: Map<String, String> = emptyMap()
+    /** The item's name and fields as loaded, by field id: what the member did not edit is sent exactly as stored. */
+    private var storedName: String? = null
+    private var storedFields: Map<String, DraftField> = emptyMap()
 
     /**
-     * Phone values as saved: E.164 when they parse, else the dialable characters ([PhoneInput.stored]); only for a
-     * new field or one the member edited.
+     * The draft as it is saved (VAULT-MESSAGING 0.55.1 §10.7 "Canonical forms"): the name, the labels and the values
+     * in their canonical forms ([CanonicalForms]; a phone by [PhoneInput.stored]), only for what is new or what the
+     * member edited. A field they did not touch, a kept one included, is sent byte for byte as stored; an older value
+     * is stored canonically only when its field is next edited and saved. The checks run on this result.
      */
-    private fun phonesStored(d: ItemDraft): ItemDraft = d.copy(
+    private fun canonical(d: ItemDraft): ItemDraft = d.copy(
+        name = if (d.name == storedName) d.name else CanonicalForms.trim(d.name),
         fields = d.fields.map { f ->
-            val untouched = f.fieldId != null && storedPhones[f.fieldId] == f.text
-            val toStore = f.kind == FieldKinds.PHONE && f.text.isNotBlank() && !f.kept
-            if (toStore && !untouched) {
-                f.copy(text = PhoneInput.stored(f.text, phoneRegion))
-            } else {
-                f
+            val base = f.fieldId?.let { storedFields[it] }
+            val label = if (base?.label == f.label) f.label else CanonicalForms.trim(f.label)
+            val untouched = base != null && base.text == f.text && base.address == f.address
+            val value = when {
+                untouched || f.kept -> f
+                f.kind == FieldKinds.PHONE -> if (f.text.isBlank()) f else f.copy(text = PhoneInput.stored(f.text, phoneRegion))
+                else -> CanonicalForms.field(f.copy(label = label))
             }
+            value.copy(label = label)
         },
     )
 
@@ -759,7 +767,7 @@ class ItemEditViewModel @Inject constructor(
     @Suppress("CyclomaticComplexMethod") // create or replace, any sensitivity, then the protection
     private fun send(p: PasswordPrompt?, pw: String) {
         val s = state.value
-        val draft = phonesStored(named(s.draft, s))
+        val draft = canonical(named(s.draft, s))
         val to = s.protectionTo
         state.update { it.copy(busy = true, error = null, limit = null) }
         viewModelScope.launch {

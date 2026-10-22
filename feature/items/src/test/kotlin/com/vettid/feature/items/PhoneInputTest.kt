@@ -174,4 +174,34 @@ class PhoneInputTest {
         assertEquals("123", PhoneInput.stored("#123", "US"))
         assertFalse(PhoneInput.hasExtension("#123"))
     }
+
+    @Suppress("MaxLineLength")
+    @Test
+    fun aMarkerTypedKeyByKeyIsKeptInTheEditTextAndDroppedOnSave() {
+        // Hardware keyboard: the text is filtered after every key, so the start of a marker must survive it.
+        fun keys(vararg typed: String): List<String> {
+            var held = ""
+            return typed.map { held = PhoneInput.raw(held + it); held }
+        }
+        val n = "+442079460958"
+        assertEquals(listOf("${n}e", "${n}ex", "${n}ext", "${n}ext ", "${n}ext 1"), keys("+442079460958", "e", "x", "t", " ", "1").drop(1))
+        assertEquals(listOf("$n;", "$n;e", "$n;ex", "$n;ext", "$n;ext=", "$n;ext=1"), keys("+442079460958", ";", "e", "x", "t", "=", "1").drop(1))
+        listOf("e", "ex", ";", ";e", ";ex", ";ext", "ext", ";ext=").forEach { tail ->
+            assertEquals(tail, "$n$tail", PhoneInput.raw("$n$tail"))
+            assertEquals(tail, n, PhoneInput.stored("$n$tail", "US"))
+            assertEquals(tail, n, PhoneInput.main("$n$tail"))
+        }
+        // Only the complete markers count as an extension (the note), not their start.
+        listOf("e", "ex", ";", ";e", ";ex").forEach { assertFalse(it, PhoneInput.hasExtension("$n$it")) }
+        listOf("ext", ";ext", ";ext=", "x").forEach { assertTrue(it, PhoneInput.hasExtension("$n$it")) }
+        // A marker still needs a digit before it, and typing a digit after the start of one is not an extension.
+        assertEquals("", PhoneInput.raw("e"))
+        assertEquals("", PhoneInput.raw(";e"))
+        assertEquals("5", PhoneInput.raw("5"))
+        assertEquals("", PhoneInput.stored("ex", "US"))
+        assertEquals("+442079460958", PhoneInput.raw("Fax: +44 20 7946 0958").let { PhoneInput.stored(it, "US") })
+        // The partial marker is drawn after the number, and the whole edit text is idempotent under raw.
+        listOf("${n}e", "${n};ex", "${n}ext=12").forEach { assertEquals(it, PhoneInput.raw(PhoneInput.raw(it))) }
+        assertEquals("+44 20 7946 0958 ;ex", typing("+442079460958;ex", "US"))
+    }
 }
