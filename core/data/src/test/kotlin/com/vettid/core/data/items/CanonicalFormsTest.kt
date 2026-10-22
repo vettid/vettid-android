@@ -33,6 +33,12 @@ class CanonicalFormsTest {
         listOf("url", "MAILTO:A@B.C", "mailto:A@B.C"), listOf("url", "Tel:+4420", "tel:+4420"), listOf("url", "SMS:123", "sms:123"),
         listOf("url", "localhost:8080/x", "https://localhost:8080/x"), listOf("url", "Example.com/A", "https://example.com/A"),
         listOf("url", "ftp://FILES.example.org/Dir", "ftp://files.example.org/Dir"), listOf("url", "", ""),
+        listOf("url", "urn:isbn:1", "urn:isbn:1"), listOf("url", "bitcoin:bc1qxyz", "bitcoin:bc1qxyz"), listOf("url", "geo:1,2", "geo:1,2"),
+        listOf("url", "foo:", "foo:"), listOf("url", "tel:5550100", "tel:5550100"), listOf("url", "C:\\path", "c:\\path"),
+        listOf("url", "user@Host:22", "https://user@host:22"), listOf("url", "Example.com:443/A", "https://example.com:443/A"),
+        listOf("url", "HTTP://[2001:DB8::1]:8080/A", "http://[2001:db8::1]:8080/A"), listOf("url", "Mailto:a@b.c", "mailto:a@b.c"),
+        listOf("url", "URN:isbn:1", "urn:isbn:1"), listOf("url", "Bitcoin:bc1qXyz", "bitcoin:bc1qXyz"), listOf("url", "GEO:1,2", "geo:1,2"),
+        listOf("url", "a.b:c", "https://a.b:c"), listOf("url", "foo/bar:baz", "https://foo/bar:baz"), listOf("url", "Host:80?Q=1", "https://host:80?Q=1"),
         listOf("text", "  Hello world \t", "Hello world"), listOf("text", "  x y　", "x y"), listOf("text", "a  b", "a  b"),
     )
 

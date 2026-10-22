@@ -164,8 +164,10 @@ internal object DateInput {
      * `2031/04/30` works), or null when no date can begin so and the change is refused. A deletion (fewer digits
      * than [old] held) always goes through, so a digit in the middle can be taken out and typed again.
      */
+    @Suppress("UnusedParameter") // a month field no longer cuts: the check refuses a full date
     fun accept(old: String, typed: String, monthOnly: Boolean): String? {
-        val d = digits(typed).take(if (monthOnly) MONTH else DAY)
+        // A full date in a month field is let through, to be refused by the check, never cut (VAULT-MESSAGING 0.55.3).
+        val d = digits(typed).take(DAY)
         return if (possible(d) || d.length < digits(old).length) format(d) else null
     }
 

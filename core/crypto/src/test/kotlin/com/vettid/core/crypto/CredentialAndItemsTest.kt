@@ -206,4 +206,14 @@ class CredentialAndItemsTest {
         assertThrows(CryptoException.Format::class.java) { ItemContent(name = "x", category = "Bad").marshal() }
         assertThrows(CryptoException.Format::class.java) { ItemField.text(null, "L", "date", "tomorrow") }
     }
+
+    /** Cases compared with the vault's Go `url.Parse` + `IsAbs` (itemspec.go validURL). */
+    @Test
+    fun opaqueUrlsAreAcceptedAsTheVaultAcceptsThem() {
+        listOf("foo:", "c:\\path", "urn:isbn:1", "geo:1,2", "bitcoin:bc1qxyz", "tel:5550100", "foo:%zz", "foo:a?%zz")
+            .plus(listOf("foo:|", "foo:{}", "foo:a#b#c", "foo::", "foo:[", "foo:%"))
+            .forEach { assertTrue(it, ItemSpec.isValidStringValue(ItemSpec.KIND_URL, it)) }
+        listOf("foo:a#%zz", "foo:\u0001", "foo:a b", "1a:x", "a_b:x", "foo:/%zz", "c :x", "no-scheme")
+            .forEach { assertFalse(it, ItemSpec.isValidStringValue(ItemSpec.KIND_URL, it)) }
+    }
 }
