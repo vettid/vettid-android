@@ -608,13 +608,16 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
         ?: DraftProblem.BAD_CHARACTER.takeIf { it in problems && ItemChecks.labelProblems(f.label.trim()).isNotEmpty() }
     val valueProblem = (problems - setOfNotNull(DraftProblem.LABEL_EMPTY, DraftProblem.LABEL_TOO_LONG, labelProblem)).firstOrNull()
     // A value that is not (yet) one of its kind says its rule while the member types (owner request 2026-10-08).
-    val live = DraftProblem.VALUE_INVALID.takeIf { !f.kept && FieldInput.incomplete(f.kind, f.text) }
+    val live = DraftProblem.VALUE_INVALID.takeIf {
+        !f.kept && FieldInput.incomplete(f.kind, if (f.kind == FieldKinds.PHONE) PhoneInput.main(f.text) else f.text)
+    }
     val error = labelProblem?.let { ItemsText.problem(it) } ?: (valueProblem ?: live)?.let { ItemsText.problem(it, f.kind) }
     // A kept value is not at hand (§10.7 Kept values): the field stays empty until the member types a new one.
     val region = phoneRegion()
     val hint = when {
         f.kept -> stringResource(R.string.items_field_kind_kept, kindName)
         // Never a block: a number libphonenumber does not know is saved as typed (owner request 2026-10-09).
+        f.kind == FieldKinds.PHONE && PhoneInput.hasExtension(f.text) -> stringResource(R.string.items_phone_extension_note)
         f.kind == FieldKinds.PHONE && PhoneInput.doubtful(f.text, region) -> stringResource(R.string.items_phone_check)
         else -> kindName
     }

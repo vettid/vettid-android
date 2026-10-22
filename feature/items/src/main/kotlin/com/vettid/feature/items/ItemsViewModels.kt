@@ -530,7 +530,7 @@ class ItemEditViewModel @Inject constructor(
      * the size limit of the protection it will have (12 KiB for critical, §10.7).
      */
     private fun checkOf(d: ItemDraft, s: ItemEditUiState): DraftCheck =
-        ItemChecks.check(named(d, s).copy(sensitivity = s.protectionTo ?: d.sensitivity))
+        ItemChecks.check(phonesStored(named(d, s)).copy(sensitivity = s.protectionTo ?: d.sensitivity))
 
     /** The draft under the template's name when the member left the name empty. */
     private fun named(d: ItemDraft, s: ItemEditUiState = state.value): ItemDraft =

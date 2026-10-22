@@ -119,6 +119,12 @@ class ItemEditViewModelTest {
         advanceUntilIdle()
         assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
 
+        val withExt = vm(template = "phone_number")
+        withExt.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 x123"))
+        withExt.save()
+        advanceUntilIdle()
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(withExt.uiState.value.savedId!!).fields.single().value)
+
         val unknown = vm(template = "phone_number")
         unknown.setFieldText(0, "55512")
         unknown.save()

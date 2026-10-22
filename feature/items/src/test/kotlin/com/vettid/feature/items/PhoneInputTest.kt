@@ -109,4 +109,19 @@ class PhoneInputTest {
         assertEquals("+44 20 7946 0958", PhoneInput.display("+442079460958", "US"))
         assertEquals("55512", PhoneInput.display("55512", "US"))
     }
+
+    /** Owner decision 2026-10-22: only the main number is saved; the extension is dropped, with a note. */
+    @Test
+    fun anExtensionIsDroppedWhenSavedAndTheEditorSaysSo() {
+        for (typed in listOf("+44 20 7946 0958 x123", "+442079460958 ext. 123", "+44 20 7946 0958;ext=123", "+44 20 7946 0958#123", "+442079460958,123")) {
+            assertTrue(typed, PhoneInput.hasExtension(typed))
+            assertEquals(typed, "+442079460958", PhoneInput.stored(PhoneInput.raw(typed), "US"))
+            assertFalse(typed, PhoneInput.doubtful(typed, "US"))
+        }
+        assertFalse(PhoneInput.hasExtension("+442079460958"))
+        // The fallback never appends the extension's digits.
+        assertEquals("55512", PhoneInput.stored("55512 x99", "US"))
+        assertEquals("+55512", PhoneInput.stored("+555 12 ext 99", "US"))
+        assertEquals("(650) 253-0000", PhoneInput.display("+16502530000", "US"))
+    }
 }
