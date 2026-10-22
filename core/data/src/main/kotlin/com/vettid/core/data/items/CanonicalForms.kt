@@ -3,8 +3,8 @@ package com.vettid.core.data.items
 import java.net.URLDecoder
 
 /**
- * The canonical stored form of each value kind (VAULT-MESSAGING 0.55.1 §10.7 "Canonical forms"; ANDROID-PLAN 0.1.66
- * §4 "Items: phone values and the tag preview"): the one place a value is canonicalised, so the same function (and
+ * The canonical stored form of each value kind (VAULT-MESSAGING 0.55.3 §10.7 "Canonical forms", number rule 0.55.2; ANDROID-PLAN
+ * 0.1.68 §4 "Items: phone values and the tag preview"): the one place a value is canonicalised, so the same function (and
  * the same tests) serve every writer. Applied on save, only to a field the member edited or created; an untouched
  * field is sent exactly as stored, and an older value is stored in this form only when its field is next edited and
  * saved. `phone` is the one kind not here: it needs libphonenumber and the phone's region (`PhoneInput.stored`).
@@ -23,7 +23,8 @@ object CanonicalForms {
     private const val MIN_SECRET = 16
     private const val MAX_SECRET = 256
     private val schemeRe = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
-    private val plainSchemes = listOf("mailto:", "tel:", "sms:")
+    private val opaqueRe = Regex("^[A-Za-z][A-Za-z0-9+-]*$")
+    private val plainSchemes = listOf("mailto", "tel", "sms")
 
     /** Unicode `White_Space` (not Kotlin's `isWhitespace`, which differs at U+001C–U+001F, U+180E and the no-break spaces). */
     @Suppress("MagicNumber")
@@ -87,14 +88,12 @@ object CanonicalForms {
     fun number(s: String): String = trim(s).let { if (it.startsWith('+')) it.substring(1) else it }
 
     /**
-     * `date`: `YYYY-MM` for a month-and-year field (the template's `"format": "month"` hint, or a stored value of
-     * that form), otherwise the form already held, a new field `YYYY-MM-DD`; a day is never invented.
+     * `date`: [monthYear] says how the field is entered (the editor's mode: the template's `"format": "month"` hint
+     * on an empty field, or a stored value of the form `YYYY-MM`). The value is kept as typed (a new day field `YYYY-MM-DD`, a month field
+     * `YYYY-MM`); a day is never invented and never cut: a full date in a month field is refused by [ItemChecks] (VAULT-MESSAGING 0.55.3).
      */
-    fun date(s: String, monthYear: Boolean): String =
-        if (monthYear && s.length == FULL_DATE && s[MONTH_END] == '-') s.substring(0, MONTH_END) else s
-
-    private const val MONTH_END = 7
-    private const val FULL_DATE = 10
+    @Suppress("UnusedParameter")
+    fun date(s: String, monthYear: Boolean): String = s
 
     /** `email`: trimmed, the domain (after the last `@`) lower-cased, the local part as typed. */
     fun email(s: String): String {
@@ -104,19 +103,34 @@ object CanonicalForms {
     }
 
     /**
-     * `url`: trimmed. `scheme://` keeps its scheme and its host lower-cased; `mailto:`, `tel:` and `sms:` keep their
-     * form with the scheme lower-cased; anything else gets `https://` in front. Path, query and fragment as typed.
+     * `url`: trimmed. `scheme://` keeps its scheme and its host lower-cased. A text with no `/` before its first
+     * `:`, whose part before it is a scheme without a `.` and that is not `host:port` (digits up to `/`, `?`, `#` or
+     * the end), keeps its scheme lower-cased and the rest as typed (`urn:isbn:1`, `bitcoin:bc1qxyz`, `geo:1,2`,
+     * `foo:`, `C:\path`, `MAILTO:a@b.c`, `tel:` and `sms:`, VAULT-MESSAGING 0.55.3); the rules apply in this
+     * order and the first match wins. Anything else gets `https://` in front and then its
+     * host lower-cased (`localhost:8080/x`, `Example.com:443/A`). Path, query and fragment as typed.
      */
     fun url(s: String): String {
         val t = trim(s)
         val scheme = schemeRe.find(t)?.value
-        val plain = plainSchemes.firstOrNull { t.startsWith(it, ignoreCase = true) }
+        val opaque = if (scheme == null) opaqueScheme(t) else null
         return when {
             t.isEmpty() -> t
             scheme != null -> lower(scheme) + hostLowered(t.substring(scheme.length))
-            plain != null -> lower(t.substring(0, plain.length)) + t.substring(plain.length)
+            opaque != null -> lower(opaque) + t.substring(opaque.length)
             else -> url("https://$t")
         }
+    }
+
+    /** The `scheme:` of [t] when it keeps it (see [url]), else null. */
+    private fun opaqueScheme(t: String): String? {
+        val colon = t.indexOf(':')
+        val slash = t.indexOf('/')
+        val scheme = t.substring(0, maxOf(colon, 0))
+        val port = t.substring(colon + 1).takeWhile { it != '/' && it != '?' && it != '#' }
+        val hostPort = port.isNotEmpty() && port.all { it in '0'..'9' } && lower(scheme) !in plainSchemes
+        val keeps = colon > 0 && (slash < 0 || slash > colon) && opaqueRe.matches(scheme) && !hostPort
+        return t.substring(0, colon + 1).takeIf { keeps }
     }
 
     /** [rest] (what follows `scheme://`) with its host lower-cased: the part after `userinfo@`, up to `:port`. */

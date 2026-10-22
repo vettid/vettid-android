@@ -27,6 +27,9 @@ class FieldInputTest {
         assertEquals("12", FieldInput.number("1-2"))
         assertEquals("1.25", FieldInput.number("1.2.5"))
         assertEquals("0.5", FieldInput.number(".5"))
+        // The input filter, not the canonical form, reads a decimal comma as the point (a thousands comma too).
+        assertEquals("1.5", FieldInput.number("1,5"))
+        assertEquals("1.000", FieldInput.number("1,000"))
         assertEquals("-0.5", FieldInput.number("-.5"))
         // A decimal comma is a point; with a point too, commas group thousands (paste).
         assertEquals("3.5", FieldInput.number("3,5"))

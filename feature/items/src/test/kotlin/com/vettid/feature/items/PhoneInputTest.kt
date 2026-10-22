@@ -204,4 +204,17 @@ class PhoneInputTest {
         listOf("${n}e", "${n};ex", "${n}ext=12").forEach { assertEquals(it, PhoneInput.raw(PhoneInput.raw(it))) }
         assertEquals("+44 20 7946 0958 ;ex", typing("+442079460958;ex", "US"))
     }
+
+    @Test
+    fun aPartialMarkerOnlyCountsRightAfterTheLastDigit() {
+        // A pasted word is not the start of a marker.
+        assertEquals("+442079460958", PhoneInput.raw("+44 20 7946 0958 Home"))
+        assertEquals("+442079460958", PhoneInput.raw("+44 20 7946 0958 home e"))
+        assertEquals("+442079460958", PhoneInput.raw("+44 20 7946 0958 Mobile"))
+        assertEquals("+442079460958", PhoneInput.stored("+44 20 7946 0958 Home", "US"))
+        // Phone signs and spaces between the last digit and the start of a marker are fine; the text is rebuilt without them.
+        assertEquals("+442079460958ex", PhoneInput.raw("+44 20 7946 0958 ex"))
+        assertEquals("+442079460958;e", PhoneInput.raw("+44 20 7946 0958) ;e"))
+        assertEquals("+442079460958e", PhoneInput.raw("+44 20 7946 0958-e"))
+    }
 }

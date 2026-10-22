@@ -277,6 +277,56 @@ class ItemEditViewModelTest {
         )
     }
 
+    private fun dateOf(id: String) = (items.stored.getValue(id).fields.first { it.kind == "date" }.value as FieldValue.Text).text
+
+    @Test
+    fun aDateIsAMonthWhereTheHintOrTheStoredFormSaysSoAndKeepsItsStoredForm() = runTest {
+        // A new payment card: the template's hint makes "Expires" a month; a full date there is refused, never cut.
+        val card = vm(template = "payment_card")
+        card.setName("Card")
+        card.setFieldText(2, "2031-04-30")
+        card.save()
+        advanceUntilIdle()
+        assertNull(card.uiState.value.savedId)
+        assertTrue(DraftProblem.VALUE_INVALID in card.uiState.value.check.fieldProblems[2].orEmpty())
+        card.setFieldText(2, "2031-04")
+        card.save()
+        advanceUntilIdle()
+        assertEquals("2031-04", dateOf(card.uiState.value.savedId!!))
+
+        // Stored YYYY-MM-DD in a month-hint template stays a day value when edited.
+        items.add(FakeItems.item("01D", "Card").copy(template = "payment_card", fields = listOf(view("f1", "Expires", "date", "2031-04-30"))))
+        val day = vm(itemId = "01D")
+        advanceUntilIdle()
+        day.setFieldText(0, "2031-05-31")
+        day.save()
+        advanceUntilIdle()
+        assertEquals("2031-05-31", dateOf("01D"))
+
+        // A stored month in a template without the hint stays a month.
+        items.add(FakeItems.item("01M", "Plain").copy(fields = listOf(view("f1", "Until", "date", "2031-04"))))
+        val month = vm(itemId = "01M")
+        advanceUntilIdle()
+        month.setFieldText(0, "2032-01")
+        month.save()
+        advanceUntilIdle()
+        assertEquals("2032-01", dateOf("01M"))
+
+        // A new date field without the hint is a day; a month typed into it is stored as YYYY-MM.
+        val blank = vm()
+        blank.setName("Dates")
+        blank.addField("Day", FieldKinds.DATE)
+        blank.addField("Month", FieldKinds.DATE)
+        blank.setFieldText(0, "2031-04-30")
+        blank.setFieldText(1, "2031-04")
+        blank.save()
+        advanceUntilIdle()
+        assertEquals(
+            listOf(FieldValue.Text("2031-04-30"), FieldValue.Text("2031-04")),
+            items.stored.getValue(blank.uiState.value.savedId!!).fields.map { it.value },
+        )
+    }
+
     @Test
     fun anOldContactCardStillEdits() = runTest {
         items.add(FakeItems.item("01K", "Contact details", category = "contact", tags = listOf("@profile"), fields = listOf("Email" to "sam@example.org")).copy(template = "contact_card"))

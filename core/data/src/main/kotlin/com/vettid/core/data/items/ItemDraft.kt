@@ -140,6 +140,7 @@ data class DraftCheck(
 /** The checks of §10.7 and §10.8 on what the member typed, and the size of the item it would become. */
 @Suppress("TooManyFunctions")
 object ItemChecks {
+    private const val YEAR_MONTH_LENGTH = 7
     const val MAX_NAME = ItemSpec.MAX_NAME
     const val MAX_LABEL = ItemSpec.MAX_LABEL
     const val MAX_VALUE = ItemSpec.MAX_VALUE
@@ -201,6 +202,12 @@ object ItemChecks {
         return if (ItemSpec.isValidStringValue(kind, s)) emptySet() else setOf(DraftProblem.VALUE_INVALID)
     }
 
+    /** A full date in a month-and-year field is refused, never cut to the month (VAULT-MESSAGING 0.55.3). */
+    private fun monthProblem(f: DraftField): Set<DraftProblem> {
+        val full = f.text.length > YEAR_MONTH_LENGTH
+        return if (f.monthYear && f.kind == FieldKinds.DATE && full) setOf(DraftProblem.VALUE_INVALID) else emptySet()
+    }
+
     fun labelProblems(label: String): Set<DraftProblem> = when {
         label.isEmpty() -> setOf(DraftProblem.LABEL_EMPTY)
         bytes(label) > MAX_LABEL -> setOf(DraftProblem.LABEL_TOO_LONG)
@@ -234,7 +241,7 @@ object ItemChecks {
         }
         val fieldProblems = d.fields.mapIndexedNotNull { i, f ->
             // A kept value was checked by the vault for its kind (§10.7 Kept values); a kept file field cannot exist.
-            val value = if (f.kept && f.kind != FieldKinds.FILE) emptySet() else valueProblems(f.kind, f.value)
+            val value = if (f.kept && f.kind != FieldKinds.FILE) emptySet() else valueProblems(f.kind, f.value) + monthProblem(f)
             (labelProblems(f.label) + value).takeIf { it.isNotEmpty() }?.let { i to it }
         }.toMap()
         val max = if (d.sensitivity == Sensitivity.CRITICAL) MAX_CRITICAL_BYTES else MAX_ITEM_BYTES

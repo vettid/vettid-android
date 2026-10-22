@@ -257,8 +257,12 @@ internal object PhoneInput {
     /** Where an extension starts: `x`, `ext`, `ext.`, `;ext=`, `#` or `,` (owner decision 2026-10-22); a `;` before `ext` goes with it. */
     private val extensionMarker = Regex(";ext=|;?ext\\.?|[x#,]", RegexOption.IGNORE_CASE)
 
-    /** What a marker is being typed as at the end of the text: `e`, `ex`, `;`, `;e` or `;ex` (then `ext` and `;ext=` complete it). */
-    private val partialMarker = Regex(";e?x?$|ex?$", RegexOption.IGNORE_CASE)
+    /**
+     * What a marker is being typed as at the end of the text: `e`, `ex`, `;`, `;e` or `;ex` (then `ext` and `;ext=`
+     * complete it), only right after the last digit with nothing but phone signs and spaces between (so a pasted word
+     * such as "Home" is not taken for the start of one).
+     */
+    private val partialMarker = Regex("[0-9][ .()\\-]*(;e?x?|ex?)$", RegexOption.IGNORE_CASE)
 
     /**
      * [typed] split at its extension: the number before it and the marker with all that follows (null if none).
@@ -272,7 +276,7 @@ internal object PhoneInput {
         // A marker needs a digit before it ("Fax: +44 ..." has no extension).
         fun digitBefore(at: Int) = typed.take(at).any { it in '0'..'9' }
         val m = extensionMarker.findAll(typed).firstOrNull { r -> digitBefore(r.range.first) }
-        val p = partialMarker.find(typed)?.takeIf { digitBefore(it.range.first) && (m == null || it.range.first <= m.range.first) }
+        val p = partialMarker.find(typed)?.groups?.get(1)?.takeIf { m == null || it.range.first <= m.range.first }
         if (p != null) return Split(typed.substring(0, p.range.first), p.value, false)
         if (m == null) return Split(typed, null, false)
         val tail = typed.substring(m.range.first).filterNot { it == '\n' || it == '\r' }

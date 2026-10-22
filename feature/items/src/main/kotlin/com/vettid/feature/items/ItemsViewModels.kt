@@ -548,7 +548,7 @@ class ItemEditViewModel @Inject constructor(
     private var storedFields: Map<String, DraftField> = emptyMap()
 
     /**
-     * The draft as it is saved (VAULT-MESSAGING 0.55.1 §10.7 "Canonical forms"): the name, the labels and the values
+     * The draft as it is saved (VAULT-MESSAGING 0.55.3 §10.7 "Canonical forms"; ANDROID-PLAN 0.1.68): the name, the labels and the values
      * in their canonical forms ([CanonicalForms]; a phone by [PhoneInput.stored]), only for what is new or what the
      * member edited. A field they did not touch, a kept one included, is sent byte for byte as stored; an older value
      * is stored canonically only when its field is next edited and saved. The checks run on this result.

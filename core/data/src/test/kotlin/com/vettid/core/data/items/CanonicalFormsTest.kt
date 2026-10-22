@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The canonical stored forms (VAULT-MESSAGING 0.55.1 §10.7 "Canonical forms"; ANDROID-PLAN 0.1.66 §4): exact
+ * The canonical stored forms (VAULT-MESSAGING 0.55.3 §10.7 "Canonical forms", number rule 0.55.2; ANDROID-PLAN 0.1.68 §4): exact
  * bytes for each example of the spec, that every result passes the §10.7 check, and that canonicalising twice
  * changes nothing. iOS mirrors these cases.
  */
@@ -70,11 +70,15 @@ class CanonicalFormsTest {
     }
 
     @Test
-    fun aDateIsAMonthOnlyWhereTheFieldIsAMonthAndNeverGainsADay() {
+    fun aDateIsKeptAsTypedAndAFullDateInAMonthFieldIsRefusedNotCut() {
         assertEquals("2031-04", canon("date", "2031-04", month = true))
-        assertEquals("2031-04", canon("date", "2031-04-30", month = true))
         assertEquals("2031-04-30", canon("date", "2031-04-30", month = false))
         assertEquals("2031-04", canon("date", "2031-04", month = false))
+        assertEquals("2031-04-30", canon("date", "2031-04-30", month = true))
+        val month = DraftField(label = "Expires", kind = "date", text = "2031-04-30", monthYear = true)
+        assertTrue(DraftProblem.VALUE_INVALID in ItemChecks.check(ItemDraft(name = "C", fields = listOf(month))).fieldProblems[0].orEmpty())
+        assertTrue(ItemChecks.check(ItemDraft(name = "C", fields = listOf(month.copy(text = "2031-04")))).ok)
+        assertTrue(ItemChecks.check(ItemDraft(name = "C", fields = listOf(month.copy(monthYear = false)))).ok)
     }
 
     @Test
