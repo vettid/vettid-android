@@ -149,8 +149,23 @@ object ItemSpec {
             val u = URI(s)
             !u.scheme.isNullOrEmpty() && u.isAbsolute
         } catch (_: URISyntaxException) {
-            false
+            isOpaqueUrl(s)
         }
+    }
+
+    private val schemeColon = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
+
+    /**
+     * What the vault's Go `url.Parse` accepts as an absolute URL and `java.net.URI` refuses: a `scheme:` followed by
+     * opaque text that does not start with `/` (`foo:`, `c:\path`), which Go does not look into, except that it
+     * refuses a control character and an invalid `%` escape in the fragment. Stricter than Go elsewhere, never looser.
+     */
+    private fun isOpaqueUrl(s: String): Boolean {
+        val m = schemeColon.find(s) ?: return false
+        val rest = s.substring(m.value.length)
+        if (rest.startsWith("/") || s.any { it < ' ' || it == '\u007f' }) return false
+        val fragment = rest.substringAfter('#', "")
+        return Regex("%(?![0-9A-Fa-f]{2})").find(fragment) == null
     }
 
     private fun isValidOtp(s: String): Boolean {

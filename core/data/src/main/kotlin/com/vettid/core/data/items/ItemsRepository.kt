@@ -30,7 +30,10 @@ interface ItemsRepository {
     /** `item.reveal` of a `critical` item with the credential password: the values sealed to a one-time reply key, opened here. */
     suspend fun revealCritical(itemId: String, password: String): ItemDetail
 
-    /** Creates a `data` or `secret` item; returns its id. The draft must pass [ItemChecks.check]. */
+    /**
+     * Creates a `data` or `secret` item; returns its id. The draft must pass [ItemChecks.check] and already be in
+     * canonical form ([CanonicalForms], VAULT-MESSAGING §10.7).
+     */
     suspend fun create(draft: ItemDraft): String
 
     /** Creates a `critical` item inside the credential with the password; returns its id. */
@@ -39,7 +42,8 @@ interface ItemsRepository {
     /**
      * Replaces a `data` or `secret` item's content and tags (`version` is the one it was based on; `conflict`
      * otherwise). Kept values (VAULT-MESSAGING 0.21.0 §10.7) go without `value`: a secret item is edited without
-     * `item.reveal`. A vault that gave no `size` (before 0.21.0) cannot keep values: the app reads them
+     * `item.reveal`. The draft must already be in canonical form ([CanonicalForms], VAULT-MESSAGING §10.7). A vault
+     * that gave no `size` (before 0.21.0) cannot keep values: the app reads them
      * (`item.reveal`, never shown) and sends them all.
      */
     suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long

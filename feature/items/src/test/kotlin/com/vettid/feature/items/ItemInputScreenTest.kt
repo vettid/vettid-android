@@ -138,9 +138,9 @@ class ItemInputScreenTest {
         rule.onNodeWithTag("item_month_9").performClick()
         rule.onNodeWithTag("item_month_ok").performClick()
         assertEquals("2032-09", draft().fields[0].text)
-        // Typed, it stops at the month.
+        // A full date typed into a month field is not cut (VAULT-MESSAGING 0.55.3): the check refuses it.
         rule.onNodeWithTag("item_edit_field_value_0").performTextReplacement("20330515")
-        assertEquals("2033-05", draft().fields[0].text)
+        assertEquals("2033-05-15", draft().fields[0].text)
     }
 
     @Test

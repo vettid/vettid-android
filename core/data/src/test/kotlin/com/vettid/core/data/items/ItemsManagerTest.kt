@@ -195,10 +195,10 @@ class ItemsManagerTest {
     }
 
     @Test
-    fun createSendsTheCheckedContent() = scope.runTest {
+    fun createSendsTheCheckedContentAsItIs() = scope.runTest {
         val draft = ItemDraft(
-            name = " Passport ", category = "identity_document", template = "passport", sensitivity = Sensitivity.SECRET,
-            tags = listOf("Travel", "travel", "ID"), fields = listOf(DraftField(label = " Number ", kind = "text", text = "X1")),
+            name = "Passport", category = "identity_document", template = "passport", sensitivity = Sensitivity.SECRET,
+            tags = listOf("Travel", "travel", "ID"), fields = listOf(DraftField(label = "Number", kind = "text", text = "X1")),
         )
         assertEquals("01NEW", m.create(draft))
         val (content, s, tags, id, v) = ops.puts.single()

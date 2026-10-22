@@ -164,8 +164,10 @@ internal object DateInput {
      * `2031/04/30` works), or null when no date can begin so and the change is refused. A deletion (fewer digits
      * than [old] held) always goes through, so a digit in the middle can be taken out and typed again.
      */
+    @Suppress("UnusedParameter") // a month field no longer cuts: the check refuses a full date
     fun accept(old: String, typed: String, monthOnly: Boolean): String? {
-        val d = digits(typed).take(if (monthOnly) MONTH else DAY)
+        // A full date in a month field is let through, to be refused by the check, never cut (VAULT-MESSAGING 0.55.3).
+        val d = digits(typed).take(DAY)
         return if (possible(d) || d.length < digits(old).length) format(d) else null
     }
 
@@ -254,34 +256,54 @@ internal object PhoneInput {
         return iso?.uppercase(Locale.ROOT) ?: UNKNOWN
     }
 
-    /** Where an extension starts: `x`, `ext`, `ext.`, `;ext=`, `#` or `,` (owner decision 2026-10-22). */
-    private val extensionMarker = Regex(";ext=|ext\\.?|[x#,]", RegexOption.IGNORE_CASE)
-
-    /** [typed] split at its extension: the number before it and the marker with all that follows, or null. */
-    private fun splitExtension(typed: String): Pair<String, String?> {
-        // A marker needs a digit before it ("Fax: +44 ..." has no extension).
-        val m = extensionMarker.findAll(typed).firstOrNull { r -> typed.take(r.range.first).any { it in '0'..'9' } }
-            ?: return typed to null
-        val tail = typed.substring(m.range.first).filterNot { it == '\n' || it == '\r' }
-        return typed.substring(0, m.range.first) to tail.take(MAX_EXTENSION)
-    }
+    /** Where an extension starts: `x`, `ext`, `ext.`, `;ext=`, `#` or `,` (owner decision 2026-10-22); a `;` before `ext` goes with it. */
+    private val extensionMarker = Regex(";ext=|;?ext\\.?|[x#,]", RegexOption.IGNORE_CASE)
 
     /**
-     * The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it starts with one.
-     * An extension stays as typed (its marker and what follows) after the number, so the editor can say it is not
-     * saved ([hasExtension]); [stored] and every parse leave it out ([main]).
+     * What a marker is being typed as at the end of the text: `e`, `ex`, `;`, `;e` or `;ex` (then `ext` and `;ext=`
+     * complete it), only right after the last digit with nothing but phone signs and spaces between (so a pasted word
+     * such as "Home" is not taken for the start of one).
+     */
+    private val partialMarker = Regex("[0-9][ .()\\-]*(;e?x?|ex?)$", RegexOption.IGNORE_CASE)
+
+    /**
+     * [typed] split at its extension: the number before it and the marker with all that follows (null if none).
+     * [complete] is false for a marker still being typed (`e`, `ex`, `;`, `;e`, `;ex` at the end): it stays in the
+     * edit text, so that typing "ext" key by key works, but it is not an extension yet and the note does not show.
+     */
+    private class Split(val head: String, val tail: String?, val complete: Boolean)
+
+    @Suppress("ReturnCount")
+    private fun split(typed: String): Split {
+        // A marker needs a digit before it ("Fax: +44 ..." has no extension).
+        fun digitBefore(at: Int) = typed.take(at).any { it in '0'..'9' }
+        val m = extensionMarker.findAll(typed).firstOrNull { r -> digitBefore(r.range.first) }
+        val p = partialMarker.find(typed)?.groups?.get(1)?.takeIf { m == null || it.range.first <= m.range.first }
+        if (p != null) return Split(typed.substring(0, p.range.first), p.value, false)
+        if (m == null) return Split(typed, null, false)
+        val tail = typed.substring(m.range.first).filterNot { it == '\n' || it == '\r' }
+        return Split(typed.substring(0, m.range.first), tail.take(MAX_EXTENSION), true)
+    }
+
+    private fun splitExtension(typed: String): Pair<String, String?> = split(typed).let { it.head to it.tail }
+
+    /**
+     * The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it comes before the
+     * first digit. An extension stays as typed (its marker and what follows, or the start of a marker) after the
+     * number, so the editor can say it is not saved ([hasExtension]); [stored] and every parse leave it out ([main]).
      */
     fun raw(typed: String): String {
         val (head, ext) = splitExtension(typed)
         val plus = head.takeWhile { it !in '0'..'9' }.contains('+')
-        return (if (plus) "+" else "") + head.filter { it in '0'..'9' }.take(MAX_DIGITS) + (ext ?: "")
+        // No cut at 15 digits (the library decides what is E.164); the edit text is at most 32 characters (§10.7).
+        return ((if (plus) "+" else "") + head.filter { it in '0'..'9' } + (ext ?: "")).take(FieldInput.MAX_PHONE)
     }
 
     /** [raw] of [text] without its extension: the main number. */
     fun main(text: String): String = raw(splitExtension(text).first)
 
     /** Whether [text] has an extension, which is not saved (the editor says so). */
-    fun hasExtension(text: String): Boolean = splitExtension(text).second != null
+    fun hasExtension(text: String): Boolean = split(text).let { it.tail != null && it.complete }
 
     /** [raw] formatted as typed in [region] (a `+` and country code switch the region); [raw] when no format fits. */
     fun asYouType(raw: String, region: String): String {
@@ -297,8 +319,9 @@ internal object PhoneInput {
     }
 
     /**
-     * What is saved for [text] in [region]: E.164 when it parses and is possible (`IS_POSSIBLE`, not only locally; it always
-     * fits §10.7), else its dialable characters ([raw]: a leading `+` if typed, then digits). An extension is dropped
+     * What is saved for [text] in [region]: E.164 when it parses and is possible (`IS_POSSIBLE`, not only locally, whatever its
+     * length: the library decides, VAULT-MESSAGING 0.55.4), else its dialable characters ([raw]: a leading `+` if
+     * typed, then all the digits up to the 32 characters §10.7 allows). An extension is dropped
      * (from its marker on) before either.
      */
     fun stored(text: String, region: String): String {
@@ -364,8 +387,6 @@ internal object PhoneInput {
         override fun hashCode(): Int = region.hashCode()
     }
 
-    /** E.164 holds at most 15 digits; §10.7 allows 32 characters. */
-    private const val MAX_DIGITS = 15
     private const val MAX_EXTENSION = 24
     private const val UNKNOWN = "ZZ"
 }

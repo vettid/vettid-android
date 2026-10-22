@@ -129,11 +129,13 @@ class PhoneInputTest {
     }
 
     @Test
-    fun noDigitLeftIsEmptyAndTheFallbackIsAtMost15Digits() {
+    fun noDigitLeftIsEmptyAndTheFallbackKeepsAllDigitsUpToTheTableLimit() {
         assertEquals("", PhoneInput.stored("+", "US"))
         assertEquals("123", PhoneInput.stored("x123", "US")) // no digit before the marker: not an extension
         assertEquals("", PhoneInput.stored("abc", "US"))
-        assertEquals(15, PhoneInput.stored("1234567890123456789", "ZZ").length)
+        assertEquals("1234567890123456789", PhoneInput.stored("1234567890123456789", "ZZ"))
+        assertEquals(32, PhoneInput.stored("1".repeat(40), "ZZ").length)
+        assertEquals(32, PhoneInput.raw("1".repeat(30) + " ext 12").length)
         // Case does not matter for a marker.
         assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 EXT. 7"), "US"))
         assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 X7"), "US"))
@@ -173,5 +175,61 @@ class PhoneInputTest {
         assertEquals("+442079460958", PhoneInput.stored("+44 20 7946 0958 X123", "US"))
         assertEquals("123", PhoneInput.stored("#123", "US"))
         assertFalse(PhoneInput.hasExtension("#123"))
+    }
+
+    @Suppress("MaxLineLength")
+    @Test
+    fun aMarkerTypedKeyByKeyIsKeptInTheEditTextAndDroppedOnSave() {
+        // Hardware keyboard: the text is filtered after every key, so the start of a marker must survive it.
+        fun keys(vararg typed: String): List<String> {
+            var held = ""
+            return typed.map { held = PhoneInput.raw(held + it); held }
+        }
+        val n = "+442079460958"
+        assertEquals(listOf("${n}e", "${n}ex", "${n}ext", "${n}ext ", "${n}ext 1"), keys("+442079460958", "e", "x", "t", " ", "1").drop(1))
+        assertEquals(listOf("$n;", "$n;e", "$n;ex", "$n;ext", "$n;ext=", "$n;ext=1"), keys("+442079460958", ";", "e", "x", "t", "=", "1").drop(1))
+        listOf("e", "ex", ";", ";e", ";ex", ";ext", "ext", ";ext=").forEach { tail ->
+            assertEquals(tail, "$n$tail", PhoneInput.raw("$n$tail"))
+            assertEquals(tail, n, PhoneInput.stored("$n$tail", "US"))
+            assertEquals(tail, n, PhoneInput.main("$n$tail"))
+        }
+        // Only the complete markers count as an extension (the note), not their start.
+        listOf("e", "ex", ";", ";e", ";ex").forEach { assertFalse(it, PhoneInput.hasExtension("$n$it")) }
+        listOf("ext", ";ext", ";ext=", "x").forEach { assertTrue(it, PhoneInput.hasExtension("$n$it")) }
+        // A marker still needs a digit before it, and typing a digit after the start of one is not an extension.
+        assertEquals("", PhoneInput.raw("e"))
+        assertEquals("", PhoneInput.raw(";e"))
+        assertEquals("5", PhoneInput.raw("5"))
+        assertEquals("", PhoneInput.stored("ex", "US"))
+        assertEquals("+442079460958", PhoneInput.raw("Fax: +44 20 7946 0958").let { PhoneInput.stored(it, "US") })
+        // The partial marker is drawn after the number, and the whole edit text is idempotent under raw.
+        listOf("${n}e", "${n};ex", "${n}ext=12").forEach { assertEquals(it, PhoneInput.raw(PhoneInput.raw(it))) }
+        assertEquals("+44 20 7946 0958 ;ex", typing("+442079460958;ex", "US"))
+    }
+
+    @Test
+    fun aPartialMarkerOnlyCountsRightAfterTheLastDigit() {
+        // A pasted word is not the start of a marker.
+        assertEquals("+442079460958", PhoneInput.raw("+44 20 7946 0958 Home"))
+        assertEquals("+442079460958", PhoneInput.raw("+44 20 7946 0958 home e"))
+        assertEquals("+442079460958", PhoneInput.raw("+44 20 7946 0958 Mobile"))
+        assertEquals("+442079460958", PhoneInput.stored("+44 20 7946 0958 Home", "US"))
+        // Phone signs and spaces between the last digit and the start of a marker are fine; the text is rebuilt without them.
+        assertEquals("+442079460958ex", PhoneInput.raw("+44 20 7946 0958 ex"))
+        assertEquals("+442079460958;e", PhoneInput.raw("+44 20 7946 0958) ;e"))
+        assertEquals("+442079460958e", PhoneInput.raw("+44 20 7946 0958-e"))
+    }
+
+    /** VAULT-MESSAGING 0.55.4: the library decides what is E.164; the rest keeps all its digits, with the hint. */
+    @Test
+    fun longNumbersAreEitherPossibleE164OrAFallbackWithAllDigits() {
+        assertEquals("+4912345678901234", PhoneInput.stored("+49 12345678901234", "DE"))
+        assertTrue(PhoneInput.doubtful("+49 12345678901234", "DE"))
+        assertEquals("+4912345678901234", PhoneInput.stored("012345678901234", "DE"))
+        assertTrue(PhoneInput.doubtful("012345678901234", "DE"))
+        assertEquals("+491234567890123456", PhoneInput.stored("+491234567890123456", "DE"))
+        assertTrue(PhoneInput.doubtful("+491234567890123456", "DE"))
+        assertTrue(PhoneInput.doubtful("555 555 5555", "US"))
+        assertTrue(PhoneInput.doubtful("054-123-4567", "IL"))
     }
 }
