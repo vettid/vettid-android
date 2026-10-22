@@ -191,4 +191,72 @@ class ShareDecidedTest {
         runCurrent()
         assertEquals(setOf("A", "B"), m.items("r1")?.toSet())
     }
+
+    private suspend fun SocialManager.decide(rule: String, include: List<String>, answer: String) =
+        decideShareWith(rule, include, emptyList(), both = { o(answer) }, one = { _, _ -> o(answer) })
+
+    @Test
+    fun aDecisionMadeHereLeavesTheSubjectsOtherRule() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "i1"), entry("r2", "i1"), entry("r2", "i3"))
+        runCurrent()
+        m.decide("r1", listOf("i1"), """{"included":["i1"],"declined":[]}""")
+        runCurrent()
+        assertNull(m.share("r1"))
+        assertEquals(listOf("i3"), m.items("r2"))
+    }
+
+    @Test
+    fun theAnswersItemsDecideWhatLeavesNotTheRequests() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "i1"), entry("r2", "i3"))
+        runCurrent()
+        m.decide("r1", listOf("i1"), """{"included":["i1","i3"],"declined":[]}""")
+        runCurrent()
+        assertNull(m.share("r2"))
+    }
+
+    @Test
+    fun aRuleHiddenByTheDedupeStillFindsItsSubject() = runTest {
+        val m = manager()
+        // r2's only item is asked under r1: r2 is not shown, but the decision of r2 still reaches r1's question.
+        m.refresh(entry("r1", "i1"), entry("r1", "i2"), entry("r2", "i1"))
+        runCurrent()
+        assertNull(m.share("r2"))
+        m.decide("r2", listOf("i1"), """{"included":["i1"],"declined":[]}""")
+        runCurrent()
+        assertEquals(listOf("i2"), m.items("r1"))
+    }
+
+    @Test
+    fun aDecisionMadeHereDuringTheReadIsNotUndoneByIt() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "i1"), entry("r2", "i1"), entry("r2", "i3"))
+        runCurrent()
+        val r = read(entry("r1", "i1"), entry("r2", "i1"), entry("r2", "i3"))
+        val gate = CompletableDeferred<Unit>()
+        val job = backgroundScope.launch { m.refreshApprovalsFrom(now) { gate.await(); r } }
+        runCurrent()
+        m.decide("r1", listOf("i1"), """{"included":["i1"],"declined":[]}""")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertNull(m.share("r1"))
+        assertEquals(listOf("i3"), m.items("r2"))
+    }
+
+    @Test
+    fun aBatchIsNotResurrectedIfItsItemWasWithdrawnBeforeTheRead() = runTest {
+        val m = manager()
+        m.batch("r1", "X")
+        val r = read(entry("r1", "A"))
+        val gate = CompletableDeferred<Unit>()
+        val job = backgroundScope.launch { m.refreshApprovalsFrom(now) { gate.await(); r } }
+        runCurrent()
+        m.batch("r1", "B")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(setOf("A", "B"), m.items("r1")?.toSet())
+    }
 }

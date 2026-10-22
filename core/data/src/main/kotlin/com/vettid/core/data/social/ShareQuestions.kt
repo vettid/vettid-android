@@ -32,6 +32,8 @@ object ShareQuestions {
         }
     }
 
+    internal fun subjectOrNull(d: Approval.ShareDecision): String? = subjectOf(d)
+
     private fun subjectOf(d: Approval.ShareDecision): String? =
         d.subjectConnectionId?.let { "c:$it" } ?: d.subjectAgentId?.let { "a:$it" }
 
