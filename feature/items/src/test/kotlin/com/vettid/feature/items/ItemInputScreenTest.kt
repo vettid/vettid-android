@@ -123,6 +123,25 @@ class ItemInputScreenTest {
     }
 
     @Test
+    fun aMonthFieldNamesItsOwnFormForAnyInvalidValueAndADayFieldKeepsTheDateRule() {
+        // VAULT-MESSAGING 0.55.5: a full date in a card expiry, and an incomplete month, show the month rule.
+        editor(field(FieldKinds.DATE, "Expires", monthYear = true))
+        rule.onNodeWithTag("item_edit_field_value_0").performTextReplacement("20330515")
+        rule.onNodeWithText("Enter a month and year, such as 2033-05").assertExists()
+        rule.onNodeWithText("Enter a date as YYYY-MM-DD or YYYY-MM").assertDoesNotExist()
+        rule.onNodeWithTag("item_edit_field_value_0").performTextReplacement("20330")
+        rule.onNodeWithText("Enter a month and year, such as 2033-05").assertExists()
+    }
+
+    @Test
+    fun aDayFieldStillSaysTheDateRule() {
+        editor(field(FieldKinds.DATE, "Issued"))
+        rule.onNodeWithTag("item_edit_field_value_0").performTextReplacement("20330")
+        rule.onNodeWithText("Enter a date as YYYY-MM-DD or YYYY-MM").assertExists()
+        rule.onNodeWithText("Enter a month and year, such as 2033-05").assertDoesNotExist()
+    }
+
+    @Test
     fun theCalendarButtonOpensTheDatePicker() {
         editor(field(FieldKinds.DATE, "Issued"))
         rule.onNodeWithContentDescription("Choose a date for Issued").performScrollTo().performClick()

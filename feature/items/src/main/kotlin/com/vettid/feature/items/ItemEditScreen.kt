@@ -608,10 +608,11 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
         ?: DraftProblem.BAD_CHARACTER.takeIf { it in problems && ItemChecks.labelProblems(f.label.trim()).isNotEmpty() }
     val valueProblem = (problems - setOfNotNull(DraftProblem.LABEL_EMPTY, DraftProblem.LABEL_TOO_LONG, labelProblem)).firstOrNull()
     // A value that is not (yet) one of its kind says its rule while the member types (owner request 2026-10-08).
+    val fullDateInMonth = f.kind == FieldKinds.DATE && f.monthYear && f.text.length > MONTH_LENGTH
     val live = DraftProblem.VALUE_INVALID.takeIf {
-        !f.kept && FieldInput.incomplete(f.kind, if (f.kind == FieldKinds.PHONE) PhoneInput.main(f.text) else f.text)
+        !f.kept && (fullDateInMonth || FieldInput.incomplete(f.kind, if (f.kind == FieldKinds.PHONE) PhoneInput.main(f.text) else f.text))
     }
-    val error = labelProblem?.let { ItemsText.problem(it) } ?: (valueProblem ?: live)?.let { ItemsText.problem(it, f.kind) }
+    val error = labelProblem?.let { ItemsText.problem(it) } ?: (valueProblem ?: live)?.let { ItemsText.problem(it, f.kind, f.monthYear) }
     // A kept value is not at hand (§10.7 Kept values): the field stays empty until the member types a new one.
     val region = phoneRegion()
     val hint = when {
@@ -1189,3 +1190,6 @@ private fun SizeNote(state: ItemEditUiState) {
 }
 
 private const val KB = 1024
+
+/** `YYYY-MM`. */
+private const val MONTH_LENGTH = 7
