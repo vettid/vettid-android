@@ -395,7 +395,7 @@ class SharingManager(
             shares = arr(o, "shares").mapNotNull { s ->
                 val r = VaultJson.str(s, "rule_id") ?: return@mapNotNull null
                 val i = VaultJson.str(s, "item_id") ?: return@mapNotNull null
-                SharePreview(r, i, ShareMode.of(VaultJson.str(s, "mode")))
+                SharePreview(r, i, ShareMode.of(VaultJson.str(s, "mode")), VaultJson.str(s, "ask_rule_id"))
             },
             sharesTotal = (VaultJson.long(o, "shares_total") ?: 0).toInt(),
         )

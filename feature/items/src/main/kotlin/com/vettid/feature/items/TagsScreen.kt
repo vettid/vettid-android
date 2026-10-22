@@ -209,7 +209,9 @@ class TagsViewModel @Inject constructor(private val sharing: SharingRepository) 
                     }
                 } else if (d.description != d.tag.description.orEmpty()) {
                     run {
-                        sharing.setTag(n, d.description, d.tag.color)
+                        // The colour the registry holds now: the colour keeper may have stored one since the form opened.
+                        val current = sharing.tags.value?.tags?.firstOrNull { it.tag == d.tag.tag }?.color ?: d.tag.color
+                        sharing.setTag(n, d.description, current)
                         done()
                     }
                 } else {
@@ -459,12 +461,11 @@ private const val SWATCHES_PER_ROW = 5
 private fun changeText(c: TagChange, renaming: Boolean): String {
     val items = pluralStringResource(R.plurals.items_tags_change_items, c.items, c.items)
     if (!renaming || c.sharesTotal == 0) return items
-    val auto = c.shares.count { it.mode == ShareMode.AUTO }
-    val asked = c.sharesTotal - auto
     return listOfNotNull(
         items,
-        auto.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_shared, it, it) },
-        asked.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_asked, it, it) },
+        c.sharedNow.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_shared, it, it) },
+        c.asked.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_asked, it, it) },
+        c.unlisted.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_share_preview_more, it, it) },
     ).joinToString(" ")
 }
 
