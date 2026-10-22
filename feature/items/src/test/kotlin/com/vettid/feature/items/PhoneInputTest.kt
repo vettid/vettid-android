@@ -129,11 +129,13 @@ class PhoneInputTest {
     }
 
     @Test
-    fun noDigitLeftIsEmptyAndTheFallbackIsAtMost15Digits() {
+    fun noDigitLeftIsEmptyAndTheFallbackKeepsAllDigitsUpToTheTableLimit() {
         assertEquals("", PhoneInput.stored("+", "US"))
         assertEquals("123", PhoneInput.stored("x123", "US")) // no digit before the marker: not an extension
         assertEquals("", PhoneInput.stored("abc", "US"))
-        assertEquals(15, PhoneInput.stored("1234567890123456789", "ZZ").length)
+        assertEquals("1234567890123456789", PhoneInput.stored("1234567890123456789", "ZZ"))
+        assertEquals(32, PhoneInput.stored("1".repeat(40), "ZZ").length)
+        assertEquals(32, PhoneInput.raw("1".repeat(30) + " ext 12").length)
         // Case does not matter for a marker.
         assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 EXT. 7"), "US"))
         assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+442079460958 X7"), "US"))
@@ -216,5 +218,18 @@ class PhoneInputTest {
         assertEquals("+442079460958ex", PhoneInput.raw("+44 20 7946 0958 ex"))
         assertEquals("+442079460958;e", PhoneInput.raw("+44 20 7946 0958) ;e"))
         assertEquals("+442079460958e", PhoneInput.raw("+44 20 7946 0958-e"))
+    }
+
+    /** VAULT-MESSAGING 0.55.4: the library decides what is E.164; the rest keeps all its digits, with the hint. */
+    @Test
+    fun longNumbersAreEitherPossibleE164OrAFallbackWithAllDigits() {
+        assertEquals("+4912345678901234", PhoneInput.stored("+49 12345678901234", "DE"))
+        assertTrue(PhoneInput.doubtful("+49 12345678901234", "DE"))
+        assertEquals("+4912345678901234", PhoneInput.stored("012345678901234", "DE"))
+        assertTrue(PhoneInput.doubtful("012345678901234", "DE"))
+        assertEquals("+491234567890123456", PhoneInput.stored("+491234567890123456", "DE"))
+        assertTrue(PhoneInput.doubtful("+491234567890123456", "DE"))
+        assertTrue(PhoneInput.doubtful("555 555 5555", "US"))
+        assertTrue(PhoneInput.doubtful("054-123-4567", "IL"))
     }
 }

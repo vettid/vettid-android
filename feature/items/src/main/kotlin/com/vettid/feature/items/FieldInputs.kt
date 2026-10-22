@@ -293,7 +293,8 @@ internal object PhoneInput {
     fun raw(typed: String): String {
         val (head, ext) = splitExtension(typed)
         val plus = head.takeWhile { it !in '0'..'9' }.contains('+')
-        return (if (plus) "+" else "") + head.filter { it in '0'..'9' }.take(MAX_DIGITS) + (ext ?: "")
+        // No cut at 15 digits (the library decides what is E.164); the edit text is at most 32 characters (§10.7).
+        return ((if (plus) "+" else "") + head.filter { it in '0'..'9' } + (ext ?: "")).take(FieldInput.MAX_PHONE)
     }
 
     /** [raw] of [text] without its extension: the main number. */
@@ -316,8 +317,9 @@ internal object PhoneInput {
     }
 
     /**
-     * What is saved for [text] in [region]: E.164 when it parses and is possible (`IS_POSSIBLE`, not only locally; it always
-     * fits §10.7), else its dialable characters ([raw]: a leading `+` if typed, then digits). An extension is dropped
+     * What is saved for [text] in [region]: E.164 when it parses and is possible (`IS_POSSIBLE`, not only locally, whatever its
+     * length: the library decides, VAULT-MESSAGING 0.55.4), else its dialable characters ([raw]: a leading `+` if
+     * typed, then all the digits up to the 32 characters §10.7 allows). An extension is dropped
      * (from its marker on) before either.
      */
     fun stored(text: String, region: String): String {
@@ -383,8 +385,6 @@ internal object PhoneInput {
         override fun hashCode(): Int = region.hashCode()
     }
 
-    /** E.164 holds at most 15 digits; §10.7 allows 32 characters. */
-    private const val MAX_DIGITS = 15
     private const val MAX_EXTENSION = 24
     private const val UNKNOWN = "ZZ"
 }
