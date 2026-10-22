@@ -111,20 +111,20 @@ class ItemEditViewModelTest {
     }
 
     @Test
-    fun aPhoneIsStoredInInternationalFormatAndAnUnknownOneAsTyped() = runTest {
-        // Owner request 2026-10-09: the input holds the dialable characters; saving formats, never blocks.
+    fun aPhoneIsStoredInE164AndAnUnknownOneAsDialableCharacters() = runTest {
+        // Owner request 2026-10-09: the input holds the dialable characters; saving stores E.164 (owner decision 2026-10-22), never blocks.
         val vm = vm(template = "phone_number")
         vm.setFieldText(0, PhoneInput.raw("+44 20 7946 0958"))
         vm.save()
         advanceUntilIdle()
-        assertEquals(FieldValue.Text("+44 20 7946 0958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
 
         val unknown = vm(template = "phone_number")
         unknown.setFieldText(0, "55512")
         unknown.save()
         advanceUntilIdle()
-        // Kept as the member saw it while typing.
-        assertEquals(FieldValue.Text("555-12"), items.stored.getValue(unknown.uiState.value.savedId!!).fields.single().value)
+        // Kept as its dialable characters only.
+        assertEquals(FieldValue.Text("55512"), items.stored.getValue(unknown.uiState.value.savedId!!).fields.single().value)
     }
 
     @Test

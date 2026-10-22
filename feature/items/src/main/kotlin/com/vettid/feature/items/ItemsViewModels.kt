@@ -539,7 +539,7 @@ class ItemEditViewModel @Inject constructor(
     /** The phone's region, for numbers typed without `+` (owner request 2026-10-09). */
     private val phoneRegion: String by lazy { PhoneInput.region(context) }
 
-    /** Phone values as saved: international format when they parse, else as typed ([PhoneInput.stored]). */
+    /** Phone values as saved: E.164 when they parse, else the dialable characters ([PhoneInput.stored]). */
     private fun phonesStored(d: ItemDraft): ItemDraft = d.copy(
         fields = d.fields.map { f ->
             if (f.kind == FieldKinds.PHONE && f.text.isNotBlank()) f.copy(text = PhoneInput.stored(f.text, phoneRegion)) else f

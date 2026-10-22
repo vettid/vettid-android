@@ -233,9 +233,12 @@ internal fun phoneRegion(): String {
 /**
  * A `phone` value (owner request 2026-10-09; §10.7 allows at most 32 digits, spaces and `+-().`): the input holds the
  * dialable characters (digits, a leading `+`) and draws libphonenumber's as-you-type format over them ([mask]), in
- * the phone's region until a `+` and country code switch it. Saved, a number that parses is stored in international
- * format ([stored], e.g. `+44 20 7946 0958`); one that does not keeps what was typed and only gets a "Check this
- * number" hint ([doubtful]), never a block. Shown, a stored number is formatted for the viewer's region ([display]).
+ * the phone's region until a `+` and country code switch it. Saved, a number that parses is stored in E.164
+ * ([stored], e.g. `+442079460958`; owner decision 2026-10-22); one that does not is stored as its dialable
+ * characters only ([raw]) and only gets a "Check this number" hint ([doubtful]), never a block. Shown, a stored number
+ * is formatted for the viewer's region ([display]). Values stored before that (the spaced international format, e.g.
+ * `+44 20 7946 0958`) are still read: [display], [doubtful] and the editor go through [raw], which drops the spaces;
+ * such a value is stored canonically only when the member saves that field (no bulk migration).
  */
 internal object PhoneInput {
     private val util: PhoneNumberUtil by lazy { PhoneNumberUtil.getInstance() }
@@ -268,16 +271,16 @@ internal object PhoneInput {
     }
 
     /**
-     * What is saved for [text] in [region]: the international format when it parses as a possible number without an
-     * extension (it always fits §10.7), else the as-you-type text (what the member saw), within §10.7's characters.
+     * What is saved for [text] in [region]: E.164 when it parses as a possible number without an extension (it always
+     * fits §10.7), else its dialable characters ([raw]: a leading `+` if typed, then digits).
      */
     fun stored(text: String, region: String): String {
         val raw = raw(text)
         if (raw.isEmpty()) return text
         val n = parse(raw, region)
-        val intl = n?.takeIf { !it.hasExtension() && util.isPossibleNumber(it) }
-            ?.let { util.format(it, PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL) }
-        return intl?.takeIf { FieldInput.phone(it) == it } ?: FieldInput.phone(asYouType(raw, region))
+        val e164 = n?.takeIf { !it.hasExtension() && util.isPossibleNumber(it) }
+            ?.let { util.format(it, PhoneNumberUtil.PhoneNumberFormat.E164) }
+        return e164?.takeIf { FieldInput.phone(it) == it } ?: raw
     }
 
     /** Whether to show "Check this number" under [text]: there are digits, and it is not a valid number. */

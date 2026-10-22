@@ -55,35 +55,37 @@ class PhoneInputTest {
         assertEquals("+16502530000", PhoneInput.raw("+1 (650) 253-0000"))
         assertEquals("+16502530000", PhoneInput.raw("+16502530000"))
         assertEquals("6502530000", PhoneInput.raw("tel: 650.253.0000"))
-        assertEquals("+44 20 7946 0958", PhoneInput.stored(PhoneInput.raw("+44 20 7946 0958"), "US"))
+        assertEquals("+442079460958", PhoneInput.stored(PhoneInput.raw("+44 20 7946 0958"), "US"))
     }
 
     @Test
-    fun aNumberIsStoredInInternationalFormatWithinThePhoneRule() {
+    fun aNumberIsStoredInE164WithinThePhoneRule() {
         val stored = listOf(
             PhoneInput.stored("6502530000", "US"),
             PhoneInput.stored("02079460958", "GB"),
             PhoneInput.stored("030123456", "DE"),
             PhoneInput.stored("+442079460958", "DE"),
         )
-        assertEquals(listOf("+1 650-253-0000", "+44 20 7946 0958", "+49 30 123456", "+44 20 7946 0958"), stored)
+        assertEquals(listOf("+16502530000", "+442079460958", "+4930123456", "+442079460958"), stored)
         stored.forEach { assertTrue(it, valid(it)) }
-        // Stored again, a stored number does not change.
-        assertEquals("+1 650-253-0000", PhoneInput.stored("+1 650-253-0000", "GB"))
+        // Stored again, a stored number does not change; an older spaced value is stored canonically when saved.
+        assertEquals("+16502530000", PhoneInput.stored("+16502530000", "GB"))
+        assertEquals("+16502530000", PhoneInput.stored("+1 650-253-0000", "GB"))
     }
 
     @Test
     fun anUnknownNumberIsKeptAsTypedWithAHintNeverABlock() {
         assertTrue(PhoneInput.doubtful("55512", "US"))
-        // Kept as the member saw it while typing (the as-you-type format), within §10.7's characters.
-        assertEquals("555-12", PhoneInput.stored("55512", "US"))
+        // Kept as its dialable characters only (owner decision 2026-10-22).
+        assertEquals("55512", PhoneInput.stored("55512", "US"))
+        assertEquals("+55512", PhoneInput.stored("+555 12", "US"))
         assertTrue(valid(PhoneInput.stored("55512", "US")))
         assertFalse(PhoneInput.doubtful("6502530000", "US"))
         assertFalse(PhoneInput.doubtful("+442079460958", "US"))
         assertFalse(PhoneInput.doubtful("", "US"))
         // A region the phone does not know reads only numbers with a +.
         assertTrue(PhoneInput.doubtful("6502530000", "ZZ"))
-        assertEquals("+1 650-253-0000", PhoneInput.stored("+16502530000", "ZZ"))
+        assertEquals("+16502530000", PhoneInput.stored("+16502530000", "ZZ"))
     }
 
     @Test
@@ -93,5 +95,18 @@ class PhoneInputTest {
         assertEquals("020 7946 0958", PhoneInput.display("+44 20 7946 0958", "GB"))
         assertEquals("+44 20 7946 0958", PhoneInput.display("+44 20 7946 0958", "US"))
         assertEquals("555 12", PhoneInput.display("555 12", "US"))
+    }
+
+    @Test
+    fun e164AndOlderSpacedValuesAreReadAlike() {
+        for (v in listOf("+16502530000", "+1 650-253-0000")) {
+            assertEquals(v, "(650) 253-0000", PhoneInput.display(v, "US"))
+            assertEquals(v, "+1 650-253-0000", PhoneInput.display(v, "GB"))
+            assertFalse(v, PhoneInput.doubtful(v, "GB"))
+            assertEquals(v, "+16502530000", PhoneInput.raw(v))
+        }
+        assertEquals("020 7946 0958", PhoneInput.display("+442079460958", "GB"))
+        assertEquals("+44 20 7946 0958", PhoneInput.display("+442079460958", "US"))
+        assertEquals("55512", PhoneInput.display("55512", "US"))
     }
 }
