@@ -363,9 +363,11 @@ class AttachmentManagerTest {
                 assertTrue("the clear waits for the build", t.isAlive)
             }
         }
+        // The answer waits for the clear to be done, so its check sees it (else the send may retake the lock first).
+        ops.duringSend = { clearing.get()?.join(5_000) }
         val e = runCatching { m.send(p) }.exceptionOrNull()
         // Anything but the clear's VaultFailure (an assertion in the hook, a failure before the build) is the real cause.
-        if (e !is VaultFailure) throw AssertionError("send failed before the build", e)
+        if (e !is VaultFailure) throw AssertionError("send ended ${e ?: "normally"}, not unavailable", e)
         assertNotNull("the build hook ran", clearing.get())
         clearing.get().join(5_000)
         val blobField = ops.requests.single().second["blob"]
