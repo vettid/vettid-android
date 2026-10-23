@@ -74,6 +74,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -873,12 +874,29 @@ class VaultManager(
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             var previous: AppPhase = AppPhase.Starting
-            phaseFlow.collect {
+            // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
+            val phaseSteps = PhaseSteps.of(
+                replay = { p -> replayHeldBack(heldBack.release(p)) },
+                forgetOpenVault = { social.forgetOpenVault() },
+                clearAttachments = { attachments.clear() },
+                clearItems = { items.clear() },
+                clearSharing = { sharing.clear() },
+                clearFeed = { feed.clear() },
+                // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
+                ownProfile = { p ->
+                    when (OwnProfileStep.onPhase(p)) {
+                        OwnProfileStep.FORGET -> forgetOwnProfile()
+                        OwnProfileStep.READ -> readOwnProfile()
+                        OwnProfileStep.NONE -> Unit
+                    }
+                },
+            )
+            // The only place a lock clears these: one failure on one phase never ends this collector (surviveEvent).
+            phaseFlow.asStateFlow().collectSurviving("phase") {
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
                 previous = it
-                replayHeldBack(heldBack.release(it))
-                if (it == AppPhase.Unlocked) {
+                phaseSteps.onPhase(it) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
                     resumeRelay() // after an unlock the notification service's connection comes back
@@ -889,51 +907,33 @@ class VaultManager(
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
                 }
-                // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
-                val steps = ClearSteps()
-                if (it != AppPhase.Unlocked && it != AppPhase.Starting) {
-                    // Locked or signed out: no item metadata and no feed item is kept outside an open vault, and
-                    // no connection or message in memory either.
-                    steps.step { social.forgetOpenVault() }
-                    steps.step { attachments.clear() }
-                    steps.step { items.clear() }
-                    steps.step { sharing.clear() }
-                    steps.step { feed.clear() }
-                }
-                // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
-                steps.step {
-                    when (OwnProfileStep.onPhase(it)) {
-                        OwnProfileStep.FORGET -> forgetOwnProfile()
-                        OwnProfileStep.READ -> readOwnProfile()
-                        OwnProfileStep.NONE -> Unit
-                    }
-                }
-                steps.finish()
             }
         }
         // The feed's owner-check items are the shell's notices (one source, ANDROID-PLAN 0.1.23, 6).
-        scope.launch { feed.items.collect { ownerCheck.onFeed(it) } }
+        scope.launch { feed.items.collectSurviving("feed items") { ownerCheck.onFeed(it) } }
         // Held or due (§3.6.3): no cached feed content is shown; after the check (here or on another device), a full read.
         scope.launch {
             var held = false
-            ownerCheck.ownerCheck.collect { v ->
+            ownerCheck.ownerCheck.collectSurviving("owner check") { v ->
                 val now = OwnProfileStep.held(v)
+                // Kept first: nothing that throws below leaves it wrong for the next value.
+                val wasHeld = held
+                held = now
                 // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
                 val steps = ClearSteps()
-                if (now && !held) {
+                if (now && !wasHeld) {
                     steps.step { feed.clear() }
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
-                if (!now && held && phaseFlow.value == AppPhase.Unlocked) feed.open()
+                if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { feed.open() }
                 // Nor the member's own names, full email or photo; read again after the passed check.
                 steps.step {
-                    when (OwnProfileStep.onCheck(wasHeld = held, held = now, phase = phaseFlow.value)) {
+                    when (OwnProfileStep.onCheck(wasHeld = wasHeld, held = now, phase = phaseFlow.value)) {
                         OwnProfileStep.FORGET -> forgetOwnProfile()
                         OwnProfileStep.READ -> readOwnProfile()
                         OwnProfileStep.NONE -> Unit
                     }
                 }
-                held = now
                 steps.finish()
             }
         }
@@ -1109,7 +1109,7 @@ class VaultManager(
         lockKeeper.resume()
         if (lockKeeper.pending) lockedHere = true
         scope.launch {
-            lockKeeper.notice.collect {
+            lockKeeper.notice.collectSurviving("lock notice") {
                 if (it !is LockNotice.Unconfirmed && pauseWanted) {
                     pauseWanted = false
                     pauseRelay()
@@ -1187,16 +1187,17 @@ class VaultManager(
         if (forget) finishMoveRunner.clearFailure() // a deleted or forgotten vault: nothing of a move is left to say
         observer?.cancel()
         observer = null
-        session?.device?.let { d -> if (forget) d.forget() else d.stop() }
+        // Every step of a forget runs even if one throws (fail secure), the device's own forget and the other devices'
+        // too (#179 review F1); the first failure is rethrown after the last.
+        val steps = ClearSteps()
+        session?.device?.let { d -> if (forget) steps.step { d.forget() } else d.stop() }
         // Every other device too (one stopped for a deletion, or detached), before the device file and keys go below.
-        if (forget) forgetDevices()
+        if (forget) steps.step { forgetDevices() }
         session = null
         eventsFlow.value = null
         moveFlow.value = null
         refusals.clear()
         if (forget) {
-            // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
-            val steps = ClearSteps()
             steps.step {
                 io {
                     val keys = deviceKeys()
@@ -1227,8 +1228,8 @@ class VaultManager(
                 }
             }
             finishMoveFlow.value = false
-            steps.finish()
         }
+        steps.finish()
     }
 
     @Suppress("TooGenericExceptionCaught")
@@ -1237,27 +1238,31 @@ class VaultManager(
         observer = scope.launch {
             // A collection that ended (a terminal relay error) is started again, with backoff: without it nothing
             // from the vault arrives until the next cold start.
+            // A child of this observer: a restart that failed would end the observer, its event collector too.
             CollectorSupervisor(this, restart = {
-                android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
-                s.device.start(scope)
-                // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
-                if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
-                // §11.14.9: and an unresolved change is checked again.
-                if (phaseFlow.value == AppPhase.Unlocked && local.unresolvedChange != null) changes.kick()
+                surviveEvent("mailbox restart", ::logSurvived, { isActive }) {
+                    android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
+                    s.device.start(scope)
+                    // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
+                    if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
+                    // §11.14.9: and an unresolved change is checked again.
+                    if (phaseFlow.value == AppPhase.Unlocked && local.unresolvedChange != null) changes.kick()
+                }
             }).watch(s.device.collectionEnded)
-            launch { s.device.vaultRefusals.collect { n -> refusals.onRefusals(n, phaseFlow.value) } }
-            launch { s.device.ownerCheckRequired.collect { ownerCheck.onRequired() } }
-            s.device.events.collect { m ->
+            launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
+            launch { s.device.ownerCheckRequired.collectSurviving("owner check required") { ownerCheck.onRequired() } }
+            // A vault.locking or vault.held arrives here (onEvent): one failure on one event never ends the observer.
+            s.device.events.collectSurviving("event") { m ->
                 if (lockNotices.stale(m)) {
                     // The lock before this phone's last unlock (an update's first step, or the lock an unlock of a
                     // running vault makes), relayed late: the vault is open.
                     android.util.Log.i("VaultManager", "dropped a vault.locking from before the last unlock")
-                    return@collect
+                    return@collectSurviving
                 }
                 onEvent(m)
                 // A lock is pending: the vault may be open and still sending, but on this phone it is locked.
                 // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
-                if (!lockGuard.takesEvents()) return@collect
+                if (!lockGuard.takesEvents()) return@collectSurviving
                 try {
                     items.onEvent(m)
                     sharing.onEvent(m)
@@ -1275,27 +1280,31 @@ class VaultManager(
         }
     }
 
+    /** A `vault.locking` (not a stale one): this phone is locked, before anything else of the event is taken. */
+    private fun lockedByNotice() {
+        windowFlow.value = null
+        val p = phaseFlow.value
+        if (p is AppPhase.Unlocked || p is AppPhase.Setup) {
+            phaseFlow.value = AppPhase.Locked
+        } else if (waking.get() > 0 && !lockedHere && p !is AppPhase.SignedOut) {
+            // A process started by the lock's own wake (§14.2 trigger 3) never saw the vault open: the notice is live
+            // (ephemeral, 60 s) and not this phone's lock, which sends no wake.
+            lockedElsewhereFlow.value = true
+        }
+    }
+
     @Suppress("CyclomaticComplexMethod") // one branch per event the app follows
     private suspend fun onEvent(m: VaultMessage) {
+        // The lock first (fail secure): nothing before it that throws may skip it.
+        if (m.type == "vault.locking") lockedByNotice()
         ownerCheck.onEvent(m)
         when (m.type) {
             // §3.6.3: entering the hold ends the credential's unlock window.
             "vault.held" -> windowFlow.value = null
-            "vault.locking" -> {
-                windowFlow.value = null
-                // The vault says it is locking, after this phone's last unlock: a lock of this phone that was in
-                // doubt no longer is. (A notice from before that unlock was dropped; one whose place in time is
-                // not known, because no unlock time is kept, confirms nothing: the status read will.)
-                if (lockNotices.sinceLastOpened(m)) lockKeeper.confirmed()
-                val p = phaseFlow.value
-                if (p is AppPhase.Unlocked || p is AppPhase.Setup) {
-                    phaseFlow.value = AppPhase.Locked
-                } else if (waking.get() > 0 && !lockedHere && p !is AppPhase.SignedOut) {
-                    // A process started by the lock's own wake (§14.2 trigger 3) never saw the vault open: the
-                    // notice is live (ephemeral, 60 s) and not this phone's lock, which sends no wake.
-                    lockedElsewhereFlow.value = true
-                }
-            }
+            // The vault says it is locking, after this phone's last unlock: a lock of this phone that was in doubt no
+            // longer is. (A notice from before that unlock was dropped; one whose place in time is not known, because
+            // no unlock time is kept, confirms nothing: the status read will.)
+            "vault.locking" -> if (lockNotices.sinceLastOpened(m)) lockKeeper.confirmed()
             // §14.2: the gateway reported the token gone, the vault erased the registration; a fresh one is asked for.
             PushWire.TOKEN_NEEDED -> tokenNeededFlow.tryEmit(PushWire.reason(m))
             "credential.alarm" -> {
@@ -3371,7 +3380,7 @@ class VaultManager(
         scope.launch { runCatching { checkKeptTransfer() } }
         // (0.44.0, §11.14.9) An unresolved change from before this start: the unlock's two steps, then the check.
         refreshChangeFlows()
-        scope.launch { changes.check.collect { refreshChangeFlows() } }
+        scope.launch { changes.check.collectSurviving("change check") { refreshChangeFlows() } }
     }
 
     companion object {

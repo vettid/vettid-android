@@ -7,6 +7,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -55,5 +57,64 @@ class RelaySafetyNetTest {
         escape(e)
         assertSame(e, fatal.single())
         assertTrue(relayErrors.isEmpty())
+    }
+
+    // --- The owner's logging rule (2026-10-23): class names only, never a message; frames only in debug builds. ---
+
+    private fun allMessages(t: Throwable, out: MutableList<String> = mutableListOf()): List<String> {
+        out += t.toString()
+        t.cause?.let { allMessages(it, out) }
+        t.suppressed.forEach { allMessages(it, out) }
+        return out
+    }
+
+    @Test
+    fun theRelayLineCarriesNoMessage() {
+        val line = RelaySafetyNet.relayLine(RelayException(403, RelayException.TOKEN_REVOKED, "vault data: Alice"))
+        assertFalse(line.contains("Alice"))
+        assertEquals("relay error not handled: RelayException", line)
+    }
+
+    @Test
+    fun aScrubbedCrashKeepsClassNamesOnlyThroughTheWholeChain() {
+        val io = IOException("secret one", IllegalArgumentException("secret two"))
+        io.addSuppressed(IllegalStateException("secret three"))
+        val crash = CollectorFailure("phase", io)
+        val release = RelaySafetyNet.Scrubbed.of(crash, keepFrames = false)
+        val text = allMessages(release)
+        assertTrue(text.none { it.contains("secret") || it.contains("phase") })
+        assertEquals(
+            listOf(CollectorFailure::class.java.name, IOException::class.java.name, IllegalArgumentException::class.java.name,
+                IllegalStateException::class.java.name),
+            text.map { it.substringAfter(": ") },
+        )
+        assertEquals(0, release.stackTrace.size)
+        assertEquals(0, release.cause!!.stackTrace.size)
+        val debug = RelaySafetyNet.Scrubbed.of(crash, keepFrames = true)
+        assertTrue(allMessages(debug).none { it.contains("secret") })
+        assertTrue(debug.stackTrace.contentEquals(crash.stackTrace))
+    }
+
+    @Test
+    fun aCycleInTheChainEnds() {
+        val a = IllegalStateException("a")
+        val b = IOException("b", a)
+        a.addSuppressed(b)
+        val s = RelaySafetyNet.Scrubbed.of(a, keepFrames = false)
+        assertEquals(1, s.suppressed.size)
+        assertNull(s.suppressed.single().cause)
+    }
+
+    @Test
+    fun theFatalHandlerHandsOnlyTheScrubbedCrashToTheThread() {
+        val got = java.util.concurrent.atomic.AtomicReference<Throwable>()
+        val t = Thread { RelaySafetyNet.crash(keepFrames = false)(IllegalStateException("vault data: Alice")) }
+        t.uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, e -> got.set(e) }
+        t.start()
+        t.join(5_000)
+        val e = got.get()
+        assertTrue(e is RelaySafetyNet.Scrubbed)
+        assertEquals(IllegalStateException::class.java.name, e.message)
+        assertTrue(allMessages(e).none { it.contains("Alice") })
     }
 }

@@ -28,8 +28,13 @@ internal class ClearSteps {
 
     /** After the last step: rethrows the first failure, if any. */
     fun finish() {
-        val f = failure ?: return
+        throw takeFailure() ?: return
+    }
+
+    /** After the last step: the first failure, if any (later ones suppressed), for a caller that acts on it first. */
+    fun takeFailure(): Throwable? {
+        val f = failure
         failure = null
-        throw f
+        return f
     }
 }
