@@ -237,6 +237,29 @@ class ApprovalsViewModelsTest {
         assertFalse(all.uiState.value.canApprove)
     }
 
+    /** §10.12: a tap decides only the share items the screen showed, not one a batch added just before it. */
+    @Test
+    fun aShareDecisionDecidesOnlyTheItemsShown() = runTest {
+        fun item(id: String) = com.vettid.core.data.social.ShareItem(id, id, "medical", "data")
+        val shown = Approval.ShareDecision("r1", "c1", null, listOf(item("i1"), item("i2")), "tagged", now)
+        social.approvals.value = listOf(shown)
+        val vm = detail(shown)
+        advanceUntilIdle()
+        vm.toggleShareItem("i2")
+        // A batch lands before the tap: i3 is in the live question but was never on screen.
+        social.approvals.value = listOf(shown.copy(items = shown.items + item("i3")))
+        advanceUntilIdle()
+        vm.approve(listOf("i1", "i2"))
+        advanceUntilIdle()
+        assertEquals(listOf("i1") to listOf("i2"), social.lastShare)
+        social.approvals.value = listOf(shown.copy(items = shown.items + item("i3")))
+        val other = detail(shown)
+        advanceUntilIdle()
+        other.deny(listOf("i1", "i2"))
+        advanceUntilIdle()
+        assertEquals(emptyList<String>() to listOf("i1", "i2"), social.lastShare)
+    }
+
     /** §10.12: entries ticked one by one, a category answered with the member's item, uses and lifetime chosen. */
     @Test
     fun aGrantIsDecidedEntryByEntry() = runTest {

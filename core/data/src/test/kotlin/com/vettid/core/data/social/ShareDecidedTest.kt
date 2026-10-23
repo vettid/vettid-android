@@ -41,12 +41,16 @@ class ShareDecidedTest {
         error("unexpected credential call ${m.name}")
     } as CredentialRepository
 
+    /** The `ref`s of the feed items a decision marked read. */
+    private val feedReads = mutableListOf<String?>()
+
     private fun TestScope.manager() = SocialManager(
         backgroundScope,
         api = { throw VaultFailure(FailureKind.OTHER) },
         credential = credential,
         store = InMemoryDeviceStateStore(),
         clock = Clock.fixed(now, ZoneOffset.UTC),
+        feedRead = { _, ref, _ -> feedReads += ref },
     )
 
     private fun o(s: String): JsonObject = VaultJson.json.parseToJsonElement(s).jsonObject
@@ -258,5 +262,211 @@ class ShareDecidedTest {
         job.join()
         runCurrent()
         assertEquals(setOf("A", "B"), m.items("r1")?.toSet())
+    }
+
+    // --- VAULT-MESSAGING 0.55.7 §10.12 "Share questions that change while the app reads the lists" ---
+
+    /** Starts a read that returns [r] once [gate] opens. */
+    private fun TestScope.reading(m: SocialManager, r: SocialManager.ListRead, gate: CompletableDeferred<Unit>) =
+        backgroundScope.launch { m.refreshApprovalsFrom(now) { gate.await(); r } }
+
+    /** A read that could not list the shares: the kept events show as they are. */
+    private suspend fun SocialManager.refreshWithoutShares() =
+        refreshApprovalsFrom(now) { SocialManager.ListRead(emptyList(), grantsOk = true, criticalOk = true, sharesOk = false) }
+
+    private suspend fun SocialManager.decideNotFound(rule: String, include: List<String>) {
+        try {
+            decideShareWith(rule, include, emptyList(), both = { throw VaultFailure(FailureKind.NOT_FOUND) }, one = { _, _ -> o("{}") })
+            error("expected not_found")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.NOT_FOUND, e.kind)
+        }
+    }
+
+    /** Rule 1: a decision drops a batch's item only when it was received after that batch; a batch after it asks again. */
+    @Test
+    fun aDecidedItemAskedAgainDuringTheReadStays() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(entry("r1", "A"), entry("r1", "C")), gate)
+        runCurrent()
+        m.decided("r1", """"A"""")
+        m.batch("r1", "A")
+        m.batch("r1", "B")
+        m.decided("r1", """"B"""")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(setOf("A", "C"), m.items("r1")?.toSet())
+    }
+
+    /** Rule 1: decisions for the same subject under another rule count; another subject's do not. */
+    @Test
+    fun decisionsUnderTheSubjectsOtherRuleDropABatchItemInOrder() = runTest {
+        val m = manager()
+        val other = """{"rule_id":"r3","subject":{"connection_id":"c2"},"item_id":"Z","name":"Z","category":"other","sensitivity":"data"}"""
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(entry("r1", "A"), entry("r2", "D"), other), gate)
+        runCurrent()
+        m.batch("r2", "B")
+        m.decided("r1", """"B"""")
+        m.decided("r1", "", """"F"""")
+        m.batch("r2", "F")
+        m.batch("r2", "G")
+        m.decided("r3", """"G"""")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(listOf("A"), m.items("r1"))
+        assertEquals(setOf("D", "F", "G"), m.items("r2")?.toSet())
+        // A read that could not list the shares covers nothing: D, still pending at the vault, stays; B does not return.
+        m.refreshWithoutShares()
+        runCurrent()
+        assertEquals(setOf("D", "F", "G"), m.items("r2")?.toSet())
+    }
+
+    /** Rule 2: a withdrawn item X does not come back with a batch B for a question the read does not list. */
+    @Test
+    fun anUnlistedQuestionKeepsOnlyTheBatchesOfTheRead() = runTest {
+        val m = manager()
+        m.batch("r1", "X")
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(entry("r2", "D")), gate)
+        runCurrent()
+        m.batch("r1", "B")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(listOf("B"), m.items("r1"))
+        // The kept event holds only B too.
+        m.refreshWithoutShares()
+        runCurrent()
+        assertEquals(listOf("B"), m.items("r1"))
+    }
+
+    /** Rule 2: an unlisted question whose batch items were all decided after their batch goes. */
+    @Test
+    fun anUnlistedQuestionWithEveryBatchItemDecidedGoes() = runTest {
+        val m = manager()
+        m.batch("r1", "X")
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(), gate)
+        runCurrent()
+        m.batch("r1", "B")
+        m.decided("r1", """"B"""")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertNull(m.share("r1"))
+        m.refreshWithoutShares()
+        runCurrent()
+        assertNull(m.share("r1"))
+    }
+
+    /** Base rule: for a listed question, an older item the read does not list is not kept (not even in the event). */
+    @Test
+    fun aListedQuestionDropsOlderItemsTheReadDoesNotList() = runTest {
+        val m = manager()
+        m.batch("r1", "X")
+        m.refresh(entry("r1", "A"))
+        runCurrent()
+        assertEquals(listOf("A"), m.items("r1"))
+        m.decided("r1", """"A"""")
+        runCurrent()
+        assertNull(m.share("r1"))
+    }
+
+    /** Rule 3: on not_found the question's noted batches are forgotten; a batch after it counts. */
+    @Test
+    fun aNotFoundDecisionForgetsTheBatchesBeforeIt() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(entry("r1", "A")), gate)
+        runCurrent()
+        m.batch("r1", "B")
+        m.decideNotFound("r1", listOf("B"))
+        m.batch("r1", "C")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(listOf("A", "C"), m.items("r1"))
+    }
+
+    @Test
+    fun aNotFoundDecisionOnAnUnlistedQuestionKeepsOnlyTheLaterBatch() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(), gate)
+        runCurrent()
+        m.batch("r1", "B")
+        m.decideNotFound("r1", listOf("B"))
+        m.batch("r1", "C")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(listOf("C"), m.items("r1"))
+    }
+
+    /** A successful decision does not forget the question's batches: an undecided batch item stays, during and after. */
+    @Test
+    fun aSuccessfulDecisionKeepsAnUndecidedBatchItem() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(entry("r1", "A")), gate)
+        runCurrent()
+        m.batch("r1", "B")
+        m.decide("r1", listOf("A"), """{"included":["A"],"declined":[]}""")
+        runCurrent()
+        assertEquals(listOf("B"), m.items("r1"))
+        // The question is still open: its feed item stays unread.
+        assertTrue(feedReads.isEmpty())
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(listOf("B"), m.items("r1"))
+        m.decide("r1", listOf("B"), """{"included":[],"declined":["B"]}""")
+        runCurrent()
+        assertNull(m.share("r1"))
+        assertEquals(listOf<String?>("r1"), feedReads)
+    }
+
+    /** A read that could not list the shares covers nothing: the questions known from the last read stay. */
+    @Test
+    fun aReadWithoutTheShareListKeepsTheKnownQuestions() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "A"))
+        runCurrent()
+        m.refreshWithoutShares()
+        runCurrent()
+        assertEquals(listOf("A"), m.items("r1"))
+    }
+
+    @Test
+    fun aSuccessfulDecisionOnAnUnlistedQuestionKeepsTheOtherBatchItem() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        val job = reading(m, read(), gate)
+        runCurrent()
+        m.batch("r1", "B")
+        m.batch("r1", "C")
+        m.decide("r1", listOf("B"), """{"included":["B"],"declined":[]}""")
+        gate.complete(Unit)
+        job.join()
+        runCurrent()
+        assertEquals(listOf("C"), m.items("r1"))
+        m.refreshWithoutShares()
+        runCurrent()
+        assertEquals(listOf("C"), m.items("r1"))
+    }
+
+    /** A sent item the answer does not name (the vault did not hold it pending) leaves the question, without a mark. */
+    @Test
+    fun aSentItemTheAnswerDoesNotNameLeavesTheQuestion() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "A"), entry("r1", "B"))
+        runCurrent()
+        m.decide("r1", listOf("A", "B"), """{"included":["A"],"declined":[]}""")
+        runCurrent()
+        assertNull(m.share("r1"))
     }
 }

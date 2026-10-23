@@ -254,7 +254,11 @@ class ApprovalDetailViewModel @Inject constructor(
         s.copy(shareExcluded = if (itemId in s.shareExcluded) s.shareExcluded - itemId else s.shareExcluded + itemId)
     }
 
-    fun approve() {
+    /**
+     * [shown]: for a share decision, the item ids the screen showed when the member tapped. Only those are decided, so a
+     * `share.pending` batch that lands just before the tap is not included or declined unseen (§10.12).
+     */
+    fun approve(shown: List<String>? = null) {
         val s = local.value.copy(approval = uiState.value.approval ?: local.value.approval)
         val a = s.approval ?: return
         if (!s.canApprove) return
@@ -278,7 +282,7 @@ class ApprovalDetailViewModel @Inject constructor(
                     local.update { it.copy(criticalResult = status ?: "ok") }
                 }
                 is Approval.ShareDecision -> {
-                    val ids = a.items.map { it.itemId }
+                    val ids = shown ?: a.items.map { it.itemId }
                     repo.decideShare(a.ruleId, include = ids - s.shareExcluded, decline = ids.filter { it in s.shareExcluded })
                 }
                 is Approval.DeviceRequest -> Unit
@@ -286,7 +290,8 @@ class ApprovalDetailViewModel @Inject constructor(
         }
     }
 
-    fun deny() {
+    /** [shown]: as for [approve]; only the share items the screen showed are declined. */
+    fun deny(shown: List<String>? = null) {
         val a = uiState.value.approval ?: return
         decide {
             when (a) {
@@ -295,7 +300,7 @@ class ApprovalDetailViewModel @Inject constructor(
                 is Approval.Authentication -> repo.denyAuthentication(a.requestId)
                 is Approval.GrantRequest -> repo.decideGrant(a.requestId, approve = false)
                 is Approval.CriticalUse -> repo.denyCriticalUse(a.requestId)
-                is Approval.ShareDecision -> repo.decideShare(a.ruleId, approve = false)
+                is Approval.ShareDecision -> repo.decideShare(a.ruleId, include = emptyList(), decline = shown ?: a.items.map { it.itemId })
                 is Approval.DeviceRequest -> repo.declineDeviceRequest(a.key)
             }
         }
