@@ -205,6 +205,8 @@ class OnboardingViewModel @Inject constructor(
                 SetupStage.VAULT_ELSEWHERE -> if (s.step != OnboardingStep.PROGRESS && !moving) go(OnboardingStep.VAULT_ELSEWHERE)
                 // (A6 audit N3) An enrollment posted before (a lost answer, a crash, a restart): resumed, with no new PIN.
                 SetupStage.ENROLLING -> if (!moving) routeEnrolling(s)
+                // (A6 audit N1) A transfer to this phone that waits for the old phone (after a restart): its screen again.
+                SetupStage.TRANSFER_WAITING -> if (s.step != OnboardingStep.TRANSFER_IN) go(OnboardingStep.TRANSFER_IN)
                 SetupStage.RECOVERING -> if (s.step != OnboardingStep.RECOVER) {
                     state.update { it.copy(step = OnboardingStep.RECOVER, busy = false, error = null) }
                 }

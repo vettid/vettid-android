@@ -481,7 +481,20 @@ fun TransferInContent(
     camera: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val back: () -> Unit = { if (!actions.back()) onLeave() }
-    BackHandler(enabled = state.step != TransferInStep.DONE) { back() }
+    BackHandler(enabled = state.step != TransferInStep.DONE && state.step != TransferInStep.FINISHING_FAILED) { back() }
+    // (A6 audit N1) Cancelling once the code was shown: the old phone may already have approved the move.
+    if (state.confirmCancel) {
+        ConfirmDialog(
+            title = stringResource(R.string.transfer_in_cancel_title),
+            text = stringResource(R.string.transfer_in_cancel_body),
+            confirmLabel = stringResource(R.string.transfer_in_cancel_confirm),
+            onConfirm = actions::confirmCancel,
+            onDismiss = actions::dismissCancel,
+            destructive = true,
+            dismissLabel = stringResource(R.string.transfer_in_keep_waiting),
+            modifier = Modifier.testTag("transfer_cancel_confirm"),
+        )
+    }
     when (state.step) {
         TransferInStep.INTRO -> FormScaffold(
             title = stringResource(R.string.transfer_in_title),
@@ -562,6 +575,8 @@ fun TransferInContent(
             secondaryLabel = stringResource(R.string.transfer_in_cancel),
             onSecondary = actions::cancel,
         ) {
+            // (A6 audit N1) The screen stays on while the member approves on the old phone.
+            KeepScreenOn()
             state.sas?.let { SasBox(it) }
             Spacer(Modifier.height(Spacing.l))
             Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
@@ -592,6 +607,7 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_rejected"),
         ) {}
+        // (A6 audit N1) The 11-minute deadline passed with no approval (after one collect): dropped; a new code.
         TransferInStep.TIMED_OUT -> FormScaffold(
             title = stringResource(R.string.transfer_in_timeout_title),
             body = stringResource(R.string.transfer_in_timeout_body),
@@ -601,6 +617,17 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_timed_out"),
         ) {}
+        // (A6 audit N1) Approved, but the take-over failed: kept, tried again.
+        TransferInStep.FINISHING_FAILED -> FormScaffold(
+            title = stringResource(R.string.transfer_in_finishing_title),
+            body = stringResource(R.string.transfer_in_finishing_body),
+            primaryLabel = stringResource(R.string.transfer_in_again),
+            onPrimary = actions::retryFinish,
+            busy = state.busy,
+            modifier = Modifier.testTag("transfer_finishing_failed"),
+        ) {
+            Failure(state.error, null, shownCode = state.errorShown)
+        }
         TransferInStep.NOT_ANSWERED -> FormScaffold(
             title = stringResource(R.string.transfer_in_no_answer_title),
             body = stringResource(R.string.transfer_in_no_answer),
@@ -610,6 +637,16 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_not_answered"),
         ) {}
+    }
+}
+
+/** (A6 audit N1) Keeps the screen on while it is shown. */
+@Composable
+private fun KeepScreenOn() {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
     }
 }
 

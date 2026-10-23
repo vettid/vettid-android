@@ -508,13 +508,23 @@ interface MoveRepository {
     /**
      * Waits for the old phone's approval, then takes the credential over (`credential.get`,
      * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
-     * [FailureKind.NO_RESPONSE] after 10 minutes. True when the vault gave this phone the member's
+     * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after one collect (A6 audit
+     * N1, VAULT-MESSAGING 0.56.2 §11.14.10 rule 5). True when the vault gave this phone the member's
      * `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), which its unlocks need; false from a vault release
      * before 0.17.0: the transfer is complete, but this phone cannot unlock the vault once it locks.
      */
     suspend fun awaitTransferIn(): Boolean
 
-    /** Drops a transfer this phone started and has not completed. */
+    /**
+     * (A6 audit N1) The transfer to this phone that waits for the old phone's approval (after a restart, or after the
+     * screen was left), or null. Its wait goes on from when its `hs.init` went out.
+     */
+    suspend fun transferInWaiting(): TransferInWaiting? = null
+
+    /**
+     * Drops a transfer this phone started and has not completed. (A6 audit N1) Only on the member's confirmed cancel:
+     * if the old phone already approved it, this phone loses the vault it was receiving.
+     */
     suspend fun abandonTransferIn()
 
     // --- direct transfer, the old phone (§6.7.1) ---
@@ -585,5 +595,11 @@ interface MoveRepository {
 
         /** [transferIn]'s [FailureKind.NO_RESPONSE] code when no `hs.resp` came within [HS_RESP_WAIT_MS]. */
         const val CODE_HS_UNANSWERED = "hs_unanswered"
+
+        /**
+         * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) [awaitTransferIn] reached the 11-minute deadline, and the
+         * one collect after it brought no `device.paired`: the handshake was dropped; a new code is needed.
+         */
+        const val CODE_TRANSFER_DROPPED = "transfer_dropped"
     }
 }

@@ -58,6 +58,12 @@ enum class SetupStage {
      */
     ENROLLING,
 
+    /**
+     * (A6 audit N1) A transfer to this phone whose code was compared (its `hs.fin` sent) waits for the old phone's
+     * approval: after a restart the transfer screen shows the code again and goes on waiting ([MoveRepository.transferInWaiting]).
+     */
+    TRANSFER_WAITING,
+
     /** Enrolled and paired, but the Protean Credential is not created yet (§3.5.7). */
     NEEDS_CREDENTIAL,
 
@@ -328,6 +334,9 @@ data class AttestationInfo(
     val lastRelease: Long,
     val lastReleaseFingerprint: String?,
 )
+
+/** (A6 audit N1) A transfer to this phone waiting for the old phone's approval: its code, and when its `hs.init` went out. */
+data class TransferInWaiting(val sas: String, val startedAt: Instant)
 
 /** Why an action failed, for the UI. */
 enum class FailureKind {
