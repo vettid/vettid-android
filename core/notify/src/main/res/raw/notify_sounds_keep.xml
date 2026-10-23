@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notification sounds are referenced only by resource id in a channel's sound URI: keep them from resource shrinking. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/vettid_general,@raw/vettid_message,@raw/vettid_urgent,@raw/vettid_ringtone" />

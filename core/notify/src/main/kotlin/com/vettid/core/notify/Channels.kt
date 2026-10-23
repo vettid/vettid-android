@@ -3,21 +3,41 @@ package com.vettid.core.notify
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioAttributes
+import android.net.Uri
+import androidx.annotation.RawRes
 
 /**
  * The notification channels (ANDROID-PLAN 0.1.23, Notification modes 6): stable ids, translated names, created at
  * first start; the member changes each in Android settings. Every notification is private on the lock screen
- * ([FeedNotifier]). "Vault updates" (`vault_updates`, 0.1.19) belongs to the app's release notice and keeps its id.
+ * ([FeedNotifier]). "Vault updates" ([VAULT_UPDATES], 0.1.19) belongs to the app's release notice, which creates it.
+ *
+ * Sounds (owner decision 2026-10-23): VettID's own sounds (`res/raw/vettid_*`, sources in `tools/sounds`). Android
+ * fixes a channel's sound when the channel is first created, so every channel whose sound changed got a new id once
+ * (`<id>_v2`); the old ids ([RETIRED]) are deleted at start. Activity and Connection stay silent with their ids.
  */
 object Channels {
-    const val MESSAGES = "messages"
-    const val REQUESTS = "requests"
-    const val CALLS = "calls"
-    const val SECURITY = "security"
-    const val OWNER_CHECK = "owner_check"
+    const val MESSAGES = "messages_v2"
+    const val REQUESTS = "requests_v2"
+    const val CALLS = "calls_v2"
+    const val SECURITY = "security_v2"
+    const val OWNER_CHECK = "owner_check_v2"
     const val ACTIVITY = "activity"
-    const val VAULT_UPDATES = "vault_updates"
+    const val VAULT_UPDATES = "vault_updates_v2"
     const val CONNECTION = "connection"
+
+    /** The ids the channels had before their sounds; deleted at start, never posted to. */
+    val RETIRED = listOf("messages", "requests", "calls", "security", "owner_check", "vault_updates")
+
+    /** Each channel's sound (a raw resource); a channel not named here is silent. */
+    val SOUNDS: Map<String, Int> = mapOf(
+        MESSAGES to R.raw.vettid_message,
+        REQUESTS to R.raw.vettid_urgent,
+        CALLS to R.raw.vettid_ringtone,
+        SECURITY to R.raw.vettid_urgent,
+        OWNER_CHECK to R.raw.vettid_urgent,
+        VAULT_UPDATES to R.raw.vettid_general,
+    )
 
     /** id → (name, description, importance). */
     @Suppress("MaxLineLength") // one channel per row
@@ -31,19 +51,47 @@ object Channels {
         Triple(CONNECTION, R.string.notify_channel_connection to R.string.notify_channel_connection_body, NotificationManager.IMPORTANCE_MIN),
     )
 
+    /** The channels [ensure] creates ([VAULT_UPDATES] is the release notice's own). */
     val ids: List<String> get() = all.map { it.first }
 
-    /** Creates (or renames, in a new language) the channels; the member's own changes to them are kept by Android. */
+    /** Every channel the app posts to. */
+    val allIds: List<String> get() = ids + VAULT_UPDATES
+
+    /**
+     * Deletes the retired ids, then creates (or renames, in a new language) the channels; the member's own changes
+     * to them are kept by Android.
+     */
     fun ensure(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        RETIRED.forEach { runCatching { nm.deleteNotificationChannel(it) } }
         nm.createNotificationChannels(
             all.map { (id, texts, importance) ->
                 NotificationChannel(id, context.getString(texts.first), importance).apply {
                     description = context.getString(texts.second)
                     lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
                     if (id == CONNECTION) setShowBadge(false)
+                    applySound(context, this)
                 }
             },
         )
     }
+
+    /** Sets [channel]'s VettID sound, or none for a channel without one (Android's default would play otherwise). */
+    fun applySound(context: Context, channel: NotificationChannel) {
+        val res = SOUNDS[channel.id]
+        if (res == null) {
+            channel.setSound(null, null)
+        } else {
+            channel.setSound(soundUri(context, res), attributes(channel.id))
+        }
+    }
+
+    /** `android.resource://<package>/<resId>`: the package is the running app's (release, staging, foss, debug). */
+    fun soundUri(context: Context, @RawRes res: Int): Uri = Uri.parse("android.resource://${context.packageName}/$res")
+
+    /** The ringtone rings as a ringtone (ring volume, ringer mode); the other sounds as notifications. */
+    fun attributes(id: String): AudioAttributes = AudioAttributes.Builder()
+        .setUsage(if (id == CALLS) AudioAttributes.USAGE_NOTIFICATION_RINGTONE else AudioAttributes.USAGE_NOTIFICATION)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .build()
 }
