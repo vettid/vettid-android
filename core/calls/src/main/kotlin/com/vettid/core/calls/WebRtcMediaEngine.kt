@@ -1,6 +1,7 @@
 package com.vettid.core.calls
 
 import android.content.Context
+import androidx.annotation.VisibleForTesting
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.call.CallFrames
 import com.vettid.core.crypto.call.CallMedia
@@ -72,7 +73,9 @@ internal object WebRtcRuntime {
  * Everything of the stack is touched on one worker thread. The engine never sees an address it does not pass on
  * and keeps no key: [setKeys] hands the keys to the stack's key provider and wipes them.
  *
- * NOT exercised by unit tests (it needs the native library): the two-phone tests of C1 are its test.
+ * NOT exercised by unit tests (it needs the native library): the two-phone tests of C1 are its test, and
+ * `FrameFormatDeviceTest` (androidTest) runs two engines against each other on one phone and reads every frame they
+ * send.
  */
 @Suppress("TooManyFunctions")
 class WebRtcMediaEngine private constructor(
@@ -95,7 +98,13 @@ class WebRtcMediaEngine private constructor(
     private var installed: MediaSuite? = null
     private var senderCryptor: FrameCryptor? = null
     private var receiverCryptor: FrameCryptor? = null
-    private var transceiver: RtpTransceiver? = null
+
+    /**
+     * The sender id of the transceiver that carries the cryptors. Never the transceiver object itself: every call of
+     * `PeerConnection.getTransceivers` disposes the objects it returned before, so a kept one is dead after the next
+     * look (it is found again by this id).
+     */
+    private var senderId: String? = null
     private var pendingOffer: SessionDescription? = null
     private var found = 0
 
@@ -112,14 +121,15 @@ class WebRtcMediaEngine private constructor(
     @Volatile
     private var receiveState = CryptorState.NEW
 
-    override suspend fun createOffer(): String = on {
+    override suspend fun createOffer(suite: MediaSuite): String = on {
+        check(suite in suites) { "suite ${suite.id} is not one this engine can do" }
         val pc = open(emptyList())
         val t = pc.addTransceiver(
             newTrack(),
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV, listOf(STREAM_ID)),
         )
         opusOnly(t)
-        encrypt(t, suites.first())
+        encrypt(t, suite)
         val created = CompletableDeferred<SessionDescription>()
         pc.createOffer(describing(created), MediaConstraints())
         created
@@ -155,14 +165,15 @@ class WebRtcMediaEngine private constructor(
         on { requireAllMediaEncrypted(checkNotNull(connection) { "no offer" }) }
     }
 
-    override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>): String {
+    override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>, suite: MediaSuite): String {
         val pc = on {
+            check(suite in suites) { "suite ${suite.id} is not one this engine can do" }
             val pc = open(servers)
             // A sender with its track and a receiver exist before the offer is applied (the offer's audio section
             // takes this transceiver), so both cryptors are in place and enabled before any SDP.
             pc.addTrack(newTrack(), listOf(STREAM_ID))
             val t = pc.transceivers.first { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO }
-            encrypt(t, suites.first())
+            encrypt(t, suite)
             pc
         }
         on {
@@ -192,10 +203,11 @@ class WebRtcMediaEngine private constructor(
         try {
             on {
                 MediaLogGuard.check()
-                check(suite in suites) { "suite ${suite.id} is not one this engine can do" }
-                // The cryptors were made for the preferred suite before the answer named one: remade here if it
-                // named another, still before the other side's SDP or any media.
-                if (installed != suite) encrypt(checkNotNull(transceiver) { "no media yet" }, suite)
+                // The cryptors were made for the call's suite before any SDP (createOffer, acceptOffer) and are
+                // never remade: a new cryptor starts disabled, and a disabled one passes clear frames. Keys for
+                // another suite end the call instead (fail closed); nothing is sent or played under them.
+                val made = checkNotNull(installed) { "no media yet" }
+                check(suite == made) { "keys for suite ${suite.id}, cryptors made for suite ${made.id}" }
                 val keys = checkNotNull(provider) { "no media yet" }
                 if (faults.wrongSendKey) for (i in send.indices) send[i] = (send[i].toInt() xor BYTE_MASK).toByte()
                 val taken = keys.setKey(SEND_ID, CallFrames.KEY_INDEX, send) && keys.setKey(RECEIVE_ID, CallFrames.KEY_INDEX, receive)
@@ -278,13 +290,14 @@ class WebRtcMediaEngine private constructor(
      * media ([MediaDiagnostics.cryptorsMoved] says so, for the phone tests).
      */
     private fun adoptOfferedSection(pc: PeerConnection) {
-        val offered = pc.transceivers.firstOrNull { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO && it.mid != null }
+        val all = pc.transceivers
+        val offered = all.firstOrNull { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO && it.mid != null }
         checkNotNull(offered) { "the offer has no audio" }
-        if (offered.sender.id() == transceiver?.sender?.id()) return
-        val stale = transceiver
+        if (offered.sender.id() == senderId) return
+        val stale = all.firstOrNull { it.sender.id() == senderId }
         check(offered.sender.setTrack(track, false)) { "the audio track was refused" }
         offered.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
-        encrypt(offered, installed ?: suites.first())
+        encrypt(offered, checkNotNull(installed) { "no cryptors yet" })
         stale?.stop()
         moved = true
     }
@@ -297,7 +310,7 @@ class WebRtcMediaEngine private constructor(
      */
     private fun requireAllMediaEncrypted(pc: PeerConnection) {
         val live = pc.transceivers.filterNot { it.isStopped }
-        val mine = transceiver?.sender?.id()
+        val mine = senderId
         if (live.size != 1 || mine == null || live[0].sender.id() != mine) {
             throw MediaNotEncryptedException("${live.size} media sections")
         }
@@ -325,7 +338,7 @@ class WebRtcMediaEngine private constructor(
         provider?.dispose()
         val keys = keyProvider(suite)
         provider = keys
-        transceiver = t
+        senderId = t.sender.id()
         installed = suite
         val aesGcm = FrameCryptorAlgorithm.AES_GCM
         senderCryptor = FrameCryptorFactory.createFrameCryptorForRtpSender(factory, t.sender, SEND_ID, aesGcm, keys).apply {
@@ -425,14 +438,22 @@ class WebRtcMediaEngine private constructor(
 
     companion object {
         /**
-         * What this media stack can do: the 128-bit suite. The 256-bit suite joins this list when the library has
-         * the key provider's key-size option (webrtc-sdk/webrtc PR #302) and [keyProvider] passes it.
+         * What this media stack can do, in [MediaSuite.PREFERENCE] order: AES-256-GCM and AES-128-GCM frames. The
+         * key provider takes the frame key's length since `io.github.webrtc-sdk:android` 150.7871.04
+         * (webrtc-sdk/webrtc PR #302), and [keyProvider] passes each suite's ([frameKeyBits]). Both derivations and
+         * the frame format are checked against the native library on phones (`FrameFormatDeviceTest`).
+         *
+         * What a call **offers** and **chooses** is this list cut down further by the call's form (VAULT-MESSAGING
+         * §10.10 "Call forms", rules 1 and 3): every `call.start` that carries form 1 offers suite 1 only
+         * (`MediaSuite.formOne`, `CallSignalling.offerable`), until form 1 is retired.
          */
-        val SUITES: List<MediaSuite> = listOf(MediaSuite.AES_128_GCM)
+        val SUITES: List<MediaSuite> = listOf(MediaSuite.AES_256_GCM, MediaSuite.AES_128_GCM)
 
         /** Decryption failures after which the receiver reports DECRYPTION_FAILED (about a fifth of a second of audio). */
         const val FAILURE_TOLERANCE = 10
         private const val KEY_RING = 1
+        private const val AES_128_BITS = 128
+        private const val AES_256_BITS = 256
         private const val BYTE_MASK = 0xFF
         private const val STREAM_ID = "vettid"
         private const val TRACK_ID = "audio0"
@@ -442,11 +463,10 @@ class WebRtcMediaEngine private constructor(
         /**
          * Per-participant keys (one per direction), HKDF with the suite's frame label as salt, no automatic
          * ratchet, no "unencrypted" magic trailer (a frame that does not decrypt is never played), a key ring of
-         * one (docs/calls/CALL-MEDIA.md §4).
+         * one, and the suite's frame-key length (docs/calls/CALL-MEDIA.md §4).
          */
-        private fun keyProvider(suite: MediaSuite): FrameCryptorKeyProvider {
-            // This library version derives 128-bit frame keys whatever it is given: it can do no other suite.
-            check(suite == MediaSuite.AES_128_GCM) { "suite ${suite.id}" }
+        internal fun keyProvider(suite: MediaSuite): FrameCryptorKeyProvider {
+            check(suite in SUITES) { "suite ${suite.id}" }
             return FrameCryptorFactory.createFrameCryptorKeyProvider(
                 false,
                 suite.frameLabel.toByteArray(Charsets.US_ASCII),
@@ -456,7 +476,19 @@ class WebRtcMediaEngine private constructor(
                 KEY_RING,
                 true,
                 FrameCryptorKeyDerivationAlgorithm.HKDF,
+                frameKeyBits(suite),
             )
+        }
+
+        /**
+         * The key provider's `keySize` for [suite]: its frame key's length in bits. Only 128 and 256 pass: the
+         * library takes **any other value as 128 without a word** (`KeyProviderOptions::frame_key_bits`), so no
+         * value it would quietly turn into another suite ever reaches it.
+         */
+        internal fun frameKeyBits(suite: MediaSuite): Int {
+            val bits = suite.frameKeySize * Byte.SIZE_BITS
+            check(bits == AES_128_BITS || bits == AES_256_BITS) { "suite ${suite.id}: a frame key of $bits bits" }
+            return bits
         }
 
         /**
@@ -479,6 +511,14 @@ class WebRtcMediaEngine private constructor(
             tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
             turnPortPrunePolicy = PeerConnection.PortPrunePolicy.PRUNE_BASED_ON_PRIORITY
         }
+
+        /**
+         * FOR THE DEVICE TEST ONLY: an engine on a stack the test built itself (one whose packets it can read).
+         * Nothing in the app calls it; [factory] is the only way an app gets an engine.
+         */
+        @VisibleForTesting
+        internal fun onStack(stack: PeerConnectionFactory, audioDevice: JavaAudioDeviceModule): WebRtcMediaEngine =
+            WebRtcMediaEngine(stack, audioDevice, false, MediaFaults())
 
         /** A factory of engines for [context]'s process. Creating an engine loads the native library if needed. */
         fun factory(context: Context): MediaEngineFactory = object : MediaEngineFactory {

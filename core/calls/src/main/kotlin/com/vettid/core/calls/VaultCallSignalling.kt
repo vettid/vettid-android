@@ -113,7 +113,7 @@ internal class VaultCallSignalling(
             ringing[call.callId] = call
             while (ringing.size > MAX_KEPT) ringing.remove(ringing.keys.first())
         }
-        return SignalEvent.Offer(call.callId, call.connectionId, call.sdp, call.exp, call.ringFor, call.ice.servers)
+        return SignalEvent.Offer(call.callId, call.connectionId, call.sdp, call.exp, call.ringFor, call.ice.servers, call.negotiated.chosen)
     }
 
     /** Rule 2. */

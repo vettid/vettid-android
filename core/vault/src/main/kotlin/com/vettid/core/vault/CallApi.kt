@@ -258,8 +258,11 @@ private fun checkSdp(sdp: String) {
 }
 
 /**
- * `call.start`: places a call to [connectionId] with this device's SDP offer [sdp]; [suites], what this device's
- * media engine can do, are added to it here, the preferred one first. A fresh `call_id` and ephemeral KEM key, the
+ * `call.start`: places a call to [connectionId] with this device's SDP offer [sdp]; of [suites], what this device's
+ * media engine can do, those form 1 may offer ([MediaSuite.formOne]: suite 1) are added to it here, the preferred
+ * one first. This start carries a form 1 signature, so rule 3 applies to it; it applies equally to a later (C2)
+ * start that carries form 2 as well: no second suite while any `call.start` carries form 1, i.e. until form 1 is
+ * retired (VAULT-MESSAGING "Mixed releases"). A fresh `call_id` and ephemeral KEM key, the
  * share signed with the device's identity key. Deposited once and awaited for [timeout]. Errors
  * ([VaultOpException]): `busy` (this vault is already in a call), `not_found`, `connection_unavailable`,
  * `owner_check_required`, `exists`, `bad_request`, `internal`, and `unsupported_type` from a vault release without
@@ -276,7 +279,7 @@ suspend fun VaultApi.callStart(
     timeout: Duration = CallLimits.START_TIMEOUT,
 ): OutgoingCall {
     val callId = device.newId()
-    val offered = checked("media suites") { CallMedia.offerOf(suites) }
+    val offered = checked("media suites") { CallMedia.offerOf(MediaSuite.formOne(suites)) }
     val offer = CallMedia.sdpWithOffer(sdp, offered)
     checkSdp(offer)
     val key = CallWire.newOfferKey()
@@ -318,7 +321,8 @@ suspend fun VaultApi.callStart(
  * Checks a `call.offer` event, in this order: the shape and sizes; that the offer has not expired; the vault-signed
  * ICE configuration; `peer_ik` against [pinnedFingerprint] (the connection's identity as the app shows it); the
  * caller's share under `peer_ik`; the SDP's one Opus audio section; the media suites, of which one must be among
- * [suites] (what this device's media engine can do). Throws [CallMessageException] for an offer that must not
+ * [suites] (what this device's media engine can do) as form 1 allows ([MediaSuite.formOne]: suite 1, so a form 1
+ * offer without suite 1 does not ring). Throws [CallMessageException] for an offer that must not
  * ring: nothing of it is used, and nothing is sent.
  */
 @OptIn(MadeByCallApi::class)
@@ -342,7 +346,7 @@ fun VaultApi.callIncoming(
     }
     val ice = iceOf(o, callId)
     verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek), pinnedFingerprint)
-    val negotiated = checked("media suites") { CallMedia.choose(CallMedia.offeredIn(sdp), suites) }
+    val negotiated = checked("media suites") { CallMedia.choose(CallMedia.offeredIn(sdp), MediaSuite.formOne(suites)) }
     return IncomingCall(callId, o.need("connection_id"), media, CallMedia.sdpWithout(sdp), exp, ringFor, ice, negotiated, ek)
 }
 

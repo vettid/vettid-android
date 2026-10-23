@@ -7,14 +7,16 @@ CALLING-SERVICE §7; §9 lists the edits. It replaces the C0 spike's `C0-FRAME-F
 findings about the media stack are kept in §5–§8.
 
 Marks: **[S]** read from the media stack's source, **[I]** inferred, **[D]** confirmed on two phones in the C0 test
-(2026-10-12, Pixel 7 and Pixel 10 Pro), **[P]** proposed here.
+(2026-10-12, Pixel 7 and Pixel 10 Pro) and, for both suites on 150.7871.04, by `FrameFormatDeviceTest` (:core:calls
+androidTest; 2026-10-23, the same two phones: real engines' frames read off the wire and opened in Kotlin, Kotlin's
+frames played by the native receiver), **[P]** proposed here.
 
 ## 1. Summary
 
 | | |
 |---|---|
 | Call key | `k_call`, 32 bytes, agreed between the two devices (VAULT-MESSAGING §10.10; unchanged) |
-| Media suite | a number from one closed registry (§2). **1 = AES-128-GCM frames**, the suite of every call today; **2 = AES-256-GCM frames**, registered, offered by no engine yet |
+| Media suite | a number from one closed registry (§2). **1 = AES-128-GCM frames**, the suite of every call today; **2 = AES-256-GCM frames**, which the engine can do (media stack 150.7871.04) but form 1 neither offers nor chooses: it is not offered while any `call.start` carries form 1, i.e. until form 1 is retired (VAULT-MESSAGING "Mixed releases"; form 2's key confirmation is necessary but not sufficient) |
 | Negotiation | in the SDP: the caller lists its suites in order of preference, the answerer names one (§2.1) |
 | Downgrade protection | the choice and the caller's whole list are in the key derivation: after a changed attribute nothing is heard, on any suite; audio may be sent under the weaker suite's keys until the failure is seen (§2.2) |
 | SDP shape | exactly one media section: audio, Opus alone; anything else is refused before the media stack sees it (§2.1, §7) |
@@ -31,10 +33,15 @@ and versioned: a number is never reused or redefined, and a device uses only sui
 | id | Frame cipher | Frame key | KDF | Label of the direction keys | Label of the frame key | Transport | State |
 |---|---|---|---|---|---|---|---|
 | 1 | AES-GCM, the media stack's frame-cryptor format (§5) | 128 bits | HKDF-SHA-256 | `vettid/vms/2/call-media` | `vettid/vms/2/call-frame` | DTLS-SRTP as the stack negotiates it; no post-quantum DTLS required | **in use** |
-| 2 | the same format | 256 bits | HKDF-SHA-256 | `vettid/vms/2/call-media` | `vettid/vms/2/call-frame` | the same | **registered, not offered**: the stack's key provider derives 128-bit keys only until a release carries its 256-bit option (webrtc-sdk/webrtc PR #302). Its frame-key derivation (§4 with L = 32) is to be confirmed against that release before an engine offers it |
+| 2 | the same format | 256 bits | HKDF-SHA-256 | `vettid/vms/2/call-media` | `vettid/vms/2/call-frame` | the same | **the engine can do it; not offered in form 1**: the stack's key provider takes the key size since `io.github.webrtc-sdk:android` 150.7871.04 (webrtc-sdk/webrtc PR #302); the frame-key derivation (§4 with L = 32) and the frame format are confirmed against that release **[D]**. Not offered while any `call.start` carries form 1, i.e. until form 1 is retired (§2.2; VAULT-MESSAGING "Call forms", rules 1 and 3, and "Mixed releases"): form 2's key confirmation is necessary but not sufficient |
 
 What a device **offers** is the registry cut down to what its media engine can do, in the registry's order of
-preference (2 before 1). Today every engine can do suite 1 only. Adding a suite is a registry entry and the
+preference (2 before 1), and further by the call's form: in form 1 (the SDP attribute of §2.1, which nothing
+signs) a device offers and chooses suite 1 only (`MediaSuite.formOne`), and that holds for every `call.start` that
+carries a form 1 signature, a C2 start that also carries form 2 included. This app's engine can do 2 and 1; every
+call it makes is on suite 1 until form 1 is retired. A device makes its frame cryptors for the call's suite
+before any SDP (the caller: the first suite it offers; the callee: the one it chose) and never remakes them: keys
+for another suite end the call. Adding a suite is a registry entry and the
 engine's capability (for suite 2: the key provider's key-size parameter); the negotiation, the derivation and the
 signalling do not change. "Transport" is part of the suite so that a later suite can require, for example, a
 post-quantum DTLS key exchange: an engine whose transport cannot meet a suite's expectation does not offer it. No
@@ -135,9 +142,10 @@ call_id   the call's id (a ULID), as in the signalling
 
 ## 4. The frame cryptor's configuration and the frame key
 
-The media stack is `io.github.webrtc-sdk:android:150.7871.01` (AAR SHA-256 `0a1627b1…79b0`); its frame cryptor is
-`api/crypto/frame_crypto_transformer.{h,cc}` of `webrtc-sdk/webrtc` at `73cb8180` **[S]**. The same C++ is wrapped
-by the family's iOS/macOS, desktop and Rust builds.
+The media stack is `io.github.webrtc-sdk:android:150.7871.04` (AAR SHA-256 `1872dda4…c84c`); its frame cryptor is
+`api/crypto/frame_crypto_transformer.{h,cc}` of `webrtc-sdk/webrtc` at `a545de45` (`m150_release`; webrtc-build's
+`WEBRTC_COMMIT` for 150.7871.04) **[S]**. The same C++ is wrapped by the family's iOS/macOS, desktop and Rust
+builds. (Until this version: 150.7871.01, `0a1627b1…79b0`, from `73cb8180`.)
 
 Key provider options, fixed for every platform **[P]**:
 
@@ -160,10 +168,17 @@ id only selects a key in the provider: it is not in the frame and not in any der
 frame_key = HKDF-SHA-256(ikm = k_dir, salt = the suite's frame-key label, info = 128 bytes of 0x00, L = 16 (suite 1) | 32 (suite 2))
 ```
 
-In the library release in use the length 16 is a literal (`SetKeyFromMaterial`), whatever the length of the
-material **[S]**, **[D]** (the C0 self-check compared the native output with this derivation): that is suite 1.
-AES-256-GCM exists in the code but cannot be reached through the key provider **[S]**; upstream PR #302 adds a key
-size to `createFrameCryptorKeyProvider` (128 by default). Suite 2 is that option, once a release has it.
+L is the key provider's `keySize` (`createFrameCryptorKeyProvider(…, keySize)`, upstream PR #302, in the library
+since 150.7871.04) divided by 8: 128 for suite 1, 256 for suite 2 **[S]**, **[D]**. The library takes **any value
+other than 256 as 128, without an error** (`KeyProviderOptions::frame_key_bits`) **[S]**, so the engine passes only
+128 or 256 and refuses anything else (`WebRtcMediaEngine.frameKeyBits`). The AES-GCM key length picks the cipher:
+16 bytes AES-128-GCM, 32 bytes AES-256-GCM **[S]**. Two consequences of the shared salt and info: for one `k_dir`,
+the suite-1 frame key is the first 16 bytes of the suite-2 one; but `k_dir` itself differs between suites (the
+chosen suite is in its derivation, §3), so no two calls' frame keys are related this way.
+
+The library's ratchet (not used: `ratchetWindowSize` 0, and nothing calls `ratchetKey`) derives new material as
+`HKDF-SHA-256(material, frame-key label, 128 zero bytes, L = 32)` whatever the suite, then the frame key from it with
+the suite's L **[S]**, **[D]**.
 
 ## 5. The encrypted frame [S] [D]
 
@@ -188,7 +203,9 @@ out      = header || sealed || iv || 0x0C || key_index                          
 
 - **Suite 1 has 128-bit frame keys.** `k_call` comes from MLKEM768X25519 (NIST category 3); AES-128 is category 1,
   so the frame cipher is the weakest part of a call's confidentiality. The owner accepted it for a first
-  production release of calls (2026-10-12); suite 2 follows when the media stack can do it (§2).
+  production release of calls (2026-10-12). The engine can do suite 2 (§2); calls use it once form 1 is retired
+  (form 2's key confirmation alone is not enough: every `call.start` carries form 1 while S10-era vaults and apps
+  exist).
 - **The IV is deterministic.** It is unique under a key while (SSRC, RTP timestamp) does not repeat with the same
   counter value: within one RTP stream until the timestamp wraps (about 24.8 hours of Opus at 48 kHz). One key per
   direction removes the cross-sender case. **A device SHOULD end a call 12 hours after it was answered**
@@ -205,8 +222,10 @@ out      = header || sealed || iv || 0x0C || key_index                          
 
 ## 7. Rules for an implementation
 
-1. **Never enable the media stack's logging.** Both key derivations log the input key, the salt and the derived key
-   at severity INFO **[S]**. No `Logging.enableLogToDebugOutput`, no injectable logger, in any build. (C0: nothing
+1. **Never enable the media stack's logging.** Up to 150.7871.01 both key derivations logged the input key, the
+   salt and the derived key at severity INFO **[S]**; from 150.7871.04 (upstream #311) they log sizes only, at
+   VERBOSE, and the key texts are gone from the binary **[S]**. The rule stands for any version: no
+   `Logging.enableLogToDebugOutput`, no injectable logger, in any build. (C0, and 2026-10-23 on 150.7871.04: no key
    in `logcat` with logging off **[D]**.)
 2. **Both cryptors are created and enabled before any SDP is applied**, and never disabled during a call: a
    disabled cryptor passes clear audio in both directions **[S]**. A sender cryptor needs its track first (it
@@ -278,7 +297,7 @@ by this module (`CallVectorsTest`) and independently with Python's `hmac` and `c
 | offered `1`, chosen `1`: `k_dir("callee")` | `8e8b93784e37abb2257c2d42e47a0839e5aee933610f511c218199ebb7da637e` |
 | … its frame key | `81e8788d323103611d582bd089af9be4` |
 | offered `2 1`, chosen `2`: `k_dir("caller")` | `129e7ea015351c448613b72d821141780fbc2681c9562f2b47894d999c609617` |
-| … its frame key (suite 2, 32 bytes; provisional, §2) | `e2637ed9e4ab88d26b3f34869104e58d355e1eb7b6c5b7d3aea521bda4fd83da` |
+| … its frame key (suite 2, 32 bytes; frames of the native library under this `k_dir` open under it **[D]**) | `e2637ed9e4ab88d26b3f34869104e58d355e1eb7b6c5b7d3aea521bda4fd83da` |
 | offered `2 1`, chosen `1`: `k_dir("caller")` | `eb7c3d3b7c0d8d3a42b85e908c9f9dbf5b76a56a11e91d0e9138134c7328aec0` |
 
 One audio frame under the first frame key: frame `78797a7b7c7d7e7f808182838485868788898a8b` (20 bytes, the first
