@@ -41,12 +41,16 @@ class ShareDecidedTest {
         error("unexpected credential call ${m.name}")
     } as CredentialRepository
 
+    /** The `ref`s of the feed items a decision marked read. */
+    private val feedReads = mutableListOf<String?>()
+
     private fun TestScope.manager() = SocialManager(
         backgroundScope,
         api = { throw VaultFailure(FailureKind.OTHER) },
         credential = credential,
         store = InMemoryDeviceStateStore(),
         clock = Clock.fixed(now, ZoneOffset.UTC),
+        feedRead = { _, ref, _ -> feedReads += ref },
     )
 
     private fun o(s: String): JsonObject = VaultJson.json.parseToJsonElement(s).jsonObject
@@ -315,10 +319,10 @@ class ShareDecidedTest {
         runCurrent()
         assertEquals(listOf("A"), m.items("r1"))
         assertEquals(setOf("D", "F", "G"), m.items("r2")?.toSet())
-        // The kept event of r2 lost B too.
+        // A read that could not list the shares covers nothing: D, still pending at the vault, stays; B does not return.
         m.refreshWithoutShares()
         runCurrent()
-        assertEquals(setOf("F", "G"), m.items("r2")?.toSet())
+        assertEquals(setOf("D", "F", "G"), m.items("r2")?.toSet())
     }
 
     /** Rule 2: a withdrawn item X does not come back with a batch B for a question the read does not list. */
@@ -414,10 +418,27 @@ class ShareDecidedTest {
         m.decide("r1", listOf("A"), """{"included":["A"],"declined":[]}""")
         runCurrent()
         assertEquals(listOf("B"), m.items("r1"))
+        // The question is still open: its feed item stays unread.
+        assertTrue(feedReads.isEmpty())
         gate.complete(Unit)
         job.join()
         runCurrent()
         assertEquals(listOf("B"), m.items("r1"))
+        m.decide("r1", listOf("B"), """{"included":[],"declined":["B"]}""")
+        runCurrent()
+        assertNull(m.share("r1"))
+        assertEquals(listOf<String?>("r1"), feedReads)
+    }
+
+    /** A read that could not list the shares covers nothing: the questions known from the last read stay. */
+    @Test
+    fun aReadWithoutTheShareListKeepsTheKnownQuestions() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "A"))
+        runCurrent()
+        m.refreshWithoutShares()
+        runCurrent()
+        assertEquals(listOf("A"), m.items("r1"))
     }
 
     @Test

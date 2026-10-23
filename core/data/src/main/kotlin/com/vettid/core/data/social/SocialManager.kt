@@ -858,7 +858,11 @@ class SocialManager(
         val since = beginRead()
         try {
             val r = read()
-            val listed = synchronized(readLock) { shareChangesSince(r.listed, since).also { listedFlow.value = it } }
+            val listed = synchronized(readLock) {
+                // A list the vault did not answer covers nothing: what was known of it stays (§10.12).
+                val kept = listedFlow.value.filterNot { covered(it, r) }
+                (shareChangesSince(r.listed, since) + kept).also { listedFlow.value = it }
+            }
             // The lists are authoritative for what they cover: drop decided or expired requests kept from events.
             val keys = listed.map { it.key }.toSet()
             val listedItems = listed.filterIsInstance<Approval.ShareDecision>()
@@ -869,11 +873,9 @@ class SocialManager(
                     events = l.events.mapNotNull { e ->
                         val p = parsed(e) ?: return@mapNotNull null
                         val exp = p.exp
-                        val stale = (p is Approval.GrantRequest && r.grantsOk) || (p is Approval.CriticalUse && r.criticalOk) ||
-                            (p is Approval.ShareDecision && r.sharesOk)
                         when {
                             exp != null && !exp.isAfter(t) -> null
-                            !stale -> e
+                            !covered(p, r) -> e
                             p is Approval.ShareDecision -> withItems(e, keptItems(p, listedItems[p.key], since, subjects))
                             p.key in keys -> e
                             else -> null
@@ -887,11 +889,16 @@ class SocialManager(
         nowFlow.value = t
     }
 
+    /** Whether [a] is of a list [r] read: the vault answered that list, so it says what of it is still asked. */
+    private fun covered(a: Approval, r: ListRead): Boolean =
+        (a is Approval.GrantRequest && r.grantsOk) || (a is Approval.CriticalUse && r.criticalOk) ||
+            (a is Approval.ShareDecision && r.sharesOk)
+
     // --- share changes during a read (§10.12) ---
 
     private class ShareMark(val at: Int, val subject: String?, val ruleId: String, val ids: Set<String>)
 
-    private class ShareBatch(val at: Int, val key: String, val subject: String, val items: List<ShareItem>)
+    private class ShareBatch(val at: Int, val key: String, val items: List<ShareItem>)
 
     private val readLock = Any()
     private var changes = 0
@@ -912,7 +919,7 @@ class SocialManager(
     private fun noteBatch(batch: Approval.ShareDecision) = synchronized(readLock) {
         changes++
         if (readSinces.isNotEmpty()) {
-            batchLog += ShareBatch(changes, batch.key, ShareQuestions.subjectKey(batch), batch.items)
+            batchLog += ShareBatch(changes, batch.key, batch.items)
             if (batchLog.size > MAX_LOG) batchLog.removeAt(0)
         }
     }
@@ -967,8 +974,7 @@ class SocialManager(
         val (marks, batches) = synchronized(readLock) {
             decidedLog.filter { it.at > since } to batchLog.filter { it.at > since && it.key == d.key }
         }
-        val known = subjects + batches.associate { it.key.removePrefix("share:") to it.subject }
-        val mine = marksFor(marks, d.ruleId, ShareQuestions.subjectKey(d), known)
+        val mine = marksFor(marks, d.ruleId, ShareQuestions.subjectKey(d), subjects)
         return listed.orEmpty() + batchItems(batches, mine).map { it.itemId }
     }
 
@@ -1041,8 +1047,9 @@ class SocialManager(
     private suspend fun decide(key: String, block: suspend (VaultApi) -> Unit) = decideRun(key) { vaultGuard { block(api()) } }
 
     /**
-     * [whole]: a decision answers the whole request, which goes. A share decision ([decideShareWith]) is not whole: only
-     * the items the vault's answer names leave, so an item a batch added meanwhile stays (§10.12 rule 1).
+     * [whole]: a decision answers the whole request, which goes and its feed item is read. A share decision
+     * ([decideShareWith]) is not whole: only the items the vault's answer names leave, so an item a batch added meanwhile
+     * stays (§10.12 rule 1), and the feed item is read only once the question is gone.
      */
     private suspend fun decideRun(key: String, whole: Boolean = true, run: suspend () -> Unit) {
         try {
@@ -1059,8 +1066,8 @@ class SocialManager(
         if (whole) {
             dropApproval(key)
             listedFlow.update { l -> l.filterNot { it.key == key } }
+            decided(key)
         }
-        decided(key)
     }
 
     /** Deciding an ask marks its feed item read (ANDROID-PLAN 0.1.23, §9 question 2). */
@@ -1231,6 +1238,9 @@ class SocialManager(
         // only; that is not a decision, so nothing is noted for a read on its way.
         val ignored = (include + decline).toSet() - done
         if (ignored.isNotEmpty()) removeShareItems(ignored, { it.ruleId == ruleId })
+        // The feed item is read only when nothing of the question is left (a batch may have added an item meanwhile).
+        val key = "share:$ruleId"
+        if (listedFlow.value.none { it.key == key } && storedFlow.value.none { keyOf(it) == key }) decided(key)
     }
 
     override suspend fun declineDeviceRequest(key: String) {
