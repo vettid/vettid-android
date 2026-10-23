@@ -1588,6 +1588,9 @@ class VaultDeviceTest {
 
             // The device's own SDP is held to the same shape.
             assertTrue(runCatching { api.callStart("conn-1", sdp + "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n") }.exceptionOrNull() is CallMessageException)
+            // Guard: a form 1 `call.start` never offers anything but [1]. An engine of suite 2 alone has nothing
+            // form 1 may offer: refused before anything leaves.
+            assertTrue(runCatching { api.callStart("conn-1", sdp, listOf(MediaSuite.AES_256_GCM)) }.exceptionOrNull() is CallMessageException)
             assertNull("nothing left the phone", deposits.poll(300, TimeUnit.MILLISECONDS))
         }
     }

@@ -41,7 +41,9 @@ enum class MediaSuite(
      * AES-256-GCM frames in the same format, with a 32-byte frame key. The media stack can do it since
      * `io.github.webrtc-sdk:android` 150.7871.04 (its key provider's key size, webrtc-sdk/webrtc PR #302); the
      * derivation and the format were checked against that library on two phones (`FrameFormatDeviceTest` in
-     * :core:calls). **Not offered or chosen in form 1** ([MediaSuite.formOne]): it needs key confirmation (form 2).
+     * :core:calls). **Not offered or chosen in form 1** ([MediaSuite.formOne]), and so not offered while any
+     * `call.start` carries form 1, i.e. until form 1 is retired (VAULT-MESSAGING "Mixed releases"): form 2's key
+     * confirmation is necessary but not sufficient.
      */
     AES_256_GCM(2, FrameCipher.AES_GCM, 32, HKDF_SHA_256, LABEL_MEDIA, LABEL_FRAME, false),
     ;
@@ -56,9 +58,10 @@ enum class MediaSuite(
         /**
          * What [supported] may offer or choose in **form 1** (the SDP attribute of [CallMedia], which nothing signs):
          * suite 1 only, or nothing if [supported] lacks it. VAULT-MESSAGING §10.10 "Call forms", rules 1 and 3: a
-         * second suite is offered and chosen only with key confirmation before microphone audio (form 2, C2), which
-         * form 1 has none of; so a device whose engine can do suite 2 still offers `1` and answers `1` in form 1, and
-         * does not ring for a form 1 offer without suite 1.
+         * device whose engine can do suite 2 still offers `1` and answers `1` in form 1, and does not ring for a
+         * form 1 offer without suite 1. Rule 3 covers **every** `call.start` that carries a form 1 signature, a C2
+         * start that also carries form 2 included: no second suite is offered while any `call.start` carries form 1,
+         * i.e. until form 1 is retired ("Mixed releases"). Form 2's key confirmation is necessary but not sufficient.
          */
         fun formOne(supported: Collection<MediaSuite>): List<MediaSuite> = supported.filter { it == AES_128_GCM }
 

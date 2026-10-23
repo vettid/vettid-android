@@ -69,7 +69,9 @@ class CallMediaTest {
 
     @Test
     fun formOneOffersAndChoosesSuiteOneOnly() {
-        // VAULT-MESSAGING §10.10 "Call forms", rules 1 and 3: no second suite without key confirmation (form 2).
+        // VAULT-MESSAGING §10.10 "Call forms", rules 1 and 3: no second suite is offered or chosen while any
+        // `call.start` carries form 1, i.e. until form 1 is retired ("Mixed releases"); key confirmation (form 2) is
+        // necessary but not sufficient.
         assertEquals(listOf(s1), MediaSuite.formOne(listOf(s2, s1)))
         assertEquals(listOf(s1), MediaSuite.formOne(MediaSuite.entries))
         assertEquals(emptyList<MediaSuite>(), MediaSuite.formOne(listOf(s2)))

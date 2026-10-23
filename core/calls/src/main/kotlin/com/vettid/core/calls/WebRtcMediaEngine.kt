@@ -102,7 +102,7 @@ class WebRtcMediaEngine private constructor(
     /**
      * The sender id of the transceiver that carries the cryptors. Never the transceiver object itself: every call of
      * `PeerConnection.getTransceivers` disposes the objects it returned before, so a kept one is dead after the next
-     * look ([carrier] finds it again).
+     * look (it is found again by this id).
      */
     private var senderId: String? = null
     private var pendingOffer: SessionDescription? = null
@@ -121,14 +121,15 @@ class WebRtcMediaEngine private constructor(
     @Volatile
     private var receiveState = CryptorState.NEW
 
-    override suspend fun createOffer(): String = on {
+    override suspend fun createOffer(suite: MediaSuite): String = on {
+        check(suite in suites) { "suite ${suite.id} is not one this engine can do" }
         val pc = open(emptyList())
         val t = pc.addTransceiver(
             newTrack(),
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV, listOf(STREAM_ID)),
         )
         opusOnly(t)
-        encrypt(t, suites.first())
+        encrypt(t, suite)
         val created = CompletableDeferred<SessionDescription>()
         pc.createOffer(describing(created), MediaConstraints())
         created
@@ -164,14 +165,15 @@ class WebRtcMediaEngine private constructor(
         on { requireAllMediaEncrypted(checkNotNull(connection) { "no offer" }) }
     }
 
-    override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>): String {
+    override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>, suite: MediaSuite): String {
         val pc = on {
+            check(suite in suites) { "suite ${suite.id} is not one this engine can do" }
             val pc = open(servers)
             // A sender with its track and a receiver exist before the offer is applied (the offer's audio section
             // takes this transceiver), so both cryptors are in place and enabled before any SDP.
             pc.addTrack(newTrack(), listOf(STREAM_ID))
             val t = pc.transceivers.first { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO }
-            encrypt(t, suites.first())
+            encrypt(t, suite)
             pc
         }
         on {
@@ -201,12 +203,11 @@ class WebRtcMediaEngine private constructor(
         try {
             on {
                 MediaLogGuard.check()
-                check(suite in suites) { "suite ${suite.id} is not one this engine can do" }
-                // The cryptors were made for the preferred suite before the answer named one: remade here if it
-                // named another (a form 1 call always names suite 1), before any media, on the same sender and
-                // receiver. Until the new provider has its keys the sender sends nothing and the receiver plays
-                // nothing (FrameFormatDeviceTest reads the frames of exactly this path).
-                if (installed != suite) encrypt(carrier(checkNotNull(connection) { "no media yet" }), suite)
+                // The cryptors were made for the call's suite before any SDP (createOffer, acceptOffer) and are
+                // never remade: a new cryptor starts disabled, and a disabled one passes clear frames. Keys for
+                // another suite end the call instead (fail closed); nothing is sent or played under them.
+                val made = checkNotNull(installed) { "no media yet" }
+                check(suite == made) { "keys for suite ${suite.id}, cryptors made for suite ${made.id}" }
                 val keys = checkNotNull(provider) { "no media yet" }
                 if (faults.wrongSendKey) for (i in send.indices) send[i] = (send[i].toInt() xor BYTE_MASK).toByte()
                 val taken = keys.setKey(SEND_ID, CallFrames.KEY_INDEX, send) && keys.setKey(RECEIVE_ID, CallFrames.KEY_INDEX, receive)
@@ -296,7 +297,7 @@ class WebRtcMediaEngine private constructor(
         val stale = all.firstOrNull { it.sender.id() == senderId }
         check(offered.sender.setTrack(track, false)) { "the audio track was refused" }
         offered.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
-        encrypt(offered, installed ?: suites.first())
+        encrypt(offered, checkNotNull(installed) { "no cryptors yet" })
         stale?.stop()
         moved = true
     }
@@ -317,10 +318,6 @@ class WebRtcMediaEngine private constructor(
             throw MediaNotEncryptedException("frame encryption is off")
         }
     }
-
-    /** The transceiver that carries the cryptors, as a live object (see [senderId]). */
-    private fun carrier(pc: PeerConnection): RtpTransceiver =
-        checkNotNull(pc.transceivers.firstOrNull { senderId != null && it.sender.id() == senderId }) { "no media yet" }
 
     /** Offers Opus alone: nothing else can be negotiated. */
     private fun opusOnly(t: RtpTransceiver) {
@@ -447,8 +444,8 @@ class WebRtcMediaEngine private constructor(
          * the frame format are checked against the native library on phones (`FrameFormatDeviceTest`).
          *
          * What a call **offers** and **chooses** is this list cut down further by the call's form (VAULT-MESSAGING
-         * §10.10 "Call forms", rules 1 and 3): a form 1 call, the only form this build sends, is suite 1
-         * (`MediaSuite.formOne`).
+         * §10.10 "Call forms", rules 1 and 3): every `call.start` that carries form 1 offers suite 1 only
+         * (`MediaSuite.formOne`, `CallSignalling.offerable`), until form 1 is retired.
          */
         val SUITES: List<MediaSuite> = listOf(MediaSuite.AES_256_GCM, MediaSuite.AES_128_GCM)
 

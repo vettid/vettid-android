@@ -16,7 +16,7 @@ frames played by the native receiver), **[P]** proposed here.
 | | |
 |---|---|
 | Call key | `k_call`, 32 bytes, agreed between the two devices (VAULT-MESSAGING §10.10; unchanged) |
-| Media suite | a number from one closed registry (§2). **1 = AES-128-GCM frames**, the suite of every call today; **2 = AES-256-GCM frames**, which the engine can do (media stack 150.7871.04) but form 1 neither offers nor chooses: it waits for key confirmation (form 2, C2) |
+| Media suite | a number from one closed registry (§2). **1 = AES-128-GCM frames**, the suite of every call today; **2 = AES-256-GCM frames**, which the engine can do (media stack 150.7871.04) but form 1 neither offers nor chooses: it is not offered while any `call.start` carries form 1, i.e. until form 1 is retired (VAULT-MESSAGING "Mixed releases"; form 2's key confirmation is necessary but not sufficient) |
 | Negotiation | in the SDP: the caller lists its suites in order of preference, the answerer names one (§2.1) |
 | Downgrade protection | the choice and the caller's whole list are in the key derivation: after a changed attribute nothing is heard, on any suite; audio may be sent under the weaker suite's keys until the failure is seen (§2.2) |
 | SDP shape | exactly one media section: audio, Opus alone; anything else is refused before the media stack sees it (§2.1, §7) |
@@ -33,12 +33,15 @@ and versioned: a number is never reused or redefined, and a device uses only sui
 | id | Frame cipher | Frame key | KDF | Label of the direction keys | Label of the frame key | Transport | State |
 |---|---|---|---|---|---|---|---|
 | 1 | AES-GCM, the media stack's frame-cryptor format (§5) | 128 bits | HKDF-SHA-256 | `vettid/vms/2/call-media` | `vettid/vms/2/call-frame` | DTLS-SRTP as the stack negotiates it; no post-quantum DTLS required | **in use** |
-| 2 | the same format | 256 bits | HKDF-SHA-256 | `vettid/vms/2/call-media` | `vettid/vms/2/call-frame` | the same | **the engine can do it; not offered in form 1**: the stack's key provider takes the key size since `io.github.webrtc-sdk:android` 150.7871.04 (webrtc-sdk/webrtc PR #302); the frame-key derivation (§4 with L = 32) and the frame format are confirmed against that release **[D]**. Offered and chosen only with key confirmation (§2.2; VAULT-MESSAGING "Call forms", rules 1 and 3) |
+| 2 | the same format | 256 bits | HKDF-SHA-256 | `vettid/vms/2/call-media` | `vettid/vms/2/call-frame` | the same | **the engine can do it; not offered in form 1**: the stack's key provider takes the key size since `io.github.webrtc-sdk:android` 150.7871.04 (webrtc-sdk/webrtc PR #302); the frame-key derivation (§4 with L = 32) and the frame format are confirmed against that release **[D]**. Not offered while any `call.start` carries form 1, i.e. until form 1 is retired (§2.2; VAULT-MESSAGING "Call forms", rules 1 and 3, and "Mixed releases"): form 2's key confirmation is necessary but not sufficient |
 
 What a device **offers** is the registry cut down to what its media engine can do, in the registry's order of
 preference (2 before 1), and further by the call's form: in form 1 (the SDP attribute of §2.1, which nothing
-signs) a device offers and chooses suite 1 only (`MediaSuite.formOne`). This app's engine can do 2 and 1; every
-call it makes today is form 1, so on suite 1. Adding a suite is a registry entry and the
+signs) a device offers and chooses suite 1 only (`MediaSuite.formOne`), and that holds for every `call.start` that
+carries a form 1 signature, a C2 start that also carries form 2 included. This app's engine can do 2 and 1; every
+call it makes is on suite 1 until form 1 is retired. A device makes its frame cryptors for the call's suite
+before any SDP (the caller: the first suite it offers; the callee: the one it chose) and never remakes them: keys
+for another suite end the call. Adding a suite is a registry entry and the
 engine's capability (for suite 2: the key provider's key-size parameter); the negotiation, the derivation and the
 signalling do not change. "Transport" is part of the suite so that a later suite can require, for example, a
 post-quantum DTLS key exchange: an engine whose transport cannot meet a suite's expectation does not offer it. No
@@ -200,8 +203,9 @@ out      = header || sealed || iv || 0x0C || key_index                          
 
 - **Suite 1 has 128-bit frame keys.** `k_call` comes from MLKEM768X25519 (NIST category 3); AES-128 is category 1,
   so the frame cipher is the weakest part of a call's confidentiality. The owner accepted it for a first
-  production release of calls (2026-10-12). The engine can do suite 2 (§2); calls use it once they carry key
-  confirmation (form 2).
+  production release of calls (2026-10-12). The engine can do suite 2 (§2); calls use it once form 1 is retired
+  (form 2's key confirmation alone is not enough: every `call.start` carries form 1 while S10-era vaults and apps
+  exist).
 - **The IV is deterministic.** It is unique under a key while (SSRC, RTP timestamp) does not repeat with the same
   counter value: within one RTP stream until the timestamp wraps (about 24.8 hours of Opus at 48 kHz). One key per
   direction removes the cross-sender case. **A device SHOULD end a call 12 hours after it was answered**

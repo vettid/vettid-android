@@ -53,8 +53,8 @@ import kotlin.concurrent.thread
  * the RTP payload, which is the frame cryptor's output, can be read. They reach each other only through [Relay], a
  * UDP relay on this phone's own IPv4 address, which records every RTP packet and can replace its payload. Each engine
  * is driven exactly as a call drives it (createOffer, startGathering, acceptOffer, setKeys, acceptAnswer), so the
- * frames are those of the production path: the cryptors are made for the preferred suite (2) when the SDP is made,
- * and remade by setKeys when the call is on suite 1.
+ * frames are those of the production path: the cryptors are made for the call's suite when the SDP is made and are
+ * never remade (keys for another suite are refused: [keysForAnotherSuiteAreRefusedAndNothingIsSent]).
  *
  * Its own APK (`com.vettid.core.calls.test`): it touches no installed VettID app. Microphone and speaker are muted
  * in the stack: the frames carry silence. Keys in the log are the specification's TEST ONLY vectors; random keys
@@ -91,7 +91,7 @@ class FrameFormatDeviceTest {
     }
 
     @Test
-    fun suite1FramesAreAes128GcmUnderTheSpecificationsFrameKeyAfterTheCryptorsWereRemade() {
+    fun suite1FramesAreAes128GcmUnderTheSpecificationsFrameKey() {
         val kCaller = hex(VECTOR_K_DIR_SUITE1)
         assertEquals(VECTOR_FRAME_KEY_SUITE1, Bytes.hex(CallFrames.frameKey(kCaller, s1)))
         val kCallee = key()
@@ -101,7 +101,7 @@ class FrameFormatDeviceTest {
             val vectorKey = hex(VECTOR_FRAME_KEY_SUITE1)
             assertTrue(c.relay.fromA.all { CallFrames.open(vectorKey, it.payload, CallFrames.AUDIO_CLEAR_SIZE) != null })
             c.receivedOk()
-            report("suite 1 (cryptors remade from 2 by setKeys): $a; $b")
+            report("suite 1: $a; $b")
         }
     }
 
@@ -139,10 +139,11 @@ class FrameFormatDeviceTest {
     }
 
     @Test
-    fun aSuite1SenderAndASuite2ReceiverHearNothing() {
+    fun mismatchedSuitesHearNothingInEitherDirection() {
         val kCaller = key()
         val kCallee = key()
-        // Same direction keys; the caller set them for suite 2, the callee for suite 1.
+        // Same direction keys; the caller's engine is made and keyed for suite 2, the callee's for suite 1: a suite-2
+        // sender to a suite-1 receiver and a suite-1 sender to a suite-2 receiver.
         call(s2, s1, kCaller, kCallee) { c ->
             c.await { CryptorState.DECRYPTION_FAILED in c.receiveStates(c.eventsA) && CryptorState.DECRYPTION_FAILED in c.receiveStates(c.eventsB) }
             val a = frames("mismatch, caller (suite 2)", c.relay.fromA, kCaller, s2)
@@ -153,6 +154,21 @@ class FrameFormatDeviceTest {
                 assertFalse("nothing decrypted: $states", CryptorState.OK in states)
             }
             report("mismatch: $a; $b; both receivers DECRYPTION_FAILED, never OK")
+        }
+    }
+
+    /**
+     * The engine never remakes its cryptors: an engine made for suite 2 refuses keys for suite 1, and its sender
+     * (made, enabled, never given a key) puts no frame on the wire while the other side's media flows.
+     */
+    @Test
+    fun keysForAnotherSuiteAreRefusedAndNothingIsSent() {
+        val kCaller = key()
+        val kCallee = key()
+        call(s2, s2, kCaller, kCallee, keySuiteA = s1) { c ->
+            val b = frames("refused, callee", c.relay.fromB, kCallee, s2)
+            assertEquals("the caller's sender sent nothing: ${c.summary(c.eventsA)}", 0, c.relay.fromA.size)
+            report("keys for suite 1 refused by an engine made for suite 2; caller frames on the wire: 0; $b")
         }
     }
 
@@ -210,6 +226,10 @@ class FrameFormatDeviceTest {
             }
         }
 
+        fun summary(events: List<MediaEvent>) =
+            "${events.size} events, send ${sendStates(events)}, receive ${receiveStates(events)}, " +
+                "connection ${events.filterIsInstance<MediaEvent.Connection>().map { it.state }}"
+
         fun await(condition: () -> Boolean) = runBlocking {
             withTimeoutOrNull(EVENT_WAIT_MS) {
                 while (!condition()) delay(POLL_MS)
@@ -224,8 +244,10 @@ class FrameFormatDeviceTest {
         kCaller: ByteArray,
         kCallee: ByteArray,
         rewriteAtoB: ((Rtp) -> ByteArray?)? = null,
+        keySuiteA: MediaSuite = suiteA,
         verify: (Call) -> Unit,
     ) = runBlocking {
+        val callerKeyed = keySuiteA == suiteA
         val relay = Relay(rewriteAtoB)
         val c = Call(relay)
         val a = engine()
@@ -235,11 +257,12 @@ class FrameFormatDeviceTest {
             launch(Dispatchers.IO) { b.events.collect { c.eventsB += it } },
         )
         try {
-            val offer = a.createOffer()
+            val offer = a.createOffer(suiteA)
             a.startGathering(emptyList())
-            val answer = b.acceptOffer(offer, emptyList())
+            val answer = b.acceptOffer(offer, emptyList(), suiteB)
             b.setKeys(suiteB, kCallee.copyOf(), kCaller.copyOf())
-            a.setKeys(suiteA, kCaller.copyOf(), kCallee.copyOf())
+            val keyed = runCatching { a.setKeys(keySuiteA, kCaller.copyOf(), kCallee.copyOf()) }
+            assertEquals("the caller's keys are taken only for the suite its cryptors were made for", callerKeyed, keyed.isSuccess)
             a.acceptAnswer(answer)
             withTimeoutOrNull(EVENT_WAIT_MS) {
                 while (c.eventsA.none { it is MediaEvent.GatheringDone } || c.eventsB.none { it is MediaEvent.GatheringDone }) delay(POLL_MS)
@@ -251,10 +274,13 @@ class FrameFormatDeviceTest {
             b.addRemoteCandidates(listOf(forB!!))
             a.addRemoteCandidates(listOf(forA!!))
             withTimeoutOrNull(EVENT_WAIT_MS) {
-                while (relay.fromA.size < MIN_FRAMES || relay.fromB.size < MIN_FRAMES) delay(POLL_MS)
+                while ((callerKeyed && relay.fromA.size < MIN_FRAMES) || relay.fromB.size < MIN_FRAMES) delay(POLL_MS)
             }
-            assertTrue("caller frames on the wire: ${relay.fromA.size}; ${c.eventsA}", relay.fromA.size >= MIN_FRAMES)
-            assertTrue("callee frames on the wire: ${relay.fromB.size}; ${c.eventsB}", relay.fromB.size >= MIN_FRAMES)
+            // Counts and cryptor states only: the events also hold candidate addresses.
+            if (callerKeyed) {
+                assertTrue("caller frames on the wire: ${relay.fromA.size}; ${c.summary(c.eventsA)}", relay.fromA.size >= MIN_FRAMES)
+            }
+            assertTrue("callee frames on the wire: ${relay.fromB.size}; ${c.summary(c.eventsB)}", relay.fromB.size >= MIN_FRAMES)
             verify(c)
         } finally {
             a.close()

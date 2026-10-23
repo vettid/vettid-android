@@ -260,7 +260,9 @@ private fun checkSdp(sdp: String) {
 /**
  * `call.start`: places a call to [connectionId] with this device's SDP offer [sdp]; of [suites], what this device's
  * media engine can do, those form 1 may offer ([MediaSuite.formOne]: suite 1) are added to it here, the preferred
- * one first. A fresh `call_id` and ephemeral KEM key, the
+ * one first. This start carries a form 1 signature, so rule 3 applies to it; it applies equally to a later (C2)
+ * start that carries form 2 as well: no second suite while any `call.start` carries form 1, i.e. until form 1 is
+ * retired (VAULT-MESSAGING "Mixed releases"). A fresh `call_id` and ephemeral KEM key, the
  * share signed with the device's identity key. Deposited once and awaited for [timeout]. Errors
  * ([VaultOpException]): `busy` (this vault is already in a call), `not_found`, `connection_unavailable`,
  * `owner_check_required`, `exists`, `bad_request`, `internal`, and `unsupported_type` from a vault release without
