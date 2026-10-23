@@ -4,13 +4,15 @@ package com.vettid.core.calls
 class MediaLoggingException(what: String, cause: Throwable? = null) : IllegalStateException("media stack logging: $what", cause)
 
 /**
- * Keeps key material out of logs. The media stack's key derivation logs its input key, its salt and the derived key
- * at severity INFO (docs/calls/CALL-MEDIA.md §7.1, read from the library's source; the texts are in the shipped
- * binary). They are printed only if something switches the stack's logging on, so nothing in this app ever does:
+ * Keeps key material out of logs. Up to 150.7871.01 the media stack's key derivation logged its input key, its salt
+ * and the derived key at severity INFO (docs/calls/CALL-MEDIA.md §7.1, read from the library's source; the texts
+ * were in the shipped binary); 150.7871.04 logs sizes only, but a stack's logging is still nothing a call wants, so
+ * nothing in this app ever switches it on:
  *
  * - no code names any of the stack's ways to log, trace or record ([FORBIDDEN]; `MediaGuardsTest` reads every
  *   source file of the repository for them). That list is every such entry point found in the pinned artifact's
- *   classes (`javap` over the AAR, 2026-10-12), including the ones [check] cannot see: a
+ *   classes (`javap` over the AAR, 2026-10-12; 150.7871.04 changes no logging class or entry point, 2026-10-23),
+ *   including the ones [check] cannot see: a
  *   `CallSessionFileRotatingLogSink` adds a native file sink at any severity without touching the two switches,
  *   and the event log, the echo-canceller dump and the sample callbacks write a call's metadata or its raw audio;
  * - [check] looks at the stack's own switches before the stack is started and again before every key is set, and

@@ -581,12 +581,12 @@ abstract class CallsApkCheck : DefaultTask() {
     companion object {
         const val LIBRARY = "libjingle_peerconnection_so.so"
 
-        /** The four libraries inside `io.github.webrtc-sdk:android:150.7871.01` (AAR SHA-256 `0a1627b1…79b0`, core/calls). */
+        /** The four libraries inside `io.github.webrtc-sdk:android:150.7871.04` (AAR SHA-256 `1872dda4…c84c`, core/calls). */
         val NATIVE_SHA256 = mapOf(
-            "arm64-v8a" to "7b299113fcd743de7dc5559686b21fc2681b2c8598347d8dc0743d2e004995ca",
-            "armeabi-v7a" to "762f3d5e1c4c69c3f02f2383540f40e1142cb631e9d99e86bdb1602f4c277559",
-            "x86_64" to "0717afcc43da0c1aabd904f9ef0653efc8f3d37b5750f39a123697e7910b623a",
-            "x86" to "80e7b1b7e07bb5a53841a8cacabf942a6f3eb8ee9759a1731741dd912f367f19",
+            "arm64-v8a" to "2b561520298d9fec3e216baf58a53fbddf4a46dfd247880cbc3821875ed20200",
+            "armeabi-v7a" to "5415e7a02ce83e983329575e7c2e46b8ced6c75baea3c41aa52b5699ccb54eda",
+            "x86_64" to "b87bbb6d6c81c50f04538cd809575de633a789cc3555af2c5eb6ec414b148908",
+            "x86" to "9a532ef72dcda8b4b9874d4f578dbd3a5eb18bce01f9f91bee883bc0962dce3c",
         )
 
         /** Type descriptors: the media stack's, and :core:calls' own. */

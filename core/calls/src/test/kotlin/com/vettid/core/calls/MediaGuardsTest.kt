@@ -71,8 +71,12 @@ class MediaGuardsTest {
     }
 
     @Test
-    fun theShippedEngineOffersTheSuiteItsLibraryCanDo() {
-        assertEquals(listOf(MediaSuite.AES_128_GCM), WebRtcMediaEngine.SUITES)
+    fun theShippedEngineCanDoBothSuitesInTheRegistrysOrder() {
+        assertEquals(listOf(MediaSuite.AES_256_GCM, MediaSuite.AES_128_GCM), WebRtcMediaEngine.SUITES)
+        assertEquals(MediaSuite.PREFERENCE, MediaSuite.ordered(WebRtcMediaEngine.SUITES))
+        // The key provider's keySize: exactly 128 or 256, the only values the library does not quietly read as 128.
+        assertEquals(128, WebRtcMediaEngine.frameKeyBits(MediaSuite.AES_128_GCM))
+        assertEquals(256, WebRtcMediaEngine.frameKeyBits(MediaSuite.AES_256_GCM))
         assertNull("the stack is not started by loading the class", WebRtcRuntime.dtlsPqcTrial)
         assertEquals("WebRTC-EnableDtlsPqc/Enabled/", WebRtcRuntime.DTLS_PQC_TRIAL)
     }

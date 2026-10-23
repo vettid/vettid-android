@@ -67,7 +67,10 @@ class MediaNotEncryptedException(what: String) : IllegalStateException("media no
  * - [setKeys] takes the keys into the stack and wipes the arrays it was given.
  */
 interface MediaEngine {
-    /** The suites this engine can encrypt with ([MediaSuite.PREFERENCE] order): what the device offers and accepts. */
+    /**
+     * The suites this engine can encrypt with ([MediaSuite.PREFERENCE] order): what the device offers and accepts,
+     * cut down by the call's form (form 1: suite 1 only, `MediaSuite.formOne`).
+     */
     val suites: List<MediaSuite>
 
     /** One collector (the call). Events from the moment the engine exists are kept for it. */

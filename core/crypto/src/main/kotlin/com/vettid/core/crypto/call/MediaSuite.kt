@@ -38,10 +38,10 @@ enum class MediaSuite(
     AES_128_GCM(1, FrameCipher.AES_GCM, 16, HKDF_SHA_256, LABEL_MEDIA, LABEL_FRAME, false),
 
     /**
-     * AES-256-GCM frames in the same format. **No engine offers it yet**: the media stack's key provider derives
-     * 128-bit keys only until a release carries its 256-bit option (webrtc-sdk/webrtc PR #302). Registered so that
-     * the number is fixed and the negotiation is tested with it; its frame-key derivation is confirmed against the
-     * library when an engine first offers it.
+     * AES-256-GCM frames in the same format, with a 32-byte frame key. The media stack can do it since
+     * `io.github.webrtc-sdk:android` 150.7871.04 (its key provider's key size, webrtc-sdk/webrtc PR #302); the
+     * derivation and the format were checked against that library on two phones (`FrameFormatDeviceTest` in
+     * :core:calls). **Not offered or chosen in form 1** ([MediaSuite.formOne]): it needs key confirmation (form 2).
      */
     AES_256_GCM(2, FrameCipher.AES_GCM, 32, HKDF_SHA_256, LABEL_MEDIA, LABEL_FRAME, false),
     ;
@@ -50,8 +50,17 @@ enum class MediaSuite(
         /** Every registered suite, the preferred one first. */
         val PREFERENCE: List<MediaSuite> = listOf(AES_256_GCM, AES_128_GCM)
 
-        /** What a device offers when its engine says nothing else: the suites the shipped media stack can do. */
+        /** What a device offers when its engine says nothing else: suite 1, what every engine can do and all form 1 allows. */
         val DEFAULT: List<MediaSuite> = listOf(AES_128_GCM)
+
+        /**
+         * What [supported] may offer or choose in **form 1** (the SDP attribute of [CallMedia], which nothing signs):
+         * suite 1 only, or nothing if [supported] lacks it. VAULT-MESSAGING §10.10 "Call forms", rules 1 and 3: a
+         * second suite is offered and chosen only with key confirmation before microphone audio (form 2, C2), which
+         * form 1 has none of; so a device whose engine can do suite 2 still offers `1` and answers `1` in form 1, and
+         * does not ring for a form 1 offer without suite 1.
+         */
+        fun formOne(supported: Collection<MediaSuite>): List<MediaSuite> = supported.filter { it == AES_128_GCM }
 
         /** The suite with this number, or null for a number this build does not know. */
         fun byId(id: Int): MediaSuite? = entries.firstOrNull { it.id == id }

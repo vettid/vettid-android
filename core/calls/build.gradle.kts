@@ -12,9 +12,10 @@ plugins {
 }
 
 // The media stack is a prebuilt binary from Maven Central (four native libraries in an AAR). A pinned version is not
-// a pinned file: the build refuses any other bytes than the ones that were inspected (C0 spike, draft PR #123). The
-// four native libraries inside it are pinned again in the APK (app/build.gradle.kts, CallsApkCheck).
-val webrtcAarSha256 = "0a1627b1a48c2bc17d9a40d62fc47bd45166f44a311e95917f147c402de379b0"
+// a pinned file: the build refuses any other bytes than the ones that were inspected (150.7871.01: C0 spike, draft
+// PR #123; 150.7871.04, built from webrtc-sdk/webrtc a545de45: the PR that moved to it). The four native libraries
+// inside it are pinned again in the APK (app/build.gradle.kts, CallsApkCheck).
+val webrtcAarSha256 = "1872dda4e3bf7d6ea6f7c6e11861332081c57081a1e62fc82fab72415c69c84c"
 val webrtcAar = configurations.detachedConfiguration(
     dependencies.create(libs.webrtc.sdk.get().let { "${it.module}:${it.version}@aar" }),
 ).apply { isTransitive = false }
@@ -59,4 +60,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // FrameFormatDeviceTest: the native frame cryptor against CallFrames, on a phone (its own test APK).
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

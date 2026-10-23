@@ -60,11 +60,23 @@ class CallMediaTest {
         assertEquals(16, s1.frameKeySize)
         assertEquals(32, s2.frameKeySize)
         assertEquals(listOf(s2, s1), MediaSuite.PREFERENCE)
-        assertEquals("only what the shipped media stack can do is offered by default", listOf(s1), MediaSuite.DEFAULT)
+        assertEquals("suite 1 by default: what every engine can do and all form 1 allows", listOf(s1), MediaSuite.DEFAULT)
         assertTrue(MediaSuite.entries.none { it.pqDtlsRequired })
         assertEquals(listOf(2, 1), CallMedia.offerOf(setOf(s1, s2)))
         assertEquals(listOf(1), CallMedia.offerOf(listOf(s1)))
         assertThrows(CryptoException.Suite::class.java) { CallMedia.offerOf(emptyList()) }
+    }
+
+    @Test
+    fun formOneOffersAndChoosesSuiteOneOnly() {
+        // VAULT-MESSAGING §10.10 "Call forms", rules 1 and 3: no second suite without key confirmation (form 2).
+        assertEquals(listOf(s1), MediaSuite.formOne(listOf(s2, s1)))
+        assertEquals(listOf(s1), MediaSuite.formOne(MediaSuite.entries))
+        assertEquals(emptyList<MediaSuite>(), MediaSuite.formOne(listOf(s2)))
+        assertEquals(listOf(1), CallMedia.offerOf(MediaSuite.formOne(listOf(s2, s1))))
+        assertThrows(CryptoException.Suite::class.java) { CallMedia.offerOf(MediaSuite.formOne(listOf(s2))) }
+        assertEquals(CallMedia.Negotiated(s1, listOf(2, 1)), CallMedia.choose(listOf(2, 1), MediaSuite.formOne(listOf(s2, s1))))
+        assertThrows(CryptoException.Suite::class.java) { CallMedia.choose(listOf(2), MediaSuite.formOne(listOf(s2, s1))) }
     }
 
     @Test

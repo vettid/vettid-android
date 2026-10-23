@@ -12,10 +12,11 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * The frame encryption of the AES-GCM media suites ([MediaSuite]), written out in Kotlin (docs/calls/CALL-MEDIA.md;
  * read from webrtc-sdk/webrtc `api/crypto/frame_crypto_transformer.{h,cc}` at commit 73cb8180, the source of
- * `io.github.webrtc-sdk:android:150.7871.01`). The app never encrypts media with this: the media stack's native
- * frame cryptor does. It exists so that the format has an executable description with test vectors that another
- * platform can reproduce, and so that a build can check on a phone that the native library does what the document
- * says.
+ * `io.github.webrtc-sdk:android:150.7871.01`, and again at a545de45, the source of 150.7871.04, which adds the
+ * key provider's key size: the format is unchanged). The app never encrypts media with this: the media stack's
+ * native frame cryptor does. It exists so that the format has an executable description with test vectors that
+ * another platform can reproduce, and so that a phone can check that the native library does what the document
+ * says (`FrameFormatDeviceTest` in :core:calls).
  */
 object CallFrames {
     const val TAG_SIZE = 16

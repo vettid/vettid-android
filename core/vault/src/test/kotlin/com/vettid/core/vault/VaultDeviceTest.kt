@@ -1499,7 +1499,8 @@ class VaultDeviceTest {
             val api = VaultApi(d)
             val peer = CallPeer()
 
-            val starting = async(Dispatchers.IO) { api.callStart("conn-1", sdp) }
+            // An engine that can do suites 2 and 1: form 1 offers suite 1 only (VAULT-MESSAGING "Call forms", rule 3).
+            val starting = async(Dispatchers.IO) { api.callStart("conn-1", sdp, MediaSuite.entries) }
             val req = v.open(nextDeposit().second)
             assertEquals("call.start", req.type)
             assertNull(req.exp)
@@ -1646,10 +1647,14 @@ class VaultDeviceTest {
             val good = d.awaitEvent("call.offer")
             assertThrows(CallMessageException::class.java) { api.callIncoming(good, other.pinned) }
             assertThrows(CallMessageException::class.java) { api.callIncoming(good, "") }
-            // A device that can do suites 2 and 1 answers a `2 1` offer with 2, fixed before it rings.
+            // A device that can do suites 2 and 1 answers a form 1 `2 1` offer with 1, fixed before it rings, and
+            // does not ring for a form 1 offer of suite 2 alone (VAULT-MESSAGING "Call forms", rule 1).
             d.handle(v.seal("call.offer", offer(offerSdp = CallMedia.sdpWithOffer(sdp, listOf(2, 1)))))
             val two = api.callIncoming(d.awaitEvent("call.offer"), peer.pinned, MediaSuite.entries)
-            assertEquals(CallMedia.Negotiated(MediaSuite.AES_256_GCM, listOf(2, 1)), two.negotiated)
+            assertEquals(CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(2, 1)), two.negotiated)
+            d.handle(v.seal("call.offer", offer(offerSdp = CallMedia.sdpWithOffer(sdp, listOf(2)))))
+            val onlyTwo = d.awaitEvent("call.offer")
+            assertThrows(CallMessageException::class.java) { api.callIncoming(onlyTwo, peer.pinned, MediaSuite.entries) }
 
             d.handle(v.seal("call.offer", offer()))
             val call = api.callIncoming(d.awaitEvent("call.offer"), peer.pinned)
