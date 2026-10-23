@@ -1,6 +1,7 @@
 package com.vettid.app
 
 import android.app.Activity
+import android.content.Context
 import android.os.Bundle
 import com.vettid.app.di.AppScope
 import com.vettid.app.distribution.DistributionApplication
@@ -11,6 +12,7 @@ import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.CrashScrubber
 import com.vettid.core.data.wipe.AndroidWipeTargets
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.notify.Channels
@@ -71,6 +73,16 @@ class VettIdApplication : DistributionApplication() {
      */
     @Inject
     lateinit var calls: CallAccess
+
+    /**
+     * The first app code of every process of the app (before any content provider and before [onCreate]): a crash
+     * from here on reaches Android's handler with class names and stack frames only, never a message (the owner's
+     * rule, 2026-10-23; [CrashScrubber]).
+     */
+    override fun attachBaseContext(base: Context) {
+        CrashScrubber.install()
+        super.attachBaseContext(base)
+    }
 
     override fun onCreate() {
         // Before injection, so before anything reads local state: a wipe of a replaced phone that the process did
