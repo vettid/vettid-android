@@ -873,11 +873,19 @@ class VaultManager(
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             var previous: AppPhase = AppPhase.Starting
-            phaseFlow.collect {
+            // Locked or signed out: no item metadata and no feed item is kept outside an open vault, and no connection
+            // or message in memory either.
+            val lockClears = LockClears(
+                listOf({ social.forgetOpenVault() }, { attachments.clear() }, { items.clear() }, { sharing.clear() }, { feed.clear() }),
+            )
+            // The only place a lock clears these: one failure on one phase never ends this collector (surviveEvent).
+            phaseFlow.asStateFlow().collectSurviving("phase") {
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
                 previous = it
-                replayHeldBack(heldBack.release(it))
+                // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
+                val steps = ClearSteps()
+                steps.step { replayHeldBack(heldBack.release(it)) }
                 if (it == AppPhase.Unlocked) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
@@ -889,17 +897,7 @@ class VaultManager(
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
                 }
-                // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
-                val steps = ClearSteps()
-                if (it != AppPhase.Unlocked && it != AppPhase.Starting) {
-                    // Locked or signed out: no item metadata and no feed item is kept outside an open vault, and
-                    // no connection or message in memory either.
-                    steps.step { social.forgetOpenVault() }
-                    steps.step { attachments.clear() }
-                    steps.step { items.clear() }
-                    steps.step { sharing.clear() }
-                    steps.step { feed.clear() }
-                }
+                lockClears.onPhase(it, steps)
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 steps.step {
                     when (OwnProfileStep.onPhase(it)) {
@@ -912,11 +910,11 @@ class VaultManager(
             }
         }
         // The feed's owner-check items are the shell's notices (one source, ANDROID-PLAN 0.1.23, 6).
-        scope.launch { feed.items.collect { ownerCheck.onFeed(it) } }
+        scope.launch { feed.items.collectSurviving("feed items") { ownerCheck.onFeed(it) } }
         // Held or due (§3.6.3): no cached feed content is shown; after the check (here or on another device), a full read.
         scope.launch {
             var held = false
-            ownerCheck.ownerCheck.collect { v ->
+            ownerCheck.ownerCheck.collectSurviving("owner check") { v ->
                 val now = OwnProfileStep.held(v)
                 // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
                 val steps = ClearSteps()
@@ -1109,7 +1107,7 @@ class VaultManager(
         lockKeeper.resume()
         if (lockKeeper.pending) lockedHere = true
         scope.launch {
-            lockKeeper.notice.collect {
+            lockKeeper.notice.collectSurviving("lock notice") {
                 if (it !is LockNotice.Unconfirmed && pauseWanted) {
                     pauseWanted = false
                     pauseRelay()
@@ -1187,16 +1185,17 @@ class VaultManager(
         if (forget) finishMoveRunner.clearFailure() // a deleted or forgotten vault: nothing of a move is left to say
         observer?.cancel()
         observer = null
-        session?.device?.let { d -> if (forget) d.forget() else d.stop() }
+        // Every step of a forget runs even if one throws (fail secure), the device's own forget and the other devices'
+        // too (#179 review F1); the first failure is rethrown after the last.
+        val steps = ClearSteps()
+        session?.device?.let { d -> if (forget) steps.step { d.forget() } else d.stop() }
         // Every other device too (one stopped for a deletion, or detached), before the device file and keys go below.
-        if (forget) forgetDevices()
+        if (forget) steps.step { forgetDevices() }
         session = null
         eventsFlow.value = null
         moveFlow.value = null
         refusals.clear()
         if (forget) {
-            // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
-            val steps = ClearSteps()
             steps.step {
                 io {
                     val keys = deviceKeys()
@@ -1227,8 +1226,8 @@ class VaultManager(
                 }
             }
             finishMoveFlow.value = false
-            steps.finish()
         }
+        steps.finish()
     }
 
     @Suppress("TooGenericExceptionCaught")
@@ -1237,27 +1236,31 @@ class VaultManager(
         observer = scope.launch {
             // A collection that ended (a terminal relay error) is started again, with backoff: without it nothing
             // from the vault arrives until the next cold start.
+            // A child of this observer: a restart that failed would end the observer, its event collector too.
             CollectorSupervisor(this, restart = {
-                android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
-                s.device.start(scope)
-                // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
-                if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
-                // §11.14.9: and an unresolved change is checked again.
-                if (phaseFlow.value == AppPhase.Unlocked && local.unresolvedChange != null) changes.kick()
+                surviveEvent("mailbox restart", ::logSurvived) {
+                    android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
+                    s.device.start(scope)
+                    // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
+                    if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
+                    // §11.14.9: and an unresolved change is checked again.
+                    if (phaseFlow.value == AppPhase.Unlocked && local.unresolvedChange != null) changes.kick()
+                }
             }).watch(s.device.collectionEnded)
-            launch { s.device.vaultRefusals.collect { n -> refusals.onRefusals(n, phaseFlow.value) } }
-            launch { s.device.ownerCheckRequired.collect { ownerCheck.onRequired() } }
-            s.device.events.collect { m ->
+            launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
+            launch { s.device.ownerCheckRequired.collectSurviving("owner check required") { ownerCheck.onRequired() } }
+            // A vault.locking or vault.held arrives here (onEvent): one failure on one event never ends the observer.
+            s.device.events.collectSurviving("event") { m ->
                 if (lockNotices.stale(m)) {
                     // The lock before this phone's last unlock (an update's first step, or the lock an unlock of a
                     // running vault makes), relayed late: the vault is open.
                     android.util.Log.i("VaultManager", "dropped a vault.locking from before the last unlock")
-                    return@collect
+                    return@collectSurviving
                 }
                 onEvent(m)
                 // A lock is pending: the vault may be open and still sending, but on this phone it is locked.
                 // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
-                if (!lockGuard.takesEvents()) return@collect
+                if (!lockGuard.takesEvents()) return@collectSurviving
                 try {
                     items.onEvent(m)
                     sharing.onEvent(m)
@@ -3371,7 +3374,7 @@ class VaultManager(
         scope.launch { runCatching { checkKeptTransfer() } }
         // (0.44.0, §11.14.9) An unresolved change from before this start: the unlock's two steps, then the check.
         refreshChangeFlows()
-        scope.launch { changes.check.collect { refreshChangeFlows() } }
+        scope.launch { changes.check.collectSurviving("change check") { refreshChangeFlows() } }
     }
 
     companion object {

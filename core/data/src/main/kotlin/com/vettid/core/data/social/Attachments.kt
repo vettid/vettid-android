@@ -200,7 +200,10 @@ class AttachmentManager(
      */
     private val clearLock = Any()
 
-    /** TEST hook: called with [HOOK_BUILD] while a send's request is built, and [HOOK_EVENT] before an inline thumbnail is kept. */
+    /**
+     * TEST hook: called with [HOOK_BUILD] while a send's request is built, [HOOK_EVENT] before an inline thumbnail is
+     * kept, and [HOOK_WIPE] in a clear before each pending photo's wipe (a hook that throws stands for a wipe that fails).
+     */
     @VisibleForTesting
     @Volatile
     internal var testHook: ((String) -> Unit)? = null
@@ -485,7 +488,12 @@ class AttachmentManager(
             steps.step { photos.clear() }
             // Under the same lock as a send's last check: a send in that step completes its request first.
             synchronized(pending) {
-                pending.forEach { p -> steps.step { p.wipe() } }
+                pending.forEach { p ->
+                    steps.step {
+                        testHook?.invoke(HOOK_WIPE)
+                        p.wipe()
+                    }
+                }
                 steps.step { pending.clear() }
             }
         }
@@ -517,6 +525,7 @@ class AttachmentManager(
 
         internal const val HOOK_BUILD = "build"
         internal const val HOOK_EVENT = "event"
+        internal const val HOOK_WIPE = "wipe"
         private const val MAX_FETCHES = 2
         private const val KEY_BYTES = 32
 
