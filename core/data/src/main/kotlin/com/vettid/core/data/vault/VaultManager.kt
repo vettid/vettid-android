@@ -1458,6 +1458,8 @@ class VaultManager(
         if (d.deviceId == null) {
             if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // registered with a recovery code (§11.11.3)
             if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
+            // (A6 audit N3) An enrollment posted earlier is resumed, never posted over (and the PIN is not asked again).
+            if (d.pendingEnroll != null && local.userGuid.isNotEmpty()) return@guard AppPhase.Setup(SetupStage.ENROLLING)
             // A setup code was redeemed: enroll. The pending key may not read the status (MEMBER-API 2.0.0); the
             // enrollment itself answers vault_exists for a vault this phone does not hold. A transfer that did not
             // complete leaves nothing to resume: the welcome screen.
@@ -1580,23 +1582,83 @@ class VaultManager(
 
     // --- VaultRepository ---
 
-    override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
+    override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) {
+        enrolment(pin, onStep)
+    }
+
+    override suspend fun resumeEnroll(onStep: (EnrollStep) -> Unit): Boolean = enrolment(null, onStep)
+
+    override val enrollPending: Boolean get() = session?.device?.pendingEnroll != null
+
+    /** (A6 audit N3) The enrollment running now, joined by a second call instead of being run twice. */
+    private var enrolmentRun: kotlinx.coroutines.Deferred<Boolean>? = null
+    private val enrolmentLock = Mutex()
+
+    /**
+     * (A6 audit N3) Enrollment through [EnrolmentResume], in the app's [scope] (leaving the screen does not stop it half
+     * way; a second call while one runs joins it). True once the vault is pinned and the first handshake done; false when
+     * nothing outstanding made a vault and no [pin] was given (the member chooses one).
+     */
+    private suspend fun enrolment(pin: String?, onStep: (EnrollStep) -> Unit): Boolean {
+        val run = enrolmentLock.withLock {
+            enrolmentRun?.takeIf { it.isActive } ?: scope.async { guard { enrolOnce(pin, onStep) } }.also { enrolmentRun = it }
+        }
+        return run.await()
+    }
+
+    private suspend fun enrolOnce(pin: String?, onStep: (EnrollStep) -> Unit): Boolean {
         val rec = record.recordGeneration
         val s = session()
+        val d = s.device
         onStep(EnrollStep.ENROLL)
-        // §11.10.9: the instance's capabilities choose the shape. Release R (§11.14.1): a phone key and its secret of
-        // epoch 1 in the request; the state is stored before the request is sent, and a retry of this enrollment (a lost
-        // answer, a crash) reuses the key: the vault may already hold its secret. Without `recovery_r`: as before.
-        val out = s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
-            val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
-            if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
+        val ops = object : EnrolmentResume.Ops {
+            override fun vaultPinned() = d.hasVault && d.vaultId != null
+            override fun pending() = d.pendingEnroll
+            override suspend fun answer(requestId: String) = s.alt.enrollAnswer(d, requestId)
+            override suspend fun markAnswered() = d.markEnrollAnswered()
+            override suspend fun drop() = d.dropPendingEnroll()
+            @Suppress("SwallowedException") // no vault.enrolled in time is an answer: false
+            override suspend fun awaitEnrolled(): Boolean {
+                onStep(EnrollStep.WAIT_FOR_VAULT)
+                return try {
+                    d.awaitEnrolled()
+                    true
+                } catch (_: TimeoutCancellationException) {
+                    false
+                }
+            }
+
+            override suspend fun post(pin: String): EnrolmentResume.Posted {
+                // §11.10.9: the instance's capabilities choose the shape. Release R (§11.14.1): a phone key and its secret
+                // of epoch 1 in the request; the state is stored before the request is sent, and a retry of this
+                // enrollment (a lost answer, a crash) reuses the key: the vault may already hold its secret. Without
+                // `recovery_r`: as before.
+                val out = s.alt.enroll(d, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
+                    val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
+                    if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
+                }
+                if (out.ok && out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) {
+                    io { updateLocal(rec) { it.copy(vaultId = out.vaultId) } }
+                }
+                return EnrolmentResume.Posted(out.ok, out.code)
+            }
         }
-        if (!out.ok) throw VaultFailure(enrollFailure(out.code), out.code)
-        if (out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) io { updateLocal(rec) { it.copy(vaultId = out.vaultId) } }
-        onStep(EnrollStep.WAIT_FOR_VAULT)
-        s.device.awaitEnrolled()
-        onStep(EnrollStep.HANDSHAKE)
-        s.device.completeEnrollment()
+        val r = try {
+            EnrolmentResume(ops).run(pin)
+        } catch (e: EnrolmentResume.Refused) {
+            throw VaultFailure(enrollFailure(e.code), e.code, cause = e)
+        } catch (e: EnrolmentResume.Waiting) {
+            throw VaultFailure(FailureKind.ENROLL_WAITING, cause = e)
+        }
+        if (r == EnrolmentResume.Result.NeedsPin) {
+            phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+            return false
+        }
+        if (d.deviceId == null) {
+            onStep(EnrollStep.HANDSHAKE)
+            d.completeEnrollment()
+        }
+        return true
     }
 
     override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit) =
@@ -2619,7 +2681,9 @@ class VaultManager(
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
         val d = session().device
-        if (d.deviceId == null && (d.hasVault || d.vaultId != null)) dropSession(forget = true) else retireOtherDevices()
+        // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
+        val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null
+        if (d.deviceId == null && stale) dropSession(forget = true) else retireOtherDevices()
     }
 
     override suspend fun recoveryStage(): RecoveryStage = guard {

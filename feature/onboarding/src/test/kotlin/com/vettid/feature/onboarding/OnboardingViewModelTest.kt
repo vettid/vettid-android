@@ -217,6 +217,89 @@ class OnboardingViewModelTest {
         assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)
     }
 
+    /**
+     * (A6 audit N3) A restart with an enrollment outstanding: it is resumed with no PIN asked (the vault may hold the one
+     * chosen then); once it made the vault, the password follows and, for release R, the PIN chosen before.
+     */
+    @Test
+    fun anOutstandingEnrollmentAfterARestartIsResumedWithoutANewPin() = runTest {
+        vault.phoneSecret = true
+        vault.pending = true
+        vault.phase.value = AppPhase.Setup(SetupStage.ENROLLING)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "resumeEnroll" })
+        assertFalse("never posted over", "enroll" in vault.calls)
+        val s = vm.uiState.value
+        assertEquals(OnboardingStep.PASSWORD, s.step)
+        assertTrue(s.credentialOnly)
+        assertTrue("the vault verifies the PIN chosen before", s.askPin && s.pinFromBefore)
+        assertFalse(vm.back())
+    }
+
+    /** (N3) A resumed enrollment that made no vault: the member starts with the account and a PIN, as a first time. */
+    @Test
+    fun aResumedEnrollmentThatMadeNoVaultStartsWithThePin() = runTest {
+        vault.pending = true
+        vault.resumeMadeVault = false
+        vault.phase.value = AppPhase.Setup(SetupStage.ENROLLING)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.resuming)
+        vm.confirmAccount()
+        assertEquals(OnboardingStep.PIN_CREATE, vm.uiState.value.step)
+    }
+
+    /**
+     * (N3) A resume that failed (the relay out of reach): Try again resumes again, and Edit goes to the account (another
+     * code), never to a new PIN; continuing from there resumes once more.
+     */
+    @Test
+    fun aFailedResumeIsTriedAgainAndNeverAsksForANewPin() = runTest {
+        vault.pending = true
+        vault.fail["resumeEnroll"] = FakeVault.failure(FailureKind.ENROLL_WAITING)
+        vault.phase.value = AppPhase.Setup(SetupStage.ENROLLING)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.PROGRESS, vm.uiState.value.step)
+        assertEquals(FailureKind.ENROLL_WAITING, vm.uiState.value.error)
+        vm.editAfterFailure()
+        assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
+        vm.confirmAccount()
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "resumeEnroll" })
+        assertFalse("enroll" in vault.calls)
+        assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
+    }
+
+    /**
+     * (N3) A lost answer in this flow ("Try again" after a failed poll): the PIN of the outstanding request stays the PIN;
+     * Edit goes back to the password, not to the PIN, and the retry carries the same PIN.
+     */
+    @Test
+    fun aLostAnswerKeepsThePinOfTheOutstandingRequest() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        val vm = vm()
+        advanceUntilIdle()
+        vm.confirmAccount()
+        vm.setPin("40281795"); vm.submitPin(); vm.setPinConfirm("40281795"); vm.submitPinConfirm()
+        vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
+        vault.pendingAfterFailure = true
+        vault.fail["enroll"] = FakeVault.failure(FailureKind.NETWORK)
+        vm.submitBackup()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.pinFixed)
+        vm.editAfterFailure()
+        assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
+        assertFalse("the PIN can no longer be changed here", vm.back())
+        vm.submitPassword()
+        vm.submitBackup()
+        advanceUntilIdle()
+        assertEquals("40281795", vault.lastPin)
+        assertEquals(OnboardingStep.DONE, vm.uiState.value.step)
+    }
+
     @Test
     fun needsCredentialResumesAtThePassword() = runTest {
         vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)

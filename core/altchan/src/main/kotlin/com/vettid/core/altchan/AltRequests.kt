@@ -135,7 +135,10 @@ object AltRequests {
         val body = request.marshal()
         request.wipe()
         val env = sealWiping(enclave, AltChannel.TYPE_ENROLL, rid, t, body, wipe = unlockSecret != null)
-        val next = state.copy(enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number)
+        val next = state.copy(
+            enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number,
+            enrollRequestId = rid, enrollPostedMs = t.toEpochMilli(), enrollAnswered = false,
+        )
         return BuiltEnroll(SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex), next)
     }
 
@@ -274,7 +277,7 @@ object AltRequests {
         var s = state
         if (s.enrollPcrs.length >= PCR_HEX) s = s.copy(release = s.enrollPcrs.substring(0, PCR_HEX), releaseNumber = s.enrollNumber)
         if (stateSeq != null && stateSeq > s.stateSeq) s = s.copy(stateSeq = stateSeq)
-        return s.copy(enrollNonce = null, enrollPcrs = "", enrollNumber = 0)
+        return s.withoutEnroll()
     }
 
     /**

@@ -67,6 +67,27 @@ class AltRequestsTest {
         assertEquals(3, after.releaseNumber)
         assertEquals(4, after.stateSeq)
         assertNull(after.enrollNonce)
+        assertNull(after.pendingEnroll)
+    }
+
+    /**
+     * (A6 audit N3) The enrollment request is outstanding from its build: its id, its time and its nonce are in the stored
+     * state (and survive a restart), until `vault.enrolled` is applied or it is dropped.
+     */
+    @Test
+    fun anEnrollmentRequestIsKeptOutstandingAcrossARestart() {
+        val built = AltRequests.buildEnroll("guid-1", "246802", enclave.verified(manifest), manifest, TestSupport.SoftAttester(), app, "v4.public.open", AltState(), now)
+        val p = built.state.pendingEnroll!!
+        assertEquals(built.request.requestId, p.requestId)
+        assertEquals(now.truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toEpochMilli(), p.postedMs)
+        assertTrue(!p.answered)
+        val restored = AltState.parse(StrictJson.parseObject(built.state.copy(enrollAnswered = true).marshal().toByteArray()))
+        assertEquals(p.copy(answered = true), restored.pendingEnroll)
+        assertArrayEquals(built.state.enrollNonce, restored.enrollNonce)
+        assertNull(restored.withoutEnroll().pendingEnroll)
+        assertNull(restored.withoutEnroll().enrollNonce)
+        // A state of an earlier version (a nonce, no request id) has nothing to resume.
+        assertNull(AltState.parse(StrictJson.parseObject(built.state.copy(enrollRequestId = "").marshal().toByteArray())).pendingEnroll)
     }
 
     @Test

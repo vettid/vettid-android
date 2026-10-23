@@ -150,8 +150,21 @@ interface VaultRepository {
     /** The member has read that the vault confirmed a lock that was in doubt. */
     fun dismissLockNotice() = Unit
 
-    /** Enrolls a vault with [pin] (§11.3) and runs the first handshake. */
+    /**
+     * Enrolls a vault with [pin] (§11.3) and runs the first handshake. (A6 audit N3) An enrollment this phone posted
+     * before is resumed first, never posted over: [pin] is used only when nothing outstanding can still make a vault.
+     */
     suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit)
+
+    /**
+     * (A6 audit N3, [SetupStage.ENROLLING]) Resumes the outstanding enrollment without a PIN: true once the vault is
+     * pinned and the first handshake done (the credential steps follow); false when it made no vault, and a new one needs
+     * the member's PIN ([SetupStage.NEW_VAULT]).
+     */
+    suspend fun resumeEnroll(onStep: (EnrollStep) -> Unit): Boolean = false
+
+    /** (N3) An enrollment this phone posted is outstanding: a retry resumes it, with the PIN chosen then. */
+    val enrollPending: Boolean get() = false
 
     /**
      * A start-over requested on the account portal (VAULT-MESSAGING 0.16.0 §11.11.9, `deletion` in `GET

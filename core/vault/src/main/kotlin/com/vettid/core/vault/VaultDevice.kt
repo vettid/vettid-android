@@ -690,6 +690,28 @@ class VaultDevice private constructor(
 
     // --- enrollment and pairing (§11.3, §6.7) ---
 
+    /**
+     * (A6 audit N3) The enrollment request this device built and whose `vault.enrolled` has not been applied: stored
+     * (with its nonce) before the request is posted, so that it outlives a lost answer, a crash and a restart.
+     */
+    val pendingEnroll: com.vettid.core.altchan.PendingEnroll? get() = alt().pendingEnroll
+
+    /** (N3) The pending enrollment's result was `ok`: its vault exists, only `vault.enrolled` is awaited. */
+    suspend fun markEnrollAnswered() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null || a.enrollAnswered) return@withLock
+        setAlt(a.copy(enrollAnswered = true))
+        save()
+    }
+
+    /** (N3) The pending enrollment made no vault (refused, or never processed): it and its nonce go. */
+    suspend fun dropPendingEnroll() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null) return@withLock
+        setAlt(a.withoutEnroll())
+        save()
+    }
+
     /** Waits for vault.enrolled (§11.3), which pins the vault and gives this device its first token. */
     suspend fun awaitEnrolled(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
         awaitEvent("vault.enrolled", timeout)

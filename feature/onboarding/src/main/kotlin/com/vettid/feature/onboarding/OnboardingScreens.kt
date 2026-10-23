@@ -477,6 +477,8 @@ fun PasswordScreen(state: OnboardingUiState, actions: OnboardingActions, onBack:
                 onValueChange = actions::setPin,
                 label = stringResource(R.string.unlock_pin_label),
                 isPin = true,
+                // (A6 audit N3) After a resumed enrollment the vault holds the PIN chosen when it was started.
+                supporting = if (state.pinFromBefore) stringResource(R.string.onboarding_pin_from_before) else null,
                 imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("credential_pin"),
             )
