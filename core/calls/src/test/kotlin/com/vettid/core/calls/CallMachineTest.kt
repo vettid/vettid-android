@@ -802,7 +802,7 @@ class CallMachineTest {
 
     @Test
     fun keysForAnotherSuiteThanTheCryptorsWereMadeForEndTheCall() = runTest {
-        // The engine never remakes its cryptors: keys for another suite are refused, and the call ends.
+        // The engine never remakes its cryptors: keys for another suite are refused, and the call ends as not encrypted.
         val s = FakeSignalling()
         val e = FakeEngines(both)
         val m = machine(s, e)
@@ -813,7 +813,7 @@ class CallMachineTest {
         runCurrent()
         assertEquals(MediaSuite.AES_128_GCM, e.last.madeFor)
         assertNull("no key was taken", e.last.suite)
-        assertTrue(m.state.value is CallState.Ended)
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
         assertTrue(e.last.closed)
     }
 }
