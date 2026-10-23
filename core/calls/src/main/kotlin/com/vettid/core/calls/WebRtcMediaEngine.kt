@@ -205,9 +205,9 @@ class WebRtcMediaEngine private constructor(
                 MediaLogGuard.check()
                 // The cryptors were made for the call's suite before any SDP (createOffer, acceptOffer) and are
                 // never remade: a new cryptor starts disabled, and a disabled one passes clear frames. Keys for
-                // another suite end the call instead (fail closed); nothing is sent or played under them.
+                // another suite end the call as not encrypted (fail closed); nothing is sent or played under them.
                 val made = checkNotNull(installed) { "no media yet" }
-                check(suite == made) { "keys for suite ${suite.id}, cryptors made for suite ${made.id}" }
+                if (suite != made) throw MediaNotEncryptedException("keys for suite ${suite.id}, cryptors made for suite ${made.id}")
                 val keys = checkNotNull(provider) { "no media yet" }
                 if (faults.wrongSendKey) for (i in send.indices) send[i] = (send[i].toInt() xor BYTE_MASK).toByte()
                 val taken = keys.setKey(SEND_ID, CallFrames.KEY_INDEX, send) && keys.setKey(RECEIVE_ID, CallFrames.KEY_INDEX, receive)
