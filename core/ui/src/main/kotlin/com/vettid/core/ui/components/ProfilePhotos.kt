@@ -42,11 +42,14 @@ object ProfilePhotos {
     private const val DISPLAY_SIDE = 256
 
     /** The JPEG bytes of [source] for `profile.set{photo}`, at most [maxBytes]. */
-    fun encode(source: Bitmap, maxBytes: Int = MAX_BYTES): ByteArray {
+    fun encode(source: Bitmap, maxBytes: Int = MAX_BYTES): ByteArray = encode(source, maxBytes, ::jpeg)
+
+    /** [encode] with the JPEG encoder [compress] (a test captures the attempts through it). */
+    internal fun encode(source: Bitmap, maxBytes: Int, compress: (Bitmap, Int) -> ByteArray): ByteArray {
         val square = centreSquare(source)
         try {
             for (side in SIDES) {
-                fitting(square, side, maxBytes)?.let { return it }
+                fitting(square, side, maxBytes, compress)?.let { return it }
             }
             error("photo does not fit")
         } finally {
@@ -54,11 +57,19 @@ object ProfilePhotos {
         }
     }
 
-    /** [square] at [side] px with the highest quality that fits [maxBytes], or null. */
-    private fun fitting(square: Bitmap, side: Int, maxBytes: Int): ByteArray? {
+    /**
+     * [square] at [side] px with the highest quality that fits [maxBytes], or null. An attempt that is too big is
+     * zeroed at once: no rejected copy of the photo stays in memory. The one returned is the caller's to zero.
+     */
+    private fun fitting(square: Bitmap, side: Int, maxBytes: Int, compress: (Bitmap, Int) -> ByteArray): ByteArray? {
         val scaled = if (square.width > side) Bitmap.createScaledBitmap(square, side, side, true) else square
         try {
-            return QUALITIES.asSequence().map { jpeg(scaled, it) }.firstOrNull { it.size <= maxBytes }
+            for (quality in QUALITIES) {
+                val attempt = compress(scaled, quality)
+                if (attempt.size <= maxBytes) return attempt
+                attempt.fill(0)
+            }
+            return null
         } finally {
             if (scaled !== square) scaled.recycle()
         }
