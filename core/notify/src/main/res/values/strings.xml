@@ -6,7 +6,9 @@
     <string name="notify_channel_requests">Requests</string>
     <string name="notify_channel_requests_body">Requests waiting for your decision</string>
     <string name="notify_channel_calls">Calls</string>
-    <string name="notify_channel_calls_body">Missed calls</string>
+    <string name="notify_channel_calls_body">Calls ringing for you</string>
+    <string name="notify_channel_missed_calls">Missed calls</string>
+    <string name="notify_channel_missed_calls_body">Calls you did not answer</string>
     <string name="notify_channel_security">Security alarms</string>
     <string name="notify_channel_security_body">A credential used somewhere else, failed checks, your vault locked or moved</string>
     <string name="notify_channel_owner_check">Daily check</string>

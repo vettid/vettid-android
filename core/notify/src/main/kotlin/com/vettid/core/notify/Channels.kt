@@ -15,11 +15,15 @@ import androidx.annotation.RawRes
  * Sounds (owner decision 2026-10-23): VettID's own sounds (`res/raw/vettid_*`, sources in `tools/sounds`). Android
  * fixes a channel's sound when the channel is first created, so every channel whose sound changed got a new id once
  * (`<id>_v2`); the old ids ([RETIRED]) are deleted at start. Activity and Connection stay silent with their ids.
+ * Calls is for ringing alone (the ringtone, looping); a missed call goes to [MISSED_CALLS].
  */
 object Channels {
     const val MESSAGES = "messages_v2"
     const val REQUESTS = "requests_v2"
     const val CALLS = "calls_v2"
+
+    /** Missed calls (owner decision 2026-10-23): their own channel, with the message sound; a new id. */
+    const val MISSED_CALLS = "missed_calls_v2"
     const val SECURITY = "security_v2"
     const val OWNER_CHECK = "owner_check_v2"
     const val ACTIVITY = "activity"
@@ -34,6 +38,7 @@ object Channels {
         MESSAGES to R.raw.vettid_message,
         REQUESTS to R.raw.vettid_urgent,
         CALLS to R.raw.vettid_ringtone,
+        MISSED_CALLS to R.raw.vettid_message,
         SECURITY to R.raw.vettid_urgent,
         OWNER_CHECK to R.raw.vettid_urgent,
         VAULT_UPDATES to R.raw.vettid_general,
@@ -45,6 +50,7 @@ object Channels {
         Triple(MESSAGES, R.string.notify_channel_messages to R.string.notify_channel_messages_body, NotificationManager.IMPORTANCE_HIGH),
         Triple(REQUESTS, R.string.notify_channel_requests to R.string.notify_channel_requests_body, NotificationManager.IMPORTANCE_HIGH),
         Triple(CALLS, R.string.notify_channel_calls to R.string.notify_channel_calls_body, NotificationManager.IMPORTANCE_HIGH),
+        Triple(MISSED_CALLS, R.string.notify_channel_missed_calls to R.string.notify_channel_missed_calls_body, NotificationManager.IMPORTANCE_HIGH),
         Triple(SECURITY, R.string.notify_channel_security to R.string.notify_channel_security_body, NotificationManager.IMPORTANCE_HIGH),
         Triple(OWNER_CHECK, R.string.notify_channel_owner_check to R.string.notify_channel_owner_check_body, NotificationManager.IMPORTANCE_HIGH),
         Triple(ACTIVITY, R.string.notify_channel_activity to R.string.notify_channel_activity_body, NotificationManager.IMPORTANCE_LOW),
@@ -70,6 +76,8 @@ object Channels {
                     description = context.getString(texts.second)
                     lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
                     if (id == CONNECTION) setShowBadge(false)
+                    // Ringing in vibrate mode buzzes; every other notification on Calls is silent (the ongoing call).
+                    if (id == CALLS) enableVibration(true)
                     applySound(context, this)
                 }
             },

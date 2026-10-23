@@ -50,7 +50,7 @@ class AndroidPoster(private val context: Context) : Poster {
 
     private fun category(channel: String): String = when (channel) {
         Channels.MESSAGES -> NotificationCompat.CATEGORY_MESSAGE
-        Channels.CALLS -> NotificationCompat.CATEGORY_MISSED_CALL
+        Channels.MISSED_CALLS -> NotificationCompat.CATEGORY_MISSED_CALL
         Channels.SECURITY, Channels.OWNER_CHECK -> NotificationCompat.CATEGORY_ALARM
         Channels.REQUESTS -> NotificationCompat.CATEGORY_REMINDER
         else -> NotificationCompat.CATEGORY_STATUS

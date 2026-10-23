@@ -70,6 +70,32 @@ class ChannelIdsTest {
         assertEquals(Channels.VAULT_UPDATES, ReleaseUpdateNotifier.CHANNEL_ID)
     }
 
+    /** Owner decision 2026-10-23: Missed calls is a channel of its own, posted to by the feed's `call.missed`. */
+    @Test
+    fun missedCallsIsAChannel() {
+        assertEquals("missed_calls_v2", Channels.MISSED_CALLS)
+        assertTrue(Channels.MISSED_CALLS in Channels.ids)
+        assertTrue(Channels.MISSED_CALLS in Channels.allIds)
+        val mapping = sources.single { it.first.endsWith("core/notify/NotificationMapping.kt") }.second
+        assertTrue(mapping.contains("-> Channels.MISSED_CALLS"))
+    }
+
+    /**
+     * Calls is for ringing alone (its ringtone): only the call service posts there, and each of its notifications
+     * on Calls is silent (the ongoing call and its lock-screen version).
+     */
+    @Test
+    fun onlyTheCallServicePostsOnCallsAndSilently() {
+        val posting = sources.filter { (path, text) ->
+            !path.endsWith("core/notify/Channels.kt") && Regex("""\bChannels\.CALLS\b""").containsMatchIn(text)
+        }
+        assertEquals(listOf("CallService.kt"), posting.map { File(it.first).name })
+        val service = posting.single().second
+        val builders = Regex("""Builder\(\s*this\s*,\s*Channels\.CALLS\s*\)""").findAll(service).count()
+        assertTrue(builders > 0)
+        assertEquals("every Calls notification is silent", builders, Regex("""\.setSilent\(true\)""").findAll(service).count())
+    }
+
     @Test
     fun noOldIdIsWrittenInTheCode() {
         Channels.RETIRED.forEach { old ->

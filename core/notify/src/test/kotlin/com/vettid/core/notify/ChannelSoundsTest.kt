@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.media.AudioAttributes
 import android.net.Uri
+import com.vettid.core.vault.FeedItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -37,6 +38,7 @@ class ChannelSoundsTest {
             Channels.SECURITY to (R.raw.vettid_urgent to AudioAttributes.USAGE_NOTIFICATION),
             Channels.OWNER_CHECK to (R.raw.vettid_urgent to AudioAttributes.USAGE_NOTIFICATION),
             Channels.CALLS to (R.raw.vettid_ringtone to AudioAttributes.USAGE_NOTIFICATION_RINGTONE),
+            Channels.MISSED_CALLS to (R.raw.vettid_message to AudioAttributes.USAGE_NOTIFICATION),
         )
         expected.forEach { (id, sound) ->
             val c = channel(id)
@@ -44,6 +46,27 @@ class ChannelSoundsTest {
             assertEquals(id, sound.second, c.audioAttributes.usage)
             assertEquals(id, AudioAttributes.CONTENT_TYPE_SONIFICATION, c.audioAttributes.contentType)
         }
+    }
+
+    /** Owner decision 2026-10-23: a missed call has its own channel with the message sound, not the ringtone. */
+    @Test
+    fun aMissedCallGoesToItsOwnChannel() {
+        Channels.ensure(app)
+        assertEquals("missed_calls_v2", Channels.MISSED_CALLS)
+        val item = FeedItem("i", 1, "call.missed", "2026-10-23T12:00:00Z", "active", "normal")
+        assertEquals(Channels.MISSED_CALLS, NotificationMapping.channel(item))
+        val c = channel(Channels.MISSED_CALLS)
+        assertEquals(uri(R.raw.vettid_message), c.sound)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, c.importance)
+        assertEquals(Notification.VISIBILITY_PRIVATE, c.lockscreenVisibility)
+        assertEquals(app.getString(R.string.notify_channel_missed_calls), c.name)
+    }
+
+    /** Spec review A2: ringing in vibrate mode buzzes. */
+    @Test
+    fun callsVibrates() {
+        Channels.ensure(app)
+        assertTrue(channel(Channels.CALLS).shouldVibrate())
     }
 
     @Test
@@ -92,13 +115,16 @@ class ChannelSoundsTest {
             Channels.MESSAGES, Channels.REQUESTS, Channels.CALLS, Channels.SECURITY, Channels.OWNER_CHECK, Channels.VAULT_UPDATES,
         )
         assertEquals(Channels.RETIRED.map { it + "_v2" }, changed)
-        assertEquals(changed.toSet(), Channels.SOUNDS.keys)
+        assertEquals(changed.toSet() + Channels.MISSED_CALLS, Channels.SOUNDS.keys)
     }
 
     @Test
     fun namesImportanceAndVisibilityAreKept() {
         Channels.ensure(app)
-        listOf(Channels.MESSAGES, Channels.REQUESTS, Channels.CALLS, Channels.SECURITY, Channels.OWNER_CHECK).forEach {
+        val loud = listOf(
+            Channels.MESSAGES, Channels.REQUESTS, Channels.CALLS, Channels.MISSED_CALLS, Channels.SECURITY, Channels.OWNER_CHECK,
+        )
+        loud.forEach {
             val c = channel(it)
             assertEquals(it, NotificationManager.IMPORTANCE_HIGH, c.importance)
             assertEquals(it, Notification.VISIBILITY_PRIVATE, c.lockscreenVisibility)
