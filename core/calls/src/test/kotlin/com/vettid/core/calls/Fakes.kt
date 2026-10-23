@@ -66,7 +66,7 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         if (suite != madeFor) {
             send.fill(0)
             receive.fill(0)
-            error("keys for suite ${suite.id}, cryptors made for ${madeFor?.id}")
+            throw MediaNotEncryptedException("keys for suite ${suite.id}, cryptors made for ${madeFor?.id}")
         }
         this.suite = suite
         sendKey = send.copyOf()
