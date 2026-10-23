@@ -3,6 +3,7 @@ package com.vettid.core.data.social
 import androidx.annotation.VisibleForTesting
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.ClaimBlob
+import com.vettid.core.data.vault.ClearSteps
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
@@ -476,23 +477,29 @@ class AttachmentManager(
     private fun acceptableThumb(t: ByteArray) = t.isNotEmpty() && t.size <= PhotoLimits.THUMB_MAX_BYTES && ImageType.sniff(t) != null
 
     override fun clear() {
+        // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
+        val steps = ClearSteps()
         synchronized(clearLock) {
-            clearedFlow.value++
-            thumbs.clear()
-            photos.clear()
+            steps.step { clearedFlow.value++ }
+            steps.step { thumbs.clear() }
+            steps.step { photos.clear() }
             // Under the same lock as a send's last check: a send in that step completes its request first.
             synchronized(pending) {
-                pending.forEach { it.wipe() }
-                pending.clear()
+                pending.forEach { p -> steps.step { p.wipe() } }
+                steps.step { pending.clear() }
             }
         }
-        com.vettid.core.media.SharedPhotos.clear() // the share provider refuses every read from now on
+        steps.step { com.vettid.core.media.SharedPhotos.clear() } // the share provider refuses every read from now on
+        steps.finish()
     }
 
     /** Clears and forgets that the vault has attachments (signed out, or a new vault). */
     fun reset() {
-        clear()
-        availableFlow.value = false
+        try {
+            clear()
+        } finally {
+            availableFlow.value = false
+        }
     }
 
     companion object {
