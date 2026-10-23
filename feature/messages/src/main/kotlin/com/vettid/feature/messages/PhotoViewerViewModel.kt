@@ -73,9 +73,12 @@ class PhotoViewerViewModel @Inject constructor(
         PhotoViewerUiState(loading = false, error = FailureKind.OTHER, problemText = R.string.messages_photo_unavailable)
 
     override fun onCleared() {
-        state.value.photo?.bytes?.fill(0)
-        // The viewer is gone (not merely recomposed or rotated): its share offers are withdrawn.
-        com.vettid.core.media.SharedPhotos.clear()
+        try {
+            state.value.photo?.bytes?.fill(0)
+        } finally {
+            // The viewer is gone (not merely recomposed or rotated): its share offers are withdrawn.
+            com.vettid.core.media.SharedPhotos.clear()
+        }
     }
 
     fun load() {

@@ -888,21 +888,27 @@ class VaultManager(
                     feed.open()
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
-                } else if (it != AppPhase.Starting) {
+                }
+                // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
+                val steps = ClearSteps()
+                if (it != AppPhase.Unlocked && it != AppPhase.Starting) {
                     // Locked or signed out: no item metadata and no feed item is kept outside an open vault, and
                     // no connection or message in memory either.
-                    social.forgetOpenVault()
-                    attachments.clear()
-                    items.clear()
-                    sharing.clear()
-                    feed.clear()
+                    steps.step { social.forgetOpenVault() }
+                    steps.step { attachments.clear() }
+                    steps.step { items.clear() }
+                    steps.step { sharing.clear() }
+                    steps.step { feed.clear() }
                 }
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
-                when (OwnProfileStep.onPhase(it)) {
-                    OwnProfileStep.FORGET -> forgetOwnProfile()
-                    OwnProfileStep.READ -> readOwnProfile()
-                    OwnProfileStep.NONE -> Unit
+                steps.step {
+                    when (OwnProfileStep.onPhase(it)) {
+                        OwnProfileStep.FORGET -> forgetOwnProfile()
+                        OwnProfileStep.READ -> readOwnProfile()
+                        OwnProfileStep.NONE -> Unit
+                    }
                 }
+                steps.finish()
             }
         }
         // The feed's owner-check items are the shell's notices (one source, ANDROID-PLAN 0.1.23, 6).
@@ -912,18 +918,23 @@ class VaultManager(
             var held = false
             ownerCheck.ownerCheck.collect { v ->
                 val now = OwnProfileStep.held(v)
+                // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
+                val steps = ClearSteps()
                 if (now && !held) {
-                    feed.clear()
-                    attachments.clear() // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
+                    steps.step { feed.clear() }
+                    steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
                 if (!now && held && phaseFlow.value == AppPhase.Unlocked) feed.open()
                 // Nor the member's own names, full email or photo; read again after the passed check.
-                when (OwnProfileStep.onCheck(wasHeld = held, held = now, phase = phaseFlow.value)) {
-                    OwnProfileStep.FORGET -> forgetOwnProfile()
-                    OwnProfileStep.READ -> readOwnProfile()
-                    OwnProfileStep.NONE -> Unit
+                steps.step {
+                    when (OwnProfileStep.onCheck(wasHeld = held, held = now, phase = phaseFlow.value)) {
+                        OwnProfileStep.FORGET -> forgetOwnProfile()
+                        OwnProfileStep.READ -> readOwnProfile()
+                        OwnProfileStep.NONE -> Unit
+                    }
                 }
                 held = now
+                steps.finish()
             }
         }
     }
@@ -1184,32 +1195,39 @@ class VaultManager(
         moveFlow.value = null
         refusals.clear()
         if (forget) {
-            io {
-                val keys = deviceKeys()
-                KeySlot.entries.forEach { keys.generate(it) }
-                gateway.newAppKey() // the app key is per vault (§11.12.2)
-                File(app.noBackupFilesDir, DEVICE_FILE).delete()
+            // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
+            val steps = ClearSteps()
+            steps.step {
+                io {
+                    val keys = deviceKeys()
+                    KeySlot.entries.forEach { keys.generate(it) }
+                    gateway.newAppKey() // the app key is per vault (§11.12.2)
+                    File(app.noBackupFilesDir, DEVICE_FILE).delete()
+                }
             }
             alarmFlow.value = null
             windowFlow.value = null
-            social.clear()
-            attachments.reset()
-            items.clear()
-            feed.clear()
-            ownerCheck.clear()
-            forgetOwnProfile()
-            phoneSecrets.delete(local.phone)
+            steps.step { social.clear() }
+            steps.step { attachments.reset() }
+            steps.step { items.clear() }
+            steps.step { feed.clear() }
+            steps.step { ownerCheck.clear() }
+            steps.step { forgetOwnProfile() }
+            steps.step { phoneSecrets.delete(local.phone) }
             // UNBOUND: clears the vault's part of whatever record is current, which the forgotten device leaves nothing
             // to belong to. A forget that ends the account resets the record next; a fresh device before an enrolment
             // ([freshDeviceIfUnpaired]: a redeem, a transfer to this phone, a recovery) keeps its member's part.
-            updateLocal(RecordStore.UNBOUND) {
-                it.copy(
-                    setupComplete = false, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
-                    transferKeepMs = null, finishMovePending = false, movedIn = false, recoveryRSeen = false,
-                    capabilities = emptyList(), timeScale = null, unreachableAfterMs = null,
-                )
+            steps.step {
+                updateLocal(RecordStore.UNBOUND) {
+                    it.copy(
+                        setupComplete = false, phoneKeyVault = "", phoneEpoch = 0, transferApprovedAtMs = null,
+                        transferKeepMs = null, finishMovePending = false, movedIn = false, recoveryRSeen = false,
+                        capabilities = emptyList(), timeScale = null, unreachableAfterMs = null,
+                    )
+                }
             }
             finishMoveFlow.value = false
+            steps.finish()
         }
     }
 
@@ -2218,15 +2236,18 @@ class VaultManager(
         windowFlow.value = null
         alarmFlow.value = null
         lockedElsewhereFlow.value = false
-        social.clear()
-        attachments.reset()
-        ownerCheck.clear()
-        forgetOwnProfile()
-        history.clear()
-        items.clear()
-        sharing.clear()
-        feed.clear()
-        deletionWatch.start(marker, readNow = false)
+        // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
+        val steps = ClearSteps()
+        steps.step { social.clear() }
+        steps.step { attachments.reset() }
+        steps.step { ownerCheck.clear() }
+        steps.step { forgetOwnProfile() }
+        steps.step { history.clear() }
+        steps.step { items.clear() }
+        steps.step { sharing.clear() }
+        steps.step { feed.clear() }
+        steps.step { deletionWatch.start(marker, readNow = false) }
+        steps.finish()
     }
 
     /** One read of `GET /api/vault/status` with the app key, without a session ([VaultDeletion.ofStatus]). */
@@ -3155,25 +3176,30 @@ class VaultManager(
         }
         // Every other device this process made (one stopped for a deletion, whose session was already dropped), before
         // anything is erased: nothing still on its way saves after the erase.
-        forgetDevices()
-        social.clear()
-        attachments.reset()
-        ownerCheck.clear()
-        forgetOwnProfile()
-        history.clear()
-        items.clear()
-        sharing.clear()
-        feed.clear()
-        canary.removeCanaryManifest()
+        // Every step runs even if one throws (fail secure), the erase too; the first failure is rethrown after the last.
+        val steps = ClearSteps()
+        steps.step { forgetDevices() }
+        steps.step { social.clear() }
+        steps.step { attachments.reset() }
+        steps.step { ownerCheck.clear() }
+        steps.step { forgetOwnProfile() }
+        steps.step { history.clear() }
+        steps.step { items.clear() }
+        steps.step { sharing.clear() }
+        steps.step { feed.clear() }
+        steps.step { canary.removeCanaryManifest() }
         transferStartedAt = null
         openTransferId = null
         alarmFlow.value = null
         windowFlow.value = null
         relayPaused = false
         lockedElsewhereFlow.value = false
-        heldBack.release(AppPhase.SignedOut)
-        wiper.resetMemory()
-        return io { wiper.erase().also { if (it) wiper.finish() } }
+        steps.step { heldBack.release(AppPhase.SignedOut) }
+        steps.step { wiper.resetMemory() }
+        val erased = io { wiper.erase().also { if (it) wiper.finish() } }
+        // A step that failed: the wipe is not reported complete (WipeRun offers "Try again").
+        steps.finish()
+        return erased
     }
 
     // --- BackgroundVault: the notification service (ANDROID-PLAN 0.1.23) ---

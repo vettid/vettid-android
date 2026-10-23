@@ -22,6 +22,9 @@ object SharedPhotos {
 
     private val offers = ConcurrentHashMap<String, Offer>()
     private val order = ArrayDeque<String>()
+
+    /** Guards [order], every addition to [offers] and [pipes], and [clear]. */
+    private val lock = Any()
     private val random = SecureRandom()
 
     /** The authority of the app's provider: `<application id>.photos`. */
@@ -30,12 +33,16 @@ object SharedPhotos {
     /** Offers [bytes] (a copy) for one share; returns the content URI to hand to the chosen app. */
     fun offer(packageName: String, bytes: ByteArray, type: ImageType): Uri {
         val t = ByteArray(TOKEN_BYTES).also(random::nextBytes).joinToString("") { "%02x".format(it) }
-        synchronized(order) {
+        val o = Offer(bytes.copyOf(), type)
+        // Under the same lock as [clear]: an offer made at the same instant as a clear is either withdrawn by it or
+        // made after it, never left live behind it.
+        synchronized(lock) {
             // At most a few offers at once: the oldest goes (zeroized) first.
             while (order.size >= MAX_OFFERS) offers.remove(order.removeFirst())?.bytes?.fill(0)
             order.addLast(t)
+            offers[t] = o
+            testHook?.invoke(HOOK_OFFERED)
         }
-        offers[t] = Offer(bytes.copyOf(), type)
         return Uri.Builder().scheme("content").authority(authority(packageName)).appendPath(t).appendPath("photo.${type.extension}").build()
     }
 
@@ -48,22 +55,52 @@ object SharedPhotos {
     /** The write ends of the pipes being streamed: a clear closes them with an error, so no reader gets zeros. */
     private val pipes = java.util.Collections.newSetFromMap(ConcurrentHashMap<ParcelFileDescriptor, Boolean>())
 
-    internal fun opened(pfd: ParcelFileDescriptor) {
+    /**
+     * A pipe that streams [offer]: kept only while the offer is still offered (checked under [clear]'s lock), so no pipe
+     * opened at the same instant as a clear outlives it. False: the offer was withdrawn, and the caller refuses the read.
+     */
+    internal fun opened(token: String, offer: Offer, pfd: ParcelFileDescriptor): Boolean = synchronized(lock) {
+        if (offers[token] !== offer) return false
         pipes += pfd
+        true
     }
 
     internal fun closed(pfd: ParcelFileDescriptor) {
         pipes -= pfd
     }
 
-    /** Withdraws every offer (zeroized). */
+    /**
+     * Withdraws every offer (zeroized). Fails secure (the owner's rule for a lock, a clear, an erase): every pipe is closed
+     * with an error even if closing one fails, and the offers are withdrawn and zeroed whatever happens before.
+     */
     fun clear() {
-        pipes.toList().forEach { runCatching { it.closeWithError("withdrawn") } }
-        pipes.clear()
-        synchronized(order) { order.clear() }
-        offers.values.forEach { it.bytes.fill(0) }
-        offers.clear()
+        synchronized(lock) {
+            try {
+                // The set's own iterator, which a stream ending meanwhile ([closed]) never breaks.
+                val it = pipes.iterator()
+                while (it.hasNext()) {
+                    testHook?.invoke(HOOK_NEXT_PIPE)
+                    val p = it.next()
+                    it.remove()
+                    runCatching { p.closeWithError("withdrawn") }
+                }
+            } finally {
+                order.clear()
+                val it = offers.values.iterator()
+                while (it.hasNext()) {
+                    val o = it.next()
+                    it.remove() // withdrawn first: [live] is false before its bytes are zeroed
+                    o.bytes.fill(0)
+                }
+            }
+        }
     }
+
+    /** Tests only: called inside [offer]'s lock ([HOOK_OFFERED]) and before each pipe [clear] closes ([HOOK_NEXT_PIPE]). */
+    @Volatile
+    internal var testHook: ((String) -> Unit)? = null
+    internal const val HOOK_OFFERED = "offered"
+    internal const val HOOK_NEXT_PIPE = "next_pipe"
 
     const val AUTHORITY_SUFFIX = ".photos"
     private const val TOKEN_BYTES = 16
@@ -85,7 +122,12 @@ class PhotoShareProvider : ContentProvider() {
         val offer = SharedPhotos.get(uri) ?: throw FileNotFoundException("not available")
         val (read, write) = ParcelFileDescriptor.createReliablePipe()
         val token = SharedPhotos.token(uri) ?: throw FileNotFoundException("not available")
-        SharedPhotos.opened(write)
+        if (!SharedPhotos.opened(token, offer, write)) {
+            // Withdrawn since it was read above (a clear at the same instant): nothing is streamed.
+            runCatching { write.closeWithError("withdrawn") }
+            runCatching { read.close() }
+            throw FileNotFoundException("not available")
+        }
         // Streamed from the offer itself (no copy), in chunks, each written only while the offer is still offered:
         // a clear (a lock, the viewer closed) ends the stream with an error, never with zeros.
         Thread {
