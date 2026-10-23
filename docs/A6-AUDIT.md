@@ -17,6 +17,54 @@ changed.
 - **Store policy statements** (Play, F-Droid) are from memory, not from the repo: check each one in
   Play Console or with `fdroid scanner` before acting on it.
 
+## Status (2026-10-23)
+
+Re-checked against master `91b17407` (2026-10-23) by reading the code; nothing was run on a phone.
+Line numbers in the findings below are those of the audited commit and have moved since.
+
+**Blockers: all seven fixed or in review.**
+
+| Finding | Status | Where | Tests |
+|---|---|---|---|
+| N1 transfer resume | Fix in review | #187 | `VaultDeviceTest.aTransferKilledAfterTheCodeIsCompletedByALateDevicePaired`, `aWaitThatEndsDropsNothing`, `aTransferWithoutACodeOrRejectedIsNotResumed`; `TransferInViewModelTest.aRestartWhileWaitingShowsTheCodeAndWaitsAgain`, `aTimedOutTransferIsDroppedOnlyByAConfirmedCancel`, `cancellingDropsTheHandshake` |
+| N2 outbox replay | Fix in review | #185 | `VaultDeviceTest.aRequestThatFailedInTransportIsNeverDeliveredLater`, `aRequestInProgressIsNotStoredForAfterAKill`, `requestsQueuedByAnEarlierVersionAreDroppedAtLoad` |
+| N3 enrolment resume | Fix in review | #186 | `EnrolmentResumeTest` (a kill at each step), `AltRequestsTest.anEnrollmentRequestIsKeptOutstandingAcrossARestart`, `OnboardingViewModelTest.anOutstandingEnrollmentAfterARestartIsResumedWithoutANewPin` and three more |
+| E1 recovery cannot be left | Fixed | #121 `00f13564` | as listed in #121 |
+| R1 root navigation | Fixed | #119 `03d2d91b` | as listed in #119 |
+| S1 Recents and screenshots | Fixed | #120 `146179bc` | as listed in #120 |
+| S2 keyboard learning | Fixed | #120 `146179bc` | as listed in #120 |
+
+Before N1's fix, release R had already changed the old phone's side (#135 `c2784564`, VAULT-MESSAGING
+§11.14.10): the old phone keeps its keys until the new phone's first unlock, or for 7 days, and offers "The
+move didn't finish". That does not cover N1. Once the approval's state write is stored, the old phone's
+unlock key is gone, so it cannot take the vault back. The new phone's resume (#187) is what closes N1.
+
+**Other findings fixed or partly fixed since the audit**
+
+| Finding | Status | Where | Evidence (master `91b17407`) |
+|---|---|---|---|
+| R3, R5 | Fixed | #119 | with R1 |
+| S3, S4 | Fixed | #120 | with S1 and S2 |
+| N4, N6, A4, G1, R2, P4 | Fixed | #122 `047cd1af` | as listed in #122 |
+| N10 lock offline | Fixed (fail secure) | #127 `7a250bcd`, #140, #181 | The lock is pending until the vault confirms it. It is retried, never sent through the outbox, and shown with "Try again" (`LockKeeper.kt`; `LockKeeperTest.aLockThatCannotBeConfirmedIsPendingAndTriedAgainUntilItIs`, `aPendingLockSurvivesTheProcess`) |
+| N18 release-update progress | Fixed in effect | #159 `e8a3c1e2` | The way back to release N is a stored marker (`AltState.movedFrom`, `moveFailed`; `MoveUnconfirmed.kt`). It survives a restart (`MoveMarkersTest`, `UnlockReturnTest`) |
+| E18 unfinished wipe | Fixed | #139, #141, #164 | `ERASE_FAILED` with "Try again". The marker is retried, then the wipe stops and says so. No enrolment while a wipe is pending (`WipeRunTest`) |
+| S16 relay log line | Fixed | #181 | The class name only (`RelaySafetyNetTest.theRelayLineCarriesNoMessage`) |
+| E7 dead ends | Mostly fixed | #142 `600a2f5d` | Recover, support or erase on the stuck screens (`UnlockStuckTest`, `StuckScreensTest`) |
+| N5 clock | Partly | #122 | A member-API 401 with the phone's clock more than 240 s off is `CLOCK` (`MemberApiFreshSignatureTest`). Relay `timestamp_stale` and vault time drops are unchanged |
+| E2 list errors | Partly | #173, #176 | A failed list no longer wipes what was known. There is still no error card |
+| E6 enclave failures | Partly | #118 | `RELEASE_UNKNOWN`, `MANIFEST` and `ENCLAVE` are separate. A stale attestation is not |
+| A1 announcements | Partly | #122, #127 | `SecretField` errors and the unlock, owner-check and lock notices are announced. The other screens listed are still silent |
+| A7 TOTP | Partly | #120 | "Copy the current code" exists. The digits and the time left are not yet described |
+| S5, S17, S18 erase and memory | Partly | #159, #164, #167 | Own profile and account are memory only. History is cleared only on wipe and deletion, not at lock. Some stores are not confirmed cleared |
+| P3 start-up | Partly | #122 | An unreadable record is a dead end with a message. `loadLocal()` still runs on the main thread |
+| P5 messages | Partly | #130 | Paging to older messages. The per-connection round trips are unchanged |
+| T2 VaultManager tests | Partly | several | Parts extracted and tested (`LockKeeper`, `WipeRun`, `FinishMoveRunner`, `OwnAccount`, now `EnrolmentResume`). `VaultManager` itself still has no test |
+
+Everything else is still open as written. That includes N8, N9, N11 to N17, N19, N20 and R9 (the
+transfer-out screen's Back still has no confirmation). The new phone's Back on "Compare the code" asks
+first since #187.
+
 ## How to read the findings
 
 **Severity**
@@ -69,6 +117,8 @@ Each of these was re-read line by line after it was first found.
 
 ### N1. A transfer to a new phone cannot be resumed once the safety code is shown; an approved transfer can leave neither phone holding the vault
 
+- **Status 2026-10-23:** fix in review, #187. The transfer is stored from its `hs.init`, with its code before `hs.fin` goes out. `device.paired{transfer}` is applied in the message handler. A restart shows the code again and goes on waiting. Nothing is dropped on the local timer. Cancel is confirmed. The steps after the approval resume as a take-over, never as `credential.create`. The screen stays on.
+
 - **Status:** V on the new phone's side; the old phone's and the vault's behaviour per spec (VAULT-MESSAGING §6.7.1).
 - **Evidence**
   - `device.paired` only completes the pairing inside one in-memory wait: `st.deviceId` is set in
@@ -97,6 +147,8 @@ Each of these was re-read line by line after it was first found.
 
 ### N2. A request that fails in transport is reported as failed, but stays in the persisted outbox and is executed later
 
+- **Status 2026-10-23:** fix in review, #185. Requests are never written to the outbox, only fire-and-forget messages are, and queued requests of earlier versions are dropped at load. N11 (client ids) stays open.
+
 - **Status:** V on the client; what the vault does with the late request per spec.
 - **Evidence**
   - `sendLocked` does `st.outbox.add(entry); save(); deliver(entry)` (`vault/VaultDevice.kt:716-718`).
@@ -122,6 +174,8 @@ Each of these was re-read line by line after it was first found.
 
 ### N3. Enrolment is not resumable: a network failure after the enrol request turns "Try again" into "Your account already has a vault"
 
+- **Status 2026-10-23:** fix in review, #186. The request id, nonce and time are stored before the post. A retry or a restart reads the slot or waits for `vault.enrolled` instead of posting again. After a restart there is no new PIN, and the run is in the app scope. N8 stays open.
+
 - **Status:** V on the client; the 24 h rule per spec (§11.3).
 - **Evidence**
   - `enroll` always starts with `s.alt.enroll(…)` and has no "already enrolling" check
@@ -144,6 +198,8 @@ Each of these was re-read line by line after it was first found.
 
 ### E1. A registered recovery cannot be left: the new phone is stuck on "Enter your vault PIN"
 
+- **Status 2026-10-23:** fixed, #121 (`00f13564`).
+
 - **Status:** V.
 - **Evidence**
   - Back is enabled only on INTRO, LOADING, SCAN and TYPE (`onboarding/MoveScreens.kt:169-172`;
@@ -160,6 +216,8 @@ Each of these was re-read line by line after it was first found.
   `abandonRecovery()`; make it the primary action after `recover_pin_cancelled`.
 
 ### R1. The root navigation rebuilds the current phase on every activity recreation and every app-lock unlock
+
+- **Status 2026-10-23:** fixed, #119 (`03d2d91b`).
 
 - **Status:** V/S. The code is verified; check it on a phone first (two minutes, checklist item 1).
 - **Evidence:** `app/ui/VettIdApp.kt:102-108`:
@@ -179,6 +237,8 @@ Each of these was re-read line by line after it was first found.
 
 ### S1. Vault content is visible in Recents, screenshots and screen recordings, and the app lock does not cover it
 
+- **Status 2026-10-23:** fixed, #120 (`146179bc`).
+
 - **Status:** V that nothing protects it; what the Recents card shows is S.
 - **Evidence:** the only `FLAG_SECURE` is the typed recovery code (`onboarding/RecoverTypeScreen.kt:59`
   through `ui/SecureWindow.kt:30`). There is no `setRecentsScreenshotEnabled` and no cover on pause.
@@ -196,6 +256,8 @@ Each of these was re-read line by line after it was first found.
   secret is in [Appendix B](#appendix-b-screens-that-show-or-accept-a-secret).
 
 ### S2. Free-text values of secret and critical items are typed with autocorrect and keyboard learning on
+
+- **Status 2026-10-23:** fixed, #120 (`146179bc`).
 
 - **Status:** V.
 - **Evidence:** `items/ItemEditScreen.kt:747` `val free = f.kind == FieldKinds.TEXT || multi`;
