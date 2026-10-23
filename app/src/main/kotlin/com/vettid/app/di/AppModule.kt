@@ -106,8 +106,14 @@ object AppModule {
     @AppScope
     fun scope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + safetyNet)
 
-    /** A relay or transport error that escapes a coroutine of the process scope is logged, never fatal. */
-    private val safetyNet = RelaySafetyNet(onRelayError = { e -> android.util.Log.w("VettID", "relay error not handled: ${e.message}") })
+    /**
+     * A relay or transport error that escapes a coroutine of the process scope is logged, never fatal; anything else
+     * crashes. Class names only, never a message (the owner's rule, 2026-10-23); stack frames in debug builds only.
+     */
+    private val safetyNet = RelaySafetyNet(
+        onRelayError = { e -> android.util.Log.w("VettID", RelaySafetyNet.relayLine(e)) },
+        fatal = RelaySafetyNet.crash(keepFrames = BuildConfig.DEBUG),
+    )
 
     /** One pool for every client derived from [http]; emptied when the network changes or the app comes back (VettIdApplication). */
     @Provides
