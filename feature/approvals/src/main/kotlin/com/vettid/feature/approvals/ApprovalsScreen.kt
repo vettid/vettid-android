@@ -95,13 +95,15 @@ fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) ->
     composable<ApprovalDetailRoute> {
         val vm: ApprovalDetailViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        // The share items this composition shows: a tap decides these, not a question a later batch changed (§10.12).
+        val shown = (state.approval as? Approval.ShareDecision)?.items?.map { it.itemId }
         ApprovalDetailScreen(
             state,
             DecisionActions(
                 onBack = onBack,
                 onPassword = vm::setPassword,
-                onApprove = vm::approve,
-                onDeny = vm::deny,
+                onApprove = { vm.approve(shown) },
+                onDeny = { vm.deny(shown) },
                 onAskBlock = vm::askBlock,
                 onBlock = vm::block,
                 onToggleShareItem = vm::toggleShareItem,
