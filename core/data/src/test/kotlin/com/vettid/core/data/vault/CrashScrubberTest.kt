@@ -93,7 +93,15 @@ class CrashScrubberTest {
     @Test
     fun relaySafetyNetsScrubbedCrashIsPassedOnAsItIs() {
         CrashScrubber.install()
-        // RelaySafetyNet.crash: the thread's handler (here the default one, through the thread group) gets a Scrubbed.
+        // What RelaySafetyNet.crash does: a Scrubbed to the thread's handler (here the default one, through the thread
+        // group). The same instance reaches Android's handler: not scrubbed again.
+        val scrubbed = Scrubbed.of(secretCrash(), keepFrames = true)
+        val t = Thread.currentThread()
+        t.uncaughtExceptionHandler!!.uncaughtException(t, scrubbed)
+        assertSame(scrubbed, received.single().second)
+
+        // And RelaySafetyNet.crash itself: its Scrubbed arrives with the class names.
+        received.clear()
         RelaySafetyNet.crash(keepFrames = true)(secretCrash())
         val s = received.single().second
         assertEquals(IllegalStateException::class.java.name, s.message)

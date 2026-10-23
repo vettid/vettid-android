@@ -8,7 +8,8 @@ import java.io.File
 /**
  * The owner's rule (2026-10-23): an exception's message never carries vault data, since logs and crash reports may carry
  * the message (crashes are scrubbed, but a message logged or wrapped elsewhere is not). A coarse check of the source:
- * no `throw …Exception("…$x…")` or `error("…$x…")` in the app's own code (app, core, feature; not tests, not
+ * no exception message (`throw …Exception("…$x…")`, a bare `…Exception("…$x…")`, `error("…$x…")`,
+ * `require(…) { "…$x…" }` and the like) in the app's own code (app, core, feature; not tests, not
  * :core:testing) interpolates a value whose name says it is a secret or a member's data. Names, item values,
  * message text and the like are described instead ("item value is not a valid phone number").
  */
@@ -39,6 +40,11 @@ class ExceptionMessageSourceTest {
         assertTrue(SENSITIVE.containsMatchIn("throw IllegalStateException(\"not a phone number: ${d}{item.value}\")"))
         assertTrue(SENSITIVE.containsMatchIn("throw CryptoException.Format(\"bad ${d}password\")"))
         assertTrue(SENSITIVE.containsMatchIn("?: error(\"no ${d}{e.message}\")"))
+        assertTrue(SENSITIVE.containsMatchIn("require(ok) { \"not a phone number: ${d}value\" }"))
+        assertTrue(SENSITIVE.containsMatchIn("checkNotNull(item) { \"no item for ${d}{item.text}\" }"))
+        assertTrue(SENSITIVE.containsMatchIn("Result.failure(IllegalArgumentException(\"bad ${d}payload\"))"))
+        assertTrue(!SENSITIVE.containsMatchIn("class CallMessageException(message: String) : IOException(\"call: ${d}message\")"))
+        assertTrue(!SENSITIVE.containsMatchIn("class CallMessageException(message: String) : java.io.IOException(\"call: ${d}message\")"))
         assertTrue(!SENSITIVE.containsMatchIn("throw CryptoException.Format(\"json: missing ${d}name\")"))
         assertTrue(!SENSITIVE.containsMatchIn("throw VaultStateException(\"${d}type: no response\")"))
     }
@@ -47,9 +53,14 @@ class ExceptionMessageSourceTest {
         val TEST_SOURCE_SETS = setOf("test", "androidTest", "testFixtures")
         const val MIN_FILES = 200
 
-        /** A `throw XxxException("…$v` or `error("…$v` whose value [v] (or `x.v`) has one of these names. */
+        /** An exception message (thrown, made, `error`, `require`/`check`) interpolating a value `v` (or `x.v`) of these names. */
         val SENSITIVE = Regex(
-            """(throw\s+[\w.]*(Exception|Error|Failure)[\w.]*\(|\berror\()"[^"]*\$\{?([a-z]\w*\.)*""" +
+            // throw XxxException("…; a bare XxxException("… (in Result.failure(…), say), but not a class's own
+            // supertype call (`) : IOException("call: …`), which only forwards its parameter; error("…; and
+            // require/check/requireNotNull/checkNotNull(…) { "… .
+            """(throw\s+[\w.]*(Exception|Error|Failure)[\w.]*\(|(?<![\w.])(?<!: )[\w.]*(Exception|Error|Failure)[\w.]*\(|""" +
+                """\berror\(|\b(require|check|requireNotNull|checkNotNull)\([^)]*\)\s*\{\s*)""" +
+                """"[^"]*\$\{?([a-z]\w*\.)*""" +
                 """(password|passphrase|pin|secret|seed|plaintext|privateKey|firstName|lastName|displayName|email|""" +
                 """phone|value|itemValue|payload|body|text|answer|message|detail|token)\b""",
         )
