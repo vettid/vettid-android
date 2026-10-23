@@ -94,8 +94,14 @@ object Channels {
         }
     }
 
-    /** `android.resource://<package>/<resId>`: the package is the running app's (release, staging, foss, debug). */
-    fun soundUri(context: Context, @RawRes res: Int): Uri = Uri.parse("android.resource://${context.packageName}/$res")
+    /**
+     * `android.resource://<package>/raw/<name>`: the package is the running app's (release, staging, foss, debug).
+     * By name, not by id: Android keeps a channel's sound URI from its creation, and resource ids change between
+     * builds, so an update would otherwise play another sound or none. The names survive resource shrinking
+     * (`res/raw/notify_sounds_keep.xml`).
+     */
+    fun soundUri(context: Context, @RawRes res: Int): Uri =
+        Uri.parse("android.resource://${context.packageName}/raw/${context.resources.getResourceEntryName(res)}")
 
     /** The ringtone rings as a ringtone (ring volume, ringer mode); the other sounds as notifications. */
     fun attributes(id: String): AudioAttributes = AudioAttributes.Builder()

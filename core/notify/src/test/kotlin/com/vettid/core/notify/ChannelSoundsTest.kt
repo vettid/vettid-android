@@ -9,6 +9,7 @@ import android.net.Uri
 import com.vettid.core.vault.FeedItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,7 +26,7 @@ class ChannelSoundsTest {
     private val app: Application = RuntimeEnvironment.getApplication()
     private val nm = app.getSystemService(NotificationManager::class.java)
 
-    private fun uri(res: Int) = Uri.parse("android.resource://${app.packageName}/$res")
+    private fun uri(res: Int) = Uri.parse("android.resource://${app.packageName}/raw/${app.resources.getResourceEntryName(res)}")
 
     private fun channel(id: String): NotificationChannel = requireNotNull(nm.getNotificationChannel(id)) { "no channel $id" }
 
@@ -76,6 +77,22 @@ class ChannelSoundsTest {
         assertEquals(uri(R.raw.vettid_general), c.sound)
         assertEquals(AudioAttributes.USAGE_NOTIFICATION, c.audioAttributes.usage)
         assertEquals(AudioAttributes.CONTENT_TYPE_SONIFICATION, c.audioAttributes.contentType)
+    }
+
+    /** Each channel's URI names its sound (never a resource id, which changes between builds) and resolves to it. */
+    @Test
+    fun eachChannelsSoundUriResolvesByName() {
+        Channels.ensure(app)
+        val updates = NotificationChannel(Channels.VAULT_UPDATES, "v", NotificationManager.IMPORTANCE_DEFAULT)
+        Channels.applySound(app, updates)
+        val channels = (Channels.ids.map { channel(it) } + updates).filter { it.sound != null }
+        assertEquals(Channels.SOUNDS.keys, channels.map { it.id }.toSet())
+        channels.forEach { c ->
+            val s = c.sound
+            assertEquals(c.id, listOf("raw", app.resources.getResourceEntryName(Channels.SOUNDS.getValue(c.id))), s.pathSegments)
+            assertEquals(c.id, Channels.SOUNDS.getValue(c.id), app.resources.getIdentifier(s.lastPathSegment, "raw", app.packageName))
+            assertNotNull(c.id, app.contentResolver.openInputStream(s)?.use { it.read() })
+        }
     }
 
     @Test

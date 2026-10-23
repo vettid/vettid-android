@@ -56,15 +56,20 @@ class ChannelIdsTest {
     fun everyBuilderAndChannelTakesAKnownId() {
         val builder = """\b(?:NotificationCompat\.Builder|Notification\.Builder)\(\s*[\w.]+\s*,\s*([^,()]+?)\s*[,)]"""
         val calls = Regex("""$builder|\bNotificationChannel\(\s*([^,()]+?)\s*,""")
-        // The expressions that carry a channel id: a Channels constant, the release notice's, a LocalNotification's
-        // (made by FeedNotifier and NotificationMapping from Channels constants), and Channels.ensure's own loop.
-        val allowed = setOf("CHANNEL_ID", "n.channel", "id")
+        // The expressions that carry a channel id: a Channels constant, a LocalNotification's (made by FeedNotifier and
+        // NotificationMapping from Channels constants), Channels.ensure's own loop, and a file's own `CHANNEL_ID`
+        // constant when that is a Channels constant (the release notice's).
+        val allowed = setOf("n.channel", "id")
+        val ownConstant = Regex("""\bconst val CHANNEL_ID\s*=\s*Channels\.([A-Z][A-Z0-9_]*)\b""")
+        fun known(arg: String) = arg.startsWith("Channels.") && idOf(arg.removePrefix("Channels.")) in Channels.allIds
         val found = sources.flatMap { (path, text) ->
             calls.findAll(text).map { m -> path to (m.groupValues[1].ifEmpty { m.groupValues[2] }) }.toList()
         }
         assertTrue("the notification builders are found", found.size >= 6)
         found.forEach { (path, arg) ->
-            val ok = arg in allowed || arg.removePrefix("Channels.").let { arg.startsWith("Channels.") && idOf(it) in Channels.allIds }
+            val text = sources.first { it.first == path }.second
+            val own = ownConstant.find(text)?.groupValues?.get(1)
+            val ok = arg in allowed || known(arg) || (arg == "CHANNEL_ID" && own != null && known("Channels.$own"))
             assertTrue("$path: notification channel `$arg`", ok)
         }
         assertEquals(Channels.VAULT_UPDATES, ReleaseUpdateNotifier.CHANNEL_ID)
@@ -91,7 +96,7 @@ class ChannelIdsTest {
         }
         assertEquals(listOf("CallService.kt"), posting.map { File(it.first).name })
         val service = posting.single().second
-        val builders = Regex("""Builder\(\s*this\s*,\s*Channels\.CALLS\s*\)""").findAll(service).count()
+        val builders = Regex("""Builder\(\s*[^,()]+,\s*Channels\.CALLS\s*\)""").findAll(service).count()
         assertTrue(builders > 0)
         assertEquals("every Calls notification is silent", builders, Regex("""\.setSilent\(true\)""").findAll(service).count())
     }
