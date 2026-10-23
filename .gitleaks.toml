@@ -37,4 +37,9 @@ regexes = [
   '''042464a2f8813e007299b9c0beef9c8d6d8d17470b32bba0329c145f0cfc60b683f831a3''',
   '''QWERTY123456''',
   '''violet-Kestrel-91-moss''',
+  # VAULT-MESSAGING 0.28.0 / docs/calls/CALL-MEDIA.md §8 call-media vectors (from vettid-vault's calls.json, TEST ONLY,
+  # printed in the specification): the frame keys of k_dir("caller") for suite 1 and suite 2, named as constants in
+  # :core:calls' FrameFormatDeviceTest.
+  '''df487affce123283952f691628c1c2de''',
+  '''e2637ed9e4ab88d26b3f34869104e58d355e1eb7b6c5b7d3aea521bda4fd83da''',
 ]
