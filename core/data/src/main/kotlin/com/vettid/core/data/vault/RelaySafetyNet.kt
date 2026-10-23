@@ -53,8 +53,8 @@ class RelaySafetyNet(
 
         /**
          * The fatal handler: [Scrubbed] goes to the thread's uncaught-exception handler (the app crashes as before). The
-         * stack frames only with [keepFrames]: the app passes `BuildConfig.DEBUG` (the debug and devStack builds), so a
-         * release or staging crash reaches logcat and any crash report with the class names alone.
+         * stack frames only with [keepFrames]: the app keeps them in every build (the owner, 2026-10-23), so a crash
+         * reaches logcat and any crash report with class names and frames, never a message.
          */
         fun crash(keepFrames: Boolean): (Throwable) -> Unit = { e ->
             val s = Scrubbed.of(e, keepFrames)

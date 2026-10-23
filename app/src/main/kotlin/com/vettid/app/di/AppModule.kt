@@ -108,11 +108,12 @@ object AppModule {
 
     /**
      * A relay or transport error that escapes a coroutine of the process scope is logged, never fatal; anything else
-     * crashes. Class names only, never a message (the owner's rule, 2026-10-23); stack frames in debug builds only.
+     * crashes. Class names only, never a message (the owner's rule, 2026-10-23); the stack frames are kept in every
+     * build (the owner, 2026-10-23: they carry no data, and a crash report without them cannot be traced).
      */
     private val safetyNet = RelaySafetyNet(
         onRelayError = { e -> android.util.Log.w("VettID", RelaySafetyNet.relayLine(e)) },
-        fatal = RelaySafetyNet.crash(keepFrames = BuildConfig.DEBUG),
+        fatal = RelaySafetyNet.crash(keepFrames = true),
     )
 
     /** One pool for every client derived from [http]; emptied when the network changes or the app comes back (VettIdApplication). */
