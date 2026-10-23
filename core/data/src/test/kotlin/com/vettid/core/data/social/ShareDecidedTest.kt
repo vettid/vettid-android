@@ -469,4 +469,47 @@ class ShareDecidedTest {
         runCurrent()
         assertNull(m.share("r1"))
     }
+
+    // --- A feed item is read once nothing of its question is left, also when another rule's decision emptied it ---
+
+    private suspend fun TestScope.hiddenUnderR1(m: SocialManager) {
+        // A waits in r1 and r2 (shown under r1), B only in r2.
+        m.refresh(entry("r1", "A"), entry("r2", "A"), entry("r2", "B"))
+        runCurrent()
+        assertEquals(listOf("A"), m.items("r1"))
+        assertEquals(listOf("B"), m.items("r2"))
+        m.decide("r2", listOf("B"), """{"included":["B"],"declined":[]}""")
+        runCurrent()
+        // r2 still holds A in the raw list: unread.
+        assertTrue(feedReads.isEmpty())
+    }
+
+    @Test
+    fun aDecisionUnderOneRuleReadsTheOtherRulesFeedItemItEmptied() = runTest {
+        val m = manager()
+        hiddenUnderR1(m)
+        m.decide("r1", listOf("A"), """{"included":["A"],"declined":[]}""")
+        runCurrent()
+        assertEquals(setOf<String?>("r1", "r2"), feedReads.toSet())
+    }
+
+    @Test
+    fun aQuestionStillOpenKeepsItsFeedItemUnread() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "A"), entry("r2", "A"), entry("r2", "B"), entry("r2", "C"))
+        runCurrent()
+        m.decide("r1", listOf("A"), """{"included":["A"],"declined":[]}""")
+        runCurrent()
+        assertEquals(listOf<String?>("r1"), feedReads)
+        assertEquals(listOf("B", "C"), m.items("r2"))
+    }
+
+    @Test
+    fun aDecisionOnAnotherDeviceReadsTheOtherRulesFeedItemToo() = runTest {
+        val m = manager()
+        hiddenUnderR1(m)
+        m.decided("r1", """"A"""")
+        runCurrent()
+        assertEquals(setOf<String?>("r1", "r2"), feedReads.toSet())
+    }
 }

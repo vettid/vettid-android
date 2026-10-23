@@ -486,13 +486,16 @@ class SocialManager(
      * rules, where they wait too (one answer per item and subject, §10.12); a question left empty goes. Kept events and
      * the list, and a read now on its way.
      */
-    private suspend fun applyShareDecided(rule: String, done: Set<String>, subjectHint: String? = null) {
-        if (done.isEmpty()) return
+    private suspend fun applyShareDecided(rule: String, done: Set<String>, subjectHint: String? = null): Set<String> {
+        if (done.isEmpty()) return emptySet()
         val known = subjectHint ?: subjectOfRule(rule)
         // A rule of no known subject: a read now settles the rest.
         if (known == null) scope.launch { runCatching { refreshApprovals() } }
         val subject = known ?: "rule:$rule"
         val applies = { d: Approval.ShareDecision -> d.ruleId == rule || ShareQuestions.subjectKey(d) == subject }
+        // The subject's questions before the removal: the one this empties has its feed item read below.
+        val asked = (listedFlow.value + storedFlow.value.mapNotNull(::parsed)).filter { it is Approval.ShareDecision && applies(it) }
+            .map { it.key }.toSet() + "share:$rule"
         removeShareItems(done, applies) {
             changes++
             if (readSinces.isNotEmpty()) {
@@ -500,6 +503,10 @@ class SocialManager(
                 if (decidedLog.size > MAX_LOG) decidedLog.removeAt(0)
             }
         }
+        // Every question of the subject now gone from the list and the kept events is read, not only the decided rule's:
+        // an item decided under one rule also leaves the others, and the dedupe may have hidden it from their screens.
+        return asked.filter { key -> listedFlow.value.none { it.key == key } && storedFlow.value.none { keyOf(it) == key } }
+            .onEach(::decided).toSet()
     }
 
     /**
@@ -1233,14 +1240,14 @@ class SocialManager(
         } else {
             told.flatMap { listOf("included", "declined").flatMap { k -> ids(it, k) } }.toSet()
         }
-        applyShareDecided(ruleId, done, subject)
+        val read = applyShareDecided(ruleId, done, subject)
         // Sent but not named by the answer: the vault did not hold them pending. They leave this rule's question here
         // only; that is not a decision, so nothing is noted for a read on its way.
         val ignored = (include + decline).toSet() - done
         if (ignored.isNotEmpty()) removeShareItems(ignored, { it.ruleId == ruleId })
         // The feed item is read only when nothing of the question is left (a batch may have added an item meanwhile).
         val key = "share:$ruleId"
-        if (listedFlow.value.none { it.key == key } && storedFlow.value.none { keyOf(it) == key }) decided(key)
+        if (key !in read && listedFlow.value.none { it.key == key } && storedFlow.value.none { keyOf(it) == key }) decided(key)
     }
 
     override suspend fun declineDeviceRequest(key: String) {
