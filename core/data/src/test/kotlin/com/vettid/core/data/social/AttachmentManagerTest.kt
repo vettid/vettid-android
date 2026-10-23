@@ -20,9 +20,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicReference
 
 /** Sending, retrying, cancelling and fetching photos (VAULT-MESSAGING 0.32.0 §10.5.1, ANDROID-PLAN 0.1.39). */
 class AttachmentManagerTest {
@@ -350,22 +352,30 @@ class AttachmentManagerTest {
     @Test
     fun aClearDuringTheRequestsBuildWaitsForACompleteRequest() = runTest {
         val p = m.begin("c1", "", photo())
-        var clearing: Thread? = null
+        // Set on the send's thread, read on the test's: an AtomicReference, never a plain var.
+        val clearing = AtomicReference<Thread>()
         m.testHook = { point ->
             if (point == AttachmentManager.HOOK_BUILD) {
                 val t = Thread { m.clear() }.apply { start() }
-                clearing = t
+                clearing.set(t)
                 // The clear is blocked until the request is built.
                 t.join(200)
                 assertTrue("the clear waits for the build", t.isAlive)
             }
         }
         val e = runCatching { m.send(p) }.exceptionOrNull()
-        clearing!!.join(5_000)
-        val blob = ops.requests.single().second["blob"]!!.jsonObject
+        // Anything but the clear's VaultFailure (an assertion in the hook, a failure before the build) is the real cause.
+        if (e !is VaultFailure) throw AssertionError("send failed before the build", e)
+        assertNotNull("the build hook ran", clearing.get())
+        clearing.get().join(5_000)
+        val blobField = ops.requests.single().second["blob"]
+        assertNotNull("the request carries the blob", blobField)
+        val blob = blobField!!.jsonObject
         val key = Base64s.decodeStd(blob["key"]!!.jsonPrimitive.content)
         assertFalse("a complete key, not zeros", key.all { it == 0.toByte() })
-        assertArrayEquals(thumb, Base64s.decodeStd(ops.requests.single().second["thumb"]!!.jsonPrimitive.content))
+        val thumbField = ops.requests.single().second["thumb"]
+        assertNotNull("the request carries the thumbnail", thumbField)
+        assertArrayEquals(thumb, Base64s.decodeStd(thumbField!!.jsonPrimitive.content))
         // What was sent opens with the reference sent.
         assertArrayEquals(jpeg, ClaimBlob.open(ops.uploads.single(), key, Base64s.decodeStd(blob["sha256"]!!.jsonPrimitive.content), blob["size"]!!.jsonPrimitive.content.toLong()))
         assertEquals(AttachmentManager.CODE_UNAVAILABLE, (e as VaultFailure).code)
