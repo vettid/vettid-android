@@ -19,7 +19,7 @@ class NotificationMappingTest {
             "connection.request", "connection.authenticate.requested", "grant.request", "share.pending", "critical-secret.use.request",
             "device.pair.pending", "device.session.pending", "approval.pending", "action.request", "intro.request", "location.request",
         ),
-        Channels.CALLS to listOf("call.missed"),
+        Channels.MISSED_CALLS to listOf("call.missed"),
         Channels.SECURITY to listOf(
             "credential.alarm", "owner_check.locked", "owner_check.failed", "owner_check.hold_changed", "credential.password_failed",
             "credential.reset", "device.replaced", "device.transferred", "device.signer_changed",

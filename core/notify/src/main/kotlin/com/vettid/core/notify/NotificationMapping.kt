@@ -19,7 +19,7 @@ object NotificationMapping {
         "critical-secret.use.request", "device.pair.pending", "device.session.pending", "approval.pending",
         "action.request", "intro.request", "location.request",
     )
-    private val CALLS = setOf("call.missed")
+    private val MISSED_CALLS = setOf("call.missed")
     private val SECURITY = setOf(
         "credential.alarm", "owner_check.locked", "owner_check.failed", "owner_check.hold_changed",
         "credential.password_failed", "credential.reset", "device.replaced", "device.transferred",
@@ -33,7 +33,7 @@ object NotificationMapping {
         FeedKinds.historyOnly(item.kind) -> null
         item.kind in MESSAGES -> Channels.MESSAGES
         item.kind in REQUESTS -> Channels.REQUESTS
-        item.kind in CALLS -> Channels.CALLS
+        item.kind in MISSED_CALLS -> Channels.MISSED_CALLS
         item.kind in SECURITY || urgentRecovery(item) -> Channels.SECURITY
         // Connections, grants, shares, items, devices, the credential renewed, agents, location, wallet; and
         // a newer vault's kinds (priority normal and above, never low: above).

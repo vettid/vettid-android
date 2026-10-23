@@ -20,6 +20,7 @@ import com.vettid.core.data.vault.ReleaseNotices
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateNoticeKind
+import com.vettid.core.notify.Channels
 import com.vettid.feature.onboarding.releaseDate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
@@ -87,7 +88,10 @@ class ReleaseUpdateNotifier(
                 CHANNEL_ID,
                 context.getString(R.string.release_channel_name),
                 NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply { description = context.getString(R.string.release_channel_description) },
+            ).apply {
+                description = context.getString(R.string.release_channel_description)
+                Channels.applySound(context, this)
+            },
         )
         val open = Intent(context, MainActivity::class.java).setAction(ACTION_OPEN_UPDATE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val tap = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -111,7 +115,8 @@ class ReleaseUpdateNotifier(
     }
 
     companion object {
-        const val CHANNEL_ID = "vault_updates"
+        /** `vault_updates_v2` since VettID's sounds (the old `vault_updates` is deleted at start, [Channels.ensure]). */
+        const val CHANNEL_ID = Channels.VAULT_UPDATES
         const val ACTION_OPEN_UPDATE = "com.vettid.app.action.OPEN_RELEASE_UPDATE"
         private const val NOTIFICATION_ID = 1001
 
