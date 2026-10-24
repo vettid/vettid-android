@@ -72,8 +72,10 @@ class PendingLockJob : JobService() {
         val FIRST_AFTER: Duration = Duration.ofMinutes(1)
 
         /**
-         * The time between runs while the lock is still pending. Every run's retries ask the member API at most 9
-         * times in its [BUDGET], so with a run every 15 minutes the member API's limit (30 locks in 15 minutes) is kept.
+         * The time between runs while the lock is still pending. A run's retries (at once, then 1, 2, 5, 10 s, 30 s
+         * apart) ask the member API about 11 times in its [BUDGET], and a process that lives on goes on at most 21 times
+         * in 15 minutes: under the member API's 30 locks in 15 minutes. A `429` is honoured. Best effort: Android may
+         * defer a job for an app it seldom sees (standby buckets); the record stays, and every start of the app resumes.
          */
         val AGAIN_AFTER: Duration = Duration.ofMinutes(15)
 

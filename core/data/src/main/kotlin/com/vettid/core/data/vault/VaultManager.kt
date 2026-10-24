@@ -1124,7 +1124,7 @@ class VaultManager(
         // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver, the pending
         // lock's job), bound to the same unlock as before when it was bound (release L).
         lockKeeper.resume()
-        if (lockKeeper.pending) lockedHere = true
+        if (lockKeeper.holdsPhone) lockedHere = true
         scope.launch {
             lockKeeper.notice.collectSurviving("lock notice") {
                 if (it !is LockNotice.Unconfirmed && pauseWanted) {
@@ -1394,7 +1394,8 @@ class VaultManager(
         val d = session?.device ?: return
         if (d.ensureCollecting()) android.util.Log.i("VaultManager", "mailbox collector restarted on return to the foreground")
         // Not while a lock is pending: nothing but the lock is sent to a vault that counts as locked.
-        if (!lockKeeper.pending) scope.launch { runCatching { d.flushOutbox() } }
+        // Not while this phone is held locked (a lock pending, or one the vault said was over: release L).
+        if (lockGuard.admits()) scope.launch { runCatching { d.flushOutbox() } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
@@ -1652,7 +1653,7 @@ class VaultManager(
         // Read before the gate: a lock asked for from here on bumps it (as at the end of an unlock).
         val gen = generation
         val rec = record.recordGeneration
-        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.pending, finishingMove = finishingMove.value)) return false
+        if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.holdsPhone, finishingMove = finishingMove.value)) return false
         io { updateLocal(rec) { it.copy(setupComplete = true, movedIn = false) } }
         // Both checks after the write, which suspends: the generation (a lock or a wipe meanwhile) and the guard (a lock
         // pending now).
@@ -1772,7 +1773,11 @@ class VaultManager(
             // Never beside a lock attempt; and once the vault has opened, no older lock is ever sent (LockKeeper).
             // On the IO dispatcher: an unlock that supersedes a pending lock removes its marker from the phone's store.
             io {
-              lockKeeper.unlocking(opened = { it.result.ok }) {
+              // (Release L) A lock asked for during this unlock is bound to the opening it makes (none: as before L).
+              lockKeeper.unlocking(
+                  opened = { it.result.ok },
+                  unlockIdOf = { o -> o.result.unlockId.takeIf { o.result.token != null } },
+              ) {
                 guard {
                     val s = session()
                     var out: UnlockOutcome = unlockWithSecret(s, pin, opts, release, onStarting, pinTaken)

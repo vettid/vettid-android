@@ -55,7 +55,9 @@ class PendingLockJobTest {
         val t = Instant.parse("2026-10-23T10:00:00Z")
         assertEquals(PendingLockNotifier.State.PENDING, PendingLockNotifier.state(LockNotice.Unconfirmed(t, 0)))
         assertEquals(PendingLockNotifier.State.IN_DOUBT, PendingLockNotifier.state(LockNotice.Unconfirmed(t, 1)))
-        for (over in listOf(LockNotice.None, LockNotice.ConfirmedLate, LockNotice.OpenedAgain)) {
+        // Opened again: the job goes (nothing to retry) but the notice does not just disappear (review of #190, D3).
+        assertEquals(PendingLockNotifier.State.OPENED_AGAIN, PendingLockNotifier.state(LockNotice.OpenedAgain))
+        for (over in listOf(LockNotice.None, LockNotice.ConfirmedLate)) {
             assertEquals(over.toString(), PendingLockNotifier.State.NONE, PendingLockNotifier.state(over))
         }
     }

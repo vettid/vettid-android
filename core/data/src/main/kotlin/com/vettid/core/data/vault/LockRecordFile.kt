@@ -12,9 +12,10 @@ import java.nio.file.StandardOpenOption
  * whole and synced before [save] returns. A lock the member asked for is kept across a process death in every state of
  * the account record: one that cannot be read (its Keystore key), one shut after a wipe that did not finish, one being
  * written. Plain text: two times (when a lock was asked for, and until when an unanswered relay lock may still be acted
- * on) and, for a lock bound to its unlock (release L), that unlock's `unlock_id` (a name, not a secret), readable
- * without the Keystore. A record without an `unlock_id` is written in the first version's form, which an older app
- * reads; a record of a form this app does not know says a lock is pending.
+ * on) and, from release L, the `unlock_id` a pending lock is bound to (a name, not a secret) and whether this phone is
+ * held locked after a lock that ended because the vault was opened again; readable without the Keystore. A record with
+ * neither is written in the first version's form, which an older app reads; a record of a form this app does not know
+ * says a lock is pending (an older app reading the second form starts locked, which is fail secure).
  *
  * Before this file, the record was kept in the account record: [legacy] reads it there until the file is in use
  * ([migrated], marked by [onFirstSave] after the first save, which also clears the legacy fields). A file that cannot be
@@ -68,7 +69,9 @@ internal class LockRecordFile(
     private fun line(r: LockRecord): String {
         val times = "${r.pendingSinceMs ?: NONE} ${r.relayLockUntilMs ?: NONE}"
         val id = r.unlockId
-        return if (id == null) "$VERSION $times\n" else "$VERSION_BOUND $times ${UnlockIds.of(id) ?: throw IOException("unlock_id")}\n"
+        if (id == null && !r.held) return "$VERSION $times\n"
+        val shown = if (id == null) NONE else UnlockIds.of(id) ?: throw IOException("unlock_id")
+        return "$VERSION_BOUND $times $shown ${if (r.held) HELD else NOT_HELD}\n"
     }
 
     @Suppress("ReturnCount") // one return per form
@@ -80,23 +83,35 @@ internal class LockRecordFile(
             else -> return null
         }
         if (parts.size != fields) return null
-        fun time(s: String): Long? = if (s == NONE) null else s.toLongOrNull() ?: throw NumberFormatException(s)
-        val id = if (fields == FIELDS_BOUND) UnlockIds.of(parts[ID_FIELD]) ?: return null else null
-        return try {
-            LockRecord(time(parts[1]), time(parts[2]), id)
-        } catch (_: NumberFormatException) {
-            null
+        val pending = time(parts[1]) ?: return null
+        val relay = time(parts[2]) ?: return null
+        if (fields == FIELDS) return LockRecord(pending.value, relay.value)
+        val raw = parts[ID_FIELD]
+        val id = if (raw == NONE) null else UnlockIds.of(raw) ?: return null
+        val held = when (parts[HELD_FIELD]) {
+            HELD -> true
+            NOT_HELD -> false
+            else -> return null
         }
+        return LockRecord(pending.value, relay.value, id, held)
     }
+
+    /** A time field: `-` is none ([Field] of null); anything but a number is not of the form (null). */
+    private fun time(s: String): Field? = if (s == NONE) Field(null) else s.toLongOrNull()?.let { Field(it) }
+
+    private class Field(val value: Long?)
 
     private companion object {
         const val VERSION = "1"
 
-        /** (Release L) With the `unlock_id` the pending lock is bound to. */
+        /** (Release L) With the `unlock_id` the pending lock is bound to (or `-`) and the held marker (`0` / `1`). */
         const val VERSION_BOUND = "2"
         const val NONE = "-"
         const val FIELDS = 3
-        const val FIELDS_BOUND = 4
+        const val FIELDS_BOUND = 5
         const val ID_FIELD = 3
+        const val HELD_FIELD = 4
+        const val HELD = "1"
+        const val NOT_HELD = "0"
     }
 }

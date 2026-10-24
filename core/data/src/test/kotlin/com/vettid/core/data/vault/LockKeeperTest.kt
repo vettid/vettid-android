@@ -548,13 +548,48 @@ class LockKeeperTest {
         assertEquals(LockNotice.OpenedAgain, k.notice.value)
         assertFalse(k.pending)
         assertTrue(k.holdsPhone)
-        assertEquals(LockRecord(), store.record)
+        assertEquals(LockRecord(held = true), store.record)
         advanceTimeBy(600_000)
         assertEquals(1, vault.attempts.size)
+        // Held across a process death (review of #190, D1): a new process starts with this phone locked.
+        val later = LockKeeper(backgroundScope, Store(store.record), vault, { now() }, ::steps)
+        later.resume()
+        assertFalse(later.pending)
+        assertTrue("held in the next process too", later.holdsPhone)
+        assertTrue(store.record.held)
         // A new lock while held: pending again, and its confirmation ends the hold.
         vault.answers += true
         assertTrue(k.ask(k.begin(null)))
         assertFalse(k.holdsPhone)
         assertEquals(listOf<String?>(id, null), vault.boundTo)
+        assertFalse(store.record.held)
+    }
+
+    /**
+     * Review of #190, D2: a lock asked for while an unlock is on its way outlives it, bound to the opening that unlock
+     * made, not to the one before (which would be answered stale_lock and leave the new opening open).
+     */
+    @Test
+    fun aLockAskedDuringAnUnlockIsBoundToTheNewOpening() = runTest {
+        val k = keeper()
+        val newId = "fedcba9876543210fedcba9876543210"
+        vault.answers += true
+        k.unlocking(opened = { it }, unlockIdOf = { newId }) {
+            val n = k.begin(id) // the member locks while the unlock is on its way
+            launch { k.ask(n) }
+            true
+        }
+        runCurrent()
+        assertEquals("named the new opening", listOf<String?>(newId), vault.boundTo)
+        assertFalse(k.pending)
+        // Without a name in the unlock's result: as before L.
+        vault.answers += true
+        k.unlocking(opened = { it }) {
+            val n = k.begin(id)
+            launch { k.ask(n) }
+            true
+        }
+        runCurrent()
+        assertEquals(listOf<String?>(newId, null), vault.boundTo)
     }
 }

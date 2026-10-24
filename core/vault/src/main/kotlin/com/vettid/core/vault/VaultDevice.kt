@@ -625,6 +625,9 @@ class VaultDevice private constructor(
         // §11.7.1 (0.27.0): the device key's chain goes with every unlock until the vault has shown this app its
         // signer in device.list ([signerSeen]); a vault that has recorded one ignores it.
         val opts = options.copy(sendChain = !st.signerSeen)
+        // (Release L) Whatever opening was known is over or about to be: a lock asked for meanwhile names none (the
+        // unlock's result names the new one).
+        unlockId = null
         val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), opts, now())
         pendingUnlock = b.pending
         discardable = Discardable(b, issuedBefore, st.issuedExpMs)

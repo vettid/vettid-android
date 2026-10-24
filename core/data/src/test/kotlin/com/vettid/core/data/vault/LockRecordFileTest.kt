@@ -97,17 +97,25 @@ class LockRecordFileTest {
     fun aBoundLocksUnlockIsKeptAcrossARestart() {
         val id = "0123456789abcdef0123456789abcdef"
         LockRecordFile(file(), legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7, unlockId = id))
-        assertEquals("2 7 - $id", file().readText().trim())
+        assertEquals("2 7 - $id 0", file().readText().trim())
         assertEquals(LockRecord(7, null, id), LockRecordFile(file(), legacy = { LockRecord() }).load())
         LockRecordFile(file(), legacy = { LockRecord() }).save(LockRecord(relayLockUntilMs = 9))
         assertEquals("an older app reads it", "1 - 9", file().readText().trim())
         assertEquals(LockRecord(null, 9), LockRecordFile(file(), legacy = { LockRecord() }).load())
     }
 
+    /** (Release L, review of #190 D1) "Held locked after the vault was opened again" survives a restart. */
+    @Test
+    fun theHeldMarkerIsKeptAcrossARestart() {
+        LockRecordFile(file(), legacy = { LockRecord() }).save(LockRecord(relayLockUntilMs = 9, held = true))
+        assertEquals("2 - 9 - 1", file().readText().trim())
+        assertEquals(LockRecord(null, 9, null, held = true), LockRecordFile(file(), legacy = { LockRecord() }).load())
+    }
+
     /** A bound record that is not of the form says a lock is pending (fail secure). */
     @Test
     fun aMalformedBoundRecordSaysALockIsPending() {
-        for (text in listOf("2 7 - xyz", "2 - - ${"A".repeat(32)}", "2 7 -", "3 7 - -")) {
+        for (text in listOf("2 7 - xyz 0", "2 - - ${"A".repeat(32)} 0", "2 7 - - 2", "2 7 - -", "3 7 - - 0")) {
             file().writeText(text)
             assertEquals(text, LockRecord(pendingSinceMs = 11), LockRecordFile(file(), legacy = { LockRecord() }, now = { 11 }).load())
         }

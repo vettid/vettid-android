@@ -15,6 +15,7 @@ import com.vettid.app.lock.PendingLockJob
 import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.notify.Channels
+import com.vettid.feature.onboarding.R as OnboardingR
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -28,7 +29,10 @@ import kotlinx.coroutines.launch
  * - while a lock is pending, the [PendingLockJob] is scheduled (it brings the process back if it was killed), and
  *   it is cancelled once the lock is over;
  * - while it is in doubt (a try failed) and VettID is not in front, the unlock screen's own words, "Your vault may
- *   still be open", as a notification on the Security channel, posted once per lock and gone when the lock is over.
+ *   still be open", as a notification on the Security channel, posted once per lock and gone when the lock is
+ *   confirmed;
+ * - (release L) when the lock ended because the vault was opened again since, the unlock screen's "Your vault was
+ *   opened again" in its place: the vault is not known to be locked, so the notice never just disappears then.
  *
  * Without the notification permission nothing is posted; the job runs all the same.
  */
@@ -37,15 +41,15 @@ class PendingLockNotifier(
     private val vault: VaultRepository,
     private val scope: CoroutineScope,
 ) {
-    /** Posted for the lock now pending: once per lock. */
-    private var posted = false
+    /** What was posted last: the lock it was for (its `askedAt`), or the opened-again notice; null: nothing. */
+    private var posted: Any? = null
 
     fun start() {
         scope.launch {
             vault.lockNotice.map { state(it) }.distinctUntilChanged().collect { s ->
                 runCatching {
                     when {
-                        s == State.NONE -> PendingLockJob.cancel(context)
+                        s == State.NONE || s == State.OPENED_AGAIN -> PendingLockJob.cancel(context)
                         !PendingLockJob.scheduled(context) -> PendingLockJob.schedule(context)
                     }
                 }
@@ -53,17 +57,24 @@ class PendingLockNotifier(
         }
         // In doubt and VettID not in front (now, or once the member leaves it): the notification, once per lock.
         scope.launch {
-            val states = combine(vault.lockNotice.map { state(it) }, AppForeground.visibleFlow) { s, front -> s to front }
-            states.distinctUntilChanged().collect { (s, front) ->
+            val states = combine(vault.lockNotice, AppForeground.visibleFlow) { n, front -> n to front }
+            states.distinctUntilChanged().collect { (n, front) ->
                 runCatching {
+                    // Keyed by the lock itself, so that a second lock is posted even if the state between was missed.
+                    val key: Any? = when (n) {
+                        is LockNotice.Unconfirmed -> n.askedAt.takeIf { n.inDoubt }
+                        LockNotice.OpenedAgain -> LockNotice.OpenedAgain
+                        else -> null
+                    }
                     when {
-                        s == State.NONE -> {
-                            posted = false
+                        // Confirmed (or nothing to lock): the notice goes.
+                        state(n) == State.NONE -> {
+                            posted = null
                             cancel()
                         }
-                        s == State.IN_DOUBT && !front && !posted && canPost() -> {
-                            post()
-                            posted = true
+                        key != null && key != posted && !front && canPost() -> {
+                            post(opened = n == LockNotice.OpenedAgain)
+                            posted = key
                         }
                     }
                 }
@@ -72,7 +83,7 @@ class PendingLockNotifier(
     }
 
     /** What the notifier does for a [LockNotice]. */
-    enum class State { NONE, PENDING, IN_DOUBT }
+    enum class State { NONE, PENDING, IN_DOUBT, OPENED_AGAIN }
 
     private fun canPost(): Boolean {
         val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -81,15 +92,17 @@ class PendingLockNotifier(
     }
 
     @android.annotation.SuppressLint("MissingPermission") // checked in canPost
-    private fun post() {
+    private fun post(opened: Boolean) {
         runCatching { Channels.ensure(context) }
         val open = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val tap = PendingIntent.getActivity(context, NOTIFICATION_ID, open, flags)
-        val text = context.getString(com.vettid.feature.onboarding.R.string.unlock_lock_unconfirmed_body)
+        val title = if (opened) OnboardingR.string.unlock_lock_opened_again_title else OnboardingR.string.unlock_lock_unconfirmed_title
+        val body = if (opened) OnboardingR.string.unlock_lock_opened_again_body else OnboardingR.string.unlock_lock_unconfirmed_body
+        val text = context.getString(body)
         val n = NotificationCompat.Builder(context, Channels.SECURITY)
             .setSmallIcon(R.drawable.ic_stat_vault_update)
-            .setContentTitle(context.getString(com.vettid.feature.onboarding.R.string.unlock_lock_unconfirmed_title))
+            .setContentTitle(context.getString(title))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(tap)
@@ -108,6 +121,7 @@ class PendingLockNotifier(
 
         /** [LockNotice] → what is shown and scheduled. */
         fun state(n: LockNotice): State = when {
+            n == LockNotice.OpenedAgain -> State.OPENED_AGAIN
             n !is LockNotice.Unconfirmed -> State.NONE
             n.inDoubt -> State.IN_DOUBT
             else -> State.PENDING

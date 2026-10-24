@@ -331,7 +331,7 @@ class LockGuardTest {
         assertEquals("the status is read to say what is true now", listOf("relay", "status"), ports.asked)
         assertEquals(LockNotice.OpenedAgain, g.keeper.notice.value)
         assertFalse(g.pending)
-        assertEquals("the record goes: nothing is tried again", LockRecord(), store.record)
+        assertEquals("nothing is tried again; the phone is held locked, on the phone too", LockRecord(held = true), store.record)
         ports.asked.clear()
         advanceTimeBy(3_600_001)
         assertEquals("not repeated", emptyList<String>(), ports.asked)
@@ -345,6 +345,7 @@ class LockGuardTest {
         assertTrue("dismissing the notice does not open this phone", g.lockedWhatever(unlocked = true))
         g.keeper.unlocking(opened = { it }) { true }
         assertFalse("an unlock here does", g.lockedWhatever(unlocked = true))
+        assertEquals(LockRecord(), store.record)
         assertTrue(g.admits())
         assertFalse(g.keeper.openedAgain)
     }

@@ -31,8 +31,16 @@ import java.time.Instant
  *   own word (the enroll, unlock or recovery-open result, or `vault.status`). With it the lock is **bound**: every
  *   attempt names it, over the relay and through the member API, and a process started later goes on with the same
  *   bound lock. Null: a vault before L, or a phone that did not hold the value; the lock is then made as before L.
+ * - [held] (release L): the last lock ended because the vault was opened again since ([LockNotice.OpenedAgain]): the
+ *   phone stays locked, also in a later process, until an unlock on this phone succeeds (or the vault is no longer
+ *   this phone's).
  */
-data class LockRecord(val pendingSinceMs: Long? = null, val relayLockUntilMs: Long? = null, val unlockId: String? = null)
+data class LockRecord(
+    val pendingSinceMs: Long? = null,
+    val relayLockUntilMs: Long? = null,
+    val unlockId: String? = null,
+    val held: Boolean = false,
+)
 
 /** Where [LockRecord] is kept: with the app's durable account record. */
 interface LockRecordStore {
@@ -183,6 +191,8 @@ class LockKeeper(
      */
     fun resume() {
         val r = store.load()
+        // (Release L) A lock that ended as "opened again": this phone is still locked, whatever the status says.
+        if (r.held) held = true
         val since = r.pendingSinceMs ?: return
         synchronized(this) {
             if (pending) return
@@ -300,7 +310,11 @@ class LockKeeper(
      * unlock succeeded, a lock asked for before it began is over (the member opened the vault again, later than
      * they locked it) and none of its attempts will ever be made.
      */
-    suspend fun <T> unlocking(opened: (T) -> Boolean, unlock: suspend () -> T): T = gate.withLock {
+    suspend fun <T> unlocking(
+        opened: (T) -> Boolean,
+        unlockIdOf: (T) -> String? = { null },
+        unlock: suspend () -> T,
+    ): T = gate.withLock {
         val before = asks
         settle().takeIf { it > 0 }?.let { delay(it) }
         val result = unlock()
@@ -316,6 +330,13 @@ class LockKeeper(
                     relayUntilMs = null
                     write { if (it != LockRecord()) LockRecord() else null }
                     noticeFlow.value = LockNotice.None
+                } else if (pending) {
+                    // (Release L) The newer lock names the opening this unlock made, never the one it ended (a lock
+                    // bound to that one would be answered stale_lock and leave this opening open).
+                    val id = unlockIdOf(result)
+                    boundTo = id
+                    held = false
+                    write { it.copy(unlockId = id, held = false) }
                 }
             }
         }
@@ -372,8 +393,8 @@ class LockKeeper(
         retries = null
         boundTo = null
         held = notice == LockNotice.OpenedAgain
-        // The relay lock's time stays: its request may still be waiting for the vault.
-        write { it.copy(pendingSinceMs = null, unlockId = null) }
+        // The relay lock's time stays: its request may still be waiting for the vault. Held is kept on the phone too.
+        write { it.copy(pendingSinceMs = null, unlockId = null, held = held) }
         noticeFlow.value = notice
     }
 
