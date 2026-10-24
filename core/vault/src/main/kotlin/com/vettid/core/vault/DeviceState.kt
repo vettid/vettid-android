@@ -53,6 +53,26 @@ internal data class DeviceState(
      * the first load ([VaultDevice.dropLegacyRequests]).
      */
     var requestsOutOfOutbox: Boolean = false,
+    /**
+     * (A6 audit N1) A direct transfer to this phone (§6.7.1) that this phone started and has not finished: kept from
+     * its `hs.init` until the app has taken the credential over ([VaultDevice.finishTransferIn]) or drops it (a
+     * rejection, a confirmed cancel, the 11-minute deadline). With the keyring stored after `hs.resp`, a `device.paired`
+     * that arrives after a restart, or after the screen stopped waiting, still completes the transfer.
+     */
+    var transferIn: TransferInRecord? = null,
+)
+
+/**
+ * (A6 audit N1) The transfer to this phone: when its `hs.init` went out (epoch ms), the SAS once `hs.fin` was sent,
+ * and, once `device.paired{transfer: true}` was applied, the member's `user_guid` from it (null from a vault release
+ * before 0.17.0).
+ */
+@Serializable
+internal data class TransferInRecord(
+    val startedMs: Long,
+    val sas: String? = null,
+    val paired: Boolean = false,
+    val userGuid: String? = null,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

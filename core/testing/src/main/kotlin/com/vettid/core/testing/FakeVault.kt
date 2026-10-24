@@ -232,9 +232,31 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     }
 
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) {
-        call("enroll")
+        // (A6 audit N3) A failure with [pendingAfterFailure] leaves the request outstanding (a lost answer).
+        try {
+            call("enroll")
+        } catch (e: VaultFailure) {
+            if (pendingAfterFailure) pending = true
+            throw e
+        }
+        pending = false
         lastPin = pin
         listOf(EnrollStep.ENROLL, EnrollStep.WAIT_FOR_VAULT, EnrollStep.HANDSHAKE).forEach(onStep)
+    }
+
+    /** (A6 audit N3) An enrollment posted earlier is outstanding ([enrollPending]); a failure of "enroll" leaves it so. */
+    var pending = false
+    var pendingAfterFailure = false
+    override val enrollPending: Boolean get() = pending
+
+    /** (N3) What [resumeEnroll] finds: true, the vault was made (pinned and paired); false, nothing outstanding made one. */
+    var resumeMadeVault = true
+
+    override suspend fun resumeEnroll(onStep: (EnrollStep) -> Unit): Boolean {
+        call("resumeEnroll")
+        listOf(EnrollStep.ENROLL, EnrollStep.WAIT_FOR_VAULT, EnrollStep.HANDSHAKE).forEach(onStep)
+        pending = false
+        return resumeMadeVault
     }
 
     // --- release R ---
@@ -586,7 +608,16 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return transferGaveUserGuid
     }
 
-    override suspend fun abandonTransferIn() = call("abandonTransferIn")
+    override suspend fun abandonTransferIn() {
+        call("abandonTransferIn")
+        waitingTransfer = null
+    }
+
+    /** (A6 audit N1) A transfer to this phone that waits for the old phone, as a restart finds it ([transferInWaiting]). */
+    var waitingTransfer: com.vettid.core.data.vault.TransferInWaiting? = null
+
+    /** A read: not recorded in [calls]. */
+    override suspend fun transferInWaiting(): com.vettid.core.data.vault.TransferInWaiting? = waitingTransfer
 
     override suspend fun transferCreate(): TransferOfferView {
         call("transferCreate")

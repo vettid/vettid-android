@@ -78,6 +78,7 @@
 
     <!-- Progress -->
     <string name="onboarding_progress_title">Setting up your vault</string>
+    <string name="onboarding_pin_from_before">The PIN you chose when you started setting up this phone.</string>
     <string name="onboarding_progress_body">This takes a moment. Keep VettID open.</string>
     <string name="onboarding_step_enroll">Verifying the vault service and this phone</string>
     <string name="onboarding_step_wait">Creating your vault</string>
@@ -277,7 +278,13 @@
     <string name="transfer_in_rejected_title">Rejected on your phone</string>
     <string name="transfer_in_rejected_body">The move was rejected on your old phone. Nothing changed: your vault stays with your old phone. To try again, show a new code on the old phone.</string>
     <string name="transfer_in_timeout_title">The transfer timed out</string>
-    <string name="transfer_in_timeout_body">It was not approved within 10 minutes. Nothing changed. Show a new code on your old phone to try again.</string>
+    <string name="transfer_in_timeout_body">It was not approved in time. Nothing changed. Show a new code on your old phone to try again.</string>
+    <string name="transfer_in_keep_waiting">Keep waiting</string>
+    <string name="transfer_in_finishing_title">Finishing the move</string>
+    <string name="transfer_in_finishing_body">Your old phone approved the move. This phone could not finish it yet. Try again.</string>
+    <string name="transfer_in_cancel_title">Cancel the move?</string>
+    <string name="transfer_in_cancel_body">If you already approved the move on your old phone, don\'t cancel: your vault is moving to this phone, and cancelling here loses it. Cancel only if you did not approve it.</string>
+    <string name="transfer_in_cancel_confirm">Cancel the move</string>
     <string name="transfer_in_no_answer">Your vault did not answer. The code may have been used already, or this phone could not be verified. Show a new code on your old phone.</string>
     <string name="transfer_in_again">Try again</string>
     <string name="transfer_in_no_answer_title">No answer from your vault</string>
@@ -433,7 +440,7 @@
     <string name="onboarding_finish_move_later">Later</string>
     <string name="onboarding_kept_check_waiting_title">Waiting for your vault</string>
     <string name="onboarding_kept_check_waiting">Your vault has not confirmed the move to this phone. Once your new phone opens your vault, remove VettID from this phone.</string>
-    <string name="onboarding_kept_transfer">This phone keeps your vault\'s keys until your new phone has finished the move, and until your vault has confirmed it. Once your new phone works, you can remove VettID from this phone. Before you give this phone away, remove VettID from it or reset it.</string>
+    <string name="onboarding_kept_transfer">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, and until your vault has confirmed it. Once your new phone works, you can remove VettID from this phone. Before you give this phone away, remove VettID from it or reset it.</string>
     <string name="onboarding_move_didnt_finish">The move didn\'t finish</string>
     <string name="onboarding_move_didnt_finish_body">Use this if your new phone cannot open your vault. If your new phone opens the vault, ignore this.</string>
     <string name="onboarding_move_back_failed">Your vault could not be opened from this phone. Contact VettID within a day of the failed move: it may be repairable.</string>

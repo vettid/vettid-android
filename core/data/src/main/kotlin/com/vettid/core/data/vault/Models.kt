@@ -51,6 +51,19 @@ enum class SetupStage {
     /** The account has a vault this device does not hold (one app per vault, §3.5.9). */
     VAULT_ELSEWHERE,
 
+    /**
+     * (A6 audit N3) An enrollment this phone posted is outstanding (its `vault.enrolled` not applied yet; after a lost
+     * answer, a crash or a restart): it is resumed ([VaultRepository.resumeEnroll]) before any new one is posted, and
+     * the PIN is not asked for again (the vault may already hold the PIN chosen then).
+     */
+    ENROLLING,
+
+    /**
+     * (A6 audit N1) A transfer to this phone whose code was compared (its `hs.fin` sent) waits for the old phone's
+     * approval: after a restart the transfer screen shows the code again and goes on waiting ([MoveRepository.transferInWaiting]).
+     */
+    TRANSFER_WAITING,
+
     /** Enrolled and paired, but the Protean Credential is not created yet (§3.5.7). */
     NEEDS_CREDENTIAL,
 
@@ -322,6 +335,9 @@ data class AttestationInfo(
     val lastReleaseFingerprint: String?,
 )
 
+/** (A6 audit N1) A transfer to this phone waiting for the old phone's approval: its code, and when its `hs.init` went out. */
+data class TransferInWaiting(val sas: String, val startedAt: Instant)
+
 /** Why an action failed, for the UI. */
 enum class FailureKind {
     NETWORK,
@@ -507,6 +523,12 @@ enum class FailureKind {
      * is answered or can no longer apply, so that its decision can only be its own. Nothing was sent.
      */
     CREDENTIAL_UNSETTLED,
+
+    /**
+     * (A6 audit N3) The enrollment made the vault (its result was `ok`), but its `vault.enrolled` has not arrived yet (a
+     * cold host, the relay out of reach). Nothing is posted again: "Try again" waits for it once more.
+     */
+    ENROLL_WAITING,
 
     /**
      * (ANDROID-PLAN 0.1.57 (1), 0.1.58 (3)) `credential_required`: the vault has no credential, or a credential but no

@@ -193,6 +193,9 @@ class PairingRejectedException : IOException("vault client: pairing rejected on 
 class NotATransferCodeException(val expired: Boolean = false) :
     IOException(if (expired) "vault client: the transfer code has expired" else "vault client: not a transfer code")
 
+/** (A6 audit N1) A transfer to this phone that is not finished ([VaultDevice.transferInPending]). */
+data class TransferInState(val startedAt: Instant, val sas: String?, val paired: Boolean, val userGuid: String?)
+
 /**
  * One owner device of a vault (VAULT-MESSAGING §6.7, §9.1, §11.3), the
  * Kotlin counterpart of vettid-vault's reference `client.Device`.
@@ -442,7 +445,11 @@ class VaultDevice private constructor(
             try {
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
-                    onRequest = { out -> collectRequestSince = if (out) System.nanoTime() else null },
+                    onRequest = { out ->
+                        collectRequestSince = if (out) System.nanoTime() else null
+                        if (!out) roundsEnded.incrementAndGet()
+                    },
+                    onReached = ::noteReached,
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
@@ -519,7 +526,27 @@ class VaultDevice private constructor(
     }
 
     /** One long-poll round (tests and the foreground-service path). */
-    suspend fun pollOnce(): Int = MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }
+    suspend fun pollOnce(): Int {
+        val started = System.nanoTime()
+        return MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }.also { noteReached(started) }
+    }
+
+    /** (A6 audit N3) The latest start ([System.nanoTime]) of a collect request that reached the relay; null before any. */
+    @Volatile
+    private var reachedStartNs: Long? = null
+
+    private fun noteReached(startedNs: Long) {
+        synchronized(this) {
+            val r = reachedStartNs
+            if (r == null || startedNs - r > 0) reachedStartNs = startedNs
+        }
+    }
+
+    /**
+     * (A6 audit N3) Whether a collect request that went out at or after [sinceNs] ([System.nanoTime]) reached the relay
+     * and handed on everything it brought: the mailbox was read after then. False while the relay is out of reach.
+     */
+    fun relayReadSince(sinceNs: Long): Boolean = reachedStartNs?.let { it - sinceNs >= 0 } ?: false
 
     // --- tokens (§7) ---
 
@@ -739,6 +766,28 @@ class VaultDevice private constructor(
 
     // --- enrollment and pairing (§11.3, §6.7) ---
 
+    /**
+     * (A6 audit N3) The enrollment request this device built and whose `vault.enrolled` has not been applied: stored
+     * (with its nonce) before the request is posted, so that it outlives a lost answer, a crash and a restart.
+     */
+    val pendingEnroll: com.vettid.core.altchan.PendingEnroll? get() = alt().pendingEnroll
+
+    /** (N3) The pending enrollment's result was `ok`: its vault exists, only `vault.enrolled` is awaited. */
+    suspend fun markEnrollAnswered() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null || a.enrollAnswered) return@withLock
+        setAlt(a.copy(enrollAnswered = true))
+        save()
+    }
+
+    /** (N3) The pending enrollment made no vault (refused, or never processed): it and its nonce go. */
+    suspend fun dropPendingEnroll() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null) return@withLock
+        setAlt(a.withoutEnroll())
+        save()
+    }
+
     /** Waits for vault.enrolled (§11.3), which pins the vault and gives this device its first token. */
     suspend fun awaitEnrolled(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
         awaitEvent("vault.enrolled", timeout)
@@ -772,10 +821,7 @@ class VaultDevice private constructor(
         val guid = lock.withLock {
             val o = ev.body
             st.deviceId = VaultJson.str(o, "device_id")
-            VaultJson.str(o, "vault_id")?.let { st.vaultId = it }
-            val rel = VaultJson.str(o, "release")
-            val num = VaultJson.long(o, "release_number")
-            if (rel != null && rel.length == PCR_HEX && num != null && num > 0) setAlt(alt().copy(release = rel, releaseNumber = num))
+            applyPaired(o)
             save()
             transferUserGuid(o)
         }
@@ -870,6 +916,7 @@ class VaultDevice private constructor(
             } finally {
                 unlockSecret?.fill(0)
             }
+            st.transferIn = TransferInRecord(at.toEpochMilli())
             save()
         }
     }
@@ -956,15 +1003,105 @@ class VaultDevice private constructor(
      * need, or null when the vault sent none (a release before 0.17.0): the transfer
      * is complete either way.
      */
-    suspend fun awaitTransfer(timeout: Duration): String? = awaitPaired(timeout)
+    suspend fun awaitTransfer(timeout: Duration): String? {
+        // (A6 audit N1) Applied by the handler already (a restart, or after the screen stopped waiting): nothing to wait for.
+        lock.withLock { st.transferIn?.takeIf { it.paired && st.deviceId != null } }?.let { return it.userGuid }
+        return awaitPaired(timeout)
+    }
 
-    /** Drops a transfer this device started and has not completed (left the screen, timed out). */
+    /**
+     * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
+     * was never answered, or at the transfer's 11-minute deadline after its collect (A6 audit N1; VAULT-MESSAGING 0.56.2
+     * §11.14.10 rule 5). Under the device's lock, and never once `device.paired` was applied: a paired device keeps
+     * everything.
+     */
     suspend fun abandonTransfer() = lock.withLock {
         if (st.deviceId != null) return@withLock
         dropPairing()
         st.vault = null
+        st.transferIn = null
         sasState.value = null
         save()
+    }
+
+    /**
+     * (A6 audit N1) The transfer to this phone that is not finished: started (its `hs.init` sent), with its SAS once
+     * `hs.fin` was sent, and paired once `device.paired{transfer: true}` was applied. Null when there is none.
+     */
+    val transferInPending: TransferInState?
+        get() = st.transferIn?.let { TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid) }
+
+    /** Collect rounds of the running collection that ended, their messages handled (A6 audit N1). */
+    private val roundsEnded = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * (A6 audit N1) Waits until the collection's round that is out now (if any) has ended, its messages handled: a message
+     * it leased from the relay (a `device.paired`) is invisible to any other collect until then. The caller bounds it.
+     */
+    suspend fun awaitCollectorRound() {
+        if (!collecting || collectRequestSince == null) return
+        val before = roundsEnded.get()
+        while (collecting && roundsEnded.get() == before) kotlinx.coroutines.delay(ROUND_POLL_MS)
+    }
+
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) What the transfer's deadline reads before anything is dropped:
+     * the collection's round in flight (it may hold a leased `device.paired`), one collect of its own ([collectOnce]),
+     * and the round in flight after it. The caller bounds the whole (30 s) and then decides; [abandonTransfer] keeps
+     * everything once `device.paired` was applied.
+     */
+    suspend fun deadlineCollect() {
+        awaitCollectorRound()
+        collectOnce()
+        awaitCollectorRound()
+    }
+
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` and `max` at
+     * its cap, each message handled (a transfer's `device.paired` applied) and acked. Transport failures are thrown; the
+     * caller bounds the time.
+     */
+    suspend fun collectOnce(): Int {
+        val msgs = own.collect(Duration.ZERO, Int.MAX_VALUE)
+        for (m in msgs) {
+            try {
+                handle(m)
+                own.ack(m.msgId)
+            } catch (_: LeaveUnacked) {
+                // redelivered after its lease
+            }
+        }
+        return msgs.size
+    }
+
+    /** (N1) The app has taken the transferred vault's credential over: the transfer to this phone is finished. */
+    suspend fun finishTransferIn() = lock.withLock {
+        if (st.deviceId == null || st.transferIn == null) return@withLock
+        st.transferIn = null
+        save()
+    }
+
+    /**
+     * (N1) Applies a transfer's `device.paired` (§6.7.1 step 4) in the message handler, whether or not a screen waits for
+     * it: the device record, the vault id, the release and the member's `user_guid`, kept until [finishTransferIn]. Only
+     * for a transfer this device started and is still waiting for.
+     */
+    private fun applyTransferPaired(body: ByteArray) {
+        val tr = st.transferIn ?: return
+        if (st.deviceId != null || tr.paired) return
+        val o = VaultJson.parseObject(body)
+        if ((o["transfer"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true) return
+        applyPaired(o)
+        st.transferIn = tr.copy(paired = true, userGuid = transferUserGuid(o))
+        pairedState.value = true
+    }
+
+    private fun applyPaired(o: JsonObject) {
+        VaultJson.str(o, "device_id")?.let { st.deviceId = it }
+        VaultJson.str(o, "vault_id")?.let { st.vaultId = it }
+        val rel = VaultJson.str(o, "release")
+        val num = VaultJson.long(o, "release_number")
+        if (rel != null && rel.length == PCR_HEX && num != null && num > 0) setAlt(alt().copy(release = rel, releaseNumber = num))
     }
 
     // --- sending (§8) ---
@@ -1403,7 +1540,10 @@ class VaultDevice private constructor(
         when (inner.type) {
             // §10.3 (0.10.3, 0.10.4): every device.paired carries the device's standing token (after enrollment
             // or recovery a fresh one); it replaces the token of hs.resp before maintain() looks at it.
-            "device.paired" -> storeVaultToken(VaultJson.parseObject(inner.body))
+            "device.paired" -> {
+                storeVaultToken(VaultJson.parseObject(inner.body))
+                applyTransferPaired(inner.body)
+            }
             // §6.7 (0.10.5): only a device still waiting for device.paired acts on it; a paired one drops it.
             TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
@@ -1438,6 +1578,7 @@ class VaultDevice private constructor(
      */
     private fun dropPairing() {
         sasState.value = null
+        st.transferIn = null
         ini?.abort()
         ini = null
         awaiting.forEach { it.resp.abort() }
@@ -1517,6 +1658,9 @@ class VaultDevice private constructor(
         }
         if (res.epoch.suite > v.suite) v.suite = res.epoch.suite
         keyring.activate(res.epoch, t)
+        // (A6 audit N1) The SAS of a transfer to this phone is stored with the session before hs.fin goes out: a transfer
+        // whose hs.fin may have reached the vault always has it, and is shown again (and resumed) after a restart.
+        st.transferIn?.let { tr -> if (res.sas != null) st.transferIn = tr.copy(sas = res.sas) }
         save()
         depositToVault(v, res.fin)
         res.sas?.let { sasState.value = it }
@@ -1903,6 +2047,7 @@ class VaultDevice private constructor(
             setOf("device.paired", TYPE_PAIR_REJECTED, "relay.token.issued", "relay.token.refresh", "identity.rotate")
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
+        private const val ROUND_POLL_MS = 50L
 
         /** (§11.14.9) How long after its `exp`, by the vault's clock, an unanswered request can no longer apply. */
         val SETTLE_MARGIN: Duration = Duration.ofMinutes(1)
