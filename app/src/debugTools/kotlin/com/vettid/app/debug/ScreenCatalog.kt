@@ -690,6 +690,9 @@ object ScreenCatalog {
         "unlock.lock_confirmed" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), lock = com.vettid.core.data.vault.LockNotice.ConfirmedLate), NoUnlock)
         },
+        "unlock.lock_opened_again" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), lock = com.vettid.core.data.vault.LockNotice.OpenedAgain), NoUnlock)
+        },
         "unlock.refused" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), refused = true), NoUnlock)
         },

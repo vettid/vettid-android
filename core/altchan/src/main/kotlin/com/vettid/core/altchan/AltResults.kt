@@ -54,12 +54,33 @@ object AltResults {
     }
 }
 
-/** `vault.enroll.result` (§11.3); success also arrives as vault.enrolled over the relay. */
-data class EnrollResult(val ok: Boolean, val code: String?, val vaultId: String?) {
+/**
+ * The name of one opening of a vault (VAULT-MESSAGING 0.29.0 §10.2 "Locks", release L): 16 random bytes as 32 lowercase
+ * hex characters, made by the vault at every enroll, unlock and recovery open and kept in its memory only. It is not a
+ * secret. A vault from before release L sends none, and a release R enclave before L sends `""` in its recovery-open
+ * result: [of] reads both, and anything else that is not of the form, as **absent** (the app then locks as for a vault
+ * before L).
+ */
+object UnlockIds {
+    private val FORM = Regex("^[0-9a-f]{32}$")
+
+    /** [s] when it is an `unlock_id`; null when absent, empty or of another form. */
+    fun of(s: String?): String? = s?.takeIf { FORM.matches(it) }
+}
+
+/**
+ * `vault.enroll.result` (§11.3); success also arrives as vault.enrolled over the relay. [unlockId] (0.29.0, release
+ * L): the name of the opening the enrollment made ([UnlockIds]); null from a vault before L.
+ */
+data class EnrollResult(val ok: Boolean, val code: String?, val vaultId: String?, val unlockId: String? = null) {
     companion object {
         fun parse(body: ByteArray): EnrollResult = wrap {
             val o = AltResults.obj(body)
-            if (o.bool("ok")) EnrollResult(true, null, o.string("vault_id")) else EnrollResult(false, o.string("code"), null)
+            if (o.bool("ok")) {
+                EnrollResult(true, null, o.string("vault_id"), UnlockIds.of(o.optString("unlock_id")))
+            } else {
+                EnrollResult(false, o.string("code"), null)
+            }
         }
     }
 }
@@ -89,6 +110,12 @@ data class UnlockResult(
      * made (§11.4). A `vault.locking` not newer than this is from before the vault opened. Null when not known.
      */
     val at: Instant? = null,
+    /**
+     * (0.29.0, release L) `unlock_id`: the name of this unlock (§10.2 "Locks"), present whenever the vault resumed
+     * (with [token]); null when absent or not of the form ([UnlockIds]). Its absence tells the app that the vault's
+     * release is from before L and that its locks are not bound.
+     */
+    val unlockId: String? = null,
 ) {
     /** The `update` member: `moved`, `abandoned` or `refused` (with a code). */
     data class Update(val to: String, val result: String, val code: String?)
@@ -123,6 +150,7 @@ data class UnlockResult(
                 recoveryCancelled = if (o.has("recovery_cancelled")) o.bool("recovery_cancelled") else false,
                 vaultBundle = bundle,
                 credentialBackup = if (o.has("credential_backup")) o.bool("credential_backup") else null,
+                unlockId = UnlockIds.of(o.optString("unlock_id")),
             )
         }
     }

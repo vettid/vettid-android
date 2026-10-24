@@ -14,6 +14,7 @@ import com.vettid.core.altchan.PendingUnlock
 import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.RecoveryResult
 import com.vettid.core.altchan.SealedRequest
+import com.vettid.core.altchan.UnlockIds
 import com.vettid.core.altchan.UnlockOptions
 import com.vettid.core.altchan.UnlockResult
 import com.vettid.core.attestation.AttestationException
@@ -235,6 +236,33 @@ class VaultDevice private constructor(
      */
     @Volatile
     private var forgotten = false
+
+    /**
+     * (VAULT-MESSAGING 0.29.0 §10.2 "Locks", release L) The name of the vault's current opening as this device last
+     * learned it: from the enroll, unlock or recovery-open result that opened it, and from every `vault.status`. In
+     * memory only: a new process starts without it (until a status read), and the app then locks as for a vault before
+     * L. Null from a vault before L, and for an `""` or another form (`UnlockIds`). Not a secret.
+     */
+    @Volatile
+    var unlockId: String? = null
+        private set
+
+    /**
+     * Bumped at every change of opening this device learns of (an unlock built, an enroll, unlock or recovery-open
+     * result): a `vault.status` answer is applied only if none came between its request and its answer, so an answer
+     * from the opening before never replaces the name of the one after ([noteUnlockId]).
+     */
+    private val openings = java.util.concurrent.atomic.AtomicLong()
+
+    /** The mark a `vault.status` request takes before it is sent ([noteUnlockId]). */
+    internal fun openingMark(): Long = openings.get()
+
+    private fun opened(id: String?) {
+        synchronized(openings) {
+            openings.incrementAndGet()
+            unlockId = id
+        }
+    }
     private val clock = cfg.clock
     private val relays = ConcurrentHashMap<String, RelayClient>()
     private val own: RelayClient = relayFor(cfg.relayUrl)
@@ -607,7 +635,24 @@ class VaultDevice private constructor(
         }
 
     override suspend fun openEnrollResult(raw: ByteArray, requestId: String): EnrollResult =
-        EnrollResult.parse(AltResults.open(raw, secrets.kem, AltResults.TYPE_ENROLL_RESULT, requestId))
+        EnrollResult.parse(AltResults.open(raw, secrets.kem, AltResults.TYPE_ENROLL_RESULT, requestId)).also {
+            if (it.ok) opened(it.unlockId)
+        }
+
+    /**
+     * An unlock result's name of the opening ([unlockId]): none when the vault did not resume (a move, §11.10.6) or is
+     * before L. A failed unlock sets none: building it already cleared the name ([prepareUnlock]), and the next
+     * `vault.status` says what runs.
+     */
+    private fun noteOpened(r: UnlockResult) {
+        if (r.ok) opened(r.unlockId.takeIf { r.token != null })
+    }
+
+    /** A `vault.status`'s `unlock_id` ([unlockId]); absent or of another form: none. */
+    internal fun noteUnlockId(id: String?, mark: Long) {
+        // An opening came between the request and its answer: the answer may name the one before.
+        synchronized(openings) { if (openings.get() == mark) unlockId = UnlockIds.of(id) }
+    }
 
     override suspend fun prepareUnlock(
         userGuid: String,
@@ -626,6 +671,9 @@ class VaultDevice private constructor(
         // §11.7.1 (0.27.0): the device key's chain goes with every unlock until the vault has shown this app its
         // signer in device.list ([signerSeen]); a vault that has recorded one ignores it.
         val opts = options.copy(sendChain = !st.signerSeen)
+        // (Release L) Whatever opening was known is over or about to be: a lock asked for meanwhile names none (the
+        // unlock's result names the new one); a status answer in flight no longer applies.
+        opened(null)
         val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), opts, now())
         pendingUnlock = b.pending
         discardable = Discardable(b, issuedBefore, st.issuedExpMs)
@@ -663,6 +711,7 @@ class VaultDevice private constructor(
             // key, whatever device.list showed earlier (a host can serve an older header, from before the
             // binding): the next unlock carries the chain again, until device.list shows a signer once more.
             st.signerSeen = st.signerSeen && r.code != CODE_SIGNER_REFUSED
+            noteOpened(r)
             if (r.ok) {
                 val bundle = r.vaultBundle
                 if (bundle != null && st.vault == null && st.recovery != null) adoptBundle(bundle)
@@ -909,6 +958,8 @@ class VaultDevice private constructor(
             val r = com.vettid.core.crypto.altchan.RecoveryOpen.Result.parse(body)
             pendingRecoveryOpen = null
             if (r.ok) {
+                // (0.56.1) A recovery open is an opening: its `unlock_id` ("" from a release before L: none).
+                opened(UnlockIds.of(r.unlockId))
                 r.vaultBundle()?.let { adoptBundle(it) }
                 st.vault?.let { v ->
                     v.token = r.token
@@ -1954,6 +2005,7 @@ class VaultDevice private constructor(
      */
     suspend fun forget() = lock.withLock {
         forgotten = true
+        opened(null)
         stop()
         keyring.destroy()
         cfg.store.clear()

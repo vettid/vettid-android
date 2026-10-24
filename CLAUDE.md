@@ -223,17 +223,27 @@ vettid.org repo's `local/android-ui/`).
   proof** (the enclave answers `done` whatever became of its lock). Until then the lock is **pending**: a record in
   the account record (`lockAskedAtMs`, written by `LockKeeper.begin()` before the lock's hooks and its first
   attempt, so a new process starts locked), retries (1, 2, 5, 10 s, four times 30 s, then every 60 s: under the
-  member API's 30 locks in 15 minutes; **in this process only**: they stop when it dies until something starts the
-  app), `VaultRepository.lockNotice` on the unlock screen (`unlock.lock_locking` while nothing has failed,
+  member API's 30 locks in 15 minutes; in the process, and (release L's Q4, owner decision 2026-10-23) across its
+  death: `PendingLockJob`, a persisted framework job scheduled by `PendingLockNotifier` while a lock is pending,
+  starts the process, whose `LockKeeper.resume()` goes on; the notifier also posts "Your vault may still be open" on
+  Security while it is in doubt and VettID is not in front), `VaultRepository.lockNotice` on the unlock screen (`unlock.lock_locking` while nothing has failed,
   `unlock.lock_unconfirmed` from the first failed try, `unlock.lock_confirmed`). The four rules of a pending lock
   live in `LockGuard` and are tested there: what confirms; locked whatever the status says; nothing sent to the
-  vault but the lock and a pending `call.end`; nothing it sends taken in. In `VaultManager` the vault client is a
+  vault but the lock, a pending `call.end` and (release L, "Lock it now") one `vault.status`
+  (`LockTimeUse.LOCK_STATUS`); nothing it sends taken in. In `VaultManager` the vault client is a
   private member of `Session`, reachable only as `openApi` (refuses with `lock_pending`) and
   `lockTimeApi(LockTimeUse)`: do not add a third way, and send nothing through `device` directly (`VaultClientAccessTest`). A vault has **no time after which
   it locks by itself**: never promise one. Every unlock goes through `LockKeeper.unlocking` (no lock attempt beside
   it, none of an older lock after it, and first the wait for an unanswered relay lock: `relayLockUntilMs`);
   `vault.lock` is sent once with an `exp` of 30 s and never through the outbox (a late lock would lock a vault the
-  member opened again). **The idle lock (release L, VAULT-MESSAGING 0.29.0 §3.6.8; gated on the vault):**
+  member opened again). **Release L (VAULT-MESSAGING 0.29.0 §10.2 "Locks"; gated):** when the vault announced an
+  `unlock_id` (enroll, unlock or recovery-open result, `vault.status`; `VaultDevice.unlockId`, memory only; `""` is
+  absent, `UnlockIds`), the lock is **bound**: `LockRecord.unlockId` (the lock file's version 2), `vault.lock
+  {unlock_id}` at every attempt with no wait before an unlock, `POST /api/vault/lock {unlock_id}`, the slot's
+  `locked` / `not_running` confirm, `stale_lock` / `stale` end it as `LockNotice.OpenedAgain` (not locked; this
+  phone held locked until an unlock here, `LockKeeper.holdsPhone`), and a `vault.locking` counts by its `unlock_id`
+  (`LockNotices`). Without the value everything above is as #127 built it. **The idle lock (release L,
+  VAULT-MESSAGING 0.29.0 §3.6.8; gated on the vault):**
   `OwnerCheckView.idleLockAt` (`idle_lock_at` of `vault.status` / `vault.held`, shown on the gated check),
   `OwnerCheckRepository.idleLocked` (`vault.locking{reason: "idle"}`, kept until the vault opens; without it
   `idleLockedNow` reads a time past `idle_lock_at`) for the unlock screen (`unlock.idle_locked`) and the Security

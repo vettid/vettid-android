@@ -1,5 +1,7 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.altchan.UnlockIds
+import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import java.time.Instant
 
@@ -15,8 +17,14 @@ import java.time.Instant
  * the enclave sets after any lock that unlock made, and a notice whose own `ts` is not later than it is stale. A
  * notice that is later (the vault locked after this unlock) is kept, as is every notice before the first unlock
  * this process saw.
+ *
+ * (VAULT-MESSAGING 0.29.0 §10.2 "Locks", release L) A notice that names the unlock it ends (`unlock_id`) is judged by
+ * that name instead, when this phone holds the vault's current one ([current]): another name is an older opening's
+ * notice, and is dropped; the same name is this opening's. A notice without the name (a release before L), or one
+ * that arrives while this phone holds no current name (a new process before its first status read), is judged by the
+ * time as above.
  */
-class LockNotices(opened: Instant? = null) {
+class LockNotices(opened: Instant? = null, private val current: () -> String? = { null }) {
     /** The last unlock's time; the one kept on the phone at a process start ([opened]), so that a restart forgets nothing. */
     @Volatile
     private var openedAt: Instant? = opened
@@ -28,11 +36,27 @@ class LockNotices(opened: Instant? = null) {
         if (prev == null || at.isAfter(prev)) openedAt = at
     }
 
-    /** Whether [m] is a `vault.locking` from before the vault last opened here. */
+    /** Whether [m] is a `vault.locking` from before the vault last opened here (or, by its name, of another opening). */
     fun stale(m: VaultMessage): Boolean {
+        if (m.type != TYPE) return false
+        val named = named(m)
+        val mine = current()
         val at = openedAt
-        return m.type == TYPE && at != null && !m.ts.isAfter(at)
+        return if (named != null && mine != null) named != mine else at != null && !m.ts.isAfter(at)
     }
+
+    /**
+     * Whether [m] is evidence for the pending lock: a `vault.locking` naming the unlock that lock is bound to
+     * ([bound], release L), or, when either has no name, one from after the vault last opened here
+     * ([sinceLastOpened]).
+     */
+    fun confirms(m: VaultMessage, bound: String?): Boolean {
+        if (m.type != TYPE) return false
+        val named = named(m)
+        return if (named != null && bound != null) named == bound else sinceLastOpened(m)
+    }
+
+    private fun named(m: VaultMessage): String? = UnlockIds.of(VaultJson.str(m.body, "unlock_id"))
 
     /**
      * Whether [m] is a `vault.locking` from **after** the vault last opened here, with that time known: only such a

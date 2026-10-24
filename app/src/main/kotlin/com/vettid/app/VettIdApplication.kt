@@ -56,6 +56,9 @@ class VettIdApplication : DistributionApplication() {
     lateinit var changeNotifier: com.vettid.app.notify.ChangeDecisionNotifier
 
     @Inject
+    lateinit var pendingLock: com.vettid.app.notify.PendingLockNotifier
+
+    @Inject
     lateinit var modes: ModeController
 
     @Inject
@@ -111,6 +114,8 @@ class VettIdApplication : DistributionApplication() {
         feedNotifier.start()
         // VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background.
         changeNotifier.start()
+        // The member's pending lock: its job while it is pending (it survives the process), and its notice.
+        pendingLock.start()
         // Google push (ANDROID-PLAN 0.1.30; the `full` distribution): in a build with the Firebase options, Firebase
         // is initialised here, before any service runs, so that a wake that started this process is handled; the
         // registration with the vault follows the mode. Without the options, and in the `foss` distribution, neither

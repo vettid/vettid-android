@@ -340,6 +340,15 @@ object AppModule {
         @AppScope scope: CoroutineScope,
     ): com.vettid.app.notify.ChangeDecisionNotifier = com.vettid.app.notify.ChangeDecisionNotifier(context, m, scope)
 
+    /** Release L's Q4 (owner decision 2026-10-23): the pending lock's job, and its notice in the background. */
+    @Provides
+    @Singleton
+    fun pendingLockNotifier(
+        @ApplicationContext context: Context,
+        m: VaultManager,
+        @AppScope scope: CoroutineScope,
+    ): com.vettid.app.notify.PendingLockNotifier = com.vettid.app.notify.PendingLockNotifier(context, m, scope)
+
     /** No vault on this phone: no notification of VettID stays (owner report 2026-10-11). */
     @Provides
     @Singleton

@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.altchan.Slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -41,13 +42,23 @@ class LockGuardTest {
         /** When set, the relay lock waits for it: the vault's answer is on its way. */
         var relayGate: CompletableDeferred<Unit>? = null
 
-        override suspend fun relayLock(): Boolean {
+        /** What the relay and the member API were asked with: the unlock each named. */
+        val named = mutableListOf<String?>()
+
+        /** When set, the relay's answer instead of [relay]. */
+        var relayAnswer: RelayLock? = null
+
+        override suspend fun relayLock(unlockId: String?): RelayLock {
             asked += "relay"
+            named += unlockId
             relayGate?.await()
-            return relay
+            return relayAnswer ?: if (relay) RelayLock.LOCKED else RelayLock.NO_ANSWER
         }
 
-        override suspend fun memberLock(): MemberLock = member.also { asked += "member" }
+        override suspend fun memberLock(unlockId: String?): MemberLock = member.also {
+            asked += "member"
+            named += unlockId
+        }
 
         override suspend fun unlocked(): Boolean? = unlocked.also { asked += "status" }
     }
@@ -67,14 +78,14 @@ class LockGuardTest {
         val g = guard()
         for (answer in listOf(MemberLock.Answered(done = false), MemberLock.Answered(done = true), MemberLock.NoAnswer)) {
             ports.member = answer
-            assertFalse("$answer, and the status still says unlocked", g.attempt(first = false))
+            assertEquals("$answer, and the status still says unlocked", LockOutcome.UNCONFIRMED, g.attempt(first = false))
         }
         // The enclave answers "done" whatever became of its lock: only the status decides.
         ports.member = MemberLock.Answered(done = true)
         ports.unlocked = null
-        assertFalse("a status that could not be read confirms nothing", g.attempt(first = false))
+        assertEquals("a status that could not be read confirms nothing", LockOutcome.UNCONFIRMED, g.attempt(first = false))
         ports.unlocked = false
-        assertTrue(g.attempt(first = false))
+        assertEquals(LockOutcome.LOCKED, g.attempt(first = false))
         // And through the keeper: pending until the status says so.
         ports.unlocked = true
         assertFalse(g.keeper.ask())
@@ -110,6 +121,7 @@ class LockGuardTest {
         assertFalse("an operation on the open vault", g.admits())
         assertTrue(g.admits(LockTimeUse.LOCK))
         assertTrue(g.admits(LockTimeUse.CALL_END))
+        assertTrue("(release L) the status read of \"Lock it now\"", g.admits(LockTimeUse.LOCK_STATUS))
         g.keeper.confirmed()
         assertTrue(g.admits())
     }
@@ -203,27 +215,27 @@ class LockGuardTest {
     fun aRateLimitedMemberApiIsNotAskedAgainBeforeItsTime() = runTest {
         val g = guard()
         ports.member = MemberLock.Limited(Duration.ofSeconds(120))
-        assertFalse(g.attempt(first = false))
+        assertEquals(LockOutcome.UNCONFIRMED, g.attempt(first = false))
         assertEquals(listOf("member", "status"), ports.asked)
         ports.asked.clear()
         advanceTimeBy(119_000)
-        assertFalse(g.attempt(first = false))
+        assertEquals(LockOutcome.UNCONFIRMED, g.attempt(first = false))
         assertEquals("no POST, the status read stays", listOf("status"), ports.asked)
         ports.unlocked = false
-        assertTrue("and a status that says locked confirms meanwhile", g.attempt(first = false))
+        assertEquals("and a status that says locked confirms meanwhile", LockOutcome.LOCKED, g.attempt(first = false))
         ports.unlocked = true
         ports.asked.clear()
         advanceTimeBy(1_000)
         // A 429 without a time: a minute.
         ports.member = MemberLock.Limited(Duration.ZERO)
-        assertFalse(g.attempt(first = false))
+        assertEquals(LockOutcome.UNCONFIRMED, g.attempt(first = false))
         assertEquals(listOf("member", "status"), ports.asked)
         ports.asked.clear()
         advanceTimeBy(59_000)
-        assertFalse(g.attempt(first = false))
+        assertEquals(LockOutcome.UNCONFIRMED, g.attempt(first = false))
         assertEquals(listOf("status"), ports.asked)
         advanceTimeBy(1_000)
-        assertFalse(g.attempt(first = false))
+        assertEquals(LockOutcome.UNCONFIRMED, g.attempt(first = false))
         assertEquals(listOf("status", "member", "status"), ports.asked)
     }
 
@@ -233,9 +245,126 @@ class LockGuardTest {
         val g = guard()
         ports.member = MemberLock.Answered(done = true)
         val start = testScheduler.currentTime
-        assertFalse(g.attempt(first = false))
+        assertEquals(LockOutcome.UNCONFIRMED, g.attempt(first = false))
         assertEquals(listOf("member", "status", "status", "status"), ports.asked)
         assertEquals(2_000L, testScheduler.currentTime - start)
         runCurrent()
+    }
+
+    // --- Release L (VAULT-MESSAGING 0.29.0 §10.2 "Locks", §8.6, §11.5; VAULT-LOCK §3.6, §3.7; ANDROID-PLAN §4 part 2) ---
+
+    private val id = "0123456789abcdef0123456789abcdef"
+
+    /** A bound lock names its unlock over the relay and through the member API, and leaves no wait before an unlock. */
+    @Test
+    fun aBoundLockNamesItsUnlockAndIsSentOverTheRelayAtEveryAttempt() = runTest {
+        val g = guard()
+        assertFalse(g.keeper.ask(g.keeper.begin(id)))
+        assertEquals(listOf("relay", "member", "status"), ports.asked)
+        assertEquals(listOf(id, id), ports.named)
+        assertEquals("bound: nothing to wait out before an unlock", LockRecord(t0.toEpochMilli(), null, id), store.record)
+        ports.asked.clear()
+        advanceTimeBy(3_600_001)
+        assertEquals("a retry sends the relay lock again (a late copy is stale_lock)", listOf("relay", "member", "status"), ports.asked)
+        var sentAt = -1L
+        g.keeper.unlocking(opened = { it }) { true.also { sentAt = testScheduler.currentTime } }
+        assertEquals("no wait before the unlock", 3_600_001L, sentAt)
+        assertEquals(LockRecord(), store.record)
+    }
+
+    /** The slot's `locked` and `not_running` confirm a bound lock; a `done` without a code still does not. */
+    @Test
+    fun aBoundLocksSlotCodesConfirmIt() = runTest {
+        val g = guard()
+        for (code in listOf(Slot.CODE_LOCKED, Slot.CODE_NOT_RUNNING)) {
+            ports.asked.clear()
+            ports.member = MemberLock.Answered(done = true, code = code)
+            assertEquals(code, LockOutcome.LOCKED, g.attempt(first = false, unlockId = id))
+            assertEquals("the code decides, no status read", listOf("relay", "member"), ports.asked)
+        }
+        ports.member = MemberLock.Answered(done = true)
+        assertEquals("a done from a release before L proves nothing", LockOutcome.UNCONFIRMED, g.attempt(first = false, unlockId = id))
+        ports.member = MemberLock.Answered(done = false, code = Slot.CODE_LOCKED)
+        assertEquals("a code beside anything but done is not read", LockOutcome.UNCONFIRMED, g.attempt(first = false, unlockId = id))
+    }
+
+    /**
+     * Gated: a lock without the unlock's name (a vault before L, S21/S22; or a phone that does not hold the value,
+     * VAULT-LOCK Q3) is #127's lock exactly: the relay once, its wait before the next unlock, the slot's codes not read.
+     */
+    @Test
+    fun withoutTheUnlockIdTheLockIsMadeAsBeforeL() = runTest {
+        val g = guard()
+        ports.member = MemberLock.Answered(done = true, code = Slot.CODE_LOCKED)
+        assertFalse(g.keeper.ask(g.keeper.begin(null)))
+        assertEquals(listOf("relay", "member", "status", "status", "status"), ports.asked)
+        assertEquals("nothing named: an unconditional API lock", listOf<String?>(null, null), ports.named)
+        assertEquals(LockRecord(t0.toEpochMilli(), t0.plusSeconds(40).toEpochMilli()), store.record)
+        assertTrue("the host's code is not taken for a lock as before L", g.pending)
+        // A stale_lock to an unbound lock is not the vault's word on it: still pending.
+        ports.relayAnswer = RelayLock.STALE
+        ports.member = MemberLock.Answered(done = true, code = Slot.CODE_STALE)
+        assertEquals(LockOutcome.UNCONFIRMED, g.attempt(first = true, unlockId = null))
+        ports.asked.clear()
+        advanceTimeBy(3_600_001)
+        assertEquals("a retry sends no relay lock", "member", ports.asked.first())
+    }
+
+    /** #127's wait before an unlock stays for a lock made as before L: the relay lock's exp and a margin. */
+    @Test
+    fun anUnlockAfterAnUnboundLockWaitsOutItsRelayLock() = runTest {
+        val g = guard()
+        assertFalse(g.keeper.ask(g.keeper.begin(null)))
+        var sentAt = -1L
+        g.keeper.unlocking(opened = { it }) { true.also { sentAt = testScheduler.currentTime } }
+        assertEquals(40_000L, sentAt)
+    }
+
+    /**
+     * `stale_lock` over the relay: the vault was opened again since. The lock is over and not repeated, it is not
+     * taken as locked, the member is told, and this phone stays locked until an unlock here.
+     */
+    @Test
+    fun aStaleLockIsNotTakenAsLocked() = runTest {
+        val g = guard()
+        ports.relayAnswer = RelayLock.STALE
+        assertFalse("not locked", g.keeper.ask(g.keeper.begin(id)))
+        assertEquals("the status is read to say what is true now", listOf("relay", "status"), ports.asked)
+        assertEquals(LockNotice.OpenedAgain, g.keeper.notice.value)
+        assertFalse(g.pending)
+        assertEquals("nothing is tried again; the phone is held locked, on the phone too", LockRecord(held = true), store.record)
+        ports.asked.clear()
+        advanceTimeBy(3_600_001)
+        assertEquals("not repeated", emptyList<String>(), ports.asked)
+        // This phone is locked all the same, whatever the status says, also once the notice was read.
+        assertTrue(g.lockedWhatever(unlocked = true))
+        assertFalse(g.admits())
+        assertFalse(g.takesEvents())
+        assertTrue(g.keeper.openedAgain)
+        g.keeper.dismissConfirmed()
+        assertEquals(LockNotice.None, g.keeper.notice.value)
+        assertTrue("dismissing the notice does not open this phone", g.lockedWhatever(unlocked = true))
+        g.keeper.unlocking(opened = { it }) { true }
+        assertFalse("an unlock here does", g.lockedWhatever(unlocked = true))
+        assertEquals(LockRecord(), store.record)
+        assertTrue(g.admits())
+        assertFalse(g.keeper.openedAgain)
+    }
+
+    /** The slot's `stale` does the same; and a stale answer after which the status says locked confirms the lock. */
+    @Test
+    fun aStaleSlotEndsTheLockAndTheStatusSaysWhatIsTrueNow() = runTest {
+        val g = guard()
+        ports.member = MemberLock.Answered(done = true, code = Slot.CODE_STALE)
+        assertEquals(LockOutcome.OPENED_AGAIN, g.attempt(first = false, unlockId = id))
+        ports.unlocked = false
+        assertEquals("locked since: confirmed", LockOutcome.LOCKED, g.attempt(first = false, unlockId = id))
+        ports.unlocked = null
+        assertEquals("unknown: not known locked", LockOutcome.OPENED_AGAIN, g.attempt(first = false, unlockId = id))
+        ports.relayAnswer = RelayLock.STALE
+        ports.unlocked = false
+        assertTrue("stale, then the status says locked: confirmed", g.keeper.ask(g.keeper.begin(id)))
+        assertEquals(LockNotice.None, g.keeper.notice.value)
+        assertFalse(g.lockedWhatever(unlocked = false))
     }
 }

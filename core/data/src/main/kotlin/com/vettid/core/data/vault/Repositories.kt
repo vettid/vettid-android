@@ -151,6 +151,13 @@ interface VaultRepository {
     fun dismissLockNotice() = Unit
 
     /**
+     * (Release L, owner decision 2026-10-24) "Lock it now" after [LockNotice.OpenedAgain]: a fresh lock of the vault as
+     * it is now, bound to its current opening when the vault's status names it, unconditional otherwise; made and
+     * retried as any lock. Returns once it is asked for.
+     */
+    suspend fun lockAgain() {}
+
+    /**
      * Enrolls a vault with [pin] (§11.3) and runs the first handshake. (A6 audit N3) An enrollment this phone posted
      * before is resumed first, never posted over: [pin] is used only when nothing outstanding can still make a vault.
      */

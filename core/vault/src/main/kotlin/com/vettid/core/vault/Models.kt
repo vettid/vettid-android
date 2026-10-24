@@ -30,6 +30,11 @@ data class VaultStatusInfo(
      * release before the scale. Which values the app takes is its build's rule, as for the descriptor's.
      */
     @SerialName("time_scale") val timeScale: Long? = null,
+    /**
+     * (0.29.0, release L) The name of the vault's current opening (§10.2 "Locks"), to the app and desktops; absent from
+     * a release before L. Read through `UnlockIds.of`: anything not of the form counts as absent.
+     */
+    @SerialName("unlock_id") val unlockId: String? = null,
 )
 
 /**

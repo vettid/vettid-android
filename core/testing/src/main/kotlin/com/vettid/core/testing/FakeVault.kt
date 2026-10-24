@@ -154,6 +154,10 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         calls += "retryLock"
     }
 
+    override suspend fun lockAgain() {
+        calls += "lockAgain"
+    }
+
     override fun dismissLockNotice() {
         calls += "dismissLockNotice"
         lockNotice.value = com.vettid.core.data.vault.LockNotice.None
