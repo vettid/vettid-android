@@ -63,6 +63,10 @@ class LockNotices(opened: Instant? = null, private val current: () -> String? = 
         }
     }
 
+    /** [confirms] for the pending (or held) lock of [keeper]. */
+    fun confirms(m: VaultMessage, keeper: LockKeeper): Boolean =
+        confirms(m, keeper.boundUnlockId, keeper.holdsPhone && !keeper.pending, keeper.deadUnlockId)
+
     private fun named(m: VaultMessage): String? = UnlockIds.of(VaultJson.str(m.body, "unlock_id"))
 
     /**
