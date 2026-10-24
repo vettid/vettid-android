@@ -34,10 +34,11 @@ class VaultDeletionTest {
     }
 
     @Test
-    fun goneOnlyForNoVaultOrA401() {
-        assertEquals(DeletionCheck.GONE, VaultDeletion.ofStatus(vaultListed = false))
+    fun nothingReadsAsGoneAndA401OrNoVaultNeverErases() {
+        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = false)) // `{vault:null}` is advisory
         assertEquals(DeletionCheck.LISTED, VaultDeletion.ofStatus(vaultListed = true))
-        assertEquals(DeletionCheck.GONE, VaultDeletion.ofFailure(FailureKind.UNAUTHORIZED))
+        // a bare 401 (any kind) is not a definite answer
+        for (k in FailureKind.values()) assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(k))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.NETWORK))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.CLOCK)) // a 401 for the clock is not the row gone
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.SERVICE_PAUSED))

@@ -21,7 +21,11 @@ internal data class DeletingMarker(val vaultId: String, val sinceMs: Long, val u
 
 /** What one read of `GET /api/vault/status` says of a vault being deleted. */
 enum class DeletionCheck {
-    /** `{vault: null}`, or `401 unauthorized` to the app key: the row, and with it the app key, is gone. */
+    /**
+     * A definite word that the vault is gone. Nothing reads it automatically yet (owner decision 2026-10-24): neither
+     * `{vault: null}` (advisory) nor a bare `401` (the member API gives the same 401 for ts, nonce, signature and other
+     * faults) is definite. A future `410 vault_deleted` from the member API is the signal meant for this.
+     */
     GONE,
 
     /** The vault is still listed, whatever its `state`. */
@@ -79,7 +83,8 @@ object VaultDeletion {
     fun ofStatus(vaultListed: Boolean, servicePaused: Boolean = false): DeletionCheck = when {
         servicePaused -> DeletionCheck.UNREACHABLE
         vaultListed -> DeletionCheck.LISTED
-        else -> DeletionCheck.GONE
+        // `{vault: null}` is advisory (as in VaultManager.evaluate()): it never erases this phone.
+        else -> DeletionCheck.UNREACHABLE
     }
 
     /**
@@ -101,9 +106,12 @@ object VaultDeletion {
 
     private const val MARKER_ATTEMPTS = 3
 
-    /** What a failed read says: `401 unauthorized` to the app key is the row removed; anything else concludes nothing. */
-    fun ofFailure(kind: FailureKind): DeletionCheck =
-        if (kind == FailureKind.UNAUTHORIZED) DeletionCheck.GONE else DeletionCheck.UNREACHABLE
+    /**
+     * What a failed read says: nothing, whatever the kind (a 401 of any kind included, 403, 5xx, timeout, paused). The
+     * member API's bare 401 does not tell a deleted vault from a missing Date header, a nonce clash or a key fault.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun ofFailure(kind: FailureKind): DeletionCheck = DeletionCheck.UNREACHABLE
 }
 
 /**

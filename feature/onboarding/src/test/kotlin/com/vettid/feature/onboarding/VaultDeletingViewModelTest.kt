@@ -8,6 +8,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -22,7 +23,7 @@ class VaultDeletingViewModelTest {
     private val vault = FakeVault(AppPhase.Deleting(slow = true))
 
     @Test
-    fun checkAgainSaysStillOrUnreachableAndAGoneVaultLeaves() = runTest {
+    fun checkAgainSaysStillOrUnreachableAndOnlyADefiniteGoneLeaves() = runTest {
         val vm = VaultDeletingViewModel(vault)
         vm.setSlow(true)
         vault.deletionChecks += DeletionCheck.LISTED
@@ -52,5 +53,43 @@ class VaultDeletingViewModelTest {
         gate.complete(Unit)
         advanceUntilIdle()
         assertEquals(1, vault.calls.count { it == "checkDeletion" })
+    }
+
+    @Test
+    fun anUnreachableAnswerNeverErases() = runTest {
+        val vm = VaultDeletingViewModel(vault)
+        vm.setSlow(true)
+        repeat(3) {
+            vault.deletionChecks += DeletionCheck.UNREACHABLE
+            vm.checkAgain()
+            advanceUntilIdle()
+        }
+        assertEquals(AppPhase.Deleting(slow = true), vault.phase.value)
+        assertTrue(vault.calls.none { it == "eraseThisPhone" })
+    }
+
+    @Test
+    fun aConfirmedRemovalAfterTheBoundErasesAndAnUnconfirmedOneDoesNot() = runTest {
+        val vm = VaultDeletingViewModel(vault)
+        vm.askRemove() // before the bound: not offered
+        assertFalse(vm.uiState.value.removeConfirm)
+        vm.setSlow(true)
+        vm.askRemove()
+        assertTrue(vm.uiState.value.removeConfirm)
+        vm.dismissRemove()
+        advanceUntilIdle()
+        assertTrue(vault.calls.none { it == "eraseThisPhone" })
+        vm.askRemove()
+        vm.confirmRemove()
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
+    }
+
+    @Test
+    fun noRemovalBeforeTheBound() = runTest {
+        val vm = VaultDeletingViewModel(vault)
+        vm.confirmRemove()
+        advanceUntilIdle()
+        assertTrue(vault.calls.none { it == "eraseThisPhone" })
     }
 }
