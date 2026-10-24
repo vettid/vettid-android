@@ -201,9 +201,13 @@ class NotATransferCodeException(val expired: Boolean = false) :
  *   (§13.6), decrypted, applied and persisted before the relay ack (§8.3).
  * - Responses complete the request that awaits them; events go to [events]
  *   and to an inbox that [awaitEvent] searches first.
- * - Outgoing messages are sealed in the current epoch and kept in a
- *   persisted outbox until the relay accepts them; a request that gets no
- *   answer is re-sent with the same inner id at most twice (§8.6).
+ * - Outgoing messages are sealed in the current epoch. Fire-and-forget
+ *   messages (token renewals and their answers, `call.end`: [OUTBOX_TYPES])
+ *   are kept in a persisted outbox until the relay accepts them. A request
+ *   ([request], [op]) is deposited from memory and never written to the
+ *   outbox: one whose caller was told it failed is not delivered later by a
+ *   flush (A6 audit N2). A request that gets no answer is re-sent with the
+ *   same inner id at most twice (§8.6).
  * - Tokens are refreshed in both directions (§7.2), vault-initiated rekeys
  *   answered (§6.5) and identity rotations followed (§3.4).
  * - As an [AltParty] it builds and opens the alternate channel's sealed
@@ -1000,6 +1004,24 @@ class VaultDevice private constructor(
     }
 
     /**
+     * (A6 audit N2) One deposit of a request ([request], [requestWithId]): sealed in the current epoch, the epoch's send
+     * counter saved, and handed to the relay client from memory, **never written to the outbox**. A relay failure is
+     * the caller's (the request fails, and the member is told so); nothing of it is kept, so no later flush, start or
+     * unlock delivers a request the member was told had failed (a second message, a PIN change or an owner check
+     * carried out later, a credential operation with an old blob replayed after a successful retry). The relay client
+     * may still repeat the same envelope within this one hand-over (429, 5xx, a transport error); the vault drops a
+     * second copy by its inner id (§8.2).
+     */
+    private suspend fun sendRequestLocked(id: String, type: String, body: JsonObject, exp: Instant?) {
+        val v = requireVault()
+        val ep = keyring.current() ?: throw VaultStateException("no session with the vault")
+        if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+        val env = ep.seal(Inner(id = id, type = type, ts = now(), exp = exp, body = VaultJson.bytes(body)))
+        save() // the epoch's send counter
+        depositToVault(v, env)
+    }
+
+    /**
      * Deposits an outbox entry; removes it once the relay accepted it, or on a terminal relay error (rethrown). A
      * transport failure, 429, 5xx and a stale or replayed signature (`timestamp_stale`, `replay_detected`: the relay
      * applied nothing, and every attempt is signed afresh, [RelayException.staleSignature]) keep it for the next flush.
@@ -1093,12 +1115,12 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendLocked(id, type, body, null, null, null) }
+            lock.withLock { sendRequestLocked(id, type, body, null) }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, null) }
+                if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, null) }
             }
             throw VaultStateException("$type: no response")
         } finally {
@@ -1606,12 +1628,12 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendLocked(id, type, body, null, null, exp) }
+            lock.withLock { sendRequestLocked(id, type, body, exp) }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, exp) }
+                if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, exp) }
             }
             throw VaultStateException("$type: no response")
         } finally {
@@ -1843,9 +1865,33 @@ class VaultDevice private constructor(
             return g.takeIf { it.length in 1..USER_GUID_MAX && it.all { c -> c.code in PRINTABLE_MIN..PRINTABLE_MAX } }
         }
 
+        /**
+         * (A6 audit N2) The only types the outbox keeps: messages that are not requests the member waits for, and that
+         * mean the same whenever they arrive (a standing token for the vault, a token renewal and its answer, the end
+         * of a call). Every request is deposited from memory ([sendRequestLocked]).
+         */
+        internal val OUTBOX_TYPES = setOf("relay.token.issued", "relay.token.refresh", "call.end")
+
+        /**
+         * (A6 audit N2) A state written by an app version that put requests in the outbox: every entry that is not of
+         * [OUTBOX_TYPES] is a request whose caller was told it failed (or never heard, the app having ended), and is
+         * dropped unsent. A credential operation among them that had never been sent ([LEGACY_UNSENT]) stays unsettled
+         * for [LEGACY_SENT_WINDOW] from now, as one sent now would: an earlier copy of it may have reached the vault.
+         */
+        internal fun dropLegacyRequests(st: DeviceState, now: Instant) {
+            if (st.requestsOutOfOutbox) return
+            val dropped = st.outbox.filter { it.type !in OUTBOX_TYPES }
+            st.outbox.removeAll(dropped.toSet())
+            val until = now.plus(LEGACY_SENT_WINDOW).toEpochMilli()
+            for (e in dropped) if (st.unsettled[e.id] == LEGACY_UNSENT) st.unsettled[e.id] = until
+            st.requestsOutOfOutbox = true
+        }
+
         /** A new device with fresh state; registers its mailbox on its relay. */
         suspend fun create(cfg: DeviceConfig, secrets: DeviceSecrets): VaultDevice {
-            val d = VaultDevice(cfg, secrets, DeviceState(cfg.role, cfg.name, cfg.relayUrl.trimEnd('/'), outboxTracked = true))
+            val d = VaultDevice(
+                cfg, secrets, DeviceState(cfg.role, cfg.name, cfg.relayUrl.trimEnd('/'), outboxTracked = true, requestsOutOfOutbox = true),
+            )
             d.own.register()
             d.save()
             return d
@@ -1861,6 +1907,7 @@ class VaultDevice private constructor(
                 for (e in st.outbox) st.unsettled.putIfAbsent(e.id, LEGACY_UNSENT)
                 st.outboxTracked = true
             }
+            dropLegacyRequests(st, Instant.now(cfg.clock))
             return VaultDevice(cfg, secrets, st)
         }
     }

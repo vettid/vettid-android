@@ -47,6 +47,12 @@ internal data class DeviceState(
      * its outbox entries carry no `exp` and are tracked at the first load ([VaultDevice.LEGACY_UNSENT]).
      */
     var outboxTracked: Boolean = false,
+    /**
+     * (A6 audit N2) The outbox holds only fire-and-forget messages ([VaultDevice.OUTBOX_TYPES]); requests are never
+     * written to it. False only in a state written by an app version that queued requests there: they are dropped at
+     * the first load ([VaultDevice.dropLegacyRequests]).
+     */
+    var requestsOutOfOutbox: Boolean = false,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

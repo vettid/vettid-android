@@ -1802,6 +1802,106 @@ class VaultDeviceTest {
         }
     }
 
+    // --- A6 audit N2: a request that failed is not delivered later ---
+
+    /**
+     * (A6 audit N2) A request whose deposit failed in transport fails for its caller, and nothing of it is kept: no later
+     * flush, and no flush after a restart, delivers it (the member was told it failed; a second `message.send` would be
+     * a second message, a late `pin.change` a change made behind the member's back).
+     */
+    @Test
+    fun aRequestThatFailedInTransportIsNeverDeliveredLater() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            val e = runCatching { d.op("message.send", buildJsonObject { put("text", "hi") }) }.exceptionOrNull()
+            assertTrue(e is RelayException && e.retryable)
+            val exp = Instant.now().plusSeconds(60)
+            val c = runCatching { d.requestWithId(Ulid.new(), "pin.change", buildJsonObject { put("x", 1) }, exp = exp) }.exceptionOrNull()
+            assertTrue(c is RelayException)
+            assertEquals("nothing of a failed request is stored", 0, savedState(store).outbox.size)
+            refuseDeposits = null
+            d.flushOutbox()
+            assertNull("the next flush sends nothing", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // A restart (a new process) and its flush send nothing either.
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!
+            again.flushOutbox()
+            assertNull("nor the first flush after a restart", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // The same request asked again is one deposit, answered once.
+            val r = async(Dispatchers.IO) { again.op("message.send", buildJsonObject { put("text", "hi") }) }
+            val m = v.open(nextDeposit().second)
+            assertEquals("message.send", m.type)
+            again.handle(v.seal("message.send", """{"message_id":"m1"}""", re = m.id, status = Inner.STATUS_OK))
+            assertEquals("m1", VaultJson.str(r.await(), "message_id"))
+            again.flushOutbox()
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * (A6 audit N2) The process ends while a request's deposit is in progress (or the request is waiting for its answer):
+     * the stored state holds no copy of it, so the next start delivers nothing the member never saw succeed.
+     */
+    @Test
+    fun aRequestInProgressIsNotStoredForAfterAKill() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(400))
+            val before = depositsStarted.get()
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            val sending = async(Dispatchers.IO) { runCatching { d.op("vault.delete", buildJsonObject { put("x", 1) }) } }
+            while (depositsStarted.get() == before) kotlinx.coroutines.delay(10)
+            // Killed here: what is stored is what the next process starts from.
+            assertEquals("not in the stored outbox during the deposit", 0, savedState(store).outbox.size)
+            depositGate!!.countDown()
+            depositGate = null
+            assertEquals("vault.delete", v.open(nextDeposit().second).type)
+            assertEquals("not stored while the answer is awaited", 0, savedState(store).outbox.size)
+            assertTrue("no answer: failed", sending.await().isFailure)
+            // Its two application retries reused the inner id (§8.6); none is stored.
+            v.open(nextDeposit().second)
+            v.open(nextDeposit().second)
+            assertEquals(0, savedState(store).outbox.size)
+        }
+    }
+
+    /**
+     * (A6 audit N2) A state of an app version that queued requests in the outbox: at the first load every entry that is
+     * not fire-and-forget is dropped unsent, the token renewals and hang-ups are kept for the flush, and a credential
+     * operation that was never sent stays unsettled as one just sent would.
+     */
+    @Test
+    fun requestsQueuedByAnEarlierVersionAreDroppedAtLoad() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            d.stop()
+            val st = savedState(store)
+            assertTrue("a device made by this version needs no migration", st.requestsOutOfOutbox)
+            val legacyCheck = Ulid.new()
+            for ((id, type) in listOf(Ulid.new() to "message.send", legacyCheck to VaultApi.TYPE_OWNER_CHECK, Ulid.new() to "pin.change",
+                Ulid.new() to "call.end", Ulid.new() to "relay.token.issued", Ulid.new() to "vault.lock")) {
+                st.outbox.add(OutboxEntry(id, type, v.relayUrl, v.mailbox, "tok", "ZW52"))
+            }
+            st.unsettled[legacyCheck] = VaultDevice.LEGACY_UNSENT
+            st.requestsOutOfOutbox = false
+            store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+            val again = VaultDevice.load(config(store), secrets)!!
+            again.markSignerSeen(!again.signerSeen) // any save writes the loaded state
+            val after = savedState(store)
+            assertEquals(listOf("call.end", "relay.token.issued"), after.outbox.map { it.type })
+            assertTrue(after.requestsOutOfOutbox)
+            val until = after.unsettled[legacyCheck]!!
+            assertTrue("unsettled for the legacy window, not forever", until < VaultDevice.LEGACY_UNSENT && until > System.currentTimeMillis())
+            assertFalse(again.credentialSettled())
+        }
+    }
+
     // --- a lost answer to a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9) ---
 
     private fun utkJson(id: String, utk: KemPrivateKey) =
