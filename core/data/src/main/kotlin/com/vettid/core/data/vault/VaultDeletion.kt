@@ -21,13 +21,26 @@ internal data class DeletingMarker(val vaultId: String, val sinceMs: Long, val u
 
 /** What one read of `GET /api/vault/status` says of a vault being deleted. */
 enum class DeletionCheck {
-    /** `{vault: null}`, or `401 unauthorized` to the app key: the row, and with it the app key, is gone. */
+    /**
+     * A definite word that the vault is gone. Nothing reads it automatically yet (owner decision 2026-10-24): neither
+     * `{vault: null}` (advisory) nor a bare `401` (the member API gives the same 401 for ts, nonce, signature and other
+     * faults) is definite. A future `410 vault_deleted` from the member API is the signal meant for this.
+     */
     GONE,
 
     /** The vault is still listed, whatever its `state`. */
     LISTED,
 
-    /** The member API could not be reached (or answered something else): nothing is concluded. */
+    /**
+     * The member API answered, but not definitely: `{vault: null}` (advisory) or a `401` of any kind. This phone cannot
+     * tell a deleted vault from a clock, nonce, signature or key fault, so nothing is erased.
+     */
+    UNCONFIRMED,
+
+    /** As [UNCONFIRMED], and the 401 was for the phone's clock (a date/time hint is shown). Never erases. */
+    UNCONFIRMED_CLOCK,
+
+    /** The member API could not be reached (network, timeout, 5xx, paused): nothing is concluded. */
     UNREACHABLE,
 }
 
@@ -79,7 +92,8 @@ object VaultDeletion {
     fun ofStatus(vaultListed: Boolean, servicePaused: Boolean = false): DeletionCheck = when {
         servicePaused -> DeletionCheck.UNREACHABLE
         vaultListed -> DeletionCheck.LISTED
-        else -> DeletionCheck.GONE
+        // `{vault: null}` is advisory (as in VaultManager.evaluate()): it never erases this phone.
+        else -> DeletionCheck.UNCONFIRMED
     }
 
     /**
@@ -101,9 +115,60 @@ object VaultDeletion {
 
     private const val MARKER_ATTEMPTS = 3
 
-    /** What a failed read says: `401 unauthorized` to the app key is the row removed; anything else concludes nothing. */
+    /**
+     * What a failed read says: nothing definite, whatever the kind. A 401 of any kind ([FailureKind.UNAUTHORIZED], and
+     * [FailureKind.CLOCK], a 401 for the clock) is UNCONFIRMED: the member API's bare 401 does not tell a deleted vault
+     * from a missing Date header, a nonce clash or a key fault. Everything else (network, timeout, 5xx, paused, 403) is
+     * UNREACHABLE.
+     */
     fun ofFailure(kind: FailureKind): DeletionCheck =
-        if (kind == FailureKind.UNAUTHORIZED) DeletionCheck.GONE else DeletionCheck.UNREACHABLE
+        when (kind) {
+            FailureKind.UNAUTHORIZED -> DeletionCheck.UNCONFIRMED
+            FailureKind.CLOCK -> DeletionCheck.UNCONFIRMED_CLOCK
+            else -> DeletionCheck.UNREACHABLE
+        }
+
+    /**
+     * What a failed read says, looking at the error itself: a 403 (`forbidden`, which [VaultManager.memberFailure] maps to
+     * OTHER) is UNCONFIRMED like a 401 (the API answered, but not definitely); 5xx, 429 and the rest stay as [ofFailure].
+     */
+    fun ofFailure(f: VaultFailure): DeletionCheck {
+        val forbidden = f.code == "forbidden" || (f.cause as? com.vettid.core.altchan.MemberApiException)?.status == HTTP_FORBIDDEN
+        return if (forbidden) DeletionCheck.UNCONFIRMED else ofFailure(f.kind)
+    }
+
+    private const val HTTP_FORBIDDEN = 403
+
+    /** What one status answer showed: whether it lists a vault, and whether the service is paused. */
+    data class StatusSeen(val vaultListed: Boolean, val servicePaused: Boolean)
+
+    /**
+     * One read of the status mapped to a [DeletionCheck] (the whole of what [VaultManager] does with the answer): no answer
+     * or failure here is ever GONE. [onPaused] gets the answer's pause flag.
+     */
+    @Suppress("TooGenericExceptionCaught") // whatever the read throws concludes nothing
+    suspend fun readCheck(onPaused: (Boolean) -> Unit = {}, read: suspend () -> StatusSeen): DeletionCheck = try {
+        val a = read()
+        onPaused(a.servicePaused)
+        ofStatus(vaultListed = a.vaultListed, servicePaused = a.servicePaused)
+    } catch (e: VaultFailure) {
+        ofFailure(e)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (_: RuntimeException) {
+        DeletionCheck.UNREACHABLE
+    }
+
+    /**
+     * Whether a deletion that began at [sinceMs] is past its bound at [nowMs]. A clock that went back before [sinceMs] is
+     * past it too (the wall clock cannot be trusted to count down), so "Check again" and "Remove" are never hidden by it.
+     * A step back of up to [CLOCK_TOLERANCE_MS] (an NTP correction) does not count.
+     */
+    fun pastBound(sinceMs: Long, untilMs: Long, nowMs: Long): Boolean = nowMs >= untilMs || nowMs < sinceMs - CLOCK_TOLERANCE_MS
+
+    private const val CLOCK_TOLERANCE_MS = 60_000L
+
+    internal fun pastBound(m: DeletingMarker, nowMs: Long = System.currentTimeMillis()): Boolean = pastBound(m.sinceMs, m.untilMs, nowMs)
 }
 
 /**
@@ -155,13 +220,14 @@ internal class DeletionWatch(
     private suspend fun run(m: DeletingMarker, readNow: Boolean) {
         if (readNow && check() == DeletionCheck.GONE) return
         // Past the bound (a start after it): "still finishing" at once, with no timer.
-        if (nowMs() >= m.untilMs) return onSlow()
+        if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return onSlow()
         while (true) {
             val now = nowMs()
-            delay(minOf(VaultDeletion.nextReadMs(m.sinceMs, now), m.untilMs) - now)
+            // Capped: a clock that moved back must not make the wait as long as the move.
+            delay((minOf(VaultDeletion.nextReadMs(m.sinceMs, now), m.untilMs) - now).coerceIn(0L, VaultDeletion.THEN_EVERY_MS))
             if (check() == DeletionCheck.GONE) return
             // At the bound: still listed (or not reachable) is "still finishing", and nothing more runs on a timer.
-            if (nowMs() >= m.untilMs) return onSlow()
+            if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return onSlow()
         }
     }
 }

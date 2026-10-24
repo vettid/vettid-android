@@ -571,7 +571,7 @@ class VaultManager(
     init {
         // A process that finds the marker starts in "being deleted", before it reads anything (the watch starts with the
         // first read of the phase, [evaluate]).
-        local.deleting?.let { m -> phaseFlow.deleting(AppPhase.Deleting(slow = System.currentTimeMillis() >= m.untilMs)) }
+        local.deleting?.let { m -> phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m))) }
     }
 
     /** (ANDROID-PLAN 0.1.54) The stored marker of an unconfirmed release move, as the device last kept it. */
@@ -1474,7 +1474,7 @@ class VaultManager(
         }
         (local.deleting ?: deletingMarker)?.let { m ->
             // ANDROID-PLAN 0.1.54: "being deleted" before anything is read; the status is re-read at every start.
-            if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = System.currentTimeMillis() >= m.untilMs))
+            if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m)))
             deletionWatch.start(m, readNow = true)
             return@guard phaseFlow.value
         }
@@ -2477,17 +2477,9 @@ class VaultManager(
     }
 
     /** One read of `GET /api/vault/status` with the app key, without a session ([VaultDeletion.ofStatus]). */
-    @Suppress("TooGenericExceptionCaught") // whatever the read throws concludes nothing
-    private suspend fun readDeletion(): DeletionCheck = try {
+    private suspend fun readDeletion(): DeletionCheck = VaultDeletion.readCheck(onPaused = { pausedFlow.value = it }) {
         val a = vaultGuard { gateway.member().vaultStatusAnswer() }
-        pausedFlow.value = a.servicePaused
-        VaultDeletion.ofStatus(vaultListed = a.vault != null, servicePaused = a.servicePaused)
-    } catch (e: VaultFailure) {
-        VaultDeletion.ofFailure(e.kind)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (_: RuntimeException) {
-        DeletionCheck.UNREACHABLE
+        VaultDeletion.StatusSeen(vaultListed = a.vault != null, servicePaused = a.servicePaused)
     }
 
     /**
