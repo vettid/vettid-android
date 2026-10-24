@@ -1529,6 +1529,32 @@ class VaultDevice private constructor(
         put("token", tok)
     }
 
+    /**
+     * (VAULT-MESSAGING §11.14.10; owner decision 2026-10-23) A fresh standing token for this device's mailbox, with its
+     * full 30 days, sent to the vault (`relay.token.issued{kind: "standing", token}`, §7.1, §7.2): the old phone does
+     * this while it is still the vault's app, right before each approval of a transfer it sends, so that the vault can
+     * deliver `device.unlinked{transferred}` for as long as possible. Deposited once, outside the outbox, and returns
+     * only once the relay accepted it (201), so that the approval deposited after it reaches the vault's mailbox after
+     * it. The earlier token is not revoked. Throws when it could not be deposited (and this phone's record of the token
+     * the vault holds stays as it was).
+     */
+    suspend fun renewIssuedToken() {
+        lock.withLock {
+            val before = st.issuedExpMs
+            val tok = mintForVault()
+            var sent = false
+            try {
+                sendOnceLocked(Ulid.new(now()), "relay.token.issued", standing(tok), null)
+                sent = true
+            } finally {
+                if (!sent) {
+                    st.issuedExpMs = before
+                    save()
+                }
+            }
+        }
+    }
+
     /** Refreshes tokens in both directions (§7.2). */
     private suspend fun maintain(t: Instant) {
         val v = st.vault ?: return

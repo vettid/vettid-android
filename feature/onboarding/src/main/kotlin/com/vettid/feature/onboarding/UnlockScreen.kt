@@ -127,6 +127,15 @@ fun UnlockContent(
                     Text(label, style = MaterialTheme.typography.bodyMedium)
                 }
             }
+            if (state.keptCheckWaiting) {
+                // §11.14.10 (owner decision 2026-10-23): the 7 days are over, the vault has not confirmed the move yet.
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.onboarding_kept_check_waiting_title),
+                    stringResource(R.string.onboarding_kept_check_waiting),
+                    modifier = Modifier.testTag("kept_check_waiting"),
+                )
+            }
             if (state.keptTransfer) {
                 // Release R (§11.14.10): the old phone after a transfer's approval.
                 NoticeCard(
@@ -201,7 +210,7 @@ fun UnlockContent(
                 )
                 LockNotice.None -> Unit
             }
-            if (state.refused && !state.notRecognised) {
+            if (state.refused && !state.notRecognised && !state.keptCheckWaiting) {
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.unlock_refused_title),
@@ -365,6 +374,8 @@ fun UnlockContent(
             // An ended release or a rollback wins: no erase there, whatever else the last answers said.
             when {
                 state.recoverOnly -> RecoverOnlyNotice(onOpenAccountSite, contactSupport)
+                // §11.14.10 (owner decision 2026-10-23): waiting for the vault's answer, the notice above; no erase offer.
+                state.keptCheckWaiting -> Unit
                 state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
                 state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
             }

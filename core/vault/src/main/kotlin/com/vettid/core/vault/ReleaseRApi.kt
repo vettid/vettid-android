@@ -15,7 +15,18 @@ import kotlinx.serialization.json.put
  * before it tries the PIN, and the transfer stays open; (0.52.0) the UTK is spent all the same, and the next approval
  * takes a fresh one.
  */
-suspend fun VaultApi.transferApprove(transferId: String, pin: String, password: String, signer: String? = null): TransferApproved =
+suspend fun VaultApi.transferApprove(
+    transferId: String,
+    pin: String,
+    password: String,
+    signer: String? = null,
+    /**
+     * (§11.14.10; owner decision 2026-10-23) Run right before each copy of the approval is deposited (also the one sent
+     * again after a `stale_credential` fetch): the old phone's token renewal ([VaultDevice.renewIssuedToken]). A throw
+     * stops the approval, nothing sent.
+     */
+    beforeSend: (suspend () -> Unit)? = null,
+): TransferApproved =
     TransferApproved.of(
         credentialOps.credOp(
             "device.transfer.approve",
@@ -24,6 +35,7 @@ suspend fun VaultApi.transferApprove(transferId: String, pin: String, password: 
                 put("pin", pin)
             },
             extra = TransferPending.approval(transferId, signer),
+            onSending = beforeSend?.let { f -> { _ -> f() } },
         ).first,
     )
 

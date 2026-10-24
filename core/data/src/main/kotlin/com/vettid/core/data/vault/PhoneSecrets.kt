@@ -189,16 +189,37 @@ object KeptTransfer {
      */
     fun start(approvedAtMs: Long, nowMs: Long): Long = minOf(approvedAtMs, nowMs)
 
+    /** What the vault's answer to the end-of-keep check says (VAULT-MESSAGING §11.14.10; owner decision 2026-10-23). */
+    enum class Verdict {
+        /** A definite answer that lists this phone as the vault's app: the transfer never took effect. */
+        STILL_THE_APP,
+
+        /** A definite answer whose list does not hold this phone's device id: this phone's keys go. */
+        NOT_THE_APP,
+
+        /**
+         * No answer, an error or refusal (`token_revoked` included), an answer without a device list, or this phone's id
+         * listed as something other than the app: nothing is decided, the check runs again.
+         */
+        UNKNOWN,
+    }
+
     /**
-     * The end-of-keep check's verdict (owner decision 2026-10-16): [deviceList] is the vault's `device.list` answer over
-     * this phone's session (null: no answer, a refusal, any failure). This phone is still the vault's app only when the
-     * list names it ([deviceId]) as an `app`; anything else erases.
+     * The end-of-keep check's verdict (owner decision 2026-10-23): [deviceList] is the `ok` response to this check's own
+     * `device.list` request, opened under this phone's session with its vault and carrying `re` = that request's id
+     * (null: no answer, an error, `token_revoked`, any failure). A list holding this phone's device id ([deviceId]) with
+     * kind `app` is [Verdict.STILL_THE_APP]; a list that does not hold that id is [Verdict.NOT_THE_APP]; anything else (no
+     * answer, no list, no device id of this phone, the id under another kind) is [Verdict.UNKNOWN], which never erases.
      */
-    fun stillTheApp(deviceList: kotlinx.serialization.json.JsonObject?, deviceId: String?): Boolean {
+    fun verdict(deviceList: kotlinx.serialization.json.JsonObject?, deviceId: String?): Verdict {
         val devices = deviceList?.get("devices") as? kotlinx.serialization.json.JsonArray
-        return deviceId != null && devices != null && devices.any { e ->
-            val d = e as? kotlinx.serialization.json.JsonObject
-            d != null && com.vettid.core.vault.VaultJson.str(d, "id") == deviceId && com.vettid.core.vault.VaultJson.str(d, "kind") == "app"
+        if (deviceId == null || devices == null) return Verdict.UNKNOWN
+        val mine = devices.mapNotNull { it as? kotlinx.serialization.json.JsonObject }
+            .filter { com.vettid.core.vault.VaultJson.str(it, "id") == deviceId }
+        return when {
+            mine.isEmpty() -> Verdict.NOT_THE_APP
+            mine.any { com.vettid.core.vault.VaultJson.str(it, "kind") == "app" } -> Verdict.STILL_THE_APP
+            else -> Verdict.UNKNOWN
         }
     }
 
@@ -221,6 +242,23 @@ object KeptTransfer {
             else -> Decision.Keep(keepMs - elapsed)
         }
     }
+}
+
+/**
+ * How long the new phone holds a transfer's handshake, attested key and epoch-1 secret for `device.paired` (release R,
+ * §11.14.10; owner decision 2026-10-23): the vault's 10-minute window after `hs.init` (§6.7, 0.10.4) plus about a minute
+ * of grace. The count starts at this phone's own `hs.init`, earlier than the vault's, so an approval near the end of the
+ * vault's window cannot complete at the vault after this phone dropped what it needs to finish. The old phone's approval
+ * window (the vault's) and the countdown the screens show stay 10 minutes.
+ */
+object TransferInWait {
+    val WAIT: java.time.Duration = java.time.Duration.ofMinutes(11)
+
+    private val MIN_LEFT: java.time.Duration = java.time.Duration.ofSeconds(1)
+
+    /** What is left of [WAIT] at [now] for a transfer this phone started at [started] (at least a second). */
+    fun left(started: java.time.Instant, now: java.time.Instant): java.time.Duration =
+        java.time.Duration.between(now, started.plus(WAIT)).coerceAtLeast(MIN_LEFT)
 }
 
 /** What ends "Finish the move" on the new phone (release R, §11.14.10). */

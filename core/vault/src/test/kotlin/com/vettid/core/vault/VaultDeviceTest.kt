@@ -357,6 +357,69 @@ class VaultDeviceTest {
     }
 
     /** A paired device drops a device.pair.rejected (only a device waiting for device.paired acts on it). */
+    /** §11.14.10 (owner decision 2026-10-23): before a transfer's approval, the vault gets a standing token with its full 30 days. */
+    @Test
+    fun aRenewedIssuedTokenReachesTheVaultWithItsFullThirtyDays() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val before = Instant.now(phoneClock)
+            d.renewIssuedToken()
+            val m = v.open(nextDeposit().second)
+            assertEquals("relay.token.issued", m.type)
+            val o = VaultJson.parseObject(m.body)
+            assertEquals("standing", VaultJson.str(o, "kind"))
+            val c = DepositTokens.verify(VaultJson.str(o, "token")!!, d.relayAddr.pk())
+            assertEquals(RelayAuth.encodeKey(v.relayKey.publicKey), c.sub)
+            // Its full 30 days, from now (issued back-dated a little, as every standing token).
+            assertEquals(DepositTokens.STANDING_TTL, java.time.Duration.between(c.iat, c.exp))
+            assertTrue("issued now", !c.iat.isBefore(before.minus(java.time.Duration.ofMinutes(10))))
+        }
+    }
+
+    /**
+     * §11.14.10 (owner decision 2026-10-23): the old phone renews the vault's token for its mailbox before each approval
+     * it sends: the renewal is accepted by the relay (deposited) before the approval is deposited, and an approval sent
+     * again after `busy` renews again.
+     */
+    @Test
+    fun eachTransferApprovalIsPrecededByADepositedTokenRenewal() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            withCredential(d, v, api)
+            val utk = KemPrivateKey.generate()
+            val first = async(Dispatchers.IO) { runCatching { api.transferApprove("t-1", "246802", "password one", beforeSend = { d.renewIssuedToken() }) } }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            d.handle(v.seal(get.type, """{"utks":[${utkEntry("00112233445566cc", utk)}]}""", re = get.id, status = Inner.STATUS_OK))
+            val renewal = v.open(nextDeposit().second)
+            assertEquals("relay.token.issued", renewal.type)
+            assertEquals("standing", VaultJson.str(VaultJson.parseObject(renewal.body), "kind"))
+            val a1 = v.open(nextDeposit().second)
+            assertEquals("device.transfer.approve", a1.type)
+            d.handle(
+                v.msg(
+                    v.keyring.current()!!.seal(
+                        Inner(id = Ulid.new(), type = a1.type, ts = Instant.now(), re = a1.id, status = Inner.STATUS_ERROR,
+                            error = com.vettid.core.crypto.envelope.InnerError("busy")),
+                    ),
+                ),
+            )
+            assertEquals("busy", (first.await().exceptionOrNull() as VaultOpException).code)
+
+            // The old app tries again: renewed again, before the new approval.
+            val second = async(Dispatchers.IO) { api.transferApprove("t-1", "246802", "password one", beforeSend = { d.renewIssuedToken() }) }
+            val get2 = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get2.type)
+            d.handle(v.seal(get2.type, """{"utks":[${utkEntry("00112233445566dd", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
+            assertEquals("relay.token.issued", v.open(nextDeposit().second).type)
+            val a2 = v.open(nextDeposit().second)
+            assertEquals("device.transfer.approve", a2.type)
+            d.handle(v.seal(a2.type, """{"unlink":"after_new_unlock"}""", re = a2.id, status = Inner.STATUS_OK))
+            assertTrue(second.await().keepUntilNewUnlock)
+        }
+    }
+
     @Test
     fun aPairedDeviceIgnoresAPairingRejection() = runBlocking<Unit> {
         withTimeout(30_000) {

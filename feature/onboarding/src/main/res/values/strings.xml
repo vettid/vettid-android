@@ -426,6 +426,8 @@
     <string name="onboarding_finish_move_body">Enter your PIN on this phone to finish moving your vault.</string>
     <string name="onboarding_finish_move_done">Your vault is on this phone now.</string>
     <string name="onboarding_finish_move_later">Later</string>
+    <string name="onboarding_kept_check_waiting_title">Waiting for your vault</string>
+    <string name="onboarding_kept_check_waiting">Your vault has not confirmed the move to this phone. Once your new phone opens your vault, remove VettID from this phone.</string>
     <string name="onboarding_kept_transfer">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most %1$s. Before you give this phone away, remove VettID from it or reset it.</string>
     <string name="onboarding_move_didnt_finish">The move didn\'t finish</string>
     <string name="onboarding_move_didnt_finish_body">Use this if your new phone cannot open your vault. If your new phone opens the vault, ignore this.</string>
