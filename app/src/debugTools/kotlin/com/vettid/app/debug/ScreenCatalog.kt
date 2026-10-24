@@ -741,6 +741,14 @@ object ScreenCatalog {
                 NoUnlock,
             )
         },
+        // Release L (§3.6.8): the vault locked itself; the unlock and the check on this screen.
+        "unlock.idle_locked" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), checkDue = true,
+                    idleLocked = com.vettid.core.data.vault.IdleLocked(604_800)),
+                NoUnlock,
+            )
+        },
         "unlock.owner_check_locked" to {
             UnlockContent(
                 UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), checkDue = true,
@@ -753,6 +761,10 @@ object ScreenCatalog {
             NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, confirming = true), NewCredentialActions())
         },
         "owner_check.held" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView), NoOwnerCheck) {} },
+        // Release L (§3.6.8): the held screen says when the vault locks itself.
+        "owner_check.held_idle_lock" to {
+            OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView.copy(idleLockAt = Instant.now().plusSeconds(6 * 86_400L))), NoOwnerCheck) {}
+        },
         // Past the deadline by the phone's clock, before the vault said what is waiting: never shown as zero.
         "owner_check.unknown" to {
             OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, okView.copy(deadline = Instant.now().minusSeconds(60))), NoOwnerCheck) {}
@@ -871,6 +883,19 @@ object ScreenCatalog {
         },
         "settings.owner_check_offer" to {
             SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), OwnerCheckSettingsUiState(okView, offerCheck = true))
+        },
+        // Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock's setting, and a longer value waiting for the next check.
+        "settings.idle_lock" to {
+            SettingsContent(
+                SettingsUiState(account = sampleAccount), SettingsActions(),
+                OwnerCheckSettingsUiState(okView, idleLock = com.vettid.core.data.vault.IdleLockSetting(604_800)),
+            )
+        },
+        "settings.idle_lock_next_check" to {
+            SettingsContent(
+                SettingsUiState(account = sampleAccount), SettingsActions(),
+                OwnerCheckSettingsUiState(okView, idleLock = com.vettid.core.data.vault.IdleLockSetting(2_592_000, 604_800), idleLongerNote = true),
+            )
         },
         "shell.deletion" to {
             Column {

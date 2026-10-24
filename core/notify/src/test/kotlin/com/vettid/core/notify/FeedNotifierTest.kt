@@ -54,6 +54,7 @@ class FeedNotifierTest {
         override val items = MutableStateFlow<List<FeedItem>>(emptyList())
         override val open = MutableStateFlow(true)
         override val lockedElsewhere = MutableStateFlow(false)
+        override val idleLocked = MutableStateFlow<com.vettid.core.data.vault.IdleLocked?>(null)
         override val ownerCheck = MutableStateFlow<OwnerCheckView?>(null)
         override val alarm = MutableStateFlow<CredentialAlarm?>(null)
         var names = FeedNames(mapOf("c1" to ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee")), mapOf("i1" to "Passport"))
@@ -255,5 +256,43 @@ class FeedNotifierTest {
         source.ownerCheck.value = held.copy(state = OwnerCheckState.OK)
         runCurrent()
         assertNull(poster.shown[FeedNotifier.TAG_CHECK])
+    }
+
+    /** Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock's notification on Security, with the time computed. */
+    @Test
+    fun anIdleLockSaysTheVaultLockedItself() = runTest {
+        notifier()
+        source.lockedElsewhere.value = true
+        runCurrent()
+        assertEquals("Your vault is locked", poster.shown.getValue(FeedNotifier.TAG_LOCKED).title)
+        source.idleLocked.value = com.vettid.core.data.vault.IdleLocked(604_800)
+        runCurrent()
+        val n = poster.shown.getValue(FeedNotifier.TAG_LOCKED)
+        assertEquals(Channels.SECURITY, n.channel)
+        assertEquals("Your vault locked itself", n.title)
+        assertEquals(
+            "You hadn’t checked in for 7 days, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.",
+            n.text,
+        )
+        assertEquals("VettID needs your attention", n.publicTitle)
+        // Staging (24): 7 days run as 7 hours; and a time not known.
+        source.idleLocked.value = com.vettid.core.data.vault.IdleLocked(25_200)
+        runCurrent()
+        assertTrue(poster.shown.getValue(FeedNotifier.TAG_LOCKED).text!!.startsWith("You hadn’t checked in for 7 hours,"))
+        source.idleLocked.value = com.vettid.core.data.vault.IdleLocked(null)
+        runCurrent()
+        assertTrue(poster.shown.getValue(FeedNotifier.TAG_LOCKED).text!!.startsWith("You hadn’t checked in, so"))
+        source.lockedElsewhere.value = false
+        runCurrent()
+        assertNull(poster.shown[FeedNotifier.TAG_LOCKED])
+    }
+
+    @Test
+    fun durationsAreSaidAsOnTheScreens() {
+        assertEquals("1 hour", FeedNotifier.durationText(3_600, res))
+        assertEquals("as the setting names it", "1 day", FeedNotifier.durationText(86_400, res))
+        assertEquals("30 days", FeedNotifier.durationText(2_592_000, res))
+        assertEquals("150 seconds", FeedNotifier.durationText(150, res))
+        assertEquals("15 minutes", FeedNotifier.durationText(900, res))
     }
 }

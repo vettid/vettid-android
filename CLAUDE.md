@@ -242,7 +242,15 @@ vettid.org repo's `local/android-ui/`).
   {unlock_id}` at every attempt with no wait before an unlock, `POST /api/vault/lock {unlock_id}`, the slot's
   `locked` / `not_running` confirm, `stale_lock` / `stale` end it as `LockNotice.OpenedAgain` (not locked; this
   phone held locked until an unlock here, `LockKeeper.holdsPhone`), and a `vault.locking` counts by its `unlock_id`
-  (`LockNotices`). Without the value everything above is as #127 built it. Do not set the phase to `Unlocked` anywhere without thinking about a pending lock
+  (`LockNotices`). Without the value everything above is as #127 built it. **The idle lock (release L,
+  VAULT-MESSAGING 0.29.0 §3.6.8; gated on the vault):**
+  `OwnerCheckView.idleLockAt` (`idle_lock_at` of `vault.status` / `vault.held`, shown on the gated check),
+  `OwnerCheckRepository.idleLocked` (`vault.locking{reason: "idle"}`, kept until the vault opens; without it
+  `idleLockedNow` reads a time past `idle_lock_at`) for the unlock screen (`unlock.idle_locked`) and the Security
+  notification, `idleLockSetting` (`idle_lock.after_seconds` via `settings.get` / `settings.set`; no row for a vault
+  that does not list the key; a longer value is in force only after the next check, the lowest since then stays),
+  History's "Vault locked itself (not checked in)" for `vault.locked` with `ref` `idle`. Do not set the phase to
+  `Unlocked` anywhere without thinking about a pending lock
   (`evaluate()` asks `LockGuard.lockedWhatever`; `lock()` bumps `generation`).
 - Every destructive action uses `ConfirmDialog`; every critical action asks for the
   credential password. No backup/export of vault data (`allowBackup=false`); the one exception is History's export of activity metadata (ANDROID-PLAN 0.1.17: the vault PIN, then "Save to…" only).

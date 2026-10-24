@@ -192,6 +192,8 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 checkNow = { host.onOwnerCheck(false) },
                 dismissOffer = ocVm::dismissOffer,
                 dismissError = ocVm::dismissError,
+                setIdleLock = ocVm::setIdleLock,
+                dismissIdleNote = ocVm::dismissIdleNote,
             ),
             bell = host.bell,
         )
