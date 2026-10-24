@@ -2123,7 +2123,20 @@ class VaultManager(
      * status says so ([lockNotice] says which). An unconfirmed lock is not an error of the caller's: it is pending,
      * durably, and tried again.
      */
-    override suspend fun lock() {
+    override suspend fun lock() = lockWith(session?.device?.unlockId)
+
+    /**
+     * (Release L, owner decision 2026-10-24) "Lock it now" after "Your vault was opened again": the vault's status is
+     * read for the opening running now, and the lock is bound to it; a status that cannot be read or names none gives
+     * the unconditional lock (VAULT-LOCK Q3). The value the last lock was bound to is never reused: it was stale.
+     */
+    override suspend fun lockAgain() {
+        val id = LockAgain.unlockId { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK).status() }.unlockId } }
+        lockWith(id)
+    }
+
+    /** The member's lock, bound to [unlockId] (null: as before release L). */
+    private suspend fun lockWith(unlockId: String?) {
         lockedHere = true
         // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault" goes with the open vault.
         CredentialRequired.clear()
@@ -2136,7 +2149,7 @@ class VaultManager(
         // and a call's hang-up is sent to the vault and nothing it sends is taken in.
         // (Release L) Bound to the vault's current unlock as this phone knows it (memory only: from the unlock result
         // or the last vault.status); without one, as before L (VAULT-LOCK §3.6, Q3).
-        val mine = withContext(Dispatchers.IO + NonCancellable) { lockKeeper.begin(session?.device?.unlockId) }
+        val mine = withContext(Dispatchers.IO + NonCancellable) { lockKeeper.begin(unlockId) }
         locking.run(lock = { lockKeeper.ask(mine) }, after = {})
     }
 

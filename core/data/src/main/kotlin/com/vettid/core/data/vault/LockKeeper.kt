@@ -177,8 +177,8 @@ class LockKeeper(
     /**
      * This phone is to stay locked whatever the vault's status says: a lock is [pending], or (release L) one ended
      * because the vault was opened again since ([LockNotice.OpenedAgain]; until an unlock on this phone succeeds,
-     * whether or not the member dismissed the notice). In memory: a new process decides from the status, as after
-     * any start.
+     * whether or not the member dismissed the notice). Kept on the phone ([LockRecord.held]): a new process starts
+     * held too.
      */
     val holdsPhone: Boolean get() = pending || held
 
@@ -244,7 +244,14 @@ class LockKeeper(
 
     /** Evidence from elsewhere that the vault is locked (its `vault.locking`, a status read): a pending lock is confirmed. */
     fun confirmed() {
-        synchronized(this) { if (pending) confirm(late = (noticeFlow.value as LockNotice.Unconfirmed).inDoubt) }
+        synchronized(this) {
+            when {
+                pending -> confirm(late = (noticeFlow.value as LockNotice.Unconfirmed).inDoubt)
+                // (Release L) Held after "opened again", and now locked after all: said so. The phone stays held
+                // (an unlock here ends that), and the record keeps it.
+                held && noticeFlow.value == LockNotice.OpenedAgain -> noticeFlow.value = LockNotice.ConfirmedLate
+            }
+        }
     }
 
     /**

@@ -243,6 +243,21 @@ class VaultDevice private constructor(
     @Volatile
     var unlockId: String? = null
         private set
+
+    /**
+     * Bumped at every change of opening this device learns of (an unlock built, an enroll, unlock or recovery-open
+     * result): a `vault.status` answer is applied only if none came between its request and its answer, so an answer
+     * from the opening before never replaces the name of the one after ([noteUnlockId]).
+     */
+    private val openings = java.util.concurrent.atomic.AtomicLong()
+
+    /** The mark a `vault.status` request takes before it is sent ([noteUnlockId]). */
+    internal fun openingMark(): Long = openings.get()
+
+    private fun opened(id: String?) {
+        openings.incrementAndGet()
+        unlockId = id
+    }
     private val clock = cfg.clock
     private val relays = ConcurrentHashMap<String, RelayClient>()
     private val own: RelayClient = relayFor(cfg.relayUrl)
@@ -592,20 +607,22 @@ class VaultDevice private constructor(
 
     override suspend fun openEnrollResult(raw: ByteArray, requestId: String): EnrollResult =
         EnrollResult.parse(AltResults.open(raw, secrets.kem, AltResults.TYPE_ENROLL_RESULT, requestId)).also {
-            if (it.ok) unlockId = it.unlockId
+            if (it.ok) opened(it.unlockId)
         }
 
     /**
      * An unlock result's name of the opening ([unlockId]): none when the vault did not resume (a move, §11.10.6) or is
-     * before L. A failed unlock changes nothing: the vault is as it was.
+     * before L. A failed unlock sets none: building it already cleared the name ([prepareUnlock]), and the next
+     * `vault.status` says what runs.
      */
     private fun noteOpened(r: UnlockResult) {
-        if (r.ok) unlockId = r.unlockId.takeIf { r.token != null }
+        if (r.ok) opened(r.unlockId.takeIf { r.token != null })
     }
 
     /** A `vault.status`'s `unlock_id` ([unlockId]); absent or of another form: none. */
-    internal fun noteUnlockId(id: String?) {
-        unlockId = UnlockIds.of(id)
+    internal fun noteUnlockId(id: String?, mark: Long) {
+        // An opening came between the request and its answer: the answer may name the one before.
+        if (openings.get() == mark) unlockId = UnlockIds.of(id)
     }
 
     override suspend fun prepareUnlock(
@@ -626,8 +643,8 @@ class VaultDevice private constructor(
         // signer in device.list ([signerSeen]); a vault that has recorded one ignores it.
         val opts = options.copy(sendChain = !st.signerSeen)
         // (Release L) Whatever opening was known is over or about to be: a lock asked for meanwhile names none (the
-        // unlock's result names the new one).
-        unlockId = null
+        // unlock's result names the new one); a status answer in flight no longer applies.
+        opened(null)
         val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), opts, now())
         pendingUnlock = b.pending
         discardable = Discardable(b, issuedBefore, st.issuedExpMs)
@@ -893,7 +910,7 @@ class VaultDevice private constructor(
             pendingRecoveryOpen = null
             if (r.ok) {
                 // (0.56.1) A recovery open is an opening: its `unlock_id` ("" from a release before L: none).
-                unlockId = UnlockIds.of(r.unlockId)
+                opened(UnlockIds.of(r.unlockId))
                 r.vaultBundle()?.let { adoptBundle(it) }
                 st.vault?.let { v ->
                     v.token = r.token
@@ -1842,7 +1859,7 @@ class VaultDevice private constructor(
      */
     suspend fun forget() = lock.withLock {
         forgotten = true
-        unlockId = null
+        opened(null)
         stop()
         keyring.destroy()
         cfg.store.clear()

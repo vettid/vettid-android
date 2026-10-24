@@ -41,8 +41,16 @@ class PendingLockNotifier(
     private val vault: VaultRepository,
     private val scope: CoroutineScope,
 ) {
-    /** What was posted last: the lock it was for (its `askedAt`), or the opened-again notice; null: nothing. */
-    private var posted: Any? = null
+    /**
+     * What was posted last: the lock it was for (`u:<askedAt>`), or the opened-again notice (`o`); null: nothing. Kept
+     * on the phone, so that a new process does not post again what the member already saw (and maybe swiped away).
+     */
+    private val prefs by lazy { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
+    private var posted: String?
+        get() = runCatching { prefs.getString(KEY_POSTED, null) }.getOrNull()
+        set(v) {
+            runCatching { prefs.edit().apply { if (v == null) remove(KEY_POSTED) else putString(KEY_POSTED, v) }.apply() }
+        }
 
     fun start() {
         scope.launch {
@@ -61,11 +69,7 @@ class PendingLockNotifier(
             states.distinctUntilChanged().collect { (n, front) ->
                 runCatching {
                     // Keyed by the lock itself, so that a second lock is posted even if the state between was missed.
-                    val key: Any? = when (n) {
-                        is LockNotice.Unconfirmed -> n.askedAt.takeIf { n.inDoubt }
-                        LockNotice.OpenedAgain -> LockNotice.OpenedAgain
-                        else -> null
-                    }
+                    val key = keyOf(n)
                     when {
                         // Confirmed (or nothing to lock): the notice goes.
                         state(n) == State.NONE -> {
@@ -106,6 +110,15 @@ class PendingLockNotifier(
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(tap)
+            .apply {
+                // (Owner decision 2026-10-24) "Lock it now": a fresh lock of the vault as it is now.
+                if (opened) {
+                    val again = Intent(context, com.vettid.app.lock.LockAgainReceiver::class.java)
+                        .setAction(com.vettid.app.lock.LockAgainReceiver.ACTION)
+                    val action = PendingIntent.getBroadcast(context, NOTIFICATION_ID, again, flags)
+                    addAction(0, context.getString(OnboardingR.string.unlock_lock_again), action)
+                }
+            }
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .build()
@@ -118,6 +131,15 @@ class PendingLockNotifier(
 
     companion object {
         const val NOTIFICATION_ID = 1003
+        private const val PREFS = "pending_lock_notice"
+        private const val KEY_POSTED = "posted"
+
+        /** Which notice [n] is, for posting it once: a lock in doubt by when it was asked; "opened again"; else none. */
+        fun keyOf(n: LockNotice): String? = when (n) {
+            is LockNotice.Unconfirmed -> "u:${n.askedAt.toEpochMilli()}".takeIf { n.inDoubt }
+            LockNotice.OpenedAgain -> "o"
+            else -> null
+        }
 
         /** [LockNotice] → what is shown and scheduled. */
         fun state(n: LockNotice): State = when {

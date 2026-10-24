@@ -151,6 +151,7 @@ class LockGuard(
      */
     fun lockedWhatever(unlocked: Boolean?): Boolean {
         if (!lock.holdsPhone) return false
+        // A pending lock confirmed, or (release L) "opened again" replaced by "locked" once the status says so.
         if (unlocked == false) lock.confirmed()
         return true
     }

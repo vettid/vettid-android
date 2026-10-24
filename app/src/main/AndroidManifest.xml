@@ -85,6 +85,10 @@
             android:name=".lock.PendingLockJob"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+        <!-- "Lock it now" on the "Your vault was opened again" notification (owner decision 2026-10-24). -->
+        <receiver
+            android:name=".lock.LockAgainReceiver"
+            android:exported="false" />
 
         <!-- Google push (Firebase Cloud Messaging) is the `full` distribution's alone: its manifest entries are in
              src/full/AndroidManifest.xml. The `foss` distribution (F-Droid) has none (README "F-Droid build"). -->

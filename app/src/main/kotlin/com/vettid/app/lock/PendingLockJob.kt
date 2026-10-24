@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
+import java.time.Instant
 import javax.inject.Inject
 
 /**
@@ -42,12 +43,18 @@ class PendingLockJob : JobService() {
     private var running: Job? = null
 
     override fun onStartJob(params: JobParameters): Boolean {
-        // Injection made the vault manager, whose start resumed a pending lock and tried it at once.
+        // Injection made the vault manager, whose start resumed a pending lock and tried it at once. The run ends after
+        // one completed attempt (the count of failed tries moves on, or the lock is over), or after BUDGET at most:
+        // the process is not kept up for the in-process retries (battery).
         running = scope.launch {
-            val over = withTimeoutOrNull(BUDGET.toMillis()) { vault.lockNotice.first { it !is LockNotice.Unconfirmed } } != null
+            val start = (vault.lockNotice.value as? LockNotice.Unconfirmed)?.attempts
+            withTimeoutOrNull(BUDGET.toMillis()) {
+                vault.lockNotice.first { it !is LockNotice.Unconfirmed || start == null || it.attempts > start }
+            }
             jobFinished(params, false)
             // Still pending: again later (scheduled after this run has finished: a schedule replaces a running job).
-            if (!over && vault.lockNotice.value is LockNotice.Unconfirmed) schedule(this@PendingLockJob, AGAIN_AFTER)
+            val n = vault.lockNotice.value
+            if (n is LockNotice.Unconfirmed) schedule(this@PendingLockJob, againAfter(Duration.between(n.askedAt, Instant.now())))
         }
         return true
     }
@@ -62,8 +69,8 @@ class PendingLockJob : JobService() {
         /** The job's id; the app's only job. */
         const val JOB_ID = 0x10C4
 
-        /** How long one run keeps the process for the lock's retries (Android allows 10 minutes). */
-        val BUDGET: Duration = Duration.ofMinutes(5)
+        /** The longest one run keeps the process, waiting for one attempt to complete (Android allows 10 minutes). */
+        val BUDGET: Duration = Duration.ofMinutes(1)
 
         /**
          * The first run after a lock became pending: the process's own retries go on meanwhile (1, 2, 5, 10 s, then
@@ -72,12 +79,19 @@ class PendingLockJob : JobService() {
         val FIRST_AFTER: Duration = Duration.ofMinutes(1)
 
         /**
-         * The time between runs while the lock is still pending. A run's retries (at once, then 1, 2, 5, 10 s, 30 s
-         * apart) ask the member API about 11 times in its [BUDGET], and a process that lives on goes on at most 21 times
-         * in 15 minutes: under the member API's 30 locks in 15 minutes. A `429` is honoured. Best effort: Android may
-         * defer a job for an app it seldom sees (standby buckets); the record stays, and every start of the app resumes.
+         * The time between runs while the lock is still pending ([againAfter]). A run waits for one attempt, so it asks
+         * the member API a few times at most; a process that lives on goes on at most 21 times in 15 minutes: under the
+         * member API's 30 locks in 15 minutes. A `429` is honoured. Best effort: Android may defer a job for an app it
+         * seldom sees (standby buckets); the record stays, and every start of the app resumes.
          */
         val AGAIN_AFTER: Duration = Duration.ofMinutes(15)
+
+        /** After [SLOW_AFTER] of a lock that is still pending, the runs come [AGAIN_AFTER_SLOW] apart (battery). */
+        val SLOW_AFTER: Duration = Duration.ofHours(3)
+        val AGAIN_AFTER_SLOW: Duration = Duration.ofHours(1)
+
+        /** The wait before the next run of a lock pending for [pendingFor]. */
+        fun againAfter(pendingFor: Duration): Duration = if (pendingFor < SLOW_AFTER) AGAIN_AFTER else AGAIN_AFTER_SLOW
 
         /** The job, with a network, kept across a restart of the phone, after [after]. */
         fun info(context: Context, after: Duration): JobInfo =

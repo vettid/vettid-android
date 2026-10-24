@@ -78,9 +78,15 @@ class VaultApi(
         op("vault.enroll.confirm")
     }
 
-    /** `vault.status`. Its `unlock_id` (release L) becomes this device's current one ([VaultDevice.unlockId]). */
-    suspend fun status(): VaultStatusInfo =
-        op("vault.status").decode(VaultStatusInfo.serializer()).also { device.noteUnlockId(it.unlockId) }
+    /**
+     * `vault.status`. Its `unlock_id` (release L) becomes this device's current one ([VaultDevice.unlockId]), unless
+     * the device learned of another opening while the answer was on its way.
+     */
+    suspend fun status(): VaultStatusInfo {
+        // (Release L) Applied only if no opening came between the request and its answer (VaultDevice.openingMark).
+        val mark = device.openingMark()
+        return op("vault.status").decode(VaultStatusInfo.serializer()).also { device.noteUnlockId(it.unlockId, mark) }
+    }
 
     /** `account.get` (§10.2, §11.13, 0.15.0): the member's account snapshot from the member API, display only. */
     suspend fun accountGet(): AccountView = op("account.get").decode(AccountView.serializer())

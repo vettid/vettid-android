@@ -31,10 +31,12 @@ class VaultClientAccessTest {
     @Test
     fun theLockTimeAccessorIsUsedForTheLockAndTheHangUpOnly() {
         val uses = code.flatMap { Regex("""lockTimeApi\((LockTimeUse\.\w+)\)""").findAll(it).map { m -> m.groupValues[1] } }
-        assertEquals(listOf("LockTimeUse.LOCK", "LockTimeUse.CALL_END"), uses.sortedDescending())
-        assertEquals("and nowhere else (the declaration is the third)", 3, count("""\blockTimeApi\("""))
+        // The lock, and (release L, "Lock it now") the status read that names the opening the lock is bound to.
+        assertEquals(listOf("LockTimeUse.LOCK", "LockTimeUse.LOCK", "LockTimeUse.CALL_END"), uses.sortedDescending())
+        assertEquals("and nowhere else (the declaration is the fourth)", 4, count("""\blockTimeApi\("""))
+        assertTrue(code.any { it.contains("s.lockTimeApi(LockTimeUse.LOCK).status() }.unlockId") })
         assertEquals(setOf(LockTimeUse.LOCK, LockTimeUse.CALL_END), LockTimeUse.entries.toSet())
-        // The lock is the only thing sent with the first, the hang-up accessor the only user of the second.
+        // The lock (and its status read) is all that is sent with the first, the hang-up accessor the only user of the second.
         assertTrue(code.any { it.contains("lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId)") })
         // The second sends one `call.end` and hands nothing out.
         assertTrue(code.any { it.contains("= session().lockTimeApi(LockTimeUse.CALL_END).callEnd(callId, reason)") })

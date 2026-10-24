@@ -43,6 +43,26 @@ class PendingLockJobTest {
         assertFalse(PendingLockJob.scheduled(context))
     }
 
+    /** Battery (second review of #190): a run waits for one attempt at most a minute; runs slow down after hours. */
+    @Test
+    fun theRunsAreShortAndSlowDownAfterSomeHours() {
+        assertEquals(Duration.ofMinutes(1), PendingLockJob.BUDGET)
+        assertEquals(Duration.ofMinutes(15), PendingLockJob.againAfter(Duration.ofMinutes(5)))
+        assertEquals(Duration.ofMinutes(15), PendingLockJob.againAfter(Duration.ofHours(2)))
+        assertEquals(Duration.ofHours(1), PendingLockJob.againAfter(Duration.ofHours(3)))
+        assertEquals(Duration.ofHours(1), PendingLockJob.againAfter(Duration.ofDays(2)))
+    }
+
+    /** A notice is posted once per lock, also across processes: its key is the lock's time, or "opened again". */
+    @Test
+    fun aNoticeIsKeyedByItsLock() {
+        val t = Instant.parse("2026-10-24T10:00:00Z")
+        assertEquals(null, PendingLockNotifier.keyOf(LockNotice.Unconfirmed(t, 0)))
+        assertEquals("u:${t.toEpochMilli()}", PendingLockNotifier.keyOf(LockNotice.Unconfirmed(t, 3)))
+        assertEquals("o", PendingLockNotifier.keyOf(LockNotice.OpenedAgain))
+        assertEquals(null, PendingLockNotifier.keyOf(LockNotice.ConfirmedLate))
+    }
+
     @Test
     fun theRunsKeepWithinTheMemberApisLockLimit() {
         // 30 locks in 15 minutes per member: a run makes at most 9 (1, 2, 5, 10 s, then 30 s apart in 5 minutes).

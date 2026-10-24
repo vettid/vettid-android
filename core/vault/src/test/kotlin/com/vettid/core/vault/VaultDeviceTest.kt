@@ -1420,7 +1420,18 @@ class VaultDeviceTest {
 
             val options = com.vettid.core.altchan.UnlockOptions()
             val before = d.issuedTokenExpMs
+            // (Release L) A vault.status asked for before this unlock was built, answered after it: its unlock_id names
+            // the opening before and is not applied (second review of #190, F1).
+            val id = "00112233445566778899aabbccddeeff"
+            d.noteUnlockId(id, d.openingMark())
+            assertEquals(id, d.unlockId)
+            val markBefore = d.openingMark()
             val b = d.prepareUnlock("guid-1", "246802", enclave, manifest, att, options)
+            assertNull("building an unlock ends the name it knew", d.unlockId)
+            d.noteUnlockId(id, markBefore)
+            assertNull("a late answer from the opening before is not taken", d.unlockId)
+            d.noteUnlockId(id, d.openingMark())
+            assertEquals("one asked for since is", id, d.unlockId)
             assertTrue("the build issued a standing token", d.issuedTokenExpMs != before)
             d.discardUnlock(b)
             assertEquals(before, d.issuedTokenExpMs)
