@@ -3,6 +3,7 @@ package com.vettid.core.data.vault
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 import java.time.Instant
@@ -88,5 +89,23 @@ internal object TransferInResume {
         } catch (_: TimeoutCancellationException) {
             atDeadline()?.let { Approved(it.userGuid) }
         }
+    }
+
+    /**
+     * (#187 recheck) One deadline step at a time. Two may meet (the screen's wait reaching the deadline, and a start or a
+     * refresh deciding DEADLINE): without this, one's collect could lease the device.paired while the other dropped the
+     * keyring before that message was handled. Inside the lock the step is decided again ([due]): one that is no longer
+     * due (paired, or dropped by the first) only answers [paired].
+     */
+    class Serial {
+        private val lock = kotlinx.coroutines.sync.Mutex()
+
+        suspend fun run(
+            due: () -> Boolean,
+            paired: () -> Boolean,
+            collect: suspend () -> Unit,
+            drop: suspend () -> Unit,
+            boundMs: Long = DEADLINE_COLLECT_MS,
+        ): Boolean = lock.withLock { if (due()) atDeadline(paired, collect, drop, boundMs) else paired() }
     }
 }

@@ -4,6 +4,7 @@ import com.vettid.core.data.vault.TransferInResume.Action
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -123,5 +124,37 @@ class TransferInResumeTest {
         assertEquals(TransferInResume.Approved("m-1"), TransferInResume.awaitApproval({ shown }, { late }, timeout) { paired })
         assertEquals("past the deadline: the least wait", Duration.ofSeconds(1), asked)
         assertEquals(null, TransferInResume.awaitApproval({ shown }, { late }, timeout) { null })
+    }
+
+    /**
+     * (#187 recheck) The answer is read after the drop: a handler that won the device's lock during it (the drop refused
+     * a paired device) makes it paired, and it must say so.
+     */
+    @Test
+    fun theAnswerIsReadAfterTheDrop() = runTest {
+        var isPaired = false
+        val r = TransferInResume.atDeadline({ isPaired }, {}, { isPaired = true })
+        assertTrue(r)
+    }
+
+    /**
+     * (#187 recheck) Two deadline steps at once: the first one's collect leases the device.paired and applies it a moment
+     * later; the second waits for it and, no longer due, drops nothing and answers paired.
+     */
+    @Test
+    fun twoDeadlineStepsAtOnceNeverDropALeasedPairing() = runTest {
+        var isPaired = false
+        var drops = 0
+        val leased = CompletableDeferred<Unit>()
+        val serial = TransferInResume.Serial()
+        val due = { !isPaired }
+        val first = async { serial.run(due, { isPaired }, { leased.await(); isPaired = true }, { drops++ }) }
+        val second = async { serial.run(due, { isPaired }, {}, { drops++ }) }
+        testScheduler.advanceTimeBy(1_000)
+        assertFalse("the second waits for the first", second.isCompleted)
+        leased.complete(Unit)
+        assertTrue(first.await())
+        assertTrue(second.await())
+        assertEquals("nothing dropped", 0, drops)
     }
 }

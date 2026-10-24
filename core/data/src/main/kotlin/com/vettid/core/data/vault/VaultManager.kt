@@ -3042,14 +3042,23 @@ class VaultManager(
      */
     private suspend fun atTransferDeadline(s: Session): TransferInState? {
         val d = s.device
-        val paired = TransferInResume.atDeadline(
-            paired = { d.transferInPending?.paired == true && d.deviceId != null },
-            collect = { d.deadlineCollect() },
-            drop = { d.abandonTransfer() },
-        )
-        d.start(scope) // deferred at a start past the deadline (session()); running already otherwise
-        return if (paired) d.transferInPending else null
+        return try {
+            // (#187 recheck) One deadline step at a time (the screen's wait and a start may both reach it), decided again
+            // inside: a second one never drops what the first one's collect is about to apply.
+            val paired = transferDeadline.run(
+                due = { TransferInResume.decide(d.transferInPending, d.deviceId, Instant.now()) == TransferInResume.Action.DEADLINE },
+                paired = { d.transferInPending?.paired == true && d.deviceId != null },
+                collect = { d.deadlineCollect() },
+                drop = { d.abandonTransfer() },
+            )
+            if (paired) d.transferInPending else null
+        } finally {
+            d.start(scope) // deferred at a start past the deadline (session()); running already otherwise
+        }
     }
+
+    /** (#187 recheck) Serializes [atTransferDeadline]. */
+    private val transferDeadline = TransferInResume.Serial()
 
     override suspend fun transferInWaiting(): TransferInWaiting? = guard {
         val t = session().device.transferInPending ?: return@guard null
