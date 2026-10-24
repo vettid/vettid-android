@@ -322,6 +322,19 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     override suspend fun recoveryOpened(): Boolean = recoveryOpenedValue
 
+    /** (ANDROID-PLAN 0.1.78) What [couldNotTell] answers in turn (then NOT_APPLICABLE), whether a lost-ok is due, and the lock. */
+    val couldNotTellAnswers = ArrayDeque<com.vettid.core.data.vault.CouldNotTell>()
+    var lostOkDueValue = false
+    var undecidedValue = false
+    override val recoveryUndecided: Boolean get() = undecidedValue
+    override fun lostOkDue(): Boolean = lostOkDueValue
+
+    override suspend fun couldNotTell(): com.vettid.core.data.vault.CouldNotTell {
+        call("couldNotTell")
+        return couldNotTellAnswers.removeFirstOrNull()
+            ?: com.vettid.core.data.vault.CouldNotTell(com.vettid.core.data.vault.CouldNotTell.Kind.NOT_APPLICABLE)
+    }
+
     /** What [resumeLostOk] answers, in order; an empty queue answers `ok`. */
     val lostOkOutcomes = ArrayDeque<com.vettid.core.data.vault.RecoveryOpenOutcome>()
 

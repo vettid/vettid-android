@@ -361,6 +361,12 @@ class VaultDevice private constructor(
     /** True while this app recovers a vault (§11.11): registered, until `credential.recover` or `credential.reset`. */
     val recovering: Boolean get() = st.recovery != null
 
+    /** The registered recovery's id: the `ctx` of this identity's handshake (§11.14.6); null when none is registered. */
+    val recoveryId: String? get() = st.recovery?.recoveryId
+
+    /** The `request_id` of the last `vault.recovery.open` this device built and has no readable answer for yet. */
+    val pendingOpenRequestId: String? get() = pendingRecoveryOpen
+
     /**
      * (Release R, §11.14.6) The vault is pinned from a recovery's result but the recovery is not finished (the first
      * handshake or `credential.get` has not completed): for a phone with a phone secret, the vault answered `ok` and

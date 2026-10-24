@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.vault.CouldNotTell
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
@@ -212,7 +213,9 @@ fun RecoverContent(
             val open: RecoveryOpenViewModel = recoveryOpen ?: hiltViewModel()
             val openState by open.uiState.collectAsStateWithLifecycle()
             // The `ok` text is the recovered phone's last setup screen: once the vault opened, setup is finished.
-            RecoveryOpenPane(openState, open, onStartOver = actions::askStartOver, onOpened = actions::finish)
+            RecoveryOpenPane(
+                openState, open, onStartOver = actions::askStartOver, onOpened = actions::finish, onNewCode = actions::useNewCode,
+            )
         } else {
             RecoverPin(state, actions)
         }
@@ -266,33 +269,68 @@ fun RecoverContent(
         }
         RecoverStep.ENDED -> FormScaffold(
             title = stringResource(R.string.recover_ended_title),
-            primaryLabel = stringResource(R.string.recover_start_over),
-            onPrimary = actions::askStartOver,
+            primaryLabel = endedPrimaryLabel(state),
+            onPrimary = if (state.undecided) endedUndecidedAction(state, actions) else actions::askStartOver,
             busy = state.busy,
-            secondaryLabel = stringResource(R.string.recover_ended_retry),
+            secondaryLabel = if (state.undecided) null else stringResource(R.string.recover_ended_retry),
             onSecondary = actions::tryPinAgain,
             modifier = Modifier.testTag("recover_ended"),
         ) {
-            // The step is reached by itself (the PIN step's answer): announced, as the code's refusals are.
-            Text(
-                stringResource(R.string.recover_ended_body),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_ended_body"),
-            )
-            Spacer(Modifier.height(Spacing.l))
-            NoticeCard(
-                NoticeKind.INFO,
-                stringResource(R.string.recover_ended_next_title),
-                stringResource(R.string.recover_ended_next),
-            )
-            if (state.error != null) Failure(state.error, shownCode = state.errorShown)
+            if (state.undecided) EndedUndecided(state) else EndedPlain(state)
         }
         RecoverStep.DONE -> MovedScreen(
             body = stringResource(R.string.onboarding_moved_recovered_body),
             onGo = actions::finish,
         )
     }
+}
+
+/** (0.1.78) The ended step after an open whose answer was lost: the primary action depends on what status with K said. */
+@Composable
+private fun endedPrimaryLabel(state: RecoverUiState): String? = when {
+    !state.undecided -> stringResource(R.string.recover_start_over)
+    state.couldNotTell?.kind == CouldNotTell.Kind.START_NEW -> stringResource(R.string.recover_undecided_new_code)
+    state.couldNotTell == null -> null
+    else -> stringResource(R.string.recover_undecided_check_again)
+}
+
+private fun endedUndecidedAction(state: RecoverUiState, actions: RecoverActions): () -> Unit =
+    if (state.couldNotTell?.kind == CouldNotTell.Kind.START_NEW) actions::useNewCode else actions::checkAgain
+
+/** The text of the undecided ended step: the approved sentence once a new recovery may start, a draft while it is checked. */
+@Composable
+private fun EndedUndecided(state: RecoverUiState) {
+    val text = when (state.couldNotTell?.kind) {
+        CouldNotTell.Kind.START_NEW -> R.string.recover_could_not_tell
+        CouldNotTell.Kind.WAIT -> R.string.recover_undecided_wait
+        CouldNotTell.Kind.UNKNOWN -> R.string.recover_undecided_unknown
+        else -> R.string.recover_undecided_checking
+    }
+    Text(
+        stringResource(text),
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_undecided_body"),
+    )
+    if (state.error != null) Failure(state.error, shownCode = state.errorShown)
+}
+
+@Composable
+private fun EndedPlain(state: RecoverUiState) {
+    // The step is reached by itself (the PIN step's answer): announced, as the code's refusals are.
+    Text(
+        stringResource(R.string.recover_ended_body),
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_ended_body"),
+    )
+    Spacer(Modifier.height(Spacing.l))
+    NoticeCard(
+        NoticeKind.INFO,
+        stringResource(R.string.recover_ended_next_title),
+        stringResource(R.string.recover_ended_next),
+    )
+    if (state.error != null) Failure(state.error, shownCode = state.errorShown)
 }
 
 private const val MIN_PIN = 6

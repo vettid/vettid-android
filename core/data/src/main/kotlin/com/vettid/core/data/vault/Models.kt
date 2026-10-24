@@ -648,6 +648,38 @@ sealed interface RecoveryRegistration {
      * wrong codes are counted per recovery however they were read; null when the claim did not answer with one.
      */
     data class Refused(val code: String, val recoveryId: String? = null) : RecoveryRegistration
+
+    /**
+     * (ANDROID-PLAN 0.1.78) `409 key_in_use` at the claim of a new code reusing K: K is the vault's key, so this phone is
+     * the vault's app. The next step is the lost-ok unlock with the PIN, not a registration.
+     */
+    data object KeyInUse : RecoveryRegistration
+
+    /** (0.1.78) The earlier open's slot held a readable `ok`: that open recovered the vault; the PIN finishes it. */
+    data object EarlierOpened : RecoveryRegistration
+}
+
+/** What [MoveRepository.couldNotTell] found (ANDROID-PLAN 0.1.78 "A phone that could not tell"). */
+data class CouldNotTell(val kind: Kind, val retryAtMs: Long? = null) {
+    enum class Kind {
+        /** No open of this phone's is unanswered: the ordinary "recovery ended". */
+        NOT_APPLICABLE,
+
+        /** `200` with the recovery ended: the lost-ok unlock (a `200` alone is not proof of adoption). */
+        LOST_OK,
+
+        /** `200` and the recovery still shows `registered`: the phone opens again. */
+        OPEN_AGAIN,
+
+        /** One read says ended; the next may be at [retryAtMs] (5 minutes after the first). */
+        WAIT,
+
+        /** Two reads at least 5 minutes apart say ended: the member may start a new recovery and use this phone for it. */
+        START_NEW,
+
+        /** The read concluded nothing (network, clock, the service). */
+        UNKNOWN,
+    }
 }
 
 /** `credential.recover`'s outcome (§11.11.5). */

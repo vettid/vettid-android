@@ -76,6 +76,17 @@ internal data class LocalAccount(
      * next answer; a new registration starts without it.
      */
     val recoveryOpenUnanswered: Boolean = false,
+    /**
+     * (ANDROID-PLAN 0.1.78) The `request_id` of the last `vault.recovery.open` the member API took, kept until it is answered
+     * readably, so that a phone that could not tell can look at its slot once ([ReuseRecord.earlierOpenRid]).
+     */
+    val recoveryOpenRid: String? = null,
+    /**
+     * (ANDROID-PLAN 0.1.78 "A phone that could not tell") What the phone keeps while an open's answer is unknown and a new
+     * recovery may reuse K: the two identities' slots, their `recovery_id`s and the clocks of the rules. Deleted only after
+     * the vault answered `ok` and the pairing completed.
+     */
+    val reuse: ReuseRecord? = null,
     /** (Release R) The attempts used of the registered recovery, as the vault's counter last reported them. */
     val recoveryAttemptsUsed: Int? = null,
     /**

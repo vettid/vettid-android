@@ -246,6 +246,8 @@ private object NoRecover : RecoverActions {
     override fun dismissStartOver() = Unit
     override fun confirmStartOver() = Unit
     override fun tryPinAgain() = Unit
+    override fun checkAgain() = Unit
+    override fun useNewCode() = Unit
     override fun finish() = Unit
 }
 

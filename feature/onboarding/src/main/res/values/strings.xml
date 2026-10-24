@@ -457,4 +457,14 @@
     <string name="ownercheck_presence_body">If this stays for three days, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
     <!-- The same on a vault with a time scale (staging): the recovery quiet period as it runs there, e.g. "3 hours" -->
     <string name="ownercheck_presence_body_scaled">If this stays for %1$s, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
+    <!-- ANDROID-PLAN 0.1.78 "A phone that could not tell". The next two are approved by the owner. -->
+    <string name="recover_could_not_tell">We could not tell whether your last attempt recovered the vault. You can start a new recovery on the account site and use this phone for it; nothing on this phone is deleted.</string>
+    <string name="onboarding_open_took_phone">Your vault took this phone, but it cannot be unlocked right now. Contact VettID.</string>
+    <!-- DRAFT texts, pending the owner. -->
+    <string name="recover_undecided_checking">Checking whether your last attempt recovered the vault. Nothing on this phone is deleted.</string>
+    <string name="recover_undecided_wait">We are still checking whether your last attempt recovered the vault. This phone looks again in a few minutes. Nothing on this phone is deleted.</string>
+    <string name="recover_undecided_unknown">We could not check just now whether your last attempt recovered the vault. Nothing on this phone is deleted. Try again later.</string>
+    <string name="recover_undecided_check_again">Check again</string>
+    <string name="recover_undecided_new_code">Use a new recovery code</string>
+    <string name="onboarding_open_again">Your recovery is still open. Enter your PIN and your password to open it again.</string>
 </resources>

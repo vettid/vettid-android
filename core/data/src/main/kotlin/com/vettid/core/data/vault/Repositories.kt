@@ -39,6 +39,11 @@ data class RecoveryOpenOutcome(
     val opened: Boolean = false,
     /** (0.34.0) Whether THIS request used an attempt, as the vault says; null from a vault that does not say. */
     val attemptUsed: Boolean? = null,
+    /**
+     * (ANDROID-PLAN 0.1.78) The lost-ok unlock after `409 key_in_use` has been refused for a day: the approved text "Your
+     * vault took this phone, but it cannot be unlocked right now. Contact VettID." Nothing is forgotten.
+     */
+    val contactVettid: Boolean = false,
 ) {
     val ok: Boolean get() = code == "ok"
     val left: Int? get() = used?.let { (ATTEMPTS - it).coerceAtLeast(0) }
@@ -565,6 +570,22 @@ interface MoveRepository {
      * sends no new open, and [abandonRecovery] is refused ([CODE_RECOVERY_OPENED]).
      */
     suspend fun recoveryOpened(): Boolean = false
+
+    /**
+     * (ANDROID-PLAN 0.1.78) An open of this phone's was taken by the member API and its answer is unknown, or a reused-key
+     * recovery is under way: K is never forgotten and "Start over" is refused until the vault answered `ok` and the pairing
+     * completed.
+     */
+    val recoveryUndecided: Boolean get() = false
+
+    /**
+     * (0.1.78) One look at status with K when the recovery has ended after an open whose answer was never readable (at least
+     * 5 minutes after the one before; the clock checked). Nothing is deleted by any answer.
+     */
+    suspend fun couldNotTell(): CouldNotTell = CouldNotTell(CouldNotTell.Kind.NOT_APPLICABLE)
+
+    /** (0.1.78) The next step is the lost-ok unlock: a `200` on status, or a `409 key_in_use` at a claim. */
+    fun lostOkDue(): Boolean = false
 
     /** (Release R) The attempts used of the registered recovery as last reported (also after a restart); null before. */
     val recoveryAttemptsUsed: Int? get() = null
