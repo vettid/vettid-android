@@ -207,6 +207,21 @@ fun UnlockContent(
                     announce = LiveRegionMode.Polite,
                     actions = { TextButton(onClick = actions::dismissLockNotice) { Text(stringResource(R.string.unlock_lock_ok)) } },
                 )
+                // (Release L) The vault was opened again after this lock: not locked, and said so. This phone stays locked.
+                LockNotice.OpenedAgain -> NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.unlock_lock_opened_again_title),
+                    stringResource(R.string.unlock_lock_opened_again_body),
+                    modifier = Modifier.testTag("unlock_lock_opened_again"),
+                    announce = LiveRegionMode.Assertive,
+                    actions = {
+                        // (Owner decision 2026-10-24) A fresh lock of the vault as it is now.
+                        TextButton(onClick = actions::lockAgain, modifier = Modifier.testTag("unlock_lock_again")) {
+                            Text(stringResource(R.string.unlock_lock_again))
+                        }
+                        TextButton(onClick = actions::dismissLockNotice) { Text(stringResource(R.string.unlock_lock_ok)) }
+                    },
+                )
                 LockNotice.None -> Unit
             }
             if (state.refused && !state.notRecognised && !state.keptCheckWaiting) {

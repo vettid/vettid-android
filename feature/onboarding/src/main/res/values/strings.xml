@@ -109,6 +109,11 @@
     <string name="unlock_lock_try_again">Try again</string>
     <string name="unlock_lock_confirmed">Your vault is locked.</string>
     <string name="unlock_lock_ok">OK</string>
+    <!-- Release L (VAULT-MESSAGING 0.29.0 §10.2 "Locks"): the vault answered that the unlock this lock was for is over (stale_lock / stale). Approved by the owner 2026-10-24. -->
+    <string name="unlock_lock_opened_again_title">Your vault was opened again</string>
+    <!-- Release L (owner decision 2026-10-24): the button on "Your vault was opened again" and on its notification. Draft, for the owner's approval. -->
+    <string name="unlock_lock_again">Lock it now</string>
+    <string name="unlock_lock_opened_again_body">Your vault was unlocked again after you locked it, so it did not lock and may be open now. This phone is locked.</string>
     <string name="unlock_title">Unlock your vault</string>
     <string name="unlock_body">Enter your vault PIN.</string>
     <string name="unlock_body_account">Enter the vault PIN for %1$s.</string>

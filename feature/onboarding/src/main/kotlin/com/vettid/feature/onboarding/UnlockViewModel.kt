@@ -250,6 +250,9 @@ interface UnlockActions {
     /** The member has read that the vault confirmed the lock. */
     fun dismissLockNotice() = Unit
 
+    /** (Release L) "Lock it now" on "Your vault was opened again". */
+    fun lockAgain() = Unit
+
     /** The member has read why "Finish the move" did not finish. */
     fun dismissMoveFailure() = Unit
 
@@ -409,6 +412,10 @@ class UnlockViewModel @Inject constructor(
     override fun retryLock() = vault.retryLock()
 
     override fun dismissLockNotice() = vault.dismissLockNotice()
+
+    override fun lockAgain() {
+        viewModelScope.launch { vault.lockAgain() }
+    }
 
     override fun dismissMoveFailure() = vault.acknowledgeFinishMoveFailure()
 
