@@ -378,7 +378,14 @@ class OwnerCheckManager(
     private fun checkPassedForIdleLock() {
         // The value set is in force from now on (a longer one set before the check included): the time said at an idle
         // lock is that value as it runs on this vault (second review of #191, G1).
-        idleSettingFlow.value?.let { idleAfterKnown = TimeScales.divide(it.seconds, lastTimeScale) }
+        val setting = idleSettingFlow.value
+        if (setting != null) {
+            idleAfterKnown = TimeScales.divide(setting.seconds, lastTimeScale)
+        } else if (idleInForce != null) {
+            // A longer value waited for this check, but its value is not loaded (a new process that has not read the
+            // setting): the time is not known, so the notice says so rather than the shorter value read before.
+            idleAfterKnown = null
+        }
         idleInForce = null
         idleSettingFlow.value?.let { idleSettingFlow.value = IdleLockSetting(it.seconds) }
     }

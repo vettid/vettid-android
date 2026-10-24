@@ -670,4 +670,23 @@ class OwnerCheckManagerTest {
         assertEquals(IdleLockSetting(1_209_600, 604_800), m.idleLockSetting.value)
         assertTrue(m.idleLockSetting.value!!.afterNextCheck)
     }
+
+    /**
+     * Review of cc184f74, G1 after a restart: a longer value set, the app killed, a check passed before the setting was
+     * read again; the vault then locks with the longer value, so the notice must not say the shorter one.
+     */
+    @Test
+    fun aCheckAfterARestartWithALongerValueWaitingSaysTheTimeIsNotKnown() = runTest {
+        val ops = Ops().apply { settings = mapOf(OwnerCheckManager.KEY_IDLE to JsonPrimitive(604_800)) }
+        val m = manager(ops)
+        readBeforeTheDeadline(ops, m)
+        m.refreshIdleLockSetting()
+        m.setIdleLockAfter(2_592_000)
+        // The process ends; the next one does not open Settings before the check.
+        val next = manager(ops)
+        assertNull("the setting is not read in this process", next.idleLockSetting.value)
+        assertEquals(OwnerCheckOutcome.Passed, next.check("975310", "pw"))
+        next.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertEquals("the approved time-not-known text", IdleLocked(null), next.idleLocked.value)
+    }
 }
