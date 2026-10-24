@@ -253,6 +253,14 @@ interface VaultRepository {
      */
     val transferKeptSince: StateFlow<Instant?> get() = NO_KEPT_TRANSFER
 
+    /**
+     * (Release R, §11.14.10; owner decision 2026-10-23) The 7 days of a kept transfer are over but the vault has not
+     * given a definite answer to the end-of-keep check (locked, offline, no answer, `token_revoked`): this phone keeps its
+     * keys, says "Your vault has not confirmed the move to this phone…" instead of any erase offer, and checks again at
+     * every start and return to the foreground.
+     */
+    val transferCheckWaiting: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
+
     /** (STAGING-TIME-SCALE §5.2) The vault's time scale as this phone knows it ([TimeScaleSource]). */
     val timeScale: StateFlow<TimeScaleView> get() = TimeScaleSource.RealTime.timeScale
 

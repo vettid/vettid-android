@@ -643,8 +643,29 @@ class VaultManager(
     @Volatile
     private var wipeMovedAway = false
 
-    /** One end-of-keep check at a time (a start, a return to the foreground and the timer may meet). */
-    private val keptEndLock = Mutex()
+    /**
+     * (Release R, §11.14.10; owner decision 2026-10-23) The check with the vault once a kept transfer's 7 days are over:
+     * erases only on a definite answer; no answer means "check again" at the next start or return to the foreground.
+     * The record (both counters and the approval's time) is noted before the up-to-[KEPT_END_CHECK_MS] wait, and every
+     * verdict is acted on only after a write conditional on it: a lock, a reset or a wipe during the wait acts on nothing.
+     */
+    private val keptEnd = KeptTransferEnd.onRecord(
+        record,
+        check = { keptEndVerdict() },
+        write = { w -> io { w() } },
+        afterWrite = { syncTimeScale() },
+        onKept = {
+            android.util.Log.i("VaultManager", "7 days after the approval the vault still has this phone as its app: kept")
+            keptTransferTimer?.cancel()
+            transferKeptFlow.value = null
+            moveNotDoneFlow.value = true
+        },
+        erase = {
+            android.util.Log.i("VaultManager", "a transfer approved 7 days ago: the vault no longer lists this phone, its keys are removed")
+            wipeMovedAway = true
+            eraseThisPhone()
+        },
+    )
     private val accountFlow = MutableStateFlow(local.toInfo())
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val windowFlow = MutableStateFlow<Instant?>(null)
@@ -2863,12 +2884,8 @@ class VaultManager(
         val rec = record.recordGeneration
         val s = session()
         val started = transferStartedAt ?: Instant.now()
-        val left = Duration.between(Instant.now(), started.plus(PAIRING_WINDOW)).coerceAtLeast(Duration.ofSeconds(1))
-        val guid = try {
-            s.device.awaitTransfer(left)
-        } catch (e: TimeoutCancellationException) {
+        val guid = TransferInWait.await(started, { Instant.now() }, { left -> s.device.awaitTransfer(left) }) {
             s.device.abandonTransfer()
-            throw e
         }
         transferStartedAt = null
         // §6.7.1 (0.17.0): the member's user_guid from device.paired, kept as an enrolled phone keeps the redeem's, so
@@ -2947,7 +2964,15 @@ class VaultManager(
         val restore: (LocalAccount) -> LocalAccount = { it.copy(transferApprovedAtMs = before, transferKeepMs = keepBefore) }
         val moved = try {
             holder.approveTransfer(if (r) 0 else UNLINK_WAIT_MS) {
-                keep = guard { session().openApi.transferApprove(transferId, pin, password, signer) }.keepUntilNewUnlock
+                keep = guard {
+                    val s = session()
+                    // §11.14.10 (owner decision 2026-10-23): the vault's token for this phone's mailbox is renewed (and
+                    // accepted by the relay) right before each copy of the approval goes out.
+                    val renew = TransferApproval.renewal(renew = { s.device.renewIssuedToken() }) { e ->
+                        android.util.Log.i("VaultManager", "the token renewal before the approval failed: ${e.javaClass.simpleName}")
+                    }
+                    s.openApi.transferApprove(transferId, pin, password, signer, beforeSend = renew)
+                }.keepUntilNewUnlock
                 openTransferId = null
             }
         } catch (e: VaultFailure) {
@@ -2997,9 +3022,11 @@ class VaultManager(
     override val transferKeepSeconds: Long get() = (local.transferKeepMs ?: KeptTransfer.KEEP_MS) / MS_PER_SECOND
 
     /**
-     * At every start, on every return to the foreground, and when the 7 days run out while the process lives: a
-     * transfer approved 7 days ago or more ends here (the old phone's keys go, §11.14.10); before that,
-     * [transferKeptSince] tells the shell to say "Finish the move on your new phone", and a timer runs to the end.
+     * At every start, on every return to the foreground, and when the 7 days run out while the process lives: for a
+     * transfer approved 7 days ago or more the vault is asked ([keptEnd], §11.14.10): this phone's keys go only on a
+     * definite answer that it is no longer the vault's app; without one they stay and the next start or return to the
+     * foreground asks again ([transferCheckWaiting]). Before that, [transferKeptSince] tells the shell to say "Finish the
+     * move on your new phone", and a timer runs to the end.
      */
     private suspend fun checkKeptTransfer() {
         val rec = record.recordGeneration
@@ -3010,8 +3037,13 @@ class VaultManager(
         if (at != stored) io { updateLocal(rec) { it.copy(transferApprovedAtMs = at) } }
         when (val k = KeptTransfer.decide(at, now, local.transferKeepMs ?: KeptTransfer.KEEP_MS)) {
             KeptTransfer.Decision.Erase -> {
+                // Still kept while the vault is asked (and after an unclear answer): "The move didn't finish" stays offered.
+                transferKeptFlow.value = Instant.ofEpochMilli(at)
                 keptTransferTimer?.cancel()
-                endKeptTransfer()
+                val o = keptEnd.run()
+                if (o == KeptTransferEnd.Outcome.WAITING) {
+                    android.util.Log.i("VaultManager", "the end-of-keep check got no definite answer: keys kept, checked again later")
+                }
             }
             is KeptTransfer.Decision.Keep -> {
                 transferKeptFlow.value = Instant.ofEpochMilli(at)
@@ -3031,6 +3063,7 @@ class VaultManager(
         keptTransferTimer?.cancel()
         io { updateLocal(since) { it.copy(transferApprovedAtMs = null) } }
         transferKeptFlow.value = null
+        keptEnd.clear()
         movedBackFlow.value = true
     }
 
@@ -3070,52 +3103,27 @@ class VaultManager(
         moveNotDoneFlow.value = false
     }
 
-    /**
-     * The 7 days are over (owner decision 2026-10-16): before erasing, ONE check with the vault over this phone's own
-     * session ([stillTheVaultsApp]). Confirmed: the transfer never took effect, this phone keeps its keys, the kept
-     * state goes and the member is told. Anything else (the vault no longer lists this phone, a refusal, no answer within
-     * [KEPT_END_CHECK_MS], any failure): this phone's keys are removed, as before. Never retried: the bound stays 7 days.
-     */
-    private suspend fun endKeptTransfer() {
-        if (!keptEndLock.tryLock()) return
-        try {
-            val rec = record.recordGeneration
-            if (local.transferApprovedAtMs == null) return
-            if (stillTheVaultsApp()) {
-                android.util.Log.i("VaultManager", "7 days after the approval the vault still has this phone as its app: kept")
-                keptTransferTimer?.cancel()
-                io { updateLocal(rec) { it.copy(transferApprovedAtMs = null) } }
-                transferKeptFlow.value = null
-                moveNotDoneFlow.value = true
-            } else {
-                android.util.Log.i("VaultManager", "a transfer approved 7 days ago: this phone's keys are removed")
-                wipeMovedAway = true
-                eraseThisPhone()
-            }
-        } finally {
-            keptEndLock.unlock()
-        }
-    }
+    override val transferCheckWaiting: StateFlow<Boolean> get() = keptEnd.waiting
 
     /**
-     * `device.list` sent over this phone's end-to-end session with the vault, answered within [KEPT_END_CHECK_MS]: true
-     * only when the answer lists this phone as the vault's app ([KeptTransfer.stillTheApp]). The answer must be sealed
-     * under the session's keys (held only by the enclave and this phone) and carry `re` = this request's fresh id; the
-     * vault removes the old app and its session at a completed approval, so it cannot answer it any more.
+     * `device.list` sent over this phone's end-to-end session with the vault, answered within [KEPT_END_CHECK_MS]
+     * ([KeptTransfer.verdict]). The answer must be sealed under the session's keys (held only by the enclave and this
+     * phone) and carry `re` = this request's fresh id. No answer within the bound, a locked vault, a refusal or any other
+     * failure is [KeptTransfer.Verdict.UNKNOWN] (owner decision 2026-10-23: never an erase); a cancelled check throws.
      */
-    @Suppress("TooGenericExceptionCaught") // any failure is "not confirmed"
-    private suspend fun stillTheVaultsApp(): Boolean = try {
+    @Suppress("TooGenericExceptionCaught") // any failure is "unknown"
+    private suspend fun keptEndVerdict(): KeptTransfer.Verdict = try {
         withTimeout(KEPT_END_CHECK_MS) {
             val s = session()
-            KeptTransfer.stillTheApp(guard { s.openApi.deviceList() }, s.device.deviceId)
+            KeptTransfer.verdict(guard { s.openApi.deviceList() }, s.device.deviceId)
         }
     } catch (_: TimeoutCancellationException) {
-        false
+        KeptTransfer.Verdict.UNKNOWN
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         android.util.Log.i("VaultManager", "the end-of-keep check failed: ${e.javaClass.simpleName}")
-        false
+        KeptTransfer.Verdict.UNKNOWN
     }
 
     override suspend fun transferReject(transferId: String) = guard {
@@ -3453,9 +3461,6 @@ class VaultManager(
 
         /** (0.34.0) A release with `recovery_r` and without `recovery_offered` (§11.10.9). */
         const val CODE_NOT_OFFERED = "not_offered"
-
-        /** The pairing window: 10 minutes after `hs.init` (§6.7, 0.10.4). */
-        private val PAIRING_WINDOW: Duration = Duration.ofMinutes(10)
 
         /** How long the old phone's approval waits for `device.unlinked{transferred}` (§6.7.1 step 4). */
         private const val UNLINK_WAIT_MS = 30_000L

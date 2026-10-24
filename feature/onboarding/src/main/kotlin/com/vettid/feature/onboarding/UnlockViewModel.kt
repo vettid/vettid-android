@@ -64,6 +64,12 @@ data class UnlockUiState(
      * move: the screen says so, and its unlock is "The move didn't finish".
      */
     val keptTransfer: Boolean = false,
+    /**
+     * (§11.14.10; owner decision 2026-10-23) The 7 days are over and the vault has not confirmed the move yet: this phone
+     * keeps its keys and says "Your vault has not confirmed the move to this phone…", instead of any erase offer (also
+     * after the relay's `token_revoked`): the phone's keys go only on the vault's own answer.
+     */
+    val keptCheckWaiting: Boolean = false,
     /** (STAGING-TIME-SCALE, S10) How long the kept transfer lasts at most: 7 days, divided by the time scale at the approval. */
     val keptForSeconds: Long = KeptTransfer.KEEP_MS / KEPT_MS_PER_SECOND,
     /** (STAGING-TIME-SCALE) A staging build adds its note to the kept transfer's text. */
@@ -189,7 +195,7 @@ data class UnlockUiState(
      * "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone;
      * never on a [recoverOnly] screen, which wins over both.
      */
-    val eraseOffered: Boolean get() = !recoverOnly && (notRecognised || keysGone)
+    val eraseOffered: Boolean get() = !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
 
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
@@ -297,6 +303,7 @@ class UnlockViewModel @Inject constructor(
                 state.update { it.copy(keptTransfer = k != null, keptForSeconds = vault.transferKeepSeconds) }
             }
         }
+        viewModelScope.launch { vault.transferCheckWaiting.collect { w -> state.update { it.copy(keptCheckWaiting = w) } } }
         viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(stagingNote = t.stagingNote) } } }
         viewModelScope.launch { vault.finishMoveFailure.collect { f -> state.update { it.copy(moveFailure = f) } } }
         // ANDROID-PLAN 0.1.54: the offer follows the stored marker (a cleared marker takes the offer, and its dialog, away).
