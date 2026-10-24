@@ -1208,6 +1208,7 @@ class VaultManager(
         if (forget) finishMoveRunner.clearFailure() // a deleted or forgotten vault: nothing of a move is left to say
         observer?.cancel()
         observer = null
+        forgetPostedPin() // (review m1) nothing of a PIN outlives the session
         // Every step of a forget runs even if one throws (fail secure), the device's own forget and the other devices'
         // too (#179 review F1); the first failure is rethrown after the last.
         val steps = ClearSteps()
@@ -1458,6 +1459,8 @@ class VaultManager(
         if (d.deviceId == null) {
             if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // registered with a recovery code (§11.11.3)
             if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
+            // (A6 audit N3) An enrollment posted earlier is resumed, never posted over (and the PIN is not asked again).
+            if (d.pendingEnroll != null && local.userGuid.isNotEmpty()) return@guard AppPhase.Setup(SetupStage.ENROLLING)
             // A setup code was redeemed: enroll. The pending key may not read the status (MEMBER-API 2.0.0); the
             // enrollment itself answers vault_exists for a vault this phone does not hold. A transfer that did not
             // complete leaves nothing to resume: the welcome screen.
@@ -1580,23 +1583,132 @@ class VaultManager(
 
     // --- VaultRepository ---
 
-    override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
+    override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) {
+        // (Review M1) A run without a PIN (a resume) joined here that made no vault: nothing was enrolled with [pin].
+        if (!enrolment(pin, onStep)) throw VaultFailure(FailureKind.RETRY, CODE_ENROLL_NOT_MADE)
+    }
+
+    override suspend fun resumeEnroll(onStep: (EnrollStep) -> Unit): Boolean = enrolment(null, onStep)
+
+    override val enrollPending: Boolean get() = session?.device?.pendingEnroll != null
+
+    /** (A6 audit N3) The enrollment running now, joined by a second call instead of being run twice. */
+    private var enrolmentRun: kotlinx.coroutines.Deferred<Boolean>? = null
+
+    /**
+     * (Review F1) The enrollment request this process posted last, with the SHA-256 of its PIN: memory only, so that
+     * after a restart, and for any other PIN, the request is resumed without a PIN and never accepted for a new one.
+     */
+    @Volatile
+    private var postedEnrol: Pair<String, ByteArray>? = null
+
+    /** (Review m1) The posted PIN's digest goes, zeroed: the vault is pinned, the request dropped, or the session gone. */
+    private fun forgetPostedPin() {
+        postedEnrol?.second?.fill(0)
+        postedEnrol = null
+    }
+
+    private fun pinDigest(pin: String): ByteArray = java.security.MessageDigest.getInstance("SHA-256").digest(pin.toByteArray())
+    private val enrolmentLock = Mutex()
+
+    /**
+     * (A6 audit N3) Enrollment through [EnrolmentResume], in the app's [scope] (leaving the screen does not stop it half
+     * way; a second call while one runs joins it). True once the vault is pinned and the first handshake done; false when
+     * nothing outstanding made a vault and no [pin] was given (the member chooses one).
+     */
+    private suspend fun enrolment(pin: String?, onStep: (EnrollStep) -> Unit): Boolean {
+        val run = enrolmentLock.withLock {
+            enrolmentRun?.takeIf { it.isActive } ?: scope.async { guard { enrolOnce(pin, onStep) } }.also { enrolmentRun = it }
+        }
+        try {
+            return run.await()
+        } catch (e: VaultFailure) {
+            // (Review F1) A failure with a request still outstanding: every screen from now on (a new one after Back, or
+            // after a restart) resumes it without a PIN, and never asks for a new PIN that the vault might not hold.
+            if (session?.device?.pendingEnroll != null && phaseFlow.value == AppPhase.Setup(SetupStage.NEW_VAULT)) {
+                phaseFlow.value = AppPhase.Setup(SetupStage.ENROLLING)
+            }
+            throw e
+        }
+    }
+
+    @Suppress("ThrowsCount") // one failure per outcome of the resume
+    private suspend fun enrolOnce(pin: String?, onStep: (EnrollStep) -> Unit): Boolean {
         val rec = record.recordGeneration
         val s = session()
+        val d = s.device
         onStep(EnrollStep.ENROLL)
-        // §11.10.9: the instance's capabilities choose the shape. Release R (§11.14.1): a phone key and its secret of
-        // epoch 1 in the request; the state is stored before the request is sent, and a retry of this enrollment (a lost
-        // answer, a crash) reuses the key: the vault may already hold its secret. Without `recovery_r`: as before.
-        val out = s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
-            val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
-            if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
+        val ops = object : EnrolmentResume.Ops {
+            override fun vaultPinned() = d.hasVault && d.vaultId != null
+            override fun pending() = d.pendingEnroll
+            override suspend fun answer(requestId: String) = s.alt.enrollAnswer(d, requestId)
+            override suspend fun markAnswered() = d.markEnrollAnswered()
+            override suspend fun drop() = d.dropPendingEnroll()
+            override fun postedHere(requestId: String, pin: String): Boolean =
+                postedEnrol?.let { (id, h) ->
+                    val typed = pinDigest(pin)
+                    try {
+                        id == requestId && java.security.MessageDigest.isEqual(h, typed)
+                    } finally {
+                        typed.fill(0)
+                    }
+                } == true
+            override fun forgetPin() = forgetPostedPin()
+            override fun relayMark(): Long = System.nanoTime()
+            override fun relayReadSince(mark: Long): Boolean = d.relayReadSince(mark)
+            @Suppress("SwallowedException") // no vault.enrolled in time is an answer: false
+            override suspend fun awaitEnrolled(): Boolean {
+                onStep(EnrollStep.WAIT_FOR_VAULT)
+                return try {
+                    d.awaitEnrolled()
+                    true
+                } catch (_: TimeoutCancellationException) {
+                    false
+                }
+            }
+
+            override suspend fun post(pin: String): EnrolmentResume.Posted {
+                // §11.10.9: the instance's capabilities choose the shape. Release R (§11.14.1): a phone key and its secret
+                // of epoch 1 in the request; the state is stored before the request is sent, and a retry of this
+                // enrollment (a lost answer, a crash) reuses the key: the vault may already hold its secret. Without
+                // `recovery_r`: as before.
+                val out = try {
+                    s.alt.enroll(d, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
+                        val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
+                        if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
+                    }
+                } finally {
+                    // (Review F1) The request stored for this post, with its PIN's digest, in memory only.
+                    forgetPostedPin()
+                    postedEnrol = d.pendingEnroll?.let { it.requestId to pinDigest(pin) }
+                }
+                if (out.ok && out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) {
+                    io { updateLocal(rec) { it.copy(vaultId = out.vaultId) } }
+                }
+                return EnrolmentResume.Posted(out.ok, out.code)
+            }
         }
-        if (!out.ok) throw VaultFailure(enrollFailure(out.code), out.code)
-        if (out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) io { updateLocal(rec) { it.copy(vaultId = out.vaultId) } }
-        onStep(EnrollStep.WAIT_FOR_VAULT)
-        s.device.awaitEnrolled()
-        onStep(EnrollStep.HANDSHAKE)
-        s.device.completeEnrollment()
+        val r = try {
+            EnrolmentResume(ops).run(pin)
+        } catch (e: EnrolmentResume.Refused) {
+            throw VaultFailure(enrollFailure(e.code), e.code, cause = e)
+        } catch (e: EnrolmentResume.Waiting) {
+            throw VaultFailure(FailureKind.ENROLL_WAITING, cause = e)
+        } catch (e: EnrolmentResume.NotThisPin) {
+            phaseFlow.value = AppPhase.Setup(SetupStage.ENROLLING)
+            throw VaultFailure(FailureKind.RETRY, VaultRepository.CODE_ENROLL_PENDING, cause = e)
+        } catch (e: EnrolmentResume.Unreachable) {
+            throw VaultFailure(FailureKind.NETWORK, CODE_ENROLL_RELAY, cause = e)
+        }
+        if (r == EnrolmentResume.Result.NeedsPin) {
+            phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+            return false
+        }
+        if (d.deviceId == null) {
+            onStep(EnrollStep.HANDSHAKE)
+            d.completeEnrollment()
+        }
+        return true
     }
 
     override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit) =
@@ -2619,7 +2731,9 @@ class VaultManager(
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
         val d = session().device
-        if (d.deviceId == null && (d.hasVault || d.vaultId != null)) dropSession(forget = true) else retireOtherDevices()
+        // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
+        val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null
+        if (d.deviceId == null && stale) dropSession(forget = true) else retireOtherDevices()
     }
 
     override suspend fun recoveryStage(): RecoveryStage = guard {
@@ -3487,6 +3601,12 @@ class VaultManager(
             RootOfTrust.UNVERIFIED -> "Unverified"
             else -> "Failed"
         }
+
+        /** (A6 audit N3) A resume joined by [enroll] made no vault: the member enrolls again with the PIN. */
+        const val CODE_ENROLL_NOT_MADE = "enroll_not_made"
+
+        /** (N3) The relay could not be read while an earlier request's `vault.enrolled` was awaited: kept, try again. */
+        const val CODE_ENROLL_RELAY = "enroll_relay"
 
         fun enrollFailure(code: String?): FailureKind = when (code) {
             "vault_exists" -> FailureKind.VAULT_EXISTS

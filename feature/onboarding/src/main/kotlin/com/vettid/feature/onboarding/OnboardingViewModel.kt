@@ -101,6 +101,18 @@ data class OnboardingUiState(
      * flow in memory: `credential.create` carries the PIN, which the vault verifies, so the password step asks for it.
      */
     val askPin: Boolean = false,
+    /**
+     * (A6 audit N3) An enrollment this phone posted before is resumed without its PIN in memory (after a restart): no PIN
+     * is chosen again, since the vault may already hold the one chosen then.
+     */
+    val resuming: Boolean = false,
+    /**
+     * (N3) The enrollment this flow posted with [pin] is outstanding: the PIN can no longer be changed in this flow (the
+     * vault may already hold it); "Edit" goes back to the password only.
+     */
+    val pinFixed: Boolean = false,
+    /** (N3) [askPin] asks for the PIN chosen when the enrollment was started, before a restart. */
+    val pinFromBefore: Boolean = false,
     /** The vault came to this phone by a direct transfer: the last screen is the move's ([OnboardingStep.DONE]). */
     val movedIn: Boolean = false,
     /** (Release R) The move still has to be finished with the PIN on this phone ("Finish the move"). */
@@ -179,7 +191,10 @@ class OnboardingViewModel @Inject constructor(
             is AppPhase.Setup -> when (phase.stage) {
                 // A redeemed code: confirm the account first (also after a restart); a recovery that deleted the
                 // vault says so first.
-                SetupStage.NEW_VAULT -> if (s.step !in vaultSteps + accountSteps && !moving) {
+                // (Review F1) An outstanding request this flow did not post: resumed, never a new PIN.
+                SetupStage.NEW_VAULT -> if (!moving && outstandingNotOurs(s)) {
+                    routeEnrolling(s)
+                } else if (s.step !in vaultSteps + accountSteps && !moving) {
                     state.update {
                         it.copy(
                             step = OnboardingStep.CONFIRM_ACCOUNT, busy = false, error = null, errorCode = null,
@@ -188,6 +203,8 @@ class OnboardingViewModel @Inject constructor(
                     }
                 }
                 SetupStage.VAULT_ELSEWHERE -> if (s.step != OnboardingStep.PROGRESS && !moving) go(OnboardingStep.VAULT_ELSEWHERE)
+                // (A6 audit N3) An enrollment posted before (a lost answer, a crash, a restart): resumed, with no new PIN.
+                SetupStage.ENROLLING -> if (!moving) routeEnrolling(s)
                 SetupStage.RECOVERING -> if (s.step != OnboardingStep.RECOVER) {
                     state.update { it.copy(step = OnboardingStep.RECOVER, busy = false, error = null) }
                 }
@@ -208,6 +225,15 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
+    /** (Review F1) An enrollment request is outstanding that this flow did not post with its PIN ([OnboardingUiState.pinFixed]). */
+    private fun outstandingNotOurs(s: OnboardingUiState): Boolean = !enrolled && !s.pinFixed && vault.enrollPending
+
+    /** (A6 audit N3) An outstanding enrollment: resumed without a PIN, unless this flow is already at it. */
+    private fun routeEnrolling(s: OnboardingUiState) {
+        if (s.step == OnboardingStep.PROGRESS || s.step == OnboardingStep.CONFIRM_ACCOUNT) return
+        if (s.pin.isEmpty()) resume() else go(OnboardingStep.PROGRESS)
+    }
+
     private fun go(step: OnboardingStep) = state.update { it.copy(step = step, busy = false, error = null, errorCode = null) }
 
     /** Back within the flow; false when there is nowhere to go back to (the system handles it). */
@@ -218,7 +244,7 @@ class OnboardingViewModel @Inject constructor(
             OnboardingStep.SETUP_SCAN -> OnboardingStep.WELCOME
             OnboardingStep.SETUP_TYPE -> OnboardingStep.SETUP_SCAN
             OnboardingStep.PIN_CONFIRM -> OnboardingStep.PIN_CREATE
-            OnboardingStep.PASSWORD -> if (s.credentialOnly) null else OnboardingStep.PIN_CONFIRM
+            OnboardingStep.PASSWORD -> if (s.credentialOnly || s.pinFixed) null else OnboardingStep.PIN_CONFIRM
             OnboardingStep.BACKUP -> OnboardingStep.PASSWORD
             else -> null
         } ?: return false
@@ -334,8 +360,8 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    /** The account is the member's: on to the vault PIN. */
-    override fun confirmAccount() = go(OnboardingStep.PIN_CREATE)
+    /** The account is the member's: on to the vault PIN, or (N3) on with the enrollment started before. */
+    override fun confirmAccount() = if (state.value.resuming) resume() else go(OnboardingStep.PIN_CREATE)
 
     /** "That is not my account" (or another code): the redeemed code is dropped; back to the welcome screen. */
     override fun useAnotherCode() {
@@ -418,9 +444,52 @@ class OnboardingViewModel @Inject constructor(
             else StepState.PENDING })
     }
 
+    /**
+     * (A6 audit N3) Resumes the enrollment this phone posted before, without a PIN: once its vault is pinned and the first
+     * handshake done, the credential steps follow (with the PIN chosen then, when the vault verifies it); if it made no
+     * vault, the member starts with the PIN.
+     */
+    private fun resume() {
+        state.update {
+            it.copy(
+                step = OnboardingStep.PROGRESS, busy = true, error = null, errorCode = null, resuming = true,
+                progress = listOf(EnrollStep.ENROLL, EnrollStep.WAIT_FOR_VAULT, EnrollStep.HANDSHAKE).map { st -> st to StepState.PENDING },
+            )
+        }
+        viewModelScope.launch {
+            try {
+                if (vault.resumeEnroll { mark(it) }) {
+                    enrolled = true
+                    val askPin = vault.usesPhoneSecret
+                    state.update {
+                        it.copy(
+                            step = OnboardingStep.PASSWORD, credentialOnly = true, busy = false, resuming = false, askPin = askPin,
+                            pinFromBefore = askPin, progress = emptyList(),
+                        )
+                    }
+                } else {
+                    state.update {
+                        it.copy(
+                            step = OnboardingStep.CONFIRM_ACCOUNT, busy = false, resuming = false, progress = emptyList(),
+                            emailHint = it.emailHint.ifEmpty { account.account.value?.emailHint ?: "" },
+                        )
+                    }
+                }
+            } catch (e: VaultFailure) {
+                failed(e)
+            }
+        }
+    }
+
     /** Runs (or resumes) enrollment and the credential steps. */
     override fun run() {
         val s = state.value
+        // (Review F1) Resumed, not posted over: a request this flow did not post (pinFixed is this flow's own) may hold
+        // another PIN.
+        if (!enrolled && (s.resuming || outstandingNotOurs(s))) {
+            resume()
+            return
+        }
         val credentialOnly = s.credentialOnly || enrolled
         state.update {
             it.copy(step = OnboardingStep.PROGRESS, busy = true, error = null, errorCode = null,
@@ -442,19 +511,31 @@ class OnboardingViewModel @Inject constructor(
                 }
                 if (account.phase.value is AppPhase.Setup) go(OnboardingStep.DONE)
             } catch (e: VaultFailure) {
-                state.update {
-                    it.copy(
-                        busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode,
-                        progress = it.progress.map { (st, ps) -> st to if (ps == StepState.ACTIVE) StepState.FAILED else ps },
-                    )
-                }
-                if (e.kind == FailureKind.VAULT_EXISTS) {
-                    state.update { it.copy(step = OnboardingStep.VAULT_ELSEWHERE, pin = "", pinConfirm = "") }
-                }
-                // The vault refused the password (§11.14.7): back to the password, with its reason under the field.
-                if (e.kind == FailureKind.WEAK_PASSWORD) refusedPassword(e)
+                failed(e)
             }
         }
+    }
+
+    private fun failed(e: VaultFailure) {
+        // (Review F1) A request this flow did not post with its PIN is outstanding: resumed, with no new PIN.
+        if (e.code == VaultRepository.CODE_ENROLL_PENDING) {
+            state.update { it.copy(pin = "", pinConfirm = "", pinFixed = false) }
+            resume()
+            return
+        }
+        // (N3) A failure with this flow's enrollment outstanding: the PIN it carried stays the PIN.
+        val fixed = !enrolled && vault.enrollPending
+        state.update {
+            it.copy(
+                busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode, pinFixed = it.pinFixed || fixed && !it.resuming,
+                progress = it.progress.map { (st, ps) -> st to if (ps == StepState.ACTIVE) StepState.FAILED else ps },
+            )
+        }
+        if (e.kind == FailureKind.VAULT_EXISTS) {
+            state.update { it.copy(step = OnboardingStep.VAULT_ELSEWHERE, pin = "", pinConfirm = "", resuming = false, pinFixed = false) }
+        }
+        // The vault refused the password (§11.14.7): back to the password, with its reason under the field.
+        if (e.kind == FailureKind.WEAK_PASSWORD) refusedPassword(e)
     }
 
     private fun refusedPassword(e: VaultFailure) {
@@ -473,10 +554,18 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    /** Leaves the progress screen after a failure, back to the PIN (before enrollment) or the password. */
+    /**
+     * Leaves the progress screen after a failure, back to the PIN (before enrollment) or the password. (N3) With an
+     * enrollment outstanding, never to the PIN: to the password while this flow holds its PIN, and to the account
+     * (where another code can be used) while it is resumed without one.
+     */
     override fun editAfterFailure() = state.update {
         it.copy(
-            step = if (enrolled) OnboardingStep.PASSWORD else OnboardingStep.PIN_CREATE,
+            step = when {
+                enrolled || it.pinFixed -> OnboardingStep.PASSWORD
+                it.resuming -> OnboardingStep.CONFIRM_ACCOUNT
+                else -> OnboardingStep.PIN_CREATE
+            },
             credentialOnly = enrolled,
             error = null,
             progress = emptyList(),

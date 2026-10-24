@@ -78,6 +78,7 @@
 
     <!-- Progress -->
     <string name="onboarding_progress_title">Setting up your vault</string>
+    <string name="onboarding_pin_from_before">The PIN you chose when you started setting up this phone.</string>
     <string name="onboarding_progress_body">This takes a moment. Keep VettID open.</string>
     <string name="onboarding_step_enroll">Verifying the vault service and this phone</string>
     <string name="onboarding_step_wait">Creating your vault</string>

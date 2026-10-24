@@ -415,6 +415,7 @@ class VaultDevice private constructor(
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out -> collectRequestSince = if (out) System.nanoTime() else null },
+                    onReached = ::noteReached,
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
@@ -491,7 +492,27 @@ class VaultDevice private constructor(
     }
 
     /** One long-poll round (tests and the foreground-service path). */
-    suspend fun pollOnce(): Int = MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }
+    suspend fun pollOnce(): Int {
+        val started = System.nanoTime()
+        return MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }.also { noteReached(started) }
+    }
+
+    /** (A6 audit N3) The latest start ([System.nanoTime]) of a collect request that reached the relay; null before any. */
+    @Volatile
+    private var reachedStartNs: Long? = null
+
+    private fun noteReached(startedNs: Long) {
+        synchronized(this) {
+            val r = reachedStartNs
+            if (r == null || startedNs - r > 0) reachedStartNs = startedNs
+        }
+    }
+
+    /**
+     * (A6 audit N3) Whether a collect request that went out at or after [sinceNs] ([System.nanoTime]) reached the relay
+     * and handed on everything it brought: the mailbox was read after then. False while the relay is out of reach.
+     */
+    fun relayReadSince(sinceNs: Long): Boolean = reachedStartNs?.let { it - sinceNs >= 0 } ?: false
 
     // --- tokens (§7) ---
 
@@ -689,6 +710,28 @@ class VaultDevice private constructor(
     }
 
     // --- enrollment and pairing (§11.3, §6.7) ---
+
+    /**
+     * (A6 audit N3) The enrollment request this device built and whose `vault.enrolled` has not been applied: stored
+     * (with its nonce) before the request is posted, so that it outlives a lost answer, a crash and a restart.
+     */
+    val pendingEnroll: com.vettid.core.altchan.PendingEnroll? get() = alt().pendingEnroll
+
+    /** (N3) The pending enrollment's result was `ok`: its vault exists, only `vault.enrolled` is awaited. */
+    suspend fun markEnrollAnswered() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null || a.enrollAnswered) return@withLock
+        setAlt(a.copy(enrollAnswered = true))
+        save()
+    }
+
+    /** (N3) The pending enrollment made no vault (refused, or never processed): it and its nonce go. */
+    suspend fun dropPendingEnroll() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null) return@withLock
+        setAlt(a.withoutEnroll())
+        save()
+    }
 
     /** Waits for vault.enrolled (§11.3), which pins the vault and gives this device its first token. */
     suspend fun awaitEnrolled(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {

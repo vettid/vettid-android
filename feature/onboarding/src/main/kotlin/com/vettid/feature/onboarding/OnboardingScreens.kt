@@ -477,6 +477,8 @@ fun PasswordScreen(state: OnboardingUiState, actions: OnboardingActions, onBack:
                 onValueChange = actions::setPin,
                 label = stringResource(R.string.unlock_pin_label),
                 isPin = true,
+                // (A6 audit N3) After a resumed enrollment the vault holds the PIN chosen when it was started.
+                supporting = if (state.pinFromBefore) stringResource(R.string.onboarding_pin_from_before) else null,
                 imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("credential_pin"),
             )
@@ -584,19 +586,21 @@ private fun stepLabel(s: EnrollStep): String = stringResource(
 @Composable
 fun ProgressScreen(state: OnboardingUiState, actions: OnboardingActions) {
     val failed = state.progressFailed || (state.error != null && !state.busy)
-    val expired = failed && state.error == FailureKind.UNAUTHORIZED && !state.credentialOnly
+    // A pending app key lasts an hour (MEMBER-API 2.0.0): after a 401 only a new setup code helps. (Review M3) A vault
+    // that was made but has not answered yet: try again, or use another code.
+    val expired = state.error == FailureKind.UNAUTHORIZED && !state.credentialOnly
+    val otherCode = failed && (expired || state.error == FailureKind.ENROLL_WAITING)
     FormScaffold(
         title = stringResource(R.string.onboarding_progress_title),
         body = stringResource(R.string.onboarding_progress_body),
         primaryLabel = if (failed) stringResource(R.string.onboarding_progress_retry) else null,
         onPrimary = actions::run,
-        // A pending app key lasts an hour (MEMBER-API 2.0.0): after a 401 only a new setup code helps.
         secondaryLabel = when {
             !failed -> null
-            expired -> stringResource(R.string.onboarding_other_code)
+            otherCode -> stringResource(R.string.onboarding_other_code)
             else -> stringResource(R.string.onboarding_progress_edit)
         },
-        onSecondary = if (expired) actions::useAnotherCode else actions::editAfterFailure,
+        onSecondary = if (otherCode) actions::useAnotherCode else actions::editAfterFailure,
     ) {
         StepList(state.progress.map { (s, st) -> stepLabel(s) to st }, Modifier.testTag("progress"))
         ErrorText(state)

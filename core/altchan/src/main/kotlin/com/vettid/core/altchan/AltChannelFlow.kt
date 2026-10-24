@@ -104,6 +104,23 @@ interface AltParty {
     suspend fun discardUnlock(built: BuiltUnlock) {}
 }
 
+/**
+ * (A6 audit N3) What the slot of an enrollment request posted earlier says ([AltChannelFlow.enrollAnswer]).
+ */
+sealed interface EnrollAnswer {
+    /** The enclave answered: `vault.enroll.result` with [ok] (the vault exists) or the refusal's [code]. */
+    data class Answered(val ok: Boolean, val code: String?) : EnrollAnswer
+
+    /**
+     * The request left the queue unprocessed (`expired`), the enclave did not know the key (`etk_unknown`), or it
+     * answered random bytes: no vault was made.
+     */
+    data object NotProcessed : EnrollAnswer
+
+    /** The slot does not exist (`404`): never posted, or more than 15 minutes old and gone. */
+    data object Gone : EnrollAnswer
+}
+
 /** The opened vault.enroll.result, the vault id the API assigned and where it ran. */
 data class EnrollOutcome(val vaultId: String, val ok: Boolean, val code: String?, val instanceId: String)
 
@@ -240,6 +257,30 @@ class AltChannelFlow(
             }
             return EnrollOutcome(vid, r.ok, r.code, info.instanceId)
         }
+    }
+
+    /**
+     * (A6 audit N3) Looks at the slot of the enrollment request [requestId] posted earlier (a lost answer, a crash, a
+     * restart) without posting anything: polls while it is queued, and opens its result. A transport failure is thrown
+     * (the request stays outstanding).
+     */
+    suspend fun enrollAnswer(party: AltParty, requestId: String): EnrollAnswer {
+        val s = try {
+            api.poll(requestId)
+        } catch (e: MemberApiException) {
+            if (e.status == HTTP_NOT_FOUND) return EnrollAnswer.Gone
+            throw e
+        }
+        if (s.status == Slot.EXPIRED || s.code == Slot.ETK_UNKNOWN) return EnrollAnswer.NotProcessed
+        val env = s.envelope()
+        if (s.status != Slot.DONE || env == null) throw AltChannelException("enrollment not answered (${s.status} ${s.code ?: ""})")
+        val r = try {
+            party.openEnrollResult(env, requestId)
+        } catch (_: AltResultException) {
+            // Random bytes of the result's size: the enclave could not read the request (§11.3), so it made nothing.
+            return EnrollAnswer.NotProcessed
+        }
+        return EnrollAnswer.Answered(r.ok, r.code)
     }
 
     /**

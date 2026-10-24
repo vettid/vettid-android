@@ -599,6 +599,28 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (A6 audit N3, review F2) "The mailbox was read after then" holds only once a collect that went out after the mark
+     * reached the relay: not while collecting is refused, and not for a read from before the mark.
+     */
+    @Test
+    fun theRelayCountsAsReadOnlyAfterACollectThatReachedIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val before = System.nanoTime()
+            assertFalse(d.relayReadSince(before))
+            refuseCollect = RelayException.TOKEN_REVOKED
+            assertTrue(runCatching { d.pollOnce() }.isFailure)
+            assertFalse("a refused collect is no read", d.relayReadSince(before))
+            refuseCollect = null
+            serveMailbox = true
+            d.pollOnce()
+            assertTrue(d.relayReadSince(before))
+            assertFalse("not for a mark after it", d.relayReadSince(System.nanoTime()))
+            serveMailbox = false
+        }
+    }
+
     /** A terminal relay error on collecting ends the collection quietly; a later start collects again. */
     @Test
     fun aTerminalCollectErrorEndsTheCollectionWithoutEscaping() = runBlocking<Unit> {

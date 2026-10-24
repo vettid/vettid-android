@@ -15,6 +15,7 @@
     <string name="data_failure_rotation_required">Your credential must be rotated before it can be used again.</string>
     <string name="data_failure_not_supported">Your vault\'s software release does not support this yet.</string>
     <string name="data_failure_no_response">Your vault did not answer in time. Try again.</string>
+    <string name="data_failure_enroll_waiting">Your vault was created but has not answered this phone yet. Nothing was lost. Try again in a minute: VettID picks up where it stopped.</string>
     <string name="data_failure_vault_exists">Your account already has a vault, held by another app.</string>
     <string name="data_failure_attestation">This phone could not be verified. VettID needs a phone with hardware key attestation and a locked, verified boot.</string>
     <string name="data_failure_rollback">The vault is served by an older software release than this phone last used. VettID did not send your PIN.</string>

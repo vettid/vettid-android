@@ -78,6 +78,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.PIN_UNCERTAIN -> R.string.data_failure_pin_uncertain
     FailureKind.RENEW_UNCONFIRMED -> R.string.data_failure_renew_unconfirmed
     FailureKind.CREDENTIAL_UNSETTLED -> R.string.data_failure_credential_unsettled
+    FailureKind.ENROLL_WAITING -> R.string.data_failure_enroll_waiting
     // (ANDROID-PLAN 0.1.57) The full screen shows the title with its body ([CredentialRequired]); inline, the title.
     FailureKind.CREDENTIAL_REQUIRED -> R.string.vault_credential_required_title
     // Its title is "Your vault moved to a new phone" (data_feed_device_replaced) where a screen shows one.
