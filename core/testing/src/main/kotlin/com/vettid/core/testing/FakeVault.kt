@@ -604,7 +604,16 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return transferGaveUserGuid
     }
 
-    override suspend fun abandonTransferIn() = call("abandonTransferIn")
+    override suspend fun abandonTransferIn() {
+        call("abandonTransferIn")
+        waitingTransfer = null
+    }
+
+    /** (A6 audit N1) A transfer to this phone that waits for the old phone, as a restart finds it ([transferInWaiting]). */
+    var waitingTransfer: com.vettid.core.data.vault.TransferInWaiting? = null
+
+    /** A read: not recorded in [calls]. */
+    override suspend fun transferInWaiting(): com.vettid.core.data.vault.TransferInWaiting? = waitingTransfer
 
     override suspend fun transferCreate(): TransferOfferView {
         call("transferCreate")

@@ -103,6 +103,10 @@ class VaultDeviceTest {
     @Volatile
     private var refuseCollect: String? = null
     private val queued = LinkedBlockingQueue<RelayMessage>()
+
+    /** When set, a collect that took a message from [queued] holds it until this opens (a lease in flight). */
+    @Volatile
+    private var leaseGate: java.util.concurrent.CountDownLatch? = null
     private val acked = LinkedBlockingQueue<String>()
 
     /** The fake vault's keys and session with the device. */
@@ -181,6 +185,8 @@ class VaultDeviceTest {
                         MockResponse.Builder().code(403).body("""{"code":"$refuseCollect","message":""}""").build()
                     path == "/v1/mailbox" && request.method == "GET" && serveMailbox -> {
                         val m = queued.poll(200, TimeUnit.MILLISECONDS)
+                        // A collect that leased a message and has not delivered it yet ([leaseGate]).
+                        if (m != null) leaseGate?.await(10, TimeUnit.SECONDS)
                         val msgs = if (m == null) "" else JsonBuilder().string("msg_id", m.msgId).string("sender", m.sender)
                             .base64("payload", m.payload()).build()
                         MockResponse.Builder().code(200).body("""{"messages":[$msgs]}""").build()
@@ -621,6 +627,22 @@ class VaultDeviceTest {
         }
     }
 
+    /** (#186 gap) A round of the background collection (start()) counts as a read of the mailbox too. */
+    @Test
+    fun aRoundOfTheRunningCollectionCountsAsARead() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val before = System.nanoTime()
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (!d.relayReadSince(before)) kotlinx.coroutines.delay(20)
+            assertTrue(d.relayReadSince(before))
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
     /** A terminal relay error on collecting ends the collection quietly; a later start collects again. */
     @Test
     fun aTerminalCollectErrorEndsTheCollectionWithoutEscaping() = runBlocking<Unit> {
@@ -1032,6 +1054,212 @@ class VaultDeviceTest {
             assertEquals(v.vaultId, d.vaultId)
             assertTrue(d.paired.value)
             assertEquals(3, d.altState.releaseNumber)
+        }
+    }
+
+    // --- A6 audit N1: a transfer to this phone resumes ---
+
+    /** The new phone's hs.init answered and its hs.fin taken: the code is shown (the vault's side of §6.7.1 step 2). */
+    private fun FakeVault.answerTransfer(d: VaultDevice): String {
+        val p = PendingInit.open(nextDeposit().second, { k -> if (k == kem.publicKey.kid) kem else null }, Instant.now())
+        val (r, env) = p.respond(ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()))
+        runBlocking { d.handle(msg(env)) }
+        val fr = r.handleFin(nextDeposit().second, d.relayAddr.pk(), Instant.now())
+        keyring.activate(fr.epoch, Instant.now())
+        return fr.sas!!
+    }
+
+    private fun FakeVault.transferPaired(d: VaultDevice) =
+        seal("device.paired", """{"device_id":"dev-2","role":"app","vault_id":"$vaultId","release":"${"a3".repeat(48)}","release_number":3,"token":"${tokenFor(d)}","transfer":true,"credential_version":5,"user_guid":"member-0017"}""")
+
+    /**
+     * (A6 audit N1) The process is killed after the code was shown; the old phone approves meanwhile. After the restart the
+     * transfer is still pending with its code, and the device.paired that waited on the relay completes it in the message
+     * handler, with no screen waiting; the member's user_guid is kept for the app until it has taken the credential over.
+     */
+    @Test
+    fun aTransferKilledAfterTheCodeIsCompletedByALateDevicePaired() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val v = FakeVault()
+            val d = VaultDevice.create(config(store), secrets)
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            assertNotNull("pending from its hs.init", d.transferInPending)
+            assertNull("no code before hs.resp", d.transferInPending!!.sas)
+            val sas = v.answerTransfer(d)
+            d.stop() // killed here
+            val again = VaultDevice.load(config(store), secrets)!!
+            val t = again.transferInPending!!
+            assertEquals("the code is shown again", sas, t.sas)
+            assertFalse(t.paired)
+            assertNull(again.deviceId)
+            // Nobody waits: the handler applies it.
+            again.handle(v.transferPaired(again))
+            assertEquals("dev-2", again.deviceId)
+            assertEquals(v.vaultId, again.vaultId)
+            assertTrue(again.paired.value)
+            assertEquals(3, again.altState.releaseNumber)
+            assertTrue(again.transferInPending!!.paired)
+            assertEquals("member-0017", again.transferInPending!!.userGuid)
+            // Killed again before the credential was taken over: still pending, and the wait returns at once.
+            again.stop()
+            val third = VaultDevice.load(config(store), secrets)!!
+            assertEquals("dev-2", third.deviceId)
+            assertTrue(third.transferInPending!!.paired)
+            assertEquals("member-0017", third.awaitTransfer(java.time.Duration.ofMillis(50)))
+            // A cancel now drops nothing: the vault is this phone's.
+            third.abandonTransfer()
+            assertEquals("dev-2", third.deviceId)
+            assertTrue(third.hasVault)
+            third.finishTransferIn()
+            assertNull(third.transferInPending)
+            third.stop()
+            assertNull(VaultDevice.load(config(store), secrets)!!.transferInPending)
+        }
+    }
+
+    /**
+     * (A6 audit N1, #187 recheck) The deadline while the collection runs and has leased the waiting device.paired (its
+     * collect is out, the message not delivered yet): the deadline's own collect sees nothing, so it waits for that round,
+     * and then the transfer is paired and nothing is dropped. The drop, asked after, keeps everything.
+     */
+    @Test
+    fun theDeadlineWaitsForARoundThatLeasedTheDevicePaired() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // leased by the collection's round
+            val deadline = async(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(10_000) { d.deadlineCollect() } }
+            kotlinx.coroutines.delay(500)
+            assertFalse("waits for the round that holds it", deadline.isCompleted)
+            assertFalse(d.transferInPending!!.paired)
+            leaseGate!!.countDown() // the round delivers it
+            assertNotNull(deadline.await())
+            assertTrue(d.transferInPending!!.paired)
+            d.abandonTransfer() // the deadline's drop, asked after: refused for a paired device
+            assertEquals("dev-2", d.deviceId)
+            assertTrue(d.hasVault)
+            assertTrue(d.transferInPending!!.paired)
+            scope.cancel()
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * (#187 recheck) The other order: the drop is asked while the collection's handler applies the device.paired. Both run
+     * under the device's lock: whichever comes second sees the first. A paired transfer is never dropped; a dropped one
+     * cannot be paired later (its keyring is gone), and the app offers a new code.
+     */
+    @Test
+    fun aDropAndAPairingNeverMeetHalfWay() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            repeat(2) { order ->
+                val v = FakeVault()
+                val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+                d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+                v.answerTransfer(d)
+                val paired = v.transferPaired(d)
+                if (order == 0) {
+                    d.handle(paired)
+                    d.abandonTransfer()
+                    assertTrue("paired first: kept", d.transferInPending!!.paired && d.hasVault && d.deviceId == "dev-2")
+                } else {
+                    d.abandonTransfer()
+                    d.handle(paired)
+                    assertNull("dropped first: nothing pairs it later", d.transferInPending)
+                    assertNull(d.deviceId)
+                    assertFalse(d.hasVault)
+                }
+            }
+        }
+    }
+
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) The deadline's one collect (`wait=0`): a device.paired that
+     * waits on the relay is applied by it; an empty mailbox brings nothing; a refused collect throws (and the caller drops).
+     */
+    @Test
+    fun theDeadlinesCollectAppliesAWaitingDevicePaired() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            assertEquals("nothing waiting", 0, d.collectOnce())
+            assertFalse(d.transferInPending!!.paired)
+            refuseCollect = RelayException.TOKEN_REVOKED
+            assertTrue(runCatching { d.collectOnce() }.isFailure)
+            refuseCollect = null
+            queued.add(v.transferPaired(d))
+            assertEquals(1, d.collectOnce())
+            assertTrue(d.transferInPending!!.paired)
+            assertEquals("dev-2", d.deviceId)
+            assertEquals("acked", 1, acked.size)
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * (A6 audit N1) The device's own wait ending drops nothing (the dropping is the 11-minute deadline's, after its
+     * collect, in the app): an approval that comes later still completes the transfer.
+     */
+    @Test
+    fun aWaitThatEndsDropsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            assertTrue(runCatching { d.awaitTransfer(java.time.Duration.ofMillis(200)) }.exceptionOrNull() is kotlinx.coroutines.TimeoutCancellationException)
+            assertTrue("the session is kept", d.hasVault)
+            assertNotNull(d.transferInPending)
+            d.handle(v.transferPaired(d))
+            assertEquals("member-0017", d.awaitTransfer(java.time.Duration.ofSeconds(1)))
+            assertEquals("dev-2", d.deviceId)
+        }
+    }
+
+    /**
+     * (A6 audit N1) Killed after hs.init and before hs.resp: no code was shown and no hs.fin sent, so nothing can complete
+     * (the vault times it out, §6.7.1): the pending record says so (no code), and a cancel drops it. A rejection drops it too.
+     */
+    @Test
+    fun aTransferWithoutACodeOrRejectedIsNotResumed() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val v = FakeVault()
+            val d = VaultDevice.create(config(store), secrets)
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            nextDeposit() // the hs.init, never answered before the kill
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!
+            assertNull(again.transferInPending!!.sas)
+            again.abandonTransfer()
+            assertNull(again.transferInPending)
+            assertFalse(again.hasVault)
+            // A rejected one goes as the rejection comes, with or without a screen waiting.
+            again.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(again)
+            again.handle(v.seal("device.pair.rejected", "{}"))
+            assertNull(again.transferInPending)
+            assertNull(again.deviceId)
+            // A device.paired that is not a transfer's is not taken as one.
+            again.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(again)
+            again.handle(v.seal("device.paired", """{"device_id":"dev-3","role":"app","vault_id":"${v.vaultId}"}"""))
+            assertNull(again.deviceId)
+            assertFalse(again.transferInPending!!.paired)
         }
     }
 

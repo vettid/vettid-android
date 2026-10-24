@@ -63,6 +63,7 @@ import com.vettid.core.data.items.ListLoad
 import com.vettid.core.vault.pinChange
 import com.vettid.core.vault.pushConfirm
 import com.vettid.core.vault.secretRenew
+import com.vettid.core.vault.TransferInState
 import com.vettid.core.vault.transferApprove
 import com.vettid.core.vault.pushRegister
 import com.vettid.core.vault.pushUnregister
@@ -447,7 +448,6 @@ class VaultManager(
                     val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
                     if (r) phoneSecrets.secret(keepPhoneKey("", rec)) else null
                 }
-                transferStartedAt = Instant.now()
                 try {
                     // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
                     withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
@@ -1188,7 +1188,11 @@ class VaultManager(
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
                 val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
-                device.start(scope)
+                // (A6 audit N1) A transfer past its deadline: its collect runs first (evaluate), before the collection
+                // can lease a waiting device.paired; the collection starts after it.
+                if (TransferInResume.decide(device.transferInPending, device.deviceId, Instant.now()) != TransferInResume.Action.DEADLINE) {
+                    device.start(scope)
+                }
                 observe(s)
                 s
             }.also {
@@ -1456,6 +1460,24 @@ class VaultManager(
         if (local.userGuid.isEmpty() && !local.transferIn) return@guard AppPhase.SignedOut
         val s = session()
         val d = s.device
+        // (A6 audit N1) A transfer to this phone that is not finished: completed if the vault paired it (also when the
+        // credential steps failed or the process ended on the way), shown again while it waits for the approval. One
+        // whose hs.init was never answered (no code shown, no hs.fin sent) cannot complete: dropped.
+        val pendingIn = d.transferInPending
+        when (TransferInResume.decide(pendingIn, d.deviceId, Instant.now())) {
+            TransferInResume.Action.COMPLETE -> {
+                completeTransferIn(s, record.recordGeneration, pendingIn?.userGuid)
+                return@guard AppPhase.Setup(SetupStage.FINISHING)
+            }
+            // Not running at the deadline (stopped, killed, the phone off): the collect and the drop now, first.
+            TransferInResume.Action.DEADLINE -> atTransferDeadline(s)?.let { t ->
+                completeTransferIn(s, record.recordGeneration, t.userGuid)
+                return@guard AppPhase.Setup(SetupStage.FINISHING)
+            }
+            TransferInResume.Action.WAIT -> return@guard AppPhase.Setup(SetupStage.TRANSFER_WAITING)
+            TransferInResume.Action.DROP -> d.abandonTransfer()
+            TransferInResume.Action.NONE -> Unit
+        }
         if (d.deviceId == null) {
             if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // registered with a recovery code (§11.11.3)
             if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
@@ -1493,7 +1515,14 @@ class VaultManager(
     @Suppress("ReturnCount")
     private suspend fun afterUnlocked(s: Session): AppPhase {
         if (s.device.recovering) return AppPhase.Setup(SetupStage.RECOVERING)
-        if (s.device.credentialVersion == null) return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        if (s.device.credentialVersion == null) {
+            // (A6 audit N1) A transfer the vault paired takes the credential over; it never creates one (`exists`).
+            s.device.transferInPending?.takeIf { it.paired }?.let { t ->
+                completeTransferIn(s, record.recordGeneration, t.userGuid)
+                return AppPhase.Setup(SetupStage.FINISHING)
+            }
+            return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        }
         scope.launch { runCatching { refreshAlarm(s) } }
         // §11.11.9: a start-over requested on the portal shows after every unlock.
         scope.launch { runCatching { vaultStatus(s) } }
@@ -2984,10 +3013,6 @@ class VaultManager(
 
     // --- MoveRepository: direct transfer (§6.7.1) ---
 
-    /** When this phone sent its transfer hs.init: it waits for the approval until 10 minutes after it. */
-    @Volatile
-    private var transferStartedAt: Instant? = null
-
     /** The transfer this (old) phone opened last, to cancel it when a new one is asked for. */
     @Volatile
     private var openTransferId: String? = null
@@ -2997,11 +3022,62 @@ class VaultManager(
     override suspend fun awaitTransferIn(): Boolean = guard {
         val rec = record.recordGeneration
         val s = session()
-        val started = transferStartedAt ?: Instant.now()
-        val guid = TransferInWait.await(started, { Instant.now() }, { left -> s.device.awaitTransfer(left) }) {
-            s.device.abandonTransfer()
+        // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
+        // (kept across restarts; nothing the member does moves it); then one collect, and applied or dropped.
+        val guid = TransferInResume.awaitApproval(
+            pending = { s.device.transferInPending },
+            now = Instant::now,
+            await = { left -> s.device.awaitTransfer(left) },
+            atDeadline = { atTransferDeadline(s) },
+        ) ?: throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED)
+        completeTransferIn(s, rec, guid.userGuid)
+    }
+
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.76) The transfer to this phone at its
+     * 11-minute deadline, or at the first start after it: one collect of the mailbox (`wait=0`, `max` at its cap, at most
+     * [TransferInResume.DEADLINE_COLLECT_MS] in all), and the `device.paired{transfer}` it brings is applied by the
+     * handler. Paired: the transfer (to be completed by the take-over). Otherwise, also when the collect fails or times
+     * out: the handshake is dropped and null.
+     */
+    private suspend fun atTransferDeadline(s: Session): TransferInState? {
+        val d = s.device
+        return try {
+            // (#187 recheck) One deadline step at a time (the screen's wait and a start may both reach it), decided again
+            // inside: a second one never drops what the first one's collect is about to apply.
+            val paired = transferDeadline.run(
+                due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },
+                paired = { d.transferInPending?.paired == true && d.deviceId != null },
+                collect = { d.deadlineCollect() },
+                drop = { d.abandonTransfer() },
+            )
+            if (paired) d.transferInPending else null
+        } finally {
+            d.start(scope) // deferred at a start past the deadline (session()); running already otherwise
         }
-        transferStartedAt = null
+    }
+
+    /** (#187 recheck) Serializes [atTransferDeadline]. */
+    private val transferDeadline = TransferInResume.Serial()
+
+    override suspend fun transferInWaiting(): TransferInWaiting? = guard {
+        val t = session().device.transferInPending ?: return@guard null
+        // Also once paired: the screen's wait then returns at once and completes it.
+        val sas = t.sas ?: return@guard null
+        TransferInWaiting(sas, t.startedAt)
+    }
+
+    /** (A6 audit N1) One completion of a transfer to this phone at a time (the screen's wait and a start may meet). */
+    private val transferInLock = Mutex()
+
+    /**
+     * (A6 audit N1) The steps after a transfer's `device.paired`, also after a restart: the member's `user_guid`, the
+     * move's markers, and the credential the vault kept (§6.7.1 step 5). The transfer stays pending on the device until
+     * they are done, so a failure or a kill on the way is resumed at the next start (never as a `credential.create`,
+     * which the vault would answer `exists`).
+     */
+    private suspend fun completeTransferIn(s: Session, rec: Int, guid: String?): Boolean = transferInLock.withLock {
+        if (s.device.transferInPending == null && s.device.credentialVersion != null) return@withLock guid != null
         // §6.7.1 (0.17.0): the member's user_guid from device.paired, kept as an enrolled phone keeps the redeem's, so
         // that this phone unlocks later (§11.4). A vault release before 0.17.0 sends none: the transfer is still
         // complete, and the unlock screen says why this phone cannot unlock.
@@ -3018,12 +3094,12 @@ class VaultManager(
         }
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.openApi.credentialTakeOver()
+        s.device.finishTransferIn()
         phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
         guid != null
     }
 
     override suspend fun abandonTransferIn() = guard {
-        transferStartedAt = null
         session().device.abandonTransfer()
     }
 
@@ -3319,7 +3395,6 @@ class VaultManager(
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
         steps.step { canary.removeCanaryManifest() }
-        transferStartedAt = null
         openTransferId = null
         alarmFlow.value = null
         windowFlow.value = null
