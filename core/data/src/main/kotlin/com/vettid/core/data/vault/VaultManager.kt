@@ -2131,12 +2131,27 @@ class VaultManager(
      * the unconditional lock (VAULT-LOCK Q3). The value the last lock was bound to is never reused: it was stale.
      */
     override suspend fun lockAgain() {
-        val id = LockAgain.unlockId { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK).status() }.unlockId } }
-        lockWith(id)
+        // Pending, durably and unbound, before anything is read (second recheck of #190, D1): a tap is never lost to a
+        // slow vault, a screen that goes away or a broadcast that ends. Returns here; the rest runs in the manager's scope.
+        val mine = beginLock(null)
+        scope.launch {
+            // At most LOCK_STATUS_WAIT for the opening running now; then bound to it, before the first attempt.
+            val id = withTimeoutOrNull(LOCK_STATUS_WAIT.toMillis()) {
+                LockAgain.unlockId { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } }
+            }
+            lockKeeper.rebind(mine, id)
+            locking.run(lock = { lockKeeper.ask(mine) }, after = {})
+        }
     }
 
     /** The member's lock, bound to [unlockId] (null: as before release L). */
     private suspend fun lockWith(unlockId: String?) {
+        val mine = beginLock(unlockId)
+        locking.run(lock = { lockKeeper.ask(mine) }, after = {})
+    }
+
+    /** This phone locked at once, and the lock pending durably ([LockKeeper.begin]); its number, for [LockKeeper.ask]. */
+    private suspend fun beginLock(unlockId: String?): Long {
         lockedHere = true
         // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault" goes with the open vault.
         CredentialRequired.clear()
@@ -2149,8 +2164,7 @@ class VaultManager(
         // and a call's hang-up is sent to the vault and nothing it sends is taken in.
         // (Release L) Bound to the vault's current unlock as this phone knows it (memory only: from the unlock result
         // or the last vault.status); without one, as before L (VAULT-LOCK §3.6, Q3).
-        val mine = withContext(Dispatchers.IO + NonCancellable) { lockKeeper.begin(unlockId) }
-        locking.run(lock = { lockKeeper.ask(mine) }, after = {})
+        return withContext(Dispatchers.IO + NonCancellable) { lockKeeper.begin(unlockId) }
     }
 
     override suspend fun overview(): VaultOverview = guard(resend = true) {
@@ -3466,6 +3480,9 @@ class VaultManager(
 
         /** How long one lock attempt waits for the member API's slot before it reads the status instead. */
         private val MEMBER_LOCK_WAIT: Duration = Duration.ofSeconds(12)
+
+        /** "Lock it now": how long the status read that names the opening may take; then the lock goes unbound. */
+        private val LOCK_STATUS_WAIT: Duration = Duration.ofSeconds(5)
         private const val TYPE_VAULT_LOCK = "vault.lock"
 
         /** The code of a vault operation refused on this phone because a lock is pending ([openApi]). */

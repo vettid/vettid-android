@@ -40,6 +40,8 @@ data class LockRecord(
     val relayLockUntilMs: Long? = null,
     val unlockId: String? = null,
     val held: Boolean = false,
+    /** Held, and since confirmed locked after all ([LockNotice.ConfirmedLate]): a new process says nothing new. */
+    val heldConfirmed: Boolean = false,
 )
 
 /** Where [LockRecord] is kept: with the app's durable account record. */
@@ -195,7 +197,7 @@ class LockKeeper(
         // the member is told again (the screen's card, and the notification an earlier process posted stays).
         if (r.held) {
             held = true
-            if (!pending) noticeFlow.value = LockNotice.OpenedAgain
+            if (!pending && !r.heldConfirmed) noticeFlow.value = LockNotice.OpenedAgain
         }
         val since = r.pendingSinceMs ?: return
         synchronized(this) {
@@ -242,6 +244,18 @@ class LockKeeper(
     /** (Release L) The last lock ended as [LockNotice.OpenedAgain], and no unlock here followed: not known locked. */
     val openedAgain: Boolean get() = held
 
+    /**
+     * (Release L, "Lock it now") Binds the lock [mine], begun unbound, to [unlockId] before its first attempt; nothing
+     * if another lock or an unlock took its place meanwhile. Null leaves it unbound (as before L).
+     */
+    fun rebind(mine: Long, unlockId: String?) {
+        synchronized(this) {
+            if (epoch != mine || !pending || unlockId == null) return
+            boundTo = unlockId
+            write { it.copy(unlockId = unlockId) }
+        }
+    }
+
     /** Evidence from elsewhere that the vault is locked (its `vault.locking`, a status read): a pending lock is confirmed. */
     fun confirmed() {
         synchronized(this) {
@@ -249,7 +263,10 @@ class LockKeeper(
                 pending -> confirm(late = (noticeFlow.value as LockNotice.Unconfirmed).inDoubt)
                 // (Release L) Held after "opened again", and now locked after all: said so. The phone stays held
                 // (an unlock here ends that), and the record keeps it.
-                held && noticeFlow.value == LockNotice.OpenedAgain -> noticeFlow.value = LockNotice.ConfirmedLate
+                held && noticeFlow.value == LockNotice.OpenedAgain -> {
+                    noticeFlow.value = LockNotice.ConfirmedLate
+                    write { it.copy(heldConfirmed = true) }
+                }
             }
         }
     }
@@ -347,7 +364,7 @@ class LockKeeper(
                     val id = unlockIdOf(result)
                     boundTo = id
                     held = false
-                    write { it.copy(unlockId = id, held = false) }
+                    write { it.copy(unlockId = id, held = false, heldConfirmed = false) }
                 }
             }
         }
@@ -405,7 +422,7 @@ class LockKeeper(
         boundTo = null
         held = notice == LockNotice.OpenedAgain
         // The relay lock's time stays: its request may still be waiting for the vault. Held is kept on the phone too.
-        write { it.copy(pendingSinceMs = null, unlockId = null, held = held) }
+        write { it.copy(pendingSinceMs = null, unlockId = null, held = held, heldConfirmed = false) }
         noticeFlow.value = notice
     }
 

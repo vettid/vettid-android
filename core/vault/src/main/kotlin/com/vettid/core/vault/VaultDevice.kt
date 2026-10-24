@@ -255,8 +255,10 @@ class VaultDevice private constructor(
     internal fun openingMark(): Long = openings.get()
 
     private fun opened(id: String?) {
-        openings.incrementAndGet()
-        unlockId = id
+        synchronized(openings) {
+            openings.incrementAndGet()
+            unlockId = id
+        }
     }
     private val clock = cfg.clock
     private val relays = ConcurrentHashMap<String, RelayClient>()
@@ -622,7 +624,7 @@ class VaultDevice private constructor(
     /** A `vault.status`'s `unlock_id` ([unlockId]); absent or of another form: none. */
     internal fun noteUnlockId(id: String?, mark: Long) {
         // An opening came between the request and its answer: the answer may name the one before.
-        if (openings.get() == mark) unlockId = UnlockIds.of(id)
+        synchronized(openings) { if (openings.get() == mark) unlockId = UnlockIds.of(id) }
     }
 
     override suspend fun prepareUnlock(

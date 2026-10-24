@@ -53,14 +53,16 @@ class PendingLockJobTest {
         assertEquals(Duration.ofHours(1), PendingLockJob.againAfter(Duration.ofDays(2)))
     }
 
-    /** A notice is posted once per lock, also across processes: its key is the lock's time, or "opened again". */
+    /** A notice is posted once per lock, also across processes: a lock in doubt by its time; "opened again" by its lock. */
     @Test
     fun aNoticeIsKeyedByItsLock() {
         val t = Instant.parse("2026-10-24T10:00:00Z")
-        assertEquals(null, PendingLockNotifier.keyOf(LockNotice.Unconfirmed(t, 0)))
-        assertEquals("u:${t.toEpochMilli()}", PendingLockNotifier.keyOf(LockNotice.Unconfirmed(t, 3)))
-        assertEquals("o", PendingLockNotifier.keyOf(LockNotice.OpenedAgain))
-        assertEquals(null, PendingLockNotifier.keyOf(LockNotice.ConfirmedLate))
+        assertEquals(null, PendingLockNotifier.keyOf(LockNotice.Unconfirmed(t, 0), null))
+        assertEquals("u:${t.toEpochMilli()}", PendingLockNotifier.keyOf(LockNotice.Unconfirmed(t, 3), null))
+        // Second recheck of #190, D4: the "opened again" of a second lock is not the first's.
+        assertEquals("o:1", PendingLockNotifier.keyOf(LockNotice.OpenedAgain, 1))
+        assertEquals("o:2", PendingLockNotifier.keyOf(LockNotice.OpenedAgain, 2))
+        assertEquals(null, PendingLockNotifier.keyOf(LockNotice.ConfirmedLate, 1))
     }
 
     @Test

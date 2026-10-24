@@ -110,12 +110,16 @@ class LockRecordFileTest {
         LockRecordFile(file(), legacy = { LockRecord() }).save(LockRecord(relayLockUntilMs = 9, held = true))
         assertEquals("2 - 9 - 1", file().readText().trim())
         assertEquals(LockRecord(null, 9, null, held = true), LockRecordFile(file(), legacy = { LockRecord() }).load())
+        // Held, and since confirmed locked (second recheck of #190, D3).
+        LockRecordFile(file(), legacy = { LockRecord() }).save(LockRecord(held = true, heldConfirmed = true))
+        assertEquals("2 - - - 2", file().readText().trim())
+        assertEquals(LockRecord(held = true, heldConfirmed = true), LockRecordFile(file(), legacy = { LockRecord() }).load())
     }
 
     /** A bound record that is not of the form says a lock is pending (fail secure). */
     @Test
     fun aMalformedBoundRecordSaysALockIsPending() {
-        for (text in listOf("2 7 - xyz 0", "2 - - ${"A".repeat(32)} 0", "2 7 - - 2", "2 7 - -", "3 7 - - 0")) {
+        for (text in listOf("2 7 - xyz 0", "2 - - ${"A".repeat(32)} 0", "2 7 - - 3", "2 7 - -", "3 7 - - 0")) {
             file().writeText(text)
             assertEquals(text, LockRecord(pendingSinceMs = 11), LockRecordFile(file(), legacy = { LockRecord() }, now = { 11 }).load())
         }

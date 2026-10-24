@@ -71,7 +71,12 @@ internal class LockRecordFile(
         val id = r.unlockId
         if (id == null && !r.held) return "$VERSION $times\n"
         val shown = if (id == null) NONE else UnlockIds.of(id) ?: throw IOException("unlock_id")
-        return "$VERSION_BOUND $times $shown ${if (r.held) HELD else NOT_HELD}\n"
+        val held = when {
+            !r.held -> NOT_HELD
+            r.heldConfirmed -> HELD_CONFIRMED
+            else -> HELD
+        }
+        return "$VERSION_BOUND $times $shown $held\n"
     }
 
     @Suppress("ReturnCount") // one return per form
@@ -89,11 +94,12 @@ internal class LockRecordFile(
         val raw = parts[ID_FIELD]
         val id = if (raw == NONE) null else UnlockIds.of(raw) ?: return null
         val held = when (parts[HELD_FIELD]) {
-            HELD -> true
-            NOT_HELD -> false
+            HELD -> true to false
+            HELD_CONFIRMED -> true to true
+            NOT_HELD -> false to false
             else -> return null
         }
-        return LockRecord(pending.value, relay.value, id, held)
+        return LockRecord(pending.value, relay.value, id, held.first, held.second)
     }
 
     /** A time field: `-` is none ([Field] of null); anything but a number is not of the form (null). */
@@ -104,7 +110,10 @@ internal class LockRecordFile(
     private companion object {
         const val VERSION = "1"
 
-        /** (Release L) With the `unlock_id` the pending lock is bound to (or `-`) and the held marker (`0` / `1`). */
+        /**
+         * (Release L) With the `unlock_id` the pending lock is bound to (or `-`) and the held marker (`0`, `1`, or `2`:
+         * held and since confirmed locked).
+         */
         const val VERSION_BOUND = "2"
         const val NONE = "-"
         const val FIELDS = 3
@@ -113,5 +122,6 @@ internal class LockRecordFile(
         const val HELD_FIELD = 4
         const val HELD = "1"
         const val NOT_HELD = "0"
+        const val HELD_CONFIRMED = "2"
     }
 }

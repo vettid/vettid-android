@@ -80,4 +80,44 @@ class LockAgainTest {
         assertEquals(LockNotice.ConfirmedLate, k.notice.value)
         assertTrue(k.holdsPhone)
     }
+
+    /** Second recheck of #190, D3: after a restart such a phone is still held, and is not told "opened again" again. */
+    @Test
+    fun heldAndConfirmedSaysNothingNewAfterARestart() = runTest {
+        val store = Store()
+        val vault = Vault().apply { outcomes += LockOutcome.OPENED_AGAIN }
+        val k = LockKeeper(backgroundScope, store, vault, { Instant.EPOCH }, { Duration.ofHours(1) })
+        k.ask(k.begin(old))
+        k.confirmed()
+        val next = LockKeeper(backgroundScope, Store(store.record), vault, { Instant.EPOCH }, { Duration.ofHours(1) })
+        next.resume()
+        assertTrue(next.holdsPhone)
+        assertEquals(LockNotice.None, next.notice.value)
+    }
+
+    /**
+     * Second recheck of #190, D1: "Lock it now" is pending, unbound, before the status is read; the read binds it before
+     * its first attempt; a read that names nothing leaves it unbound (as before L).
+     */
+    @Test
+    fun theFreshLockIsPendingBeforeTheReadAndBoundBeforeItsFirstAttempt() = runTest {
+        val store = Store()
+        val vault = Vault().apply { outcomes += LockOutcome.LOCKED }
+        val k = LockKeeper(backgroundScope, store, vault, { Instant.EPOCH }, { Duration.ofHours(1) })
+        val mine = k.begin(null)
+        assertTrue("pending before anything is read", k.pending)
+        assertEquals(null, store.record.unlockId)
+        k.rebind(mine, now)
+        assertEquals(now, store.record.unlockId)
+        assertTrue(k.ask(mine))
+        assertEquals(listOf<String?>(now), vault.bound)
+        // Unbound when the read names nothing; and a rebind of a lock that is no longer pending does nothing.
+        vault.outcomes += LockOutcome.LOCKED
+        val two = k.begin(null)
+        k.rebind(two, null)
+        assertTrue(k.ask(two))
+        assertEquals(listOf<String?>(now, null), vault.bound)
+        k.rebind(two, now)
+        assertEquals(LockRecord(), store.record)
+    }
 }

@@ -46,6 +46,11 @@ class PendingLockNotifier(
      * on the phone, so that a new process does not post again what the member already saw (and maybe swiped away).
      */
     private val prefs by lazy { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
+    private var lastAsked: Long?
+        get() = runCatching { prefs.getLong(KEY_LAST_ASKED, -1).takeIf { it >= 0 } }.getOrNull()
+        set(v) {
+            runCatching { prefs.edit().apply { if (v == null) remove(KEY_LAST_ASKED) else putLong(KEY_LAST_ASKED, v) }.apply() }
+        }
     private var posted: String?
         get() = runCatching { prefs.getString(KEY_POSTED, null) }.getOrNull()
         set(v) {
@@ -69,7 +74,9 @@ class PendingLockNotifier(
             states.distinctUntilChanged().collect { (n, front) ->
                 runCatching {
                     // Keyed by the lock itself, so that a second lock is posted even if the state between was missed.
-                    val key = keyOf(n)
+                    // The lock an "opened again" is about: the last one seen pending (kept on the phone).
+                    if (n is LockNotice.Unconfirmed) lastAsked = n.askedAt.toEpochMilli()
+                    val key = keyOf(n, lastAsked)
                     when {
                         // Confirmed (or nothing to lock): the notice goes.
                         state(n) == State.NONE -> {
@@ -134,10 +141,15 @@ class PendingLockNotifier(
         private const val PREFS = "pending_lock_notice"
         private const val KEY_POSTED = "posted"
 
-        /** Which notice [n] is, for posting it once: a lock in doubt by when it was asked; "opened again"; else none. */
-        fun keyOf(n: LockNotice): String? = when (n) {
+        private const val KEY_LAST_ASKED = "last_asked"
+
+        /**
+         * Which notice [n] is, for posting it once: a lock in doubt by when it was asked; "opened again" by the lock it
+         * ended ([lastAsked], when it was asked); else none.
+         */
+        fun keyOf(n: LockNotice, lastAsked: Long?): String? = when (n) {
             is LockNotice.Unconfirmed -> "u:${n.askedAt.toEpochMilli()}".takeIf { n.inDoubt }
-            LockNotice.OpenedAgain -> "o"
+            LockNotice.OpenedAgain -> "o:${lastAsked ?: ""}"
             else -> null
         }
 

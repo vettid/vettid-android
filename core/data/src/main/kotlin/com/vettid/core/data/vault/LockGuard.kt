@@ -12,6 +12,12 @@ enum class LockTimeUse {
 
     /** A `call.end`: the hang-up of a call the lock ends, so that the other member is not left listening. */
     CALL_END,
+
+    /**
+     * (Release L, owner decision 2026-10-24) One `vault.status`, read for "Lock it now" to bind the fresh lock to the
+     * opening running now. A read; only its `unlock_id` is used.
+     */
+    LOCK_STATUS,
 }
 
 /** The three ways the app reaches the vault for a lock. None of them throws for a vault that cannot be reached. */
@@ -72,7 +78,8 @@ sealed interface MemberLock {
  *    `locked` and `not_running`; and the vault's `stale_lock` or the slot's `stale` end the lock without confirming
  *    it (the vault was opened again since), unless a status read then says it is locked after all.
  * 2. **While a lock is pending this phone is locked whatever the status says** ([lockedWhatever]).
- * 3. **While a lock is pending nothing is sent to the vault** but the lock and a pending `call.end` ([admits]).
+ * 3. **While a lock is pending nothing is sent to the vault** but the lock, a pending `call.end` and (release L, "Lock
+ *    it now") the one `vault.status` that names the opening the fresh lock is bound to ([admits]).
  * 4. **While a lock is pending nothing the vault sends is taken into the app's lists** ([takesEvents]).
  */
 class LockGuard(

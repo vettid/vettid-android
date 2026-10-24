@@ -121,6 +121,7 @@ class LockGuardTest {
         assertFalse("an operation on the open vault", g.admits())
         assertTrue(g.admits(LockTimeUse.LOCK))
         assertTrue(g.admits(LockTimeUse.CALL_END))
+        assertTrue("(release L) the status read of \"Lock it now\"", g.admits(LockTimeUse.LOCK_STATUS))
         g.keeper.confirmed()
         assertTrue(g.admits())
     }

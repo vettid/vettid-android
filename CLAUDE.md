@@ -229,7 +229,8 @@ vettid.org repo's `local/android-ui/`).
   Security while it is in doubt and VettID is not in front), `VaultRepository.lockNotice` on the unlock screen (`unlock.lock_locking` while nothing has failed,
   `unlock.lock_unconfirmed` from the first failed try, `unlock.lock_confirmed`). The four rules of a pending lock
   live in `LockGuard` and are tested there: what confirms; locked whatever the status says; nothing sent to the
-  vault but the lock and a pending `call.end`; nothing it sends taken in. In `VaultManager` the vault client is a
+  vault but the lock, a pending `call.end` and (release L, "Lock it now") one `vault.status`
+  (`LockTimeUse.LOCK_STATUS`); nothing it sends taken in. In `VaultManager` the vault client is a
   private member of `Session`, reachable only as `openApi` (refuses with `lock_pending`) and
   `lockTimeApi(LockTimeUse)`: do not add a third way, and send nothing through `device` directly (`VaultClientAccessTest`). A vault has **no time after which
   it locks by itself**: never promise one. Every unlock goes through `LockKeeper.unlocking` (no lock attempt beside
