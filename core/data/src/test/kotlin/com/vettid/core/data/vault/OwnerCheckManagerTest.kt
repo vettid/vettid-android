@@ -634,4 +634,40 @@ class OwnerCheckManagerTest {
         assertTrue(runCatching { again.setIdleLockAfter(3_599) }.isFailure)
         assertEquals(listOf(3_600L, 86_400L, 604_800L, 1_209_600L, 2_592_000L), IdleLockSetting.CHOICES_S)
     }
+
+    /** Second review of #191, G1: once a check puts a longer value in force, the idle notice says that value. */
+    @Test
+    fun aCheckPuttingALongerValueInForceChangesTheTimeSaid() = runTest {
+        val ops = Ops().apply { settings = mapOf(OwnerCheckManager.KEY_IDLE to JsonPrimitive(604_800)) }
+        val m = manager(ops)
+        readBeforeTheDeadline(ops, m)
+        m.refreshIdleLockSetting()
+        m.setIdleLockAfter(2_592_000)
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw"))
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertEquals(IdleLocked(2_592_000), m.idleLocked.value)
+        // On a scaled vault (staging, 24): as it runs there.
+        ops.timeScale = 24
+        ops.status = OwnerCheckStatus("held", deadline, 86_400, hold = true)
+        m.refreshOwnerCheck()
+        m.setIdleLockAfter(1_209_600)
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw"))
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertEquals(IdleLocked(50_400), m.idleLocked.value)
+    }
+
+    /** Keep the lowest since the last check, not the lowest of the values set: 7 d, then 30 d, then 14 d keeps 7 d. */
+    @Test
+    fun theLowestSinceTheLastCheckIsTheValueInForceNotTheLastSet() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T11:00:00Z", 86_400)
+            settings = mapOf(OwnerCheckManager.KEY_IDLE to JsonPrimitive(604_800))
+        }
+        val m = manager(ops)
+        m.refreshIdleLockSetting()
+        m.setIdleLockAfter(2_592_000)
+        m.setIdleLockAfter(1_209_600)
+        assertEquals(IdleLockSetting(1_209_600, 604_800), m.idleLockSetting.value)
+        assertTrue(m.idleLockSetting.value!!.afterNextCheck)
+    }
 }

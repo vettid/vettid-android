@@ -97,6 +97,9 @@ class OwnerCheckManager(
      */
     private var idleAfterKnown: Long? = saved?.idleAfterKnown
 
+    /** The time scale of the last `vault.status` read (1 without one): an idle-lock value as it runs. */
+    private var lastTimeScale: Long = 1
+
     /** (Release L) The member locked the vault on this phone since it last opened. */
     private var lockedHere: Boolean = saved?.lockedHere == true
     private val idleSettingFlow = MutableStateFlow<IdleLockSetting?>(null)
@@ -235,6 +238,7 @@ class OwnerCheckManager(
         val since = mark()
         val (st0, recovery, timeScale) = vaultGuard(resend = true) { ops().statusRead() }
         runCatching { onTimeScale(timeScale, since) }
+        lastTimeScale = timeScale?.takeIf { it >= 1 } ?: 1
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
         val st = st0 ?: return view.value
@@ -372,6 +376,9 @@ class OwnerCheckManager(
 
     /** A check passed: the value set is the one in force from now on. */
     private fun checkPassedForIdleLock() {
+        // The value set is in force from now on (a longer one set before the check included): the time said at an idle
+        // lock is that value as it runs on this vault (second review of #191, G1).
+        idleSettingFlow.value?.let { idleAfterKnown = TimeScales.divide(it.seconds, lastTimeScale) }
         idleInForce = null
         idleSettingFlow.value?.let { idleSettingFlow.value = IdleLockSetting(it.seconds) }
     }

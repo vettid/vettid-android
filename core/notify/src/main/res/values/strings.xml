@@ -29,10 +29,10 @@
     <!-- The vault's state. -->
     <string name="notify_locked_title">Your vault is locked</string>
     <string name="notify_locked_body">You won’t be notified until you unlock it</string>
-    <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock, on Security. As ANDROID-PLAN §4 "Locking the vault" part 2 (drafts, VAULT-LOCK L16); %1$s the time past the deadline ("7 days"). -->
+    <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock, on Security. As ANDROID-PLAN §4 "Locking the vault" part 2 (approved by the owner 2026-10-24); %1$s the time past the deadline ("7 days"). -->
     <string name="notify_idle_locked_title">Your vault locked itself</string>
     <string name="notify_idle_locked_body">You hadn’t checked in for %1$s, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.</string>
-    <!-- Release L: the time not known. Draft, for the owner's approval. -->
+    <!-- Release L: the time not known. Approved by the owner 2026-10-24. -->
     <string name="notify_idle_locked_body_unknown">You hadn’t checked in, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.</string>
     <plurals name="notify_duration_days">
         <item quantity="one">%1$d day</item>

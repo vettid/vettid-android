@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -234,7 +235,13 @@ fun UnlockContent(
                     stringResource(R.string.unlock_idle_locked_title),
                     // The staging note where a scaled wait is shown (ANDROID-PLAN 0.1.44).
                     if (after != null) {
-                        stringResource(R.string.unlock_idle_locked_body, durationText(after))
+                        // One day is "1 day", as the setting names it (approved by the owner 2026-10-24).
+                        val words = if (after == SECONDS_PER_DAY) {
+                            pluralStringResource(com.vettid.core.ui.R.plurals.core_ui_duration_days, 1, 1)
+                        } else {
+                            durationText(after)
+                        }
+                        stringResource(R.string.unlock_idle_locked_body, words)
                     } else {
                         stringResource(R.string.unlock_idle_locked_body_unknown)
                     } + stagingNoteSuffix(),
@@ -646,3 +653,6 @@ internal fun PreflightNotices(
         }
     }
 }
+
+/** A day in seconds: the idle lock's "1 day". */
+private const val SECONDS_PER_DAY = 86_400L

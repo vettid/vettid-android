@@ -226,13 +226,14 @@ class FeedNotifier(
         const val TAG_ALARM = "credential.alarm"
 
         /**
-         * [seconds] in words, as the screens say a duration (`Durations` in :core:ui): two or more whole days in days,
+         * [seconds] in words, as the screens say a duration (`Durations` in :core:ui), but one whole day is "1 day": whole days in days,
          * whole hours in hours, from 10 minutes in minutes rounded up, under that in seconds.
          */
         fun durationText(seconds: Long, r: Resources): String {
             val s = seconds.coerceAtLeast(0)
             val (res, n) = when {
-                s >= 2 * DAY && s % DAY == 0L -> R.plurals.notify_duration_days to s / DAY
+                // One day is "1 day", as the idle lock's setting names it (approved by the owner 2026-10-24).
+                s >= DAY && s % DAY == 0L -> R.plurals.notify_duration_days to s / DAY
                 s >= HOUR && s % HOUR == 0L -> R.plurals.notify_duration_hours to s / HOUR
                 s >= SECONDS_UP_TO -> R.plurals.notify_duration_minutes to (s + MINUTE - 1) / MINUTE
                 else -> R.plurals.notify_duration_seconds to s

@@ -290,7 +290,7 @@ class FeedNotifierTest {
     @Test
     fun durationsAreSaidAsOnTheScreens() {
         assertEquals("1 hour", FeedNotifier.durationText(3_600, res))
-        assertEquals("24 hours", FeedNotifier.durationText(86_400, res))
+        assertEquals("as the setting names it", "1 day", FeedNotifier.durationText(86_400, res))
         assertEquals("30 days", FeedNotifier.durationText(2_592_000, res))
         assertEquals("150 seconds", FeedNotifier.durationText(150, res))
         assertEquals("15 minutes", FeedNotifier.durationText(900, res))

@@ -3,7 +3,7 @@
 <resources>
     <string name="history_kind_vault_unlocked">Vault unlocked</string>
     <string name="history_kind_vault_locked">Vault locked</string>
-    <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): vault.locked with ref idle. As ANDROID-PLAN §4 "Locking the vault" part 2 (draft, VAULT-LOCK L16). -->
+    <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): vault.locked with ref idle. As ANDROID-PLAN §4 "Locking the vault" part 2 (approved by the owner 2026-10-24). -->
     <string name="history_kind_vault_locked_idle">Vault locked itself (not checked in)</string>
     <string name="history_kind_vault_pin_failed">Wrong PIN entered</string>
     <string name="history_kind_owner_check_passed">Daily check passed</string>

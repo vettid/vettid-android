@@ -15,7 +15,7 @@
     <string name="settings_owner_check_hold_off_until">Off until %1$s</string>
     <string name="settings_owner_check_offer_title">Check now?</string>
     <string name="settings_owner_check_offer_body">A shorter interval can put your vault on hold at once. A check now starts the new interval from now.</string>
-    <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock's setting. Label, note and body as ANDROID-PLAN §4 "Locking the vault" part 2 (drafts, VAULT-LOCK L16). -->
+    <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock's setting. Label, note and body as ANDROID-PLAN §4 "Locking the vault" part 2 (approved by the owner 2026-10-24). -->
     <string name="settings_idle_lock">Lock my vault by itself after</string>
     <string name="settings_idle_lock_next_check">This takes effect after your next check.</string>
     <string name="settings_idle_lock_body">If you don\'t pass the daily check for this long, your vault locks itself and stops receiving until you unlock it.</string>
