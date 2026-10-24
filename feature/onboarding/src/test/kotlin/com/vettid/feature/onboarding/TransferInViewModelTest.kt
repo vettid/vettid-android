@@ -85,6 +85,10 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
     }
 
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) The repository's wait ends at the one deadline (after its
+     * collect) and drops the handshake: the screen says so and offers a new code; nothing here extends the wait.
+     */
     @Test
     fun timesOutAfterTheWindow() = runTest {
         val vm = TransferInViewModel(vault, vault)
@@ -92,9 +96,59 @@ class TransferInViewModelTest {
         vm.setInput(qr())
         vm.submitInput()
         advanceTimeBy(100)
-        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.NO_RESPONSE))
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED))
         advanceTimeBy(1500)
         assertEquals(TransferInStep.TIMED_OUT, vm.uiState.value.step)
+        assertNull("the dropped code is not shown", vm.uiState.value.sas)
+        assertEquals("one wait, never a second", 1, vault.calls.count { it == "awaitTransferIn" })
+        assertFalse("no cancel to confirm: it was dropped", vm.back())
+        vm.again()
+        assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+    }
+
+    /** (A6 audit N1) The take-over after the approval failed: "Finishing the move" and Try again, never the code again. */
+    @Test
+    fun aFailedTakeOverIsTriedAgain() = runTest {
+        val vm = TransferInViewModel(vault, vault)
+        vm.scan()
+        vm.scanned(qr())
+        advanceTimeBy(100)
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.NETWORK))
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.FINISHING_FAILED, vm.uiState.value.step)
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
+        vault.transferApproval = CompletableDeferred(Unit)
+        vm.retryFinish()
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
+        assertFalse("abandonTransferIn" in vault.calls)
+    }
+
+    /**
+     * (A6 audit N1) A restart (the process killed, or the screen left) while the transfer waits for the old phone: the
+     * screen shows the same code and waits again, without a new hs.init; the approval completes the move.
+     */
+    @Test
+    fun aRestartWhileWaitingShowsTheCodeAndWaitsAgain() = runTest {
+        val start = Instant.now()
+        vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(120))
+        val vm = TransferInViewModel(vault, vault)
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        advanceTimeBy(100)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+        assertTrue("the window runs from the hs.init", vm.uiState.value.secondsLeft in 470..480)
+        assertFalse("no new hs.init", "transferIn" in vault.calls)
+        assertTrue("awaitTransferIn" in vault.calls)
+        vault.transferApproval.complete(Unit)
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
     }
 
     @Test
@@ -111,6 +165,7 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
     }
 
+    /** (A6 audit N1) Once the code is shown, Back asks first: the old phone may already have approved the move. */
     @Test
     fun cancellingDropsTheHandshake() = runTest {
         val vm = TransferInViewModel(vault, vault)
@@ -118,6 +173,13 @@ class TransferInViewModelTest {
         vm.scanned(qr())
         advanceTimeBy(100)
         assertTrue(vm.back())
+        advanceTimeBy(100)
+        assertTrue(vm.uiState.value.confirmCancel)
+        assertFalse("not without the confirmation", "abandonTransferIn" in vault.calls)
+        vm.dismissCancel()
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertTrue(vm.back())
+        vm.confirmCancel()
         advanceTimeBy(100)
         assertTrue("abandonTransferIn" in vault.calls)
         assertEquals(TransferInStep.INTRO, vm.uiState.value.step)

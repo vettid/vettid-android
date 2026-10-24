@@ -150,8 +150,21 @@ interface VaultRepository {
     /** The member has read that the vault confirmed a lock that was in doubt. */
     fun dismissLockNotice() = Unit
 
-    /** Enrolls a vault with [pin] (§11.3) and runs the first handshake. */
+    /**
+     * Enrolls a vault with [pin] (§11.3) and runs the first handshake. (A6 audit N3) An enrollment this phone posted
+     * before is resumed first, never posted over: [pin] is used only when nothing outstanding can still make a vault.
+     */
     suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit)
+
+    /**
+     * (A6 audit N3, [SetupStage.ENROLLING]) Resumes the outstanding enrollment without a PIN: true once the vault is
+     * pinned and the first handshake done (the credential steps follow); false when it made no vault, and a new one needs
+     * the member's PIN ([SetupStage.NEW_VAULT]).
+     */
+    suspend fun resumeEnroll(onStep: (EnrollStep) -> Unit): Boolean = false
+
+    /** (N3) An enrollment this phone posted is outstanding: a retry resumes it, with the PIN chosen then. */
+    val enrollPending: Boolean get() = false
 
     /**
      * A start-over requested on the account portal (VAULT-MESSAGING 0.16.0 §11.11.9, `deletion` in `GET
@@ -386,6 +399,15 @@ interface VaultRepository {
     suspend fun recovery(): RecoveryView?
 
     suspend fun attestationInfo(): AttestationInfo
+
+    companion object {
+        /**
+         * (A6 audit N3, review F1) [enroll] found a request outstanding that this process did not post with that PIN (a
+         * new screen after Back, a restart): nothing was posted or accepted with the PIN, and the phase is
+         * [SetupStage.ENROLLING], where the request is resumed without one ([resumeEnroll]).
+         */
+        const val CODE_ENROLL_PENDING = "enroll_pending"
+    }
 }
 
 /** The Protean Credential (§3.5): status, unlock window, password, rotation, backup, clone alarms. */
@@ -486,13 +508,23 @@ interface MoveRepository {
     /**
      * Waits for the old phone's approval, then takes the credential over (`credential.get`,
      * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
-     * [FailureKind.NO_RESPONSE] after 10 minutes. True when the vault gave this phone the member's
+     * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after one collect (A6 audit
+     * N1, VAULT-MESSAGING 0.56.2 §11.14.10 rule 5). True when the vault gave this phone the member's
      * `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), which its unlocks need; false from a vault release
      * before 0.17.0: the transfer is complete, but this phone cannot unlock the vault once it locks.
      */
     suspend fun awaitTransferIn(): Boolean
 
-    /** Drops a transfer this phone started and has not completed. */
+    /**
+     * (A6 audit N1) The transfer to this phone that waits for the old phone's approval (after a restart, or after the
+     * screen was left), or null. Its wait goes on from when its `hs.init` went out.
+     */
+    suspend fun transferInWaiting(): TransferInWaiting? = null
+
+    /**
+     * Drops a transfer this phone started and has not completed. (A6 audit N1) Only on the member's confirmed cancel:
+     * if the old phone already approved it, this phone loses the vault it was receiving.
+     */
     suspend fun abandonTransferIn()
 
     // --- direct transfer, the old phone (§6.7.1) ---
@@ -563,5 +595,11 @@ interface MoveRepository {
 
         /** [transferIn]'s [FailureKind.NO_RESPONSE] code when no `hs.resp` came within [HS_RESP_WAIT_MS]. */
         const val CODE_HS_UNANSWERED = "hs_unanswered"
+
+        /**
+         * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) [awaitTransferIn] reached the 11-minute deadline, and the
+         * one collect after it brought no `device.paired`: the handshake was dropped; a new code is needed.
+         */
+        const val CODE_TRANSFER_DROPPED = "transfer_dropped"
     }
 }
