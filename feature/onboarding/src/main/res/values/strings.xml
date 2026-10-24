@@ -362,10 +362,18 @@
     <string name="vault_deleting_title">Your vault is being deleted</string>
     <string name="vault_deleting_body">VettID is erasing everything in your vault. This usually takes a few minutes. Nothing in it can be opened or restored. You will get an email when it is done.</string>
     <string name="vault_deleting_slow_title">Still finishing</string>
-    <string name="vault_deleting_slow_body">Your vault can no longer be opened, but VettID has not finished deleting it yet. Check back later.</string>
+    <string name="vault_deleting_slow_body">Your vault can no longer be opened, but this phone cannot confirm that VettID has finished deleting it. When you get the email that your vault was deleted, or the account site offers to set up a new vault, remove VettID from this phone.</string>
     <string name="vault_deleting_check_again">Check again</string>
-    <string name="vault_deleting_still">Not finished yet. Try again later.</string>
+    <string name="vault_deleting_still">VettID has not finished yet. Tap Check again later, or check the account site.</string>
     <string name="vault_deleting_unreachable">VettID couldn\'t be reached. Check your connection and try again.</string>
+    <!-- DRAFT texts for the owner's approval (a deletion this phone cannot confirm; member-confirmed removal). -->
+    <string name="vault_deleting_unconfirmed">This phone can\'t confirm the deletion.</string>
+    <string name="vault_deleting_cannot_confirm">VettID answered, but this phone cannot confirm that the deletion is finished. When you get the email that your vault was deleted, or the account site offers to set up a new vault, remove VettID from this phone.</string>
+    <string name="vault_deleting_clock_hint">Also check that the date and time on this phone are right.</string>
+    <string name="vault_deleting_remove">Remove from this phone</string>
+    <string name="vault_deleting_remove_confirm_title">Remove VettID from this phone?</string>
+    <string name="vault_deleting_remove_confirm_body">Your vault can never be opened again, and nothing on this phone is needed to finish deleting it. This removes VettID\'s data on this phone only: its keys, your account details and the app\'s settings. It works without a connection and cannot be undone.</string>
+    <string name="vault_deleting_remove_confirm">Remove</string>
     <string name="vault_deleting_account_site">Open the account site</string>
     <!-- Release R (ANDROID-PLAN 0.1.40, VAULT-MESSAGING 0.33.0 §11.14.6): draft texts for the owner's wording. -->
     <string name="recover_not_offered">This vault\'s release does not offer recovery.</string>

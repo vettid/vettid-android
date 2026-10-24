@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.DeletionCheck
+import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.PrimaryButton
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -50,12 +51,24 @@ data class VaultDeletingUiState(
     val checking: Boolean = false,
     /** What the last "Check again" found, when the vault was not gone: still listed, or not reachable. */
     val lastCheck: DeletionCheck? = null,
+    /** The member asked to remove VettID from this phone and is asked to confirm (offered only past the bound). */
+    val removeConfirm: Boolean = false,
+    /** The confirmed removal runs. */
+    val removing: Boolean = false,
 )
 
 /** What the screen can ask for. */
 interface VaultDeletingActions {
     /** "Check again": one read of the status; a second tap waits for the first. */
     fun checkAgain()
+
+    /** "Remove from this phone", past the bound: asks for the confirmation. */
+    fun askRemove()
+
+    fun dismissRemove()
+
+    /** The confirmed removal: the existing local erase (`eraseThisPhone`). */
+    fun confirmRemove()
 }
 
 /**
@@ -79,6 +92,26 @@ class VaultDeletingViewModel @Inject constructor(private val account: AccountRep
             state.update { it.copy(checking = false, lastCheck = r.takeIf { c -> c != DeletionCheck.GONE }) }
         }
     }
+
+    // Nothing here erases by itself: a vault is left only by a definite signal (none yet) or by this confirmed removal.
+    // The vault's own `vault_deleted` word says it will never run again, so a removal the member confirms is safe.
+    override fun askRemove() {
+        if (state.value.slow) state.update { it.copy(removeConfirm = true) }
+    }
+
+    override fun dismissRemove() = state.update { it.copy(removeConfirm = false) }
+
+    override fun confirmRemove() {
+        if (state.value.removing || !state.value.slow) return
+        state.update { it.copy(removeConfirm = false, removing = true) }
+        viewModelScope.launch {
+            try {
+                account.eraseThisPhone()
+            } finally {
+                state.update { it.copy(removing = false) }
+            }
+        }
+    }
 }
 
 @Composable
@@ -91,6 +124,7 @@ fun VaultDeletingRoute(slow: Boolean, onOpenAccountSite: () -> Unit, viewModel: 
 /** The screen for [state] (stateless). The progress has no percentage; the title is a polite live region. */
 @Composable
 fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActions, onOpenAccountSite: () -> Unit) {
+    RemoveConfirm(state, actions)
     Surface(Modifier.fillMaxSize().testTag("vault_deleting"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize()) {
             Column(
@@ -115,15 +149,29 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (state.slow && state.lastCheck == null) {
+                    Text(
+                        stringResource(R.string.vault_deleting_unconfirmed),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag("vault_deleting_unconfirmed"),
+                    )
+                }
                 if (!state.slow || state.checking) LinearProgressIndicator(Modifier.fillMaxWidth())
                 state.lastCheck?.let { c ->
                     Text(
                         stringResource(
-                            if (c == DeletionCheck.LISTED) R.string.vault_deleting_still else R.string.vault_deleting_unreachable,
+                            when (c) {
+                                DeletionCheck.LISTED -> R.string.vault_deleting_still
+                                DeletionCheck.UNCONFIRMED, DeletionCheck.UNCONFIRMED_CLOCK -> R.string.vault_deleting_cannot_confirm
+                                else -> R.string.vault_deleting_unreachable
+                            },
                         ),
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("vault_deleting_check").semantics { liveRegion = LiveRegionMode.Polite },
                     )
+                    if (c == DeletionCheck.UNCONFIRMED_CLOCK) {
+                        Text(stringResource(R.string.vault_deleting_clock_hint), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
             Column(
@@ -141,10 +189,33 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                         busy = state.checking,
                     )
                 }
+                if (state.slow) {
+                    TextButton(
+                        onClick = actions::askRemove,
+                        enabled = !state.removing,
+                        modifier = Modifier.fillMaxWidth().testTag("vault_deleting_remove"),
+                    ) {
+                        Text(stringResource(R.string.vault_deleting_remove))
+                    }
+                }
                 TextButton(onClick = onOpenAccountSite, modifier = Modifier.fillMaxWidth().testTag("vault_deleting_account_site")) {
                     Text(stringResource(R.string.vault_deleting_account_site))
                 }
             }
         }
     }
+}
+
+@Composable
+private fun RemoveConfirm(state: VaultDeletingUiState, actions: VaultDeletingActions) {
+    if (!state.removeConfirm) return
+    ConfirmDialog(
+        title = stringResource(R.string.vault_deleting_remove_confirm_title),
+        text = stringResource(R.string.vault_deleting_remove_confirm_body),
+        confirmLabel = stringResource(R.string.vault_deleting_remove_confirm),
+        onConfirm = actions::confirmRemove,
+        onDismiss = actions::dismissRemove,
+        modifier = Modifier.testTag("vault_deleting_remove_confirm"),
+        destructive = true,
+    )
 }
