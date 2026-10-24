@@ -28,6 +28,7 @@ import com.vettid.core.altchan.PendingEnroll
  * Every step is stored before the next one, so a process kill at any step resumes from the step it reached.
  */
 internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Long = System::currentTimeMillis) {
+    @Suppress("TooManyFunctions") // one per step of the resume
     interface Ops {
         /** `vault.enrolled` has been applied: the vault is pinned on this phone. */
         fun vaultPinned(): Boolean
@@ -52,6 +53,12 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
          * PIN resume it. Any other PIN may not be the one the vault holds.
          */
         fun postedHere(requestId: String, pin: String): Boolean
+
+        /**
+         * (Review m1) What [postedHere] keeps of the PIN is no longer needed (the vault is pinned, or the request is
+         * dropped): it goes, zeroed.
+         */
+        fun forgetPin()
 
         /** A mark of now, for [relayReadSince]. */
         fun relayMark(): Long
@@ -93,8 +100,10 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
      * Resumes the outstanding request, or posts a new one with [pin] when nothing can still make a vault. Throws
      * [Refused], [Waiting], or the transport's failure (the request then stays outstanding).
      */
+    suspend fun run(pin: String?): Result = runOutstanding(pin).also { if (it == Result.Pinned) ops.forgetPin() }
+
     @Suppress("ReturnCount") // one return per state of the outstanding request
-    suspend fun run(pin: String?): Result {
+    private suspend fun runOutstanding(pin: String?): Result {
         if (ops.vaultPinned()) return Result.Pinned
         val q = ops.pending()
         if (pin != null && q != null && !ops.postedHere(q.requestId, pin)) throw NotThisPin()
@@ -152,11 +161,13 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
 
     private suspend fun refused(code: String?): Nothing {
         ops.drop()
+        ops.forgetPin()
         throw Refused(code)
     }
 
     private suspend fun dropped(): PendingEnroll? {
         ops.drop()
+        ops.forgetPin()
         return null
     }
 

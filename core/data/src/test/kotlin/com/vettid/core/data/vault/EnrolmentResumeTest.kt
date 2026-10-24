@@ -78,6 +78,9 @@ class EnrolmentResumeTest {
         }
 
         override fun postedHere(requestId: String, pin: String) = w.postedHere == (requestId to pin)
+        override fun forgetPin() {
+            w.postedHere = null
+        }
         override fun relayMark(): Long = 0
         override fun relayReadSince(mark: Long) = w.relayUp
 
@@ -300,5 +303,38 @@ class EnrolmentResumeTest {
         val e = assertThrows(EnrolmentResume.Refused::class.java) { run(w, null) }
         assertEquals("attestation", e.code)
         assertNull(w.pending)
+    }
+
+    /** (Review m1) What is kept of the PIN goes once the vault is pinned. */
+    @Test
+    fun thePinsDigestGoesOnceTheVaultIsPinned() {
+        val w = World()
+        assertEquals(EnrolmentResume.Result.Pinned, run(w, "246802"))
+        assertNull(w.postedHere)
+        // Also after a lost answer, at the resume that pins it.
+        val v = World()
+        v.enclave = "lost"
+        assertThrows(IOException::class.java) { run(v, "246802") }
+        assertEquals("r1" to "246802", v.postedHere)
+        v.enclave = "ok"
+        assertEquals(EnrolmentResume.Result.Pinned, run(v, "246802"))
+        assertNull(v.postedHere)
+    }
+
+    /** (Review m1) ...and when the request is dropped: refused, or never processed. */
+    @Test
+    fun thePinsDigestGoesWhenTheRequestIsDropped() {
+        val w = World()
+        w.vaultPin = "111111" // another phone's vault: refused
+        assertThrows(EnrolmentResume.Refused::class.java) { run(w, "246802") }
+        assertNull(w.pending)
+        assertNull(w.postedHere)
+        val u = World()
+        u.pending = PendingEnroll("r0", u.now, answered = false)
+        u.postedHere = "r0" to "246802"
+        u.slots["r0"] = EnrollAnswer.NotProcessed
+        u.enclave = "attestation" // the new post is refused too: dropped again
+        assertThrows(EnrolmentResume.Refused::class.java) { run(u, "246802") }
+        assertNull(u.postedHere)
     }
 }

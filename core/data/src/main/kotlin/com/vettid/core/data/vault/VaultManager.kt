@@ -1208,6 +1208,7 @@ class VaultManager(
         if (forget) finishMoveRunner.clearFailure() // a deleted or forgotten vault: nothing of a move is left to say
         observer?.cancel()
         observer = null
+        forgetPostedPin() // (review m1) nothing of a PIN outlives the session
         // Every step of a forget runs even if one throws (fail secure), the device's own forget and the other devices'
         // too (#179 review F1); the first failure is rethrown after the last.
         val steps = ClearSteps()
@@ -1601,6 +1602,12 @@ class VaultManager(
     @Volatile
     private var postedEnrol: Pair<String, ByteArray>? = null
 
+    /** (Review m1) The posted PIN's digest goes, zeroed: the vault is pinned, the request dropped, or the session gone. */
+    private fun forgetPostedPin() {
+        postedEnrol?.second?.fill(0)
+        postedEnrol = null
+    }
+
     private fun pinDigest(pin: String): ByteArray = java.security.MessageDigest.getInstance("SHA-256").digest(pin.toByteArray())
     private val enrolmentLock = Mutex()
 
@@ -1638,7 +1645,15 @@ class VaultManager(
             override suspend fun markAnswered() = d.markEnrollAnswered()
             override suspend fun drop() = d.dropPendingEnroll()
             override fun postedHere(requestId: String, pin: String): Boolean =
-                postedEnrol?.let { (id, h) -> id == requestId && java.security.MessageDigest.isEqual(h, pinDigest(pin)) } == true
+                postedEnrol?.let { (id, h) ->
+                    val typed = pinDigest(pin)
+                    try {
+                        id == requestId && java.security.MessageDigest.isEqual(h, typed)
+                    } finally {
+                        typed.fill(0)
+                    }
+                } == true
+            override fun forgetPin() = forgetPostedPin()
             override fun relayMark(): Long = System.nanoTime()
             override fun relayReadSince(mark: Long): Boolean = d.relayReadSince(mark)
             @Suppress("SwallowedException") // no vault.enrolled in time is an answer: false
@@ -1664,6 +1679,7 @@ class VaultManager(
                     }
                 } finally {
                     // (Review F1) The request stored for this post, with its PIN's digest, in memory only.
+                    forgetPostedPin()
                     postedEnrol = d.pendingEnroll?.let { it.requestId to pinDigest(pin) }
                 }
                 if (out.ok && out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) {
