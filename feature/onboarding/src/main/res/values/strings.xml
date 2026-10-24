@@ -367,7 +367,7 @@
     <string name="vault_deleting_still">VettID has not finished yet. Tap Check again later, or check the account site.</string>
     <string name="vault_deleting_unreachable">VettID couldn\'t be reached. Check your connection and try again.</string>
     <!-- DRAFT texts for the owner's approval (a deletion this phone cannot confirm; member-confirmed removal). -->
-    <string name="vault_deleting_unconfirmed">This phone can\'t confirm it yet.</string>
+    <string name="vault_deleting_unconfirmed">This phone can\'t confirm the deletion.</string>
     <string name="vault_deleting_cannot_confirm">VettID answered, but this phone cannot confirm that the deletion is finished. When you get the email that your vault was deleted, or the account site offers to set up a new vault, remove VettID from this phone.</string>
     <string name="vault_deleting_clock_hint">Also check that the date and time on this phone are right.</string>
     <string name="vault_deleting_remove">Remove from this phone</string>
