@@ -282,7 +282,7 @@
     <string name="settings_recovery_status_off">Recovery: off (credential backup is off).</string>
     <string name="settings_recovery_status_unknown">Recovery: cannot be checked right now.</string>
     <string name="settings_recovery_not_offered">This vault\'s release does not offer recovery.</string>
-    <string name="settings_transfer_moved_kept_body">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, for at most %1$s. Before you give this phone away, remove VettID from it or reset it.</string>
+    <string name="settings_transfer_moved_kept_body">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, and until your vault has confirmed it. Once your new phone works, you can remove VettID from this phone. Before you give this phone away, remove VettID from it or reset it.</string>
     <string name="settings_recovery_status_change_required">Recovery is off until you choose a new password that meets the rules.</string>
     <!-- Release R (ANDROID-PLAN "Other screens"): Settings → Security → New phone secret -->
     <string name="settings_security_new_secret">New phone secret</string>
