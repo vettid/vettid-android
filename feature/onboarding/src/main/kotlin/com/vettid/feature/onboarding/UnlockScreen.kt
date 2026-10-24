@@ -216,6 +216,20 @@ fun UnlockContent(
                     stringResource(R.string.unlock_owner_check_locked_body),
                     modifier = Modifier.testTag("unlock_owner_check_locked"),
                 )
+            } else if (state.idleLocked != null) {
+                // (Release L, §3.6.8; ANDROID-PLAN §4 "Locking the vault" part 2) It locked itself: why, then the unlock
+                // and the check on this screen.
+                val after = state.idleLocked.afterSeconds
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.unlock_idle_locked_title),
+                    if (after != null) {
+                        stringResource(R.string.unlock_idle_locked_body, durationText(after))
+                    } else {
+                        stringResource(R.string.unlock_idle_locked_body_unknown)
+                    },
+                    modifier = Modifier.testTag("unlock_idle_locked"),
+                )
             } else if (state.checkDue) {
                 NoticeCard(
                     NoticeKind.INFO,

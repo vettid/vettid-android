@@ -44,6 +44,7 @@ import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.StagingTimeNote
+import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledDurationText
@@ -122,6 +123,14 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             if (state.timeScale.stagingNote) StagingTimeNote()
             if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
+            // (Release L, §3.6.8) The held and daily-check screens say when the vault locks itself.
+            idleLockAtOf(state.mode, v)?.let {
+                Text(
+                    stringResource(R.string.ownercheck_idle_lock_at, Times.full(it)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("owner_check_idle_lock_at"),
+                )
+            }
             if (state.mode == OwnerCheckMode.HOLD_OFF) {
                 NoticeCard(
                     NoticeKind.WARNING,
@@ -229,6 +238,12 @@ private fun PresenceAfterCheck(title: String, actions: OwnerCheckActions) {
  * known either.
  */
 data class WaitingCardModel(val counts: WaitingCounts?, val held: Boolean?)
+
+/**
+ * (Release L, VAULT-MESSAGING 0.29.0 §3.6.8) When the vault locks itself if no check is passed, as it last said: on the
+ * gated check (held, or due with the hold off) only; null for a vault before L.
+ */
+fun idleLockAtOf(mode: OwnerCheckMode, v: OwnerCheckView?): Instant? = v?.idleLockAt?.takeIf { mode == OwnerCheckMode.GATED }
 
 /**
  * The waiting card whenever the check gates the app ([OwnerCheckMode.GATED]), also while the phone's clock has passed

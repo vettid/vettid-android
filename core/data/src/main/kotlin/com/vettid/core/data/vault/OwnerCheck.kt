@@ -40,7 +40,24 @@ data class OwnerCheckView(
     val holdOffUntil: Instant?,
     /** The latest `vault.held` counts, while gated. */
     val waiting: WaitingCounts? = null,
+    /**
+     * (VAULT-MESSAGING 0.29.0 §3.6.8, release L) When the vault locks itself if no check is passed, as it last said
+     * (`vault.status`, `vault.held`); null from a vault before L, and until it said again after a check moved the
+     * deadline.
+     */
+    val idleLockAt: Instant? = null,
 ) {
+    /**
+     * How long past the deadline the vault locks itself, as it last said ([idleLockAt] − [deadline], on the vault's
+     * clock and in its time); null when either is not known.
+     */
+    val idleAfterSeconds: Long?
+        get() {
+            val at = idleLockAt ?: return null
+            val d = deadline ?: return null
+            return Duration.between(d, at).seconds.takeIf { it > 0 }
+        }
+
     /** Past the deadline: the app may send only the check (§3.6.3), whether or not the hold is on. */
     fun gated(now: Instant): Boolean = state != OwnerCheckState.OK || (deadline != null && !now.isBefore(deadline))
 
@@ -74,6 +91,33 @@ data class OwnerCheckView(
 
         /** (STAGING-TIME-SCALE, S2) The early warning on a vault of [timeScale]. */
         fun warningFor(timeScale: Long): Duration = Duration.ofSeconds(TimeScales.divide(WARNING.seconds, timeScale))
+    }
+}
+
+/**
+ * (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself because no check was passed in time
+ * (`vault.locking{reason: "idle"}`, or, without the notice, a locked vault past the [OwnerCheckView.idleLockAt] the app
+ * last read). [afterSeconds]: how long past the deadline that was, when known (for "You hadn't checked in for 7 days").
+ */
+data class IdleLocked(val afterSeconds: Long?)
+
+/**
+ * (Release L) `idle_lock.after_seconds` (§10.8), as the app knows it: [seconds] is what is set; [inForceSeconds] what the
+ * vault uses until the next successful check when a longer value was set since the last one (the vault keeps the lowest
+ * value since then; owner decision 2026-10-23), else [seconds].
+ */
+data class IdleLockSetting(val seconds: Long, val inForceSeconds: Long = seconds) {
+    /** A longer value than the one in force was set: it takes effect after the next check. */
+    val afterNextCheck: Boolean get() = seconds > inForceSeconds
+
+    companion object {
+        /** 1 hour to 30 days, default 7 days, no "never" (§3.6.8, VAULT-LOCK L11, L12). */
+        const val MIN_S = 3_600L
+        const val MAX_S = 2_592_000L
+        const val DEFAULT_S = 604_800L
+
+        /** The choices (ANDROID-PLAN §4 "Locking the vault" part 2): 1 hour, 1 day, 7 days, 14 days, 30 days. */
+        val CHOICES_S = listOf(3_600L, 86_400L, 604_800L, 1_209_600L, 2_592_000L)
     }
 }
 
@@ -112,6 +156,27 @@ interface OwnerCheckRepository {
 
     /** The vault locked after ten consecutive failed checks (`vault.locking{reason: "owner_check"}`, §3.6.4). */
     val lockedByOwnerCheck: StateFlow<Boolean>
+
+    /**
+     * (Release L, §3.6.8) The vault locked itself (`vault.locking{reason: "idle"}`); null otherwise. Kept on the phone
+     * until the next unlock. Without the notice, see [idleLockedNow].
+     */
+    val idleLocked: StateFlow<IdleLocked?> get() = NO_IDLE_LOCK
+
+    /**
+     * (Release L) The idle-lock setting; null for a vault that does not have it (before L) or before it was read
+     * ([refreshIdleLockSetting]).
+     */
+    val idleLockSetting: StateFlow<IdleLockSetting?> get() = NO_IDLE_SETTING
+
+    /** Reads `idle_lock.after_seconds` (`settings.get`); quiet for a vault before L, which does not list it. */
+    suspend fun refreshIdleLockSetting() {}
+
+    /**
+     * Sets `idle_lock.after_seconds` (one of [IdleLockSetting.CHOICES_S]): a shorter value applies at once, a longer one
+     * from the next successful check (§3.6.8).
+     */
+    suspend fun setIdleLockAfter(seconds: Long) {}
 
     /** The answer to the check sent right after an unlock past the deadline, for the check screen to show. */
     val unlockCheckOutcome: StateFlow<OwnerCheckOutcome?>
@@ -156,6 +221,17 @@ interface OwnerCheckRepository {
 }
 
 private val NOT_SET: StateFlow<Boolean> = kotlinx.coroutines.flow.MutableStateFlow(false)
+private val NO_IDLE_LOCK: StateFlow<IdleLocked?> = kotlinx.coroutines.flow.MutableStateFlow(null)
+private val NO_IDLE_SETTING: StateFlow<IdleLockSetting?> = kotlinx.coroutines.flow.MutableStateFlow(null)
+
+/**
+ * (Release L, §3.6.8) Why the locked vault is locked, if it locked itself: the notice ([OwnerCheckRepository.idleLocked]),
+ * or, lacking it (the phone was off), a time past the [OwnerCheckView.idleLockAt] the app last read ("the app says why
+ * from the notice or, lacking it, from `idle_lock_at` as it last read it"). Only for a vault that is locked.
+ */
+fun OwnerCheckRepository.idleLockedNow(now: Instant): IdleLocked? = idleLocked.value ?: ownerCheck.value?.let { v ->
+    v.idleLockAt?.takeIf { !now.isBefore(it) }?.let { IdleLocked(v.idleAfterSeconds) }
+}
 
 /** Turning the hold off (§3.6.7): [until] at most 30 days ahead, or null. */
 data class HoldOff(val until: Instant?)

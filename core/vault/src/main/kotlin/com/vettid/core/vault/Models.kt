@@ -46,6 +46,11 @@ data class OwnerCheckStatus(
     val hold: Boolean = true,
     @SerialName("hold_off_until") val holdOffUntil: String? = null,
     val waiting: HeldCounts? = null,
+    /**
+     * (VAULT-MESSAGING 0.29.0 §3.6.8, release L) When the vault will lock itself if no check is passed (RFC 3339), as
+     * it computes it now; absent from a release before L and for a vault without a credential.
+     */
+    @SerialName("idle_lock_at") val idleLockAt: String? = null,
 )
 
 /** `vault.owner_check`'s answer (§3.6.1), less the blob and UTKs the credential layer keeps. */
@@ -66,9 +71,16 @@ data class OwnerCheckPassed(
 @Serializable
 data class OwnerCheckRecovery(val state: String? = null, @SerialName("present_recorded") val presentRecorded: Boolean? = null)
 
-/** `vault.held` (§3.6.3): content-free counts of what waits since the deadline. */
+/**
+ * `vault.held` (§3.6.3): content-free counts of what waits since the deadline; (0.29.0, release L) [idleLockAt], when
+ * the vault will lock itself if no check is passed (§3.6.8).
+ */
 @Serializable
-data class HeldNotice(val deadline: String? = null, val waiting: HeldCounts = HeldCounts())
+data class HeldNotice(
+    val deadline: String? = null,
+    val waiting: HeldCounts = HeldCounts(),
+    @SerialName("idle_lock_at") val idleLockAt: String? = null,
+)
 
 /** `vault.held`'s `waiting`. */
 @Serializable

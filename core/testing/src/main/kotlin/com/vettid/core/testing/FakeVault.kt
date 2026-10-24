@@ -672,6 +672,21 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         ownerCheck.value = ownerCheck.value?.copy(intervalSeconds = seconds)
     }
 
+    /** (Release L) The idle lock: null for a vault before L. */
+    override val idleLocked = MutableStateFlow<com.vettid.core.data.vault.IdleLocked?>(null)
+    override val idleLockSetting = MutableStateFlow<com.vettid.core.data.vault.IdleLockSetting?>(null)
+
+    override suspend fun refreshIdleLockSetting() {
+        call("refreshIdleLockSetting")
+    }
+
+    /** As the vault: a shorter value at once, a longer one after the next check (the lowest since then in force). */
+    override suspend fun setIdleLockAfter(seconds: Long) {
+        call("setIdleLockAfter")
+        val before = idleLockSetting.value ?: return
+        idleLockSetting.value = com.vettid.core.data.vault.IdleLockSetting(seconds, minOf(before.inForceSeconds, seconds))
+    }
+
     override suspend fun turnHoldOn() {
         call("turnHoldOn")
         ownerCheck.value = ownerCheck.value?.copy(hold = true, holdOffUntil = null)

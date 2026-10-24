@@ -46,6 +46,14 @@ class AuditKindsTest {
         "credential.holder_cleared",
     )
 
+    /** Release L (VAULT-MESSAGING 0.29.0 §3.6.8): `vault.locked` with `ref` `idle` reads "Vault locked itself (not checked in)". */
+    @Test
+    fun anIdleLockHasItsOwnTitle() {
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_vault_locked_idle), AuditKinds.title("vault.locked", "idle"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_vault_locked), AuditKinds.title("vault.locked", "owner_check"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_vault_locked), AuditKinds.title("vault.locked"))
+    }
+
     /** ANDROID-PLAN 0.1.60: the one-time keys' resync is a Security entry with its own title. */
     @Test
     fun aUtkResyncIsUnderSecurity() {

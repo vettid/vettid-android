@@ -30,6 +30,7 @@ class VaultNotifySource(
         p == AppPhase.Unlocked && (v == null || v.state == OwnerCheckState.OK)
     }.stateIn(scope, SharingStarted.Eagerly, false)
     override val lockedElsewhere: StateFlow<Boolean> = vault.lockedElsewhere
+    override val idleLocked: StateFlow<com.vettid.core.data.vault.IdleLocked?> = vault.ownerCheck.idleLocked
     override val ownerCheck: StateFlow<OwnerCheckView?> = vault.ownerCheck.ownerCheck
     override val alarm: StateFlow<CredentialAlarm?> = vault.alarm
 

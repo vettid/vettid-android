@@ -2,6 +2,7 @@ package com.vettid.feature.settings
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.VerifiedUser
@@ -17,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.IdleLockSetting
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.TimeScaleSource
@@ -57,6 +59,10 @@ data class OwnerCheckSettingsUiState(
     val offerCheck: Boolean = false,
     /** (STAGING-TIME-SCALE) The vault's time scale: the interval also as it runs, and the staging note. */
     val timeScale: TimeScaleView = TimeScaleView(),
+    /** (Release L, §3.6.8) The idle lock's setting; null for a vault that does not have it (before L): no row. */
+    val idleLock: IdleLockSetting? = null,
+    /** A longer idle-lock value was just chosen: it takes effect after the next check (said once). */
+    val idleLongerNote: Boolean = false,
 )
 
 /** What the owner-check rows can ask for. */
@@ -67,6 +73,9 @@ data class OwnerCheckSettingsActions(
     val checkNow: () -> Unit = {},
     val dismissOffer: () -> Unit = {},
     val dismissError: () -> Unit = {},
+    /** (Release L) `idle_lock.after_seconds`, one of [IdleLockSetting.CHOICES_S]. */
+    val setIdleLock: (Long) -> Unit = {},
+    val dismissIdleNote: () -> Unit = {},
 )
 
 /** The interval (1–24 h) and the hold switch (§3.6.2, §3.6.7). */
@@ -77,16 +86,37 @@ class OwnerCheckSettingsViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(OwnerCheckSettingsUiState())
     val uiState: StateFlow<OwnerCheckSettingsUiState> =
-        combine(local, repo.ownerCheck, timeScale.timeScale) { s, v, t -> s.copy(view = v, timeScale = t) }
+        combine(local, repo.ownerCheck, timeScale.timeScale, repo.idleLockSetting) { s, v, t, idle ->
+            s.copy(view = v, timeScale = t, idleLock = idle)
+        }
             .stateIn(
                 viewModelScope,
                 SharingStarted.Eagerly,
-                OwnerCheckSettingsUiState(view = repo.ownerCheck.value, timeScale = timeScale.timeScale.value),
+                OwnerCheckSettingsUiState(
+                    view = repo.ownerCheck.value, timeScale = timeScale.timeScale.value, idleLock = repo.idleLockSetting.value,
+                ),
             )
 
     init {
         viewModelScope.launch { runCatching { repo.refreshOwnerCheck() } }
+        // (Release L) Whether the vault has the idle lock, and its value.
+        viewModelScope.launch { runCatching { repo.refreshIdleLockSetting() } }
     }
+
+    /**
+     * (Release L, §3.6.8) The idle lock's value: a shorter one applies at once, a longer one after the next check, which
+     * the member is told.
+     */
+    fun setIdleLock(seconds: Long) {
+        val before = repo.idleLockSetting.value ?: return
+        if (seconds == before.seconds) return
+        act {
+            repo.setIdleLockAfter(seconds)
+            if (repo.idleLockSetting.value?.afterNextCheck == true) local.update { it.copy(idleLongerNote = true) }
+        }
+    }
+
+    fun dismissIdleNote() = local.update { it.copy(idleLongerNote = false) }
 
     fun setIntervalHours(hours: Int) {
         val seconds = hours * SECONDS_PER_HOUR
@@ -147,6 +177,8 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
         modifier = Modifier.testTag("owner_check_interval"),
     )
     if (t.stagingNote) StagingTimeNote(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs))
+    // (Release L) Beside the interval: the idle lock, for a vault that has it.
+    state.idleLock?.let { IdleLockRow(it, state, actions) }
     SettingsDivider()
     SettingsRow(
         stringResource(R.string.settings_owner_check_now),
@@ -212,3 +244,63 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
         )
     }
 }
+
+/**
+ * (Release L, VAULT-MESSAGING 0.29.0 §3.6.8; ANDROID-PLAN §4 "Locking the vault" part 2) "Lock my vault by itself after",
+ * beside the check's interval: 1 hour to 30 days, no "never"; in real units, and as it runs on a staging vault.
+ */
+@Composable
+private fun IdleLockRow(idle: IdleLockSetting, state: OwnerCheckSettingsUiState, actions: OwnerCheckSettingsActions) {
+    var picker by rememberSaveable { mutableStateOf(false) }
+    val t = state.timeScale
+    val value = scaledSettingText(idleLockText(idle.seconds), t.scaled, t.scaledSeconds(idle.seconds))
+    val lines = listOfNotNull(
+        value,
+        stringResource(R.string.settings_idle_lock_next_check).takeIf { idle.afterNextCheck },
+        stringResource(R.string.settings_idle_lock_body),
+    )
+    SettingsDivider()
+    SettingsRow(
+        stringResource(R.string.settings_idle_lock),
+        { picker = true },
+        icon = Icons.Outlined.LockClock,
+        supporting = lines.joinToString("\n"),
+        modifier = Modifier.testTag("idle_lock"),
+    )
+    if (picker) {
+        ChoiceDialog(
+            title = stringResource(R.string.settings_idle_lock),
+            options = IdleLockSetting.CHOICES_S,
+            selected = idle.seconds,
+            label = { scaledSettingText(idleLockText(it), t.scaled, t.scaledSeconds(it)) },
+            onPick = {
+                picker = false
+                actions.setIdleLock(it)
+            },
+            onDismiss = { picker = false },
+        )
+    }
+    if (state.idleLongerNote) {
+        ConfirmDialog(
+            title = stringResource(R.string.settings_idle_lock),
+            text = stringResource(R.string.settings_idle_lock_next_check),
+            confirmLabel = stringResource(R.string.settings_done),
+            onConfirm = actions.dismissIdleNote,
+            onDismiss = actions.dismissIdleNote,
+        )
+    }
+}
+
+/** A choice in its real units: "1 hour", "1 day", "7 days" (ANDROID-PLAN's names; the setting is whole hours or days). */
+@Composable
+private fun idleLockText(seconds: Long): String {
+    val days = (seconds / SECONDS_PER_DAY).toInt()
+    return if (seconds % SECONDS_PER_DAY == 0L) {
+        pluralStringResource(R.plurals.settings_idle_lock_days, days, days)
+    } else {
+        val hours = (seconds / OwnerCheckSettingsViewModel.SECONDS_PER_HOUR).toInt()
+        pluralStringResource(R.plurals.settings_idle_lock_hours, hours, hours)
+    }
+}
+
+private const val SECONDS_PER_DAY = 86_400L

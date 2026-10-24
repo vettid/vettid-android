@@ -8,6 +8,7 @@ import com.vettid.core.data.feed.FeedTarget
 import com.vettid.core.data.prefs.NotificationMode
 import com.vettid.core.data.prefs.NotificationPreviews
 import com.vettid.core.data.vault.CredentialAlarm
+import com.vettid.core.data.vault.IdleLocked
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.WaitingCounts
@@ -17,9 +18,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+
+private val NO_IDLE: StateFlow<IdleLocked?> = MutableStateFlow(null)
 
 /** The member's notification settings (device preferences, DataStore): the mode and what notifications show. */
 data class NotifySettings(
@@ -61,6 +65,12 @@ interface NotifySource {
 
     /** The vault locked, from another device or by itself (not by the member on this phone): "Your vault is locked". */
     val lockedElsewhere: StateFlow<Boolean>
+
+    /**
+     * (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself because no check was passed in time
+     * (`vault.locking{reason: "idle"}`): the locked notification says so.
+     */
+    val idleLocked: StateFlow<IdleLocked?> get() = NO_IDLE
     val ownerCheck: StateFlow<OwnerCheckView?>
     val alarm: StateFlow<CredentialAlarm?>
 
@@ -96,7 +106,7 @@ class FeedNotifier(
         scope.launch { source.items.collect { onItems(it) } }
         scope.launch { source.open.collect { open -> if (!open) cancelItems() } }
         scope.launch { settings.map { it.mode }.distinctUntilChanged().collect { if (it == NotificationMode.OFF) cancelAll() } }
-        scope.launch { source.lockedElsewhere.collect { onLocked(it) } }
+        scope.launch { combine(source.lockedElsewhere, source.idleLocked) { l, i -> l to i }.collect { (l, i) -> onLocked(l, i) } }
         scope.launch { source.ownerCheck.collect { onOwnerCheck(it) } }
         scope.launch { source.alarm.collect { onAlarm(it) } }
     }
@@ -154,19 +164,27 @@ class FeedNotifier(
         listOf(TAG_LOCKED, TAG_CHECK, TAG_ALARM).forEach { poster.cancel(it) }
     }
 
-    private fun onLocked(locked: Boolean) {
+    /** "Your vault is locked"; (release L) "Your vault locked itself" for the idle lock ([idle]), in place of it. */
+    private fun onLocked(locked: Boolean, idle: IdleLocked?) {
         if (!locked) {
             poster.cancel(TAG_LOCKED)
             return
         }
         if (!on) return
         val r = res()
-        poster.post(
-            LocalNotification(
-                TAG_LOCKED, Channels.SECURITY, r.getString(R.string.notify_locked_title), r.getString(R.string.notify_locked_body),
-                r.getString(R.string.notify_public_attention), alertOnce = true,
-            ),
-        )
+        val (title, body) = if (idle == null) {
+            r.getString(R.string.notify_locked_title) to r.getString(R.string.notify_locked_body)
+        } else {
+            val after = idle.afterSeconds
+            val text = if (after != null) {
+                r.getString(R.string.notify_idle_locked_body, durationText(after, r))
+            } else {
+                r.getString(R.string.notify_idle_locked_body_unknown)
+            }
+            r.getString(R.string.notify_idle_locked_title) to text
+        }
+        val public = r.getString(R.string.notify_public_attention)
+        poster.post(LocalNotification(TAG_LOCKED, Channels.SECURITY, title, body, public, alertOnce = true))
     }
 
     /** Held or due (§3.6.3): one "Daily check due" with the counts only, updated in place; never names. */
@@ -206,6 +224,26 @@ class FeedNotifier(
         const val TAG_LOCKED = "vault.locked"
         const val TAG_CHECK = "owner_check.due"
         const val TAG_ALARM = "credential.alarm"
+
+        /**
+         * [seconds] in words, as the screens say a duration (`Durations` in :core:ui): two or more whole days in days,
+         * whole hours in hours, from 10 minutes in minutes rounded up, under that in seconds.
+         */
+        fun durationText(seconds: Long, r: Resources): String {
+            val s = seconds.coerceAtLeast(0)
+            val (res, n) = when {
+                s >= 2 * DAY && s % DAY == 0L -> R.plurals.notify_duration_days to s / DAY
+                s >= HOUR && s % HOUR == 0L -> R.plurals.notify_duration_hours to s / HOUR
+                s >= SECONDS_UP_TO -> R.plurals.notify_duration_minutes to (s + MINUTE - 1) / MINUTE
+                else -> R.plurals.notify_duration_seconds to s
+            }
+            return r.getQuantityString(res, n.toInt(), n.toInt())
+        }
+
+        private const val MINUTE = 60L
+        private const val HOUR = 3_600L
+        private const val DAY = 86_400L
+        private const val SECONDS_UP_TO = 600L
 
         /** "3 messages and 1 request are waiting"; unknown counts are "Something may be waiting", never "nothing new". */
         fun waitingText(w: WaitingCounts?, r: Resources): String {

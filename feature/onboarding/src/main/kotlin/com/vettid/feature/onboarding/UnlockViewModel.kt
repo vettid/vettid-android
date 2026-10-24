@@ -14,6 +14,7 @@ import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
+import com.vettid.core.data.vault.idleLockedNow
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -135,6 +136,11 @@ data class UnlockUiState(
     val password: String = "",
     /** The vault locked after ten failed checks (§3.6.4). */
     val lockedByOwnerCheck: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself because no check was passed in time: said here,
+     * with the unlock and the check on the same screen.
+     */
+    val idleLocked: com.vettid.core.data.vault.IdleLocked? = null,
     /**
      * (Release R, ANDROID-PLAN "Other screens") The vault has a phone secret: cancelling a recovery from here sends the
      * owner check at once, so the password is asked for with it.
@@ -315,8 +321,11 @@ class UnlockViewModel @Inject constructor(
                 .collect { (u, n) -> state.update { it.copy(previousPinStep = u, newPinStep = n) } }
         }
         viewModelScope.launch {
-            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> (v?.gated(Instant.now()) == true) to locked }
-                .collect { (due, locked) -> state.update { it.copy(checkDue = due || locked, lockedByOwnerCheck = locked) } }
+            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.idleLocked) { v, locked, _ ->
+                Triple(v?.gated(Instant.now()) == true, locked, ownerCheck.idleLockedNow(Instant.now()))
+            }.collect { (due, locked, idle) ->
+                state.update { it.copy(checkDue = due || locked || idle != null, lockedByOwnerCheck = locked, idleLocked = idle) }
+            }
         }
     }
 

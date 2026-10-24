@@ -63,10 +63,14 @@ class OwnerCheckManagerTest {
 
         override suspend fun statusRead() = statusAndRecovery().let { (o, r) -> StatusRead(o, r, timeScale) }
 
-        override suspend fun settingsGet() = Settings(7, JsonObject(emptyMap()))
+        /** What `settings.get` lists (a vault before L lists no `idle_lock.after_seconds`). */
+        var settings: Map<String, JsonElement> = emptyMap()
+
+        override suspend fun settingsGet() = Settings(7, JsonObject(settings))
 
         override suspend fun settingsSet(version: Long, set: Map<String, JsonElement>) {
             sets += set
+            settings = settings + set
         }
     }
 
@@ -493,5 +497,95 @@ class OwnerCheckManagerTest {
         assertEquals(24L, read("""{"vault_id":"x","time_scale":24}""").timeScale)
         val without = read("""{"vault_id":"x"}""")
         assertNull(without.timeScale)
+    }
+
+    // --- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock ---
+
+    private val deadline = "2026-10-06T11:00:00Z"
+    private val idleAt = "2026-10-13T11:00:00Z"
+
+    /** `idle_lock_at` from the status and from vault.held, kept on the phone; a passed check drops it (the deadline moved). */
+    @Test
+    fun theIdleLocksTimeIsReadKeptAndDroppedWhenACheckMovesTheDeadline() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", deadline, 86_400, hold = true, idleLockAt = idleAt) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(Instant.parse(idleAt), m.ownerCheck.value!!.idleLockAt)
+        assertEquals("7 days past the deadline", 604_800L, m.ownerCheck.value!!.idleAfterSeconds)
+        assertEquals("kept across a restart", Instant.parse(idleAt), manager(Ops()).ownerCheck.value!!.idleLockAt)
+        val held = """{"deadline":"$deadline","waiting":{"messages":1},"idle_lock_at":"2026-10-12T11:00:00Z"}"""
+        m.onEvent(event("vault.held", held, now.plusSeconds(1)))
+        assertEquals(Instant.parse("2026-10-12T11:00:00Z"), m.ownerCheck.value!!.idleLockAt)
+        m.onEvent(event("vault.held", """{"waiting":{"messages":2}}""", now.plusSeconds(2)))
+        assertEquals("a vault.held without it keeps what was read", Instant.parse("2026-10-12T11:00:00Z"), m.ownerCheck.value!!.idleLockAt)
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw"))
+        assertNull(m.ownerCheck.value!!.idleLockAt)
+        // A vault before L: none.
+        ops.status = OwnerCheckStatus("ok", deadline, 86_400)
+        m.refreshOwnerCheck()
+        assertNull(m.ownerCheck.value!!.idleLockAt)
+    }
+
+    /** `vault.locking{reason: "idle"}`: said until the vault opens again, with how long past the deadline it was. */
+    @Test
+    fun anIdleLockIsSaidUntilTheVaultOpensAgain() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", deadline, 86_400, hold = true, idleLockAt = idleAt) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertNull(m.idleLocked.value)
+        m.onEvent(event("vault.locking", """{"reason":"owner_check"}"""))
+        assertNull("another reason", m.idleLocked.value)
+        m.onEvent(event("vault.locking", """{"reason":"idle","unlock_id":"${"a".repeat(32)}"}"""))
+        assertEquals(IdleLocked(604_800), m.idleLocked.value)
+        assertEquals("kept across a restart", IdleLocked(604_800), manager(Ops()).idleLocked.value)
+        m.onOpened()
+        assertNull(m.idleLocked.value)
+        assertNull(manager(Ops()).idleLocked.value)
+    }
+
+    /** Without the notice (the phone was off): a time past the `idle_lock_at` last read says why; before it, nothing. */
+    @Test
+    fun withoutTheNoticeTheTimeLastReadSaysWhy() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", deadline, 86_400, hold = true, idleLockAt = idleAt) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertNull(m.idleLockedNow(Instant.parse(idleAt).minusSeconds(1)))
+        assertEquals(IdleLocked(604_800), m.idleLockedNow(Instant.parse(idleAt)))
+        ops.status = OwnerCheckStatus("held", deadline, 86_400, hold = true)
+        m.refreshOwnerCheck()
+        assertNull("a vault before L says nothing of it", m.idleLockedNow(Instant.parse(idleAt).plusSeconds(60)))
+    }
+
+    /**
+     * The setting: none for a vault before L; a shorter value in force at once, a longer one after the next check, and
+     * the lowest set since the last check stays in force (owner decision 2026-10-23).
+     */
+    @Test
+    fun theIdleLockSettingShorterAtOnceLongerAfterTheNextCheck() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T11:00:00Z", 86_400) }
+        val m = manager(ops)
+        m.refreshIdleLockSetting()
+        assertNull("a vault before L: no setting", m.idleLockSetting.value)
+        ops.settings = mapOf(OwnerCheckManager.KEY_IDLE to JsonPrimitive(604_800))
+        m.refreshIdleLockSetting()
+        assertEquals(IdleLockSetting(604_800), m.idleLockSetting.value)
+        m.setIdleLockAfter(2_592_000)
+        assertEquals(mapOf(OwnerCheckManager.KEY_IDLE to JsonPrimitive(2_592_000L)), ops.sets.last())
+        assertTrue("longer: after the next check", m.idleLockSetting.value!!.afterNextCheck)
+        assertEquals(604_800L, m.idleLockSetting.value!!.inForceSeconds)
+        m.setIdleLockAfter(3_600)
+        assertEquals("shorter: at once", IdleLockSetting(3_600), m.idleLockSetting.value)
+        m.setIdleLockAfter(1_209_600)
+        assertEquals("the lowest since the last check stays", IdleLockSetting(1_209_600, 3_600), m.idleLockSetting.value)
+        // Kept across a restart.
+        val again = manager(ops)
+        again.refreshIdleLockSetting()
+        assertEquals(IdleLockSetting(1_209_600, 3_600), again.idleLockSetting.value)
+        assertEquals(OwnerCheckOutcome.Passed, again.check("975310", "pw"))
+        assertEquals("a passed check puts it in force", IdleLockSetting(1_209_600), again.idleLockSetting.value)
+        // Only the choices; no "never".
+        assertTrue(runCatching { again.setIdleLockAfter(0) }.isFailure)
+        assertTrue(runCatching { again.setIdleLockAfter(3_599) }.isFailure)
+        assertEquals(listOf(3_600L, 86_400L, 604_800L, 1_209_600L, 2_592_000L), IdleLockSetting.CHOICES_S)
     }
 }
