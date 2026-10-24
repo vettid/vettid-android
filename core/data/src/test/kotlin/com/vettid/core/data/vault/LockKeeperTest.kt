@@ -556,6 +556,7 @@ class LockKeeperTest {
         later.resume()
         assertFalse(later.pending)
         assertTrue("held in the next process too", later.holdsPhone)
+        assertEquals("and said again (review of #190, R1)", LockNotice.OpenedAgain, later.notice.value)
         assertTrue(store.record.held)
         // A new lock while held: pending again, and its confirmation ends the hold.
         vault.answers += true

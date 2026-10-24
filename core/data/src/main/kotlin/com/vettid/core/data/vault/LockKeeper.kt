@@ -191,8 +191,12 @@ class LockKeeper(
      */
     fun resume() {
         val r = store.load()
-        // (Release L) A lock that ended as "opened again": this phone is still locked, whatever the status says.
-        if (r.held) held = true
+        // (Release L) A lock that ended as "opened again": this phone is still locked, whatever the status says, and
+        // the member is told again (the screen's card, and the notification an earlier process posted stays).
+        if (r.held) {
+            held = true
+            if (!pending) noticeFlow.value = LockNotice.OpenedAgain
+        }
         val since = r.pendingSinceMs ?: return
         synchronized(this) {
             if (pending) return
