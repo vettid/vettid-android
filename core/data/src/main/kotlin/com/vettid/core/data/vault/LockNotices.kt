@@ -47,14 +47,25 @@ class LockNotices(opened: Instant? = null, private val current: () -> String? = 
 
     /**
      * Whether [m] is evidence for the pending lock: a `vault.locking` naming the unlock that lock is bound to
-     * ([bound], release L), or, when either has no name, one from after the vault last opened here
+     * ([bound], release L; [held]: after "opened again", see below), or, when either has no name, one from after the vault last opened here
      * ([sinceLastOpened]).
      */
-    fun confirms(m: VaultMessage, bound: String?): Boolean {
+    fun confirms(m: VaultMessage, bound: String?, held: Boolean = false, dead: String? = null): Boolean {
         if (m.type != TYPE) return false
         val named = named(m)
-        return if (named != null && bound != null) named == bound else sinceLastOpened(m)
+        // (Release L) Held after "opened again", with no lock pending: a notice naming the dead opening, or none, or
+        // arriving when the dead one is not known, says nothing about the vault now. Only a newer name does (and a
+        // status read, elsewhere).
+        return when {
+            held -> named != null && dead != null && named != dead
+            named != null && bound != null -> named == bound
+            else -> sinceLastOpened(m)
+        }
     }
+
+    /** [confirms] for the pending (or held) lock of [keeper]. */
+    fun confirms(m: VaultMessage, keeper: LockKeeper): Boolean =
+        confirms(m, keeper.boundUnlockId, keeper.holdsPhone && !keeper.pending, keeper.deadUnlockId)
 
     private fun named(m: VaultMessage): String? = UnlockIds.of(VaultJson.str(m.body, "unlock_id"))
 

@@ -257,6 +257,20 @@ class VaultDevice private constructor(
     /** The mark a `vault.status` request takes before it is sent ([noteUnlockId]). */
     internal fun openingMark(): Long = openings.get()
 
+    /**
+     * (Release L) A lock bound to [dead] ended because the vault was opened again: the name is forgotten if it is still
+     * the one held, and a status answer in flight is not applied (a later lock is then unconditional, never bound to a
+     * dead name).
+     */
+    fun forgetUnlockId(dead: String?) {
+        synchronized(openings) {
+            if (dead != null && unlockId == dead) {
+                openings.incrementAndGet()
+                unlockId = null
+            }
+        }
+    }
+
     private fun opened(id: String?) {
         synchronized(openings) {
             openings.incrementAndGet()

@@ -114,4 +114,25 @@ class LockNoticesTest {
         assertTrue(n.confirms(named(t0.plusSeconds(1), null), bound = b))
         assertFalse("not a vault.locking", n.confirms(msg("vault.held", t0.plusSeconds(1)), bound = null))
     }
+
+    private fun named(id: String, ts: Instant) =
+        VaultMessage(Inner(id = Ulid.new(), type = "vault.locking", ts = ts, body = """{"unlock_id":"$id"}""".toByteArray()))
+
+    /**
+     * Review of the iOS mirror, defect 2(a): held after "opened again", a `vault.locking` naming the dead opening (or
+     * none, or while the dead one is not known) does not confirm; only a newer name does.
+     */
+    @Test
+    fun whileHeldOnlyANewerNameConfirms() {
+        val dead = "00112233445566778899aabbccddeeff"
+        val newer = "ffeeddccbbaa99887766554433221100"
+        val n = LockNotices(opened = t0)
+        assertFalse(n.confirms(named(dead, t0.plusSeconds(1)), null, held = true, dead = dead))
+        assertFalse(n.confirms(msg("vault.locking", t0.plusSeconds(1)), null, held = true, dead = dead))
+        val later = named(newer, t0.plusSeconds(1))
+        assertFalse("the dead one is not known (a new process)", n.confirms(later, null, held = true, dead = null))
+        assertTrue(n.confirms(named(newer, t0.plusSeconds(1)), null, held = true, dead = dead))
+        // Not held: the rules of a pending lock, unchanged.
+        assertTrue(n.confirms(named(dead, t0.plusSeconds(1)), dead))
+    }
 }

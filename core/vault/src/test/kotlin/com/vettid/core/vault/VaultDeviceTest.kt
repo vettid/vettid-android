@@ -1634,6 +1634,7 @@ class VaultDeviceTest {
      * pending unlock remains; but a token minted since the build (the vault's refresh) keeps its expiry, also from 0.
      */
     @Test
+    @Suppress("LongMethod")
     fun aDiscardedUnlockLeavesNothingRecorded() = runBlocking<Unit> {
         withTimeout(30_000) {
             val store = InMemoryDeviceStateStore()
@@ -1682,6 +1683,15 @@ class VaultDeviceTest {
             assertNull("a late answer from the opening before is not taken", d.unlockId)
             d.noteUnlockId(id, d.openingMark())
             assertEquals("one asked for since is", id, d.unlockId)
+            // Defect 2 of the iOS mirror's review: the dead name is forgotten, and only if it is still the one held.
+            d.forgetUnlockId("ffeeddccbbaa99887766554433221100")
+            assertEquals("another name is left", id, d.unlockId)
+            val m2 = d.openingMark()
+            d.forgetUnlockId(id)
+            assertNull(d.unlockId)
+            d.noteUnlockId(id, m2)
+            assertNull("an answer in flight is not applied after the name was forgotten", d.unlockId)
+            d.noteUnlockId(id, d.openingMark())
             assertTrue("the build issued a standing token", d.issuedTokenExpMs != before)
             d.discardUnlock(b)
             assertEquals(before, d.issuedTokenExpMs)

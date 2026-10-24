@@ -1125,13 +1125,15 @@ class VaultManager(
             }
         },
         newKeeper = { attempt ->
-            LockKeeper(
+            LockWiring.keeper(
                 scope,
                 store = lockFile,
+                attempt = attempt,
                 onSaveFailed = { e ->
                     android.util.Log.w("VaultManager", "the lock's record could not be saved: ${e.javaClass.simpleName}")
                 },
-                attempt = attempt,
+                // (Release L) The opening the lock was for is dead: a later plain lock must not be bound to its name.
+                forgetUnlockId = { dead -> session?.device?.forgetUnlockId(dead) },
             )
         },
     )
@@ -1347,7 +1349,9 @@ class VaultManager(
             // The vault says it is locking, after this phone's last unlock: a lock of this phone that was in doubt no
             // longer is. (A notice from before that unlock was dropped; one whose place in time is not known, because
             // no unlock time is kept, confirms nothing: the status read will.)
-            "vault.locking" -> if (lockNotices.confirms(m, lockKeeper.boundUnlockId)) lockKeeper.confirmed()
+            "vault.locking" -> {
+                if (lockNotices.confirms(m, lockKeeper)) lockKeeper.confirmed()
+            }
             // §14.2: the gateway reported the token gone, the vault erased the registration; a fresh one is asked for.
             PushWire.TOKEN_NEEDED -> tokenNeededFlow.tryEmit(PushWire.reason(m))
             "credential.alarm" -> {
@@ -2275,14 +2279,12 @@ class VaultManager(
         // Pending, durably and unbound, before anything is read (second recheck of #190, D1): a tap is never lost to a
         // slow vault, a screen that goes away or a broadcast that ends. Returns here; the rest runs in the manager's scope.
         val mine = beginLock(null)
-        scope.launch {
-            // At most LOCK_STATUS_WAIT for the opening running now; then bound to it, before the first attempt.
-            val id = withTimeoutOrNull(LOCK_STATUS_WAIT.toMillis()) {
-                LockAgain.unlockId { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } }
-            }
-            lockKeeper.rebind(mine, id)
-            locking.run(lock = { lockKeeper.ask(mine) }, after = {})
-        }
+        // The mark is taken before the status is read (F1); the rest runs in the manager's scope.
+        LockAgain.start(
+            scope, lockKeeper, mine, LOCK_STATUS_WAIT,
+            read = { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } },
+            then = { locking.run(lock = { lockKeeper.ask(mine) }, after = {}) },
+        )
     }
 
     /** The member's lock, bound to [unlockId] (null: as before release L). */
