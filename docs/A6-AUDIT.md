@@ -43,8 +43,10 @@ unlock key is gone, so it cannot take the vault back. The new phone's resume (#1
 
 | Finding | Status | Where | Evidence (master `91b17407`) |
 |---|---|---|---|
-| R3, R5 | Fixed | #119 | with R1 |
-| S3, S4 | Fixed | #120 | with S1 and S2 |
+| R5 | Fixed | #119 | with R1 |
+| R3 app lock on configuration changes | Fixed for rotation only | #119 | A recreation no longer marks the app as left. With the timeout "Immediately", leaving for a system picker, the share sheet or the browser still locks. That is deliberate, per #120's test plan |
+| S3 | Fixed | #120 | with S1 and S2 |
+| S4 clipboard | Partly | #120 | Copies are marked sensitive (`EXTRA_IS_SENSITIVE`). Nothing is ever cleared from the clipboard: there is no `clearPrimaryClip` |
 | N4, N6, A4, G1, R2, P4 | Fixed | #122 `047cd1af` | as listed in #122 |
 | N10 lock offline | Fixed (fail secure) | #127 `7a250bcd`, #140, #181 | The lock is pending until the vault confirms it. It is retried, never sent through the outbox, and shown with "Try again" (`LockKeeper.kt`; `LockKeeperTest.aLockThatCannotBeConfirmedIsPendingAndTriedAgainUntilItIs`, `aPendingLockSurvivesTheProcess`) |
 | N18 release-update progress | Fixed in effect | #159 `e8a3c1e2` | The way back to release N is a stored marker (`AltState.movedFrom`, `moveFailed`; `MoveUnconfirmed.kt`). It survives a restart (`MoveMarkersTest`, `UnlockReturnTest`) |
