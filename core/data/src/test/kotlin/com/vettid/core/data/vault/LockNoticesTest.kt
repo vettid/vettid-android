@@ -77,4 +77,41 @@ class LockNoticesTest {
         assertTrue(notices.stale(msg("vault.locking", t0.plusSeconds(30))))
         assertFalse(notices.stale(msg("vault.locking", t0.plusSeconds(61))))
     }
+
+    // --- Release L (VAULT-MESSAGING 0.29.0 §10.2 "Locks"): a notice that names the unlock it ends ---
+
+    private val a = "a".repeat(32)
+    private val b = "b".repeat(32)
+
+    private fun named(ts: Instant, id: String?) = VaultMessage(
+        Inner(id = Ulid.new(), type = "vault.locking", ts = ts, body = (if (id == null) "{}" else "{\"unlock_id\":\"$id\"}").toByteArray()),
+    )
+
+    @Test
+    fun aNamedNoticeIsJudgedByItsNameWhenThisPhoneHoldsTheCurrentOne() {
+        var current: String? = b
+        val n = LockNotices(opened = t0) { current }
+        assertTrue("another opening's lock, however late it says it is", n.stale(named(t0.plusSeconds(60), a)))
+        assertFalse("this opening's lock, even with an earlier ts", n.stale(named(t0.minusSeconds(1), b)))
+        // A notice without a name (a release before L) and a name of another form: by the time, as before L.
+        assertTrue(n.stale(named(t0, null)))
+        assertFalse(n.stale(named(t0.plusMillis(1), null)))
+        assertFalse(n.stale(named(t0.plusMillis(1), "")))
+        // No current name (a new process before its first status read): by the time.
+        current = null
+        assertFalse(n.stale(named(t0.plusSeconds(60), a)))
+        assertTrue(n.stale(named(t0.minusSeconds(1), b)))
+    }
+
+    @Test
+    fun onlyANoticeNamingTheBoundUnlockConfirmsABoundLock() {
+        val n = LockNotices(opened = t0) { b }
+        assertTrue(n.confirms(named(t0.minusSeconds(1), b), bound = b))
+        assertFalse("another opening's lock says nothing of this one", n.confirms(named(t0.plusSeconds(60), a), bound = b))
+        // An unbound lock, or a notice without a name: from after the last unlock here, as before L.
+        assertTrue(n.confirms(named(t0.plusSeconds(1), a), bound = null))
+        assertFalse(n.confirms(named(t0, null), bound = b))
+        assertTrue(n.confirms(named(t0.plusSeconds(1), null), bound = b))
+        assertFalse("not a vault.locking", n.confirms(msg("vault.held", t0.plusSeconds(1)), bound = null))
+    }
 }

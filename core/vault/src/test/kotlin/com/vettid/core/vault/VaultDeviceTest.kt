@@ -1802,6 +1802,43 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (VAULT-MESSAGING 0.29.0 §10.2 "Locks", release L) A bound lock names its unlock; `stale_lock` is its own error;
+     * the device's current unlock is what `vault.status` last said (absent or of another form: none).
+     */
+    @Test
+    fun aBoundLockNamesTheUnlockAndTheStatusSaysWhichIsCurrent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            assertNull("nothing learned yet", d.unlockId)
+            val id = "00112233445566778899aabbccddeeff"
+            val status = async(Dispatchers.IO) { api.status() }
+            val sreq = v.open(nextDeposit().second)
+            d.handle(v.seal("vault.status", """{"vault_id":"${v.vaultId}","unlock_id":"$id"}""", re = sreq.id, status = Inner.STATUS_OK))
+            status.await()
+            assertEquals(id, d.unlockId)
+
+            val locking = async(Dispatchers.IO) { runCatching { api.lock(timeout = java.time.Duration.ofSeconds(5), unlockId = id) } }
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.lock", req.type)
+            assertEquals(id, VaultJson.str(VaultJson.parseObject(req.body), "unlock_id"))
+            assertTrue("at most 60 s", req.exp!!.isBefore(Instant.now().plusSeconds(61)))
+            refuse(d, v, req, VaultApi.CODE_STALE_LOCK)
+            val e = locking.await().exceptionOrNull() as VaultOpException
+            assertEquals(VaultApi.CODE_STALE_LOCK, e.code)
+
+            // A vault before L (or a malformed value): no current unlock.
+            for (body in listOf("""{"vault_id":"${v.vaultId}"}""", """{"vault_id":"${v.vaultId}","unlock_id":""}""")) {
+                val again = async(Dispatchers.IO) { api.status() }
+                val r = v.open(nextDeposit().second)
+                d.handle(v.seal("vault.status", body, re = r.id, status = Inner.STATUS_OK))
+                again.await()
+                assertNull(body, d.unlockId)
+            }
+        }
+    }
+
     // --- A6 audit N2: a request that failed is not delivered later ---
 
     /**

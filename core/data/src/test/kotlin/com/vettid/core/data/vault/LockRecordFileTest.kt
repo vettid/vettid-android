@@ -91,4 +91,25 @@ class LockRecordFileTest {
         val f = LockRecordFile(file(), legacy = { LockRecord() }, migrated = { false }, recordUnreadable = { false }, now = { 17 })
         assertEquals(LockRecord(), f.load())
     }
+
+    /** (Release L) A bound lock's unlock is kept with it; a record without one keeps the first version's form. */
+    @Test
+    fun aBoundLocksUnlockIsKeptAcrossARestart() {
+        val id = "0123456789abcdef0123456789abcdef"
+        LockRecordFile(file(), legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7, unlockId = id))
+        assertEquals("2 7 - $id", file().readText().trim())
+        assertEquals(LockRecord(7, null, id), LockRecordFile(file(), legacy = { LockRecord() }).load())
+        LockRecordFile(file(), legacy = { LockRecord() }).save(LockRecord(relayLockUntilMs = 9))
+        assertEquals("an older app reads it", "1 - 9", file().readText().trim())
+        assertEquals(LockRecord(null, 9), LockRecordFile(file(), legacy = { LockRecord() }).load())
+    }
+
+    /** A bound record that is not of the form says a lock is pending (fail secure). */
+    @Test
+    fun aMalformedBoundRecordSaysALockIsPending() {
+        for (text in listOf("2 7 - xyz", "2 - - ${"A".repeat(32)}", "2 7 -", "3 7 - -")) {
+            file().writeText(text)
+            assertEquals(text, LockRecord(pendingSinceMs = 11), LockRecordFile(file(), legacy = { LockRecord() }, now = { 11 }).load())
+        }
+    }
 }

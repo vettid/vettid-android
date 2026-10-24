@@ -20,8 +20,16 @@ import kotlinx.coroutines.launch
 
 /** Whether an activity of VettID is started (the app is in front); kept by the application's lifecycle callbacks. */
 object AppForeground {
-    @Volatile
-    var visible: Boolean = false
+    private val flow = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** [visible] as a flow, for a notice that waits until the app is in the background. */
+    val visibleFlow: kotlinx.coroutines.flow.StateFlow<Boolean> get() = flow
+
+    var visible: Boolean
+        get() = flow.value
+        set(v) {
+            flow.value = v
+        }
 }
 
 /**

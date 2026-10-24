@@ -78,7 +78,9 @@ class VaultApi(
         op("vault.enroll.confirm")
     }
 
-    suspend fun status(): VaultStatusInfo = op("vault.status").decode(VaultStatusInfo.serializer())
+    /** `vault.status`. Its `unlock_id` (release L) becomes this device's current one ([VaultDevice.unlockId]). */
+    suspend fun status(): VaultStatusInfo =
+        op("vault.status").decode(VaultStatusInfo.serializer()).also { device.noteUnlockId(it.unlockId) }
 
     /** `account.get` (§10.2, §11.13, 0.15.0): the member's account snapshot from the member API, display only. */
     suspend fun accountGet(): AccountView = op("account.get").decode(AccountView.serializer())
@@ -88,9 +90,14 @@ class VaultApi(
      * outbox, so a lock that could not be delivered is not delivered by a later flush, and the vault drops one that
      * reaches it more than [validFor] after it was asked. A lock must never land on a vault the member has opened
      * again since. Throws without an answer within [timeout]; the caller decides what follows.
+     *
+     * (0.29.0, release L) With [unlockId] a bound lock, `vault.lock {unlock_id}`: the vault locks only if it names its
+     * current unlock, and otherwise answers `stale_lock` ([VaultOpException], [CODE_STALE_LOCK]) and does nothing.
+     * Without it, `{}`: carried out as before L. [validFor] is at most 60 s (§8.6).
      */
-    suspend fun lock(timeout: Duration = LOCK_ANSWER, validFor: Duration = LOCK_VALID) {
-        device.opOnce("vault.lock", timeout = timeout, exp = device.clockNow().plus(validFor))
+    suspend fun lock(timeout: Duration = LOCK_ANSWER, validFor: Duration = LOCK_VALID, unlockId: String? = null) {
+        val body = if (unlockId == null) VaultDevice.EMPTY else buildJsonObject { put("unlock_id", unlockId) }
+        device.opOnce("vault.lock", body, timeout = timeout, exp = device.clockNow().plus(validFor.coerceAtMost(LOCK_VALID_MAX)))
     }
 
     /**
@@ -905,6 +912,12 @@ class VaultApi(
 
         /** How long after it was asked a `vault.lock` may still be acted on. */
         val LOCK_VALID: Duration = Duration.ofSeconds(30)
+
+        /** The longest `exp` a `vault.lock` may have (§8.6, 0.29.0): it must not wait at the relay for long. */
+        val LOCK_VALID_MAX: Duration = Duration.ofSeconds(60)
+
+        /** (0.29.0, release L) `vault.lock {unlock_id}` named an unlock that is not the vault's current one. */
+        const val CODE_STALE_LOCK = "stale_lock"
 
         const val INVITE_TTL_DEFAULT = 3600
 

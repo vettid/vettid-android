@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.altchan.UnlockIds
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -10,8 +11,10 @@ import java.nio.file.StandardOpenOption
  * The lock's record ([LockRecord], [LockKeeper]) in a file of its own, beside the account record and not in it, written
  * whole and synced before [save] returns. A lock the member asked for is kept across a process death in every state of
  * the account record: one that cannot be read (its Keystore key), one shut after a wipe that did not finish, one being
- * written. Plain text: two times and nothing else (when a lock was asked for, and until when an unanswered relay lock
- * may still be acted on), readable without the Keystore.
+ * written. Plain text: two times (when a lock was asked for, and until when an unanswered relay lock may still be acted
+ * on) and, for a lock bound to its unlock (release L), that unlock's `unlock_id` (a name, not a secret), readable
+ * without the Keystore. A record without an `unlock_id` is written in the first version's form, which an older app
+ * reads; a record of a form this app does not know says a lock is pending.
  *
  * Before this file, the record was kept in the account record: [legacy] reads it there until the file is in use
  * ([migrated], marked by [onFirstSave] after the first save, which also clears the legacy fields). A file that cannot be
@@ -43,7 +46,7 @@ internal class LockRecordFile(
             file.parentFile?.mkdirs()
             val tmp = File(file.parentFile, file.name + ".tmp")
             FileOutputStream(tmp).use {
-                it.write("$VERSION ${record.pendingSinceMs ?: NONE} ${record.relayLockUntilMs ?: NONE}\n".toByteArray())
+                it.write(line(record).toByteArray())
                 it.fd.sync()
             }
             if (!tmp.renameTo(file)) throw IOException("lock record not saved")
@@ -62,12 +65,25 @@ internal class LockRecordFile(
         }
     }
 
+    private fun line(r: LockRecord): String {
+        val times = "${r.pendingSinceMs ?: NONE} ${r.relayLockUntilMs ?: NONE}"
+        val id = r.unlockId
+        return if (id == null) "$VERSION $times\n" else "$VERSION_BOUND $times ${UnlockIds.of(id) ?: throw IOException("unlock_id")}\n"
+    }
+
+    @Suppress("ReturnCount") // one return per form
     private fun parse(text: String): LockRecord? {
         val parts = text.trim().split(' ')
-        if (parts.size != FIELDS || parts[0] != VERSION) return null
+        val fields = when (parts[0]) {
+            VERSION -> FIELDS
+            VERSION_BOUND -> FIELDS_BOUND
+            else -> return null
+        }
+        if (parts.size != fields) return null
         fun time(s: String): Long? = if (s == NONE) null else s.toLongOrNull() ?: throw NumberFormatException(s)
+        val id = if (fields == FIELDS_BOUND) UnlockIds.of(parts[ID_FIELD]) ?: return null else null
         return try {
-            LockRecord(time(parts[1]), time(parts[2]))
+            LockRecord(time(parts[1]), time(parts[2]), id)
         } catch (_: NumberFormatException) {
             null
         }
@@ -75,7 +91,12 @@ internal class LockRecordFile(
 
     private companion object {
         const val VERSION = "1"
+
+        /** (Release L) With the `unlock_id` the pending lock is bound to. */
+        const val VERSION_BOUND = "2"
         const val NONE = "-"
         const val FIELDS = 3
+        const val FIELDS_BOUND = 4
+        const val ID_FIELD = 3
     }
 }

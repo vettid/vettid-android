@@ -336,12 +336,13 @@ class AltChannelFlow(
     /**
      * Asks the leaseholder to lock the vault and waits for the slot: until it is no longer queued, or for [atMost]
      * (then the slot is returned as it is, still [Slot.QUEUED]: the request may be carried out later, or never).
-     * An answered slot says that the request was handled, **not** that the vault locked: the enclave answers "done"
-     * whatever became of its lock. Only the vault's status says whether it is locked.
+     * An answered slot from a release before L says that the request was handled, **not** that the vault locked: the
+     * enclave answers "done" whatever became of its lock. From release L a `done` carries a code ([Slot.CODE_LOCKED],
+     * [Slot.CODE_NOT_RUNNING], [Slot.CODE_STALE]), the host's word. [unlockId]: a bound lock (MEMBER-API 2.5.0).
      */
-    suspend fun lock(vaultId: String, atMost: Duration? = null): Slot {
+    suspend fun lock(vaultId: String, atMost: Duration? = null, unlockId: String? = null): Slot {
         val rid = Ulid.new(Instant.now(clock))
-        api.lock(vaultId, rid)
+        api.lock(vaultId, rid, unlockId)
         return api.poll(rid, atMost)
     }
 

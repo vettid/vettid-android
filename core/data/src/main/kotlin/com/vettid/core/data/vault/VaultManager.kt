@@ -734,7 +734,7 @@ class VaultManager(
     override val refusedByVault: StateFlow<Boolean> = refusals.suspected
 
     /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
-    private val lockNotices = LockNotices(opened = local.lastOpenedAtMs?.let { Instant.ofEpochMilli(it) })
+    private val lockNotices = LockNotices(opened = local.lastOpenedAtMs?.let { Instant.ofEpochMilli(it) }) { session?.device?.unlockId }
 
     /** `feed.event`s collected before the phase is known (a process started by a push wake), until it is ([HeldBackEvents]). */
     private val heldBack = HeldBackEvents()
@@ -1062,18 +1062,34 @@ class VaultManager(
         ports = object : LockPorts {
             override val relayValidFor: Duration = VaultApi.LOCK_VALID
 
-            override suspend fun relayLock(): Boolean {
-                val s = lockSession() ?: return false
-                return runCatching { io { s.lockTimeApi(LockTimeUse.LOCK).lock() } }.isSuccess
+            override suspend fun relayLock(unlockId: String?): RelayLock {
+                val s = lockSession() ?: return RelayLock.NO_ANSWER
+                return try {
+                    io { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }
+                    RelayLock.LOCKED
+                } catch (_: TimeoutCancellationException) {
+                    RelayLock.NO_ANSWER
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: VaultOpException) {
+                    if (e.code == VaultApi.CODE_STALE_LOCK) RelayLock.STALE else RelayLock.NO_ANSWER
+                } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                    RelayLock.NO_ANSWER
+                }
             }
 
             @Suppress("ReturnCount") // one return per answer
-            override suspend fun memberLock(): MemberLock {
+            override suspend fun memberLock(unlockId: String?): MemberLock {
                 val s = lockSession() ?: return MemberLock.NoAnswer
                 val vaultId = s.device.vaultId ?: return MemberLock.NoAnswer
                 return try {
-                    val slot = io { s.alt.lock(vaultId, MEMBER_LOCK_WAIT) }
-                    if (slot.status == Slot.QUEUED) MemberLock.NoAnswer else MemberLock.Answered(slot.status == Slot.DONE)
+                    val slot = io { s.alt.lock(vaultId, MEMBER_LOCK_WAIT, unlockId) }
+                    when (slot.status) {
+                        Slot.QUEUED -> MemberLock.NoAnswer
+                        // A code is read only beside "done" (MEMBER-API 2.5.0 "Locks").
+                        Slot.DONE -> MemberLock.Answered(true, slot.code)
+                        else -> MemberLock.Answered(false)
+                    }
                 } catch (e: MemberApiException) {
                     if (e.status != HTTP_TOO_MANY) return MemberLock.NoAnswer
                     MemberLock.Limited(Duration.ofSeconds(e.retryAfterSeconds.toLong()))
@@ -1105,7 +1121,8 @@ class VaultManager(
 
     init {
         // A lock that was pending when the process ended: locked here from the start, and tried again at once
-        // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver).
+        // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver, the pending
+        // lock's job), bound to the same unlock as before when it was bound (release L).
         lockKeeper.resume()
         if (lockKeeper.pending) lockedHere = true
         scope.launch {
@@ -1304,7 +1321,7 @@ class VaultManager(
             // The vault says it is locking, after this phone's last unlock: a lock of this phone that was in doubt no
             // longer is. (A notice from before that unlock was dropped; one whose place in time is not known, because
             // no unlock time is kept, confirms nothing: the status read will.)
-            "vault.locking" -> if (lockNotices.sinceLastOpened(m)) lockKeeper.confirmed()
+            "vault.locking" -> if (lockNotices.confirms(m, lockKeeper.boundUnlockId)) lockKeeper.confirmed()
             // §14.2: the gateway reported the token gone, the vault erased the registration; a fresh one is asked for.
             PushWire.TOKEN_NEEDED -> tokenNeededFlow.tryEmit(PushWire.reason(m))
             "credential.alarm" -> {
@@ -1987,8 +2004,8 @@ class VaultManager(
 
         override suspend fun lock() {
             this@VaultManager.lock()
-            // An update moves on only from a vault that is known to be locked.
-            if (lockKeeper.pending) throw VaultFailure(FailureKind.NO_RESPONSE, CODE_LOCK_PENDING)
+            // An update moves on only from a vault that is known to be locked: not after one opened again since either.
+            if (lockKeeper.pending || lockKeeper.openedAgain) throw VaultFailure(FailureKind.NO_RESPONSE, CODE_LOCK_PENDING)
             // The next unlock goes to the instance that holds the vault: wait (bounded) until its lease is gone.
             withTimeoutOrNull(LOCKED_WAIT_MS) {
                 while (runCatching { guard { vaultStatus(session()) } }.getOrNull()?.state == "unlocked") {
@@ -2091,7 +2108,9 @@ class VaultManager(
         // Pending, durably, BEFORE anything else is done for the lock (the hooks below take up to two seconds): a
         // process that dies from here on starts locked and goes on trying, and from here on nothing but the lock
         // and a call's hang-up is sent to the vault and nothing it sends is taken in.
-        val mine = withContext(Dispatchers.IO + NonCancellable) { lockKeeper.begin() }
+        // (Release L) Bound to the vault's current unlock as this phone knows it (memory only: from the unlock result
+        // or the last vault.status); without one, as before L (VAULT-LOCK §3.6, Q3).
+        val mine = withContext(Dispatchers.IO + NonCancellable) { lockKeeper.begin(session?.device?.unlockId) }
         locking.run(lock = { lockKeeper.ask(mine) }, after = {})
     }
 

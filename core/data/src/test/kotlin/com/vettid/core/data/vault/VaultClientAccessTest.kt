@@ -35,7 +35,7 @@ class VaultClientAccessTest {
         assertEquals("and nowhere else (the declaration is the third)", 3, count("""\blockTimeApi\("""))
         assertEquals(setOf(LockTimeUse.LOCK, LockTimeUse.CALL_END), LockTimeUse.entries.toSet())
         // The lock is the only thing sent with the first, the hang-up accessor the only user of the second.
-        assertTrue(code.any { it.contains("lockTimeApi(LockTimeUse.LOCK).lock()") })
+        assertTrue(code.any { it.contains("lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId)") })
         // The second sends one `call.end` and hands nothing out.
         assertTrue(code.any { it.contains("= session().lockTimeApi(LockTimeUse.CALL_END).callEnd(callId, reason)") })
         // The only way a client leaves the manager is vaultApi(), which refuses while a lock is pending.

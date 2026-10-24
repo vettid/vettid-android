@@ -31,6 +31,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 /** The member API client and the alternate-channel flows against a fake member API + enclave. */
+@Suppress("LargeClass") // One class: every test shares the fake member API and its helpers.
 class MemberApiTest {
     private lateinit var server: MockWebServer
     private val enclaves = ArrayDeque<TestSupport.Enclave>()
@@ -113,8 +114,10 @@ class MemberApiTest {
                 resp(202, """{"vault_id":"0123456789abcdef0123456789abcdef","request_id":"$rid"}""")
             }
             path == "/api/vault/lock" -> {
-                val rid = StrictJson.parseObject(r.body!!.toByteArray()).string("request_id")
-                slots[rid] = """{"status":"done"}"""
+                val o = StrictJson.parseObject(r.body!!.toByteArray())
+                val rid = o.string("request_id")
+                lockBodies += o
+                slots[rid] = lockSlot
                 resp(202, "{}")
             }
             path.startsWith("/api/vault/requests/") -> {
@@ -127,6 +130,10 @@ class MemberApiTest {
     }
 
     private var statusBody = """{"vault":null,"service":"available"}"""
+
+    /** The lock requests' bodies, and the slot each lock gets. */
+    private val lockBodies = mutableListOf<com.vettid.core.crypto.json.JsonObject>()
+    private var lockSlot = """{"status":"done"}"""
     private val enrolledVaultIds = mutableListOf<String>()
     private val signed = mutableListOf<Pair<String, String>>()
     private val appKey = SoftAppKey()
@@ -289,6 +296,21 @@ class MemberApiTest {
     }
 
     private fun assertNotNullRelease(m: ReleaseManifest) = assertTrue(m.byPcr0(TestSupport.pcr0) != null)
+
+    /** MEMBER-API 2.5.0 "Locks" (release L): a bound lock names its unlock; the slot's code is passed on. */
+    @Test
+    fun aBoundLockNamesItsUnlockAndItsSlotsCodeIsRead() = runBlocking<Unit> {
+        val f = flow()
+        val id = "00112233445566778899aabbccddeeff"
+        lockSlot = """{"status":"done","code":"stale"}"""
+        val slot = f.lock("0123456789abcdef0123456789abcdef", unlockId = id)
+        assertEquals(Slot.DONE, slot.status)
+        assertEquals(Slot.CODE_STALE, slot.code)
+        assertEquals(id, lockBodies.last().optString("unlock_id"))
+        lockSlot = """{"status":"done"}"""
+        assertEquals(null, f.lock("0123456789abcdef0123456789abcdef").code)
+        assertFalse("unconditional: no member at all", lockBodies.last().has("unlock_id"))
+    }
 
     @Test
     fun enrollUnlockLock() = runBlocking<Unit> {

@@ -278,6 +278,16 @@ class AltRequestsTest {
         assertEquals(true, UnlockResult.parse((ok + "true}").toByteArray()).credentialBackup)
         assertEquals(false, UnlockResult.parse((ok + "false}").toByteArray()).credentialBackup)
         assertThrows(AltResultException::class.java) { UnlockResult.parse((ok + "1}").toByteArray()) }
+        // (0.29.0, release L) unlock_id: kept when of the form; absent, "" (a release R enclave before L) or another form: none.
+        assertNull(u.unlockId)
+        val withId = """{"ok":true,"state_seq":3,"header_seq":2,"token":"t","release":"${TestSupport.pcr0}","release_number":3,"release_status":"active","manifest_serial":7,"unlock_id":"""
+        assertEquals("0123456789abcdef0123456789abcdef", UnlockResult.parse((withId + "\"0123456789abcdef0123456789abcdef\"}").toByteArray()).unlockId)
+        for (v in listOf("\"\"", "\"0123456789ABCDEF0123456789ABCDEF\"", "\"0123\"")) assertNull(v, UnlockResult.parse((withId + v + "}").toByteArray()).unlockId)
+        assertEquals(
+            EnrollResult(true, null, "abc", "0123456789abcdef0123456789abcdef"),
+            EnrollResult.parse("""{"ok":true,"vault_id":"abc","unlock_id":"0123456789abcdef0123456789abcdef"}""".toByteArray()),
+        )
+        assertEquals(EnrollResult(true, null, "abc", null), EnrollResult.parse("""{"ok":true,"vault_id":"abc","unlock_id":""}""".toByteArray()))
         val f = UnlockResult.parse("""{"ok":false,"code":"backoff","header_seq":4,"retry_after":30}""".toByteArray())
         assertEquals("backoff", f.code)
         assertEquals(30, f.retryAfterSeconds)
