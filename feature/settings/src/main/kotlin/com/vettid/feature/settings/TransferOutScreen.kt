@@ -52,7 +52,6 @@ import com.vettid.core.ui.components.QrCode
 import com.vettid.core.ui.components.SafetyCode
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.StagingTimeNote
-import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -193,7 +192,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         TransferOutStep.MOVED -> FormScaffold(
             title = stringResource(R.string.settings_transfer_moved_title),
             body = if (state.keptKeys) {
-                stringResource(R.string.settings_transfer_moved_kept_body, durationText(state.keptForSeconds))
+                stringResource(R.string.settings_transfer_moved_kept_body)
             } else {
                 stringResource(R.string.settings_transfer_moved_body, state.pending?.name ?: "")
             },
