@@ -31,7 +31,13 @@ enum class DeletionCheck {
     /** The vault is still listed, whatever its `state`. */
     LISTED,
 
-    /** The member API could not be reached (or answered something else): nothing is concluded. */
+    /**
+     * The member API answered, but not definitely: `{vault: null}` (advisory) or a `401` of any kind. This phone cannot
+     * tell a deleted vault from a clock, nonce, signature or key fault, so nothing is erased.
+     */
+    UNCONFIRMED,
+
+    /** The member API could not be reached (network, timeout, 5xx, paused): nothing is concluded. */
     UNREACHABLE,
 }
 
@@ -84,7 +90,7 @@ object VaultDeletion {
         servicePaused -> DeletionCheck.UNREACHABLE
         vaultListed -> DeletionCheck.LISTED
         // `{vault: null}` is advisory (as in VaultManager.evaluate()): it never erases this phone.
-        else -> DeletionCheck.UNREACHABLE
+        else -> DeletionCheck.UNCONFIRMED
     }
 
     /**
@@ -107,11 +113,41 @@ object VaultDeletion {
     private const val MARKER_ATTEMPTS = 3
 
     /**
-     * What a failed read says: nothing, whatever the kind (a 401 of any kind included, 403, 5xx, timeout, paused). The
-     * member API's bare 401 does not tell a deleted vault from a missing Date header, a nonce clash or a key fault.
+     * What a failed read says: nothing definite, whatever the kind. A 401 of any kind ([FailureKind.UNAUTHORIZED], and
+     * [FailureKind.CLOCK], a 401 for the clock) is UNCONFIRMED: the member API's bare 401 does not tell a deleted vault
+     * from a missing Date header, a nonce clash or a key fault. Everything else (network, timeout, 5xx, paused, 403) is
+     * UNREACHABLE.
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun ofFailure(kind: FailureKind): DeletionCheck = DeletionCheck.UNREACHABLE
+    fun ofFailure(kind: FailureKind): DeletionCheck =
+        if (kind == FailureKind.UNAUTHORIZED || kind == FailureKind.CLOCK) DeletionCheck.UNCONFIRMED else DeletionCheck.UNREACHABLE
+
+    /** What one status answer showed: whether it lists a vault, and whether the service is paused. */
+    data class StatusSeen(val vaultListed: Boolean, val servicePaused: Boolean)
+
+    /**
+     * One read of the status mapped to a [DeletionCheck] (the whole of what [VaultManager] does with the answer): no answer
+     * or failure here is ever GONE. [onPaused] gets the answer's pause flag.
+     */
+    @Suppress("TooGenericExceptionCaught") // whatever the read throws concludes nothing
+    suspend fun readCheck(onPaused: (Boolean) -> Unit = {}, read: suspend () -> StatusSeen): DeletionCheck = try {
+        val a = read()
+        onPaused(a.servicePaused)
+        ofStatus(vaultListed = a.vaultListed, servicePaused = a.servicePaused)
+    } catch (e: VaultFailure) {
+        ofFailure(e.kind)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (_: RuntimeException) {
+        DeletionCheck.UNREACHABLE
+    }
+
+    /**
+     * Whether a deletion that began at [sinceMs] is past its bound at [nowMs]. A clock that went back before [sinceMs] is
+     * past it too (the wall clock cannot be trusted to count down), so "Check again" and "Remove" are never hidden by it.
+     */
+    fun pastBound(sinceMs: Long, untilMs: Long, nowMs: Long): Boolean = nowMs >= untilMs || nowMs < sinceMs
+
+    internal fun pastBound(m: DeletingMarker, nowMs: Long = System.currentTimeMillis()): Boolean = pastBound(m.sinceMs, m.untilMs, nowMs)
 }
 
 /**
@@ -163,13 +199,14 @@ internal class DeletionWatch(
     private suspend fun run(m: DeletingMarker, readNow: Boolean) {
         if (readNow && check() == DeletionCheck.GONE) return
         // Past the bound (a start after it): "still finishing" at once, with no timer.
-        if (nowMs() >= m.untilMs) return onSlow()
+        if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return onSlow()
         while (true) {
             val now = nowMs()
-            delay(minOf(VaultDeletion.nextReadMs(m.sinceMs, now), m.untilMs) - now)
+            // Capped: a clock that moved back must not make the wait as long as the move.
+            delay((minOf(VaultDeletion.nextReadMs(m.sinceMs, now), m.untilMs) - now).coerceIn(0L, VaultDeletion.THEN_EVERY_MS))
             if (check() == DeletionCheck.GONE) return
             // At the bound: still listed (or not reachable) is "still finishing", and nothing more runs on a timer.
-            if (nowMs() >= m.untilMs) return onSlow()
+            if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return onSlow()
         }
     }
 }

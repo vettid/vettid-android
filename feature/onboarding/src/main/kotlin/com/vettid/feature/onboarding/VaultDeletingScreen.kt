@@ -160,7 +160,11 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                 state.lastCheck?.let { c ->
                     Text(
                         stringResource(
-                            if (c == DeletionCheck.LISTED) R.string.vault_deleting_still else R.string.vault_deleting_unreachable,
+                            when (c) {
+                                DeletionCheck.LISTED -> R.string.vault_deleting_still
+                                DeletionCheck.UNCONFIRMED -> R.string.vault_deleting_cannot_confirm
+                                else -> R.string.vault_deleting_unreachable
+                            },
                         ),
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("vault_deleting_check").semantics { liveRegion = LiveRegionMode.Polite },

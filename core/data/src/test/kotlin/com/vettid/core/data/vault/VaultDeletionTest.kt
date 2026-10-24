@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,16 +36,75 @@ class VaultDeletionTest {
 
     @Test
     fun nothingReadsAsGoneAndA401OrNoVaultNeverErases() {
-        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = false)) // `{vault:null}` is advisory
+        assertEquals(DeletionCheck.UNCONFIRMED, VaultDeletion.ofStatus(vaultListed = false)) // `{vault:null}` is advisory
         assertEquals(DeletionCheck.LISTED, VaultDeletion.ofStatus(vaultListed = true))
         // a bare 401 (any kind) is not a definite answer
-        for (k in FailureKind.values()) assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(k))
+        for (k in FailureKind.values()) assertNotEquals(DeletionCheck.GONE, VaultDeletion.ofFailure(k))
+        assertEquals(DeletionCheck.UNCONFIRMED, VaultDeletion.ofFailure(FailureKind.UNAUTHORIZED))
+        assertEquals(DeletionCheck.UNCONFIRMED, VaultDeletion.ofFailure(FailureKind.CLOCK))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.NETWORK))
-        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.CLOCK)) // a 401 for the clock is not the row gone
-        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.SERVICE_PAUSED))
+                assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.SERVICE_PAUSED))
         // `{vault: null}` while the service is paused concludes nothing.
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = false, servicePaused = true))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = true, servicePaused = true))
+    }
+
+    @Test
+    fun readCheckNeverSaysGoneAndKeepsTheMappingOfEachAnswer() = runTest {
+        suspend fun fail(k: FailureKind) = VaultDeletion.readCheck { throw VaultFailure(k) }
+        assertEquals(DeletionCheck.UNCONFIRMED, fail(FailureKind.UNAUTHORIZED)) // a 401
+        assertEquals(DeletionCheck.UNCONFIRMED, fail(FailureKind.CLOCK))
+        assertEquals(DeletionCheck.UNREACHABLE, fail(FailureKind.NETWORK))
+        assertEquals(DeletionCheck.UNREACHABLE, fail(FailureKind.SERVICE_PAUSED))
+        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.readCheck { throw IllegalStateException("x") })
+        assertEquals(DeletionCheck.UNCONFIRMED, VaultDeletion.readCheck { VaultDeletion.StatusSeen(false, false) }) // {vault:null}
+        assertEquals(DeletionCheck.LISTED, VaultDeletion.readCheck { VaultDeletion.StatusSeen(true, false) })
+        var paused: Boolean? = null
+        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.readCheck({ paused = it }) { VaultDeletion.StatusSeen(false, true) })
+        assertEquals(true, paused)
+        for (k in FailureKind.values()) assertNotEquals(DeletionCheck.GONE, fail(k))
+    }
+
+    @Test
+    fun readCheckThroughAWatchLeavesThePhaseAndTheMarkerAlone() = runTest {
+        // A 401 and {vault:null} through the watch: onGone never runs, so the "being deleted" hold stays.
+        val phase = PhaseHolder(AppPhase.Unlocked)
+        phase.deleting(AppPhase.Deleting(slow = true))
+        var gone = 0
+        val answers = ArrayDeque(listOf<suspend () -> VaultDeletion.StatusSeen>(
+            { throw VaultFailure(FailureKind.UNAUTHORIZED) }, { VaultDeletion.StatusSeen(false, false) },
+        ))
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = { VaultDeletion.readCheck { answers.removeFirst()() } },
+            onGone = { gone++; phase.endDeleting(AppPhase.SignedOut) }, onSlow = {})
+        assertEquals(DeletionCheck.UNCONFIRMED, w.check())
+        assertEquals(DeletionCheck.UNCONFIRMED, w.check())
+        assertEquals(0, gone)
+        assertTrue(phase.deleting)
+        assertEquals(AppPhase.Deleting(slow = true), phase.value)
+    }
+
+    @Test
+    fun aClockMovedBackIsPastTheBoundAndNeverWaitsLong() = runTest {
+        assertTrue(VaultDeletion.pastBound(1_000_000L, 1_000_000L + 10 * min, 1_000_000L - 24 * 60 * min))
+        assertFalse(VaultDeletion.pastBound(0, 10 * min, 5 * min))
+        assertTrue(VaultDeletion.pastBound(0, 10 * min, 10 * min))
+        // A watch started with the event "in the future" is slow at once and sets no day-long wait.
+        val r = Reads(ArrayDeque())
+        watch(r).start(DeletingMarker("v", 24 * 60 * min, 24 * 60 * min + 10 * min), readNow = false)
+        runCurrent()
+        assertEquals(1, r.slow)
+        // And a clock that moves back after the start: the wait is at most 60 s, so the bound is seen again.
+        val r2 = Reads(ArrayDeque())
+        var skew = 0L
+        val w = DeletionWatch(
+            backgroundScope, { currentTime - skew }, read = { r2.at += currentTime; DeletionCheck.LISTED },
+            onGone = {}, onSlow = { r2.slow++ },
+        )
+        advanceTimeBy(20_000)
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        skew = 24 * 60 * min // the clock jumps back a day
+        advanceTimeBy(60_001 + 5_000)
+        assertEquals(1, r2.slow)
     }
 
     @Test

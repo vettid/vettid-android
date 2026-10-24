@@ -56,11 +56,11 @@ class VaultDeletingViewModelTest {
     }
 
     @Test
-    fun anUnreachableAnswerNeverErases() = runTest {
+    fun anUnreachableOrUnconfirmedAnswerNeverErases() = runTest {
         val vm = VaultDeletingViewModel(vault)
         vm.setSlow(true)
-        repeat(3) {
-            vault.deletionChecks += DeletionCheck.UNREACHABLE
+        for (c in listOf(DeletionCheck.UNREACHABLE, DeletionCheck.UNCONFIRMED, DeletionCheck.UNCONFIRMED)) {
+            vault.deletionChecks += c
             vm.checkAgain()
             advanceUntilIdle()
         }
