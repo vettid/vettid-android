@@ -231,6 +231,10 @@ internal class AccountRecord(
      */
     fun update(since: Int, f: (LocalAccount) -> LocalAccount?): Boolean = store.update(since) { cur -> f(cur)?.withLockOf(cur) }
 
+    /** [update], also dropped when [generation] (bumped by every lock, reset and wipe) moved since it was read. */
+    fun update(since: Int, generation: Int, f: (LocalAccount) -> LocalAccount?): Boolean =
+        store.update(since, generation) { cur -> f(cur)?.withLockOf(cur) }
+
     /** A record of its own ([a]: none, or a new setup's): no offer from before it, and the writes still on their way are dropped. */
     fun reset(a: LocalAccount): Boolean = store.reset { cur ->
         rotateOfferFlow.value = a.rotateOffered
