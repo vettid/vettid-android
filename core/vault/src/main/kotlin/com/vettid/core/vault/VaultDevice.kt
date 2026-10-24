@@ -417,7 +417,10 @@ class VaultDevice private constructor(
             try {
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
-                    onRequest = { out -> collectRequestSince = if (out) System.nanoTime() else null },
+                    onRequest = { out ->
+                        collectRequestSince = if (out) System.nanoTime() else null
+                        if (!out) roundsEnded.incrementAndGet()
+                    },
                     onReached = ::noteReached,
                 ).run { handle(it) }
             } catch (e: RelayException) {
@@ -956,8 +959,10 @@ class VaultDevice private constructor(
     }
 
     /**
-     * Drops a transfer this device started and has not completed: only on the member's confirmed cancel, or when its
-     * `hs.init` was never answered (A6 audit N1: never on a local timer, since the old phone may have approved it).
+     * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
+     * was never answered, or at the transfer's 11-minute deadline after its collect (A6 audit N1; VAULT-MESSAGING 0.56.2
+     * §11.14.10 rule 5). Under the device's lock, and never once `device.paired` was applied: a paired device keeps
+     * everything.
      */
     suspend fun abandonTransfer() = lock.withLock {
         if (st.deviceId != null) return@withLock
@@ -974,6 +979,31 @@ class VaultDevice private constructor(
      */
     val transferInPending: TransferInState?
         get() = st.transferIn?.let { TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid) }
+
+    /** Collect rounds of the running collection that ended, their messages handled (A6 audit N1). */
+    private val roundsEnded = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * (A6 audit N1) Waits until the collection's round that is out now (if any) has ended, its messages handled: a message
+     * it leased from the relay (a `device.paired`) is invisible to any other collect until then. The caller bounds it.
+     */
+    suspend fun awaitCollectorRound() {
+        if (!collecting || collectRequestSince == null) return
+        val before = roundsEnded.get()
+        while (collecting && roundsEnded.get() == before) kotlinx.coroutines.delay(ROUND_POLL_MS)
+    }
+
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) What the transfer's deadline reads before anything is dropped:
+     * the collection's round in flight (it may hold a leased `device.paired`), one collect of its own ([collectOnce]),
+     * and the round in flight after it. The caller bounds the whole (30 s) and then decides; [abandonTransfer] keeps
+     * everything once `device.paired` was applied.
+     */
+    suspend fun deadlineCollect() {
+        awaitCollectorRound()
+        collectOnce()
+        awaitCollectorRound()
+    }
 
     /**
      * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` and `max` at
@@ -1965,6 +1995,7 @@ class VaultDevice private constructor(
             setOf("device.paired", TYPE_PAIR_REJECTED, "relay.token.issued", "relay.token.refresh", "identity.rotate")
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
+        private const val ROUND_POLL_MS = 50L
 
         /** (§11.14.9) How long after its `exp`, by the vault's clock, an unanswered request can no longer apply. */
         val SETTLE_MARGIN: Duration = Duration.ofMinutes(1)

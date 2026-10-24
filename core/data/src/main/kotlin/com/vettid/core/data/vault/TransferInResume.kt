@@ -62,9 +62,10 @@ internal object TransferInResume {
                 // a failed collect: dropped below
             }
         }
-        val done = paired()
-        if (!done) drop()
-        return done
+        // The drop refuses a paired device under its lock, so a device.paired the collection applied meanwhile is kept:
+        // the answer is read after it.
+        if (!paired()) drop()
+        return paired()
     }
 
     /** The paired transfer's `user_guid` (null from a vault release before 0.17.0). */

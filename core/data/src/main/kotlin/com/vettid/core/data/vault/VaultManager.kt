@@ -1188,7 +1188,11 @@ class VaultManager(
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
                 val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
-                device.start(scope)
+                // (A6 audit N1) A transfer past its deadline: its collect runs first (evaluate), before the collection
+                // can lease a waiting device.paired; the collection starts after it.
+                if (TransferInResume.decide(device.transferInPending, device.deviceId, Instant.now()) != TransferInResume.Action.DEADLINE) {
+                    device.start(scope)
+                }
                 observe(s)
                 s
             }.also {
@@ -1511,7 +1515,14 @@ class VaultManager(
     @Suppress("ReturnCount")
     private suspend fun afterUnlocked(s: Session): AppPhase {
         if (s.device.recovering) return AppPhase.Setup(SetupStage.RECOVERING)
-        if (s.device.credentialVersion == null) return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        if (s.device.credentialVersion == null) {
+            // (A6 audit N1) A transfer the vault paired takes the credential over; it never creates one (`exists`).
+            s.device.transferInPending?.takeIf { it.paired }?.let { t ->
+                completeTransferIn(s, record.recordGeneration, t.userGuid)
+                return AppPhase.Setup(SetupStage.FINISHING)
+            }
+            return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        }
         scope.launch { runCatching { refreshAlarm(s) } }
         // §11.11.9: a start-over requested on the portal shows after every unlock.
         scope.launch { runCatching { vaultStatus(s) } }
@@ -3033,9 +3044,10 @@ class VaultManager(
         val d = s.device
         val paired = TransferInResume.atDeadline(
             paired = { d.transferInPending?.paired == true && d.deviceId != null },
-            collect = { d.collectOnce() },
+            collect = { d.deadlineCollect() },
             drop = { d.abandonTransfer() },
         )
+        d.start(scope) // deferred at a start past the deadline (session()); running already otherwise
         return if (paired) d.transferInPending else null
     }
 

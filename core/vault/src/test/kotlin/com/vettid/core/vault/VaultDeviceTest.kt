@@ -103,6 +103,10 @@ class VaultDeviceTest {
     @Volatile
     private var refuseCollect: String? = null
     private val queued = LinkedBlockingQueue<RelayMessage>()
+
+    /** When set, a collect that took a message from [queued] holds it until this opens (a lease in flight). */
+    @Volatile
+    private var leaseGate: java.util.concurrent.CountDownLatch? = null
     private val acked = LinkedBlockingQueue<String>()
 
     /** The fake vault's keys and session with the device. */
@@ -181,6 +185,8 @@ class VaultDeviceTest {
                         MockResponse.Builder().code(403).body("""{"code":"$refuseCollect","message":""}""").build()
                     path == "/v1/mailbox" && request.method == "GET" && serveMailbox -> {
                         val m = queued.poll(200, TimeUnit.MILLISECONDS)
+                        // A collect that leased a message and has not delivered it yet ([leaseGate]).
+                        if (m != null) leaseGate?.await(10, TimeUnit.SECONDS)
                         val msgs = if (m == null) "" else JsonBuilder().string("msg_id", m.msgId).string("sender", m.sender)
                             .base64("payload", m.payload()).build()
                         MockResponse.Builder().code(200).body("""{"messages":[$msgs]}""").build()
@@ -1098,6 +1104,70 @@ class VaultDeviceTest {
     }
 
     /**
+     * (A6 audit N1, #187 recheck) The deadline while the collection runs and has leased the waiting device.paired (its
+     * collect is out, the message not delivered yet): the deadline's own collect sees nothing, so it waits for that round,
+     * and then the transfer is paired and nothing is dropped. The drop, asked after, keeps everything.
+     */
+    @Test
+    fun theDeadlineWaitsForARoundThatLeasedTheDevicePaired() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // leased by the collection's round
+            val deadline = async(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(10_000) { d.deadlineCollect() } }
+            kotlinx.coroutines.delay(500)
+            assertFalse("waits for the round that holds it", deadline.isCompleted)
+            assertFalse(d.transferInPending!!.paired)
+            leaseGate!!.countDown() // the round delivers it
+            assertNotNull(deadline.await())
+            assertTrue(d.transferInPending!!.paired)
+            d.abandonTransfer() // the deadline's drop, asked after: refused for a paired device
+            assertEquals("dev-2", d.deviceId)
+            assertTrue(d.hasVault)
+            assertTrue(d.transferInPending!!.paired)
+            scope.cancel()
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * (#187 recheck) The other order: the drop is asked while the collection's handler applies the device.paired. Both run
+     * under the device's lock: whichever comes second sees the first. A paired transfer is never dropped; a dropped one
+     * cannot be paired later (its keyring is gone), and the app offers a new code.
+     */
+    @Test
+    fun aDropAndAPairingNeverMeetHalfWay() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            repeat(2) { order ->
+                val v = FakeVault()
+                val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+                d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+                v.answerTransfer(d)
+                val paired = v.transferPaired(d)
+                if (order == 0) {
+                    d.handle(paired)
+                    d.abandonTransfer()
+                    assertTrue("paired first: kept", d.transferInPending!!.paired && d.hasVault && d.deviceId == "dev-2")
+                } else {
+                    d.abandonTransfer()
+                    d.handle(paired)
+                    assertNull("dropped first: nothing pairs it later", d.transferInPending)
+                    assertNull(d.deviceId)
+                    assertFalse(d.hasVault)
+                }
+            }
+        }
+    }
+
+    /**
      * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) The deadline's one collect (`wait=0`): a device.paired that
      * waits on the relay is applied by it; an empty mailbox brings nothing; a refused collect throws (and the caller drops).
      */
@@ -1124,8 +1194,8 @@ class VaultDeviceTest {
     }
 
     /**
-     * (A6 audit N1) The screen's wait ends (this phone's 10 minutes) before the approval: nothing is dropped, and the
-     * approval that comes later completes the transfer.
+     * (A6 audit N1) The device's own wait ending drops nothing (the dropping is the 11-minute deadline's, after its
+     * collect, in the app): an approval that comes later still completes the transfer.
      */
     @Test
     fun aWaitThatEndsDropsNothing() = runBlocking<Unit> {

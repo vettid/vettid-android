@@ -40,4 +40,23 @@ class TransferInDeadlineCallTest {
         assertTrue(b.any { it.contains("TransferInResume.decide(pendingIn, d.deviceId, Instant.now())") })
         assertTrue(b.any { it.contains("TransferInResume.Action.DEADLINE -> atTransferDeadline(s)") })
     }
+
+    /**
+     * (#187 recheck) A start past the deadline does its collect before the collection can lease the waiting device.paired;
+     * the deadline waits for a round in flight; and a paired transfer never reaches credential.create.
+     */
+    @Test
+    fun theDeadlineCannotMissALeasedDevicePaired() {
+        val deferred = "if (TransferInResume.decide(device.transferInPending, device.deviceId, Instant.now()) !="
+        val start = code.indexOfFirst { it.startsWith(deferred) }
+        assertTrue("the collection is deferred at a start past the deadline", start >= 0)
+        assertEquals("device.start(scope)", code[start + 1])
+        val dl = body("private suspend fun atTransferDeadline(")
+        assertTrue(dl.any { it == "collect = { d.deadlineCollect() }," })
+        assertTrue(dl.any { it.startsWith("d.start(scope)") })
+        val after = body("private suspend fun afterUnlocked(")
+        val take = after.indexOfFirst { it.startsWith("s.device.transferInPending?.takeIf { it.paired }") }
+        val create = after.indexOfFirst { it == "return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)" }
+        assertTrue("a paired transfer is taken over before NEEDS_CREDENTIAL", take in 0 until create)
+    }
 }
