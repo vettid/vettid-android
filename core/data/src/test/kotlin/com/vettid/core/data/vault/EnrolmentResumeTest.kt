@@ -44,6 +44,16 @@ class EnrolmentResumeTest {
 
         /** How the enclave answers the next request: ok, a refusal code, or "lost" (made, answer never seen). */
         var enclave: String = "ok"
+
+        /** The process's memory: the request it posted and that request's PIN. A kill clears it. */
+        var postedHere: Pair<String, String>? = null
+
+        /** Whether a collect reaches the relay (the mailbox can be read). */
+        var relayUp = true
+
+        fun kill() {
+            postedHere = null
+        }
     }
 
     private class Killed : RuntimeException("process killed")
@@ -67,7 +77,12 @@ class EnrolmentResumeTest {
             w.pending = null
         }
 
+        override fun postedHere(requestId: String, pin: String) = w.postedHere == (requestId to pin)
+        override fun relayMark(): Long = 0
+        override fun relayReadSince(mark: Long) = w.relayUp
+
         override suspend fun awaitEnrolled(): Boolean {
+            if (!w.relayUp) return false
             val id = w.enrolledOnRelay ?: return false
             if (w.pending?.requestId != id) return false // its nonce is gone: dropped as unverifiable
             w.pinned = true
@@ -78,8 +93,10 @@ class EnrolmentResumeTest {
         override suspend fun post(pin: String): EnrolmentResume.Posted {
             val id = "r${++w.nextId}"
             w.pending = PendingEnroll(id, w.now, answered = false) // stored before the request goes out
+            w.postedHere = id to pin
             if (w.failNext == "kill-before-post") {
                 w.failNext = null
+                w.kill()
                 throw Killed()
             }
             w.posted += id to pin
@@ -95,6 +112,7 @@ class EnrolmentResumeTest {
             }
             if (w.failNext == "kill-after-post") {
                 w.failNext = null
+                w.kill()
                 throw Killed()
             }
             if (w.enclave == "lost" || w.failNext == "poll") {
@@ -176,18 +194,56 @@ class EnrolmentResumeTest {
         assertTrue(w.posted.isEmpty())
     }
 
-    /** A transport failure while the slot is read again keeps the request outstanding; nothing is posted. */
+    /**
+     * A transport failure while the slot is read again keeps the request outstanding; nothing is posted. After the
+     * restart, a run with a (new) PIN is refused before anything is read or posted (review F1): the request is resumed
+     * without a PIN, and the vault keeps the PIN of the request that made it.
+     */
     @Test
     fun aFailedReadOfTheSlotKeepsTheRequest() {
         val w = World()
         w.failNext = "kill-after-post"
         assertThrows(Killed::class.java) { run(w, "246802") }
-        w.failNext = "poll"
-        assertThrows(IOException::class.java) { run(w, "999999") }
+        assertThrows(EnrolmentResume.NotThisPin::class.java) { run(w, "999999") }
         assertEquals("r1", w.pending?.requestId)
-        assertEquals(EnrolmentResume.Result.Pinned, run(w, "999999"))
-        assertEquals("the vault keeps the PIN of the request that made it", "246802", w.vaultPin)
+        w.failNext = "poll"
+        assertThrows(IOException::class.java) { run(w, null) }
+        assertEquals("r1", w.pending?.requestId)
+        assertEquals(EnrolmentResume.Result.Pinned, run(w, null))
+        assertEquals("246802", w.vaultPin)
         assertEquals(1, w.posted.size)
+    }
+
+    /** (Review F1) In the same process, a different PIN (a new screen after Back) is refused just the same. */
+    @Test
+    fun anotherPinInTheSameProcessIsRefused() {
+        val w = World()
+        w.enclave = "lost"
+        assertThrows(IOException::class.java) { run(w, "246802") }
+        assertThrows(EnrolmentResume.NotThisPin::class.java) { run(w, "135790") }
+        w.enclave = "ok"
+        assertEquals("the same PIN resumes it", EnrolmentResume.Result.Pinned, run(w, "246802"))
+        assertEquals(1, w.posted.size)
+    }
+
+    /**
+     * (Review F2) The slot is gone long after the post and the relay cannot be read during the wait: nobody knows whether
+     * the vault exists, so the request is kept and nothing is posted.
+     */
+    @Test
+    fun anOldGoneSlotWhileTheRelayIsDownKeepsTheRequest() {
+        val w = World()
+        w.pending = PendingEnroll("r0", w.now, answered = false)
+        w.vaultPin = "246802"
+        w.enrolledOnRelay = "r0"
+        w.now += 20 * 60 * 1000
+        w.relayUp = false
+        assertThrows(EnrolmentResume.Unreachable::class.java) { run(w, null) }
+        assertEquals("r0", w.pending?.requestId)
+        assertTrue(w.posted.isEmpty())
+        w.relayUp = true
+        assertEquals(EnrolmentResume.Result.Pinned, run(w, null))
+        assertTrue(w.posted.isEmpty())
     }
 
     /** A request that left the queue unprocessed (`expired`, `etk_unknown`) made nothing: a new one is posted. */
@@ -196,6 +252,7 @@ class EnrolmentResumeTest {
         val w = World()
         w.pending = PendingEnroll("r0", w.now, answered = false)
         w.slots["r0"] = EnrollAnswer.NotProcessed
+        w.postedHere = "r0" to "246802" // this flow's own request
         assertEquals(EnrolmentResume.Result.Pinned, run(w, "246802"))
         assertEquals(listOf("r1" to "246802"), w.posted)
     }

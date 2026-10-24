@@ -191,7 +191,10 @@ class OnboardingViewModel @Inject constructor(
             is AppPhase.Setup -> when (phase.stage) {
                 // A redeemed code: confirm the account first (also after a restart); a recovery that deleted the
                 // vault says so first.
-                SetupStage.NEW_VAULT -> if (s.step !in vaultSteps + accountSteps && !moving) {
+                // (Review F1) An outstanding request this flow did not post: resumed, never a new PIN.
+                SetupStage.NEW_VAULT -> if (!moving && outstandingNotOurs(s)) {
+                    routeEnrolling(s)
+                } else if (s.step !in vaultSteps + accountSteps && !moving) {
                     state.update {
                         it.copy(
                             step = OnboardingStep.CONFIRM_ACCOUNT, busy = false, error = null, errorCode = null,
@@ -221,6 +224,9 @@ class OnboardingViewModel @Inject constructor(
             else -> Unit
         }
     }
+
+    /** (Review F1) An enrollment request is outstanding that this flow did not post with its PIN ([OnboardingUiState.pinFixed]). */
+    private fun outstandingNotOurs(s: OnboardingUiState): Boolean = !enrolled && !s.pinFixed && vault.enrollPending
 
     /** (A6 audit N3) An outstanding enrollment: resumed without a PIN, unless this flow is already at it. */
     private fun routeEnrolling(s: OnboardingUiState) {
@@ -478,7 +484,9 @@ class OnboardingViewModel @Inject constructor(
     /** Runs (or resumes) enrollment and the credential steps. */
     override fun run() {
         val s = state.value
-        if (!enrolled && s.resuming) {
+        // (Review F1) Resumed, not posted over: a request this flow did not post (pinFixed is this flow's own) may hold
+        // another PIN.
+        if (!enrolled && (s.resuming || outstandingNotOurs(s))) {
             resume()
             return
         }
@@ -509,6 +517,12 @@ class OnboardingViewModel @Inject constructor(
     }
 
     private fun failed(e: VaultFailure) {
+        // (Review F1) A request this flow did not post with its PIN is outstanding: resumed, with no new PIN.
+        if (e.code == VaultRepository.CODE_ENROLL_PENDING) {
+            state.update { it.copy(pin = "", pinConfirm = "", pinFixed = false) }
+            resume()
+            return
+        }
         // (N3) A failure with this flow's enrollment outstanding: the PIN it carried stays the PIN.
         val fixed = !enrolled && vault.enrollPending
         state.update {

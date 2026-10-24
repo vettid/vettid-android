@@ -300,6 +300,38 @@ class OnboardingViewModelTest {
         assertEquals(OnboardingStep.DONE, vm.uiState.value.step)
     }
 
+    /**
+     * (Review F1) An enrollment failed with its request outstanding; the member goes Back and opens VettID again (a new
+     * screen in the same phase): no PIN is asked for, the request is resumed without one.
+     */
+    @Test
+    fun aNewScreenAfterAFailureWithARequestOutstandingNeverAsksForANewPin() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        val first = vm()
+        advanceUntilIdle()
+        first.confirmAccount()
+        first.setPin("40281795"); first.submitPin(); first.setPinConfirm("40281795"); first.submitPinConfirm()
+        first.setPassword("correct horse battery staple"); first.setPasswordConfirm("correct horse battery staple"); first.submitPassword()
+        vault.pendingAfterFailure = true
+        vault.fail["enroll"] = FakeVault.failure(FailureKind.NETWORK)
+        first.submitBackup()
+        advanceUntilIdle()
+        assertTrue(vault.enrollPending)
+        // The phase stayed NEW_VAULT (the worst case): a new screen.
+        val second = vm()
+        advanceUntilIdle()
+        assertTrue("resumed", "resumeEnroll" in vault.calls)
+        assertTrue(second.uiState.value.step != OnboardingStep.PIN_CREATE)
+        assertEquals("never posted again with another PIN", 1, vault.calls.count { it == "enroll" })
+        // Resumed into ENROLLING, it is the same.
+        vault.pending = true
+        vault.phase.value = AppPhase.Setup(SetupStage.ENROLLING)
+        val third = vm()
+        advanceUntilIdle()
+        assertTrue(third.uiState.value.step != OnboardingStep.PIN_CREATE)
+        assertEquals(1, vault.calls.count { it == "enroll" })
+    }
+
     @Test
     fun needsCredentialResumesAtThePassword() = runTest {
         vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)

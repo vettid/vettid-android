@@ -399,6 +399,15 @@ interface VaultRepository {
     suspend fun recovery(): RecoveryView?
 
     suspend fun attestationInfo(): AttestationInfo
+
+    companion object {
+        /**
+         * (A6 audit N3, review F1) [enroll] found a request outstanding that this process did not post with that PIN (a
+         * new screen after Back, a restart): nothing was posted or accepted with the PIN, and the phase is
+         * [SetupStage.ENROLLING], where the request is resumed without one ([resumeEnroll]).
+         */
+        const val CODE_ENROLL_PENDING = "enroll_pending"
+    }
 }
 
 /** The Protean Credential (§3.5): status, unlock window, password, rotation, backup, clone alarms. */

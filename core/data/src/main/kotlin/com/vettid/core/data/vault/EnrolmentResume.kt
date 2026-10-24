@@ -15,11 +15,15 @@ import com.vettid.core.altchan.PendingEnroll
  * - The request's result was `ok`: only its `vault.enrolled` is awaited (the relay keeps it for 14 days).
  * - Otherwise the request's slot is read again: `ok` as above; a refusal ends it (and is the member's answer);
  *   `expired`, `etk_unknown` or random bytes mean it made nothing, so a new one may be posted.
- * - The slot is gone (`404`): less than [SLOT_YOUNG_MS] after the request was built, it was never posted (a slot lives
- *   15 minutes), so a new one may be posted. Older, nobody can tell: its `vault.enrolled` is awaited once, and if none
- *   comes, a new request is posted.
+ * - The slot is gone (`404`): less than [SLOT_YOUNG_MS] (14 minutes) after the request was built, it was never posted
+ *   (a slot lives 15 minutes from its post, which comes after the build; the minute is a margin), so a new one may be
+ *   posted. Older, nobody can tell: its `vault.enrolled` is awaited once. If none comes **and** the relay was read during
+ *   that wait (so it is not waiting there), the request made no vault and a new one is posted; if the relay could not
+ *   be read, the request is kept and the try fails ([Unreachable]), to be tried again.
  * - A new request needs the PIN: without one (a restart, where the PIN typed before is not in memory) the member is
  *   asked for it ([Result.NeedsPin]), and nothing that may already hold the member's earlier PIN is ever posted over.
+ * - A run with a PIN resumes only a request this process posted with that same PIN ([Ops.postedHere]); any other one
+ *   is [NotThisPin], and is resumed without a PIN.
  *
  * Every step is stored before the next one, so a process kill at any step resumes from the step it reached.
  */
@@ -43,6 +47,18 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
         /** Waits for `vault.enrolled`; false when it did not come in time. */
         suspend fun awaitEnrolled(): Boolean
 
+        /**
+         * (Review F1) Whether the request [requestId] was posted by this process with [pin]: only then may a run with a
+         * PIN resume it. Any other PIN may not be the one the vault holds.
+         */
+        fun postedHere(requestId: String, pin: String): Boolean
+
+        /** A mark of now, for [relayReadSince]. */
+        fun relayMark(): Long
+
+        /** Whether the device's mailbox was read on the relay (a collect that reached it) after [mark]. */
+        fun relayReadSince(mark: Long): Boolean
+
         /** Builds, stores and posts a new request with [pin], and returns its opened result. */
         suspend fun post(pin: String): Posted
     }
@@ -65,6 +81,15 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
     class Waiting : Exception("vault.enrolled not received yet")
 
     /**
+     * (Review F1) A run with a PIN found a request outstanding that this process did not post with that PIN (a new screen
+     * after Back, a restart): nothing is posted or accepted with the PIN; the request is resumed without one.
+     */
+    class NotThisPin : Exception("an enrollment posted with another PIN, or before a restart, is outstanding")
+
+    /** The relay could not be read while an old request's `vault.enrolled` was awaited: the request is kept. */
+    class Unreachable : Exception("the relay was not read")
+
+    /**
      * Resumes the outstanding request, or posts a new one with [pin] when nothing can still make a vault. Throws
      * [Refused], [Waiting], or the transport's failure (the request then stays outstanding).
      */
@@ -72,6 +97,7 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
     suspend fun run(pin: String?): Result {
         if (ops.vaultPinned()) return Result.Pinned
         val q = ops.pending()
+        if (pin != null && q != null && !ops.postedHere(q.requestId, pin)) throw NotThisPin()
         val p = if (q == null || q.answered) q else settle(q)
         if (pinned) return Result.Pinned
         if (p != null) return enrolled()
@@ -106,10 +132,13 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
             EnrollAnswer.Gone -> {
                 if (nowMs() - p.postedMs in 0 until SLOT_YOUNG_MS) return dropped()
                 // Nobody can tell whether it made a vault: if it did, its vault.enrolled waits on the relay.
+                val mark = ops.relayMark()
                 if (ops.awaitEnrolled() || ops.vaultPinned()) {
                     pinned = true
                     return null
                 }
+                // Only a read of the mailbox that found nothing shows that it made none; otherwise it is kept.
+                if (!ops.relayReadSince(mark)) throw Unreachable()
                 return dropped()
             }
         }
@@ -132,7 +161,11 @@ internal class EnrolmentResume(private val ops: Ops, private val nowMs: () -> Lo
     }
 
     companion object {
-        /** A slot lives 15 minutes after it is made (MEMBER-API); a request younger than this whose slot is gone was never posted. */
+        /**
+         * A slot lives 15 minutes after it is made (MEMBER-API), at the post, which follows the build: a request built
+         * less than 14 minutes ago whose slot is gone was never posted (the minute is a margin for the build and the
+         * phone's clock).
+         */
         const val SLOT_YOUNG_MS = 14L * 60 * 1000
         const val CODE_MANIFEST = "manifest"
     }

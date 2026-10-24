@@ -1583,7 +1583,8 @@ class VaultManager(
     // --- VaultRepository ---
 
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) {
-        enrolment(pin, onStep)
+        // (Review M1) A run without a PIN (a resume) joined here that made no vault: nothing was enrolled with [pin].
+        if (!enrolment(pin, onStep)) throw VaultFailure(FailureKind.RETRY, CODE_ENROLL_NOT_MADE)
     }
 
     override suspend fun resumeEnroll(onStep: (EnrollStep) -> Unit): Boolean = enrolment(null, onStep)
@@ -1592,6 +1593,15 @@ class VaultManager(
 
     /** (A6 audit N3) The enrollment running now, joined by a second call instead of being run twice. */
     private var enrolmentRun: kotlinx.coroutines.Deferred<Boolean>? = null
+
+    /**
+     * (Review F1) The enrollment request this process posted last, with the SHA-256 of its PIN: memory only, so that
+     * after a restart, and for any other PIN, the request is resumed without a PIN and never accepted for a new one.
+     */
+    @Volatile
+    private var postedEnrol: Pair<String, ByteArray>? = null
+
+    private fun pinDigest(pin: String): ByteArray = java.security.MessageDigest.getInstance("SHA-256").digest(pin.toByteArray())
     private val enrolmentLock = Mutex()
 
     /**
@@ -1603,9 +1613,19 @@ class VaultManager(
         val run = enrolmentLock.withLock {
             enrolmentRun?.takeIf { it.isActive } ?: scope.async { guard { enrolOnce(pin, onStep) } }.also { enrolmentRun = it }
         }
-        return run.await()
+        try {
+            return run.await()
+        } catch (e: VaultFailure) {
+            // (Review F1) A failure with a request still outstanding: every screen from now on (a new one after Back, or
+            // after a restart) resumes it without a PIN, and never asks for a new PIN that the vault might not hold.
+            if (session?.device?.pendingEnroll != null && phaseFlow.value == AppPhase.Setup(SetupStage.NEW_VAULT)) {
+                phaseFlow.value = AppPhase.Setup(SetupStage.ENROLLING)
+            }
+            throw e
+        }
     }
 
+    @Suppress("ThrowsCount") // one failure per outcome of the resume
     private suspend fun enrolOnce(pin: String?, onStep: (EnrollStep) -> Unit): Boolean {
         val rec = record.recordGeneration
         val s = session()
@@ -1617,6 +1637,10 @@ class VaultManager(
             override suspend fun answer(requestId: String) = s.alt.enrollAnswer(d, requestId)
             override suspend fun markAnswered() = d.markEnrollAnswered()
             override suspend fun drop() = d.dropPendingEnroll()
+            override fun postedHere(requestId: String, pin: String): Boolean =
+                postedEnrol?.let { (id, h) -> id == requestId && java.security.MessageDigest.isEqual(h, pinDigest(pin)) } == true
+            override fun relayMark(): Long = System.nanoTime()
+            override fun relayReadSince(mark: Long): Boolean = d.relayReadSince(mark)
             @Suppress("SwallowedException") // no vault.enrolled in time is an answer: false
             override suspend fun awaitEnrolled(): Boolean {
                 onStep(EnrollStep.WAIT_FOR_VAULT)
@@ -1633,9 +1657,14 @@ class VaultManager(
                 // of epoch 1 in the request; the state is stored before the request is sent, and a retry of this
                 // enrollment (a lost answer, a crash) reuses the key: the vault may already hold its secret. Without
                 // `recovery_r`: as before.
-                val out = s.alt.enroll(d, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
-                    val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
-                    if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
+                val out = try {
+                    s.alt.enroll(d, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
+                        val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
+                        if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
+                    }
+                } finally {
+                    // (Review F1) The request stored for this post, with its PIN's digest, in memory only.
+                    postedEnrol = d.pendingEnroll?.let { it.requestId to pinDigest(pin) }
                 }
                 if (out.ok && out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) {
                     io { updateLocal(rec) { it.copy(vaultId = out.vaultId) } }
@@ -1649,6 +1678,11 @@ class VaultManager(
             throw VaultFailure(enrollFailure(e.code), e.code, cause = e)
         } catch (e: EnrolmentResume.Waiting) {
             throw VaultFailure(FailureKind.ENROLL_WAITING, cause = e)
+        } catch (e: EnrolmentResume.NotThisPin) {
+            phaseFlow.value = AppPhase.Setup(SetupStage.ENROLLING)
+            throw VaultFailure(FailureKind.RETRY, VaultRepository.CODE_ENROLL_PENDING, cause = e)
+        } catch (e: EnrolmentResume.Unreachable) {
+            throw VaultFailure(FailureKind.NETWORK, CODE_ENROLL_RELAY, cause = e)
         }
         if (r == EnrolmentResume.Result.NeedsPin) {
             phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
@@ -3551,6 +3585,12 @@ class VaultManager(
             RootOfTrust.UNVERIFIED -> "Unverified"
             else -> "Failed"
         }
+
+        /** (A6 audit N3) A resume joined by [enroll] made no vault: the member enrolls again with the PIN. */
+        const val CODE_ENROLL_NOT_MADE = "enroll_not_made"
+
+        /** (N3) The relay could not be read while an earlier request's `vault.enrolled` was awaited: kept, try again. */
+        const val CODE_ENROLL_RELAY = "enroll_relay"
 
         fun enrollFailure(code: String?): FailureKind = when (code) {
             "vault_exists" -> FailureKind.VAULT_EXISTS

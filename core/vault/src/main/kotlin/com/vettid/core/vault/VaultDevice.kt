@@ -415,6 +415,7 @@ class VaultDevice private constructor(
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out -> collectRequestSince = if (out) System.nanoTime() else null },
+                    onReached = ::noteReached,
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
@@ -491,7 +492,27 @@ class VaultDevice private constructor(
     }
 
     /** One long-poll round (tests and the foreground-service path). */
-    suspend fun pollOnce(): Int = MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }
+    suspend fun pollOnce(): Int {
+        val started = System.nanoTime()
+        return MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }.also { noteReached(started) }
+    }
+
+    /** (A6 audit N3) The latest start ([System.nanoTime]) of a collect request that reached the relay; null before any. */
+    @Volatile
+    private var reachedStartNs: Long? = null
+
+    private fun noteReached(startedNs: Long) {
+        synchronized(this) {
+            val r = reachedStartNs
+            if (r == null || startedNs - r > 0) reachedStartNs = startedNs
+        }
+    }
+
+    /**
+     * (A6 audit N3) Whether a collect request that went out at or after [sinceNs] ([System.nanoTime]) reached the relay
+     * and handed on everything it brought: the mailbox was read after then. False while the relay is out of reach.
+     */
+    fun relayReadSince(sinceNs: Long): Boolean = reachedStartNs?.let { it - sinceNs >= 0 } ?: false
 
     // --- tokens (§7) ---
 
