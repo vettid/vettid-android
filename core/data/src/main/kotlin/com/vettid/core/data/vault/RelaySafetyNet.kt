@@ -27,7 +27,10 @@ class RelaySafetyNet(
      * carry vault data (a relay answer, a name, an item), so none is kept: not the exception's, not its causes', not its
      * suppressed ones'.
      */
-    class Scrubbed private constructor(className: String) : RuntimeException(className) {
+    class Scrubbed private constructor(
+        /** The class name of the throwable this one stands for (also its message). */
+        val className: String,
+    ) : RuntimeException(className) {
         companion object {
             /**
              * [t] and its whole chain (causes and suppressed) with the class names only; the stack frames (classes,
@@ -38,7 +41,8 @@ class RelaySafetyNet(
 
             private fun of(t: Throwable, keepFrames: Boolean, seen: MutableSet<Throwable>): Scrubbed {
                 seen += t
-                val s = Scrubbed(t.javaClass.name)
+                // A Scrubbed already is one: it keeps the class name it carries (scrubbing twice changes nothing).
+                val s = Scrubbed(if (t is Scrubbed) t.className else t.javaClass.name)
                 s.stackTrace = if (keepFrames) t.stackTrace else emptyArray()
                 t.cause?.takeIf { it !in seen }?.let { s.initCause(of(it, keepFrames, seen)) }
                 t.suppressed.filter { it !in seen }.forEach { s.addSuppressed(of(it, keepFrames, seen)) }

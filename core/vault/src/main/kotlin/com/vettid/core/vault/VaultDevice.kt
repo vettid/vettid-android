@@ -168,8 +168,12 @@ class VaultMessage(val inner: Inner) {
  * with `{connection_id}` for `connection.invite.accept`, 0.10.2).
  */
 class VaultOpException(val type: String, val code: String, message: String = "", val body: JsonObject? = null) :
-    IOException("vault: $type: $code${if (message.isEmpty()) "" else " ($message)"}") {
-    /** The error's `message` ("" without one): `push.confirm` names the cause of a `gateway_error` there (§14.1). */
+    IOException("vault: $type: $code") {
+    /**
+     * The error's `message` ("" without one): `push.confirm` names the cause of a `gateway_error` there (§14.1).
+     * Never in the exception's message, which logs and crash reports may carry: the vault's text may carry vault data
+     * (the owner's rule, 2026-10-23).
+     */
     val detail: String = message
 }
 

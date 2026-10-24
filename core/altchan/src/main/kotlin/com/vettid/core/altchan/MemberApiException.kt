@@ -16,7 +16,13 @@ class MemberApiException(
     val retryAfterSeconds: Int = 0,
     /** `vault_unavailable`: the body's `service` (1.2.0: `"paused"` while the operator paused the vault service). */
     val service: String? = null,
-) : IOException("member API $status $code${if (message.isEmpty()) "" else ": $message"}") {
+) : IOException("member API $status $code") {
+    /**
+     * The API's text ("" without one). Never in the exception's message, which logs and crash reports may carry: an
+     * answer's text may carry account data (the owner's rule, 2026-10-23).
+     */
+    val detail: String = message
+
     /**
      * MEMBER-API 1.2.0 "Vault service pause": the operator paused the vault service. Temporary: try again
      * after [retryAfterSeconds]. The operator's reason is never sent to members (and never read here).

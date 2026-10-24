@@ -23,9 +23,18 @@ import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
-/** A relay error response (RELAY-PROTOCOL §7.1). [code] is `http_<status>` when the body carried none. */
+/**
+ * A relay error response (RELAY-PROTOCOL §7.1). [code] is `http_<status>` when the body carried none.
+ *
+ * The exception's message is the status and the code only: the relay's own text (the body's `message`, or a body
+ * that is not JSON) is a relay answer, so it is kept in [detail] and never in the message, which logs and crash
+ * reports may carry (the owner's rule, 2026-10-23).
+ */
 class RelayException(val status: Int, val code: String, message: String, val retryAfterSeconds: Int = 0) :
-    IOException("relay: $status $code${if (message.isEmpty()) "" else ": $message"}") {
+    IOException("relay: $status $code") {
+    /** The relay's text ("" without one): never in the exception's message. */
+    val detail: String = message
+
     /**
      * 429 and 5xx are retried with backoff (§7.2), and so is a signature the relay found stale or already seen
      * ([staleSignature]); other client errors never are.
