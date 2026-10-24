@@ -35,6 +35,11 @@ object AuditKinds {
 
     const val KIND_EXPORTED = "audit.exported"
 
+    const val KIND_LOCKED = "vault.locked"
+
+    /** (Release L) `vault.locked`'s `ref` for the idle lock (§3.6.8). */
+    const val REF_IDLE = "idle"
+
     /**
      * What a signer entry's `ref` says (VAULT-MESSAGING 0.27.0 §10.9, §11.7.1; classes, never digests):
      * `device.signer_bound` the class, `device.signer_changed` `<old class>:<new class>`, `device.signer_refused`
@@ -102,6 +107,8 @@ object AuditKinds {
                 ?.let { Title.Counted(R.string.history_kind_recovery_attempts_used, it) }
                 ?: Title.Known(R.string.history_kind_recovery_attempts_used_any)
             KIND_CLOSED -> return Title.Known(closedTitle(RecoveryRefs.closure(ref)?.reason))
+            // (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself: `vault.locked` with `ref` `idle`.
+            KIND_LOCKED -> if (ref == REF_IDLE) return Title.Known(R.string.history_kind_vault_locked_idle)
         }
         NAMED[kind]?.let { return it }
         TITLES[kind]?.let { return Title.Known(it) }

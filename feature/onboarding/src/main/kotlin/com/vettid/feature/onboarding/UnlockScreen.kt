@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -51,6 +52,7 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.Durations
 import com.vettid.core.ui.format.StagingTimeNote
+import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.format.stagingNoteSuffix
@@ -238,6 +240,27 @@ fun UnlockContent(
                     stringResource(R.string.unlock_owner_check_locked_title),
                     stringResource(R.string.unlock_owner_check_locked_body),
                     modifier = Modifier.testTag("unlock_owner_check_locked"),
+                )
+            } else if (state.idleLocked != null) {
+                // (Release L, §3.6.8; ANDROID-PLAN §4 "Locking the vault" part 2) It locked itself: why, then the unlock
+                // and the check on this screen.
+                val after = state.idleLocked.afterSeconds
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.unlock_idle_locked_title),
+                    // The staging note where a scaled wait is shown (ANDROID-PLAN 0.1.44).
+                    if (after != null) {
+                        // One day is "1 day", as the setting names it (approved by the owner 2026-10-24).
+                        val words = if (after == SECONDS_PER_DAY) {
+                            pluralStringResource(com.vettid.core.ui.R.plurals.core_ui_duration_days, 1, 1)
+                        } else {
+                            durationText(after)
+                        }
+                        stringResource(R.string.unlock_idle_locked_body, words)
+                    } else {
+                        stringResource(R.string.unlock_idle_locked_body_unknown)
+                    } + stagingNoteSuffix(),
+                    modifier = Modifier.testTag("unlock_idle_locked"),
                 )
             } else if (state.checkDue) {
                 NoticeCard(
@@ -645,3 +668,6 @@ internal fun PreflightNotices(
         }
     }
 }
+
+/** A day in seconds: the idle lock's "1 day". */
+private const val SECONDS_PER_DAY = 86_400L
