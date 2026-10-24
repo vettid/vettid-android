@@ -107,17 +107,82 @@ class LockAgainTest {
         val mine = k.begin(null)
         assertTrue("pending before anything is read", k.pending)
         assertEquals(null, store.record.unlockId)
-        k.rebind(mine, now)
+        k.rebind(mine, now, k.openingMark())
         assertEquals(now, store.record.unlockId)
         assertTrue(k.ask(mine))
         assertEquals(listOf<String?>(now), vault.bound)
         // Unbound when the read names nothing; and a rebind of a lock that is no longer pending does nothing.
         vault.outcomes += LockOutcome.LOCKED
         val two = k.begin(null)
-        k.rebind(two, null)
+        k.rebind(two, null, k.openingMark())
         assertTrue(k.ask(two))
         assertEquals(listOf<String?>(now, null), vault.bound)
-        k.rebind(two, now)
+        k.rebind(two, now, k.openingMark())
         assertEquals(LockRecord(), store.record)
+    }
+
+    private val w = "aabbccddeeff00112233445566778899"
+    private val z = "11223344556677889900aabbccddeeff"
+
+    /**
+     * Review of the iOS mirror, defect 1: held on "opened again", the member unlocks (result W) and taps "Lock it now"
+     * while that unlock is in flight; the status read is answered under Z and arrives after W bound the pending lock.
+     * The late answer is dropped: the lock stays on W, and ends the member's own opening.
+     */
+    @Test
+    fun aStatusAnswerFromBeforeAnUnlockThatCameSinceIsNotBoundToTheLock() = runTest {
+        val store = Store()
+        val vault = Vault().apply { outcomes += LockOutcome.OPENED_AGAIN }
+        val k = LockKeeper(backgroundScope, store, vault, { Instant.EPOCH }, { Duration.ofHours(1) })
+        k.ask(k.begin(old))
+        assertTrue(k.openedAgain)
+        // The unlock is in flight when the member taps: pending unbound, the mark taken before the read.
+        var mine = 0L
+        var mark = 0L
+        // The unlock succeeds (W) and rebinds the pending lock.
+        k.unlocking({ true }, { w }) {
+            mine = k.begin(null)
+            mark = k.openingMark()
+            "ok"
+        }
+        assertEquals(w, store.record.unlockId)
+        assertTrue("the newer lock stays pending", k.pending)
+        // The late answer, under Z.
+        k.rebind(mine, z, mark)
+        assertEquals(w, store.record.unlockId)
+        assertEquals(w, k.boundUnlockId)
+        assertTrue(k.ask(mine.also { vault.outcomes += LockOutcome.LOCKED }))
+        assertEquals("the lock names W, never Z", w, vault.bound.last())
+    }
+
+    /** The same race when the unlock result names none: the stale answer must not bind the lock either. */
+    @Test
+    fun aLateAnswerDoesNotBindEvenWhenTheUnlockNamedNone() = runTest {
+        val store = Store()
+        val k = LockKeeper(backgroundScope, store, Vault(), { Instant.EPOCH }, { Duration.ofHours(1) })
+        var mine = 0L
+        var mark = 0L
+        k.unlocking({ true }, { null }) {
+            mine = k.begin(null)
+            mark = k.openingMark()
+            "ok"
+        }
+        k.rebind(mine, z, mark)
+        assertNull(k.boundUnlockId)
+        assertNull(store.record.unlockId)
+    }
+
+    /** Defect 2: "opened again" forgets the dead name; the keeper says which one it was. */
+    @Test
+    fun openedAgainForgetsTheDeadOpening() = runTest {
+        val forgotten = mutableListOf<String?>()
+        val vault = Vault().apply { outcomes += LockOutcome.OPENED_AGAIN }
+        val k = LockKeeper(backgroundScope, Store(), vault, { Instant.EPOCH }, { Duration.ofHours(1) }, onOpenedAgain = { forgotten += it })
+        k.ask(k.begin(old))
+        assertEquals(listOf<String?>(old), forgotten)
+        assertEquals(old, k.deadUnlockId)
+        // A new lock, or an unlock here, ends that.
+        k.begin(null)
+        assertNull(k.deadUnlockId)
     }
 }

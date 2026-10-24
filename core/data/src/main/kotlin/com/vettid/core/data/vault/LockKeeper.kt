@@ -143,6 +143,8 @@ class LockKeeper(
     private val backoff: (attempts: Int) -> Duration = ::defaultBackoff,
     private val retryNowEvery: Duration = RETRY_NOW_EVERY,
     private val onSaveFailed: (Exception) -> Unit = {},
+    /** (Release L) A lock ended as [LockNotice.OpenedAgain]: the opening it was bound to is dead; its name is to be forgotten. */
+    private val onOpenedAgain: (dead: String?) -> Unit = {},
 ) {
     private val gate = Mutex()
     private val noticeFlow = MutableStateFlow<LockNotice>(LockNotice.None)
@@ -169,6 +171,17 @@ class LockKeeper(
     /** (Release L) The lock ended as [LockNotice.OpenedAgain]: this phone stays locked until an unlock here. */
     @Volatile
     private var held = false
+
+    /**
+     * (Release L) The opening the last lock was bound to when it ended as "opened again": dead, so a `vault.locking` that
+     * names it says nothing about the vault now. Memory only (a new process knows no name; only a status read decides).
+     */
+    @Volatile
+    private var deadId: String? = null
+
+    /** How many unlocks succeeded here; a "Lock it now" status read taken before one is not applied after it ([rebind]). */
+    @Volatile
+    private var openings = 0L
 
     /** What to tell the member; [LockNotice.Unconfirmed] exactly while a lock is pending. */
     val notice: StateFlow<LockNotice> = noticeFlow.asStateFlow()
@@ -223,6 +236,7 @@ class LockKeeper(
         boundTo = unlockId
         noticeFlow.value = LockNotice.Unconfirmed(t, 0)
         asks++
+        deadId = null
         val mine = ++epoch
         write { it.copy(pendingSinceMs = t.toEpochMilli(), unlockId = unlockId) }
         mine
@@ -244,13 +258,22 @@ class LockKeeper(
     /** (Release L) The last lock ended as [LockNotice.OpenedAgain], and no unlock here followed: not known locked. */
     val openedAgain: Boolean get() = held
 
+    /** The dead opening's name while held and no lock is pending; null otherwise, or when it was not known. */
+    val deadUnlockId: String? get() = if (held && !pending) deadId else null
+
+    /** (Release L, "Lock it now") The mark taken before the status read whose answer [rebind] may apply. */
+    fun openingMark(): Long = openings
+
     /**
      * (Release L, "Lock it now") Binds the lock [mine], begun unbound, to [unlockId] before its first attempt; nothing
-     * if another lock or an unlock took its place meanwhile. Null leaves it unbound (as before L).
+     * if another lock or an unlock took its place meanwhile. Null leaves it unbound (as before L). [mark]
+     * ([openingMark], taken before the status was read): an unlock that succeeded since makes the answer one of the
+     * opening before, which is dropped (the F1 rule): the lock keeps what that unlock bound it to, or stays unbound.
      */
-    fun rebind(mine: Long, unlockId: String?) {
+    fun rebind(mine: Long, unlockId: String?, mark: Long) {
         synchronized(this) {
-            if (epoch != mine || !pending || unlockId == null) return
+            if (epoch != mine || !pending || openings != mark) return
+            if (unlockId == null) return
             boundTo = unlockId
             write { it.copy(unlockId = unlockId) }
         }
@@ -315,6 +338,7 @@ class LockKeeper(
             retries = null
             boundTo = null
             held = false
+            deadId = null
             relayUntilMs = null // nothing of this phone's is on its way to a vault it still holds
             write { if (it != LockRecord()) LockRecord() else null }
             noticeFlow.value = LockNotice.None
@@ -348,6 +372,7 @@ class LockKeeper(
         val result = unlock()
         if (opened(result)) {
             synchronized(this) {
+                openings++
                 // A lock asked for while this unlock was on its way is newer than it: it stays, and is tried next.
                 if (asks == before) {
                     epoch++
@@ -355,6 +380,7 @@ class LockKeeper(
                     retries = null
                     boundTo = null
                     held = false
+                    deadId = null
                     relayUntilMs = null
                     write { if (it != LockRecord()) LockRecord() else null }
                     noticeFlow.value = LockNotice.None
@@ -364,6 +390,7 @@ class LockKeeper(
                     val id = unlockIdOf(result)
                     boundTo = id
                     held = false
+                    deadId = null
                     write { it.copy(unlockId = id, held = false, heldConfirmed = false) }
                 }
             }
@@ -419,8 +446,11 @@ class LockKeeper(
         epoch++
         retries?.cancel()
         retries = null
+        val dead = boundTo
         boundTo = null
         held = notice == LockNotice.OpenedAgain
+        deadId = if (held) dead else null
+        if (held) onOpenedAgain(dead)
         // The relay lock's time stays: its request may still be waiting for the vault. Held is kept on the phone too.
         write { it.copy(pendingSinceMs = null, unlockId = null, held = held, heldConfirmed = false) }
         noticeFlow.value = notice
