@@ -37,6 +37,9 @@ enum class DeletionCheck {
      */
     UNCONFIRMED,
 
+    /** As [UNCONFIRMED], and the 401 was for the phone's clock (a date/time hint is shown). Never erases. */
+    UNCONFIRMED_CLOCK,
+
     /** The member API could not be reached (network, timeout, 5xx, paused): nothing is concluded. */
     UNREACHABLE,
 }
@@ -119,7 +122,22 @@ object VaultDeletion {
      * UNREACHABLE.
      */
     fun ofFailure(kind: FailureKind): DeletionCheck =
-        if (kind == FailureKind.UNAUTHORIZED || kind == FailureKind.CLOCK) DeletionCheck.UNCONFIRMED else DeletionCheck.UNREACHABLE
+        when (kind) {
+            FailureKind.UNAUTHORIZED -> DeletionCheck.UNCONFIRMED
+            FailureKind.CLOCK -> DeletionCheck.UNCONFIRMED_CLOCK
+            else -> DeletionCheck.UNREACHABLE
+        }
+
+    /**
+     * What a failed read says, looking at the error itself: a 403 (`forbidden`, which [VaultManager.memberFailure] maps to
+     * OTHER) is UNCONFIRMED like a 401 (the API answered, but not definitely); 5xx, 429 and the rest stay as [ofFailure].
+     */
+    fun ofFailure(f: VaultFailure): DeletionCheck {
+        val forbidden = f.code == "forbidden" || (f.cause as? com.vettid.core.altchan.MemberApiException)?.status == HTTP_FORBIDDEN
+        return if (forbidden) DeletionCheck.UNCONFIRMED else ofFailure(f.kind)
+    }
+
+    private const val HTTP_FORBIDDEN = 403
 
     /** What one status answer showed: whether it lists a vault, and whether the service is paused. */
     data class StatusSeen(val vaultListed: Boolean, val servicePaused: Boolean)
@@ -134,7 +152,7 @@ object VaultDeletion {
         onPaused(a.servicePaused)
         ofStatus(vaultListed = a.vaultListed, servicePaused = a.servicePaused)
     } catch (e: VaultFailure) {
-        ofFailure(e.kind)
+        ofFailure(e)
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (_: RuntimeException) {
@@ -144,8 +162,11 @@ object VaultDeletion {
     /**
      * Whether a deletion that began at [sinceMs] is past its bound at [nowMs]. A clock that went back before [sinceMs] is
      * past it too (the wall clock cannot be trusted to count down), so "Check again" and "Remove" are never hidden by it.
+     * A step back of up to [CLOCK_TOLERANCE_MS] (an NTP correction) does not count.
      */
-    fun pastBound(sinceMs: Long, untilMs: Long, nowMs: Long): Boolean = nowMs >= untilMs || nowMs < sinceMs
+    fun pastBound(sinceMs: Long, untilMs: Long, nowMs: Long): Boolean = nowMs >= untilMs || nowMs < sinceMs - CLOCK_TOLERANCE_MS
+
+    private const val CLOCK_TOLERANCE_MS = 60_000L
 
     internal fun pastBound(m: DeletingMarker, nowMs: Long = System.currentTimeMillis()): Boolean = pastBound(m.sinceMs, m.untilMs, nowMs)
 }

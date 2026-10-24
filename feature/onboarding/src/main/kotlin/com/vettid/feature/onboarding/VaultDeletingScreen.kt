@@ -162,13 +162,16 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                         stringResource(
                             when (c) {
                                 DeletionCheck.LISTED -> R.string.vault_deleting_still
-                                DeletionCheck.UNCONFIRMED -> R.string.vault_deleting_cannot_confirm
+                                DeletionCheck.UNCONFIRMED, DeletionCheck.UNCONFIRMED_CLOCK -> R.string.vault_deleting_cannot_confirm
                                 else -> R.string.vault_deleting_unreachable
                             },
                         ),
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("vault_deleting_check").semantics { liveRegion = LiveRegionMode.Polite },
                     )
+                    if (c == DeletionCheck.UNCONFIRMED_CLOCK) {
+                        Text(stringResource(R.string.vault_deleting_clock_hint), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
             Column(

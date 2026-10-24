@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.altchan.MemberApiException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -41,9 +42,9 @@ class VaultDeletionTest {
         // a bare 401 (any kind) is not a definite answer
         for (k in FailureKind.values()) assertNotEquals(DeletionCheck.GONE, VaultDeletion.ofFailure(k))
         assertEquals(DeletionCheck.UNCONFIRMED, VaultDeletion.ofFailure(FailureKind.UNAUTHORIZED))
-        assertEquals(DeletionCheck.UNCONFIRMED, VaultDeletion.ofFailure(FailureKind.CLOCK))
+        assertEquals(DeletionCheck.UNCONFIRMED_CLOCK, VaultDeletion.ofFailure(FailureKind.CLOCK))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.NETWORK))
-                assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.SERVICE_PAUSED))
+        assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofFailure(FailureKind.SERVICE_PAUSED))
         // `{vault: null}` while the service is paused concludes nothing.
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = false, servicePaused = true))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.ofStatus(vaultListed = true, servicePaused = true))
@@ -51,9 +52,17 @@ class VaultDeletionTest {
 
     @Test
     fun readCheckNeverSaysGoneAndKeepsTheMappingOfEachAnswer() = runTest {
-        suspend fun fail(k: FailureKind) = VaultDeletion.readCheck { throw VaultFailure(k) }
+        suspend fun viaStatus(status: Int) =
+            VaultDeletion.readCheck { throw VaultFailure(FailureKind.OTHER, cause = MemberApiException(status, "x")) }
+        suspend fun fail(k: FailureKind, code: String? = null) = VaultDeletion.readCheck { throw VaultFailure(k, code) }
         assertEquals(DeletionCheck.UNCONFIRMED, fail(FailureKind.UNAUTHORIZED)) // a 401
-        assertEquals(DeletionCheck.UNCONFIRMED, fail(FailureKind.CLOCK))
+        assertEquals(DeletionCheck.UNCONFIRMED_CLOCK, fail(FailureKind.CLOCK))
+        // A 403 (kind OTHER, code forbidden, or a MemberApiException with status 403) is unconfirmed; 5xx and 429 are not.
+        assertEquals(DeletionCheck.UNCONFIRMED, fail(FailureKind.OTHER, code = "forbidden"))
+        assertEquals(DeletionCheck.UNCONFIRMED, viaStatus(403))
+        assertEquals(DeletionCheck.UNREACHABLE, viaStatus(503))
+        assertEquals(DeletionCheck.UNREACHABLE, viaStatus(500))
+        assertEquals(DeletionCheck.UNREACHABLE, fail(FailureKind.RATE_LIMITED))
         assertEquals(DeletionCheck.UNREACHABLE, fail(FailureKind.NETWORK))
         assertEquals(DeletionCheck.UNREACHABLE, fail(FailureKind.SERVICE_PAUSED))
         assertEquals(DeletionCheck.UNREACHABLE, VaultDeletion.readCheck { throw IllegalStateException("x") })
@@ -84,9 +93,12 @@ class VaultDeletionTest {
     }
 
     @Test
-    fun aClockMovedBackIsPastTheBoundAndNeverWaitsLong() = runTest {
+    fun aClockMovedBackIsPastTheBoundWithinATolerance() = runTest {
         assertTrue(VaultDeletion.pastBound(1_000_000L, 1_000_000L + 10 * min, 1_000_000L - 24 * 60 * min))
         assertFalse(VaultDeletion.pastBound(0, 10 * min, 5 * min))
+        // A small step back (an NTP correction) is not past the bound; a larger one is.
+        assertFalse(VaultDeletion.pastBound(1_000_000L, 1_000_000L + 10 * min, 1_000_000L - 59_000L))
+        assertTrue(VaultDeletion.pastBound(1_000_000L, 1_000_000L + 10 * min, 1_000_000L - 61_000L))
         assertTrue(VaultDeletion.pastBound(0, 10 * min, 10 * min))
         // A watch started with the event "in the future" is slow at once and sets no day-long wait.
         val r = Reads(ArrayDeque())
