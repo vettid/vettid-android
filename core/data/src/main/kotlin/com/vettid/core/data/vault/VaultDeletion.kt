@@ -19,14 +19,32 @@ import kotlinx.serialization.Serializable
 @Serializable
 internal data class DeletingMarker(val vaultId: String, val sinceMs: Long, val untilMs: Long)
 
+/**
+ * (ANDROID-PLAN 0.1.78 §4 "A vault being deleted", 5) The marker `deleted_api {vault_id, since, until, code}`: the member
+ * API said `410 vault_deleted` or `410 account_deleted` (signal (b) alone, no word from the vault). [untilMs] is
+ * [sinceMs] + 10 minutes, not scaled by the staging time scale; [code] is the 410's `code`.
+ */
+@Serializable
+internal data class DeletedApiMarker(val vaultId: String, val sinceMs: Long, val untilMs: Long, val code: String) {
+    /** The same times as the watch's marker, so that one [DeletionWatch] serves both states. */
+    fun watch(): DeletingMarker = DeletingMarker(vaultId, sinceMs, untilMs)
+}
+
 /** What one read of `GET /api/vault/status` says of a vault being deleted. */
 enum class DeletionCheck {
     /**
-     * A definite word that the vault is gone. Nothing reads it automatically yet (owner decision 2026-10-24): neither
-     * `{vault: null}` (advisory) nor a bare `401` (the member API gives the same 401 for ts, nonce, signature and other
-     * faults) is definite. A future `410 vault_deleted` from the member API is the signal meant for this.
+     * A definite word that the vault is gone, **reachable only from `410 vault_deleted` / `410 account_deleted`** (MEMBER-API
+     * 2.11.0; [VaultDeletion.readCheck]): neither `{vault: null}` (advisory) nor a bare `401` (the member API gives the same
+     * 401 for ts, nonce, signature and other faults) is definite. The app acts on it by erasing only with the vault's own
+     * word as well ([VaultDeletion.resolve]); a 410 alone is [API_ONLY].
      */
     GONE,
+
+    /**
+     * The member API said `410 vault_deleted` / `410 account_deleted`, and the phone has no word from the vault (no
+     * `device.unlinked{vault_deleted}`, no answer to its own `vault.delete`): "Your vault was deleted", nothing erased.
+     */
+    API_ONLY,
 
     /** The vault is still listed, whatever its `state`. */
     LISTED,
@@ -48,6 +66,7 @@ enum class DeletionCheck {
  * The bound and the re-reads of "being deleted" (VAULT-MESSAGING §12.5: the member API reads the vault as gone only after
  * step 5, MEMBER-API "Vault deletion").
  */
+@Suppress("TooManyFunctions") // the rules of one state, each a pure function
 object VaultDeletion {
     /** The bound: 10 minutes after the event. */
     const val BOUND_MS = 10 * 60 * 1000L
@@ -133,11 +152,40 @@ object VaultDeletion {
      * OTHER) is UNCONFIRMED like a 401 (the API answered, but not definitely); 5xx, 429 and the rest stay as [ofFailure].
      */
     fun ofFailure(f: VaultFailure): DeletionCheck {
+        if (isGone410(f)) return DeletionCheck.GONE
         val forbidden = f.code == "forbidden" || (f.cause as? com.vettid.core.altchan.MemberApiException)?.status == HTTP_FORBIDDEN
         return if (forbidden) DeletionCheck.UNCONFIRMED else ofFailure(f.kind)
     }
 
     private const val HTTP_FORBIDDEN = 403
+    private const val HTTP_GONE = 410
+
+    /** The `code`s of the member API's `410` that say the vault is gone (MEMBER-API 2.11.0). Not `release_unavailable`. */
+    const val CODE_VAULT_DELETED = "vault_deleted"
+    const val CODE_ACCOUNT_DELETED = "account_deleted"
+
+    /**
+     * Whether [f] is the member API's definite `410 vault_deleted` / `410 account_deleted`: read from the error itself (status
+     * and code), never from a [FailureKind] alone, so that no other refusal can be taken for it.
+     */
+    fun isGone410(f: VaultFailure): Boolean {
+        val e = f.cause as? com.vettid.core.altchan.MemberApiException ?: return false
+        return e.status == HTTP_GONE && (e.code == CODE_VAULT_DELETED || e.code == CODE_ACCOUNT_DELETED)
+    }
+
+    /**
+     * What a [DeletionCheck.GONE] allows (owner decisions of 2026-10-24, VAULT-MESSAGING 0.57.0 §12.5): with the vault's own
+     * word ([vaultWord]: the phone is in "being deleted" from `device.unlinked{vault_deleted}` or its own `vault.delete`
+     * answer) the phone erases; with the 410 alone it is [DeletionCheck.API_ONLY]. Every other check is as it is.
+     */
+    fun resolve(check: DeletionCheck, vaultWord: Boolean): DeletionCheck =
+        if (check == DeletionCheck.GONE && !vaultWord) DeletionCheck.API_ONLY else check
+
+    /** The bound of a 410 without the vault's word: 10 minutes after the first 410, never scaled. */
+    fun apiUntilMs(sinceMs: Long): Long = sinceMs + BOUND_MS
+
+    /** A status that lists the vault again removes the `deleted_api` marker and returns to the unlock screen. */
+    fun clearsApiMarker(check: DeletionCheck): Boolean = check == DeletionCheck.LISTED
 
     /** What one status answer showed: whether it lists a vault, and whether the service is paused. */
     data class StatusSeen(val vaultListed: Boolean, val servicePaused: Boolean)

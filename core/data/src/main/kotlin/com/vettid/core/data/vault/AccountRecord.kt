@@ -139,6 +139,12 @@ internal data class LocalAccount(
      * Deleted with the move to "no vault" and at a wipe.
      */
     val deleting: DeletingMarker? = null,
+    /**
+     * (ANDROID-PLAN 0.1.78 §4 "A vault being deleted", 5) The marker `deleted_api {vault_id, since, until, code}` of a `410
+     * vault_deleted` / `account_deleted` without the vault's word: the keys and the device session are kept. Deleted with
+     * the move to "no vault", at a wipe, and when a status lists the vault again.
+     */
+    val deletedApi: DeletedApiMarker? = null,
     /** (0.1.54) "Your vault was deleted" is to be said once on "no vault" (a record of its own after the deletion). */
     val deletedNotice: Boolean = false,
 ) {

@@ -111,8 +111,9 @@ interface AccountRepository {
 
     /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") "Check again" on the "still finishing" screen: one read of `GET
-     * /api/vault/status`; a tap while one runs waits for it. [DeletionCheck.GONE] (only a definite signal; none yet) has moved the app to
-     * "no vault"; every other answer leaves "being deleted" as it is.
+     * /api/vault/status`; a tap while one runs waits for it.
+     * [DeletionCheck.GONE] (only `410 vault_deleted` / `account_deleted`, and only with the vault's own
+     * word) has moved the app to "no vault"; [DeletionCheck.API_ONLY] (the 410 alone) and every other answer leave the state as it is.
      */
     suspend fun checkDeletion(): DeletionCheck = DeletionCheck.LISTED
 
