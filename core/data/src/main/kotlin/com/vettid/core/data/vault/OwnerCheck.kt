@@ -150,6 +150,7 @@ data class OwnerCheckNotice(
 )
 
 /** The daily owner check (§3.6) for the app's screens. Every failure is a [VaultFailure] or an [OwnerCheckOutcome]. */
+@Suppress("TooManyFunctions") // one per thing the screens ask of the owner check
 interface OwnerCheckRepository {
     /** Null until the vault reported its owner check (or for a vault older than 0.13.0). */
     val ownerCheck: StateFlow<OwnerCheckView?>
@@ -168,6 +169,18 @@ interface OwnerCheckRepository {
      * ([refreshIdleLockSetting]).
      */
     val idleLockSetting: StateFlow<IdleLockSetting?> get() = NO_IDLE_SETTING
+
+    /**
+     * (Release L) Why the locked vault is locked, if it locked itself: the notice ([idleLocked]), or, lacking it (the
+     * phone was off), a time past the [OwnerCheckView.idleLockAt] the app last read ("the app says why from the notice
+     * or, lacking it, from `idle_lock_at` as it last read it"), unless the member locked it on this phone since.
+     */
+    fun idleLockedNow(now: Instant): IdleLocked? = idleLocked.value ?: ownerCheck.value?.let { v ->
+        v.idleLockAt?.takeIf { !now.isBefore(it) }?.let { IdleLocked(v.idleAfterSeconds) }
+    }
+
+    /** (Release L) The member locked the vault on this phone: a later unlock screen does not say it locked itself. */
+    fun onLockedHere() {}
 
     /** Reads `idle_lock.after_seconds` (`settings.get`); quiet for a vault before L, which does not list it. */
     suspend fun refreshIdleLockSetting() {}
@@ -223,15 +236,6 @@ interface OwnerCheckRepository {
 private val NOT_SET: StateFlow<Boolean> = kotlinx.coroutines.flow.MutableStateFlow(false)
 private val NO_IDLE_LOCK: StateFlow<IdleLocked?> = kotlinx.coroutines.flow.MutableStateFlow(null)
 private val NO_IDLE_SETTING: StateFlow<IdleLockSetting?> = kotlinx.coroutines.flow.MutableStateFlow(null)
-
-/**
- * (Release L, §3.6.8) Why the locked vault is locked, if it locked itself: the notice ([OwnerCheckRepository.idleLocked]),
- * or, lacking it (the phone was off), a time past the [OwnerCheckView.idleLockAt] the app last read ("the app says why
- * from the notice or, lacking it, from `idle_lock_at` as it last read it"). Only for a vault that is locked.
- */
-fun OwnerCheckRepository.idleLockedNow(now: Instant): IdleLocked? = idleLocked.value ?: ownerCheck.value?.let { v ->
-    v.idleLockAt?.takeIf { !now.isBefore(it) }?.let { IdleLocked(v.idleAfterSeconds) }
-}
 
 /** Turning the hold off (§3.6.7): [until] at most 30 days ahead, or null. */
 data class HoldOff(val until: Instant?)

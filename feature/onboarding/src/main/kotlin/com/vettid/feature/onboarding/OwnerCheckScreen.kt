@@ -124,7 +124,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
             // (Release L, §3.6.8) The held and daily-check screens say when the vault locks itself.
-            idleLockAtOf(state.mode, v)?.let {
+            idleLockAtOf(state.mode, v, Instant.now())?.let {
                 Text(
                     stringResource(R.string.ownercheck_idle_lock_at, Times.full(it)),
                     style = MaterialTheme.typography.bodyMedium,
@@ -241,9 +241,11 @@ data class WaitingCardModel(val counts: WaitingCounts?, val held: Boolean?)
 
 /**
  * (Release L, VAULT-MESSAGING 0.29.0 §3.6.8) When the vault locks itself if no check is passed, as it last said: on the
- * gated check (held, or due with the hold off) only; null for a vault before L.
+ * gated check (held, or due with the hold off) only; null for a vault before L, and once that time has passed (a call
+ * in progress delays the lock; the line would name a time gone by).
  */
-fun idleLockAtOf(mode: OwnerCheckMode, v: OwnerCheckView?): Instant? = v?.idleLockAt?.takeIf { mode == OwnerCheckMode.GATED }
+fun idleLockAtOf(mode: OwnerCheckMode, v: OwnerCheckView?, now: Instant): Instant? =
+    v?.idleLockAt?.takeIf { mode == OwnerCheckMode.GATED && now.isBefore(it) }
 
 /**
  * The waiting card whenever the check gates the app ([OwnerCheckMode.GATED]), also while the phone's clock has passed

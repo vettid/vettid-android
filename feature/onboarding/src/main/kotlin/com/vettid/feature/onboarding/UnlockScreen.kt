@@ -223,11 +223,12 @@ fun UnlockContent(
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.unlock_idle_locked_title),
+                    // The staging note where a scaled wait is shown (ANDROID-PLAN 0.1.44).
                     if (after != null) {
                         stringResource(R.string.unlock_idle_locked_body, durationText(after))
                     } else {
                         stringResource(R.string.unlock_idle_locked_body_unknown)
-                    },
+                    } + stagingNoteSuffix(),
                     modifier = Modifier.testTag("unlock_idle_locked"),
                 )
             } else if (state.checkDue) {

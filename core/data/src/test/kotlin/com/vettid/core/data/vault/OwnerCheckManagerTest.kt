@@ -526,12 +526,20 @@ class OwnerCheckManagerTest {
         assertNull(m.ownerCheck.value!!.idleLockAt)
     }
 
+    /** Before the deadline: `idle_lock_at` − `deadline` is the value in force (later on it can move, §3.6.8). */
+    private suspend fun readBeforeTheDeadline(ops: Ops, m: OwnerCheckManager) {
+        ops.status = OwnerCheckStatus("ok", "2026-10-06T13:00:00Z", 86_400, idleLockAt = "2026-10-13T13:00:00Z")
+        m.refreshOwnerCheck()
+        ops.status = OwnerCheckStatus("held", deadline, 86_400, hold = true, idleLockAt = idleAt)
+        m.refreshOwnerCheck()
+    }
+
     /** `vault.locking{reason: "idle"}`: said until the vault opens again, with how long past the deadline it was. */
     @Test
     fun anIdleLockIsSaidUntilTheVaultOpensAgain() = runTest {
-        val ops = Ops().apply { status = OwnerCheckStatus("held", deadline, 86_400, hold = true, idleLockAt = idleAt) }
+        val ops = Ops()
         val m = manager(ops)
-        m.refreshOwnerCheck()
+        readBeforeTheDeadline(ops, m)
         assertNull(m.idleLocked.value)
         m.onEvent(event("vault.locking", """{"reason":"owner_check"}"""))
         assertNull("another reason", m.idleLocked.value)
@@ -546,14 +554,52 @@ class OwnerCheckManagerTest {
     /** Without the notice (the phone was off): a time past the `idle_lock_at` last read says why; before it, nothing. */
     @Test
     fun withoutTheNoticeTheTimeLastReadSaysWhy() = runTest {
-        val ops = Ops().apply { status = OwnerCheckStatus("held", deadline, 86_400, hold = true, idleLockAt = idleAt) }
+        val ops = Ops()
         val m = manager(ops)
-        m.refreshOwnerCheck()
+        readBeforeTheDeadline(ops, m)
         assertNull(m.idleLockedNow(Instant.parse(idleAt).minusSeconds(1)))
         assertEquals(IdleLocked(604_800), m.idleLockedNow(Instant.parse(idleAt)))
         ops.status = OwnerCheckStatus("held", deadline, 86_400, hold = true)
         m.refreshOwnerCheck()
         assertNull("a vault before L says nothing of it", m.idleLockedNow(Instant.parse(idleAt).plusSeconds(60)))
+    }
+
+    /**
+     * Review of #191, D1: an unlock past the idle lock's time moves `idle_lock_at` to one hour after it; the notice
+     * still says how long past the deadline the vault was set to wait, not that time plus the gap and the hour.
+     */
+    @Test
+    fun theTimeSaidIsTheValueInForceNotAMovedIdleLockTime() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        readBeforeTheDeadline(ops, m)
+        ops.status = OwnerCheckStatus("held", deadline, 86_400, hold = true, idleLockAt = "2026-10-14T15:17:00Z")
+        m.refreshOwnerCheck()
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertEquals(IdleLocked(604_800), m.idleLocked.value)
+        // Never read before the deadline: not known (the plain text), never a made-up figure.
+        stored = null
+        val fresh = manager(Ops().apply { status = OwnerCheckStatus("held", deadline, 86_400, idleLockAt = "2026-10-14T15:17:00Z") })
+        fresh.refreshOwnerCheck()
+        fresh.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertEquals(IdleLocked(null), fresh.idleLocked.value)
+    }
+
+    /** Review of #191, D2: after the member's own lock on this phone, the unlock screen does not say it locked itself. */
+    @Test
+    fun aLockMadeHereIsNotSaidToBeAnIdleLock() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        readBeforeTheDeadline(ops, m)
+        m.onLockedHere()
+        assertNull(m.idleLockedNow(Instant.parse(idleAt).plusSeconds(60)))
+        assertNull("kept across a restart", manager(Ops()).idleLockedNow(Instant.parse(idleAt).plusSeconds(60)))
+        m.onOpened()
+        assertEquals(IdleLocked(604_800), m.idleLockedNow(Instant.parse(idleAt).plusSeconds(60)))
+        // The vault's own notice is said whoever locked before.
+        m.onLockedHere()
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertEquals(IdleLocked(604_800), m.idleLockedNow(Instant.parse(idleAt).plusSeconds(60)))
     }
 
     /**

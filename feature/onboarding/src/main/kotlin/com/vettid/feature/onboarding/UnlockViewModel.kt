@@ -14,7 +14,6 @@ import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
-import com.vettid.core.data.vault.idleLockedNow
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay

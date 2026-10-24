@@ -2082,6 +2082,8 @@ class VaultManager(
      */
     override suspend fun lock() {
         lockedHere = true
+        // (Release L) Not "locked itself" on a later unlock screen: the member locked it here.
+        ownerCheck.onLockedHere()
         // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault" goes with the open vault.
         CredentialRequired.clear()
         // A phase being computed now (a refresh, the end of an unlock) is not published after this.

@@ -89,6 +89,16 @@ class OwnerCheckManager(
 
     /** (Release L) The lowest idle-lock value set since the last check, when one was set; null: the set value is in force. */
     private var idleInForce: Long? = saved?.idleInForce
+
+    /**
+     * (Release L) How long past the deadline the vault locks itself, as read while the check was not yet due (then
+     * `idle_lock_at` − `deadline` is the value in force; past the deadline an unlock's extra hour or a call can move
+     * `idle_lock_at`, and the difference no longer says how long the member was away). Null: never read.
+     */
+    private var idleAfterKnown: Long? = saved?.idleAfterKnown
+
+    /** (Release L) The member locked the vault on this phone since it last opened. */
+    private var lockedHere: Boolean = saved?.lockedHere == true
     private val idleSettingFlow = MutableStateFlow<IdleLockSetting?>(null)
 
     /**
@@ -137,7 +147,7 @@ class OwnerCheckManager(
                 // (Release L, §3.6.8) It locked itself: said on the unlock screen and in the notification, with how
                 // long past the deadline that was, as the vault last said.
                 REASON_IDLE -> {
-                    idleFlow.value = IdleLocked(view.value?.idleAfterSeconds)
+                    idleFlow.value = IdleLocked(idleAfterKnown)
                     view.value?.let { set(it) }
                 }
             }
@@ -180,8 +190,9 @@ class OwnerCheckManager(
 
     /** The vault is open again: it no longer is locked by itself. */
     private fun endIdleLocked() {
-        if (idleFlow.value == null) return
+        if (idleFlow.value == null && !lockedHere) return
         idleFlow.value = null
+        lockedHere = false
         view.value?.let { set(it) }
     }
 
@@ -257,6 +268,7 @@ class OwnerCheckManager(
             heldTs = null
             presenceFromCheck(r)
             idleFlow.value = null
+            lockedHere = false
             checkPassedForIdleLock()
             set(
                 OwnerCheckView(
@@ -324,6 +336,14 @@ class OwnerCheckManager(
         val o = ops()
         val current = o.settingsGet()
         if (current.settings[key] != value) o.settingsSet(current.version, mapOf(key to value))
+    }
+
+    override fun idleLockedNow(now: Instant): IdleLocked? = idleFlow.value
+        ?: view.value?.idleLockAt?.takeIf { !lockedHere && !now.isBefore(it) }?.let { IdleLocked(idleAfterKnown) }
+
+    override fun onLockedHere() {
+        lockedHere = true
+        view.value?.let { set(it) }
     }
 
     // --- the idle lock's setting (release L, §3.6.8) ---
@@ -422,6 +442,8 @@ class OwnerCheckManager(
         checkAfterCancelFlow.value = false
         idleFlow.value = null
         idleInForce = null
+        idleAfterKnown = null
+        lockedHere = false
         idleSettingFlow.value = null
         runCatching { persist(ByteArray(0)) }
     }
@@ -437,10 +459,14 @@ class OwnerCheckManager(
 
     private fun set(v: OwnerCheckView) {
         view.value = v
+        // Before the deadline the idle lock's time is the deadline plus the value in force (§3.6.8).
+        val d = v.deadline
+        if (v.state == OwnerCheckState.OK && d != null && now().isBefore(d)) v.idleAfterSeconds?.let { idleAfterKnown = it }
         val idle = idleFlow.value
         val saved = Saved.of(v, heldTs).copy(
             presenceUnrecorded = presenceFlow.value, presenceCheckAt = presenceCheckAt?.toString(),
             idleLocked = idle != null, idleAfter = idle?.afterSeconds, idleInForce = idleInForce,
+            idleAfterKnown = idleAfterKnown, lockedHere = lockedHere,
         )
         runCatching { persist(json.encodeToString(Saved.serializer(), saved).toByteArray()) }
     }
@@ -477,6 +503,8 @@ class OwnerCheckManager(
         val idleLocked: Boolean = false,
         val idleAfter: Long? = null,
         val idleInForce: Long? = null,
+        val idleAfterKnown: Long? = null,
+        val lockedHere: Boolean = false,
     ) {
         fun toView() = OwnerCheckView(
             runCatching { OwnerCheckState.valueOf(state) }.getOrDefault(OwnerCheckState.OK),
