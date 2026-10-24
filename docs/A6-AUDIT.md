@@ -22,12 +22,12 @@ changed.
 Re-checked against master `91b17407` (2026-10-23) by reading the code; nothing was run on a phone.
 Line numbers in the findings below are those of the audited commit and have moved since.
 
-**Blockers: all seven fixed or in review.**
+**Blockers: four fixed earlier, N2 fixed now, N1 and N3 in review.**
 
 | Finding | Status | Where | Tests |
 |---|---|---|---|
 | N1 transfer resume | Fix in review | #187 | `VaultDeviceTest.aTransferKilledAfterTheCodeIsCompletedByALateDevicePaired`, `aWaitThatEndsDropsNothing`, `aTransferWithoutACodeOrRejectedIsNotResumed`; `TransferInViewModelTest.aRestartWhileWaitingShowsTheCodeAndWaitsAgain`, `aTimedOutTransferIsDroppedOnlyByAConfirmedCancel`, `cancellingDropsTheHandshake` |
-| N2 outbox replay | Fix in review | #185 | `VaultDeviceTest.aRequestThatFailedInTransportIsNeverDeliveredLater`, `aRequestInProgressIsNotStoredForAfterAKill`, `requestsQueuedByAnEarlierVersionAreDroppedAtLoad` |
+| N2 outbox replay | Fixed | #185 `304f95ce` | `VaultDeviceTest.aRequestThatFailedInTransportIsNeverDeliveredLater`, `aRequestInProgressIsNotStoredForAfterAKill`, `requestsQueuedByAnEarlierVersionAreDroppedAtLoad` |
 | N3 enrolment resume | Fix in review | #186 | `EnrolmentResumeTest` (a kill at each step), `AltRequestsTest.anEnrollmentRequestIsKeptOutstandingAcrossARestart`, `OnboardingViewModelTest.anOutstandingEnrollmentAfterARestartIsResumedWithoutANewPin` and three more |
 | E1 recovery cannot be left | Fixed | #121 `00f13564` | as listed in #121 |
 | R1 root navigation | Fixed | #119 `03d2d91b` | as listed in #119 |
@@ -149,7 +149,7 @@ Each of these was re-read line by line after it was first found.
 
 ### N2. A request that fails in transport is reported as failed, but stays in the persisted outbox and is executed later
 
-- **Status 2026-10-23:** fix in review, #185. Requests are never written to the outbox, only fire-and-forget messages are, and queued requests of earlier versions are dropped at load. N11 (client ids) stays open.
+- **Status 2026-10-23:** fixed, #185 (`304f95ce`). Requests are never written to the outbox, only fire-and-forget messages are, and queued requests of earlier versions are dropped at load. N11 (client ids) stays open.
 
 - **Status:** V on the client; what the vault does with the late request per spec.
 - **Evidence**
