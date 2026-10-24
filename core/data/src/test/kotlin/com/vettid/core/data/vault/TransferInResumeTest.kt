@@ -157,4 +157,28 @@ class TransferInResumeTest {
         assertTrue(second.await())
         assertEquals("nothing dropped", 0, drops)
     }
+
+    /**
+     * (#187 recheck) The screen's step 1 ms before the stored deadline (a timeout firing early, a clock set back) still
+     * collects and decides; a paired or a dropped transfer is no longer due.
+     */
+    @Test
+    fun theScreensStepJustBeforeTheDeadlineStillCollects() = runTest {
+        val early = at.plus(Duration.ofMinutes(11)).minusMillis(1)
+        assertTrue(TransferInResume.deadlineDue(shown, null, early))
+        assertTrue(TransferInResume.deadlineDue(shown, null, at.plus(Duration.ofMinutes(11))))
+        assertFalse(TransferInResume.deadlineDue(paired, "dev-2", early))
+        assertFalse(TransferInResume.deadlineDue(null, null, early))
+        var collects = 0
+        var drops = 0
+        val r = TransferInResume.Serial().run(
+            due = { TransferInResume.deadlineDue(shown, null, early) },
+            paired = { false },
+            collect = { collects++ },
+            drop = { drops++ },
+        )
+        assertFalse(r)
+        assertEquals("collected", 1, collects)
+        assertEquals("then decided: dropped", 1, drops)
+    }
 }

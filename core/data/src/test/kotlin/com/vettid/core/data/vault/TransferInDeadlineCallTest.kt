@@ -53,6 +53,8 @@ class TransferInDeadlineCallTest {
         assertEquals("device.start(scope)", code[start + 1])
         val dl = body("private suspend fun atTransferDeadline(")
         assertTrue(dl.any { it == "collect = { d.deadlineCollect() }," })
+        val due = "due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },"
+        assertTrue("due while waiting too", dl.any { it == due })
         assertTrue(dl.any { it.startsWith("d.start(scope)") })
         val after = body("private suspend fun afterUnlocked(")
         val take = after.indexOfFirst { it.startsWith("s.device.transferInPending?.takeIf { it.paired }") }

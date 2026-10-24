@@ -43,6 +43,15 @@ internal object TransferInResume {
     }
 
     /**
+     * (#187 recheck) Whether a deadline step still has to run: the transfer still waits ([Action.WAIT] or
+     * [Action.DEADLINE]). WAIT counts too: the screen's wait can end a moment before the stored deadline (a timeout fires
+     * up to a millisecond early, a clock set back), and its step must still collect and decide. After a first step the
+     * decision is COMPLETE or NONE, so a second one answers without dropping.
+     */
+    fun deadlineDue(t: TransferInState?, deviceId: String?, now: Instant): Boolean =
+        decide(t, deviceId, now) in setOf(Action.WAIT, Action.DEADLINE)
+
+    /**
      * At the deadline: unless [paired] already, one [collect] (bounded by [boundMs]; the handler applies a
      * `device.paired{transfer}` it brings), then [paired] again. True when paired; otherwise [drop] ran, also after a
      * collect that failed or timed out (an unreachable relay is no reason to keep the keys longer).

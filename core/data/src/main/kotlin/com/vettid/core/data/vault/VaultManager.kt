@@ -3046,7 +3046,7 @@ class VaultManager(
             // (#187 recheck) One deadline step at a time (the screen's wait and a start may both reach it), decided again
             // inside: a second one never drops what the first one's collect is about to apply.
             val paired = transferDeadline.run(
-                due = { TransferInResume.decide(d.transferInPending, d.deviceId, Instant.now()) == TransferInResume.Action.DEADLINE },
+                due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },
                 paired = { d.transferInPending?.paired == true && d.deviceId != null },
                 collect = { d.deadlineCollect() },
                 drop = { d.abandonTransfer() },

@@ -627,6 +627,22 @@ class VaultDeviceTest {
         }
     }
 
+    /** (#186 gap) A round of the background collection (start()) counts as a read of the mailbox too. */
+    @Test
+    fun aRoundOfTheRunningCollectionCountsAsARead() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val before = System.nanoTime()
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (!d.relayReadSince(before)) kotlinx.coroutines.delay(20)
+            assertTrue(d.relayReadSince(before))
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
     /** A terminal relay error on collecting ends the collection quietly; a later start collects again. */
     @Test
     fun aTerminalCollectErrorEndsTheCollectionWithoutEscaping() = runBlocking<Unit> {
