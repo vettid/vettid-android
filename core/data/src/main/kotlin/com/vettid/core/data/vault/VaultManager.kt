@@ -646,25 +646,14 @@ class VaultManager(
     /**
      * (Release R, §11.14.10; owner decision 2026-10-23) The check with the vault once a kept transfer's 7 days are over:
      * erases only on a definite answer; no answer means "check again" at the next start or return to the foreground.
-     * The record's counters are noted before the up-to-[KEPT_END_CHECK_MS] wait and read again after it: a lock, a reset
-     * or a wipe during it acts on nothing, and the "kept" write is conditional on both.
+     * The record (both counters and the approval's time) is noted before the up-to-[KEPT_END_CHECK_MS] wait, and every
+     * verdict is acted on only after a write conditional on it: a lock, a reset or a wipe during the wait acts on nothing.
      */
-    private val keptEnd = KeptTransferEnd(
-        pending = { local.transferApprovedAtMs != null },
-        mark = { KeptTransferEnd.Mark(record.recordGeneration, record.generation) },
-        unchanged = { m -> m.record == record.recordGeneration && m.generation == record.generation },
+    private val keptEnd = KeptTransferEnd.onRecord(
+        record,
         check = { keptEndVerdict() },
-        recordKept = { m ->
-            io {
-                try {
-                    record.update(m.record, m.generation) { a ->
-                        a.takeIf { it.transferApprovedAtMs != null }?.copy(transferApprovedAtMs = null)
-                    }
-                } finally {
-                    syncTimeScale()
-                }
-            }
-        },
+        write = { w -> io { w() } },
+        afterWrite = { syncTimeScale() },
         onKept = {
             android.util.Log.i("VaultManager", "7 days after the approval the vault still has this phone as its app: kept")
             keptTransferTimer?.cancel()
@@ -2895,12 +2884,8 @@ class VaultManager(
         val rec = record.recordGeneration
         val s = session()
         val started = transferStartedAt ?: Instant.now()
-        val left = TransferInWait.left(started, Instant.now())
-        val guid = try {
-            s.device.awaitTransfer(left)
-        } catch (e: TimeoutCancellationException) {
+        val guid = TransferInWait.await(started, { Instant.now() }, { left -> s.device.awaitTransfer(left) }) {
             s.device.abandonTransfer()
-            throw e
         }
         transferStartedAt = null
         // §6.7.1 (0.17.0): the member's user_guid from device.paired, kept as an enrolled phone keeps the redeem's, so

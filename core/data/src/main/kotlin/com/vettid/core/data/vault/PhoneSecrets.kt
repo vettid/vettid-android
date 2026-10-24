@@ -259,6 +259,22 @@ object TransferInWait {
     /** What is left of [WAIT] at [now] for a transfer this phone started at [started] (at least a second). */
     fun left(started: java.time.Instant, now: java.time.Instant): java.time.Duration =
         java.time.Duration.between(now, started.plus(WAIT)).coerceAtLeast(MIN_LEFT)
+
+    /**
+     * The new phone's wait for `device.paired` ([awaitPaired], given what is left of [WAIT] from [started]); when it
+     * runs out, [abandon] drops the handshake, the attested key and the epoch-1 secret, and the timeout is rethrown.
+     */
+    suspend fun <T> await(
+        started: java.time.Instant,
+        now: () -> java.time.Instant,
+        awaitPaired: suspend (java.time.Duration) -> T,
+        abandon: suspend () -> Unit,
+    ): T = try {
+        awaitPaired(left(started, now()))
+    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+        abandon()
+        throw e
+    }
 }
 
 /** What ends "Finish the move" on the new phone (release R, §11.14.10). */

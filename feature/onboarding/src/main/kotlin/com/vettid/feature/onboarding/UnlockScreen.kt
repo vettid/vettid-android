@@ -51,7 +51,6 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.Durations
 import com.vettid.core.ui.format.StagingTimeNote
-import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.format.stagingNoteSuffix
@@ -141,7 +140,7 @@ fun UnlockContent(
                 NoticeCard(
                     NoticeKind.INFO,
                     stringResource(R.string.onboarding_move_didnt_finish),
-                    stringResource(R.string.onboarding_kept_transfer, durationText(state.keptForSeconds)) + "\n\n" +
+                    stringResource(R.string.onboarding_kept_transfer) + "\n\n" +
                         stringResource(R.string.onboarding_move_didnt_finish_body),
                     modifier = Modifier.testTag("kept_transfer"),
                 )

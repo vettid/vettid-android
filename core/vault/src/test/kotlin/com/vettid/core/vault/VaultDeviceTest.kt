@@ -356,7 +356,6 @@ class VaultDeviceTest {
         }
     }
 
-    /** A paired device drops a device.pair.rejected (only a device waiting for device.paired acts on it). */
     /** §11.14.10 (owner decision 2026-10-23): before a transfer's approval, the vault gets a standing token with its full 30 days. */
     @Test
     fun aRenewedIssuedTokenReachesTheVaultWithItsFullThirtyDays() = runBlocking<Unit> {
@@ -373,6 +372,34 @@ class VaultDeviceTest {
             // Its full 30 days, from now (issued back-dated a little, as every standing token).
             assertEquals(DepositTokens.STANDING_TTL, java.time.Duration.between(c.iat, c.exp))
             assertTrue("issued now", !c.iat.isBefore(before.minus(java.time.Duration.ofMinutes(10))))
+        }
+    }
+
+    /**
+     * §11.14.10 (review of #189): an older `relay.token.issued` still queued in the outbox is dropped by the renewal, so it
+     * cannot flush after the fresh token and replace it at the vault.
+     */
+    @Test
+    fun aRenewalDropsAnOlderQueuedTokenFromTheOutbox() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            val old = buildJsonObject {
+                put("kind", "standing")
+                put("token", "an-older-token")
+            }
+            assertTrue(runCatching { d.send("relay.token.issued", old) }.exceptionOrNull() is RelayException)
+            assertEquals(listOf("relay.token.issued"), savedState(store).outbox.map { it.type })
+            refuseDeposits = null
+            d.renewIssuedToken()
+            val fresh = v.open(nextDeposit().second)
+            assertEquals("relay.token.issued", fresh.type)
+            assertTrue(VaultJson.str(VaultJson.parseObject(fresh.body), "token") != "an-older-token")
+            assertTrue("the older one is gone", savedState(store).outbox.isEmpty())
+            d.flushOutbox()
+            assertNull("nothing follows the renewal", deposits.poll(300, TimeUnit.MILLISECONDS))
         }
     }
 
@@ -420,6 +447,7 @@ class VaultDeviceTest {
         }
     }
 
+    /** A paired device drops a device.pair.rejected (only a device waiting for device.paired acts on it). */
     @Test
     fun aPairedDeviceIgnoresAPairingRejection() = runBlocking<Unit> {
         withTimeout(30_000) {

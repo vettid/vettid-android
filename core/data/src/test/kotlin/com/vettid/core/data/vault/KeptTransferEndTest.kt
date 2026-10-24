@@ -3,11 +3,16 @@ package com.vettid.core.data.vault
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Duration
@@ -19,7 +24,6 @@ import java.time.Instant
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class KeptTransferEndTest {
-
     /**
      * The vault manager's side, faked: the kept transfer in the record with its two counters (as RecordStore's: a lock
      * bumps [generation]; a wipe or reset bumps both), the conditional write, the erase.
@@ -32,21 +36,23 @@ class KeptTransferEndTest {
         var told = 0
         var checks = 0
         var writeFails = false
-        val end = KeptTransferEnd(
+        val waitingAtCheck = mutableListOf<Boolean>()
+        private fun now() = KeptTransferEnd.Mark(recordGeneration, generation, if (kept) APPROVED else null)
+        val end: KeptTransferEnd = KeptTransferEnd(
             pending = { kept },
-            mark = { KeptTransferEnd.Mark(recordGeneration, generation) },
-            unchanged = { m -> m.record == recordGeneration && m.generation == generation },
+            mark = { now() },
             check = {
                 checks++
+                waitingAtCheck += end.waiting.value
                 answer()
             },
-            recordKept = { m ->
-                // As RecordStore.update(since, generation): dropped when either counter moved, or nothing is kept.
-                val moved = m != KeptTransferEnd.Mark(recordGeneration, generation)
+            writeIf = { m, clear ->
+                // As RecordStore.update(since, generation) with the approval's time: dropped when anything moved.
+                val moved = m != now()
                 if (moved || !kept || writeFails) {
                     false
                 } else {
-                    kept = false
+                    if (clear) kept = false
                     true
                 }
             },
@@ -56,6 +62,7 @@ class KeptTransferEndTest {
                 kept = false
             },
         )
+
         fun lock() {
             generation++
         }
@@ -78,6 +85,15 @@ class KeptTransferEndTest {
         assertEquals(2, f.checks)
         assertEquals(1, f.erased)
         assertFalse(f.end.waiting.value)
+    }
+
+    @Test
+    fun theNoticeIsShownBeforeTheVaultIsAsked() = runTest {
+        // A fresh start: the flag starts false, and is set before the request, so no erase offer flashes meanwhile.
+        val f = Fixture { KeptTransfer.Verdict.NOT_THE_APP }
+        assertFalse(f.end.waiting.value)
+        f.start()
+        assertEquals(listOf(true), f.waitingAtCheck)
     }
 
     @Test
@@ -170,7 +186,7 @@ class KeptTransferEndTest {
     }
 
     @Test
-    fun aKeptWriteThatDoesNotLandClaimsNothingAndTheCheckRunsAgain() = runTest {
+    fun aWriteThatDoesNotLandClaimsNothingErasesNothingAndTheCheckRunsAgain() = runTest {
         // The record could not be written (unreadable, a wipe that did not finish): the conditional write fails.
         val f = Fixture { KeptTransfer.Verdict.STILL_THE_APP }
         f.writeFails = true
@@ -178,7 +194,11 @@ class KeptTransferEndTest {
         assertEquals(0, f.told)
         assertTrue(f.kept)
         assertTrue(f.end.waiting.value)
+        f.answer = { KeptTransfer.Verdict.NOT_THE_APP }
+        assertEquals(KeptTransferEnd.Outcome.WAITING, f.start())
+        assertEquals("no erase without the write", 0, f.erased)
         f.writeFails = false
+        f.answer = { KeptTransfer.Verdict.STILL_THE_APP }
         assertEquals(KeptTransferEnd.Outcome.KEPT, f.start())
         assertEquals(1, f.told)
     }
@@ -205,6 +225,7 @@ class KeptTransferEndTest {
         assertEquals(KeptTransferEnd.Outcome.NONE, f.start())
         assertEquals(0, f.erased)
         assertEquals(0, f.told)
+        assertFalse(f.end.waiting.value)
     }
 
     @Test
@@ -219,6 +240,66 @@ class KeptTransferEndTest {
         assertEquals(1, f.checks)
     }
 
+    // --- through the vault manager's wiring ([KeptTransferEnd.onRecord]) over a real account record ---
+
+    private class OnRecord(var answer: suspend (AccountRecord) -> KeptTransfer.Verdict) {
+        var disk: LocalAccount? = null
+        val record = AccountRecord(LocalAccount(vaultId = "v-1", transferApprovedAtMs = APPROVED), readable = true, persist = { disk = it })
+        var erased = 0
+        var told = 0
+        var writes = 0
+        val end = KeptTransferEnd.onRecord(
+            record,
+            check = { answer(record) },
+            onKept = { told++ },
+            erase = { erased++ },
+            afterWrite = { writes++ },
+        )
+    }
+
+    @Test
+    fun theVaultManagersWiringDropsAStillTheAppAcrossALock() = runTest {
+        // VaultManager's lock() bumps the record's generation (record.bumpGeneration()) while the check waits.
+        val r = OnRecord { rec ->
+            rec.bumpGeneration()
+            KeptTransfer.Verdict.STILL_THE_APP
+        }
+        assertEquals(KeptTransferEnd.Outcome.WAITING, r.end.run())
+        assertEquals(0, r.told)
+        assertEquals("the kept transfer stays in the record", APPROVED, r.record.value.transferApprovedAtMs)
+        assertNull("nothing written", r.disk)
+        // Without a lock meanwhile, the write lands and clears it.
+        r.answer = { KeptTransfer.Verdict.STILL_THE_APP }
+        assertEquals(KeptTransferEnd.Outcome.KEPT, r.end.run())
+        assertEquals(1, r.told)
+        assertNull(r.record.value.transferApprovedAtMs)
+        assertNull(r.disk!!.transferApprovedAtMs)
+    }
+
+    @Test
+    fun theVaultManagersWiringErasesNothingAcrossALockOrAReset() = runTest {
+        val r = OnRecord { rec ->
+            rec.bumpGeneration()
+            KeptTransfer.Verdict.NOT_THE_APP
+        }
+        assertEquals(KeptTransferEnd.Outcome.WAITING, r.end.run())
+        assertEquals(0, r.erased)
+        // A reset (a new record, here one that keeps a transfer approved at another time): nothing either.
+        r.answer = { rec ->
+            rec.reset(LocalAccount(vaultId = "v-1", transferApprovedAtMs = APPROVED + 1))
+            KeptTransfer.Verdict.NOT_THE_APP
+        }
+        assertEquals(KeptTransferEnd.Outcome.WAITING, r.end.run())
+        assertEquals(0, r.erased)
+        // Unchanged: erased, and the record was left as it was by the proving write.
+        r.answer = { KeptTransfer.Verdict.NOT_THE_APP }
+        assertEquals(KeptTransferEnd.Outcome.ERASED, r.end.run())
+        assertEquals(1, r.erased)
+        assertEquals(APPROVED + 1, r.record.value.transferApprovedAtMs)
+    }
+
+    // --- the new phone's wait (awaitTransferIn) ---
+
     @Test
     fun theNewPhoneWaitsElevenMinutesFromItsOwnStart() {
         val started = Instant.parse("2026-10-23T10:00:00Z")
@@ -229,5 +310,47 @@ class KeptTransferEndTest {
         // At or after 11 minutes: the least wait, once.
         assertEquals(Duration.ofSeconds(1), TransferInWait.left(started, started.plus(Duration.ofMinutes(11))))
         assertEquals(Duration.ofSeconds(1), TransferInWait.left(started, started.plus(Duration.ofMinutes(30))))
+    }
+
+    @Test
+    fun aDevicePairedAtTenAndAHalfMinutesIsTakenAndNothingIsDropped() = runTest {
+        val start = Instant.parse("2026-10-23T10:00:00Z")
+        val paired = CompletableDeferred<String>()
+        var abandoned = 0
+        val wait = async {
+            TransferInWait.await(start, { start.plusMillis(currentTime) }, { left -> withTimeout(left.toMillis()) { paired.await() } }) {
+                abandoned++
+            }
+        }
+        advanceTimeBy(Duration.ofSeconds(630).toMillis())
+        assertEquals("nothing dropped at 10 min 30 s", 0, abandoned)
+        paired.complete("member-guid")
+        assertEquals("member-guid", wait.await())
+        assertEquals(0, abandoned)
+    }
+
+    @Test
+    fun nothingIsDroppedBeforeElevenMinutes() = runTest {
+        val start = Instant.parse("2026-10-23T10:00:00Z")
+        var abandoned = 0
+        val wait = async {
+            runCatching {
+                val never = CompletableDeferred<String>()
+                TransferInWait.await(start, { start.plusMillis(currentTime) }, { left -> withTimeout(left.toMillis()) { never.await() } }) {
+                    abandoned++
+                }
+            }
+        }
+        advanceTimeBy(Duration.ofMinutes(11).toMillis() - 1)
+        assertEquals(0, abandoned)
+        assertFalse(wait.isCompleted)
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(1, abandoned)
+        assertTrue(wait.await().exceptionOrNull() is TimeoutCancellationException)
+    }
+
+    private companion object {
+        const val APPROVED = 1_760_000_000_000L
     }
 }

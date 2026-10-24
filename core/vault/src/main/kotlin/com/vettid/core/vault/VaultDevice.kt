@@ -1540,11 +1540,14 @@ class VaultDevice private constructor(
      */
     suspend fun renewIssuedToken() {
         lock.withLock {
+            // An older token still queued (a maintain() whose deposit failed) must not flush after this one and replace
+            // the fresh 30 days at the vault: dropped first, under the same lock.
+            if (st.outbox.removeAll { it.type == TYPE_TOKEN_ISSUED }) save()
             val before = st.issuedExpMs
             val tok = mintForVault()
             var sent = false
             try {
-                sendOnceLocked(Ulid.new(now()), "relay.token.issued", standing(tok), null)
+                sendOnceLocked(Ulid.new(now()), TYPE_TOKEN_ISSUED, standing(tok), null)
                 sent = true
             } finally {
                 if (!sent) {
@@ -1562,7 +1565,7 @@ class VaultDevice private constructor(
         try {
             if (st.issuedExpMs != 0L && Duration.between(t, Instant.ofEpochMilli(st.issuedExpMs)) < ISSUE_BEFORE) {
                 val tok = mintForVault()
-                sendLocked(null, "relay.token.issued", standing(tok), null, null, null)
+                sendLocked(null, TYPE_TOKEN_ISSUED, standing(tok), null, null, null)
             }
             val exp = Instant.ofEpochMilli(v.tokenExpMs)
             if (Duration.between(t, exp) < REFRESH_BEFORE && t.isBefore(exp)) {
@@ -1824,6 +1827,7 @@ class VaultDevice private constructor(
     companion object {
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
+        private const val TYPE_TOKEN_ISSUED = "relay.token.issued"
         private const val EVENT_BUFFER = 256
         /** §10.1 (0.13.0): the vault is past its owner-check deadline (§3.6.3). */
         const val CODE_OWNER_CHECK_REQUIRED = "owner_check_required"
