@@ -184,6 +184,49 @@ object VaultDeletion {
     /** The bound of a 410 without the vault's word: 10 minutes after the first 410, never scaled. */
     fun apiUntilMs(sinceMs: Long): Long = sinceMs + BOUND_MS
 
+    /** What the event observer does with a vault event while a 410 without the vault's word stands. */
+    enum class EventAction {
+        /** `device.unlinked{vault_deleted}`: the vault's own word, with the 410: erase at once. */
+        ERASE,
+
+        /** `device.unlinked{transferred|replaced}`: proofs that this phone was replaced, handled as always (HolderWatch). */
+        HOLDER,
+
+        /** Everything else is not taken. */
+        DROP,
+    }
+
+    /** The action for an event of [type] with [reason] while [apiStanding]; without a standing 410 the ordinary handling applies (null). */
+    fun eventAction(type: String, reason: String?, apiStanding: Boolean): EventAction? = when {
+        !apiStanding -> null
+        type != HolderPolicy.DEVICE_UNLINKED -> EventAction.DROP
+        reason == "vault_deleted" -> EventAction.ERASE
+        reason == HolderPolicy.REASON_TRANSFERRED || reason == HolderPolicy.REASON_REPLACED -> EventAction.HOLDER
+        else -> EventAction.DROP
+    }
+
+    /** Whether the event erases the phone (it is the vault's own word while a 410 stands). */
+    fun erasesOnEvent(type: String, reason: String?, apiStanding: Boolean): Boolean =
+        eventAction(type, reason, apiStanding) == EventAction.ERASE
+
+    /**
+     * Whether a session may be opened: never while "being deleted", except the mailbox of a phone that holds a 410 without
+     * the vault's word ([mailboxOnly] and [apiStanding]).
+     */
+    fun allowsSession(deleting: Boolean, mailboxOnly: Boolean, apiStanding: Boolean): Boolean =
+        !deleting || (mailboxOnly && apiStanding)
+
+    /** A 410 without the vault's word closes an open (or paired) vault with a fail-secure lock; a locked or unset phone needs none. */
+    fun locksOnApiDeleted(phase: AppPhase): Boolean =
+        phase is AppPhase.Unlocked || (phase is AppPhase.Setup && phase.stage in PAIRED_STAGES)
+
+    /** Whether a 410 without the vault's word starts the state: not twice, not on a phone with no vault, not before a vault is paired. */
+    fun api410Applies(phase: AppPhase, deleting: Boolean): Boolean =
+        !deleting && phase != AppPhase.SignedOut && (phase !is AppPhase.Setup || phase.stage in PAIRED_STAGES)
+
+    /** Setup stages of a phone that is paired with its vault (it can open it), where a 410 also applies. */
+    val PAIRED_STAGES = setOf(SetupStage.NEEDS_CREDENTIAL, SetupStage.FINISHING)
+
     /** A status that lists the vault again removes the `deleted_api` marker and returns to the unlock screen. */
     fun clearsApiMarker(check: DeletionCheck): Boolean = check == DeletionCheck.LISTED
 

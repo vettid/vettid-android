@@ -234,9 +234,12 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
 @Composable
 private fun RemoveConfirm(state: VaultDeletingUiState, actions: VaultDeletingActions) {
     if (!state.removeConfirm) return
+    val apiOnly = state.apiOnly
     ConfirmDialog(
         title = stringResource(R.string.vault_deleting_remove_confirm_title),
-        text = stringResource(R.string.vault_deleting_remove_confirm_body),
+        text = stringResource(
+            if (apiOnly) R.string.vault_deleted_api_remove_confirm_body else R.string.vault_deleting_remove_confirm_body,
+        ),
         confirmLabel = stringResource(R.string.vault_deleting_remove_confirm),
         onConfirm = actions::confirmRemove,
         onDismiss = actions::dismissRemove,
