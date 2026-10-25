@@ -542,10 +542,24 @@ class VaultManager(
     private val deletionWatch = DeletionWatch(
         scope,
         nowMs = System::currentTimeMillis,
-        read = { readDeletionResolved() },
+        read = { resolvedRead.read() },
         onGone = { finishDeleted() },
         onSlow = { if (phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = true, apiOnly = deletedApiMarker != null)) },
     )
+
+    private val resolvedRead = ResolvedRead(
+        apiStanding = { deletedApiMarker != null },
+        source = { readDeletion() },
+        onListedWhileApi = { scope.launch { clearApiDeleted() } },
+    )
+
+    private val deletionEvents = DeletionEvents(
+        apiStanding = { deletedApiMarker != null },
+        onErase = { scope.launch { finishDeleted() } },
+        onHolder = { holderWhile410(it) },
+    )
+
+    private val sessionGuard = SessionGuard(deleting = { phaseFlow.deleting }, apiStanding = { deletedApiMarker != null })
 
     /** One move to "no vault" after a deletion, whichever read saw the vault gone. */
     private val deletionEnd = Mutex()
@@ -1181,7 +1195,7 @@ class VaultManager(
 
     /** The session a lock is sent through: only for a vault this phone is set up with (an erased phone opens none). */
     private suspend fun lockSession(): Session? =
-        if (enrolledOnThisPhone) runCatching { session(mailboxOnly = deletedApiMarker != null) }.getOrNull() else null
+        if (enrolledOnThisPhone) runCatching { session(mailboxOnly = sessionGuard.lockMailboxOnly()) }.getOrNull() else null
 
     /**
      * The vault client for an operation on the open vault. While a lock is pending the vault counts as locked,
@@ -1199,9 +1213,7 @@ class VaultManager(
     private suspend fun session(mailboxOnly: Boolean = false): Session = mutex.withLock {
         // ANDROID-PLAN 0.1.54: a vault being deleted gets nothing more from this phone, and nothing of it is read.
         // (0.1.78) The one exception: the mailbox of a phone that holds a 410 without the vault's word keeps being collected.
-        if (!VaultDeletion.allowsSession(phaseFlow.deleting, mailboxOnly, deletedApiMarker != null)) {
-            throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_DELETING)
-        }
+        sessionGuard.check(mailboxOnly)
         // Fail secure: while a wipe runs, and after one that did not finish, nothing of the old vault is opened again.
         // The only place a session is made: through the gate, by construction.
         SessionGate.open(record, session) {
@@ -1316,16 +1328,7 @@ class VaultManager(
             // A vault.locking or vault.held arrives here (onEvent): one failure on one event never ends the observer.
             s.device.events.collectSurviving("event") { m ->
                 // (0.1.78) A 410 without the vault's word: only the vault's own `vault_deleted` is taken, and it erases at once.
-                val action = VaultDeletion.eventAction(m.type, VaultJson.str(m.body, "reason"), deletedApiMarker != null)
-                if (action != null) {
-                    when (action) {
-                        VaultDeletion.EventAction.ERASE -> scope.launch { finishDeleted() }
-                        // Proofs of a replaced phone are handled as always, so that it is not left holding keys.
-                        VaultDeletion.EventAction.HOLDER -> holderWhile410(m)
-                        VaultDeletion.EventAction.DROP -> Unit
-                    }
-                    return@collectSurviving
-                }
+                if (deletionEvents.take(m)) return@collectSurviving
                 if (lockNotices.stale(m)) {
                     // The lock before this phone's last unlock (an update's first step, or the lock an unlock of a
                     // running vault makes), relayed late: the vault is open.
@@ -2526,36 +2529,25 @@ class VaultManager(
         steps.finish()
     }
 
-    /** One read, with the 410 resolved against the vault's word: only a phone in "being deleted" from the vault erases on it. */
-    private suspend fun readDeletionResolved(): DeletionCheck {
-        val api = deletedApiMarker != null
-        val r = VaultDeletion.resolve(readDeletion(), vaultWord = !api)
-        if (api && VaultDeletion.clearsApiMarker(r)) scope.launch { clearApiDeleted() }
-        return r
-    }
 
     /**
      * The member API said `410 vault_deleted` / `account_deleted` to a request this phone signed ([guard]); without the
      * vault's word. At once the vault's screens close ("Your vault was deleted"); the keys, the device session and the
      * relay mailbox stay. Nothing is erased here.
      */
-    private fun apiDeleted(code: String) {
-        var previous: AppPhase = AppPhase.Starting
+    private fun apiDeleted(f: VaultFailure) {
+        var plan: ApiDeletionStart.Plan? = null
         val marker = synchronized(deletedApiLock) {
-            val p = phaseFlow.value
-            previous = p
-            // A phone paired with its vault (setup not finished) counts like an unlocked or locked one; other setup stages do not.
-            if (!VaultDeletion.api410Applies(p, phaseFlow.deleting)) return
+            plan = ApiDeletionStart.plan(f, phaseFlow.value, phaseFlow.deleting) ?: return
             val since = System.currentTimeMillis()
-            DeletedApiMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.apiUntilMs(since), code).also {
+            DeletedApiMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
                 record.bumpGeneration()
                 deletedApiMarker = it
                 phaseFlow.deleting(AppPhase.Deleting(apiOnly = true))
             }
         }
         releaseUpdate.close()
-        val lock = VaultDeletion.locksOnApiDeleted(previous)
-        scope.launch { closeForApiDeleted(marker, lock) }
+        scope.launch { closeForApiDeleted(marker, plan!!.lock) }
     }
 
     private suspend fun closeForApiDeleted(marker: DeletedApiMarker, lock: Boolean) {
@@ -3719,7 +3711,7 @@ class VaultManager(
         // MEMBER-API 1.2.0: a refusal while paused also shows the banner (status may not have been read yet).
         if (e.kind == FailureKind.SERVICE_PAUSED) pausedFlow.value = true
         // (ANDROID-PLAN 0.1.78) Signal (b): the member API's definite 410, from the error itself, never from the kind alone.
-        if (VaultDeletion.isGone410(e)) apiDeleted((e.cause as com.vettid.core.altchan.MemberApiException).code)
+        apiDeleted(e)
         throw e
     }
 
