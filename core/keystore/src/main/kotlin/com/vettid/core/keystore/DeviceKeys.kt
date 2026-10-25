@@ -27,7 +27,8 @@ class SharedPreferencesWrappedKeyStore(context: Context, name: String = DEFAULT_
     }
 
     override fun remove(slot: KeySlot) {
-        prefs.edit().remove(slot.wire).apply()
+        // commit(): a removal that is not durable could bring a key back after a restart.
+        prefs.edit().remove(slot.wire).commit()
     }
 
     companion object {

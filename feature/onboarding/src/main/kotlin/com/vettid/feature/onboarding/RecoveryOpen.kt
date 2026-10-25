@@ -519,6 +519,7 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     val failure = state.failure
     if (o != null && o.opened) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(openAnswerText(o, false).res))
+        if (o.contactVettid) ContactSupport()
     } else if (failure != null) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), failureText(failure.messageRes()))
     }
@@ -532,6 +533,18 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
             Text(stringResource(R.string.onboarding_open_back))
         }
     }
+}
+
+/** "Contact VettID": the support address, as a mail button (the address is shown when no mail app takes it). */
+@Composable
+private fun ContactSupport() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var noMail by remember { androidx.compose.runtime.mutableStateOf(false) }
+    // The button label is a DRAFT (pending the owner's wording).
+    OutlinedButton(onClick = { noMail = !SupportMail.open(context) }, modifier = Modifier.testTag("open_contact_support")) {
+        Text(stringResource(R.string.onboarding_open_contact_support, SupportMail.ADDRESS))
+    }
+    if (noMail) Text(SupportMail.ADDRESS, style = MaterialTheme.typography.bodyMedium)
 }
 
 /** The vault no longer has this phone: "Erase VettID from this phone", after a confirmation. */

@@ -208,8 +208,8 @@ class RecoveryReuseTest {
     @Test
     fun theRecordKeepsBothIdentitiesAndRoundTrips() {
         val r = ReuseRecord(
-            earlierSlot = 0, earlierRecoveryId = "01EARLIER", earlierOpenRid = "01RID", newSlot = 1, newRecoveryId = "01NEW",
-            newRegistered = true, endedSeenAtMs = 5L, startNew = true, lostOkDue = false, earlierPolled = true, refusedSinceMs = 9L,
+            earlierSlot = 0, earlierRecoveryId = "01EARLIER", newSlot = 1, keyInUse = true, newRecoveryId = "01NEW",
+            newRegistered = true, endedSeenAtMs = 5L, startNew = true, lostOkDue = false, refusedSinceMs = 9L,
         )
         val json = Json
         assertEquals(r, json.decodeFromString<ReuseRecord>(json.encodeToString(ReuseRecord.serializer(), r)))
@@ -224,5 +224,75 @@ class RecoveryReuseTest {
     fun theLostOkOrderIsNewestFirst() {
         assertEquals(listOf(Identity.NEW, Identity.EARLIER), Rules.lostOkOrder(true))
         assertEquals(listOf(Identity.EARLIER), Rules.lostOkOrder(false))
+    }
+
+    // --- the guards, as pure decisions (the review of #195) ---
+
+    private val o1 = SentOpen("rid1", "rec1", 0)
+    private val o2 = SentOpen("rid2", "rec1", 0)
+
+    @Test
+    fun unansweredIsStickyAndALaterAnswerOnlyAnswersItself() {
+        // Open 1 gets no answer; open 2 is answered `wrong`: open 1 stays unanswered, so Start over is not offered.
+        var l = Ledger.afterSent(emptyList(), o1)
+        l = Ledger.afterSent(l, o2)
+        l = Ledger.afterAnswer(l, "rid2")
+        assertEquals(listOf(o1), l)
+        assertTrue(Rules.undecided(l.isNotEmpty(), null))
+        // A lone open that is answered leaves nothing unanswered.
+        assertEquals(emptyList<SentOpen>(), Ledger.afterAnswer(Ledger.afterSent(emptyList(), o1), "rid1"))
+        // The same open is not listed twice.
+        assertEquals(listOf(o1), Ledger.afterSent(listOf(o1), o1))
+    }
+
+    @Test
+    fun everyUnansweredOpenIsLookedAtOnce() {
+        val l = listOf(o1, o2)
+        assertEquals(listOf(o1, o2), Ledger.toPoll(l))
+        val p = Ledger.polled(l, "rid1")
+        assertEquals(listOf(o2), Ledger.toPoll(p))
+        assertEquals(emptyList<SentOpen>(), Ledger.toPoll(Ledger.polled(p, "rid2")))
+    }
+
+    @Test
+    fun theUndecidedGuardHoldsWhateverTheDeviceSays() {
+        // A record stands (even after a refused register): undecided, nothing may be forgotten or generated.
+        assertTrue(Rules.undecided(openUnanswered = false, reuse = ReuseRecord(0, "r")))
+        for (u in listOf(true)) {
+            assertFalse(Rules.mayForget(u))
+            assertFalse(Rules.mayGenerateKeys(u))
+        }
+        assertTrue(Rules.mayForget(false))
+        assertTrue(Rules.mayGenerateKeys(false))
+    }
+
+    @Test
+    fun aNewCodeIsRefusedWhileUndecidedUnlessTwoReadsAllowedIt() {
+        assertEquals(Rules.Gate.FRESH, Rules.gateNewCode(undecided = false, startNew = false))
+        assertEquals(Rules.Gate.REFUSE, Rules.gateNewCode(undecided = true, startNew = false))
+        assertEquals(Rules.Gate.REUSE, Rules.gateNewCode(undecided = true, startNew = true))
+    }
+
+    @Test
+    fun openAgainUsesTheIdentityRegisteredForTheCurrentRecovery() {
+        assertEquals(1, Rules.slotForOpenAgain(newRegistered = true, newSlot = 1, earlierSlot = 0))
+        assertEquals(0, Rules.slotForOpenAgain(newRegistered = false, newSlot = 1, earlierSlot = 0))
+        assertEquals(0, Rules.slotForOpenAgain(newRegistered = true, newSlot = null, earlierSlot = 0))
+        assertEquals(0, Rules.slotAfterRefusedRegister(0))
+    }
+
+    @Test
+    fun theNewIdentityPairsWithTheFallbackOnlyWhenItIsInUse() {
+        assertTrue(Rules.pairsWithFallback(newSlot = 1, activeSlot = 1))
+        assertFalse(Rules.pairsWithFallback(newSlot = 1, activeSlot = 0))
+        assertFalse(Rules.pairsWithFallback(newSlot = null, activeSlot = 0))
+    }
+
+    @Test
+    fun theContactTextNeedsKeyInUseARealRefusalAndADay() {
+        assertTrue(Rules.showContact(keyInUse = true, refusal = true, sinceMs = 0L, nowMs = day))
+        assertFalse(Rules.showContact(keyInUse = false, refusal = true, sinceMs = 0L, nowMs = day)) // a 200 alone
+        assertFalse(Rules.showContact(keyInUse = true, refusal = false, sinceMs = 0L, nowMs = day)) // a wrong PIN
+        assertFalse(Rules.showContact(keyInUse = true, refusal = true, sinceMs = 0L, nowMs = day - 1))
     }
 }

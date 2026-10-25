@@ -28,8 +28,6 @@ internal data class ReuseRecord(
     val earlierSlot: Int,
     /** That identity's `recovery_id`: the `ctx` of its handshake. */
     val earlierRecoveryId: String,
-    /** The earlier open's `request_id`, to look at its slot once; null when this build did not keep it. */
-    val earlierOpenRid: String? = null,
     /** The slot of the new identity, once made. */
     val newSlot: Int? = null,
     /** The `recovery_id` the new identity registered for. */
@@ -42,12 +40,34 @@ internal data class ReuseRecord(
     val startNew: Boolean = false,
     /** A `200` on status, or a `409 key_in_use` at a claim: the next step is the lost-ok unlock. */
     val lostOkDue: Boolean = false,
-    /** The earlier open's slot was looked at (once, whatever it held). */
-    val earlierPolled: Boolean = false,
+    /** A `409 key_in_use` was seen: only then is the lost-ok unlock "the vault took this phone" (a `200` alone is not that). */
+    val keyInUse: Boolean = false,
     /** Since when the lost-ok unlock is refused (epoch ms); after a day the contact text. */
     val refusedSinceMs: Long? = null,
 )
 
+/** An open the member API took ([rid]), by the identity in [slot] for [recoveryId]; [polled]: its slot was looked at. */
+@Serializable
+internal data class SentOpen(val rid: String, val recoveryId: String, val slot: Int, val polled: Boolean = false)
+
+/**
+ * Every open sent whose answer was never readable. It is sticky: a later open's answer, of whatever kind, says nothing of
+ * an earlier open that may have stored step 1 (a later `wrong` is the earlier one's recovery resumed), so only the
+ * answered open leaves; the rest go with the cleanup after `ok` and the pairing ([Rules.mayDeleteEarlier]).
+ */
+internal object Ledger {
+    fun afterSent(ledger: List<SentOpen>, o: SentOpen): List<SentOpen> = if (ledger.any { it.rid == o.rid }) ledger else ledger + o
+
+    /** A readable answer to the open [rid]: it is answered; its predecessors stay unanswered. */
+    fun afterAnswer(ledger: List<SentOpen>, rid: String?): List<SentOpen> = ledger.filterNot { it.rid == rid }
+
+    /** The opens whose slot is still to be looked at once. */
+    fun toPoll(ledger: List<SentOpen>): List<SentOpen> = ledger.filterNot { it.polled }
+
+    fun polled(ledger: List<SentOpen>, rid: String): List<SentOpen> = ledger.map { if (it.rid == rid) it.copy(polled = true) else it }
+}
+
+@Suppress("TooManyFunctions") // one small decision per guard
 internal object Rules {
     /** The reads of status with K are at least this far apart. */
     const val MIN_BETWEEN_READS_MS = 5 * 60 * 1000L
@@ -116,6 +136,35 @@ internal object Rules {
 
     /** The contact text: refused since [sinceMs] for a day, the clock checked (a clock set back never shows it early or late). */
     fun contactVettid(sinceMs: Long?, nowMs: Long): Boolean = sinceMs != null && nowMs >= sinceMs && nowMs - sinceMs >= REFUSED_FOR_MS
+
+    /** What a new code does: starts afresh, reuses K, or is refused. */
+    enum class Gate { FRESH, REUSE, REFUSE }
+
+    fun gateNewCode(undecided: Boolean, startNew: Boolean): Gate = when {
+        startNew && undecided -> Gate.REUSE
+        undecided -> Gate.REFUSE
+        else -> Gate.FRESH
+    }
+
+    /** Forgetting K (start over, a fresh device, dropping the setup code, new keys) is never allowed while undecided. */
+    fun mayForget(undecided: Boolean): Boolean = !undecided
+
+    /** A session on a slot with missing keys makes new ones only when nothing is undecided; otherwise it fails secure. */
+    fun mayGenerateKeys(undecided: Boolean): Boolean = !undecided
+
+    /** After `transfer_incomplete` the open repeats the recovery of the identity registered for the current one. */
+    fun slotForOpenAgain(newRegistered: Boolean, newSlot: Int?, earlierSlot: Int): Int =
+        if (newRegistered && newSlot != null) newSlot else earlierSlot
+
+    /** The identity in use after a refused or unauthorized register of the new identity: the earlier one. */
+    fun slotAfterRefusedRegister(earlierSlot: Int): Int = earlierSlot
+
+    /** The new identity's open answered `ok`: its pairing has the fall back to the earlier identity. */
+    fun pairsWithFallback(newSlot: Int?, activeSlot: Int): Boolean = newSlot != null && activeSlot == newSlot
+
+    /** "Your vault took this phone…": only after `409 key_in_use`, a refusal that is not a PIN answer, for a day. */
+    fun showContact(keyInUse: Boolean, refusal: Boolean, sinceMs: Long?, nowMs: Long): Boolean =
+        keyInUse && refusal && contactVettid(sinceMs, nowMs)
 
     /** K is forgotten, or the phone starts over, never while undecided (also on `410 recovery_ended`). */
     fun undecided(openUnanswered: Boolean, reuse: ReuseRecord?): Boolean = applies(openUnanswered, reuse)

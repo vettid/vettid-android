@@ -461,6 +461,7 @@
     <string name="recover_could_not_tell">We could not tell whether your last attempt recovered the vault. You can start a new recovery on the account site and use this phone for it; nothing on this phone is deleted.</string>
     <string name="onboarding_open_took_phone">Your vault took this phone, but it cannot be unlocked right now. Contact VettID.</string>
     <!-- DRAFT texts, pending the owner. -->
+    <string name="onboarding_open_contact_support">Email %1$s</string>
     <string name="recover_undecided_checking">Checking whether your last attempt recovered the vault. Nothing on this phone is deleted.</string>
     <string name="recover_undecided_wait">We are still checking whether your last attempt recovered the vault. This phone looks again in a few minutes. Nothing on this phone is deleted.</string>
     <string name="recover_undecided_unknown">We could not check just now whether your last attempt recovered the vault. Nothing on this phone is deleted. Try again later.</string>
