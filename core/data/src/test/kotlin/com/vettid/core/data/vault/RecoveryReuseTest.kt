@@ -300,6 +300,8 @@ class RecoveryReuseTest {
         // No answer can name it, so none removes it.
         assertEquals(1, Ledger.afterAnswer(true, l, null, "wait", ok = false).size)
         assertEquals(1, Ledger.afterAnswer(true, l, "ridX", "wait", ok = false).size)
+        // Two such opens are two entries.
+        assertEquals(2, Ledger.afterSent(false, l, null, "rec", 0).size)
         // A synthetic entry is not looked at.
         assertTrue(Ledger.toPoll(l).isEmpty())
     }
