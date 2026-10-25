@@ -37,8 +37,10 @@ sealed interface AppPhase {
      * (ANDROID-PLAN 0.1.54) The vault sent `device.unlinked{vault_deleted}` (VAULT-MESSAGING §12.5 step 1): "Your vault is
      * being deleted", over every other phase, until the member API no longer lists the vault ([VaultDeletion]). [slow]:
      * still listed at the bound, "Still finishing" with "Check again".
+     * (0.1.78) [apiOnly]: "Your vault was deleted" from the member API's `410` alone, without the vault's word; [slow]
+     * is then the bound after the first 410, from which a confirmed "Remove from this phone" is offered.
      */
-    data class Deleting(val slow: Boolean = false) : AppPhase
+    data class Deleting(val slow: Boolean = false, val apiOnly: Boolean = false) : AppPhase
 
     // A phone that a transfer or a recovery replaced has no phase of its own: it erases itself and is
     // SignedOut, as freshly installed (owner decision, 2026-10-05; VaultManager, HolderWatch).
@@ -355,6 +357,9 @@ enum class FailureKind {
      */
     SERVICE_PAUSED,
     RELEASE_ENDED,
+
+    /** (MEMBER-API 2.11.0) `410 vault_deleted` or `410 account_deleted` to the app key; see [VaultDeletion.isGone410]. */
+    VAULT_DELETED,
     BAD_PIN,
     BAD_PASSWORD,
     BACKOFF,

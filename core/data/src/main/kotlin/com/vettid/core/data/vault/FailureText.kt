@@ -27,6 +27,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.VAULT_UNAVAILABLE -> R.string.data_failure_vault_unavailable
     FailureKind.SERVICE_PAUSED -> R.string.data_failure_service_paused
     FailureKind.RELEASE_ENDED -> R.string.data_failure_release_ended
+    FailureKind.VAULT_DELETED -> R.string.data_failure_vault_deleted
     FailureKind.BAD_PIN -> R.string.data_failure_bad_pin
     FailureKind.BAD_PASSWORD -> R.string.data_failure_bad_password
     FailureKind.BACKOFF -> R.string.data_failure_backoff

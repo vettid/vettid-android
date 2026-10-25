@@ -74,6 +74,149 @@ class VaultDeletionTest {
         for (k in FailureKind.values()) assertNotEquals(DeletionCheck.GONE, fail(k))
     }
 
+    private fun gone(status: Int, code: String) =
+        VaultFailure(VaultManager.memberFailure(MemberApiException(status, code)), code, cause = MemberApiException(status, code))
+
+    @Test
+    fun only410VaultDeletedOrAccountDeletedReadsAsGone() = runTest {
+        suspend fun check(f: VaultFailure) = VaultDeletion.readCheck { throw f }
+        assertEquals(DeletionCheck.GONE, check(gone(410, "vault_deleted")))
+        assertEquals(DeletionCheck.GONE, check(gone(410, "account_deleted")))
+        // Other 410s, the same codes under another status, and every other refusal are "could not tell".
+        assertEquals(DeletionCheck.UNREACHABLE, check(gone(410, "release_unavailable")))
+        assertEquals(DeletionCheck.UNREACHABLE, check(gone(410, "recovery_ended")))
+        assertEquals(DeletionCheck.UNREACHABLE, check(gone(404, "vault_deleted")))
+        assertEquals(DeletionCheck.UNREACHABLE, check(gone(500, "account_deleted")))
+        assertEquals(DeletionCheck.UNCONFIRMED, check(gone(401, "unauthorized")))
+        assertEquals(DeletionCheck.UNCONFIRMED, check(gone(403, "forbidden")))
+        assertEquals(DeletionCheck.UNREACHABLE, check(gone(429, "rate_limited")))
+        // The kind alone, without the error behind it, is not the signal.
+        assertEquals(DeletionCheck.UNREACHABLE, check(VaultFailure(FailureKind.VAULT_DELETED, "vault_deleted")))
+        // `{vault: null}` and a listed vault are not GONE either.
+        assertEquals(DeletionCheck.UNCONFIRMED, VaultDeletion.readCheck { VaultDeletion.StatusSeen(false, false) })
+        assertEquals(DeletionCheck.LISTED, VaultDeletion.readCheck { VaultDeletion.StatusSeen(true, false) })
+    }
+
+    @Test
+    fun memberFailureMapsThe410CodesOnlyWith410() {
+        assertEquals(FailureKind.VAULT_DELETED, VaultManager.memberFailure(MemberApiException(410, "vault_deleted")))
+        assertEquals(FailureKind.VAULT_DELETED, VaultManager.memberFailure(MemberApiException(410, "account_deleted")))
+        assertEquals(FailureKind.OTHER, VaultManager.memberFailure(MemberApiException(404, "vault_deleted")))
+        assertEquals(FailureKind.RELEASE_ENDED, VaultManager.memberFailure(MemberApiException(410, "release_unavailable")))
+    }
+
+    @Test
+    fun aGoneErasesOnlyWithTheVaultsWordAndAloneIsApiOnly() {
+        assertEquals(DeletionCheck.GONE, VaultDeletion.resolve(DeletionCheck.GONE, vaultWord = true))
+        assertEquals(DeletionCheck.API_ONLY, VaultDeletion.resolve(DeletionCheck.GONE, vaultWord = false))
+        for (c in DeletionCheck.values().filter { it != DeletionCheck.GONE }) {
+            assertEquals(c, VaultDeletion.resolve(c, vaultWord = true))
+            assertEquals(c, VaultDeletion.resolve(c, vaultWord = false))
+        }
+    }
+
+    @Test
+    fun theApiOnlyBoundIsTenMinutesAfterTheFirst410AndNeverScaled() {
+        assertEquals(1_000L + 10 * min, VaultDeletion.apiUntilMs(1_000L))
+        val m = DeletedApiMarker("v", 5_000L, VaultDeletion.apiUntilMs(5_000L), "vault_deleted")
+        assertEquals(DeletingMarker("v", 5_000L, 5_000L + 10 * min), m.watch())
+        val json = kotlinx.serialization.json.Json
+        assertEquals(m, json.decodeFromString<DeletedApiMarker>(json.encodeToString(DeletedApiMarker.serializer(), m)))
+    }
+
+    @Test
+    fun whileA410StandsOnlyTheVaultsDeletedEventErasesAndReplacementProofsGoToTheHolder() {
+        val u = HolderPolicy.DEVICE_UNLINKED
+        assertTrue(VaultDeletion.erasesOnEvent(u, "vault_deleted", apiStanding = true))
+        // No other event erases, whatever it is.
+        for (r in listOf("transferred", "replaced", "other", null)) assertFalse(r.toString(), VaultDeletion.erasesOnEvent(u, r, true))
+        for (t in listOf("vault.locking", "sync.event", "credential.alarm", "device.paired")) {
+            assertFalse(t, VaultDeletion.erasesOnEvent(t, "vault_deleted", true))
+            assertEquals(VaultDeletion.EventAction.DROP, VaultDeletion.eventAction(t, "vault_deleted", true))
+        }
+        // Without a standing 410 the ordinary handling applies (the filter does not act).
+        assertEquals(null, VaultDeletion.eventAction(u, "vault_deleted", false))
+        assertFalse(VaultDeletion.erasesOnEvent(u, "vault_deleted", false))
+        // A replaced or transferred phone is handled as always, so it is not left holding keys.
+        assertEquals(VaultDeletion.EventAction.HOLDER, VaultDeletion.eventAction(u, "transferred", true))
+        assertEquals(VaultDeletion.EventAction.HOLDER, VaultDeletion.eventAction(u, "replaced", true))
+    }
+
+    @Test
+    fun aSessionIsOpenedWhileDeletingOnlyForTheMailboxOfAStanding410() {
+        assertTrue(VaultDeletion.allowsSession(deleting = false, mailboxOnly = false, apiStanding = false))
+        assertFalse(VaultDeletion.allowsSession(deleting = true, mailboxOnly = false, apiStanding = true))
+        assertFalse(VaultDeletion.allowsSession(deleting = true, mailboxOnly = true, apiStanding = false))
+        assertTrue(VaultDeletion.allowsSession(deleting = true, mailboxOnly = true, apiStanding = true))
+    }
+
+    @Test
+    fun a410StartsTheStateOnlyOnAPhoneWithAVaultAndNotTwice() {
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = false))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Starting, deleting = false))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.FINISHING), deleting = false))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.NEW_VAULT), deleting = false))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.SignedOut, deleting = false))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = true))
+    }
+
+    @Test
+    fun aOpenOrPairedPhoneIsLockedOnA410AndTheLockIsPendingAndRetried() = runTest {
+        assertTrue(VaultDeletion.locksOnApiDeleted(AppPhase.Unlocked))
+        assertTrue(VaultDeletion.locksOnApiDeleted(AppPhase.Setup(SetupStage.FINISHING)))
+        assertTrue(VaultDeletion.locksOnApiDeleted(AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)))
+        assertFalse(VaultDeletion.locksOnApiDeleted(AppPhase.Locked))
+        assertFalse(VaultDeletion.locksOnApiDeleted(AppPhase.Setup(SetupStage.NEW_VAULT)))
+        // The lock the manager begins (unbound without a current unlock) stays pending while the vault cannot be reached.
+        val attempts = mutableListOf<String?>()
+        val store = object : LockRecordStore {
+            var r = LockRecord()
+            override fun load() = r
+            override fun save(record: LockRecord) { r = record }
+        }
+        val k = LockKeeper(backgroundScope, store, object : LockAttempt {
+            override suspend fun tryLock(first: Boolean, unlockId: String?): LockOutcome {
+                attempts += unlockId
+                return LockOutcome.UNCONFIRMED
+            }
+        })
+        val mine = k.begin(null)
+        assertTrue(k.pending)
+        assertTrue(store.r.pendingSinceMs != null)
+        k.ask(mine)
+        assertTrue(k.pending)
+        assertEquals(listOf<String?>(null), attempts)
+    }
+
+    @Test
+    fun onlyAListedStatusClearsTheApiMarker() {
+        for (c in DeletionCheck.values()) assertEquals(c == DeletionCheck.LISTED, VaultDeletion.clearsApiMarker(c))
+    }
+
+    @Test
+    fun anApiOnlyStateKeepsReadingOnItsScheduleAndNeverErases() = runTest {
+        // With a 410 alone the manager's read answers API_ONLY: the watch keeps its timer and onGone never runs.
+        val phase = PhaseHolder(AppPhase.Unlocked)
+        phase.deleting(AppPhase.Deleting(apiOnly = true))
+        var gone = 0
+        val reads = mutableListOf<Long>()
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = {
+            reads += currentTime
+            VaultDeletion.resolve(VaultDeletion.readCheck { throw gone(410, "vault_deleted") }, vaultWord = false)
+        }, onGone = { gone++ }, onSlow = {})
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        advanceTimeBy(106_000)
+        assertEquals(listOf(5_000L, 15_000L, 45_000L, 105_000L), reads)
+        assertEquals(0, gone)
+        assertTrue(phase.deleting)
+        // With the vault's word the same 410 is GONE: the erase runs once.
+        val w2 = DeletionWatch(backgroundScope, { currentTime }, read = {
+            VaultDeletion.resolve(VaultDeletion.readCheck { throw gone(410, "account_deleted") }, vaultWord = true)
+        }, onGone = { gone++ }, onSlow = {})
+        assertEquals(DeletionCheck.GONE, w2.check())
+        assertEquals(1, gone)
+    }
+
     @Test
     fun readCheckThroughAWatchLeavesThePhaseAndTheMarkerAlone() = runTest {
         // A 401 and {vault:null} through the watch: onGone never runs, so the "being deleted" hold stays.
