@@ -513,6 +513,41 @@ class MemberApiTest {
         assertEquals(0, log.count { it.startsWith("GET /api/vault/requests/") })
     }
 
+    /** ANDROID-PLAN 0.1.80: the open's history entry is saved before the open is posted; a save that fails posts nothing. */
+    @Test
+    fun aRecoveryOpenIsPostedOnlyAfterItsHistoryWasSaved() = runBlocking<Unit> {
+        val request = SealedRequest("01JB2Z6V9K3M4N5P6Q7R8S9T60", "kid", ByteArray(8), null)
+        var postsSeenBySave = -1
+        val failed = assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                flow().recoveryOpen(
+                    "0123456789abcdef0123456789abcdef",
+                    build = { _, _ -> request },
+                    open = { _, _ -> error("opened a result") },
+                    beforePost = {
+                        postsSeenBySave = log.count { l -> l == "POST /api/vault/recovery/open" }
+                        error("history not saved")
+                    },
+                )
+            }
+        }
+        assertEquals("history not saved", failed.message)
+        assertEquals(0, postsSeenBySave)
+        assertEquals(0, log.count { it == "POST /api/vault/recovery/open" })
+        // A save that succeeds comes first: the post follows it.
+        var seen = -1
+        runCatching {
+            flow().recoveryOpen(
+                "0123456789abcdef0123456789abcdef",
+                build = { _, _ -> request },
+                open = { _, _ -> error("not answered") },
+                beforePost = { seen = log.count { l -> l == "POST /api/vault/recovery/open" } },
+            )
+        }
+        assertEquals(0, seen)
+        assertEquals(1, log.count { it == "POST /api/vault/recovery/open" })
+    }
+
     @Test
     fun aStagingBuildAcceptsOneAndTwentyFourOnly() = runBlocking<Unit> {
         for (scale in listOf(null, 1L, 24L)) {

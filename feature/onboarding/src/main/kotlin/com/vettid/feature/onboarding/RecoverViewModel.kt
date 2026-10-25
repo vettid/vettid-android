@@ -81,6 +81,9 @@ enum class CodeRefusal {
     /** A recovery QR of another environment's portal (its `api`, §11.11.2, 0.15.0). */
     OTHER_ENVIRONMENT,
 
+    /** (ANDROID-PLAN 0.1.80) A recovery code for another vault than the one of this phone's earlier open; nothing was registered. */
+    OTHER_VAULT,
+
     /** A recovery QR without `api` (an account site from before 0.15.0): apps of 0.15.0 require it. */
     NO_API,
 
@@ -413,6 +416,7 @@ class RecoverViewModel @Inject constructor(
             CODE_NONE, CODE_USED -> CodeRefusal.GONE
             CODE_NOT_AVAILABLE -> CodeRefusal.NOT_AVAILABLE
             CODE_NOT_OFFERED -> CodeRefusal.NOT_OFFERED
+            CODE_OTHER_VAULT -> CodeRefusal.OTHER_VAULT
             CODE_NO_BACKUP -> {
                 state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, refusal = null, typed = "", typedProblem = null) }
                 noBackup()
@@ -671,6 +675,7 @@ class RecoverViewModel @Inject constructor(
         /** (0.34.0) The release does not offer recovery (§11.10.9, §11.14.13). */
         const val CODE_NOT_OFFERED = "not_offered"
         const val CODE_UNKNOWN_DEVICE = "unknown_device"
+        const val CODE_OTHER_VAULT = "other_vault"
         const val CODE_REQUIRED = "credential_required"
         const val CODE_NO_BACKUP = "no_backup"
         private const val SIGNER_REFUSED = "signer_refused"

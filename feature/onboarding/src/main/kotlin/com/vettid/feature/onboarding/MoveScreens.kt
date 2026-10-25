@@ -416,6 +416,7 @@ private fun CodeRefusalNotice(state: RecoverUiState) {
         CodeRefusal.RETRY -> stringResource(R.string.recover_code_retry)
         CodeRefusal.NOT_A_CODE -> stringResource(R.string.recover_scan_not_code)
         CodeRefusal.OTHER_ENVIRONMENT -> stringResource(R.string.recover_scan_other_environment, state.otherApi ?: "")
+        CodeRefusal.OTHER_VAULT -> stringResource(R.string.recover_other_vault)
         CodeRefusal.NO_API -> stringResource(R.string.recover_scan_no_api)
         CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available, scaledDurationText(Durations.DAY))
         CodeRefusal.NOT_OFFERED -> stringResource(R.string.recover_not_offered)

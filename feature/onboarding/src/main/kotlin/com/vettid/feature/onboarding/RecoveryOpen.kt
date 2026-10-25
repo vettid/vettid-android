@@ -349,6 +349,8 @@ fun openAnswerText(o: RecoveryOpenOutcome, rightButIncomplete: Boolean): OpenAns
     return when {
         // (0.1.78) Approved texts: the lost-ok unlock refused for a day, and a new recovery with this phone.
         o.contactVettid -> OpenAnswerText(R.string.onboarding_open_took_phone)
+        // DRAFT (ANDROID-PLAN 0.1.80): both identities stand and the vault does not take this phone.
+        o.contactCouldNotRecover -> OpenAnswerText(R.string.recover_could_not_recover)
         o.code == CODE_START_NEW -> OpenAnswerText(R.string.recover_could_not_tell)
         rightButIncomplete && o.retryAt != null ->
             OpenAnswerText(R.string.onboarding_open_right_incomplete, listOf(left), withRetryAt = true)
@@ -519,7 +521,7 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     val failure = state.failure
     if (o != null && o.opened) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(openAnswerText(o, false).res))
-        if (o.contactVettid) ContactSupport()
+        if (o.contactVettid || o.contactCouldNotRecover) ContactSupport()
     } else if (failure != null) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), failureText(failure.messageRes()))
     }

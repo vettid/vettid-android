@@ -44,6 +44,11 @@ data class RecoveryOpenOutcome(
      * vault took this phone, but it cannot be unlocked right now. Contact VettID." Nothing is forgotten.
      */
     val contactVettid: Boolean = false,
+    /**
+     * (ANDROID-PLAN 0.1.80, DRAFT text `recover_could_not_recover`) Both identities stand, the lost-ok unlock has been refused
+     * for a day, and K is not the vault's key: "This phone could not recover your vault…" with an Email support action.
+     */
+    val contactCouldNotRecover: Boolean = false,
 ) {
     val ok: Boolean get() = code == "ok"
     val left: Int? get() = used?.let { (ATTEMPTS - it).coerceAtLeast(0) }

@@ -24,37 +24,125 @@ class RecoveryReuseTest {
         assertTrue(Rules.undecided(false, ReuseRecord(0, "r")))
     }
 
-    @Test
-    fun aListedStatusIsTheLostOkUnlockAndNeverAdoption() {
-        val (d, seen) = Rules.afterRead(Rules.Read.Listed(registered = false), seenAtMs = 5L, nowMs = 10L)
-        assertEquals(Rules.Decision.LostOk, d)
-        assertEquals(null, seen) // the count of ended reads starts again
-        // Still registered: the phone opens again.
-        assertEquals(Rules.Decision.OpenAgain, Rules.afterRead(Rules.Read.Listed(registered = true), null, 10L).first)
+    private fun at(wallMin: Long, monoMin: Long = wallMin) = Rules.Clock(wallMin * min, monoMin * min)
+
+    /** One read after another on both clocks; the decisions in order. */
+    private fun reads(vararg steps: Pair<Rules.Read, Rules.Clock>, second: Boolean = false): List<Rules.Decision> {
+        var seen = Rules.Seen()
+        return steps.map { (r, c) ->
+            val (d, s) = Rules.afterRead(r, seen, c, second)
+            seen = s
+            d
+        }
     }
 
     @Test
-    fun aNewRecoveryNeedsTwoEndedReadsAtLeastFiveMinutesApart() {
-        val (d1, s1) = Rules.afterRead(Rules.Read.Ended, null, 1_000L)
-        assertEquals(Rules.Decision.Wait(1_000L + 5 * min), d1)
-        assertEquals(1_000L, s1)
-        // Too soon: still waiting, the first read is kept.
-        val (d2, s2) = Rules.afterRead(Rules.Read.Ended, s1, 1_000L + 4 * min + 59_000L)
-        assertEquals(Rules.Decision.Wait(1_000L + 5 * min), d2)
-        assertEquals(1_000L, s2)
-        // Exactly 5 minutes: the second read.
-        assertEquals(Rules.Decision.StartNew, Rules.afterRead(Rules.Read.Ended, s1, 1_000L + 5 * min).first)
-        assertEquals(Rules.Decision.StartNew, Rules.afterRead(Rules.Read.Ended, s1, 1_000L + 6 * 60 * min).first)
+    fun aListedStatusIsTheLostOkUnlockOnlyAfterTheSamePairAndNeverAdoption() {
+        val l = Rules.Read.Listed(registered = false)
+        val d = reads(l to at(0), l to at(1), l to at(6))
+        assertEquals(Rules.Decision.Wait(5 * min), d[0])
+        assertEquals(Rules.Decision.Wait(5 * min), d[1])
+        assertEquals(Rules.Decision.LostOk, d[2])
+        // Still registered: the phone opens again, with the same pair.
+        val r = Rules.Read.Listed(registered = true)
+        assertEquals(Rules.Decision.OpenAgain, reads(r to at(0), r to at(5))[1])
+        // An ended read between restarts the pair of 200s.
+        val mixed = reads(l to at(0), Rules.Read.Ended to at(6), l to at(7))
+        assertEquals(Rules.Decision.Wait(12 * min), mixed[2])
     }
 
     @Test
-    fun theClockIsChecked() {
-        // A phone clock set back past the first read starts the count again; it never counts as five minutes.
-        val (d, s) = Rules.afterRead(Rules.Read.Ended, seenAtMs = 10 * day, nowMs = 5 * day)
-        assertEquals(Rules.Decision.Wait(5 * day + 5 * min), d)
-        assertEquals(5 * day, s)
-        // An unknown read (a network fault, a 401 for the clock) concludes nothing and keeps the first read.
-        assertEquals(Rules.Decision.Unknown to 7L, Rules.afterRead(Rules.Read.Unknown, 7L, 10 * day))
+    fun aNewRecoveryNeedsTwoEndedReadsAtLeastFiveMinutesApartOnBothClocks() {
+        val e = Rules.Read.Ended
+        val d = reads(e to at(0), e to at(4), e to at(5), e to at(60))
+        assertEquals(Rules.Decision.Wait(5 * min), d[0])
+        assertEquals(Rules.Decision.Wait(5 * min), d[1]) // too soon: the first read is kept
+        assertEquals(Rules.Decision.StartNew, d[2])
+        assertEquals(Rules.Decision.StartNew, d[3])
+    }
+
+    @Test
+    fun bothClocksMustAgreeAndARebootOrASetClockRestartsThePair() {
+        val e = Rules.Read.Ended
+        // The wall clock says an hour, the monotonic clock 1 minute (the wall clock was set forward): restarts.
+        assertEquals(Rules.Decision.Wait(60 * min + 5 * min), reads(e to at(0), e to at(60, monoMin = 1))[1])
+        // The monotonic clock says an hour, the wall clock 6 minutes (set back): restarts.
+        assertEquals(Rules.Decision.Wait(6 * min + 5 * min), reads(e to at(0), e to at(6, monoMin = 60))[1])
+        // A reboot: the monotonic clock went back below the first read; restarts.
+        assertEquals(Rules.Decision.Wait(30 * min + 5 * min), reads(e to at(0, monoMin = 100), e to at(30, monoMin = 2))[1])
+        // A reboot just after the first read, the two measures still within 2 minutes: restarts, not "too soon".
+        assertEquals(Rules.Decision.Wait(1 * min + 5 * min), reads(e to at(0, monoMin = 100), e to at(1, monoMin = 99))[1])
+        // The wall clock went back: restarts.
+        assertEquals(Rules.Decision.Wait(3 * min + 5 * min), reads(e to at(10), e to at(3, monoMin = 13))[1])
+        // Within 2 minutes of each other: counts.
+        assertEquals(Rules.Decision.StartNew, reads(e to at(0), e to at(6, monoMin = 7))[1])
+        assertEquals(Rules.Decision.Wait(30 * min + 5 * min), reads(e to at(0), e to at(30, monoMin = 33))[1])
+        // Only one clock at five minutes: not enough.
+        assertEquals(Rules.Decision.Wait(5 * min), reads(e to at(0), e to at(6, monoMin = 4))[1])
+    }
+
+    @Test
+    fun withBothIdentitiesTwoEndedReadsKeepBothAndNeverOfferAnotherRecovery() {
+        val e = Rules.Read.Ended
+        assertEquals(Rules.Decision.KeepBoth, reads(e to at(0), e to at(5), second = true)[1])
+        assertEquals(Rules.Decision.StartNew, reads(e to at(0), e to at(5), second = false)[1])
+        assertFalse(Rules.startNewAllowed(newRegistered = true))
+        assertTrue(Rules.startNewAllowed(newRegistered = false))
+        assertEquals(Rules.Gate.REFUSE, Rules.gateNewCode(undecided = true, startNew = true, secondIdentity = true))
+    }
+
+    @Test
+    fun anUnknownReadConcludesNothingAndKeepsTheFirstRead() {
+        val (d, s) = Rules.afterRead(Rules.Read.Unknown, Rules.Seen(ended = at(1)), at(30))
+        assertEquals(Rules.Decision.Unknown, d)
+        assertEquals(Rules.Seen(ended = at(1)), s)
+    }
+
+    @Test
+    fun onlyTheVaultRefusingThePhoneCountsTowardTheDay() {
+        for (c in listOf("bad_pin", "backoff", "retry", "busy", "counter_unavailable", "no_answer", "timeout", "network", "service")) {
+            assertFalse(c, Rules.countsAsRefusal(c))
+        }
+        for (c in listOf("device_secret", "no_bundle", "no_recovery", "unknown_device")) assertTrue(c, Rules.countsAsRefusal(c))
+    }
+
+    @Test
+    fun theCouldNotRecoverTextNeedsBothIdentitiesNoKeyInUseARefusalAndADayStagingScaled() {
+        assertTrue(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = true, refusal = true, sinceMs = 0, nowMs = day))
+        assertFalse(Rules.showCouldNotRecover(keyInUse = true, secondIdentity = true, refusal = true, sinceMs = 0, nowMs = day))
+        assertFalse(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = false, refusal = true, sinceMs = 0, nowMs = day))
+        assertFalse(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = true, refusal = false, sinceMs = 0, nowMs = day))
+        assertFalse(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = true, refusal = true, sinceMs = 0, nowMs = day - 1))
+        // Staging: a day divided by the time scale.
+        assertTrue(Rules.showCouldNotRecover(false, true, true, 0, day / 24, scale = 24))
+        assertFalse(Rules.showCouldNotRecover(false, true, true, 0, day / 24 - 1, scale = 24))
+        // The "took this phone" text stays for key_in_use only.
+        assertTrue(Rules.showContact(keyInUse = true, refusal = true, sinceMs = 0, nowMs = day))
+    }
+
+    @Test
+    fun aCodeForAnotherVaultIsRefused() {
+        assertTrue(Rules.sameVault("v1", "v1"))
+        assertTrue(Rules.sameVault("v1", null)) // an older API names none
+        assertFalse(Rules.sameVault("v1", "v2"))
+    }
+
+    @Test
+    fun anOpenTheMemberApiRefusedIsNotUnansweredButOneThatMayHaveBeenTakenIs() {
+        val l = Ledger.afterSent(false, emptyList(), "rid1", "rec", 0)
+        for (status in listOf(400, 401, 403, 404, 409, 429)) {
+            assertEquals(status.toString(), emptyList<SentOpen>(), Ledger.afterPostFailed(l, "rid1", status))
+        }
+        for (status in listOf(408, 500, 502, 503, null)) assertEquals(l, Ledger.afterPostFailed(l, "rid1", status))
+    }
+
+    @Test
+    fun exhaustedAndNotArmedSettleOnlyTheirOwnOpen() {
+        val l = sent("rid1", "rid2")
+        for (c in listOf("exhausted", "not_armed")) {
+            assertEquals(c, listOf("rid1"), answer(l, "rid2", c))
+            assertEquals(c, emptyList<String>(), answer(sent("rid1"), "rid1", c))
+        }
     }
 
     // --- what it may do: the three sequences ---
@@ -209,7 +297,8 @@ class RecoveryReuseTest {
     fun theRecordKeepsBothIdentitiesAndRoundTrips() {
         val r = ReuseRecord(
             earlierSlot = 0, earlierRecoveryId = "01EARLIER", newSlot = 1, keyInUse = true, newRecoveryId = "01NEW",
-            newRegistered = true, endedSeenAtMs = 5L, startNew = true, lostOkDue = false, refusedSinceMs = 9L,
+            newRegistered = true, endedSeen = Rules.Clock(5L, 6L), listedSeen = Rules.Clock(7L, 8L), startNew = true,
+            lostOkDue = false, refusedSinceMs = 9L,
         )
         val json = Json
         assertEquals(r, json.decodeFromString<ReuseRecord>(json.encodeToString(ReuseRecord.serializer(), r)))
@@ -256,7 +345,7 @@ class RecoveryReuseTest {
     @Test
     fun aSealedRetryOrAnyOtherCodeLeavesTheOpenUnanswered() {
         // The vault can store step 1 and still answer `retry`: Start over would lose K and the secret.
-        for (c in listOf("retry", "stored_mismatch", "missing", "vault_missing", "exhausted", "no_recovery", "something_new")) {
+        for (c in listOf("retry", "stored_mismatch", "missing", "vault_missing", "no_recovery", "something_new")) {
             assertEquals(c, listOf("rid1"), answer(sent("rid1"), "rid1", c))
         }
     }

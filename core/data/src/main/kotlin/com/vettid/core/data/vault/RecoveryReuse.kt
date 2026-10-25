@@ -34,8 +34,10 @@ internal data class ReuseRecord(
     val newRecoveryId: String? = null,
     /** The vault accepted the new identity's register (`vault.recovery.result` ok). */
     val newRegistered: Boolean = false,
-    /** First read of status with K that answered `401` / `410 recovery_ended` (epoch ms, this phone's clock). */
-    val endedSeenAtMs: Long? = null,
+    /** First read of status with K that answered `401` / `410 recovery_ended` (both clocks). */
+    val endedSeen: Rules.Clock? = null,
+    /** First read that answered `200` (both clocks): the same pair is needed before the phone acts on a `200`. */
+    val listedSeen: Rules.Clock? = null,
     /** Two such reads at least 5 minutes apart: the member may be told to start a new recovery. */
     val startNew: Boolean = false,
     /** A `200` on status, or a `409 key_in_use` at a claim: the next step is the lost-ok unlock. */
@@ -60,7 +62,11 @@ internal data class SentOpen(val rid: String, val recoveryId: String, val slot: 
  */
 internal object Ledger {
     /** Sealed refusals that always prove the open stored no step 1: before the spend, or the vault's wait verdicts. */
-    val REFUSALS = setOf("busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet")
+    val REFUSALS = setOf(
+        "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet",
+        // Emitted by the vault after the resume branch and before beginReplace (recovery_open.go): no step 1 stored.
+        "exhausted", "not_armed",
+    )
 
     /** Prove it only when no earlier open stands. */
     val ALONE_ONLY = setOf("wrong", "expired")
@@ -87,6 +93,16 @@ internal object Ledger {
         return if (leaves) l.filterIndexed { n, _ -> n != i } else l
     }
 
+    /**
+     * The member API refused the post with [status]: the open was not queued, so its entry (saved before the post) goes. Any
+     * other failure (a timeout, a network fault, a `5xx`) leaves it: the request may have been taken.
+     */
+    fun afterPostFailed(ledger: List<SentOpen>, rid: String?, status: Int?): List<SentOpen> =
+        if (status != null && status in HTTP_REFUSED && status != HTTP_TIMEOUT) ledger.filterNot { it.rid == rid } else ledger
+
+    private val HTTP_REFUSED = 400..499
+    private const val HTTP_TIMEOUT = 408
+
     /** The opens whose slot is still to be looked at once. */
     fun toPoll(ledger: List<SentOpen>): List<SentOpen> = ledger.filterNot { it.polled }
 
@@ -104,8 +120,33 @@ internal object Rules {
     /** The reads of status with K are at least this far apart. */
     const val MIN_BETWEEN_READS_MS = 5 * 60 * 1000L
 
-    /** The lost-ok unlock refused for this long: "Your vault took this phone, but it cannot be unlocked right now". */
+    /** The lost-ok unlock refused for this long (staging-scaled): the contact text. */
     const val REFUSED_FOR_MS = 24 * 60 * 60 * 1000L
+
+    /** The wall clock and the monotonic clock may differ this much between two reads, or the pair restarts. */
+    const val CLOCK_AGREE_MS = 2 * 60 * 1000L
+
+    /** A moment on both clocks: the wall clock (epoch ms) and the monotonic one (`elapsedRealtime`, which a reboot resets). */
+    @Serializable
+    data class Clock(val wallMs: Long, val elapsedMs: Long)
+
+    /** What two reads say of the time between them. */
+    enum class Gap { FIRST, TOO_SOON, OK, RESTART }
+
+    /**
+     * Two reads count only with both clocks at least 5 minutes apart, the two measures agreeing within 2 minutes. A clock
+     * that was set, or a reboot (the monotonic clock went back), between them restarts the pair.
+     */
+    fun pair(seen: Clock?, now: Clock): Gap {
+        if (seen == null) return Gap.FIRST
+        val wall = now.wallMs - seen.wallMs
+        val mono = now.elapsedMs - seen.elapsedMs
+        return when {
+            wall < 0 || mono < 0 || kotlin.math.abs(wall - mono) > CLOCK_AGREE_MS -> Gap.RESTART
+            wall >= MIN_BETWEEN_READS_MS && mono >= MIN_BETWEEN_READS_MS -> Gap.OK
+            else -> Gap.TOO_SOON
+        }
+    }
 
     /** What status with K answered. */
     sealed interface Read {
@@ -138,9 +179,15 @@ internal object Rules {
         /** Two reads at least 5 minutes apart say ended: a new recovery may be started with K. */
         data object StartNew : Decision
 
+        /** Two ended reads, but both identities already stand: keep both for good and try the lost-ok unlock (no third). */
+        data object KeepBoth : Decision
+
         /** The read concluded nothing. */
         data object Unknown : Decision
     }
+
+    /** What [afterRead] leaves for the next read: the first read of each kind. */
+    data class Seen(val ended: Clock? = null, val listed: Clock? = null)
 
     /**
      * Only after an open the member API took and whose answer was never readable ([openUnanswered]); or while a [ReuseRecord]
@@ -149,16 +196,21 @@ internal object Rules {
     fun applies(openUnanswered: Boolean, reuse: ReuseRecord?): Boolean = openUnanswered || reuse != null
 
     /**
-     * What a read of status with K allows. [seenAtMs] is the first ended read; the clock is checked: a phone clock that went
-     * back past it starts the count again. Returns the decision and the new [seenAtMs].
+     * What a read of status with K allows, on both clocks ([pair]). The same pair is needed for an ended answer and for a `200`
+     * before the phone acts on either; a read of the other kind restarts the pair. [secondIdentity]: N already stands, so two
+     * ended reads keep both identities ([Decision.KeepBoth]) instead of offering another recovery.
      */
-    fun afterRead(read: Read, seenAtMs: Long?, nowMs: Long): Pair<Decision, Long?> = when (read) {
-        is Read.Listed -> (if (read.registered) Decision.OpenAgain else Decision.LostOk) to null
-        Read.Unknown -> Decision.Unknown to seenAtMs
-        Read.Ended -> when {
-            seenAtMs == null || nowMs < seenAtMs -> Decision.Wait(nowMs + MIN_BETWEEN_READS_MS) to nowMs
-            nowMs - seenAtMs >= MIN_BETWEEN_READS_MS -> Decision.StartNew to seenAtMs
-            else -> Decision.Wait(seenAtMs + MIN_BETWEEN_READS_MS) to seenAtMs
+    fun afterRead(read: Read, seen: Seen, now: Clock, secondIdentity: Boolean = false): kotlin.Pair<Decision, Seen> = when (read) {
+        Read.Unknown -> Decision.Unknown to seen
+        is Read.Listed -> when (pair(seen.listed, now)) {
+            Gap.OK -> (if (read.registered) Decision.OpenAgain else Decision.LostOk) to Seen(listed = seen.listed)
+            Gap.TOO_SOON -> Decision.Wait(seen.listed!!.wallMs + MIN_BETWEEN_READS_MS) to Seen(listed = seen.listed)
+            Gap.FIRST, Gap.RESTART -> Decision.Wait(now.wallMs + MIN_BETWEEN_READS_MS) to Seen(listed = now)
+        }
+        Read.Ended -> when (pair(seen.ended, now)) {
+            Gap.OK -> (if (secondIdentity) Decision.KeepBoth else Decision.StartNew) to Seen(ended = seen.ended)
+            Gap.TOO_SOON -> Decision.Wait(seen.ended!!.wallMs + MIN_BETWEEN_READS_MS) to Seen(ended = seen.ended)
+            Gap.FIRST, Gap.RESTART -> Decision.Wait(now.wallMs + MIN_BETWEEN_READS_MS) to Seen(ended = now)
         }
     }
 
@@ -166,13 +218,34 @@ internal object Rules {
     fun lostOkOrder(newRegistered: Boolean): List<Identity> =
         if (newRegistered) listOf(Identity.NEW, Identity.EARLIER) else listOf(Identity.EARLIER)
 
-    /** The contact text: refused since [sinceMs] for a day, the clock checked (a clock set back never shows it early or late). */
-    fun contactVettid(sinceMs: Long?, nowMs: Long): Boolean = sinceMs != null && nowMs >= sinceMs && nowMs - sinceMs >= REFUSED_FOR_MS
+    /**
+     * The contact text: refused since [sinceMs] for a day (staging-scaled by [scale]), the clock checked (a clock set back never
+     * shows it early or late).
+     */
+    fun contactVettid(sinceMs: Long?, nowMs: Long, scale: Long = 1L): Boolean =
+        sinceMs != null && nowMs >= sinceMs && nowMs - sinceMs >= REFUSED_FOR_MS / scale.coerceAtLeast(1L)
+
+    /**
+     * Whether a lost-ok answer counts as a refusal: not a wrong PIN, a backoff, or a failure of the service or the network.
+     * Only the vault refusing this phone counts.
+     */
+    fun countsAsRefusal(code: String): Boolean = code !in NOT_REFUSALS
+
+    private val NOT_REFUSALS = setOf(
+        "bad_pin", "backoff", "retry", "busy", "counter_unavailable", "no_answer", "timeout", "network", "service", "rate_limited",
+    )
+
+    /** A recovery code or register answer that names another vault than the earlier open's is refused, nothing registered. */
+    fun sameVault(own: String, named: String?): Boolean = named == null || named == own
+
+    /** Another recovery with N standing is never started: two identities at most. */
+    fun startNewAllowed(newRegistered: Boolean): Boolean = !newRegistered
 
     /** What a new code does: starts afresh, reuses K, or is refused. */
     enum class Gate { FRESH, REUSE, REFUSE }
 
-    fun gateNewCode(undecided: Boolean, startNew: Boolean): Gate = when {
+    fun gateNewCode(undecided: Boolean, startNew: Boolean, secondIdentity: Boolean = false): Gate = when {
+        undecided && secondIdentity -> Gate.REFUSE // never a third identity
         startNew && undecided -> Gate.REUSE
         undecided -> Gate.REFUSE
         else -> Gate.FRESH
@@ -194,9 +267,20 @@ internal object Rules {
     /** The new identity's open answered `ok`: its pairing has the fall back to the earlier identity. */
     fun pairsWithFallback(newSlot: Int?, activeSlot: Int): Boolean = newSlot != null && activeSlot == newSlot
 
-    /** "Your vault took this phone…": only after `409 key_in_use`, a refusal that is not a PIN answer, for a day. */
-    fun showContact(keyInUse: Boolean, refusal: Boolean, sinceMs: Long?, nowMs: Long): Boolean =
-        keyInUse && refusal && contactVettid(sinceMs, nowMs)
+    /** "Your vault took this phone…": only after `409 key_in_use`, a real refusal, for a day. */
+    fun showContact(keyInUse: Boolean, refusal: Boolean, sinceMs: Long?, nowMs: Long, scale: Long = 1L): Boolean =
+        keyInUse && refusal && contactVettid(sinceMs, nowMs, scale)
+
+    /** "This phone could not recover your vault…": both identities stand without `key_in_use`, a real refusal, for a day. */
+    fun showCouldNotRecover(
+        keyInUse: Boolean,
+        secondIdentity: Boolean,
+        refusal: Boolean,
+        sinceMs: Long?,
+        nowMs: Long,
+        scale: Long = 1L,
+    ): Boolean =
+        !keyInUse && secondIdentity && refusal && contactVettid(sinceMs, nowMs, scale)
 
     /** K is forgotten, or the phone starts over, never while undecided (also on `410 recovery_ended`). */
     fun undecided(openUnanswered: Boolean, reuse: ReuseRecord?): Boolean = applies(openUnanswered, reuse)
