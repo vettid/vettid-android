@@ -179,7 +179,10 @@ internal object Rules {
         /** Two reads at least 5 minutes apart say ended: a new recovery may be started with K. */
         data object StartNew : Decision
 
-        /** Two ended reads, but both identities already stand: keep both for good and try the lost-ok unlock (no third). */
+        /**
+         * Two ended reads, but both identities already stand: keep both for good, try the lost-ok unlock first, and allow a new
+         * code that reuses N (no third identity).
+         */
         data object KeepBoth : Decision
 
         /** The read concluded nothing. */
@@ -198,7 +201,7 @@ internal object Rules {
     /**
      * What a read of status with K allows, on both clocks ([pair]). The same pair is needed for an ended answer and for a `200`
      * before the phone acts on either; a read of the other kind restarts the pair. [secondIdentity]: N already stands, so two
-     * ended reads keep both identities ([Decision.KeepBoth]) instead of offering another recovery.
+     * ended reads give [Decision.KeepBoth]: the lost-ok unlock first, and a new code reusing N.
      */
     fun afterRead(read: Read, seen: Seen, now: Clock, secondIdentity: Boolean = false): kotlin.Pair<Decision, Seen> = when (read) {
         Read.Unknown -> Decision.Unknown to seen
@@ -238,14 +241,26 @@ internal object Rules {
     /** A recovery code or register answer that names another vault than the earlier open's is refused, nothing registered. */
     fun sameVault(own: String, named: String?): Boolean = named == null || named == own
 
-    /** Another recovery with N standing is never started: two identities at most. */
-    fun startNewAllowed(newRegistered: Boolean): Boolean = !newRegistered
+    /**
+     * Whether a failed register left N possibly registered. A failure that did not reach the vault (the release starting or
+     * the vault unavailable, a rate limit, `recovery_not_available`, no network) leaves N unregistered: the same N, K and code
+     * may be tried again. [status] is null for a network fault.
+     */
+    fun registerFailedBeforeVault(status: Int?, code: String?): Boolean =
+        status == null || status == HTTP_TOO_MANY || status == HTTP_UNAVAILABLE || code == "recovery_not_available"
+
+    private const val HTTP_TOO_MANY = 429
+    private const val HTTP_UNAVAILABLE = 503
 
     /** What a new code does: starts afresh, reuses K, or is refused. */
     enum class Gate { FRESH, REUSE, REFUSE }
 
-    fun gateNewCode(undecided: Boolean, startNew: Boolean, secondIdentity: Boolean = false): Gate = when {
-        undecided && secondIdentity -> Gate.REFUSE // never a third identity
+    /**
+     * A new code reuses the identity N (made once, re-registered with the same K and the earlier `unlock_secret`) when two
+     * reads allowed it; there is no third identity, so there is nothing else to refuse but a code while the rule has not
+     * allowed it.
+     */
+    fun gateNewCode(undecided: Boolean, startNew: Boolean): Gate = when {
         startNew && undecided -> Gate.REUSE
         undecided -> Gate.REFUSE
         else -> Gate.FRESH

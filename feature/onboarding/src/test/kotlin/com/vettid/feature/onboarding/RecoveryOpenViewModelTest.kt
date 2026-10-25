@@ -360,4 +360,18 @@ class RecoveryOpenViewModelTest {
         assertEquals(R.string.recover_could_not_tell, openAnswerText(vm.uiState.value.outcome!!, false).res)
         assertFalse(openCanTryAgain("start_new"))
     }
+
+    @Test
+    fun theLostOkStepOffersANewCodeOnlyWhenTheRuleAllowedIt() = runTest {
+        vault.lostOkDueValue = true
+        vault.undecidedValue = true
+        vault.newCodeAllowedValue = true
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.newCodeAllowed)
+        vault.newCodeAllowedValue = false
+        val other = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        assertFalse(other.uiState.value.newCodeAllowed)
+    }
 }

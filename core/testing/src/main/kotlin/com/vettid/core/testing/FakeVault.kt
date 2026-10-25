@@ -328,6 +328,8 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     var undecidedValue = false
     override val recoveryUndecided: Boolean get() = undecidedValue
     override fun lostOkDue(): Boolean = lostOkDueValue
+    var newCodeAllowedValue = false
+    override fun newCodeAllowed(): Boolean = newCodeAllowedValue
 
     override suspend fun couldNotTell(): com.vettid.core.data.vault.CouldNotTell {
         call("couldNotTell")

@@ -3169,13 +3169,15 @@ class VaultManager(
 
     override fun lostOkDue(): Boolean = local.reuse?.lostOkDue == true
 
+    override fun newCodeAllowed(): Boolean = local.reuse?.startNew == true
+
     /**
      * The record when the member may use a new code with K (two reads said ended). While undecided and not yet allowed, a
      * new code is refused: registering again would overwrite the earlier recovery ([CODE_UNDECIDED]).
      */
     private fun reuseGate(): ReuseRecord? {
         val r = local.reuse
-        return when (Rules.gateNewCode(undecidedNow(), r?.startNew == true, secondIdentity = r?.newRegistered == true)) {
+        return when (Rules.gateNewCode(undecidedNow(), r?.startNew == true)) {
             Rules.Gate.REUSE -> r
             Rules.Gate.REFUSE -> throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
             Rules.Gate.FRESH -> null
@@ -3229,7 +3231,7 @@ class VaultManager(
             reuse.copy(
                 endedSeen = seen.ended,
                 listedSeen = seen.listed,
-                startNew = decision == Rules.Decision.StartNew || (reuse.startNew && !listed && Rules.startNewAllowed(reuse.newRegistered)),
+                startNew = decision == Rules.Decision.StartNew || decision == Rules.Decision.KeepBoth || (reuse.startNew && !listed),
                 lostOkDue = decision == Rules.Decision.LostOk || decision == Rules.Decision.KeepBoth ||
                     (reuse.lostOkDue && decision != Rules.Decision.OpenAgain),
             ),
@@ -3400,6 +3402,7 @@ class VaultManager(
         gateway.memberChanged(claimed.userGuid)
         // N may have registered once this is posted, whatever comes back: kept as unknown, never registered again, tried
         // by the lost-ok unlock. A definite refusal below takes it back.
+        val before = local.reuse ?: r
         markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId) }
         val since = record.recordGeneration
         val res = try {
@@ -3415,41 +3418,66 @@ class VaultManager(
             when (e.code) {
                 // K became a key in use between the claim and the register: no claim key; nothing was recorded.
                 MemberApiException.UNAUTHORIZED -> {
-                    backToEarlier()
+                    // N's registration is dropped with its identity and relay key: it no longer counts as one of the two.
+                    s.device.dropRecoveryRegistration()
+                    backToEarlier(before)
+                    if (!before.newRegistered) dropNewIdentity()
                     return RegisterAnswer.Unauthorized
                 }
                 MemberApiException.RECOVERY_UNAVAILABLE -> {
                     s.device.dropRecoveryRegistration()
-                    backToEarlier()
+                    backToEarlier(before)
                     return RegisterAnswer.Refused(CODE_NO_BACKUP)
                 }
                 MemberApiException.RECOVERY_NOT_AVAILABLE -> null
-                else -> throw e
+                else -> {
+                    // A failure that did not reach the vault leaves N unregistered: the same N, K and code may try again.
+                    if (Rules.registerFailedBeforeVault(e.status, e.code)) {
+                        s.device.dropRecoveryRegistration()
+                        backToEarlier(before)
+                    }
+                    throw e
+                }
             }
+        } catch (e: IOException) {
+            s.device.dropRecoveryRegistration()
+            backToEarlier(before)
+            throw e
         }
         return when {
             res == null -> {
                 s.device.dropRecoveryRegistration()
-                backToEarlier()
+                backToEarlier(before)
                 RegisterAnswer.Refused(CODE_NOT_AVAILABLE)
             }
             res.ok -> {
+                s.device.confirmRecoveryRegistration()
                 markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
                 phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
                 RegisterAnswer.Registered
             }
             else -> {
                 s.device.dropRecoveryRegistration()
-                backToEarlier()
+                backToEarlier(before)
                 RegisterAnswer.Refused(res.code ?: CODE_RETRY)
             }
         }
     }
 
+    /** N's keys and state are removed (after a `401` at its register) and the record forgets its slot: a later N is made anew. */
+    private suspend fun dropNewIdentity() {
+        val r = local.reuse
+        val n = r?.newSlot
+        if (r == null || n == null || n == slots.active) return
+        io { slots.clear(n) }
+        persistReuse(r.copy(newSlot = null, newRegistered = false, newRecoveryId = null))
+    }
+
     /** A refused register leaves the new identity unregistered: the earlier identity is the one in use again. */
-    private suspend fun backToEarlier() {
+    private suspend fun backToEarlier(before: ReuseRecord? = null) {
         val r = local.reuse ?: return
-        persistReuse(r.copy(newRegistered = false, newRecoveryId = null))
+        // N keeps what it had accepted before this attempt (the `recovery_id` it LAST registered for); a first N has none.
+        persistReuse(r.copy(newRegistered = before?.newRegistered == true, newRecoveryId = before?.newRecoveryId))
         switchIdentity(Rules.slotAfterRefusedRegister(r.earlierSlot))
     }
 
@@ -3509,7 +3537,7 @@ class VaultManager(
                 switchIdentity(Rules.slotForOpenAgain(reuse.newRegistered, reuse.newSlot, reuse.earlierSlot))
                 val registered = (readStatusWithK(session()) as? Rules.Read.Listed)?.registered == true
                 markReuse {
-                    it.copy(lostOkDue = false, startNew = !registered && Rules.startNewAllowed(it.newRegistered), refusedSinceMs = null)
+                    it.copy(lostOkDue = false, startNew = !registered, refusedSinceMs = null)
                 }
                 RecoveryOpenOutcome(if (registered) CODE_OPEN_AGAIN else CODE_START_NEW, used, opened = true, attemptUsed = false)
             }

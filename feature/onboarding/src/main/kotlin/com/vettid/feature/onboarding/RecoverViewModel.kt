@@ -507,7 +507,10 @@ class RecoverViewModel @Inject constructor(
 
     override fun useNewCode() {
         val s = state.value
-        if (s.step != RecoverStep.ENDED || s.couldNotTell?.kind != CouldNotTell.Kind.START_NEW) return
+        val fromEnded = s.step == RecoverStep.ENDED && s.couldNotTell?.kind == CouldNotTell.Kind.START_NEW
+        // Also from the lost-ok step once the rule allowed a new code that reuses the second identity (0.1.80).
+        val fromPin = s.step == RecoverStep.PIN && move.newCodeAllowed()
+        if (!fromEnded && !fromPin) return
         state.update { it.copy(step = RecoverStep.SCAN, refusal = null, error = null, typedProblem = null) }
     }
 

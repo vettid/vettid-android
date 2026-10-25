@@ -120,6 +120,8 @@ data class RecoveryOpenUiState(
     val undecided: Boolean = false,
     /** (0.1.78) The lost-ok unlock found the recovery still registered: the PIN and the password open it again. */
     val openAgain: Boolean = false,
+    /** (0.1.80) A new recovery code may be used with this phone (it reuses the second identity). */
+    val newCodeAllowed: Boolean = false,
 ) {
     val canContinue: Boolean get() = pinValid && password.isNotEmpty()
 
@@ -186,7 +188,7 @@ class RecoveryOpenViewModel @Inject constructor(
                 // A `200` on status, or `409 key_in_use` at a claim: this phone may be the vault's app (0.1.78).
                 finishLostOk()
             }
-            state.update { it.copy(undecided = move.recoveryUndecided) }
+            state.update { it.copy(undecided = move.recoveryUndecided, newCodeAllowed = move.newCodeAllowed()) }
         }
     }
 
@@ -225,7 +227,7 @@ class RecoveryOpenViewModel @Inject constructor(
                 return@launch
             }
             answered(out)
-            state.update { it.copy(undecided = move.recoveryUndecided) }
+            state.update { it.copy(undecided = move.recoveryUndecided, newCodeAllowed = move.newCodeAllowed()) }
         }
     }
 
@@ -490,7 +492,7 @@ fun RecoveryOpenPane(
             OpenStep.CHECK -> OpenCheck(state, vm)
             OpenStep.SENDING -> CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             OpenStep.ANSWERED -> OpenAnswer(state, vm, startOver, onNewCode)
-            OpenStep.FINISH -> OpenFinish(state, vm)
+            OpenStep.FINISH -> OpenFinish(state, vm, onNewCode)
             OpenStep.DONE -> OpenDone(state, vm)
         }
     }
@@ -498,7 +500,7 @@ fun RecoveryOpenPane(
 
 /** The vault answered `ok` earlier: the PIN alone finishes opening it. No new open, no start over. */
 @Composable
-private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
+private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onNewCode: (() -> Unit)?) {
     Text(
         stringResource(if (state.lostOk) R.string.onboarding_open_lost_title else R.string.onboarding_open_finish_title),
         style = MaterialTheme.typography.titleLarge,
@@ -522,6 +524,12 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     if (o != null && o.opened) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(openAnswerText(o, false).res))
         if (o.contactVettid || o.contactCouldNotRecover) ContactSupport()
+        // The lost-ok unlock found nothing: a new recovery code can still use this phone (the second identity is reused).
+        if (state.newCodeAllowed && onNewCode != null) {
+            OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_lost_ok")) {
+                Text(stringResource(R.string.recover_undecided_new_code))
+            }
+        }
     } else if (failure != null) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), failureText(failure.messageRes()))
     }

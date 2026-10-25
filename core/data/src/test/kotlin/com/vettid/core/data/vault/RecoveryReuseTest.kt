@@ -82,13 +82,27 @@ class RecoveryReuseTest {
     }
 
     @Test
-    fun withBothIdentitiesTwoEndedReadsKeepBothAndNeverOfferAnotherRecovery() {
+    fun withBothIdentitiesTwoEndedReadsKeepBothAndStillAllowANewCodeThatReusesN() {
         val e = Rules.Read.Ended
         assertEquals(Rules.Decision.KeepBoth, reads(e to at(0), e to at(5), second = true)[1])
         assertEquals(Rules.Decision.StartNew, reads(e to at(0), e to at(5), second = false)[1])
-        assertFalse(Rules.startNewAllowed(newRegistered = true))
-        assertTrue(Rules.startNewAllowed(newRegistered = false))
-        assertEquals(Rules.Gate.REFUSE, Rules.gateNewCode(undecided = true, startNew = true, secondIdentity = true))
+        // A new code reuses N (never a third identity); undecided and allowed is the only way in.
+        assertEquals(Rules.Gate.REUSE, Rules.gateNewCode(undecided = true, startNew = true))
+        assertEquals(Rules.Gate.REFUSE, Rules.gateNewCode(undecided = true, startNew = false))
+        assertEquals(Rules.Gate.FRESH, Rules.gateNewCode(undecided = false, startNew = false))
+    }
+
+    @Test
+    fun aRegisterThatFailedBeforeTheVaultMayBeTriedAgainWithTheSameN() {
+        assertTrue(Rules.registerFailedBeforeVault(null, null)) // no network
+        assertTrue(Rules.registerFailedBeforeVault(503, "release_starting"))
+        assertTrue(Rules.registerFailedBeforeVault(503, "vault_unavailable"))
+        assertTrue(Rules.registerFailedBeforeVault(429, "rate_limited"))
+        assertTrue(Rules.registerFailedBeforeVault(409, "recovery_not_available"))
+        // Anything else may have reached the vault: N stays unknown.
+        assertFalse(Rules.registerFailedBeforeVault(500, "internal"))
+        assertFalse(Rules.registerFailedBeforeVault(504, "http_504"))
+        assertFalse(Rules.registerFailedBeforeVault(400, "bad_request"))
     }
 
     @Test

@@ -590,6 +590,12 @@ interface MoveRepository {
      */
     suspend fun couldNotTell(): CouldNotTell = CouldNotTell(CouldNotTell.Kind.NOT_APPLICABLE)
 
+    /**
+     * (ANDROID-PLAN 0.1.80) A new recovery code may be used with this phone (it reuses the second identity; never a third):
+     * two reads allowed it, or the lost-ok unlock found the recovery ended.
+     */
+    fun newCodeAllowed(): Boolean = false
+
     /** (0.1.78) The next step is the lost-ok unlock: a `200` on status, or a `409 key_in_use` at a claim. */
     fun lostOkDue(): Boolean = false
 

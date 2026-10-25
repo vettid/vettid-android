@@ -28,6 +28,12 @@ internal data class DeviceState(
     var credential: CredentialCopy? = null,
     val utks: MutableList<UtkRecord> = mutableListOf(),
     var recovery: RecoveryRecord? = null,
+    /**
+     * (ANDROID-PLAN 0.1.80) The registration this identity last had accepted, kept while a re-register for a later recovery is
+     * undecided: a re-register that fails before the vault restores it, so the handshake's `ctx` stays the `recovery_id` this
+     * identity LAST registered for.
+     */
+    var priorRecovery: RecoveryRecord? = null,
     val outbox: MutableList<OutboxEntry> = mutableListOf(),
     /**
      * The vault has shown this app a signer on its own `device.list` entry (VAULT-MESSAGING 0.27.0 §11.7.1): the
@@ -122,6 +128,18 @@ internal data class UtkRecord(val id: String, val ek: String, val expiresAtMs: L
  */
 @Serializable
 internal data class RecoveryRecord(val recoveryId: String, val requestId: String = "", val credentialBackup: Boolean? = null)
+
+/**
+ * (ANDROID-PLAN 0.1.80) What a re-register does to an identity's registration: the one accepted before stays until the new
+ * one is, and a failed attempt restores it, so the handshake's `ctx` is the `recovery_id` the identity LAST registered for.
+ */
+internal data class RegistrationState(val recovery: RecoveryRecord?, val prior: RecoveryRecord?) {
+    fun begin(next: RecoveryRecord) = RegistrationState(next, prior ?: recovery)
+
+    fun drop() = RegistrationState(prior, null)
+
+    fun confirm() = copy(prior = null)
+}
 
 /** A deposit not yet answered 201 by the relay (§8.3: the entry goes once the relay accepted it). */
 @Serializable

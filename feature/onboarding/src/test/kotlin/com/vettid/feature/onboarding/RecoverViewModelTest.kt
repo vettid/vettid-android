@@ -773,4 +773,18 @@ class RecoverViewModelTest {
         vm.askStartOver()
         assertTrue(vm.uiState.value.confirmStartOver)
     }
+
+    @Test
+    fun aNewCodeCanBeUsedFromTheLostOkStepOnceTheRuleAllowedIt() = runTest {
+        vault.recoveryStageValue = RecoveryStage.PIN
+        vault.undecidedValue = true
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vm.useNewCode() // not allowed yet
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vault.newCodeAllowedValue = true // two reads allowed a new code that reuses the second identity
+        vm.useNewCode()
+        assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
+    }
 }
