@@ -47,6 +47,8 @@ import javax.inject.Inject
 data class VaultDeletingUiState(
     /** Past the bound and still listed: "Still finishing", with "Check again". */
     val slow: Boolean = false,
+    /** (0.1.78) The member API's `410` alone: "Your vault was deleted"; nothing is erased without the member (or the vault's word). */
+    val apiOnly: Boolean = false,
     /** A "Check again" read is under way. */
     val checking: Boolean = false,
     /** What the last "Check again" found, when the vault was not gone: still listed, or not reachable. */
@@ -84,6 +86,9 @@ class VaultDeletingViewModel @Inject constructor(private val account: AccountRep
     /** The phase's own "still finishing" (the root passes it on). */
     fun setSlow(slow: Boolean) = state.update { it.copy(slow = slow) }
 
+    /** The phase's `apiOnly` (the root passes it on). */
+    fun setApiOnly(apiOnly: Boolean) = state.update { it.copy(apiOnly = apiOnly) }
+
     override fun checkAgain() {
         if (state.value.checking) return
         state.update { it.copy(checking = true, lastCheck = null) }
@@ -115,10 +120,36 @@ class VaultDeletingViewModel @Inject constructor(private val account: AccountRep
 }
 
 @Composable
-fun VaultDeletingRoute(slow: Boolean, onOpenAccountSite: () -> Unit, viewModel: VaultDeletingViewModel = hiltViewModel()) {
+fun VaultDeletingRoute(
+    slow: Boolean,
+    onOpenAccountSite: () -> Unit,
+    apiOnly: Boolean = false,
+    viewModel: VaultDeletingViewModel = hiltViewModel(),
+) {
     LaunchedEffect(slow) { viewModel.setSlow(slow) }
+    LaunchedEffect(apiOnly) { viewModel.setApiOnly(apiOnly) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     VaultDeletingContent(state, viewModel, onOpenAccountSite)
+}
+
+private fun titleRes(state: VaultDeletingUiState): Int = when {
+    state.apiOnly -> R.string.vault_deleted_api_title
+    state.slow -> R.string.vault_deleting_slow_title
+    else -> R.string.vault_deleting_title
+}
+
+private fun checkRes(c: DeletionCheck): Int = when (c) {
+    DeletionCheck.LISTED -> R.string.vault_deleting_still
+    DeletionCheck.API_ONLY -> R.string.vault_deleted_api_again
+    DeletionCheck.UNCONFIRMED, DeletionCheck.UNCONFIRMED_CLOCK -> R.string.vault_deleting_cannot_confirm
+    else -> R.string.vault_deleting_unreachable
+}
+
+private fun bodyRes(state: VaultDeletingUiState): Int = when {
+    state.apiOnly && state.slow -> R.string.vault_deleted_api_slow_body
+    state.apiOnly -> R.string.vault_deleted_api_body
+    state.slow -> R.string.vault_deleting_slow_body
+    else -> R.string.vault_deleting_body
 }
 
 /** The screen for [state] (stateless). The progress has no percentage; the title is a polite live region. */
@@ -137,7 +168,7 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
             ) {
                 Spacer(Modifier.height(Spacing.xl))
                 Text(
-                    stringResource(if (state.slow) R.string.vault_deleting_slow_title else R.string.vault_deleting_title),
+                    stringResource(titleRes(state)),
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.semantics {
                         heading()
@@ -145,11 +176,11 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                     },
                 )
                 Text(
-                    stringResource(if (state.slow) R.string.vault_deleting_slow_body else R.string.vault_deleting_body),
+                    stringResource(bodyRes(state)),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (state.slow && state.lastCheck == null) {
+                if (state.slow && !state.apiOnly && state.lastCheck == null) {
                     Text(
                         stringResource(R.string.vault_deleting_unconfirmed),
                         style = MaterialTheme.typography.bodyMedium,
@@ -159,13 +190,7 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                 if (!state.slow || state.checking) LinearProgressIndicator(Modifier.fillMaxWidth())
                 state.lastCheck?.let { c ->
                     Text(
-                        stringResource(
-                            when (c) {
-                                DeletionCheck.LISTED -> R.string.vault_deleting_still
-                                DeletionCheck.UNCONFIRMED, DeletionCheck.UNCONFIRMED_CLOCK -> R.string.vault_deleting_cannot_confirm
-                                else -> R.string.vault_deleting_unreachable
-                            },
-                        ),
+                        stringResource(checkRes(c)),
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("vault_deleting_check").semantics { liveRegion = LiveRegionMode.Polite },
                     )
@@ -181,7 +206,7 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                     .padding(horizontal = Spacing.xl, vertical = Spacing.l),
                 verticalArrangement = Arrangement.spacedBy(Spacing.s),
             ) {
-                if (state.slow) {
+                if (state.slow || state.apiOnly) {
                     PrimaryButton(
                         stringResource(R.string.vault_deleting_check_again),
                         actions::checkAgain,
@@ -209,9 +234,12 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
 @Composable
 private fun RemoveConfirm(state: VaultDeletingUiState, actions: VaultDeletingActions) {
     if (!state.removeConfirm) return
+    val apiOnly = state.apiOnly
     ConfirmDialog(
         title = stringResource(R.string.vault_deleting_remove_confirm_title),
-        text = stringResource(R.string.vault_deleting_remove_confirm_body),
+        text = stringResource(
+            if (apiOnly) R.string.vault_deleted_api_remove_confirm_body else R.string.vault_deleting_remove_confirm_body,
+        ),
         confirmLabel = stringResource(R.string.vault_deleting_remove_confirm),
         onConfirm = actions::confirmRemove,
         onDismiss = actions::dismissRemove,

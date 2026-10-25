@@ -206,7 +206,11 @@ fun VettIdApp(
                         composable<UpdateDest> { ReleaseUpdateFlowRoute() }
                         composable<DeletingDest> {
                             val slow = (phase as? AppPhase.Deleting)?.slow == true
-                            VaultDeletingRoute(slow = slow, onOpenAccountSite = { uri.openUri(portal) })
+                            VaultDeletingRoute(
+                                slow = slow,
+                                apiOnly = (phase as? AppPhase.Deleting)?.apiOnly == true,
+                                onOpenAccountSite = { uri.openUri(portal) },
+                            )
                         }
                         composable<MainDest> {
                             // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).

@@ -92,4 +92,26 @@ class VaultDeletingViewModelTest {
         advanceUntilIdle()
         assertTrue(vault.calls.none { it == "eraseThisPhone" })
     }
+
+    @Test
+    fun anApiOnlyStateOffersRemoveOnlyFromTheBoundAndANewChecksNeverLeaves() = runTest {
+        val api = FakeVault(AppPhase.Deleting(apiOnly = true))
+        val vm = VaultDeletingViewModel(api)
+        vm.setApiOnly(true)
+        vm.askRemove() // before the bound
+        vm.confirmRemove()
+        assertFalse(vm.uiState.value.removeConfirm)
+        api.deletionChecks += DeletionCheck.API_ONLY
+        vm.checkAgain()
+        advanceUntilIdle()
+        assertEquals(DeletionCheck.API_ONLY, vm.uiState.value.lastCheck)
+        assertEquals(AppPhase.Deleting(apiOnly = true), api.phase.value)
+        assertTrue(api.calls.none { it == "eraseThisPhone" })
+        vm.setSlow(true)
+        vm.askRemove()
+        assertTrue(vm.uiState.value.removeConfirm)
+        vm.confirmRemove()
+        advanceUntilIdle()
+        assertEquals(1, api.calls.count { it == "eraseThisPhone" })
+    }
 }

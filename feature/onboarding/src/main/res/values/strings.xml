@@ -374,6 +374,12 @@
     <string name="vault_deleting_remove_confirm_title">Remove VettID from this phone?</string>
     <string name="vault_deleting_remove_confirm_body">Your vault can never be opened again, and nothing on this phone is needed to finish deleting it. This removes VettID\'s data on this phone only: its keys, your account details and the app\'s settings. It works without a connection and cannot be undone.</string>
     <string name="vault_deleting_remove_confirm">Remove</string>
+    <!-- DRAFT (ANDROID-PLAN 0.1.78, pending the owner's wording): the member API's 410 without the vault's own word. -->
+    <string name="vault_deleted_api_title">Your vault was deleted</string>
+    <string name="vault_deleted_api_body">VettID says your vault was deleted. This phone has not yet heard it from the vault itself, so it keeps your keys. Nothing on this phone is erased until the vault confirms it or you remove VettID from this phone. It checks again whenever you open VettID.</string>
+    <string name="vault_deleted_api_slow_body">VettID says your vault was deleted, but this phone has not heard it from the vault itself. You can remove VettID from this phone, or keep it: if the vault confirms the deletion, this phone removes VettID by itself.</string>
+    <string name="vault_deleted_api_remove_confirm_body">VettID says your vault was deleted, but the vault itself has not confirmed it. If it still exists, you can get it back only with a recovery code and your credential backup; without them you would lose it. This removes VettID\'s data on this phone only: its keys, your account details and the app\'s settings. It works without a connection and cannot be undone.</string>
+    <string name="vault_deleted_api_again">VettID still says your vault was deleted. This phone is waiting for the vault itself.</string>
     <string name="vault_deleting_account_site">Open the account site</string>
     <!-- Release R (ANDROID-PLAN 0.1.40, VAULT-MESSAGING 0.33.0 §11.14.6): draft texts for the owner's wording. -->
     <string name="recover_not_offered">This vault\'s release does not offer recovery.</string>
