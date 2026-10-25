@@ -51,20 +51,52 @@ internal data class ReuseRecord(
 internal data class SentOpen(val rid: String, val recoveryId: String, val slot: Int, val polled: Boolean = false)
 
 /**
- * Every open sent whose answer was never readable. It is sticky: a later open's answer, of whatever kind, says nothing of
- * an earlier open that may have stored step 1 (a later `wrong` is the earlier one's recovery resumed), so only the
- * answered open leaves; the rest go with the cleanup after `ok` and the pairing ([Rules.mayDeleteEarlier]).
+ * Every open sent whose answer is not a decisive one. It is sticky and fails secure: an open leaves only on a sealed
+ * refusal that proves it stored no step 1 ([REFUSALS]); `wrong` and `expired` prove that only when no earlier open
+ * stands (a later `wrong` is the earlier open's recovery resumed). Every other code (`retry`, `stored_mismatch`,
+ * `missing`, one this build does not know) leaves the open unanswered: the vault can store step 1 and still answer
+ * `retry`. An earlier open never leaves because of a later one's answer. Everything goes together, after `ok`, the
+ * pairing and the credential ([completes]).
  */
 internal object Ledger {
-    fun afterSent(ledger: List<SentOpen>, o: SentOpen): List<SentOpen> = if (ledger.any { it.rid == o.rid }) ledger else ledger + o
+    /** Sealed refusals that always prove the open stored no step 1: before the spend, or the vault's wait verdicts. */
+    val REFUSALS = setOf("busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet")
 
-    /** A readable answer to the open [rid]: it is answered; its predecessors stay unanswered. */
-    fun afterAnswer(ledger: List<SentOpen>, rid: String?): List<SentOpen> = ledger.filterNot { it.rid == rid }
+    /** Prove it only when no earlier open stands. */
+    val ALONE_ONLY = setOf("wrong", "expired")
+
+    /** A record of an earlier build that says "unanswered" but has no list keeps that: one entry nothing can answer. */
+    fun seed(flag: Boolean, ledger: List<SentOpen>): List<SentOpen> =
+        if (flag && ledger.isEmpty()) listOf(SentOpen(LEGACY, "", 0, polled = true)) else ledger
+
+    /** The open sent ([rid] null: not known, a synthetic entry nothing can answer). */
+    fun afterSent(flag: Boolean, ledger: List<SentOpen>, rid: String?, recoveryId: String, slot: Int): List<SentOpen> {
+        val l = seed(flag, ledger)
+        val id = rid ?: "$UNKNOWN${l.size}"
+        return if (l.any { it.rid == id }) l else l + SentOpen(id, recoveryId, slot, polled = rid == null)
+    }
+
+    /** The sealed answer [code] ([ok]) to the open [rid]: the ledger after it. */
+    fun afterAnswer(flag: Boolean, ledger: List<SentOpen>, rid: String?, code: String?, ok: Boolean): List<SentOpen> {
+        val l = seed(flag, ledger)
+        val i = l.indexOfFirst { it.rid == rid }
+        if (i < 0) return l
+        // `ok` does not remove it either: everything goes together at [completes], so a restart before the pairing stays
+        // undecided.
+        val leaves = !ok && (code in REFUSALS || (code in ALONE_ONLY && i == 0))
+        return if (leaves) l.filterIndexed { n, _ -> n != i } else l
+    }
 
     /** The opens whose slot is still to be looked at once. */
     fun toPoll(ledger: List<SentOpen>): List<SentOpen> = ledger.filterNot { it.polled }
 
     fun polled(ledger: List<SentOpen>, rid: String): List<SentOpen> = ledger.map { if (it.rid == rid) it.copy(polled = true) else it }
+
+    /** Nothing is unanswered any more only once `ok`, the pairing and the credential have all completed. */
+    fun completes(ok: Boolean, paired: Boolean, credential: Boolean): Boolean = ok && paired && credential
+
+    private const val LEGACY = "legacy"
+    private const val UNKNOWN = "unknown-"
 }
 
 @Suppress("TooManyFunctions") // one small decision per guard

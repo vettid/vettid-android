@@ -231,18 +231,77 @@ class RecoveryReuseTest {
     private val o1 = SentOpen("rid1", "rec1", 0)
     private val o2 = SentOpen("rid2", "rec1", 0)
 
+    private fun sent(vararg rids: String): List<SentOpen> =
+        rids.fold(emptyList()) { l, r -> Ledger.afterSent(false, l, r, "rec", 0) }
+
+    private fun answer(l: List<SentOpen>, rid: String, code: String, ok: Boolean = false) =
+        Ledger.afterAnswer(flag = l.isNotEmpty(), ledger = l, rid = rid, code = code, ok = ok).map { it.rid }
+
     @Test
     fun unansweredIsStickyAndALaterAnswerOnlyAnswersItself() {
-        // Open 1 gets no answer; open 2 is answered `wrong`: open 1 stays unanswered, so Start over is not offered.
-        var l = Ledger.afterSent(emptyList(), o1)
-        l = Ledger.afterSent(l, o2)
-        l = Ledger.afterAnswer(l, "rid2")
-        assertEquals(listOf(o1), l)
-        assertTrue(Rules.undecided(l.isNotEmpty(), null))
-        // A lone open that is answered leaves nothing unanswered.
-        assertEquals(emptyList<SentOpen>(), Ledger.afterAnswer(Ledger.afterSent(emptyList(), o1), "rid1"))
+        // Open 1 gets no answer; open 2 is answered `wrong`: both stay (wrong proves nothing with an earlier open standing).
+        val l = sent("rid1", "rid2")
+        assertEquals(listOf("rid1", "rid2"), answer(l, "rid2", "wrong"))
+        // A wait verdict for open 2 removes open 2 only; open 1 stays unanswered.
+        assertEquals(listOf("rid1"), answer(l, "rid2", "wait"))
+        assertTrue(Rules.undecided(true, null))
+        // A lone open: `wrong` and `expired` leave it, a refusal before the spend too.
+        for (c in listOf("wrong", "expired", "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet")) {
+            assertEquals(c, emptyList<String>(), answer(sent("rid1"), "rid1", c))
+        }
         // The same open is not listed twice.
-        assertEquals(listOf(o1), Ledger.afterSent(listOf(o1), o1))
+        assertEquals(listOf("rid1"), sent("rid1", "rid1").map { it.rid })
+    }
+
+    @Test
+    fun aSealedRetryOrAnyOtherCodeLeavesTheOpenUnanswered() {
+        // The vault can store step 1 and still answer `retry`: Start over would lose K and the secret.
+        for (c in listOf("retry", "stored_mismatch", "missing", "vault_missing", "exhausted", "no_recovery", "something_new")) {
+            assertEquals(c, listOf("rid1"), answer(sent("rid1"), "rid1", c))
+        }
+    }
+
+    @Test
+    fun wrongAndExpiredProveNothingWhenAnEarlierOpenStands() {
+        for (c in listOf("wrong", "expired")) assertEquals(c, listOf("rid1", "rid2"), answer(sent("rid1", "rid2"), "rid2", c))
+        // ... but the earlier one answered with them leaves when it is the first.
+        assertEquals(listOf("rid2"), answer(sent("rid1", "rid2"), "rid1", "wrong"))
+    }
+
+    @Test
+    fun anOkDoesNotRemoveAnythingUntilEverythingCompleted() {
+        assertEquals(listOf("rid1", "rid2"), answer(sent("rid1", "rid2"), "rid2", "ok", ok = true))
+        assertFalse(Ledger.completes(ok = true, paired = false, credential = true))
+        assertFalse(Ledger.completes(ok = true, paired = true, credential = false))
+        assertFalse(Ledger.completes(ok = false, paired = true, credential = true))
+        assertTrue(Ledger.completes(ok = true, paired = true, credential = true))
+    }
+
+    @Test
+    fun aRecordOfAnEarlierBuildThatSaysUnansweredStaysSticky() {
+        // Flag true, no list: a synthetic entry that no answer can remove.
+        val seeded = Ledger.seed(true, emptyList())
+        assertEquals(1, seeded.size)
+        assertEquals(emptyList<SentOpen>(), Ledger.seed(false, emptyList()))
+        // A new open sent and answered `wait` leaves the legacy one standing.
+        val l = Ledger.afterSent(true, emptyList(), "rid9", "rec", 0)
+        assertEquals(2, l.size)
+        val after = Ledger.afterAnswer(true, l, "rid9", "wait", ok = false)
+        assertEquals(1, after.size)
+        assertTrue(Rules.undecided(after.isNotEmpty(), null))
+        // An answer with the flag and no list at all changes nothing.
+        assertEquals(1, Ledger.afterAnswer(true, emptyList(), "rid9", "wait", ok = false).size)
+    }
+
+    @Test
+    fun anOpenWhoseRequestIdIsUnknownIsKeptUnanswered() {
+        val l = Ledger.afterSent(false, emptyList(), null, "rec", 0)
+        assertEquals(1, l.size)
+        // No answer can name it, so none removes it.
+        assertEquals(1, Ledger.afterAnswer(true, l, null, "wait", ok = false).size)
+        assertEquals(1, Ledger.afterAnswer(true, l, "ridX", "wait", ok = false).size)
+        // A synthetic entry is not looked at.
+        assertTrue(Ledger.toPoll(l).isEmpty())
     }
 
     @Test

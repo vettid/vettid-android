@@ -2891,11 +2891,13 @@ class VaultManager(
         val phone = local.phone
         if (!phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
         if (s.device.recoveryOpenedNotFinished) {
-            return@guard if (local.reuse != null) {
+            val resumed = if (local.reuse != null) {
                 finishReuse(pin, local.recoveryAttemptsUsed, resuming = true)
             } else {
                 finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
             }
+            completeOpens(resumed)
+            return@guard resumed
         }
         val afterUnanswered = local.recoveryOpenUnanswered
         var sentRid: String? = null
@@ -2912,10 +2914,10 @@ class VaultManager(
                 onSent = {
                     // (0.1.78) Every open sent is kept (sticky) until the vault answered `ok` and the pairing completed.
                     sentRid = s.device.pendingOpenRequestId
-                    val sent = sentRid?.let { SentOpen(it, s.device.recoveryId ?: "", slots.active) }
+                    val recoveryIdNow = s.device.recoveryId ?: ""
                     io {
                         updateLocal(rec) {
-                            val l = sent?.let { o -> Ledger.afterSent(it.sentOpens, o) } ?: it.sentOpens
+                            val l = Ledger.afterSent(it.recoveryOpenUnanswered, it.sentOpens, sentRid, recoveryIdNow, slots.active)
                             it.copy(recoveryOpenUnanswered = true, sentOpens = l)
                         }
                     }
@@ -2928,7 +2930,7 @@ class VaultManager(
         io {
             updateLocal(rec) {
                 // Only this open is answered; an earlier one that got no answer stays unanswered.
-                val left = Ledger.afterAnswer(it.sentOpens, sentRid)
+                val left = Ledger.afterAnswer(it.recoveryOpenUnanswered, it.sentOpens, sentRid, r.code, r.ok)
                 val attempts = used ?: it.recoveryAttemptsUsed
                 it.copy(recoveryOpenUnanswered = left.isNotEmpty(), sentOpens = left, recoveryAttemptsUsed = attempts)
             }
@@ -2936,8 +2938,21 @@ class VaultManager(
         if (!r.ok) {
             return@guard RecoveryOpenOutcome(r.code, used, r.retryAt, afterUnanswered = afterUnanswered, attemptUsed = r.attemptUsed)
         }
-        (if (local.reuse != null) finishReuse(pin, used, resuming = false) else finishOpened(s, pin, used, resuming = false))
-            .copy(attemptUsed = r.attemptUsed)
+        val out = if (local.reuse != null) finishReuse(pin, used, resuming = false) else finishOpened(s, pin, used, resuming = false)
+        completeOpens(out)
+        out.copy(attemptUsed = r.attemptUsed)
+    }
+
+    /** `ok`, the pairing and the credential completed ([finishOpened] answers `ok` only then): nothing is unanswered any more. */
+    private suspend fun completeOpens(out: RecoveryOpenOutcome) {
+        if (!Ledger.completes(out.ok, paired = out.ok, credential = out.ok)) return
+        val rec = record.recordGeneration
+        io {
+            updateLocal(rec) {
+                val none = it.sentOpens.isEmpty() && !it.recoveryOpenUnanswered
+                if (none) null else it.copy(sentOpens = emptyList(), recoveryOpenUnanswered = false)
+            }
+        }
     }
 
     /**
@@ -2952,14 +2967,16 @@ class VaultManager(
         val s = session()
         val d = s.device
         if (!local.phone.inUse || !d.recovering) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_recovery")
-        if (d.recoveryOpenedNotFinished) return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
+        if (d.recoveryOpenedNotFinished) {
+            return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true).also { completeOpens(it) }
+        }
         val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
         when {
             !u.ok -> RecoveryOpenOutcome(u.result.code ?: "retry", local.recoveryAttemptsUsed, opened = true, attemptUsed = false)
             // A result without `vault_bundle`: this phone is not the one a completed recovery made the app.
             !d.recoveryOpenedNotFinished ->
                 RecoveryOpenOutcome(CODE_NO_BUNDLE, local.recoveryAttemptsUsed, opened = true, attemptUsed = false)
-            else -> finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = false).copy(attemptUsed = false)
+            else -> finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = false).also { completeOpens(it) }.copy(attemptUsed = false)
         }
     }
 
@@ -3169,7 +3186,7 @@ class VaultManager(
             val used = if (res.counted) res.used else null
             io {
                 updateLocal(rec) {
-                    val left = Ledger.afterAnswer(it.sentOpens, o.rid)
+                    val left = Ledger.afterAnswer(it.recoveryOpenUnanswered, it.sentOpens, o.rid, res.code, res.ok)
                     val attempts = used ?: it.recoveryAttemptsUsed
                 it.copy(recoveryOpenUnanswered = left.isNotEmpty(), sentOpens = left, recoveryAttemptsUsed = attempts)
                 }
@@ -3348,7 +3365,7 @@ class VaultManager(
             is LostOk.Result.Ok -> {
                 markReuse { it.copy(refusedSinceMs = null, lostOkDue = false) }
                 // The new identity's pairing has the fall back to the earlier one; the cleanup is in finishReuse.
-                finishReuse(pin, used, resuming = false).copy(attemptUsed = false)
+                finishReuse(pin, used, resuming = false).also { completeOpens(it) }.copy(attemptUsed = false)
             }
             is LostOk.Result.TransferIncomplete -> {
                 // The state is still under DEK_0: only an open repeats the recovery, while the recovery shows `registered`.
