@@ -93,16 +93,61 @@ class RecoveryReuseTest {
     }
 
     @Test
-    fun aRegisterThatFailedBeforeTheVaultMayBeTriedAgainWithTheSameN() {
-        assertTrue(Rules.registerFailedBeforeVault(null, null)) // no network
-        assertTrue(Rules.registerFailedBeforeVault(503, "release_starting"))
-        assertTrue(Rules.registerFailedBeforeVault(503, "vault_unavailable"))
-        assertTrue(Rules.registerFailedBeforeVault(429, "rate_limited"))
-        assertTrue(Rules.registerFailedBeforeVault(409, "recovery_not_available"))
+    fun aFirstRegisterThatFailedBeforeTheVaultMayBeTriedAgainWithTheSameN() {
+        assertTrue(Rules.registerFailedBeforeVault(false, null, null)) // no network
+        assertTrue(Rules.registerFailedBeforeVault(false, 503, "release_starting"))
+        assertTrue(Rules.registerFailedBeforeVault(false, 503, "vault_unavailable"))
+        assertTrue(Rules.registerFailedBeforeVault(false, 429, "rate_limited"))
+        assertTrue(Rules.registerFailedBeforeVault(false, 409, "recovery_not_available"))
         // Anything else may have reached the vault: N stays unknown.
-        assertFalse(Rules.registerFailedBeforeVault(500, "internal"))
-        assertFalse(Rules.registerFailedBeforeVault(504, "http_504"))
-        assertFalse(Rules.registerFailedBeforeVault(400, "bad_request"))
+        assertFalse(Rules.registerFailedBeforeVault(false, 500, "internal"))
+        assertFalse(Rules.registerFailedBeforeVault(false, 504, "http_504"))
+        assertFalse(Rules.registerFailedBeforeVault(false, 400, "bad_request"))
+    }
+
+    @Test
+    fun aRepeatForTheSameCodeIsMaybeRegisteredNeverBeforeTheVault() {
+        for ((status, code) in listOf<Pair<Int?, String?>>(
+            null to null, 503 to "release_starting", 429 to "rate_limited", 409 to "recovery_not_available",
+        )) {
+            assertFalse("$status $code", Rules.registerFailedBeforeVault(true, status, code))
+        }
+        assertTrue(Rules.maybeRegistered(true, "recovery_not_available"))
+        assertTrue(Rules.maybeRegistered(true, "used"))
+        assertFalse(Rules.maybeRegistered(false, "recovery_not_available")) // a first attempt: before the vault
+        assertFalse(Rules.maybeRegistered(false, "used"))
+        assertFalse(Rules.maybeRegistered(true, "expired"))
+    }
+
+    @Test
+    fun nKeysAreNeverReplacedOnceNWasOrMayHaveBeenRegistered() {
+        assertTrue(Rules.mayMakeNewKeysForN(newRegistered = false, newRecoveryId = null))
+        assertFalse(Rules.mayMakeNewKeysForN(newRegistered = true, newRecoveryId = null))
+        assertFalse(Rules.mayMakeNewKeysForN(newRegistered = false, newRecoveryId = "R2"))
+    }
+
+    @Test
+    fun noFailureOfAPostOrAfterItRemovesAnOpenEntry() {
+        // The status-derived codes of a refused post or poll (401 unauthorized, 409 duplicate_request, 429, 404) are not
+        // sealed refusals: none of them settles an entry. An HTTP client may have sent a copy that was queued.
+        val l = sent("rid1")
+        val codes = listOf("unauthorized", "duplicate_request", "rate_limited", "not_found", "http_401", "http_409", "http_429", "http_404")
+        for (c in codes) {
+            assertEquals(c, listOf("rid1"), answer(l, "rid1", c))
+        }
+    }
+
+    @Test
+    fun theCouldNotRecoverTextComesOnlyFromAFreshOpenThatRuledRecoveryOut() {
+        for (c in listOf("exhausted", "closed", "not_armed")) {
+            assertTrue(c, Rules.showCouldNotRecover(keyInUse = false, secondIdentity = true, openCode = c))
+        }
+        // Not after ordinary refusals, a wrong PIN, a retry, or without both identities or with key_in_use.
+        for (c in listOf("wrong", "retry", "bad_pin", "device_secret", "wait", null)) {
+            assertFalse(c.toString(), Rules.showCouldNotRecover(false, true, c))
+        }
+        assertFalse(Rules.showCouldNotRecover(keyInUse = true, secondIdentity = true, openCode = "exhausted"))
+        assertFalse(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = false, openCode = "exhausted"))
     }
 
     @Test
@@ -121,17 +166,11 @@ class RecoveryReuseTest {
     }
 
     @Test
-    fun theCouldNotRecoverTextNeedsBothIdentitiesNoKeyInUseARefusalAndADayStagingScaled() {
-        assertTrue(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = true, refusal = true, sinceMs = 0, nowMs = day))
-        assertFalse(Rules.showCouldNotRecover(keyInUse = true, secondIdentity = true, refusal = true, sinceMs = 0, nowMs = day))
-        assertFalse(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = false, refusal = true, sinceMs = 0, nowMs = day))
-        assertFalse(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = true, refusal = false, sinceMs = 0, nowMs = day))
-        assertFalse(Rules.showCouldNotRecover(keyInUse = false, secondIdentity = true, refusal = true, sinceMs = 0, nowMs = day - 1))
-        // Staging: a day divided by the time scale.
-        assertTrue(Rules.showCouldNotRecover(false, true, true, 0, day / 24, scale = 24))
-        assertFalse(Rules.showCouldNotRecover(false, true, true, 0, day / 24 - 1, scale = 24))
-        // The "took this phone" text stays for key_in_use only.
+    fun theTookPhoneTextIsStagingScaledAndNeedsKeyInUse() {
         assertTrue(Rules.showContact(keyInUse = true, refusal = true, sinceMs = 0, nowMs = day))
+        assertFalse(Rules.showContact(keyInUse = false, refusal = true, sinceMs = 0, nowMs = day))
+        assertTrue(Rules.showContact(true, true, 0, day / 24, scale = 24))
+        assertFalse(Rules.showContact(true, true, 0, day / 24 - 1, scale = 24))
     }
 
     @Test
@@ -139,15 +178,6 @@ class RecoveryReuseTest {
         assertTrue(Rules.sameVault("v1", "v1"))
         assertTrue(Rules.sameVault("v1", null)) // an older API names none
         assertFalse(Rules.sameVault("v1", "v2"))
-    }
-
-    @Test
-    fun anOpenTheMemberApiRefusedIsNotUnansweredButOneThatMayHaveBeenTakenIs() {
-        val l = Ledger.afterSent(false, emptyList(), "rid1", "rec", 0)
-        for (status in listOf(400, 401, 403, 404, 409, 429)) {
-            assertEquals(status.toString(), emptyList<SentOpen>(), Ledger.afterPostFailed(l, "rid1", status))
-        }
-        for (status in listOf(408, 500, 502, 503, null)) assertEquals(l, Ledger.afterPostFailed(l, "rid1", status))
     }
 
     @Test

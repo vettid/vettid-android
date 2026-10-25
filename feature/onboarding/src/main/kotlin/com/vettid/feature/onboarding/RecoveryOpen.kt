@@ -545,6 +545,17 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, on
     }
 }
 
+/** Recovery is ruled out for now: the contact line, and (not terminal) a new code that reuses the second identity. */
+@Composable
+private fun RuledOut(newCodeAllowed: Boolean, onNewCode: (() -> Unit)?) {
+    ContactSupport()
+    if (newCodeAllowed && onNewCode != null) {
+        OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_ruled_out")) {
+            Text(stringResource(R.string.recover_undecided_new_code))
+        }
+    }
+}
+
 /** "Contact VettID": the support address, as a mail button (the address is shown when no mail app takes it). */
 @Composable
 private fun ContactSupport() {
@@ -682,7 +693,7 @@ private fun OpenCheck(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
 }
 
 @Composable
-@Suppress("SpreadOperator") // a string's arguments
+@Suppress("SpreadOperator", "CyclomaticComplexMethod") // a string's arguments; one branch per kind of answer
 private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onStartOver: (() -> Unit)?, onNewCode: (() -> Unit)?) {
     val o = state.outcome
     if (o == null) {
@@ -717,6 +728,7 @@ private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, on
             Text(stringResource(R.string.onboarding_open_lost_title))
         }
     }
+    if (o.contactCouldNotRecover) RuledOut(state.newCodeAllowed, onNewCode)
     if (o.code == CODE_START_NEW && onNewCode != null) {
         Button(onClick = onNewCode, modifier = Modifier.testTag("open_new_code")) {
             Text(stringResource(R.string.recover_undecided_new_code))

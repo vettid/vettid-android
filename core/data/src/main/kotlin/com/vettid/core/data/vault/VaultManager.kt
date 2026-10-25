@@ -3040,15 +3040,6 @@ class VaultManager(
                     if (!ok) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_HISTORY_NOT_SAVED)
                 },
             )
-        } catch (e: MemberApiException) {
-            // Refused by the member API: not queued, so not unanswered.
-            io {
-                updateLocal(rec) {
-                    val left = Ledger.afterPostFailed(it.sentOpens, sentRid, e.status)
-                    it.copy(sentOpens = left, recoveryOpenUnanswered = left.isNotEmpty())
-                }
-            }
-            throw e
         } finally {
             secret.fill(0)
         }
@@ -3062,7 +3053,12 @@ class VaultManager(
             }
         }
         if (!r.ok) {
-            return@guard RecoveryOpenOutcome(r.code, used, r.retryAt, afterUnanswered = afterUnanswered, attemptUsed = r.attemptUsed)
+            val reuseNow = local.reuse
+            return@guard RecoveryOpenOutcome(
+                r.code, used, r.retryAt, afterUnanswered = afterUnanswered, attemptUsed = r.attemptUsed,
+                // Recovery is ruled out until the owner's app arms a new generation; not terminal (a later recovery reuses N).
+                contactCouldNotRecover = reuseNow != null && Rules.showCouldNotRecover(reuseNow.keyInUse, reuseNow.newRegistered, r.code),
+            )
         }
         val out = if (local.reuse != null) finishReuse(pin, used, resuming = false) else finishOpened(s, pin, used, resuming = false)
         completeOpens(out)
@@ -3381,7 +3377,7 @@ class VaultManager(
     }
 
     /** The new identity in the other slot (made once, kept across a failed register), registered with the same K. */
-    @Suppress("ReturnCount", "ThrowsCount", "CyclomaticComplexMethod") // one branch per answer of the register
+    @Suppress("ReturnCount", "ThrowsCount", "CyclomaticComplexMethod", "LongMethod") // one branch per answer of the register
     private suspend fun registerNewIdentity(code: RecoveryCode, claimed: Claimed): RegisterAnswer {
         var r = local.reuse ?: throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
         val slot = r.newSlot ?: slots.other(r.earlierSlot)
@@ -3391,6 +3387,8 @@ class VaultManager(
             persistReuse(r)
         }
         if (!io { slots.exists(slot) }) {
+            // Fail secure: N's keys are never replaced once N was (or may have been) registered.
+            if (!Rules.mayMakeNewKeysForN(r.newRegistered, r.newRecoveryId)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_UNDECIDED)
             io {
                 slots.file(slot).delete()
                 val k = slots.keys(slot)
@@ -3403,7 +3401,8 @@ class VaultManager(
         // N may have registered once this is posted, whatever comes back: kept as unknown, never registered again, tried
         // by the lost-ok unlock. A definite refusal below takes it back.
         val before = local.reuse ?: r
-        markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId) }
+        val repeat = before.registerTried == code.recoveryId
+        markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, registerTried = code.recoveryId) }
         val since = record.recordGeneration
         val res = try {
             s.alt.recoveryRegister(
@@ -3429,10 +3428,11 @@ class VaultManager(
                     backToEarlier(before)
                     return RegisterAnswer.Refused(CODE_NO_BACKUP)
                 }
-                MemberApiException.RECOVERY_NOT_AVAILABLE -> null
+                MemberApiException.RECOVERY_NOT_AVAILABLE ->
+                    if (Rules.maybeRegistered(repeat, e.code)) return maybeRegistered(s, code) else null
                 else -> {
-                    // A failure that did not reach the vault leaves N unregistered: the same N, K and code may try again.
-                    if (Rules.registerFailedBeforeVault(e.status, e.code)) {
+                    // A first attempt that did not reach the vault leaves N unregistered: the same N, K and code may try again.
+                    if (Rules.registerFailedBeforeVault(repeat, e.status, e.code)) {
                         s.device.dropRecoveryRegistration()
                         backToEarlier(before)
                     }
@@ -3440,8 +3440,10 @@ class VaultManager(
                 }
             }
         } catch (e: IOException) {
-            s.device.dropRecoveryRegistration()
-            backToEarlier(before)
+            if (Rules.registerFailedBeforeVault(repeat, null, null)) {
+                s.device.dropRecoveryRegistration()
+                backToEarlier(before)
+            }
             throw e
         }
         return when {
@@ -3456,12 +3458,26 @@ class VaultManager(
                 phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
                 RegisterAnswer.Registered
             }
+            // A readable `used` after an earlier attempt for the same code: maybe registered (the first copy went through).
+            Rules.maybeRegistered(repeat, res.code) -> maybeRegistered(s, code)
             else -> {
                 s.device.dropRecoveryRegistration()
                 backToEarlier(before)
                 RegisterAnswer.Refused(res.code ?: CODE_RETRY)
             }
         }
+    }
+
+    /**
+     * A repeat register for the same code was refused, but the first copy may have been recorded: the new registration is kept
+     * (the prior one is not restored) and status signed with K decides, `registered` there meaning registered for this recovery.
+     */
+    private suspend fun maybeRegistered(s: Session, code: RecoveryCode): RegisterAnswer {
+        if ((readStatusWithK(s) as? Rules.Read.Listed)?.registered != true) return RegisterAnswer.Refused(CODE_RETRY)
+        s.device.confirmRecoveryRegistration()
+        markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
+        phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+        return RegisterAnswer.Registered
     }
 
     /** N's keys and state are removed (after a `401` at its register) and the record forgets its slot: a later N is made anew. */
@@ -3552,8 +3568,6 @@ class VaultManager(
                 RecoveryOpenOutcome(
                     result.code, used, opened = true, attemptUsed = false,
                     contactVettid = Rules.showContact(reuse.keyInUse, refusal, since, now, scale),
-                    contactCouldNotRecover =
-                        Rules.showCouldNotRecover(reuse.keyInUse, reuse.newRegistered, refusal, since, now, scale),
                 )
             }
         }

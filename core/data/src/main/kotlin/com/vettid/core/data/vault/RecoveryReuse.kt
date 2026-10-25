@@ -42,6 +42,8 @@ internal data class ReuseRecord(
     val startNew: Boolean = false,
     /** A `200` on status, or a `409 key_in_use` at a claim: the next step is the lost-ok unlock. */
     val lostOkDue: Boolean = false,
+    /** The recovery_id of the last register posted (even if undecided): a repeat for the same code is "maybe registered". */
+    val registerTried: String? = null,
     /** A `409 key_in_use` was seen: only then is the lost-ok unlock "the vault took this phone" (a `200` alone is not that). */
     val keyInUse: Boolean = false,
     /** Since when the lost-ok unlock is refused (epoch ms); after a day the contact text. */
@@ -93,15 +95,9 @@ internal object Ledger {
         return if (leaves) l.filterIndexed { n, _ -> n != i } else l
     }
 
-    /**
-     * The member API refused the post with [status]: the open was not queued, so its entry (saved before the post) goes. Any
-     * other failure (a timeout, a network fault, a `5xx`) leaves it: the request may have been taken.
-     */
-    fun afterPostFailed(ledger: List<SentOpen>, rid: String?, status: Int?): List<SentOpen> =
-        if (status != null && status in HTTP_REFUSED && status != HTTP_TIMEOUT) ledger.filterNot { it.rid == rid } else ledger
-
-    private val HTTP_REFUSED = 400..499
-    private const val HTTP_TIMEOUT = 408
+    // No failure of the post removes an entry, and nothing after it does either (the entry was saved before the post): an
+    // HTTP client may send a POST again, so copy 1 can be queued while a later copy is refused (401, 409, 429). A refused
+    // post only keeps the phone undecided, which is the safe side.
 
     /** The opens whose slot is still to be looked at once. */
     fun toPoll(ledger: List<SentOpen>): List<SentOpen> = ledger.filterNot { it.polled }
@@ -242,12 +238,24 @@ internal object Rules {
     fun sameVault(own: String, named: String?): Boolean = named == null || named == own
 
     /**
-     * Whether a failed register left N possibly registered. A failure that did not reach the vault (the release starting or
-     * the vault unavailable, a rate limit, `recovery_not_available`, no network) leaves N unregistered: the same N, K and code
-     * may be tried again. [status] is null for a network fault.
+     * Whether a failed register left N unregistered: it did not reach the vault (the release starting or the vault
+     * unavailable, a rate limit, `recovery_not_available`, no network; [status] null) AND it was the FIRST attempt for this code.
+     * A repeat for the same code ([repeatForSameCode]) may have been the second copy of a register that went through: the member
+     * API answers `409` to any repeat once the first was recorded.
      */
-    fun registerFailedBeforeVault(status: Int?, code: String?): Boolean =
-        status == null || status == HTTP_TOO_MANY || status == HTTP_UNAVAILABLE || code == "recovery_not_available"
+    fun registerFailedBeforeVault(repeatForSameCode: Boolean, status: Int?, code: String?): Boolean =
+        !repeatForSameCode &&
+            (status == null || status == HTTP_TOO_MANY || status == HTTP_UNAVAILABLE || code == "recovery_not_available")
+
+    /** A repeat for the same code answered `recovery_not_available`, or a readable `used`: maybe registered, not refused. */
+    fun maybeRegistered(repeatForSameCode: Boolean, code: String?): Boolean =
+        repeatForSameCode && (code == "recovery_not_available" || code == "used")
+
+    /** N's state and keys are never replaced by new ones once N was (or may have been) registered. */
+    fun mayMakeNewKeysForN(newRegistered: Boolean, newRecoveryId: String?): Boolean = !newRegistered && newRecoveryId == null
+
+    /** The answers of a fresh open that rule out recovery until the owner's app arms a new generation. */
+    val RULED_OUT = setOf("exhausted", "closed", "not_armed")
 
     private const val HTTP_TOO_MANY = 429
     private const val HTTP_UNAVAILABLE = 503
@@ -286,16 +294,13 @@ internal object Rules {
     fun showContact(keyInUse: Boolean, refusal: Boolean, sinceMs: Long?, nowMs: Long, scale: Long = 1L): Boolean =
         keyInUse && refusal && contactVettid(sinceMs, nowMs, scale)
 
-    /** "This phone could not recover your vault…": both identities stand without `key_in_use`, a real refusal, for a day. */
-    fun showCouldNotRecover(
-        keyInUse: Boolean,
-        secondIdentity: Boolean,
-        refusal: Boolean,
-        sinceMs: Long?,
-        nowMs: Long,
-        scale: Long = 1L,
-    ): Boolean =
-        !keyInUse && secondIdentity && refusal && contactVettid(sinceMs, nowMs, scale)
+    /**
+     * "This phone could not recover your vault…": both identities stand, K is not the vault's key, and a fresh open's answer
+     * ruled recovery out until the owner's app arms a new generation. Not after a day of ordinary lost-ok refusals. Not
+     * terminal: a later recovery still reuses N.
+     */
+    fun showCouldNotRecover(keyInUse: Boolean, secondIdentity: Boolean, openCode: String?): Boolean =
+        !keyInUse && secondIdentity && openCode in RULED_OUT
 
     /** K is forgotten, or the phone starts over, never while undecided (also on `410 recovery_ended`). */
     fun undecided(openUnanswered: Boolean, reuse: ReuseRecord?): Boolean = applies(openUnanswered, reuse)
