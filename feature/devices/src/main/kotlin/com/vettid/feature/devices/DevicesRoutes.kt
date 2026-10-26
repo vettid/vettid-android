@@ -22,12 +22,22 @@ data class DeviceRoute(val deviceId: String) {
     }
 }
 
+/** Pairing an agent (AA2); [held]: opened from the feed item "A device asks to pair", so it shows what is held, never a new code. */
+@Serializable
+data class PairRoute(val held: Boolean = false) {
+    companion object {
+        const val HELD = "held"
+    }
+}
+
 /** What the Devices & agents destinations need from the app shell. */
 data class DevicesHost(
     val navigate: (Any) -> Unit,
     val onBack: () -> Unit,
     /** Opens History with its search set to the device's name (§10.9: the vault's search matches device names). */
     val onOpenHistory: (String) -> Unit,
+    /** The daily owner check (a refused pairing request says it is due). */
+    val onOwnerCheck: () -> Unit = {},
 )
 
 /** Registers the list and a device's page. */
@@ -44,7 +54,13 @@ fun NavGraphBuilder.devicesDestination(chrome: ShellChrome, host: DevicesHost) {
             onOpen = { host.navigate(DeviceRoute(it)) },
             onRetry = vm::refresh,
             onRemovedShown = vm::removedShown,
+            onPair = { host.navigate(PairRoute()) },
         )
+    }
+    composable<PairRoute> {
+        val vm: PairViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        PairContent(vm, state, host)
     }
     composable<DeviceRoute> {
         val vm: DeviceViewModel = hiltViewModel()
@@ -69,5 +85,41 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
             onRetry = vm::refresh,
         ),
         now = rememberNow(),
+    )
+}
+
+@Composable
+private fun PairContent(vm: PairViewModel, state: PairUiState, host: DevicesHost) {
+    PairScreen(
+        state,
+        PairActions(
+            // Leaving a pairing not approved rejects it (the view model's end); a final stage is read.
+            onBack = {
+                vm.done()
+                host.onBack()
+            },
+            onNewCode = vm::newCode,
+            onCopied = vm::copied,
+            onCancel = {
+                vm.cancel()
+                host.onBack()
+            },
+            onCodesMatch = vm::codesMatch,
+            onCloseSheet = vm::closeSheet,
+            onChoose = vm::choose,
+            onPair = vm::pair,
+            onReject = vm::reject,
+            onDone = {
+                vm.done()
+                host.onBack()
+            },
+            // The agent's page, where what it may use is chosen (AA4); the list when its id is not known.
+            onChooseWhatItMayUse = { id ->
+                vm.done()
+                host.onBack()
+                id?.let { host.navigate(DeviceRoute(it)) }
+            },
+            onOwnerCheck = host.onOwnerCheck,
+        ),
     )
 }

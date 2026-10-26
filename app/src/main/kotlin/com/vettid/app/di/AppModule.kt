@@ -56,6 +56,7 @@ import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.RelaySafetyNet
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.devices.DevicesRepository
+import com.vettid.core.data.devices.PairingRepository
 import com.vettid.core.data.vault.HistoryExportRepository
 import com.vettid.core.data.vault.HistoryRepository
 import com.vettid.core.data.vault.ProfileRepository
@@ -208,6 +209,9 @@ object AppModule {
 
     @Provides
     fun devicesRepository(m: VaultManager): DevicesRepository = m.devices
+
+    @Provides
+    fun pairingRepository(m: VaultManager): PairingRepository = m.pairing
 
     @Provides
     fun itemsRepository(m: VaultManager): ItemsRepository = m.items

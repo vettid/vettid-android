@@ -27,12 +27,19 @@ internal object DeviceText {
 
     /** The name as shown in a heading or a row: a device with no name is named by its role. */
     @Composable
-    fun name(d: DeviceInfo): String {
-        val shown = d.name.ifEmpty { return stringResource(R.string.devices_unnamed, role(d).lowercase()) }
+    fun name(d: DeviceInfo): String = label(d.name, role(d))
+
+    /** The agent a pairing shows, by the name it gave (already sanitised): as [name], for an agent not yet listed. */
+    @Composable
+    fun agentName(name: String): String = label(name, stringResource(R.string.devices_role_agent))
+
+    @Composable
+    private fun label(name: String, role: String): String {
+        val shown = name.ifEmpty { return stringResource(R.string.devices_unnamed, role.lowercase()) }
         // A self-asserted name that could pass for the phone itself or for VettID is shown with its role.
         val phone = stringResource(R.string.devices_this_phone)
         return if (shown.equals(phone, ignoreCase = true) || shown.equals("VettID", ignoreCase = true)) {
-            stringResource(R.string.devices_name_with_role, shown, role(d))
+            stringResource(R.string.devices_name_with_role, shown, role)
         } else {
             shown
         }

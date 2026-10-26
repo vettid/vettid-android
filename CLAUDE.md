@@ -155,8 +155,20 @@ The A2 exit test:
   (no unlock window, no password). This phone's entry has no actions and nothing is sent for it. Ending access or removing
   takes the device's entries out of Approvals (`ApprovalsRepository.dropDeviceRequests`). The remove text names the
   longest `status_ttl` of the agent's grants plus 60 s, the worst case (3,660 s) when the vault cannot be asked. A device's
-  name is its own, self-asserted and never edited. Pairing (AA2), permissions (AA3), share rules (AA4) and Approvals for
-  devices (AA5) are later PRs; screens are in the catalog (`devices*`).
+  name is its own, self-asserted and never edited. Pairing an agent (AA2; `PairingManager` / `PairingRepository` in
+  `:core:data` `devices/`, `VaultManager.pairing`, `PairViewModel` / `PairScreen`, `PairRoute`): the floating button on the
+  list; `device.pair.create{role: "agent"}` (the link must parse as an agent pairing, else it is never shown), the QR and
+  the bare code (Copy marked sensitive and cleared by `PairingClipboard`, which keeps only a hash and clears when the
+  pairing ends or on the next window focus after the code expired; Share sends the code alone), `FLAG_SECURE` over the
+  whole flow, the countdown to `exp` (never more than 10 min + 1); `device.pair.pending` for the pairing this phone made
+  shows the six digits and the agent's sanitised name, and only **The codes match** opens the sheet (first access 1 h
+  preselected) which sends `device.pair.approve{pairing_id, session_seconds?}` with no grants (no unlock window); a
+  pending that is not for an agent or has no six-digit code offers only Reject; any refused approval (the owner check
+  excepted, which keeps the comparison) is "This pairing has ended" and nothing is paired; leaving the screen rejects
+  (`PairViewModel.onCleared`); the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
+  from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
+  Permissions (AA3), share rules (AA4) and Approvals for devices, including the pending pairing's entry (AA5), are later
+  PRs; screens are in the catalog (`devices*`).
 
 ## Device testing
 

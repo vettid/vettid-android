@@ -67,6 +67,7 @@ import com.vettid.feature.credential.credentialDestination
 import com.vettid.feature.devices.DeviceRoute
 import com.vettid.feature.devices.DevicesHost
 import com.vettid.feature.devices.DevicesRoute
+import com.vettid.feature.devices.PairRoute
 import com.vettid.feature.devices.devicesDestination
 import com.vettid.feature.history.ConnectionHistoryRoute
 import com.vettid.feature.history.DeviceHistoryRoute
@@ -365,6 +366,7 @@ fun AppShell(
                                 navigate = navigate,
                                 onBack = back,
                                 onOpenHistory = { q -> navController.navigate(DeviceHistoryRoute(q)) { launchSingleTop = true } },
+                                onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
                             ),
                         )
                         credentialDestination(
@@ -536,6 +538,7 @@ private fun feedRoute(t: FeedTarget): Any? = when (t) {
     is FeedTarget.Item -> ItemDetailRoute(t.itemId)
     FeedTarget.Devices -> VaultStatusRoute
     FeedTarget.DeviceList -> DevicesRoute
+    FeedTarget.Pairing -> PairRoute(held = true)
     is FeedTarget.Device -> DeviceRoute(t.deviceId)
     FeedTarget.Alarm -> CredentialAlarmRoute
     FeedTarget.Credential -> CredentialRoute

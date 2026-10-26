@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,12 +36,14 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.components.TopLevelScaffold
+import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
@@ -53,7 +56,7 @@ import java.time.Instant
 /**
  * Devices & agents (ANDROID-PLAN 0.1.53 AA1): this phone first, then the member's agents, then desktops, each newest
  * first. A row is the name, the role, the access ("Access until 15:40" / "No access") and the last activity; an agent
- * the vault paused carries a "Paused" chip. Pairing an agent (AA2) adds its button later.
+ * the vault paused carries a "Paused" chip. The button **Pair an agent** (AA2) is the floating action button.
  */
 @Composable
 fun DevicesScreen(
@@ -64,6 +67,7 @@ fun DevicesScreen(
     onOpen: (String) -> Unit = {},
     onRetry: () -> Unit = {},
     onRemovedShown: () -> Unit = {},
+    onPair: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
     // The name as the list shows it (a name that could pass for the phone or VettID comes with its role).
@@ -79,6 +83,19 @@ fun DevicesScreen(
         modifier = modifier,
         overlay = {
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = Spacing.l))
+            // Pair an agent (AA2), also with only this phone listed; not while the list could not be read at all.
+            if (!state.loading && !(state.devices.isEmpty() && state.error != null)) {
+                BottomFloatingControls(
+                    end = {
+                        VettIdFab(
+                            icon = Icons.Outlined.Add,
+                            contentDescription = stringResource(R.string.devices_pair),
+                            onClick = onPair,
+                            modifier = Modifier.testTag("pair_agent"),
+                        )
+                    },
+                )
+            }
         },
     ) {
         val error = state.error
@@ -119,7 +136,7 @@ private fun DeviceList(state: DevicesUiState, now: Instant, onOpen: (String) -> 
         }
         return
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("devices"), contentPadding = PaddingValues(bottom = Spacing.xxl)) {
+    LazyColumn(Modifier.fillMaxSize().testTag("devices"), contentPadding = PaddingValues(bottom = FAB_SPACE)) {
         state.error?.let { e ->
             // The list on screen is what was read before; a refresh that failed says so above it.
             item(key = "error") {
@@ -200,3 +217,6 @@ internal fun rememberNow(): Instant {
 }
 
 private const val CLOCK_MS = 30_000L
+
+/** Room under the last row for the floating button. */
+private val FAB_SPACE = 96.dp
