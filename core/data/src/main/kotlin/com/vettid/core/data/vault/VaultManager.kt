@@ -29,6 +29,8 @@ import com.vettid.core.data.items.VaultItemsOps
 import com.vettid.core.data.items.SharingManager
 import com.vettid.core.data.items.VaultSharingOps
 import com.vettid.core.data.env.AppEnvironment
+import com.vettid.core.data.devices.DevicesManager
+import com.vettid.core.data.devices.VaultDevicesOps
 import com.vettid.core.data.feed.FeedManager
 import com.vettid.core.data.feed.VaultFeedOps
 import com.vettid.core.data.wipe.LocalWipe
@@ -884,6 +886,17 @@ class VaultManager(
         },
     )
 
+    /**
+     * The member's devices and agents (VAULT-MESSAGING §10.3, ANDROID-PLAN 0.1.53 AA1): "Devices & agents". Memory only,
+     * while the vault is open and not held. Ending a device's access or removing it takes its requests out of Approvals.
+     */
+    val devices = DevicesManager(
+        scope,
+        ops = { VaultDevicesOps(openApi()) },
+        self = { session?.device?.deviceId },
+        onDeviceGone = { social.dropDeviceRequests(it) },
+    )
+
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(
         ops = { VaultAuditOps(openApi()) },
@@ -937,6 +950,7 @@ class VaultManager(
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },
                 clearFeed = { feed.clear() },
+                clearDevices = { devices.clear() },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
                     when (OwnProfileStep.onPhase(p)) {
@@ -978,6 +992,7 @@ class VaultManager(
                 val steps = ClearSteps()
                 if (now && !wasHeld) {
                     steps.step { feed.clear() }
+                    steps.step { devices.clear() }
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { feed.open() }
@@ -1302,6 +1317,7 @@ class VaultManager(
             steps.step { attachments.reset() }
             steps.step { items.clear() }
             steps.step { feed.clear() }
+            steps.step { devices.clear() }
             steps.step { ownerCheck.clear() }
             steps.step { forgetOwnProfile() }
             steps.step { phoneSecrets.delete(local.phone) }
@@ -1358,6 +1374,7 @@ class VaultManager(
                 try {
                     items.onEvent(m)
                     sharing.onEvent(m)
+                    devices.onEvent(m)
                     social.onEvent(m)
                     attachments.onEvent(m.type, m.body)
                     // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
@@ -2542,6 +2559,7 @@ class VaultManager(
         steps.step { items.clear() }
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
+        steps.step { devices.clear() }
         steps.step { deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
@@ -2591,6 +2609,7 @@ class VaultManager(
         steps.step { items.clear() }
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
+        steps.step { devices.clear() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
@@ -4109,6 +4128,7 @@ class VaultManager(
         steps.step { items.clear() }
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
+        steps.step { devices.clear() }
         steps.step { canary.removeCanaryManifest() }
         openTransferId = null
         alarmFlow.value = null

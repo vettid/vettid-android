@@ -107,6 +107,13 @@ data object HistoryRoute
 @Serializable
 data class ConnectionHistoryRoute(val connectionId: String)
 
+/**
+ * History from a device's page (ANDROID-PLAN 0.1.53 AA1): the search field set to the device's name, since `audit.list`
+ * has no device filter and the vault's search matches device names (§10.9).
+ */
+@Serializable
+data class DeviceHistoryRoute(val query: String)
+
 /** One audit entry, by its `seq` (§10.9). */
 @Serializable
 data class HistoryEntryRoute(val seq: Long)
@@ -129,6 +136,7 @@ data class HistoryHost(
 fun NavGraphBuilder.historyDestination(chrome: ShellChrome, host: HistoryHost) {
     composable<HistoryRoute> { HistoryRouteContent(chrome, host, onBack = null) }
     composable<ConnectionHistoryRoute> { HistoryRouteContent(chrome, host, onBack = host.onBack) }
+    composable<DeviceHistoryRoute> { HistoryRouteContent(chrome, host, onBack = host.onBack) }
     composable<HistoryEntryRoute> {
         val vm: HistoryEntryViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()

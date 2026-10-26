@@ -64,7 +64,12 @@ import androidx.compose.ui.platform.testTag
 import com.vettid.feature.approvals.approvalsDestination
 import com.vettid.feature.connections.connectionsDestination
 import com.vettid.feature.credential.credentialDestination
+import com.vettid.feature.devices.DeviceRoute
+import com.vettid.feature.devices.DevicesHost
+import com.vettid.feature.devices.DevicesRoute
+import com.vettid.feature.devices.devicesDestination
 import com.vettid.feature.history.ConnectionHistoryRoute
+import com.vettid.feature.history.DeviceHistoryRoute
 import com.vettid.feature.history.HistoryHost
 import com.vettid.feature.history.historyDestination
 import com.vettid.feature.items.ItemsHost
@@ -354,6 +359,14 @@ fun AppShell(
                                 onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
                             ),
                         )
+                        devicesDestination(
+                            chrome,
+                            DevicesHost(
+                                navigate = navigate,
+                                onBack = back,
+                                onOpenHistory = { q -> navController.navigate(DeviceHistoryRoute(q)) { launchSingleTop = true } },
+                            ),
+                        )
                         credentialDestination(
                             chrome,
                             navigate = { navController.navigate(it) },
@@ -522,6 +535,8 @@ private fun feedRoute(t: FeedTarget): Any? = when (t) {
     is FeedTarget.ShareRule -> RuleEditRoute(t.connectionId, t.ruleId)
     is FeedTarget.Item -> ItemDetailRoute(t.itemId)
     FeedTarget.Devices -> VaultStatusRoute
+    FeedTarget.DeviceList -> DevicesRoute
+    is FeedTarget.Device -> DeviceRoute(t.deviceId)
     FeedTarget.Alarm -> CredentialAlarmRoute
     FeedTarget.Credential -> CredentialRoute
     else -> null
