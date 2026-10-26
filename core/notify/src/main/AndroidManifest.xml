@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Started again after the phone starts (sent after the first unlock; no direct-boot receiver). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- The connection monitor reads the active network (VaultConnectionService). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Notifications (Android 13+), asked for in context. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

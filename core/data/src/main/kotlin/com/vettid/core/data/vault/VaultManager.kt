@@ -3420,71 +3420,82 @@ class VaultManager(
         // N may have registered once this is posted, whatever comes back: kept as unknown, never registered again, tried
         // by the lost-ok unlock. A definite refusal below takes it back.
         val before = local.reuse ?: r
-        val repeat = before.registerTried == code.recoveryId
+        // Per POST (in [build]), see [Rules.registerFailure]: [postedEarlier] any earlier POST built in this flow, [accepted] this
+        // POST got its `202`, [earlierAccepted] an earlier POST of this flow did (sticky: this POST's answer settles only itself).
+        val triedBefore = before.registerTried == code.recoveryId
+        var built = false
+        var postedEarlier = false
+        var accepted = false
+        var earlierAccepted = false
         markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, registerTried = code.recoveryId) }
         val since = record.recordGeneration
+
+        /** Applies [Rules.registerFailure] to a failed POST; the caller then throws, answers or confirms by the outcome. */
+        suspend fun fail(status: Int?, failCode: String?): Rules.RegisterOutcome {
+            val o = Rules.registerFailure(
+                triedBefore, postedEarlier, accepted, earlierAccepted, before.newRegistered == true, status, failCode,
+            )
+            when (o) {
+                Rules.RegisterOutcome.DROP_AND_RETRY, Rules.RegisterOutcome.DROP_REFUSED -> {
+                    s.device.dropRecoveryRegistration()
+                    backToEarlier(before)
+                }
+                Rules.RegisterOutcome.DROP_UNAUTHORIZED -> {
+                    // N's registration is dropped with its identity and relay key: it no longer counts as one of the two.
+                    s.device.dropRecoveryRegistration()
+                    backToEarlier(before)
+                    dropNewIdentity()
+                }
+                Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.RegisterOutcome.KEEP_UNKNOWN -> Unit
+            }
+            return o
+        }
         val res = try {
             s.alt.recoveryRegister(
                 code.vaultId,
-                build = { e -> buildReuseRegister(s, code, e, since) },
+                build = { e ->
+                    postedEarlier = built
+                    built = true
+                    earlierAccepted = earlierAccepted || accepted
+                    accepted = false
+                    buildReuseRegister(s, code, e, since)
+                },
                 open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+                onPosted = { accepted = true },
             )
         } catch (e: VaultFailure) {
             if (e.code != CODE_NOT_OFFERED) throw e
             return RegisterAnswer.Refused(CODE_NOT_OFFERED)
         } catch (e: MemberApiException) {
-            when (e.code) {
-                // K became a key in use between the claim and the register: no claim key; nothing was recorded.
-                MemberApiException.UNAUTHORIZED -> {
-                    // N's registration is dropped with its identity and relay key: it no longer counts as one of the two.
-                    s.device.dropRecoveryRegistration()
-                    backToEarlier(before)
-                    if (!before.newRegistered) dropNewIdentity()
-                    return RegisterAnswer.Unauthorized
-                }
-                MemberApiException.RECOVERY_UNAVAILABLE -> {
-                    s.device.dropRecoveryRegistration()
-                    backToEarlier(before)
-                    return RegisterAnswer.Refused(CODE_NO_BACKUP)
-                }
-                MemberApiException.RECOVERY_NOT_AVAILABLE ->
-                    if (Rules.maybeRegistered(repeat, e.code)) return maybeRegistered(s, code) else null
-                else -> {
-                    // A first attempt that did not reach the vault leaves N unregistered: the same N, K and code may try again.
-                    if (Rules.registerFailedBeforeVault(repeat, e.status, e.code)) {
-                        s.device.dropRecoveryRegistration()
-                        backToEarlier(before)
-                    }
-                    throw e
-                }
+            val o = fail(e.status, e.code)
+            return when {
+                o == Rules.RegisterOutcome.MAYBE_REGISTERED -> maybeRegistered(s, code)
+                o == Rules.RegisterOutcome.DROP_UNAUTHORIZED -> RegisterAnswer.Unauthorized
+                e.code == MemberApiException.RECOVERY_UNAVAILABLE -> RegisterAnswer.Refused(CODE_NO_BACKUP)
+                e.code == MemberApiException.RECOVERY_NOT_AVAILABLE -> RegisterAnswer.Refused(CODE_NOT_AVAILABLE)
+                else -> throw e
             }
         } catch (e: IOException) {
-            if (Rules.registerFailedBeforeVault(repeat, null, null)) {
-                s.device.dropRecoveryRegistration()
-                backToEarlier(before)
-            }
+            // A failure after the `202` (the poll, a slot that never answered) is not "before the vault".
+            if (fail(null, null) == Rules.RegisterOutcome.MAYBE_REGISTERED) return maybeRegistered(s, code)
             throw e
         }
-        return when {
-            res == null -> {
-                s.device.dropRecoveryRegistration()
-                backToEarlier(before)
-                RegisterAnswer.Refused(CODE_NOT_AVAILABLE)
-            }
-            res.ok -> {
-                s.device.confirmRecoveryRegistration()
-                markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
-                phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
-                RegisterAnswer.Registered
-            }
-            // A readable `used` after an earlier attempt for the same code: maybe registered (the first copy went through).
-            Rules.maybeRegistered(repeat, res.code) -> maybeRegistered(s, code)
-            else -> {
-                s.device.dropRecoveryRegistration()
-                backToEarlier(before)
-                RegisterAnswer.Refused(res.code ?: CODE_RETRY)
-            }
+        if (res?.ok == true) {
+            s.device.confirmRecoveryRegistration()
+            markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
+            phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+            return RegisterAnswer.Registered
         }
+        // A readable refusal settles its own POST only: after an earlier `202`, or a `used` to a repeat, N may be registered.
+        val repeat = Rules.isRepeatPost(triedBefore, postedEarlier)
+        // An earlier flow's POST for this code left N registered or maybe registered (memory-only [earlierAccepted] is gone).
+        val priorRegistration = triedBefore && before.newRegistered && before.newRecoveryId == code.recoveryId
+        if (Rules.registerRefusal(repeat, earlierAccepted || priorRegistration, res?.code) == Rules.RegisterOutcome.MAYBE_REGISTERED) {
+            return maybeRegistered(s, code)
+        }
+        s.device.dropRecoveryRegistration()
+        backToEarlier(before)
+        return if (res == null) RegisterAnswer.Refused(CODE_NOT_AVAILABLE) else RegisterAnswer.Refused(res.code ?: CODE_RETRY)
     }
 
     /**
