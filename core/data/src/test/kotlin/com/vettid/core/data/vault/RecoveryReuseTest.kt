@@ -452,9 +452,15 @@ class RecoveryReuseTest {
         assertEquals(listOf("rid1"), answer(l, "rid2", "wait"))
         // `attestation` answers only its own open too (decided at step 1); the earlier one stays.
         assertEquals(listOf("rid1"), answer(l, "rid2", "attestation"))
+        // ... and, unlike `wrong`, it settles the earlier open while a later one stands.
+        assertEquals(listOf("rid2"), answer(sent("rid1", "rid2"), "rid1", "attestation"))
         assertTrue(Rules.undecided(true, null))
         // A lone open: `wrong` and `expired` leave it, a refusal before the spend too.
-        for (c in listOf("wrong", "expired", "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet", "attestation")) {
+        val lone = listOf(
+            "wrong", "expired", "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet",
+            "attestation",
+        )
+        for (c in lone) {
             assertEquals(c, emptyList<String>(), answer(sent("rid1"), "rid1", c))
         }
         // The same open is not listed twice.
