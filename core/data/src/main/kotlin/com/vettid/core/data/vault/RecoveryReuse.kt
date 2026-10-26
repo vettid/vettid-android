@@ -68,6 +68,9 @@ internal object Ledger {
         "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet",
         // Emitted by the vault after the resume branch and before beginReplace (recovery_open.go): no step 1 stored.
         "exhausted", "not_armed",
+        // Decided at step 1 (the assertion is not the registered attestation's key), before anything is written
+        // (VAULT-MESSAGING 0.63.1 §11.14.6, owner decision 2026-10-26).
+        "attestation",
     )
 
     /** Prove it only when no earlier open stands. */
