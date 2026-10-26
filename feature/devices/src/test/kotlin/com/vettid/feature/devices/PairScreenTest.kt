@@ -50,7 +50,7 @@ class PairScreenTest {
         onPair = { calls += "pair" },
         onChoose = { calls += "choose:${it.name}" },
         onDone = { calls += "done" },
-        onChooseWhatItMayUse = { calls += "choose-use:$it" },
+        onOpenPage = { calls += "page:$it" },
         onOwnerCheck = { calls += "check" },
         onBack = { calls += "back" },
     )
@@ -76,7 +76,7 @@ class PairScreenTest {
 
     @Test
     fun anExpiredCodeSaysSoAndOffersANewOne() {
-        show(at(PairingStage.CodeExpired))
+        show(at(PairingStage.CodeExpired("p1", now)))
         rule.onNodeWithText("This code expired.").assertIsDisplayed()
         rule.onNodeWithText("New code").performClick()
         assertEquals(listOf("new"), calls)
@@ -172,10 +172,12 @@ class PairScreenTest {
     fun pairedNamesTheAgentAndOffersTheNextStep() {
         show(at(PairingStage.Paired("Claude on laptop", "a1")))
         rule.onNodeWithText("is paired", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("It can't use any of your items yet.", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("Choose what it may use").performClick()
-        rule.onNodeWithText("Later").performClick()
-        assertEquals(listOf("choose-use:a1", "done"), calls)
+        rule.onNodeWithText("It can't use any of your items yet.").assertIsDisplayed()
+        // Nothing to choose until AA4: Done, and the agent's page.
+        assertEquals(0, rule.onAllNodesWithText("Choose what it may use").fetchSemanticsNodes().size)
+        rule.onNodeWithText("Open its page").performClick()
+        rule.onNodeWithText("Done").performClick()
+        assertEquals(listOf("page:a1", "done"), calls)
     }
 
     @Test
@@ -189,12 +191,29 @@ class PairScreenTest {
     fun noAnswerFromTheVaultAddsThatTheAgentMayBeInTheList() {
         rule.setContent {
             PairScreen(
-                PairUiState(PairingState(PairingStage.Ended, error = FailureKind.NO_RESPONSE, unknownOutcome = true)),
+                PairUiState(PairingState(PairingStage.Ended, error = FailureKind.NO_RESPONSE, unknownOutcome = true, agentName = "Claude")),
                 actions(),
                 now = { now },
             )
         }
-        rule.onNodeWithText("If your vault did get the approval", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Pairing not confirmed").assertIsDisplayed()
+        rule.onNodeWithText("Your vault did not answer.", substring = true).assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Not paired").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aPairingTheLockTookAwayIsInterruptedWithNewCodeAndCancel() {
+        show(PairUiState(PairingState(PairingStage.Idle), interrupted = true))
+        rule.onNodeWithText("This pairing has ended. Start again from Devices & agents.").assertIsDisplayed()
+        rule.onNodeWithText("New code").performClick()
+        rule.onNodeWithText("Cancel").performClick()
+        assertEquals(listOf("new", "cancel"), calls)
+    }
+
+    @Test
+    fun theCodeScreenAnnouncesTheMinutesLeft() {
+        show(at(PairingStage.Code(code)))
+        rule.onNodeWithTag("pair_minutes_left").assertTextContains("10 minutes left")
     }
 
     @Test

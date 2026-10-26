@@ -2,6 +2,7 @@ package com.vettid.feature.devices
 
 import android.content.ClipboardManager
 import android.content.Context
+import com.vettid.core.ui.components.CLIP_EXTRA_IS_SENSITIVE
 import com.vettid.core.ui.components.textClip
 import java.security.MessageDigest
 import java.time.Instant
@@ -16,13 +17,13 @@ import java.time.Instant
 object PairingClipboard {
     private var armed: Armed? = null
 
-    private class Armed(val hash: ByteArray, val exp: Instant, var ended: Boolean)
+    private class Armed(val hash: ByteArray, val exp: Instant, val label: String, var ended: Boolean)
 
     /** Puts [code] on the clipboard, marked sensitive, and remembers to clear it at [exp] or when the pairing ends. */
     fun copy(context: Context, code: String, exp: Instant, label: String) {
         val cm = context.getSystemService(ClipboardManager::class.java) ?: return
         cm.setPrimaryClip(textClip(label, code, sensitive = true))
-        synchronized(this) { armed = Armed(hash(code), exp, ended = false) }
+        synchronized(this) { armed = Armed(hash(code), exp, label, ended = false) }
     }
 
     /** The pairing ended (cancelled, rejected, paired, expired): the code is worthless; clear it as soon as it can be. */
@@ -38,7 +39,18 @@ object PairingClipboard {
     private fun wipe(context: Context, now: Instant) {
         val a = synchronized(this) { armed?.takeIf { it.ended || !it.exp.isAfter(now) } } ?: return
         val cm = context.getSystemService(ClipboardManager::class.java) ?: return
-        // Without the focus the system hands back nothing: keep waiting, never guess.
+        // Without the focus the system hands back nothing: keep waiting, never guess. The clip's description comes first:
+        // only a clip with this label and the sensitive mark is read at all (anything else is not ours).
+        val description = try {
+            cm.primaryClipDescription
+        } catch (_: SecurityException) {
+            null
+        } ?: return
+        val ours = description.label?.toString() == a.label && description.extras?.getBoolean(CLIP_EXTRA_IS_SENSITIVE) == true
+        if (!ours) {
+            synchronized(this) { if (armed === a) armed = null }
+            return
+        }
         val clip = try {
             cm.primaryClip
         } catch (_: SecurityException) {

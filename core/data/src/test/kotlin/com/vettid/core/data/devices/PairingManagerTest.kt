@@ -11,6 +11,8 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -133,15 +135,32 @@ class PairingManagerTest {
         m.start()
         clock = clock.plusSeconds(601)
         advanceTimeBy(601_000)
-        assertEquals(PairingStage.CodeExpired, m.state.value.stage)
-        // Late events for the expired pairing are ignored.
-        m.onEvent(pending())
-        assertEquals(PairingStage.CodeExpired, m.state.value.stage)
+        assertEquals(PairingStage.CodeExpired("p1", clock.minusSeconds(1)), m.state.value.stage)
         // "New code" makes a new pairing.
         ops.created = obj("""{"pairing_id":"p2","link":"${link(exp = clock.plusSeconds(600))}"}""")
         m.acknowledge()
         m.start()
         assertEquals("p2", (m.state.value.stage as PairingStage.Code).code.pairingId)
+    }
+
+    @Test
+    fun aLateAnswerIsTakenForAMinuteAfterTheCodeEndedAndStillNeedsTheComparison() = runTest {
+        val m = manager(Ops())
+        m.start()
+        clock = clock.plusSeconds(601)
+        advanceTimeBy(601_000)
+        m.onEvent(pending(id = "other"))
+        assertTrue(m.state.value.stage is PairingStage.CodeExpired)
+        m.onEvent(pending())
+        assertEquals("123456", (m.state.value.stage as PairingStage.Compare).pending.sas)
+
+        val late = manager(Ops())
+        late.start()
+        clock = clock.plusSeconds(601)
+        advanceTimeBy(601_000)
+        clock = clock.plusSeconds(61)
+        late.onEvent(pending())
+        assertTrue(late.state.value.stage is PairingStage.CodeExpired)
     }
 
     @Test
@@ -274,13 +293,55 @@ class PairingManagerTest {
 
     @Test
     fun anApprovalThatGotNoAnswerSaysTheOutcomeIsUnknown() = runTest {
-        val ops = Ops().apply { refuse["approve"] = "timeout" }
+        val ops = Ops().apply { onApprove = { throw java.io.IOException() } }
         val m = manager(ops)
         m.start()
         m.onEvent(pending())
         m.approve(3600)
-        // Whatever kind the failure maps to, the pairing is not shown as paired.
+        // Not asserted either way: nothing was confirmed, and the screen says so.
         assertEquals(PairingStage.Ended, m.state.value.stage)
+        assertTrue(m.state.value.unknownOutcome)
+        assertFalse(m.state.value.busy)
+    }
+
+    @Test
+    fun anUnansweredApprovalThatTheFeedItemConfirmsIsPaired() = runTest {
+        val ops = Ops().apply { onApprove = { throw java.io.IOException() } }
+        val m = manager(ops)
+        m.start()
+        m.onEvent(pending())
+        // The device.paired item arrives after the request gave up, within the wait.
+        val late = launch {
+            delay(3_000)
+            m.onEvent(paidFeed("agent-9"))
+        }
+        m.approve(3600)
+        late.join()
+        assertEquals(PairingStage.Paired("Claude on laptop", "agent-9"), m.state.value.stage)
+    }
+
+    @Test
+    fun anUnansweredApprovalThatTheListConfirmsIsPaired() = runTest {
+        val ops = Ops().apply { onApprove = { throw java.io.IOException() } }
+        val m = manager(ops, listed = listOf(agent("new", "Claude on laptop")))
+        m.start()
+        m.onEvent(pending())
+        m.approve(3600)
+        assertEquals(PairingStage.Paired("Claude on laptop", "new"), m.state.value.stage)
+    }
+
+    @Test
+    fun aFeedItemOfADeviceListedBeforeOrFromBeforeTheApprovalIsNotTheNewAgent() = runTest {
+        val ops = Ops()
+        val m = manager(ops, known = setOf("me", "old"))
+        m.start()
+        m.onEvent(pending())
+        ops.onApprove = {
+            m.onEvent(paidFeed("old"))
+            m.onEvent(event("feed.event", """{"item_id":"i","seq":1,"kind":"device.paired","at":"2026-10-25T12:00:00Z","status":"unread","device_id":"stale"}"""))
+        }
+        m.approve(3600)
+        assertNull((m.state.value.stage as PairingStage.Paired).deviceId)
     }
 
     @Test

@@ -41,6 +41,7 @@ class PairingClipboardTest {
     @Test
     fun otherTextTheMemberCopiedMeanwhileIsLeftAlone() {
         PairingClipboard.copy(context, "CODE-3", exp, "Pairing code")
+        // Another label, no sensitive mark: not ours, and not even read.
         cm.setPrimaryClip(ClipData.newPlainText("x", "my shopping list"))
         PairingClipboard.ended(context)
         assertEquals("my shopping list", text())

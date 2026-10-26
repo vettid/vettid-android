@@ -119,12 +119,21 @@
     <!-- Any failed approval (no code is named for an ended pairing, decision 14c). The title is DRAFT: not in the plan. -->
     <string name="pair_ended_title">Not paired</string>
     <string name="pair_ended">This pairing has ended. Start again from Devices &amp; agents.</string>
-    <!-- DRAFT: not in the plan. Only when the vault did not answer: it may have taken the approval. -->
-    <string name="pair_ended_unknown">If your vault did get the approval, the agent appears in Devices &amp; agents.</string>
+    <!-- DRAFT: not in the plan. When the vault did not answer the approval: it may have taken it, so nothing is asserted.
+         %1$s is the name the agent gave itself. -->
+    <string name="pair_unconfirmed_title">Pairing not confirmed</string>
+    <string name="pair_unconfirmed_body">Your vault did not answer. If %1$s is listed in Devices &amp; agents, it was paired; if not, start again.</string>
 
     <!-- Step 4: paired. %1$s is the name the agent gave itself. -->
     <string name="pair_paired_title">%1$s is paired</string>
-    <string name="pair_paired_body">It can\'t use any of your items yet. Choose the items it may use: you decide per tag, and it never gets critical items.</string>
-    <string name="pair_choose">Choose what it may use</string>
-    <string name="pair_later">Later</string>
+    <!-- The plan's text goes on: "Choose the items it may use: you decide per tag, and it never gets critical items." with
+         the buttons "Choose what it may use" and "Later", when the share-rule editor (AA4) exists. -->
+    <string name="pair_paired_body">It can\'t use any of your items yet.</string>
+    <!-- DRAFT: not in the plan. Only when the new agent\'s id is known. -->
+    <string name="pair_open_page">Open its page</string>
+    <!-- DRAFT: not in the plan. Said once a minute to a screen reader while the code counts down. -->
+    <plurals name="pair_minutes_left">
+        <item quantity="one">%1$d minute left</item>
+        <item quantity="other">%1$d minutes left</item>
+    </plurals>
 </resources>

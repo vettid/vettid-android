@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,9 +41,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -84,7 +88,8 @@ data class PairActions(
     val onPair: () -> Unit = {},
     val onReject: () -> Unit = {},
     val onDone: () -> Unit = {},
-    val onChooseWhatItMayUse: (String?) -> Unit = {},
+    /** Opens the new agent's page. */
+    val onOpenPage: (String) -> Unit = {},
     val onOwnerCheck: () -> Unit = {},
 )
 
@@ -100,6 +105,8 @@ fun PairScreen(state: PairUiState, actions: PairActions, modifier: Modifier = Mo
     val context = LocalContext.current
     val stage = state.stage
     // The code is worthless once a pairing is over, however it ended: the clipboard is cleared as soon as it can be.
+    // Leaving the screen ends the code's use, however it is left.
+    DisposableEffect(Unit) { onDispose { PairingClipboard.ended(context) } }
     LaunchedEffect(stage) {
         if (stage !is PairingStage.Code && stage !is PairingStage.Creating) PairingClipboard.ended(context)
     }
@@ -128,6 +135,15 @@ fun PairScreen(state: PairUiState, actions: PairActions, modifier: Modifier = Mo
         }
         stage is PairingStage.Paired -> PairedStep(stage, actions, modifier)
         stage is PairingStage.Ended -> EndedStep(state, actions, modifier)
+        // A lock or a hold took the pairing away while this screen was open: it was interrupted, nothing is paired.
+        stage is PairingStage.Idle && state.interrupted -> Plain(
+            R.string.pair_ended_title,
+            actions,
+            modifier,
+            primary = R.string.pair_new_code to actions.onNewCode,
+            secondary = R.string.pair_cancel to actions.onCancel,
+            tag = "pair_interrupted",
+        ) { Text(stringResource(R.string.pair_ended), style = MaterialTheme.typography.bodyLarge) }
         stage is PairingStage.Idle && state.pairing.error != null -> CreateFailed(state, actions, modifier)
         stage is PairingStage.Idle && state.held -> Plain(
             R.string.pair_lost_title,
@@ -180,6 +196,8 @@ private fun CodeStep(code: PairingCode, state: PairUiState, actions: PairActions
         }
     }
     val left = Duration.between(clock, code.exp).coerceAtLeast(Duration.ZERO)
+    // Announced to a screen reader once a minute, not every second.
+    val minutes = ((left.seconds + SECONDS - 1) / SECONDS).toInt()
     val clipLabel = stringResource(R.string.pair_clip_label)
     val shareTitle = stringResource(R.string.pair_share_title)
     FormScaffold(
@@ -202,6 +220,13 @@ private fun CodeStep(code: PairingCode, state: PairUiState, actions: PairActions
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().testTag("pair_countdown"),
+        )
+        Text(
+            pluralStringResource(R.plurals.pair_minutes_left, minutes, minutes),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite }.testTag("pair_minutes_left"),
         )
         Spacer(Modifier.height(Spacing.l))
         Surface(shape = VettIdShape.card, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
@@ -423,10 +448,11 @@ private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifie
     FormScaffold(
         title = stringResource(R.string.pair_paired_title, name),
         body = stringResource(R.string.pair_paired_body),
-        primaryLabel = stringResource(R.string.pair_choose),
-        onPrimary = { actions.onChooseWhatItMayUse(stage.deviceId) },
-        secondaryLabel = stringResource(R.string.pair_later),
-        onSecondary = actions.onDone,
+        // What it may use is chosen from AA4 on; until then there is nothing to choose, only its page.
+        primaryLabel = stringResource(R.string.pair_done),
+        onPrimary = actions.onDone,
+        secondaryLabel = stage.deviceId?.let { stringResource(R.string.pair_open_page) },
+        onSecondary = { stage.deviceId?.let(actions.onOpenPage) },
         onBack = actions.onDone,
         modifier = modifier.testTag("pair_paired"),
     ) {}
@@ -434,16 +460,15 @@ private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifie
 
 @Composable
 private fun EndedStep(state: PairUiState, actions: PairActions, modifier: Modifier) {
-    Plain(R.string.pair_ended_title, actions, modifier, primary = R.string.pair_done to actions.onDone, tag = "pair_ended") {
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+    val unknown = state.pairing.unknownOutcome
+    // No answer from the vault asserts nothing: not "Not paired", but that it was not confirmed.
+    val title = if (unknown) R.string.pair_unconfirmed_title else R.string.pair_ended_title
+    Plain(title, actions, modifier, primary = R.string.pair_done to actions.onDone, tag = "pair_ended") {
+        if (unknown) {
+            val name = isolate(DeviceText.agentName(state.pairing.agentName.orEmpty()))
+            Text(stringResource(R.string.pair_unconfirmed_body, name), style = MaterialTheme.typography.bodyLarge)
+        } else {
             Text(stringResource(R.string.pair_ended), style = MaterialTheme.typography.bodyLarge)
-            if (state.pairing.unknownOutcome) {
-                Text(
-                    stringResource(R.string.pair_ended_unknown),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
     }
 }

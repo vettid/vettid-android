@@ -51,6 +51,7 @@ class PairViewModelTest {
         pairing.state.value = PairingState(PairingStage.Compare(pending))
         advanceUntilIdle()
         vm.codesMatch()
+        advanceUntilIdle()
         assertTrue(vm.uiState.value.sheet)
         // One hour is preselected (decision 5).
         assertEquals(SessionChoice.HOUR_1, vm.uiState.value.session)
@@ -102,7 +103,7 @@ class PairViewModelTest {
     @Test
     fun aNewCodeAfterExpiryStartsAgain() = runTest {
         val vm = vm()
-        pairing.state.value = PairingState(PairingStage.CodeExpired)
+        pairing.state.value = PairingState(PairingStage.CodeExpired("p1", exp))
         advanceUntilIdle()
         pairing.calls.clear()
         vm.newCode()
@@ -119,6 +120,39 @@ class PairViewModelTest {
         pairing.state.value = PairingState(PairingStage.Compare(pending), error = FailureKind.OWNER_CHECK_REQUIRED)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.pairing.error != null)
+    }
+
+    @Test
+    fun aPairingTheLockTookAwayIsInterruptedNotAnEndlessSpinner() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        // Before anything was shown, nothing to interrupt.
+        assertFalse(vm.uiState.value.interrupted)
+        pairing.state.value = PairingState(PairingStage.Code(PairingCode("p1", "L", exp)))
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.interrupted)
+        // clear(): back to nothing, without an error and not busy.
+        pairing.state.value = PairingState()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.interrupted)
+        // Leaving by the member's own answer is not an interruption.
+        vm.done()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.interrupted)
+    }
+
+    @Test
+    fun theSheetBelongsToTheComparisonItWasOpenedFor() = runTest {
+        val vm = vm()
+        pairing.state.value = PairingState(PairingStage.Compare(pending))
+        advanceUntilIdle()
+        vm.codesMatch()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.sheet)
+        // Another pairing's comparison does not open with it.
+        pairing.state.value = PairingState(PairingStage.Compare(PendingPairing("p2", "Other", "654321", exp)))
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.sheet)
     }
 
     @Test

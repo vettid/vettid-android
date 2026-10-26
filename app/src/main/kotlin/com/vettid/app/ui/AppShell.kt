@@ -547,6 +547,9 @@ private fun feedRoute(t: FeedTarget): Any? = when (t) {
 
 /** Drawer navigation: one copy of each top-level screen, state saved per destination. */
 private fun NavHostController.navigateTopLevel(route: Any) {
+    // The pairing is never saved with the stack (state saving keeps the screen's view model alive, and with it a pairing
+    // nobody answers): leaving it by the drawer or a notification pops it, which rejects it.
+    popBackStack<PairRoute>(inclusive = true)
     navigate(route) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true

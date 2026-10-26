@@ -38,8 +38,10 @@ data class PairUiState(
     val pairing: PairingState = PairingState(),
     /** Opened from the feed item "A device asks to pair": with no pairing held, the phone can't check it any more. */
     val held: Boolean = false,
-    /** The sheet "Allow access now?" is open (only over the compare stage). */
+    /** The sheet "Allow access now?" is open (only over the very comparison it was opened for). */
     val sheet: Boolean = false,
+    /** A pairing was shown and the state returned to nothing by itself (a lock, a hold): it was interrupted, nothing paired. */
+    val interrupted: Boolean = false,
     val session: SessionChoice = SessionChoice.HOUR_1,
     /** The code was copied: the button says so. */
     val copied: Boolean = false,
@@ -60,8 +62,21 @@ class PairViewModel @Inject constructor(
     private val held: Boolean = saved.get<Boolean>(PairRoute.HELD) ?: false
     private val local = MutableStateFlow(PairUiState(held = held))
 
-    val uiState: StateFlow<PairUiState> = combine(local, repo.state) { l, p ->
-        l.copy(pairing = p, sheet = l.sheet && p.stage is PairingStage.Compare)
+    /** The pairing the sheet was opened for. */
+    private val sheetFor = MutableStateFlow<String?>(null)
+
+    /** A stage other than nothing was seen, and the screen is not being closed. */
+    private var sawStage = false
+    private val closing = MutableStateFlow(false)
+
+    val uiState: StateFlow<PairUiState> = combine(local, repo.state, sheetFor, closing) { l, p, forId, leaving ->
+        val st = p.stage
+        if (st !is PairingStage.Idle) sawStage = true
+        l.copy(
+            pairing = p,
+            sheet = st is PairingStage.Compare && forId == st.pending.pairingId,
+            interrupted = sawStage && !leaving && st is PairingStage.Idle && p.error == null && !p.busy,
+        )
     }
         .stateIn(viewModelScope, SharingStarted.Eagerly, PairUiState(held = held))
 
@@ -81,7 +96,9 @@ class PairViewModel @Inject constructor(
 
     /** "New code", or "Try again" after a code could not be made. */
     fun newCode() {
-        local.update { it.copy(copied = false, sheet = false) }
+        local.update { it.copy(copied = false) }
+        sheetFor.value = null
+        sawStage = false
         viewModelScope.launch {
             repo.acknowledge()
             repo.start()
@@ -91,11 +108,18 @@ class PairViewModel @Inject constructor(
     fun copied() = local.update { it.copy(copied = true) }
 
     /** Cancel on the code screen: the vault is told, nothing is held. */
-    fun cancel() = repo.leave()
+    fun cancel() {
+        closing.value = true
+        repo.leave()
+    }
 
-    fun codesMatch() = local.update { it.copy(sheet = true) }
+    fun codesMatch() {
+        sheetFor.value = (repo.state.value.stage as? PairingStage.Compare)?.pending?.pairingId
+    }
 
-    fun closeSheet() = local.update { it.copy(sheet = false) }
+    fun closeSheet() {
+        sheetFor.value = null
+    }
 
     fun choose(c: SessionChoice) = local.update { it.copy(session = c) }
 
@@ -103,19 +127,20 @@ class PairViewModel @Inject constructor(
         val s = local.value
         viewModelScope.launch {
             repo.approve(s.session.seconds)
-            // Only a refused daily check keeps the comparison (and the sheet) open.
-            if (repo.state.value.stage !is PairingStage.Compare) local.update { it.copy(sheet = false) }
         }
     }
 
     /** "They don't match", and Reject for a pairing that cannot be compared. */
     fun reject() {
-        local.update { it.copy(sheet = false) }
+        sheetFor.value = null
         viewModelScope.launch { repo.reject() }
     }
 
     /** A final stage was read. */
-    fun done() = repo.acknowledge()
+    fun done() {
+        closing.value = true
+        repo.acknowledge()
+    }
 
     override fun onCleared() {
         // The screen is gone: a code not used or a comparison not answered is rejected (best effort), never kept.

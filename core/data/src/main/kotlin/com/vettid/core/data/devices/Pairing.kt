@@ -69,8 +69,15 @@ sealed interface PairingStage {
     /** Step 1: the code is shown. */
     data class Code(val code: PairingCode) : PairingStage
 
-    /** The code expired unused: nothing was paired. */
-    data object CodeExpired : PairingStage
+    /**
+     * The code expired unused: nothing was paired. The pairing's id and end are kept, only to take a late answer of the
+     * agent (a pending up to [LATE] after [exp]); the code itself is gone, and the comparison is still required.
+     */
+    data class CodeExpired(val pairingId: String, val exp: Instant) : PairingStage {
+        companion object {
+            val LATE: Duration = Duration.ofSeconds(60)
+        }
+    }
 
     /** Step 2: the agent has answered; the member compares the code. */
     data class Compare(val pending: PendingPairing) : PairingStage
@@ -93,6 +100,8 @@ data class PairingState(
     val errorCode: String? = null,
     /** With [PairingStage.Ended]: the approval's outcome is unknown (no answer), so the agent may be in the list. */
     val unknownOutcome: Boolean = false,
+    /** With [unknownOutcome]: the name the agent gave itself (sanitised), for "If <name> is listed…". */
+    val agentName: String? = null,
 )
 
 /** `device.pair.*` and the vault's device list, so that [PairingManager] can be tested without a vault. */
@@ -162,6 +171,10 @@ class PairingManager(
     private var arrivals = mutableListOf<String>()
     private var watching = false
 
+    /** The ids listed before the approval, and when it started: an arrival that was listed before, or older, is not it. */
+    private var baseline: Set<String>? = null
+    private var watchFrom: Instant = Instant.EPOCH
+
     override val state: StateFlow<PairingState> = flow.asStateFlow()
 
     /** Forgets everything: the vault locked, was held or wiped. A request on its way is not applied afterwards. */
@@ -181,8 +194,14 @@ class PairingManager(
         when (m.type) {
             "device.pair.pending" -> pending(m.body)
             "feed.event" -> if (VaultJson.str(m.body, "kind") == "device.paired") {
-                VaultJson.str(m.body, "device_id")?.takeIf { it.isNotEmpty() }?.let { id ->
-                    synchronized(lock) { if (watching && id !in arrivals) arrivals.add(id) }
+                val id = VaultJson.str(m.body, "device_id")?.takeIf { it.isNotEmpty() }
+                val at = ApprovalParser.instant(VaultJson.str(m.body, "at"))
+                synchronized(lock) {
+                    // Only a new device, from after the approval started (a little slack for the clocks).
+                    val fresh = at != null && !at.isBefore(watchFrom.minus(CLOCK_SLACK))
+                    if (!watching || id == null) return@synchronized
+                    val usable = fresh && baseline?.contains(id) != true
+                    if (usable && id !in arrivals) arrivals.add(id)
                 }
             }
         }
@@ -193,9 +212,8 @@ class PairingManager(
         val at = now()
         synchronized(lock) {
             val s = flow.value
-            val code = (s.stage as? PairingStage.Code)?.code
             // Only the pairing this phone made, once: a second event for it, or one for another, changes nothing.
-            if (code == null || code.pairingId != id || !code.exp.isAfter(at)) return
+            if (!ours(s.stage, id, at)) return
             val role = VaultJson.str(body, "role")
             val sas = if (role == ROLE_AGENT) readSas(VaultJson.str(body, "sas")) else null
             val ends = at.plus(WINDOW)
@@ -207,6 +225,13 @@ class PairingManager(
         }
     }
 
+    /** Whether [stage] is the pairing [id] this phone made and still takes the agent's answer at [at]. */
+    private fun ours(stage: PairingStage, id: String, at: Instant): Boolean = when (stage) {
+        is PairingStage.Code -> stage.code.pairingId == id && stage.code.exp.isAfter(at)
+        is PairingStage.CodeExpired -> stage.pairingId == id && !at.isAfter(stage.exp.plus(PairingStage.CodeExpired.LATE))
+        else -> false
+    }
+
     /** At [at] a stage that [still] holds ends: nothing was approved, so nothing is. */
     private suspend fun endAt(at: Instant, gen: Int, still: (PairingStage) -> Boolean) {
         val wait = Duration.between(now(), at)
@@ -216,7 +241,12 @@ class PairingManager(
             if (gen != generation || !still(s.stage)) return
             // An approval in flight settles it by its answer.
             if (s.busy) return
-            flow.value = if (s.stage is PairingStage.Code) PairingState(PairingStage.CodeExpired) else PairingState(PairingStage.Ended)
+            val st = s.stage
+            flow.value = if (st is PairingStage.Code) {
+                PairingState(PairingStage.CodeExpired(st.code.pairingId, st.code.exp))
+            } else {
+                PairingState(PairingStage.Ended)
+            }
         }
     }
 
@@ -280,9 +310,11 @@ class PairingManager(
             p = c.pending
             arrivals = mutableListOf()
             watching = true
+            // What the list shows now, and nothing is read first (the list may never have been loaded: then no guess).
+            baseline = knownDeviceIds()
+            watchFrom = now()
             flow.value = PairingState(c, busy = true)
         }
-        val baseline = knownDeviceIds() ?: runCatching { readDevices().map { it.id }.toSet() }.getOrNull()
         try {
             sent { ops().approve(p.pairingId, sessionSeconds) }
         } catch (e: VaultFailure) {
@@ -296,17 +328,28 @@ class PairingManager(
             flow.value = PairingState(PairingStage.Paired(p.name, null))
         }
         runCatching { onPaired() }
-        val id = findAgent(p, baseline)
+        val id = findAgent(p)
         synchronized(lock) {
             watching = false
             if (gen == generation && flow.value.stage is PairingStage.Paired) flow.value = PairingState(PairingStage.Paired(p.name, id))
         }
     }
 
-    private fun failed(gen: Int, p: PendingPairing, e: VaultFailure) {
+    @Suppress("ReturnCount")
+    private suspend fun failed(gen: Int, p: PendingPairing, e: VaultFailure) {
+        // No answer at all: the vault may have taken the approval. Look for the new agent before saying anything.
+        val unknown = e.kind == FailureKind.NETWORK || e.kind == FailureKind.NO_RESPONSE
+        val found = if (unknown) findAgent(p) else null
         synchronized(lock) {
             watching = false
             if (gen != generation) return
+            if (found != null) {
+                timer?.cancel()
+                timer = null
+                flow.value = PairingState(PairingStage.Paired(p.name, found))
+                runCatching { onPaired() }
+                return
+            }
             // The daily check is due: the approval was not sent for it, and the same code may still be compared.
             if (e.kind == FailureKind.OWNER_CHECK_REQUIRED && p.ends.isAfter(now())) {
                 flow.value = PairingState(PairingStage.Compare(p), error = e.kind, errorCode = e.shownCode)
@@ -320,7 +363,8 @@ class PairingManager(
                 PairingStage.Ended,
                 error = e.kind,
                 errorCode = e.shownCode,
-                unknownOutcome = e.kind == FailureKind.NETWORK || e.kind == FailureKind.NO_RESPONSE,
+                unknownOutcome = unknown,
+                agentName = p.name,
             )
         }
     }
@@ -331,7 +375,7 @@ class PairingManager(
      * none or more than one fits: the list opens instead.
      */
     @Suppress("ReturnCount")
-    private suspend fun findAgent(p: PendingPairing, baseline: Set<String>?): String? {
+    private suspend fun findAgent(p: PendingPairing): String? {
         var waited = 0L
         while (waited < ID_WAIT.toMillis()) {
             synchronized(lock) { arrivals.singleOrNull()?.let { return it } }
@@ -342,13 +386,13 @@ class PairingManager(
             if (arrivals.size == 1) return arrivals.single()
             if (arrivals.size > 1) return null
         }
-        if (baseline == null) return null
+        val known = synchronized(lock) { baseline } ?: return null
         val list = try {
             readDevices()
         } catch (_: VaultFailure) {
             return null
         }
-        return list.filter { it.isAgent && it.id !in baseline && it.name == p.name }.singleOrNull()?.id
+        return list.filter { it.isAgent && it.id !in known && it.name == p.name }.singleOrNull()?.id
     }
 
     override suspend fun reject() {
@@ -429,6 +473,7 @@ class PairingManager(
         val CODE_MAX: Duration = Duration.ofMinutes(10).plusSeconds(60)
         val ID_WAIT: Duration = Duration.ofSeconds(10)
         const val POLL_MS = 250L
+        val CLOCK_SLACK: Duration = Duration.ofSeconds(30)
         const val SESSION_MIN = 60
         const val SESSION_MAX = 86_400
         val SAS = Regex("[0-9]{6}")

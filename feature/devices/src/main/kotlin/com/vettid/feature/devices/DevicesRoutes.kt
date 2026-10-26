@@ -113,11 +113,11 @@ private fun PairContent(vm: PairViewModel, state: PairUiState, host: DevicesHost
                 vm.done()
                 host.onBack()
             },
-            // The agent's page, where what it may use is chosen (AA4); the list when its id is not known.
-            onChooseWhatItMayUse = { id ->
+            // The agent's page (what it may use is chosen there from AA4 on).
+            onOpenPage = { id ->
                 vm.done()
                 host.onBack()
-                id?.let { host.navigate(DeviceRoute(it)) }
+                host.navigate(DeviceRoute(id))
             },
             onOwnerCheck = host.onOwnerCheck,
         ),

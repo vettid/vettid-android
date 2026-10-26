@@ -73,7 +73,7 @@ internal object DevicesCatalog {
         "devices.end_failed" to { Page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.END_ACCESS, error = FailureKind.NETWORK)) },
         "devices.remove_failed" to { Page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.REMOVE, error = FailureKind.NETWORK)) },
         "devices.pair_code" to { Pair(PairingStage.Code(code)) },
-        "devices.pair_expired" to { Pair(PairingStage.CodeExpired) },
+        "devices.pair_expired" to { Pair(PairingStage.CodeExpired("p1", now)) },
         "devices.pair_failed" to { Pair(PairingStage.Idle, error = FailureKind.NETWORK) },
         "devices.pair_compare" to { Pair(PairingStage.Compare(pending)) },
         "devices.pair_compare_sheet" to { Pair(PairingStage.Compare(pending), sheet = true) },

@@ -165,8 +165,10 @@ The A2 exit test:
   preselected) which sends `device.pair.approve{pairing_id, session_seconds?}` with no grants (no unlock window); a
   pending that is not for an agent or has no six-digit code offers only Reject; any refused approval (the owner check
   excepted, which keeps the comparison) is "This pairing has ended" and nothing is paired; leaving the screen rejects
-  (`PairViewModel.onCleared`); the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
-  from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
+  (`PairViewModel.onCleared`; `navigateTopLevel` pops `PairRoute` so state saving never keeps it alive); a pairing taken away
+  by a lock shows "This pairing has ended" (`PairUiState.interrupted`); an approval with no answer is "Pairing not
+  confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
+  from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens (the paired screen offers only Done and "Open its page" until AA4).
   Permissions (AA3), share rules (AA4) and Approvals for devices, including the pending pairing's entry (AA5), are later
   PRs; screens are in the catalog (`devices*`).
 
