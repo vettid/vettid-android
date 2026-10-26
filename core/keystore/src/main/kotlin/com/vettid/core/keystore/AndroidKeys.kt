@@ -28,6 +28,24 @@ object AndroidKeys {
     const val ALIAS_APP_DATA = "vettid.app_data.v1"
     const val ALIAS_APP_API = "vettid.app_api.v1"
 
+    /**
+     * The device attestation keys of identity slot [slot]: one key per attestation (an enrollment, a transfer, each
+     * recovery register POST), at [index] in 0 until [DEVICE_ATTESTATION_KEYS_PER_SLOT]. A Keystore key's attestation
+     * challenge is fixed when it is generated, so a new request is a new key. [ALIAS_DEVICE_ATTESTATION] is the one key of
+     * the builds before slots, taken over by the slot in use ([com.vettid.core.keystore.DeviceAttestationKey]).
+     */
+    fun deviceAttestationAlias(slot: Int, index: Int): String {
+        require(slot in 0 until DEVICE_ATTESTATION_SLOTS && index in 0 until DEVICE_ATTESTATION_KEYS_PER_SLOT)
+        return "$ALIAS_DEVICE_ATTESTATION.slot$slot.$index"
+    }
+
+    /** Every device attestation alias the app may create: the earlier single key and those of every slot. */
+    val DEVICE_ATTESTATION_ALIASES: List<String> = listOf(ALIAS_DEVICE_ATTESTATION) +
+        (0 until DEVICE_ATTESTATION_SLOTS).flatMap { s -> (0 until DEVICE_ATTESTATION_KEYS_PER_SLOT).map { deviceAttestationAlias(s, it) } }
+
+    const val DEVICE_ATTESTATION_SLOTS = 2
+    const val DEVICE_ATTESTATION_KEYS_PER_SLOT = 64
+
     internal fun keyStore(): KeyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
 
     fun exists(alias: String): Boolean = keyStore().containsAlias(alias)

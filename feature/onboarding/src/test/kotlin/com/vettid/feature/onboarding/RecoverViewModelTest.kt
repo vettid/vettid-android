@@ -127,6 +127,11 @@ class RecoverViewModelTest {
         vm.scanned(qr)
         advanceUntilIdle()
         assertEquals(CodeRefusal.NOT_OFFERED, vm.uiState.value.refusal)
+        // ANDROID-PLAN §4 step 5: every attestation key of the identity still listed; nothing was sent.
+        vault.registrations.add(RecoveryRegistration.Refused("attestation_keys_full"))
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(CodeRefusal.TOO_MANY_ATTEMPTS, vm.uiState.value.refusal)
     }
 
     private suspend fun kotlinx.coroutines.test.TestScope.atThePin(): RecoverViewModel {

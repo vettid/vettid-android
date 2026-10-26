@@ -390,12 +390,17 @@ class AltChannelFlow(
     /**
      * Registers this app for a recovery (§11.11.3) with the portal's code.
      * [build] seals the request to the verified enclave (the device records
-     * its recovery state); [open] opens vault.recovery.result.
+     * its recovery state); [open] opens vault.recovery.result. [onPosted] runs right after each POST the member API
+     * accepted (`202`): from then on that attempt may have registered, whatever else fails (the poll, the answer). [build]
+     * runs once per attempt, before its POST; an `expired` slot posts again with a new request. [postFailed] hears an I/O
+     * failure of the POST itself (not of the poll or the routing), before it is thrown.
      */
     suspend fun recoveryRegister(
         vaultId: String,
         build: suspend (VerifiedEnclave) -> SealedRequest,
         open: suspend (ByteArray, String) -> RecoveryResult,
+        onPosted: suspend () -> Unit = {},
+        postFailed: suspend (java.io.IOException) -> Unit = {},
     ): RecoveryResult {
         val m = manifest(0)
         var attempt = 1
@@ -405,7 +410,13 @@ class AltChannelFlow(
             var err: MemberApiException? = null
             var slot: Slot? = null
             try {
-                api.recoveryRegister(vaultId, info.instanceId, req)
+                try {
+                    api.recoveryRegister(vaultId, info.instanceId, req)
+                } catch (x: java.io.IOException) {
+                    postFailed(x)
+                    throw x
+                }
+                onPosted()
                 slot = api.poll(req.requestId)
             } catch (x: MemberApiException) {
                 err = x

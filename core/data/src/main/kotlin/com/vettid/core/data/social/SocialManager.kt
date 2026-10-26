@@ -1257,6 +1257,11 @@ class SocialManager(
         }
     }
 
+    override suspend fun dropDeviceRequests(deviceId: String) {
+        edit { l -> l.copy(events = l.events.filterNot { (parsed(it) as? Approval.DeviceRequest)?.deviceId == deviceId }) }
+        listedFlow.update { l -> l.filterNot { it is Approval.DeviceRequest && it.deviceId == deviceId } }
+    }
+
     private fun summaries(cs: List<ConnectionInfo>, ms: Map<String, List<MessageInfo>>): List<ConversationSummary> =
         cs.filter { it.state == ConnectionState.ACTIVE || ms[it.id].orEmpty().isNotEmpty() }
             .map { c ->

@@ -74,8 +74,8 @@ class HistoryViewModelTest {
         seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE)))
     }
 
-    private fun vm(vault: Vault, connectionId: String? = "c1", owner: FakeVault = FakeVault()) = HistoryViewModel(
-        SavedStateHandle(listOfNotNull(connectionId?.let { "connectionId" to it }).toMap()),
+    private fun vm(vault: Vault, connectionId: String? = "c1", owner: FakeVault = FakeVault(), query: String? = null) = HistoryViewModel(
+        SavedStateHandle(listOfNotNull(connectionId?.let { "connectionId" to it }, query?.let { "query" to it }).toMap()),
         HistoryManager { vault },
         social,
         RuntimeEnvironment.getApplication(),
@@ -105,6 +105,27 @@ class HistoryViewModelTest {
         assertEquals(listOf(900L, 700L, 650L), s.entries.map { it.seq })
         assertTrue(s.end)
         assertNull(s.error)
+    }
+
+    /** ANDROID-PLAN 0.1.53 AA1: History from a device's page has the search field set to the device's name. */
+    @Test
+    fun aDevicesHistoryIsTheFullLogSearchedForItsName() = runTest(main.dispatcher) {
+        val vault = Vault({ page(900) })
+        val model = vm(vault, connectionId = null, query = "Claude on work laptop")
+        val s = settle(model, ::idle)
+        assertNull(vault.calls.single()["connection_id"])
+        assertEquals("Claude on work laptop", vault.calls.single()["q"])
+        assertEquals("Claude on work laptop", s.filter.query)
+    }
+
+    @Test
+    fun aDevicesNameTooLongForTheSearchIsCutAsTheSearchCutsIt() = runTest(main.dispatcher) {
+        val vault = Vault({ page(900) })
+        val model = vm(vault, connectionId = null, query = "é".repeat(100))
+        val s = settle(model, ::idle)
+        // At most 128 bytes of UTF-8, cut at a character (VAULT-MESSAGING §10.9).
+        assertEquals(64, s.filter.query.length)
+        assertEquals(s.filter.query, vault.calls.single()["q"])
     }
 
     @Test

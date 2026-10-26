@@ -74,8 +74,17 @@ sealed interface FeedTarget {
 
     data class Item(val itemId: String) : FeedTarget
 
-    /** Settings → Vault (the devices). */
+    /** Settings → Vault (the transfer and the signer's notices). */
     data object Devices : FeedTarget
+
+    /** Devices & agents (ANDROID-PLAN 0.1.53 AA1): the list. */
+    data object DeviceList : FeedTarget
+
+    /** The pairing's compare screen (`device.pair.pending`, AA2); with no pairing held, it says it cannot be checked. */
+    data object Pairing : FeedTarget
+
+    /** A device's page in Devices & agents (`device.paired` with its `device_id`). */
+    data class Device(val deviceId: String) : FeedTarget
 
     /** The clone alarm's screen. */
     data object Alarm : FeedTarget
@@ -374,9 +383,11 @@ object FeedKinds {
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
             "share.rate_limited" -> if (c != null && !ref.isNullOrEmpty()) FeedTarget.ShareRule(c, ref) else FeedTarget.Sheet
             "item.revealed" -> if (!ref.isNullOrEmpty()) FeedTarget.Item(ref) else FeedTarget.Sheet
-            "device.pair.pending", "device.paired", "device.unlinked", "device.transferred", "device.replaced",
-            "device.signer_changed",
-            -> FeedTarget.Devices
+            // 0.1.53: the pairing (AA2 opens its comparison), the device and the list are in Devices & agents.
+            "device.paired" -> item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
+            "device.pair.pending" -> FeedTarget.Pairing
+            "device.unlinked" -> FeedTarget.DeviceList
+            "device.transferred", "device.replaced", "device.signer_changed" -> FeedTarget.Devices
             "credential.alarm" -> FeedTarget.Alarm
             "credential.password_failed" -> FeedTarget.History
             "credential.rotated", "credential.reset" -> FeedTarget.Credential

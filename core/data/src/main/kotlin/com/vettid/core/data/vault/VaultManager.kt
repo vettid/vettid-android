@@ -29,6 +29,10 @@ import com.vettid.core.data.items.VaultItemsOps
 import com.vettid.core.data.items.SharingManager
 import com.vettid.core.data.items.VaultSharingOps
 import com.vettid.core.data.env.AppEnvironment
+import com.vettid.core.data.devices.DevicesManager
+import com.vettid.core.data.devices.PairingManager
+import com.vettid.core.data.devices.VaultPairingOps
+import com.vettid.core.data.devices.VaultDevicesOps
 import com.vettid.core.data.feed.FeedManager
 import com.vettid.core.data.feed.VaultFeedOps
 import com.vettid.core.data.wipe.LocalWipe
@@ -442,7 +446,7 @@ class VaultManager(
                 // Release R (§11.14.10): this phone's key and its secret of epoch 1 go in the hs.init. The vault id is not
                 // known yet: the key and the secret are made for "" (as vettid-vault's reference client does).
                 // Stored before the hs.init is sent; a retry reuses the key. §11.10.9: only when the bundle lists `recovery_r`.
-                d.startTransfer(link, env.attester()) { traits ->
+                d.startTransfer(link, attester()) { traits ->
                     val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
                     if (r) phoneSecrets.secret(keepPhoneKey("", rec)) else null
                 }
@@ -493,34 +497,49 @@ class VaultManager(
              * After the claim, however the code was read: the sealed `vault.recovery.register` (§11.11.3). Here, in the
              * enrolments' object, so that the reset to the claimed vault's record is reached only through [enrolments]' check.
              */
-            @Suppress("ReturnCount")
+            @Suppress("ReturnCount", "ThrowsCount") // one per answer of the register
             private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
                 val s = session()
                 gateway.memberChanged(claimed.userGuid)
                 io { resetLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
                 // The claim's own record, just made: what the registration writes belongs to it.
                 val rec = record.recordGeneration
+                // Each POST's attestation key, kept until that POST is settled not registered (ANDROID-PLAN §4 step 5).
+                val slot = slots.active
+                val posts = RegisterKeys()
                 val r = try {
                     s.alt.recoveryRegister(
                         code.vaultId,
-                        build = { e -> buildRegister(s, code, e, rec) },
+                        build = { e -> buildRegister(s, code, e, rec, posts) },
                         open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+                        onPosted = { posts.accepted() },
+                        // A connection that was never made: that POST never left (its key is settled below).
+                        postFailed = { e -> if (RegisterKeys.neverSent(e)) posts.unsent() },
                     )
                 } catch (e: VaultFailure) {
+                    // Every attestation key of this identity is listed: nothing was made or sent (fail secure).
+                    if (e.code == AttestationKeys.CODE_KEYS_FULL) return RecoveryRegistration.Refused(AttestationKeys.CODE_KEYS_FULL)
                     if (e.code != CODE_NOT_OFFERED) throw e
                     return RecoveryRegistration.Refused(CODE_NOT_OFFERED)
                 } catch (e: MemberApiException) {
+                    posts.answered(e.status, e.code)
                     // 2.1.0: a recovery the enclave refused (no backup copy) is `unavailable`: the register is refused too.
                     if (e.code == MemberApiException.RECOVERY_UNAVAILABLE) {
                         s.device.dropRecoveryRegistration()
+                        forgetUnregistered(slot, posts, lastRefused = false)
                         return RecoveryRegistration.Refused(CODE_NO_BACKUP)
                     }
                     if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
                     null
+                } catch (e: IOException) {
+                    // Only the keys of POSTs that never left go (postFailed); the failure is thrown on as before.
+                    forgetUnregistered(slot, posts, lastRefused = false)
+                    throw e
                 }
                 return when {
                     r == null -> {
                         s.device.dropRecoveryRegistration()
+                        forgetUnregistered(slot, posts, lastRefused = false)
                         RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
                     }
                     r.ok -> {
@@ -529,6 +548,7 @@ class VaultManager(
                     }
                     else -> {
                         s.device.dropRecoveryRegistration()
+                        forgetUnregistered(slot, posts, lastRefused = true)
                         RecoveryRegistration.Refused(r.code ?: "retry")
                     }
                 }
@@ -884,6 +904,31 @@ class VaultManager(
         },
     )
 
+    /**
+     * The member's devices and agents (VAULT-MESSAGING §10.3, ANDROID-PLAN 0.1.53 AA1): "Devices & agents". Memory only,
+     * while the vault is open and not held. Ending a device's access or removing it takes its requests out of Approvals.
+     */
+    val devices = DevicesManager(
+        scope,
+        ops = { VaultDevicesOps(openApi()) },
+        self = { session?.device?.deviceId },
+        onDeviceGone = { social.dropDeviceRequests(it) },
+        // The pairing in progress goes wherever the list does (lock, hold, wipe, deletion).
+        onClear = { pairing.clear() },
+    )
+
+    /** Pairing an agent (ANDROID-PLAN 0.1.53 AA2): the code, the comparison, the approval. Memory only, cleared with [devices]. */
+    val pairing: PairingManager = PairingManager(
+        scope,
+        ops = { VaultPairingOps(openApi()) },
+        knownDeviceIds = { devices.devices.value.takeIf { devices.load.value == ListLoad.LOADED }?.map { it.id }?.toSet() },
+        readDevices = {
+            devices.refresh()
+            devices.devices.value
+        },
+        onPaired = { devices.refreshQuietly() },
+    )
+
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(
         ops = { VaultAuditOps(openApi()) },
@@ -937,6 +982,7 @@ class VaultManager(
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },
                 clearFeed = { feed.clear() },
+                clearDevices = { devices.clear() },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
                     when (OwnProfileStep.onPhase(p)) {
@@ -978,6 +1024,7 @@ class VaultManager(
                 val steps = ClearSteps()
                 if (now && !wasHeld) {
                     steps.step { feed.clear() }
+                    steps.step { devices.clear() }
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { feed.open() }
@@ -1265,7 +1312,54 @@ class VaultManager(
     }
 
     /** (0.1.78) The phone's device identities: slot 0 normally, a second only while a reused-key recovery is undecided. */
-    private val slots = IdentitySlots(app, app.noBackupFilesDir)
+    private val slots = IdentitySlots(app, app.noBackupFilesDir, recoveryIdOf = { migrationRecoveryId(it) })
+
+    /**
+     * The `recovery_id` the identity in [slot] is recovering for, as far as this process knows it (the migration's tag of the
+     * key of the builds before slots): the reuse record's, or the device in use's while it is recovering; else null.
+     */
+    private fun migrationRecoveryId(slot: Int): String? {
+        val r = local.reuse
+        return when {
+            r != null && slot == r.earlierSlot -> r.earlierRecoveryId
+            r != null && slot == r.newSlot -> r.newRecoveryId
+            else -> session?.device?.takeIf { slot == slots.active && it.recovering }?.recoveryId
+        }
+    }
+
+    /**
+     * The attester of identity [slot] (the one in use by default, [AttestationKeys]): an attestation is a new key of the
+     * slot, registered for [recoveryId] when it is a register's; it signs with [signWith], else with the slot's current key.
+     */
+    private fun attester(slot: Int = slots.active, recoveryId: String? = null, signWith: String? = null): SlotAttester =
+        SlotAttester(slots.attestation, slot, recoveryId, signWith) { env.attester(it) }
+
+    /** The keys of [posts] that are settled not registered ([RegisterKeys]) are deleted from [slot]. */
+    private suspend fun forgetUnregistered(slot: Int, posts: RegisterKeys, lastRefused: Boolean) {
+        io { slots.attestation.remove(slot, posts.notRegistered(lastRefused)) }
+    }
+
+    /**
+     * The recovered identity's handshake (VAULT-MESSAGING §11.14.6 "Pairing"): `hs.init` with each `recovery_id` the identity
+     * in use registered for, newest first, each waiting [wait] (null: the device's default), and the last one's timeout
+     * thrown. Once one completes, the vault's binding is the attested key of the registration it named: that registration's
+     * keys stay and the identity's other keys go ([AttestationKeys.keepRegistration]).
+     */
+    private suspend fun pairWithEach(d: com.vettid.core.vault.VaultDevice, wait: Duration?) {
+        val slot = slots.active
+        val contexts = io { slots.attestation.pairingContexts(slot, d.recoveryId) }
+        var i = 0
+        while (true) {
+            val ctx = contexts[i++]
+            try {
+                if (wait == null) d.completeRecoveryOpen(ctx = ctx) else d.completeRecoveryOpen(wait, ctx)
+                break
+            } catch (e: TimeoutCancellationException) {
+                if (i == contexts.size) throw e
+            }
+        }
+        io { slots.attestation.keepRegistration(slot, contexts[i - 1]) }
+    }
 
 
     /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
@@ -1302,6 +1396,7 @@ class VaultManager(
             steps.step { attachments.reset() }
             steps.step { items.clear() }
             steps.step { feed.clear() }
+            steps.step { devices.clear() }
             steps.step { ownerCheck.clear() }
             steps.step { forgetOwnProfile() }
             steps.step { phoneSecrets.delete(local.phone) }
@@ -1358,6 +1453,8 @@ class VaultManager(
                 try {
                     items.onEvent(m)
                     sharing.onEvent(m)
+                    devices.onEvent(m)
+                    pairing.onEvent(m)
                     social.onEvent(m)
                     attachments.onEvent(m.type, m.body)
                     // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
@@ -1789,7 +1886,7 @@ class VaultManager(
                 // enrollment (a lost answer, a crash) reuses the key: the vault may already hold its secret. Without
                 // `recovery_r`: as before.
                 val out = try {
-                    s.alt.enroll(d, local.vaultId, local.userGuid, pin, env.attester()) { traits ->
+                    s.alt.enroll(d, local.vaultId, local.userGuid, pin, attester()) { traits ->
                         val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
                         if (r) phoneSecrets.secret(keepPhoneKey(local.vaultId, rec)) else null
                     }
@@ -2126,7 +2223,6 @@ class VaultManager(
      * `device_secret` is tried once more with the next epoch (the answer to a change of secret may have been lost);
      * when that opens the vault, the phone moves to that epoch. A missing phone key is [FailureKind.DEVICE_SECRET].
      */
-    @Suppress("ReturnCount")
     private suspend fun unlockWithSecret(
         s: Session,
         pin: String,
@@ -2134,6 +2230,30 @@ class VaultManager(
         release: String?,
         onStarting: ((Long) -> Unit)?,
         pinTaken: Int? = null,
+    ): UnlockOutcome {
+        // (ANDROID-PLAN §4 step 5) Signed with the identity's newest key; on a readable `attestation` (decided before the PIN,
+        // not counted) with its other keys, newest first, each once. Outside a recovery the key answered `ok` is the vault's
+        // binding: the identity's other keys that served no registration go.
+        val slot = slots.active
+        return slots.attestation.tryKeys(
+            slot,
+            attempt = { alias -> unlockWithSecretOnce(s, pin, opts, release, onStarting, pinTaken, attester(slot, signWith = alias)) },
+            code = { it.result.code },
+            ok = { it.ok },
+            onOk = { alias -> if (!s.device.recovering) io { slots.attestation.keepAfterUnlock(slot, alias) } },
+        )
+    }
+
+    /** One [unlockWithSecret], signed by [signer]. */
+    @Suppress("ReturnCount", "LongParameterList")
+    private suspend fun unlockWithSecretOnce(
+        s: Session,
+        pin: String,
+        opts: UnlockOptions,
+        release: String?,
+        onStarting: ((Long) -> Unit)?,
+        pinTaken: Int?,
+        signer: com.vettid.core.altchan.Attester,
     ): UnlockOutcome {
         val phone = local.phone
         // Right before each request is posted: a held-back unlock would otherwise still go out (and may mint a token).
@@ -2150,7 +2270,7 @@ class VaultManager(
             pinChangeUnresolved = twoStep,
             newPinAsked = newPinStep,
             send = { ahead ->
-                val o = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting, beforePost) { traits ->
+                val o = s.alt.unlock(s.device, local.userGuid, pin, signer, opts, release, onStarting, beforePost) { traits ->
                     val path = choosePath(traits, makesPhoneKey = false, rec)
                     // An unlock never sets the mark on a phone without a phone secret (it then fails without one, unmarked).
                     if (ahead == 0) r = path == ReleasePath.Path.R
@@ -2542,6 +2662,7 @@ class VaultManager(
         steps.step { items.clear() }
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
+        steps.step { devices.clear() }
         steps.step { deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
@@ -2591,6 +2712,7 @@ class VaultManager(
         steps.step { items.clear() }
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
+        steps.step { devices.clear() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
@@ -2645,9 +2767,10 @@ class VaultManager(
     }
 
     override suspend fun attestationInfo(): AttestationInfo = io {
-        val key = DeviceAttestationKey()
-        val present = key.exists()
-        val desc = if (present) {
+        // The key the identity in use signs with (ANDROID-PLAN §4 step 5).
+        val key = slots.attestation.current(slots.active)?.let { DeviceAttestationKey(it.alias) }
+        val present = key?.exists() == true
+        val desc = if (key != null && present) {
             try {
                 KeyDescription.parse(key.chain().first())
             } catch (_: AttestationException) {
@@ -2658,7 +2781,7 @@ class VaultManager(
         } else {
             null
         }
-        val level = if (present) runCatching { key.level().name }.getOrNull() else null
+        val level = if (key != null && present) runCatching { key.level().name }.getOrNull() else null
         val rot = desc?.rootOfTrust
         val alt = session?.device?.altState
         AttestationInfo(
@@ -2982,6 +3105,7 @@ class VaultManager(
         code: RecoveryCode,
         e: com.vettid.core.attestation.VerifiedEnclave,
         since: Int,
+        posts: RegisterKeys,
     ): com.vettid.core.altchan.SealedRequest {
         val caps = e.descriptor.capabilities
         if (choosePath(e.descriptor.traits, makesPhoneKey = true, since) == ReleasePath.Path.R) {
@@ -2989,7 +3113,20 @@ class VaultManager(
             val phone = phoneSecrets.create(code.vaultId)
             updateLocal(since) { it.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch) }
         }
-        return s.device.prepareRecoveryRegister(local.userGuid, code, e, env.attester())
+        return registerRequest(s, code, e, posts)
+    }
+
+    /** The register's request, attested with a new key of the identity in use, which [posts] records for this POST. */
+    private suspend fun registerRequest(
+        s: Session,
+        code: RecoveryCode,
+        e: com.vettid.core.attestation.VerifiedEnclave,
+        posts: RegisterKeys,
+    ): com.vettid.core.altchan.SealedRequest {
+        val att = attester(recoveryId = code.recoveryId)
+        val req = s.device.prepareRecoveryRegister(local.userGuid, code, e, att)
+        posts.built(att.made)
+        return req
     }
 
     override suspend fun recoveryPreflight(): PreflightInfo = preflight()
@@ -3015,43 +3152,22 @@ class VaultManager(
             return@guard resumed
         }
         val afterUnanswered = local.recoveryOpenUnanswered
-        var sentRid: String? = null
         val secret = phoneSecrets.secret(phone)
         val r = try {
-            s.alt.recoveryOpen(
-                local.vaultId,
-                build = { e, m ->
-                    // §11.10.9: this phone registered with release R; an instance without it is refused, nothing sent.
-                    choosePath(e.descriptor.traits, makesPhoneKey = false, rec)
-                    s.device.prepareRecoveryOpen(local.userGuid, pin, password, secret, e, m, env.attester())
-                },
-                open = { raw, rid -> s.device.openRecoveryOpenResult(raw, rid) },
-                // (0.1.78) The open's entry is saved durably BEFORE it is posted; a save that fails posts nothing. Every open sent
-                // is kept (sticky) until the vault answered `ok` and the pairing completed.
-                beforePost = { rid ->
-                    sentRid = rid
-                    val recoveryIdNow = s.device.recoveryId ?: ""
-                    val ok = io {
-                        record.update(rec) {
-                            val l = Ledger.afterSent(it.recoveryOpenUnanswered, it.sentOpens, rid, recoveryIdNow, slots.active)
-                            it.copy(recoveryOpenUnanswered = true, sentOpens = l)
-                        }
-                    }
-                    if (!ok) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_HISTORY_NOT_SAVED)
-                },
+            // (ANDROID-PLAN §4 step 5) Signed with the identity's newest key; on a readable `attestation` (decided before the
+            // PIN, not counted) the vault holds an earlier register's key: the identity's other keys, newest first, each once.
+            slots.attestation.tryKeys(
+                slots.active,
+                attempt = { alias -> openOnce(s, rec, pin, password, secret, alias) },
+                code = { it.code },
+                ok = { it.ok },
+                // The key the `ok` open was signed with is never deleted at the handshake.
+                onOk = { alias -> io { slots.attestation.markOpened(slots.active, alias) } },
             )
         } finally {
             secret.fill(0)
         }
         val used = if (r.counted) r.used else null
-        io {
-            updateLocal(rec) {
-                // Only this open is answered; an earlier one that got no answer stays unanswered.
-                val left = Ledger.afterAnswer(it.recoveryOpenUnanswered, it.sentOpens, sentRid, r.code, r.ok)
-                val attempts = used ?: it.recoveryAttemptsUsed
-                it.copy(recoveryOpenUnanswered = left.isNotEmpty(), sentOpens = left, recoveryAttemptsUsed = attempts)
-            }
-        }
         if (!r.ok) {
             val reuseNow = local.reuse
             return@guard RecoveryOpenOutcome(
@@ -3063,6 +3179,54 @@ class VaultManager(
         val out = if (local.reuse != null) finishReuse(pin, used, resuming = false) else finishOpened(s, pin, used, resuming = false)
         completeOpens(out)
         out.copy(attemptUsed = r.attemptUsed)
+    }
+
+    /**
+     * One `vault.recovery.open` signed with the attestation key [alias] (null: the identity's current key). Its entry in the
+     * per-open history is saved before it is posted, and its answer settles only that entry.
+     */
+    @Suppress("LongParameterList")
+    private suspend fun openOnce(
+        s: Session,
+        rec: Int,
+        pin: String,
+        password: String,
+        secret: ByteArray,
+        alias: String?,
+    ): com.vettid.core.crypto.altchan.RecoveryOpen.Result {
+        var sentRid: String? = null
+        val r = s.alt.recoveryOpen(
+            local.vaultId,
+            build = { e, m ->
+                // §11.10.9: this phone registered with release R; an instance without it is refused, nothing sent.
+                choosePath(e.descriptor.traits, makesPhoneKey = false, rec)
+                s.device.prepareRecoveryOpen(local.userGuid, pin, password, secret, e, m, attester(signWith = alias))
+            },
+            open = { raw, rid -> s.device.openRecoveryOpenResult(raw, rid) },
+            // (0.1.78) The open's entry is saved durably BEFORE it is posted; a save that fails posts nothing. Every open sent
+            // is kept (sticky) until the vault answered `ok` and the pairing completed.
+            beforePost = { rid ->
+                sentRid = rid
+                val recoveryIdNow = s.device.recoveryId ?: ""
+                val ok = io {
+                    record.update(rec) {
+                        val l = Ledger.afterSent(it.recoveryOpenUnanswered, it.sentOpens, rid, recoveryIdNow, slots.active)
+                        it.copy(recoveryOpenUnanswered = true, sentOpens = l)
+                    }
+                }
+                if (!ok) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_HISTORY_NOT_SAVED)
+            },
+        )
+        val used = if (r.counted) r.used else null
+        io {
+            updateLocal(rec) {
+                // Only this open is answered; an earlier one that got no answer stays unanswered.
+                val left = Ledger.afterAnswer(it.recoveryOpenUnanswered, it.sentOpens, sentRid, r.code, r.ok)
+                val attempts = used ?: it.recoveryAttemptsUsed
+                it.copy(recoveryOpenUnanswered = left.isNotEmpty(), sentOpens = left, recoveryAttemptsUsed = attempts)
+            }
+        }
+        return r
     }
 
     /** `ok`, the pairing and the credential completed ([finishOpened] answers `ok` only then): nothing is unanswered any more. */
@@ -3121,12 +3285,12 @@ class VaultManager(
 
     /** The recovered phone's handshake; unanswered, an unlock with its own key and the handshake again. The unlock's refusal code. */
     private suspend fun pairRecovered(s: Session, pin: String, resuming: Boolean): String? = try {
-        s.device.completeRecoveryOpen(if (resuming) RESUME_HANDSHAKE_WAIT else Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
+        pairWithEach(s.device, if (resuming) RESUME_HANDSHAKE_WAIT else Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
         null
     } catch (e: TimeoutCancellationException) {
         android.util.Log.i("VaultManager", "the recovered phone's handshake was not answered: unlocking with its own key")
         unlockOwn(s, pin, e) ?: run {
-            s.device.completeRecoveryOpen()
+            pairWithEach(s.device, null)
             null
         }
     }
@@ -3205,7 +3369,10 @@ class VaultManager(
         }
         val v = a.vault
         if (v == null || a.servicePaused) return Rules.Read.Unknown
-        return Rules.Read.Listed(registered = v.recoveryState == RECOVERY_REGISTERED)
+        return Rules.Read.Listed(
+            registered = v.recoveryState == RECOVERY_REGISTERED,
+            unregistered = v.recoveryState == RECOVERY_PENDING || v.recoveryState == RECOVERY_AVAILABLE,
+        )
     }
 
     @Suppress("CyclomaticComplexMethod", "ComplexCondition") // the two reads, the clock, and one answer per decision
@@ -3401,71 +3568,96 @@ class VaultManager(
         // N may have registered once this is posted, whatever comes back: kept as unknown, never registered again, tried
         // by the lost-ok unlock. A definite refusal below takes it back.
         val before = local.reuse ?: r
-        val repeat = before.registerTried == code.recoveryId
+        // Per POST (in [build]), see [Rules.registerFailure]: [postedEarlier] any earlier POST built in this flow, [accepted] this
+        // POST got its `202`, [earlierAccepted] an earlier POST of this flow did (sticky: this POST's answer settles only itself).
+        val triedBefore = before.registerTried == code.recoveryId
+        var built = false
+        var postedEarlier = false
+        var accepted = false
+        var earlierAccepted = false
+        // Each POST's attestation key is N's, kept until that POST is settled not registered; E's keys are never touched here.
+        val posts = RegisterKeys()
         markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, registerTried = code.recoveryId) }
         val since = record.recordGeneration
-        val res = try {
-            s.alt.recoveryRegister(
-                code.vaultId,
-                build = { e -> buildReuseRegister(s, code, e, since) },
-                open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+
+        /** Applies [Rules.registerFailure] to a failed POST; the caller then throws, answers or confirms by the outcome. */
+        suspend fun fail(status: Int?, failCode: String?): Rules.RegisterOutcome {
+            val o = Rules.registerFailure(
+                triedBefore, postedEarlier, accepted, earlierAccepted, before.newRegistered == true, status, failCode,
             )
-        } catch (e: VaultFailure) {
-            if (e.code != CODE_NOT_OFFERED) throw e
-            return RegisterAnswer.Refused(CODE_NOT_OFFERED)
-        } catch (e: MemberApiException) {
-            when (e.code) {
-                // K became a key in use between the claim and the register: no claim key; nothing was recorded.
-                MemberApiException.UNAUTHORIZED -> {
+            when (o) {
+                Rules.RegisterOutcome.DROP_AND_RETRY, Rules.RegisterOutcome.DROP_REFUSED -> {
+                    s.device.dropRecoveryRegistration()
+                    backToEarlier(before)
+                }
+                Rules.RegisterOutcome.DROP_UNAUTHORIZED -> {
                     // N's registration is dropped with its identity and relay key: it no longer counts as one of the two.
                     s.device.dropRecoveryRegistration()
                     backToEarlier(before)
-                    if (!before.newRegistered) dropNewIdentity()
-                    return RegisterAnswer.Unauthorized
+                    dropNewIdentity()
                 }
-                MemberApiException.RECOVERY_UNAVAILABLE -> {
-                    s.device.dropRecoveryRegistration()
-                    backToEarlier(before)
-                    return RegisterAnswer.Refused(CODE_NO_BACKUP)
-                }
-                MemberApiException.RECOVERY_NOT_AVAILABLE ->
-                    if (Rules.maybeRegistered(repeat, e.code)) return maybeRegistered(s, code) else null
-                else -> {
-                    // A first attempt that did not reach the vault leaves N unregistered: the same N, K and code may try again.
-                    if (Rules.registerFailedBeforeVault(repeat, e.status, e.code)) {
-                        s.device.dropRecoveryRegistration()
-                        backToEarlier(before)
-                    }
-                    throw e
-                }
+                Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.RegisterOutcome.KEEP_UNKNOWN -> Unit
+            }
+            return o
+        }
+        val res = try {
+            s.alt.recoveryRegister(
+                code.vaultId,
+                build = { e ->
+                    postedEarlier = built
+                    built = true
+                    earlierAccepted = earlierAccepted || accepted
+                    accepted = false
+                    buildReuseRegister(s, code, e, since, posts)
+                },
+                open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+                onPosted = {
+                    accepted = true
+                    posts.accepted()
+                },
+            )
+        } catch (e: VaultFailure) {
+            // Every attestation key of N is listed: nothing was made or sent (fail secure).
+            if (e.code == AttestationKeys.CODE_KEYS_FULL) return RegisterAnswer.Refused(AttestationKeys.CODE_KEYS_FULL)
+            if (e.code != CODE_NOT_OFFERED) throw e
+            return RegisterAnswer.Refused(CODE_NOT_OFFERED)
+        } catch (e: MemberApiException) {
+            val o = fail(e.status, e.code)
+            posts.answered(e.status, e.code)
+            forgetUnregistered(slot, posts, lastRefused = false)
+            return when {
+                o == Rules.RegisterOutcome.MAYBE_REGISTERED -> maybeRegistered(s, code)
+                o == Rules.RegisterOutcome.DROP_UNAUTHORIZED -> RegisterAnswer.Unauthorized
+                e.code == MemberApiException.RECOVERY_UNAVAILABLE -> RegisterAnswer.Refused(CODE_NO_BACKUP)
+                e.code == MemberApiException.RECOVERY_NOT_AVAILABLE -> RegisterAnswer.Refused(CODE_NOT_AVAILABLE)
+                else -> throw e
             }
         } catch (e: IOException) {
-            if (Rules.registerFailedBeforeVault(repeat, null, null)) {
-                s.device.dropRecoveryRegistration()
-                backToEarlier(before)
-            }
+            // A failure after the `202` (the poll, a slot that never answered) is not "before the vault".
+            val o = fail(null, null)
+            // No answer: this POST may have been queued, so its key stays.
+            forgetUnregistered(slot, posts, lastRefused = false)
+            if (o == Rules.RegisterOutcome.MAYBE_REGISTERED) return maybeRegistered(s, code)
             throw e
         }
-        return when {
-            res == null -> {
-                s.device.dropRecoveryRegistration()
-                backToEarlier(before)
-                RegisterAnswer.Refused(CODE_NOT_AVAILABLE)
-            }
-            res.ok -> {
-                s.device.confirmRecoveryRegistration()
-                markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
-                phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
-                RegisterAnswer.Registered
-            }
-            // A readable `used` after an earlier attempt for the same code: maybe registered (the first copy went through).
-            Rules.maybeRegistered(repeat, res.code) -> maybeRegistered(s, code)
-            else -> {
-                s.device.dropRecoveryRegistration()
-                backToEarlier(before)
-                RegisterAnswer.Refused(res.code ?: CODE_RETRY)
-            }
+        // A readable refusal settles its own POST: that POST's key was not recorded (the vault keeps an earlier one).
+        if (res?.ok == false) forgetUnregistered(slot, posts, lastRefused = true)
+        if (res?.ok == true) {
+            s.device.confirmRecoveryRegistration()
+            markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
+            phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+            return RegisterAnswer.Registered
         }
+        // A readable refusal settles its own POST only: after an earlier `202`, or a `used` to a repeat, N may be registered.
+        val repeat = Rules.isRepeatPost(triedBefore, postedEarlier)
+        // An earlier flow's POST for this code left N registered or maybe registered (memory-only [earlierAccepted] is gone).
+        val priorRegistration = triedBefore && before.newRegistered && before.newRecoveryId == code.recoveryId
+        if (Rules.registerRefusal(repeat, earlierAccepted || priorRegistration, res?.code) == Rules.RegisterOutcome.MAYBE_REGISTERED) {
+            return maybeRegistered(s, code)
+        }
+        s.device.dropRecoveryRegistration()
+        backToEarlier(before)
+        return if (res == null) RegisterAnswer.Refused(CODE_NOT_AVAILABLE) else RegisterAnswer.Refused(res.code ?: CODE_RETRY)
     }
 
     /**
@@ -3473,7 +3665,16 @@ class VaultManager(
      * (the prior one is not restored) and status signed with K decides, `registered` there meaning registered for this recovery.
      */
     private suspend fun maybeRegistered(s: Session, code: RecoveryCode): RegisterAnswer {
-        if ((readStatusWithK(s) as? Rules.Read.Listed)?.registered != true) return RegisterAnswer.Refused(CODE_RETRY)
+        val read = readStatusWithK(s) as? Rules.Read.Listed
+        if (read?.registered != true) {
+            // The recovery is active and not registered, and no open was ever sent for it: this identity's keys made for it
+            // past any queue were not recorded (a later POST for it is a new key), so they no longer fill its list.
+            if (read?.unregistered == true && local.sentOpens.none { it.recoveryId == code.recoveryId }) {
+                val slot = slots.active
+                io { slots.attestation.settleNotRegistered(slot, code.recoveryId, SETTLE_AFTER_MS) }
+            }
+            return RegisterAnswer.Refused(CODE_RETRY)
+        }
         s.device.confirmRecoveryRegistration()
         markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
         phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
@@ -3503,13 +3704,14 @@ class VaultManager(
         code: RecoveryCode,
         e: com.vettid.core.attestation.VerifiedEnclave,
         since: Int,
+        posts: RegisterKeys,
     ): com.vettid.core.altchan.SealedRequest {
         if (choosePath(e.descriptor.traits, makesPhoneKey = false, since) != ReleasePath.Path.R ||
             !ReleasePath.recoveryOffered(e.descriptor.capabilities)
         ) {
             throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_NOT_OFFERED)
         }
-        return s.device.prepareRecoveryRegister(local.userGuid, code, e, env.attester())
+        return registerRequest(s, code, e, posts)
     }
 
     /** The lost-ok unlock with [identity] (it becomes the identity in use): `ok` only with the vault's bundle. */
@@ -3595,7 +3797,7 @@ class VaultManager(
                     val d = session().device
                     if (d.deviceId != null) return PairAnswer.PAIRED
                     return try {
-                        d.completeRecoveryOpen(Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
+                        pairWithEach(d, Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
                         PairAnswer.PAIRED
                     } catch (e: TimeoutCancellationException) {
                         android.util.Log.i("VaultManager", "no hs.resp for the new identity: trying the earlier one")
@@ -4109,6 +4311,7 @@ class VaultManager(
         steps.step { items.clear() }
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
+        steps.step { devices.clear() }
         steps.step { canary.removeCanaryManifest() }
         openTransferId = null
         alarmFlow.value = null
@@ -4377,6 +4580,11 @@ class VaultManager(
         const val CODE_OTHER_VAULT = "other_vault"
         private const val CODE_TRANSFER_INCOMPLETE = "transfer_incomplete"
         private const val RECOVERY_REGISTERED = "registered"
+        private const val RECOVERY_PENDING = "pending"
+        private const val RECOVERY_AVAILABLE = "available"
+
+        /** A register POST queued this long ago is past the member API's queue (5.5 minutes) with a wide margin. */
+        private const val SETTLE_AFTER_MS = 30L * 60 * 1000
 
         /** (0.1.78) The lost-ok unlock's outcomes for [RecoveryOpenOutcome.code]: open again, or a new recovery with K. */
         const val CODE_OPEN_AGAIN = "open_again"

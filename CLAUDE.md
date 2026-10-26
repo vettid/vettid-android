@@ -163,6 +163,31 @@ The A2 exit test:
   screen (`CallTest`: stable, untranslated labels for `uiautomator dump`), whose switches work only while the vault
   reports this app's signer class as `development` (`CallsController.testsAllowed`).
 
+- Devices & agents (ANDROID-PLAN 0.1.53 "Devices & agents", step AA1 of AA1-AA5; `:feature:devices`, `DevicesManager` /
+  `DevicesRepository` in `:core:data` `devices/`, `VaultManager.devices`): the drawer destination after Vault, the list
+  (`device.list`, `leash.grant.list` for the paused agents; memory only, cleared with the feed at lock and at the hold,
+  `PhaseSteps.DEVICES`; re-read on `sync.event` `device.paired|unlinked|session`, `leash.agent.suspended`), a device's
+  page, **End access** (`device.session.end`) and **Remove** (`device.unlink`), both confirmed, neither signing anything
+  (no unlock window, no password). This phone's entry has no actions and nothing is sent for it. Ending access or removing
+  takes the device's entries out of Approvals (`ApprovalsRepository.dropDeviceRequests`). The remove text names the
+  longest `status_ttl` of the agent's grants plus 60 s, the worst case (3,660 s) when the vault cannot be asked. A device's
+  name is its own, self-asserted and never edited. Pairing an agent (AA2; `PairingManager` / `PairingRepository` in
+  `:core:data` `devices/`, `VaultManager.pairing`, `PairViewModel` / `PairScreen`, `PairRoute`): the floating button on the
+  list; `device.pair.create{role: "agent"}` (the link must parse as an agent pairing, else it is never shown), the QR and
+  the bare code (Copy marked sensitive and cleared by `PairingClipboard`, which keeps only a hash and clears when the
+  pairing ends or on the next window focus after the code expired; Share sends the code alone), `FLAG_SECURE` over the
+  whole flow, the countdown to `exp` (never more than 10 min + 1); `device.pair.pending` for the pairing this phone made
+  shows the six digits and the agent's sanitised name, and only **The codes match** opens the sheet (first access 1 h
+  preselected) which sends `device.pair.approve{pairing_id, session_seconds?}` with no grants (no unlock window); a
+  pending that is not for an agent or has no six-digit code offers only Reject; any refused approval (the owner check
+  excepted, which keeps the comparison) is "This pairing has ended" and nothing is paired; leaving the screen rejects
+  (`PairViewModel.onCleared`; `navigateTopLevel` pops `PairRoute` so state saving never keeps it alive); a pairing taken away
+  by a lock shows "This pairing has ended" (`PairUiState.interrupted`); an approval with no answer is "Pairing not
+  confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
+  from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens (the paired screen offers only Done and "Open its page" until AA4).
+  Permissions (AA3), share rules (AA4) and Approvals for devices, including the pending pairing's entry (AA5), are later
+  PRs; screens are in the catalog (`devices*`).
+
 ## Device testing
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:

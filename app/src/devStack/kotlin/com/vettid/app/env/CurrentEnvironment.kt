@@ -3,8 +3,6 @@ package com.vettid.app.env
 import android.content.Context
 import com.vettid.app.BuildConfig
 import com.vettid.core.altchan.AltTrust
-import com.vettid.core.altchan.Attester
-import com.vettid.core.altchan.KeystoreAttester
 import com.vettid.core.data.Endpoints
 import com.vettid.core.data.account.MemberGateway
 import com.vettid.core.data.env.AppEnvironment
@@ -34,8 +32,6 @@ internal val currentEnvironment: AppEnvironment = object : AppEnvironment {
         base.newBuilder().addInterceptor(OriginMapInterceptor(mapOf(stack.relayUrl to BuildConfig.DEV_STACK_RELAY))).build()
 
     override suspend fun trust(http: OkHttpClient): AltTrust = stack.trust()
-
-    override fun attester(): Attester = KeystoreAttester()
 
     override fun memberGateway(context: Context, http: OkHttpClient, vaultId: () -> String?): MemberGateway =
         DevMemberGateway(context, endpoints.apiBase, endpoints.manifestUrl, http)

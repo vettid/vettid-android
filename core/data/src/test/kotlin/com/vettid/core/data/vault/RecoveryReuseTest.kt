@@ -94,15 +94,88 @@ class RecoveryReuseTest {
 
     @Test
     fun aFirstRegisterThatFailedBeforeTheVaultMayBeTriedAgainWithTheSameN() {
-        assertTrue(Rules.registerFailedBeforeVault(false, null, null)) // no network
-        assertTrue(Rules.registerFailedBeforeVault(false, 503, "release_starting"))
-        assertTrue(Rules.registerFailedBeforeVault(false, 503, "vault_unavailable"))
-        assertTrue(Rules.registerFailedBeforeVault(false, 429, "rate_limited"))
-        assertTrue(Rules.registerFailedBeforeVault(false, 409, "recovery_not_available"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, null, null)) // no network
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 503, "release_starting"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 503, "vault_unavailable"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 429, "rate_limited"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 409, "recovery_not_available"))
         // Anything else may have reached the vault: N stays unknown.
-        assertFalse(Rules.registerFailedBeforeVault(false, 500, "internal"))
-        assertFalse(Rules.registerFailedBeforeVault(false, 504, "http_504"))
-        assertFalse(Rules.registerFailedBeforeVault(false, 400, "bad_request"))
+        assertFalse(Rules.registerFailedBeforeVault(false, false, 500, "internal"))
+        assertFalse(Rules.registerFailedBeforeVault(false, false, 504, "http_504"))
+        assertFalse(Rules.registerFailedBeforeVault(false, false, 400, "bad_request"))
+    }
+
+    @Test
+    fun aFailureAfterThe202IsNeverBeforeTheVault() {
+        // A poll that failed (no network, a 503, a 429) or a slot that never answered, after the register was accepted.
+        for ((status, code) in listOf<Pair<Int?, String?>>(
+            null to null, 503 to "release_starting", 503 to "vault_unavailable", 429 to "rate_limited", 409 to "recovery_not_available",
+        )) {
+            assertFalse("$status $code", Rules.registerFailedBeforeVault(false, true, status, code))
+        }
+        // Before the POST (no 202) the same failures are still before the vault.
+        assertTrue(Rules.registerFailedBeforeVault(false, false, null, null))
+    }
+
+    @Test
+    fun aRepostInTheSameFlowAfterAnExpiredSlotIsARepeat() {
+        // The first POST of a first flow is not a repeat; the re-post after its 202 and an expired slot is.
+        assertFalse(Rules.isRepeatPost(triedBefore = false, postedEarlierInFlow = false))
+        val repeat = Rules.isRepeatPost(triedBefore = false, postedEarlierInFlow = true)
+        assertTrue(repeat)
+        // Answered 409 recovery_not_available or used: maybe registered (status signed with K), never before the vault.
+        assertTrue(Rules.maybeRegistered(repeat, "recovery_not_available"))
+        assertTrue(Rules.maybeRegistered(repeat, "used"))
+        assertFalse(Rules.registerFailedBeforeVault(repeat, false, 409, "recovery_not_available"))
+        // An earlier flow's POST for the same code makes the first POST of this flow a repeat too.
+        assertTrue(Rules.isRepeatPost(triedBefore = true, postedEarlierInFlow = false))
+    }
+
+    private fun failure(
+        tried: Boolean = false,
+        postedEarlier: Boolean = false,
+        accepted: Boolean = false,
+        earlierAccepted: Boolean = false,
+        beforeNew: Boolean = false,
+        status: Int? = null,
+        code: String? = null,
+    ) = Rules.registerFailure(tried, postedEarlier, accepted, earlierAccepted, beforeNew, status, code)
+
+    @Test
+    fun theOutcomeOfAFailedRegisterMatrix() {
+        // (a) 401 on a re-post after an earlier 202 (the 202 stays remembered): maybe registered, nothing dropped.
+        assertEquals(
+            Rules.RegisterOutcome.MAYBE_REGISTERED,
+            failure(postedEarlier = true, earlierAccepted = true, status = 401, code = "unauthorized"),
+        )
+        // (b) 401 with N registered before this flow: nothing dropped.
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(beforeNew = true, status = 401, code = "unauthorized"))
+        // ... and only the first POST of an N never registered drops it.
+        assertEquals(Rules.RegisterOutcome.DROP_UNAUTHORIZED, failure(status = 401, code = "unauthorized"))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(postedEarlier = true, status = 401, code = "unauthorized"))
+        // (c) a sealed bad_code to POST 2 after POST 1's 202; (d) to the only POST after its 202: settled.
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.registerRefusal(true, true, "bad_code"))
+        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, Rules.registerRefusal(false, false, "bad_code"))
+        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, Rules.registerRefusal(false, false, null))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.registerRefusal(true, false, "used"))
+        // A readable refusal to the first POST of a LATER flow, N registered for this very code before: not settled
+        // (the caller passes earlierAccepted || priorRegistration).
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.registerRefusal(true, true, "bad_code"))
+        // (e) instance_moved (a POST built, no 202) then a 503: the repeat keeps N unknown.
+        assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(postedEarlier = true, status = 503, code = "release_starting"))
+        // (f) a first POST answered 503: before the vault.
+        assertEquals(Rules.RegisterOutcome.DROP_AND_RETRY, failure(status = 503, code = "release_starting"))
+        assertEquals(Rules.RegisterOutcome.DROP_AND_RETRY, failure()) // no network before the POST
+        // (g) recovery_unavailable on any POST without a 202: N is kept (fail secure).
+        assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(tried = true, status = 409, code = "recovery_unavailable"))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(accepted = true, status = 409, code = "recovery_unavailable"))
+        assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(status = 409, code = "recovery_unavailable"))
+        // A 409 recovery_not_available: before the vault on a first POST, maybe registered on a repeat.
+        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, failure(status = 409, code = "recovery_not_available"))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(postedEarlier = true, status = 409, code = "recovery_not_available"))
+        // After this POST's own 202 every failure is maybe registered, a poll failure included.
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(accepted = true))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(accepted = true, status = 503, code = "vault_unavailable"))
     }
 
     @Test
@@ -110,7 +183,7 @@ class RecoveryReuseTest {
         for ((status, code) in listOf<Pair<Int?, String?>>(
             null to null, 503 to "release_starting", 429 to "rate_limited", 409 to "recovery_not_available",
         )) {
-            assertFalse("$status $code", Rules.registerFailedBeforeVault(true, status, code))
+            assertFalse("$status $code", Rules.registerFailedBeforeVault(true, false, status, code))
         }
         assertTrue(Rules.maybeRegistered(true, "recovery_not_available"))
         assertTrue(Rules.maybeRegistered(true, "used"))
@@ -377,9 +450,17 @@ class RecoveryReuseTest {
         assertEquals(listOf("rid1", "rid2"), answer(l, "rid2", "wrong"))
         // A wait verdict for open 2 removes open 2 only; open 1 stays unanswered.
         assertEquals(listOf("rid1"), answer(l, "rid2", "wait"))
+        // `attestation` answers only its own open too (decided at step 1); the earlier one stays.
+        assertEquals(listOf("rid1"), answer(l, "rid2", "attestation"))
+        // ... and, unlike `wrong`, it settles the earlier open while a later one stands.
+        assertEquals(listOf("rid2"), answer(sent("rid1", "rid2"), "rid1", "attestation"))
         assertTrue(Rules.undecided(true, null))
         // A lone open: `wrong` and `expired` leave it, a refusal before the spend too.
-        for (c in listOf("wrong", "expired", "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet")) {
+        val lone = listOf(
+            "wrong", "expired", "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet",
+            "attestation",
+        )
+        for (c in lone) {
             assertEquals(c, emptyList<String>(), answer(sent("rid1"), "rid1", c))
         }
         // The same open is not listed twice.

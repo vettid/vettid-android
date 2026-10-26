@@ -123,6 +123,10 @@ class ApprovalParserTest {
 
         val d = ApprovalParser.parse("device.session.pending", o("""{"request_id":"S1","device_id":"D","role":"desktop","name":"Laptop","seconds":60}"""), at)
         assertEquals("device:device.session.pending:S1", d?.key)
+        // 0.1.53 AA1: the requesting device, so that its entries leave at once when its access ends or it is removed.
+        assertEquals("D", (d as Approval.DeviceRequest).deviceId)
+        val held = ApprovalParser.parse("approval.pending", o("""{"approval_id":"H1","device_id":"A","role":"agent","name":"Bot","type":"agent.request","body":{},"exp":"2026-10-11T12:00:00.000Z"}"""), at)
+        assertEquals("A", (held as Approval.DeviceRequest).deviceId)
         assertNull(ApprovalParser.parse("message.new", o("{}"), at))
     }
 

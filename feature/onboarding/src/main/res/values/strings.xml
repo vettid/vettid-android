@@ -366,7 +366,7 @@
     <string name="vault_deleting_check_again">Check again</string>
     <string name="vault_deleting_still">VettID has not finished yet. Tap Check again later, or check the account site.</string>
     <string name="vault_deleting_unreachable">VettID couldn\'t be reached. Check your connection and try again.</string>
-    <!-- DRAFT texts for the owner's approval (a deletion this phone cannot confirm; member-confirmed removal). -->
+    <!-- A deletion this phone cannot confirm; member-confirmed removal (#192). Approved by the owner 2026-10-24. -->
     <string name="vault_deleting_unconfirmed">This phone can\'t confirm the deletion.</string>
     <string name="vault_deleting_cannot_confirm">VettID answered, but this phone cannot confirm that the deletion is finished. When you get the email that your vault was deleted, or the account site offers to set up a new vault, remove VettID from this phone.</string>
     <string name="vault_deleting_clock_hint">Also check that the date and time on this phone are right.</string>
@@ -374,7 +374,7 @@
     <string name="vault_deleting_remove_confirm_title">Remove VettID from this phone?</string>
     <string name="vault_deleting_remove_confirm_body">Your vault can never be opened again, and nothing on this phone is needed to finish deleting it. This removes VettID\'s data on this phone only: its keys, your account details and the app\'s settings. It works without a connection and cannot be undone.</string>
     <string name="vault_deleting_remove_confirm">Remove</string>
-    <!-- DRAFT (ANDROID-PLAN 0.1.78, pending the owner's wording): the member API's 410 without the vault's own word. -->
+    <!-- ANDROID-PLAN 0.1.78: the member API's 410 without the vault's own word (#194). Approved by the owner 2026-10-25. -->
     <string name="vault_deleted_api_title">Your vault was deleted</string>
     <string name="vault_deleted_api_body">VettID says your vault was deleted. This phone has not yet heard it from the vault itself, so it keeps your keys. Nothing on this phone is erased until the vault confirms it or you remove VettID from this phone. It checks again whenever you open VettID.</string>
     <string name="vault_deleted_api_slow_body">VettID says your vault was deleted, but this phone has not heard it from the vault itself. You can remove VettID from this phone, or keep it: if the vault confirms the deletion, this phone removes VettID by itself.</string>
@@ -466,10 +466,13 @@
     <!-- ANDROID-PLAN 0.1.78 "A phone that could not tell". The next two are approved by the owner. -->
     <string name="recover_could_not_tell">We could not tell whether your last attempt recovered the vault. You can start a new recovery on the account site and use this phone for it; nothing on this phone is deleted.</string>
     <string name="onboarding_open_took_phone">Your vault took this phone, but it cannot be unlocked right now. Contact VettID.</string>
-    <!-- DRAFT texts, pending the owner. -->
+    <!-- Two identities at most (#195, VAULT-MESSAGING 0.62.0). Approved by the owner 2026-10-26. -->
     <string name="recover_could_not_recover">This phone could not recover your vault. Nothing on this phone is deleted. Contact VettID at support@vettid.org.</string>
     <string name="recover_other_vault">This recovery code is for a different vault than the one this phone is recovering. Nothing was registered, and nothing on this phone is deleted.</string>
     <string name="onboarding_open_contact_support">Email %1$s</string>
+    <!-- Approved by the owner 2026-10-26 (ANDROID-PLAN §4 step 5): every attestation key of this identity is still
+         listed, so no register is sent. -->
+    <string name="recover_too_many_attempts">This phone has too many unfinished attempts. Contact VettID at support@vettid.org.</string>
     <string name="recover_undecided_checking">Checking whether your last attempt recovered the vault. Nothing on this phone is deleted.</string>
     <string name="recover_undecided_wait">We are still checking whether your last attempt recovered the vault. This phone looks again in a few minutes. Nothing on this phone is deleted.</string>
     <string name="recover_undecided_unknown">We could not check just now whether your last attempt recovered the vault. Nothing on this phone is deleted. Try again later.</string>

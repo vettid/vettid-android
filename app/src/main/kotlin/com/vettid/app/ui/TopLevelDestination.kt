@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.People
@@ -13,6 +14,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.vettid.app.R
 import com.vettid.feature.approvals.ApprovalsRoute
 import com.vettid.feature.connections.ConnectionsRoute
+import com.vettid.feature.devices.DevicesRoute
 import com.vettid.feature.history.HistoryRoute
 import com.vettid.feature.items.ItemsRoute
 import com.vettid.feature.messages.MessagesRoute
@@ -32,6 +34,9 @@ enum class TopLevelDestination(
     Approvals(ApprovalsRoute, Icons.Outlined.TaskAlt, R.string.nav_approvals, group = 0),
     // "Vault" in the UI (owner feedback 2026-10-07); the code keeps the Items names.
     Items(ItemsRoute, Icons.Outlined.Inventory2, R.string.nav_items, group = 1),
+    // Paired agents and desktops (ANDROID-PLAN 0.1.53 AA1, decision 13): after Vault, before History. No badge: what a
+    // device asks for waits in Approvals.
+    Devices(DevicesRoute, Icons.Outlined.Devices, R.string.nav_devices, group = 1),
     // The member's audit log (VAULT-MESSAGING §10.9). The credential is reached through Settings → Security, and
     // inviting through the Connections screen's add button (owner feedback 2026-10-07).
     History(HistoryRoute, Icons.Outlined.History, R.string.nav_history, group = 1),

@@ -837,6 +837,31 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * ANDROID-PLAN 0.1.53 AA1 (VAULT-MESSAGING §10.3, §10.11): ending a device's access, removing it and the grant list
+     * (for an agent's grants, and without `agent_id` for the paused agents) carry the members the vault reads.
+     */
+    @Test
+    fun devicesAndAgentsRequestsCarryTheirMembers() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            suspend fun request(type: String, send: suspend () -> Unit): com.vettid.core.crypto.json.JsonObject {
+                val job = async(Dispatchers.IO) { send() }
+                val r = v.open(nextDeposit().second)
+                assertEquals(type, r.type)
+                d.handle(v.seal(type, if (type == "leash.grant.list") """{"grants":[],"suspended":[]}""" else "{}", re = r.id, status = Inner.STATUS_OK))
+                job.await()
+                return StrictJson.parseObject(r.body)
+            }
+            assertEquals("a1", request("device.session.end") { api.deviceSessionEnd("a1") }.string("device_id"))
+            assertEquals("d1", request("device.unlink") { api.deviceUnlink("d1") }.string("device_id"))
+            assertEquals("a2", request("leash.grant.list") { api.leashGrantList("a2") }.string("agent_id"))
+            val all = request("leash.grant.list") { api.leashGrantList() }
+            assertFalse("no agent_id asks for every agent", all.has("agent_id"))
+        }
+    }
+
     /** Release R: a recovery is finished only on a paired phone (after its credential.get), never before. */
     @Test
     fun aRecoveryIsFinishedOnlyOnAPairedPhone() = runBlocking<Unit> {

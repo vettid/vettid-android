@@ -906,6 +906,7 @@ dependencies {
     implementation(projects.feature.approvals)
     implementation(projects.feature.items)
     implementation(projects.feature.history)
+    implementation(projects.feature.devices)
     implementation(projects.feature.credential)
     implementation(projects.feature.settings)
     implementation(projects.feature.notifications)

@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ANDROID-PLAN 0.1.53 "Devices & agents", AA1: every string of this file. Approved by the owner 2026-10-26. -->
+    <string name="devices_title">Devices &amp; agents</string>
+    <string name="devices_this_phone">This phone</string>
+    <string name="devices_role_agent">Agent</string>
+    <string name="devices_role_desktop">Desktop</string>
+    <string name="devices_role_phone">Phone</string>
+    <!-- A device whose own name reads "This phone" or "VettID": shown with its role, so it cannot pass for either. -->
+    <string name="devices_name_with_role">%1$s (%2$s)</string>
+    <!-- A kind the vault names that this app does not know is shown as it is; this is for one with no text at all. -->
+    <string name="devices_role_unknown">Device</string>
+    <!-- A device that gave no name: "Unnamed agent" / "Unnamed phone" (the role in lower case). -->
+    <string name="devices_unnamed">Unnamed %1$s</string>
+    <string name="devices_access_until">Access until %1$s</string>
+    <string name="devices_no_access">No access</string>
+    <string name="devices_last_active">Last active %1$s</string>
+    <string name="devices_not_active_yet">Not active yet</string>
+    <string name="devices_ago_now">just now</string>
+    <string name="devices_ago_minutes">%1$d min ago</string>
+    <string name="devices_ago_hours">%1$d h ago</string>
+    <string name="devices_ago_days">%1$d d ago</string>
+    <string name="devices_paused">Paused</string>
+    <string name="devices_empty_title">No agents yet</string>
+    <string name="devices_empty_body">Pair an agent to let an AI assistant on your computer use items you choose. It acts only while you allow it.</string>
+    <string name="devices_error_title">Could not load your devices</string>
+    <string name="devices_retry">Try again</string>
+    <string name="devices_ok">OK</string>
+    <string name="devices_removed">%1$s was removed</string>
+
+    <!-- A device's page. -->
+    <string name="devices_name_by_agent">Name given by the agent</string>
+    <string name="devices_name_by_desktop">Name given by the desktop</string>
+    <string name="devices_name_by_device">Name given by the device</string>
+    <string name="devices_about">About</string>
+    <string name="devices_role">Role</string>
+    <string name="devices_paired_on">Paired on</string>
+    <string name="devices_last_active_label">Last active</string>
+    <string name="devices_key">Key fingerprint</string>
+    <string name="devices_access">Access</string>
+    <string name="devices_no_access_agent">No access. When the agent needs access, it asks you in Approvals.</string>
+    <string name="devices_no_access_desktop">No access. When the desktop needs access, it asks you in Approvals.</string>
+    <string name="devices_agents_rule">Agents act only while you allow access, and only within the permissions you give them.</string>
+    <string name="devices_end_access">End access</string>
+    <string name="devices_access_ended">Access ended</string>
+    <string name="devices_history">History</string>
+    <string name="devices_remove">Remove</string>
+
+    <string name="devices_end_access_title">End access for %1$s?</string>
+    <string name="devices_end_access_body">It stops at once, and any of its requests still waiting for you are declined. It can ask for access again; you decide then.</string>
+    <string name="devices_end_failed_title">Access not ended</string>
+    <string name="devices_remove_failed_title">Not removed</string>
+    <string name="devices_end_failed">Access for %1$s could not be ended. Try again.</string>
+
+    <string name="devices_remove_title">Remove %1$s?</string>
+    <string name="devices_remove_agent_body">It loses access to your vault at once and cannot connect again. Its permissions and its share rules are deleted.</string>
+    <!-- Only while the agent has a permission: %1$s is the longest status lifetime of its permissions plus 1 minute. -->
+    <string name="devices_remove_agent_services">Services it showed a permission to may accept it for up to %1$s.</string>
+    <string name="devices_remove_agent_again">To use this agent again, pair it again.</string>
+    <string name="devices_remove_desktop_body">It loses access to your vault at once and cannot connect again. To use it again, pair it again.</string>
+    <string name="devices_remove_failed">%1$s could not be removed. Try again.</string>
+
+    <!-- Approved by the owner 2026-10-26 (ANDROID-PLAN 0.1.53 AA2, pairing an agent): every string below, to the end of
+         this file. Held for AA4, not yet strings: "Choose the items it may use: you decide per tag, and it never gets
+         critical items." with the buttons "Choose what it may use" and "Later". -->
+    <string name="devices_pair">Pair an agent</string>
+
+    <!-- Step 1: the code. -->
+    <string name="pair_title">Pair an agent</string>
+    <string name="pair_code_body">Copy this code to the computer where the agent runs. It works once and expires in 10 minutes.</string>
+    <!-- The QR's description for a screen reader, and the progress ring's. -->
+    <string name="pair_qr_cd">Pairing code as a QR code</string>
+    <string name="pair_creating">Making a pairing code</string>
+    <!-- The clip's label (the system hides the clip's text: it is marked sensitive). -->
+    <string name="pair_clip_label">Pairing code</string>
+    <string name="pair_copy">Copy</string>
+    <!-- The Copy button after it was pressed (as on an invitation). -->
+    <string name="pair_copied">Copied</string>
+    <string name="pair_share">Share</string>
+    <!-- The line over the share sheet; the code is the only content shared. -->
+    <string name="pair_share_title">Send it only to yourself.</string>
+    <string name="pair_expires_in">Expires in %1$s</string>
+    <string name="pair_expired">This code expired.</string>
+    <string name="pair_new_code">New code</string>
+    <string name="pair_cancel">Cancel</string>
+    <string name="pair_create_failed">A pairing code could not be made. Try again.</string>
+    <!-- After a failed request, and for the daily check ("Check now", as in History's export). -->
+    <string name="pair_try_again">Try again</string>
+    <string name="pair_check_now">Check now</string>
+
+    <!-- Step 2: compare. %1$s is the six digits in two groups of three ("123 456"). -->
+    <string name="pair_compare_title">Compare the code</string>
+    <string name="pair_compare_body">Does the agent show %1$s? Approve only if the codes match.</string>
+    <string name="pair_calls_itself">It calls itself %1$s.</string>
+    <string name="pair_calls_itself_note">The code proves this phone talks to the agent you just gave the code to. The name is only what the agent says about itself.</string>
+    <string name="pair_codes_match">The codes match</string>
+    <string name="pair_codes_differ">They don\'t match</string>
+    <!-- ("only Reject"): a pairing that is not an agent's, or whose code is not six digits. -->
+    <string name="pair_reject">Reject</string>
+    <string name="pair_cannot_compare">This phone can\'t show a code to compare for this pairing, so it can\'t be approved. Reject it.</string>
+    <string name="pair_rejected_title">Pairing rejected</string>
+    <string name="pair_rejected_body">The agent is told it was rejected. If you did not expect a code, someone else may have the pairing code; it no longer works.</string>
+    <!-- The rejection could not be sent to the vault: nothing is paired, and it ends by itself. -->
+    <string name="pair_rejected_unsent">Nothing is paired. Your vault could not be told, so the pairing ends by itself within 10 minutes. If you did not expect a code, someone else may have the pairing code.</string>
+    <string name="pair_done">Done</string>
+    <!-- The feed item after the phone lost the code (the process ended since). -->
+    <string name="pair_lost_title">A device asks to pair</string>
+    <string name="pair_lost_body">This pairing can\'t be checked on this phone any more. Let it expire: it ends by itself within 10 minutes and nothing is paired. If you want to pair, start again.</string>
+
+    <!-- Step 3: the sheet. -->
+    <string name="pair_allow_title">Allow access now?</string>
+    <string name="pair_allow_body">Agents act only while you allow access, and only within the permissions you give them.</string>
+    <string name="pair_session_none">No access yet</string>
+    <string name="pair_session_15m">15 minutes</string>
+    <string name="pair_session_1h">1 hour</string>
+    <string name="pair_session_4h">4 hours</string>
+    <string name="pair_session_8h">8 hours</string>
+    <string name="pair_session_24h">24 hours</string>
+    <string name="pair_confirm">Pair</string>
+    <!-- Any failed approval (no code is named for an ended pairing, decision 14c).  -->
+    <string name="pair_ended_title">Not paired</string>
+    <string name="pair_ended">This pairing has ended. Start again from Devices &amp; agents.</string>
+    <!-- When the vault did not answer the approval: it may have taken it, so nothing is asserted.
+         %1$s is the name the agent gave itself. -->
+    <string name="pair_unconfirmed_title">Pairing not confirmed</string>
+    <string name="pair_unconfirmed_body">Your vault did not answer. If %1$s is listed in Devices &amp; agents, it was paired; if not, start again.</string>
+
+    <!-- Step 4: paired. %1$s is the name the agent gave itself. -->
+    <string name="pair_paired_title">%1$s is paired</string>
+    <!-- The plan's text goes on: "Choose the items it may use: you decide per tag, and it never gets critical items." with
+         the buttons "Choose what it may use" and "Later", when the share-rule editor (AA4) exists. -->
+    <string name="pair_paired_body">It can\'t use any of your items yet.</string>
+    <!-- Only when the new agent\'s id is known. -->
+    <string name="pair_open_page">Open its page</string>
+    <!-- Said once a minute to a screen reader while the code counts down. -->
+    <plurals name="pair_minutes_left">
+        <item quantity="one">%1$d minute left</item>
+        <item quantity="other">%1$d minutes left</item>
+    </plurals>
+</resources>

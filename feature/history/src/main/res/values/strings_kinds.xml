@@ -25,8 +25,8 @@
     <string name="history_signer_refused_unpinned">This vault release does not accept its signer</string>
     <string name="history_signer_refused_unbound">No signer was recorded for it</string>
     <string name="history_detail_signer">Version of VettID</string>
-    <string name="history_kind_device_session_granted">Desktop session granted</string>
-    <string name="history_kind_device_session_ended">Desktop session ended</string>
+    <string name="history_kind_device_session_granted">Access allowed</string>
+    <string name="history_kind_device_session_ended">Access ended</string>
     <string name="history_kind_approval_granted">Request approved</string>
     <string name="history_kind_approval_denied">Request denied</string>
     <string name="history_kind_connection_added">Connection added</string>

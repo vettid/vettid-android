@@ -1,8 +1,6 @@
 package com.vettid.app.env
 
 import com.vettid.core.altchan.AltTrust
-import com.vettid.core.altchan.Attester
-import com.vettid.core.altchan.KeystoreAttester
 import com.vettid.core.data.Endpoints
 import com.vettid.core.data.env.AppEnvironment
 import okhttp3.OkHttpClient
@@ -20,6 +18,4 @@ object ProductionEnvironment : AppEnvironment {
     override fun http(base: OkHttpClient): OkHttpClient = base
 
     override suspend fun trust(http: OkHttpClient): AltTrust = AltTrust.production()
-
-    override fun attester(): Attester = KeystoreAttester()
 }
