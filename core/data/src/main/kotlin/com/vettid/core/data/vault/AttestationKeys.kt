@@ -100,15 +100,23 @@ internal class AttestationKeys(
      * it under the alias given. A listed key is never replaced: with every alias of the slot listed, nothing is made.
      */
     @Synchronized
+    @Suppress("TooGenericExceptionCaught") // whatever the generation threw, it is thrown on unchanged
     fun <T> attest(slot: Int, recoveryId: String?, generate: (alias: String) -> T): T {
         migrate()
-        // A listed key that is not in the Keystore (deleted, or its generation failed) holds nothing: its alias is free.
-        val list = load(slot).filter { keys.exists(it.alias) }
+        // Only an alias no entry lists is free: the Keystore's `exists` can answer false on an internal error, so a listed key
+        // is never taken as gone here (generating under an alias deletes what it holds).
+        val list = load(slot)
         val used = list.map { it.alias }.toSet()
         val alias = (0 until AndroidKeys.DEVICE_ATTESTATION_KEYS_PER_SLOT).map { AndroidKeys.deviceAttestationAlias(slot, it) }
             .firstOrNull { it !in used } ?: throw VaultFailure(FailureKind.LOCAL_STATE, CODE_KEYS_FULL)
         save(slot, list + Entry(alias, recoveryId, nowMs()))
-        return generate(alias)
+        return try {
+            generate(alias)
+        } catch (e: Exception) {
+            // Nothing was made under it: only the new entry goes (fail secure for every other key).
+            save(slot, load(slot).filter { it.alias != alias })
+            throw e
+        }
     }
 
     /**
@@ -331,7 +339,15 @@ internal class SlotAttester(
         }
     }
 
-    override fun chain(): List<ByteArray>? = signer()?.let { keyOf(it).chain() }
+    /** The key's chain; one that cannot be read throws [KeySignFailure], so that an unlock goes on with the next key. */
+    @Suppress("TooGenericExceptionCaught") // any Keystore failure of one key: the next key is tried
+    override fun chain(): List<ByteArray>? = signer()?.let { alias ->
+        try {
+            keyOf(alias).chain()
+        } catch (e: Exception) {
+            throw KeySignFailure(e)
+        }
+    }
 
     private fun signer(): String? = signWith ?: ring.current(slot)?.alias
 }
@@ -360,6 +376,12 @@ internal class RegisterKeys {
         posts.lastOrNull()?.accepted = true
     }
 
+    /** The last POST never left the phone (a connection that was never made, [neverSent]): nothing was forwarded. */
+    fun unsent() {
+        val last = posts.lastOrNull() ?: return
+        if (!last.accepted) last.notForwarded = true
+    }
+
     /** The member API answered the last POST with [status] and [code] (an error, no `202`). */
     fun answered(status: Int?, code: String?) {
         val last = posts.lastOrNull() ?: return
@@ -379,6 +401,14 @@ internal class RegisterKeys {
         posts.filterIndexed { i, p -> (p.notForwarded && !p.accepted) || (lastRefused && i == posts.lastIndex) }.mapNotNull { it.alias }
 
     companion object {
+        /**
+         * A failure that proves the POST never left: no address, a refused or unroutable connection, with no earlier attempt
+         * behind it (OkHttp records the routes it tried before as suppressed exceptions).
+         */
+        fun neverSent(e: java.io.IOException): Boolean =
+            (e is java.net.UnknownHostException || e is java.net.ConnectException || e is java.net.NoRouteToHostException) &&
+                e.suppressed.isEmpty()
+
         private const val HTTP_UNAUTHORIZED = 401
         private const val HTTP_TOO_MANY = 429
         private const val HTTP_UNAVAILABLE = 503

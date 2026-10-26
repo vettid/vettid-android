@@ -497,7 +497,7 @@ class VaultManager(
              * After the claim, however the code was read: the sealed `vault.recovery.register` (§11.11.3). Here, in the
              * enrolments' object, so that the reset to the claimed vault's record is reached only through [enrolments]' check.
              */
-            @Suppress("ReturnCount")
+            @Suppress("ReturnCount", "ThrowsCount") // one per answer of the register
             private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
                 val s = session()
                 gateway.memberChanged(claimed.userGuid)
@@ -513,6 +513,8 @@ class VaultManager(
                         build = { e -> buildRegister(s, code, e, rec, posts) },
                         open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
                         onPosted = { posts.accepted() },
+                        // A connection that was never made: that POST never left (its key is settled below).
+                        postFailed = { e -> if (RegisterKeys.neverSent(e)) posts.unsent() },
                     )
                 } catch (e: VaultFailure) {
                     // Every attestation key of this identity is listed: nothing was made or sent (fail secure).
@@ -529,6 +531,10 @@ class VaultManager(
                     }
                     if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
                     null
+                } catch (e: IOException) {
+                    // Only the keys of POSTs that never left go (postFailed); the failure is thrown on as before.
+                    forgetUnregistered(slot, posts, lastRefused = false)
+                    throw e
                 }
                 return when {
                     r == null -> {

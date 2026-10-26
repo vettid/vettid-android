@@ -27,7 +27,10 @@ class AttestationKeysTest {
         /** Keys that are listed and present but cannot sign (a Keystore fault). */
         val broken = mutableSetOf<String>()
 
-        override fun exists(alias: String) = alias in keys
+        /** Aliases whose next `exists` answers false (keystore2's containsAlias on an internal error). */
+        val flakyOnce = mutableSetOf<String>()
+
+        override fun exists(alias: String) = if (flakyOnce.remove(alias)) false else alias in keys
 
         override fun delete(alias: String) {
             if (alias in failing) throw KeyStoreException("busy")
@@ -57,6 +60,11 @@ class AttestationKeysTest {
             check(alias !in ks.broken) { "keystore fault" }
             signed += alias
             return DeviceAssertion.android(alias.toByteArray())
+        }
+
+        override fun chain(): List<ByteArray>? {
+            check(alias !in ks.broken) { "keystore fault" }
+            return listOf(alias.toByteArray())
         }
     }
 
@@ -566,5 +574,76 @@ class AttestationKeysTest {
         }
         assertTrue(AndroidKeys.ALIAS_DEVICE_ATTESTATION in com.vettid.core.data.wipe.LocalWipe.KNOWN_ALIASES)
         assertEquals("vettid.device_attestation.v1.slot1.63", slotAlias(1, 63))
+    }
+
+    @Test
+    fun aTransientExistsFalseNeverFreesAListedAlias() {
+        val p = Phone()
+        val a0 = p.attester(0, "R1").also { it.attest(ByteArray(32)) }.made!!
+        p.ks.flakyOnce += a0
+        val a1 = p.attester(0, "R2").also { it.attest(ByteArray(32)) }.made!!
+        assertEquals(slotAlias(0, 1), a1)
+        assertTrue(a0 in p.ks.keys)
+        // A later read that answers false skips it for that try only; it stays listed.
+        assertEquals(listOf(a1), p.ring.candidates(0).map { it.alias })
+        assertEquals(listOf(a1, a0), p.ring.candidates(0).map { it.alias })
+    }
+
+    @Test
+    fun aGenerationThatFailsRemovesOnlyItsOwnEntry() {
+        val p = Phone()
+        val a0 = p.attester(0, "R1").also { it.attest(ByteArray(32)) }.made!!
+        assertThrows(IllegalStateException::class.java) { p.ring.attest(0, "R2") { error("keystore fault") } }
+        assertEquals(listOf(a0), p.ring.candidates(0).map { it.alias })
+        assertTrue(a0 in p.ks.keys)
+        // The alias is free again.
+        assertEquals(slotAlias(0, 1), p.attester(0, "R2").also { it.attest(ByteArray(32)) }.made)
+    }
+
+    @Test
+    fun aKeyWhoseChainCannotBeReadIsSkipped() = runTest {
+        val p = Phone()
+        val good = p.attester(0).also { it.attest(ByteArray(32)) }.made!!
+        val bad = p.attester(0).also { it.attest(ByteArray(32)) }.made!!
+        p.ks.broken += bad
+        val vault = Vault().apply { held = good }
+        val r = p.ring.tryKeys(
+            0,
+            attempt = { alias ->
+                val a = p.attester(0, signWith = alias)
+                a.chain()
+                a.assert(ByteArray(32))
+                vault.answer(p.signed.last())
+            },
+            code = { it },
+            ok = { it == "ok" },
+        )
+        assertEquals("ok", r)
+        assertEquals(listOf<String?>(good), vault.asked)
+    }
+
+    @Test
+    fun aConnectionNeverMadeSettlesItsPost() {
+        val p = Phone()
+        assertTrue(RegisterKeys.neverSent(java.net.UnknownHostException("x")))
+        assertTrue(RegisterKeys.neverSent(java.net.ConnectException("x")))
+        assertTrue(RegisterKeys.neverSent(java.net.NoRouteToHostException("x")))
+        // An earlier route was tried (OkHttp's suppressed failures), a timeout, a reset: it may have left.
+        assertFalse(RegisterKeys.neverSent(java.net.ConnectException("x").apply { addSuppressed(java.io.IOException("first route")) }))
+        assertFalse(RegisterKeys.neverSent(java.net.SocketTimeoutException("x")))
+        assertFalse(RegisterKeys.neverSent(java.io.IOException("reset")))
+        val posts = RegisterKeys()
+        val k1 = p.buildRegister(0, "R", posts)
+        posts.accepted()
+        val k2 = p.buildRegister(0, "R", posts)
+        posts.unsent()
+        assertEquals(listOf(k2), posts.notRegistered(lastRefused = false))
+        // After its 202 a POST is never taken as unsent.
+        val q = RegisterKeys()
+        p.buildRegister(0, "R", q)
+        q.accepted()
+        q.unsent()
+        assertTrue(q.notRegistered(lastRefused = false).isEmpty())
+        assertFalse(k1 in posts.notRegistered(lastRefused = false))
     }
 }
