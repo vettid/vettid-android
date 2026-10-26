@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- DRAFT texts for the owner's approval (ANDROID-PLAN 0.1.53 "Devices & agents", AA1): every string of this file. -->
+    <!-- ANDROID-PLAN 0.1.53 "Devices & agents", AA1: every string of this file. Approved by the owner 2026-10-26. -->
     <string name="devices_title">Devices &amp; agents</string>
     <string name="devices_this_phone">This phone</string>
     <string name="devices_role_agent">Agent</string>
