@@ -263,7 +263,10 @@ internal object Rules {
         /** Nothing reached the vault: N and the earlier identity are restored, the same N, K and code may try again. */
         DROP_AND_RETRY,
 
-        /** A first POST was answered `recovery_not_available` / a readable refusal: N unregistered, the refusal is shown. */
+        /**
+         * A first POST was answered `recovery_not_available` / a readable refusal: the earlier identity is in use again, N is
+         * kept and the same N, K and code may try again; the refusal is shown.
+         */
         DROP_REFUSED,
 
         /** `401` on the first POST of an N never registered: N's registration and identity are dropped. */
@@ -295,7 +298,8 @@ internal object Rules {
             // K became a key in use: nothing recorded, but an N that was (or may have been) registered loses nothing.
             "unauthorized" ->
                 if (beforeNewRegistered || postedEarlierInFlow) RegisterOutcome.MAYBE_REGISTERED else RegisterOutcome.DROP_UNAUTHORIZED
-            "recovery_unavailable" -> if (repeat) RegisterOutcome.KEEP_UNKNOWN else RegisterOutcome.DROP_REFUSED
+            // No 202 and not a 401: N stays unknown, whatever the POST (fail secure).
+            "recovery_unavailable" -> RegisterOutcome.KEEP_UNKNOWN
             "recovery_not_available" -> if (repeat) RegisterOutcome.MAYBE_REGISTERED else RegisterOutcome.DROP_REFUSED
             else ->
                 if (registerFailedBeforeVault(repeat, false, status, code)) RegisterOutcome.DROP_AND_RETRY else RegisterOutcome.KEEP_UNKNOWN

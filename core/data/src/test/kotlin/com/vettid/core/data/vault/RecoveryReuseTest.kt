@@ -158,15 +158,18 @@ class RecoveryReuseTest {
         assertEquals(Rules.RegisterOutcome.DROP_REFUSED, Rules.registerRefusal(false, false, "bad_code"))
         assertEquals(Rules.RegisterOutcome.DROP_REFUSED, Rules.registerRefusal(false, false, null))
         assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.registerRefusal(true, false, "used"))
+        // A readable refusal to the first POST of a LATER flow, N registered for this very code before: not settled
+        // (the caller passes earlierAccepted || priorRegistration).
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.registerRefusal(true, true, "bad_code"))
         // (e) instance_moved (a POST built, no 202) then a 503: the repeat keeps N unknown.
         assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(postedEarlier = true, status = 503, code = "release_starting"))
         // (f) a first POST answered 503: before the vault.
         assertEquals(Rules.RegisterOutcome.DROP_AND_RETRY, failure(status = 503, code = "release_starting"))
         assertEquals(Rules.RegisterOutcome.DROP_AND_RETRY, failure()) // no network before the POST
-        // (g) recovery_unavailable on a repeat (or after a 202): N is kept; on a first POST it is refused.
+        // (g) recovery_unavailable on any POST without a 202: N is kept (fail secure).
         assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(tried = true, status = 409, code = "recovery_unavailable"))
         assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(accepted = true, status = 409, code = "recovery_unavailable"))
-        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, failure(status = 409, code = "recovery_unavailable"))
+        assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(status = 409, code = "recovery_unavailable"))
         // A 409 recovery_not_available: before the vault on a first POST, maybe registered on a repeat.
         assertEquals(Rules.RegisterOutcome.DROP_REFUSED, failure(status = 409, code = "recovery_not_available"))
         assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(postedEarlier = true, status = 409, code = "recovery_not_available"))

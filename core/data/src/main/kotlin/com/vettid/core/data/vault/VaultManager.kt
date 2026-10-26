@@ -3469,7 +3469,9 @@ class VaultManager(
         }
         // A readable refusal settles its own POST only: after an earlier `202`, or a `used` to a repeat, N may be registered.
         val repeat = Rules.isRepeatPost(triedBefore, postedEarlier)
-        if (Rules.registerRefusal(repeat, earlierAccepted, res?.code) == Rules.RegisterOutcome.MAYBE_REGISTERED) {
+        // An earlier flow's POST for this code left N registered or maybe registered (memory-only [earlierAccepted] is gone).
+        val priorRegistration = triedBefore && before.newRegistered && before.newRecoveryId == code.recoveryId
+        if (Rules.registerRefusal(repeat, earlierAccepted || priorRegistration, res?.code) == Rules.RegisterOutcome.MAYBE_REGISTERED) {
             return maybeRegistered(s, code)
         }
         s.device.dropRecoveryRegistration()
