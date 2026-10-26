@@ -68,6 +68,9 @@ internal object Ledger {
         "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet",
         // Emitted by the vault after the resume branch and before beginReplace (recovery_open.go): no step 1 stored.
         "exhausted", "not_armed",
+        // Decided at step 1 (the assertion is not the registered attestation's key), before anything is written
+        // (VAULT-MESSAGING 0.63.1 §11.14.6, owner decision 2026-10-26).
+        "attestation",
     )
 
     /** Prove it only when no earlier open stands. */
@@ -239,13 +242,81 @@ internal object Rules {
 
     /**
      * Whether a failed register left N unregistered: it did not reach the vault (the release starting or the vault
-     * unavailable, a rate limit, `recovery_not_available`, no network; [status] null) AND it was the FIRST attempt for this code.
-     * A repeat for the same code ([repeatForSameCode]) may have been the second copy of a register that went through: the member
-     * API answers `409` to any repeat once the first was recorded.
+     * unavailable, a rate limit, `recovery_not_available`, no network before the POST; [status] null) AND this POST was the
+     * FIRST for this code AND no `202` came for it ([accepted]: after a `202` any failure, a failed poll too, is "maybe
+     * registered"). A repeat for the same code ([repeatForSameCode], decided per POST) may have been the second copy of a
+     * register that went through: the member API answers `409` to any repeat once the first was recorded.
      */
-    fun registerFailedBeforeVault(repeatForSameCode: Boolean, status: Int?, code: String?): Boolean =
-        !repeatForSameCode &&
+    fun registerFailedBeforeVault(repeatForSameCode: Boolean, accepted: Boolean, status: Int?, code: String?): Boolean =
+        !repeatForSameCode && !accepted &&
             (status == null || status == HTTP_TOO_MANY || status == HTTP_UNAVAILABLE || code == "recovery_not_available")
+
+    /**
+     * Whether the POST about to be sent is a repeat for its code, decided per POST: an earlier register flow tried this code
+     * ([triedBefore]), or ANY earlier POST was built in this flow ([postedEarlierInFlow]: an `expired` slot, or a
+     * `409 instance_moved`, posts again).
+     */
+    fun isRepeatPost(triedBefore: Boolean, postedEarlierInFlow: Boolean): Boolean = triedBefore || postedEarlierInFlow
+
+    /** What a failed register does with N (VAULT-MESSAGING §11.14.6 "A phone that could not tell"). */
+    enum class RegisterOutcome {
+        /** Keep N's state; status signed with K decides. */
+        MAYBE_REGISTERED,
+
+        /** Nothing reached the vault: N and the earlier identity are restored, the same N, K and code may try again. */
+        DROP_AND_RETRY,
+
+        /**
+         * A first POST was answered `recovery_not_available` / a readable refusal: the earlier identity is in use again, N is
+         * kept and the same N, K and code may try again; the refusal is shown.
+         */
+        DROP_REFUSED,
+
+        /** `401` on the first POST of an N never registered: N's registration and identity are dropped. */
+        DROP_UNAUTHORIZED,
+
+        /** Fail secure: N stays unknown, nothing dropped, the failure is shown (thrown or refused). */
+        KEEP_UNKNOWN,
+    }
+
+    /**
+     * The outcome of a register POST that failed with [status] (null: no answer, an IOException) and [code]. [triedBefore]: an
+     * earlier flow tried this code; [postedEarlierInFlow]: an earlier POST was built in this flow; [acceptedThisPost]: this
+     * POST got its `202` (any failure after it is maybe registered); [earlierAccepted]: an earlier POST of this flow got
+     * its `202` (this POST's answer settles only itself); [beforeNewRegistered]: N was registered before this flow.
+     */
+    @Suppress("LongParameterList", "ReturnCount")
+    fun registerFailure(
+        triedBefore: Boolean,
+        postedEarlierInFlow: Boolean,
+        acceptedThisPost: Boolean,
+        earlierAccepted: Boolean,
+        beforeNewRegistered: Boolean,
+        status: Int?,
+        code: String?,
+    ): RegisterOutcome {
+        if (acceptedThisPost || earlierAccepted) return RegisterOutcome.MAYBE_REGISTERED
+        val repeat = isRepeatPost(triedBefore, postedEarlierInFlow)
+        return when (code) {
+            // K became a key in use: nothing recorded, but an N that was (or may have been) registered loses nothing.
+            "unauthorized" ->
+                if (beforeNewRegistered || postedEarlierInFlow) RegisterOutcome.MAYBE_REGISTERED else RegisterOutcome.DROP_UNAUTHORIZED
+            // No 202 and not a 401: N stays unknown, whatever the POST (fail secure).
+            "recovery_unavailable" -> RegisterOutcome.KEEP_UNKNOWN
+            "recovery_not_available" -> if (repeat) RegisterOutcome.MAYBE_REGISTERED else RegisterOutcome.DROP_REFUSED
+            else ->
+                if (registerFailedBeforeVault(repeat, false, status, code)) RegisterOutcome.DROP_AND_RETRY else RegisterOutcome.KEEP_UNKNOWN
+        }
+    }
+
+    /**
+     * The outcome of a register POST that was answered (sealed, readable) not-ok with [readableCode] (null: unreadable).
+     * A refusal settles only its own POST: after an earlier `202` in the flow ([earlierAccepted]) N may still be registered.
+     */
+    fun registerRefusal(repeatForSameCode: Boolean, earlierAccepted: Boolean, readableCode: String?): RegisterOutcome = when {
+        earlierAccepted || maybeRegistered(repeatForSameCode, readableCode) -> RegisterOutcome.MAYBE_REGISTERED
+        else -> RegisterOutcome.DROP_REFUSED
+    }
 
     /** A repeat for the same code answered `recovery_not_available`, or a readable `used`: maybe registered, not refused. */
     fun maybeRegistered(repeatForSameCode: Boolean, code: String?): Boolean =
