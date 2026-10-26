@@ -120,15 +120,59 @@ class RecoveryReuseTest {
     @Test
     fun aRepostInTheSameFlowAfterAnExpiredSlotIsARepeat() {
         // The first POST of a first flow is not a repeat; the re-post after its 202 and an expired slot is.
-        assertFalse(Rules.isRepeatPost(triedBefore = false, acceptedEarlierInFlow = false))
-        val repeat = Rules.isRepeatPost(triedBefore = false, acceptedEarlierInFlow = true)
+        assertFalse(Rules.isRepeatPost(triedBefore = false, postedEarlierInFlow = false))
+        val repeat = Rules.isRepeatPost(triedBefore = false, postedEarlierInFlow = true)
         assertTrue(repeat)
         // Answered 409 recovery_not_available or used: maybe registered (status signed with K), never before the vault.
         assertTrue(Rules.maybeRegistered(repeat, "recovery_not_available"))
         assertTrue(Rules.maybeRegistered(repeat, "used"))
         assertFalse(Rules.registerFailedBeforeVault(repeat, false, 409, "recovery_not_available"))
         // An earlier flow's POST for the same code makes the first POST of this flow a repeat too.
-        assertTrue(Rules.isRepeatPost(triedBefore = true, acceptedEarlierInFlow = false))
+        assertTrue(Rules.isRepeatPost(triedBefore = true, postedEarlierInFlow = false))
+    }
+
+    private fun failure(
+        tried: Boolean = false,
+        postedEarlier: Boolean = false,
+        accepted: Boolean = false,
+        earlierAccepted: Boolean = false,
+        beforeNew: Boolean = false,
+        status: Int? = null,
+        code: String? = null,
+    ) = Rules.registerFailure(tried, postedEarlier, accepted, earlierAccepted, beforeNew, status, code)
+
+    @Test
+    fun theOutcomeOfAFailedRegisterMatrix() {
+        // (a) 401 on a re-post after an earlier 202 (the 202 stays remembered): maybe registered, nothing dropped.
+        assertEquals(
+            Rules.RegisterOutcome.MAYBE_REGISTERED,
+            failure(postedEarlier = true, earlierAccepted = true, status = 401, code = "unauthorized"),
+        )
+        // (b) 401 with N registered before this flow: nothing dropped.
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(beforeNew = true, status = 401, code = "unauthorized"))
+        // ... and only the first POST of an N never registered drops it.
+        assertEquals(Rules.RegisterOutcome.DROP_UNAUTHORIZED, failure(status = 401, code = "unauthorized"))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(postedEarlier = true, status = 401, code = "unauthorized"))
+        // (c) a sealed bad_code to POST 2 after POST 1's 202; (d) to the only POST after its 202: settled.
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.registerRefusal(true, true, "bad_code"))
+        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, Rules.registerRefusal(false, false, "bad_code"))
+        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, Rules.registerRefusal(false, false, null))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, Rules.registerRefusal(true, false, "used"))
+        // (e) instance_moved (a POST built, no 202) then a 503: the repeat keeps N unknown.
+        assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(postedEarlier = true, status = 503, code = "release_starting"))
+        // (f) a first POST answered 503: before the vault.
+        assertEquals(Rules.RegisterOutcome.DROP_AND_RETRY, failure(status = 503, code = "release_starting"))
+        assertEquals(Rules.RegisterOutcome.DROP_AND_RETRY, failure()) // no network before the POST
+        // (g) recovery_unavailable on a repeat (or after a 202): N is kept; on a first POST it is refused.
+        assertEquals(Rules.RegisterOutcome.KEEP_UNKNOWN, failure(tried = true, status = 409, code = "recovery_unavailable"))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(accepted = true, status = 409, code = "recovery_unavailable"))
+        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, failure(status = 409, code = "recovery_unavailable"))
+        // A 409 recovery_not_available: before the vault on a first POST, maybe registered on a repeat.
+        assertEquals(Rules.RegisterOutcome.DROP_REFUSED, failure(status = 409, code = "recovery_not_available"))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(postedEarlier = true, status = 409, code = "recovery_not_available"))
+        // After this POST's own 202 every failure is maybe registered, a poll failure included.
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(accepted = true))
+        assertEquals(Rules.RegisterOutcome.MAYBE_REGISTERED, failure(accepted = true, status = 503, code = "vault_unavailable"))
     }
 
     @Test

@@ -44,6 +44,8 @@ class MemberApiTest {
     private var recoveryResult = """{"ok":true}"""
     private var slotCode: String? = null
     private var expireFirstRegister = false
+    private var unauthorizedSecondRegister = false
+    private var registerPosts = 0
     private val kem = KemPrivateKey.generate()
 
     private fun resp(
@@ -110,6 +112,7 @@ class MemberApiTest {
                 val o = StrictJson.parseObject(r.body!!.toByteArray())
                 val rid = o.string("request_id")
                 assertEquals(rid, e.open(Base64s.decodeStd(o.string("envelope"))).id)
+                if (unauthorizedSecondRegister && ++registerPosts == 2) return resp(401, """{"error":"unauthorized","code":"unauthorized"}""")
                 val sealed = Base64s.encodeStd(TestSupport.sealResult(kem.publicKey, AltResults.TYPE_RECOVERY_RESULT, rid, recoveryResult))
                 if (expireFirstRegister) expireFirstRegister = false else slots[rid] = """{"status":"done","envelope":"$sealed"${slotCode?.let { ",\"code\":\"$it\"" } ?: ""}}"""
                 resp(202, """{"vault_id":"0123456789abcdef0123456789abcdef","request_id":"$rid"}""")
@@ -435,6 +438,31 @@ class MemberApiTest {
         assertEquals(RecoveryResult(true, null), r)
         assertEquals(listOf("build", "posted", "build", "posted"), events)
         assertEquals(2, log.count { it == "POST /api/vault/recovery/register" })
+    }
+
+    /** 202, an `expired` slot, then `401` on the re-post: the first POST's `202` was reported before the `401`. */
+    @Test
+    fun aRepostAnswered401AfterAnEarlier202IsReportedAfterThatPost() = runBlocking<Unit> {
+        expireFirstRegister = true
+        unauthorizedSecondRegister = true
+        val code = RecoveryCode("0123456789abcdef0123456789abcdef", Ulid.new(), "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0")
+        val app = Party().app
+        val events = mutableListOf<String>()
+        val e = assertThrows(MemberApiException::class.java) {
+            runBlocking {
+                flow().recoveryRegister(
+                    code.vaultId,
+                    build = { en ->
+                        events += "build"
+                        AltRequests.buildRecoveryRegister("guid-1", code, en, TestSupport.SoftAttester(), app, Instant.now())
+                    },
+                    open = { _, _ -> error("opened a result") },
+                    onPosted = { events += "posted" },
+                )
+            }
+        }
+        assertEquals(MemberApiException.UNAUTHORIZED, e.code)
+        assertEquals(listOf("build", "posted", "build"), events)
     }
 
     @Test
