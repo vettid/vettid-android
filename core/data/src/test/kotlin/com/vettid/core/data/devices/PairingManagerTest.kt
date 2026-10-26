@@ -11,8 +11,6 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -39,6 +37,7 @@ class PairingManagerTest {
         var created = obj("""{"pairing_id":"p1","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
         val calls = mutableListOf<String>()
         val refuse = mutableMapOf<String, String>()
+        var onApprove: () -> Unit = {}
 
         override suspend fun create(): JsonObject {
             calls += "create"
@@ -48,6 +47,7 @@ class PairingManagerTest {
 
         override suspend fun approve(pairingId: String, sessionSeconds: Int?) {
             calls += "approve:$pairingId:$sessionSeconds"
+            onApprove()
             refuse["approve"]?.let { throw VaultOpException("device.pair.approve", it) }
         }
 
@@ -226,24 +226,12 @@ class PairingManagerTest {
     @Test
     fun theNewAgentsIdComesFromTheFeedItem() = runTest {
         val ops = Ops()
-        val m = PairingManager(
-            this,
-            ops = { ops },
-            now = { clock },
-            knownDeviceIds = { setOf("me") },
-            // The feed item arrives while the phone reads the list for the baseline.
-            readDevices = { emptyList() },
-        )
+        val m = manager(ops)
+        // The vault's feed item for the new agent arrives while the approval is being answered.
+        ops.onApprove = { m.onEvent(paidFeed("agent-9")) }
         m.start()
         m.onEvent(pending())
-        val approving = launch { m.approve(3600) }
-        // The approval is answered, then the feed item arrives within the wait.
-        while (m.state.value.stage !is PairingStage.Paired) {
-            delay(1)
-            Thread.sleep(1)
-            if (m.state.value.busy) m.onEvent(paidFeed("agent-9"))
-        }
-        approving.join()
+        m.approve(3600)
         assertEquals("agent-9", (m.state.value.stage as PairingStage.Paired).deviceId)
     }
 
