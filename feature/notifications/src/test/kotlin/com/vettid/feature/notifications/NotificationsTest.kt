@@ -84,6 +84,12 @@ class NotificationsTest {
         )
         assertEquals(null, FeedKinds.supporting(item("device.signer_changed", c = null, ref = "vettid"), names))
         assertEquals(FeedTarget.Devices, FeedKinds.target(changed))
+        // ANDROID-PLAN 0.1.53 AA1: the pairing, the device and the list are in Devices & agents; a transfer stays in Settings.
+        assertEquals(FeedTarget.Device("d1"), FeedKinds.target(item("device.paired", c = null).copy(deviceId = "d1")))
+        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item("device.paired", c = null)))
+        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item("device.unlinked", c = null)))
+        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item("device.pair.pending", c = null)))
+        assertEquals(FeedTarget.Devices, FeedKinds.target(item("device.transferred", c = null)))
         assertEquals(FeedTarget.ApprovalEntry("grant:g1"), FeedKinds.target(item("grant.request", ref = "g1")))
         assertEquals(FeedTarget.Conversation("c1"), FeedKinds.target(item("message.received")))
         assertEquals(FeedTarget.ShareRule("c1", "r1"), FeedKinds.target(item("share.rate_limited")))

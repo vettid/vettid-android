@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DRAFT texts for the owner's approval (ANDROID-PLAN 0.1.53 "Devices & agents", AA1): every string of this file. -->
+    <string name="devices_title">Devices &amp; agents</string>
+    <string name="devices_this_phone">This phone</string>
+    <string name="devices_role_agent">Agent</string>
+    <string name="devices_role_desktop">Desktop</string>
+    <!-- A kind the vault names that this app does not know is shown as it is; this is for one with no text at all. -->
+    <string name="devices_role_unknown">Device</string>
+    <!-- A device that gave no name: "Unnamed agent" / "Unnamed desktop". -->
+    <string name="devices_unnamed">Unnamed %1$s</string>
+    <string name="devices_access_until">Access until %1$s</string>
+    <string name="devices_no_access">No access</string>
+    <string name="devices_last_active">Last active %1$s</string>
+    <string name="devices_not_active_yet">Not active yet</string>
+    <string name="devices_ago_now">just now</string>
+    <string name="devices_ago_minutes">%1$d min ago</string>
+    <string name="devices_ago_hours">%1$d h ago</string>
+    <string name="devices_ago_days">%1$d d ago</string>
+    <string name="devices_paused">Paused</string>
+    <string name="devices_empty_title">No agents yet</string>
+    <string name="devices_empty_body">Pair an agent to let an AI assistant on your computer use items you choose. It acts only while you allow it.</string>
+    <string name="devices_error_title">Could not load your devices</string>
+    <string name="devices_retry">Try again</string>
+    <string name="devices_ok">OK</string>
+    <string name="devices_removed">%1$s was removed</string>
+    <string name="devices_removed_unnamed">The device was removed</string>
+
+    <!-- A device's page. -->
+    <string name="devices_name_by_agent">Name given by the agent</string>
+    <string name="devices_name_by_desktop">Name given by the desktop</string>
+    <string name="devices_name_by_device">Name given by the device</string>
+    <string name="devices_about">About</string>
+    <string name="devices_role">Role</string>
+    <string name="devices_paired_on">Paired on</string>
+    <string name="devices_last_active_label">Last active</string>
+    <string name="devices_key">Key fingerprint</string>
+    <string name="devices_access">Access</string>
+    <string name="devices_no_access_agent">No access. When the agent needs access, it asks you in Approvals.</string>
+    <string name="devices_no_access_desktop">No access. When the desktop needs access, it asks you in Approvals.</string>
+    <string name="devices_agents_rule">Agents act only while you allow access, and only within the permissions you give them.</string>
+    <string name="devices_end_access">End access</string>
+    <string name="devices_access_ended">Access ended</string>
+    <string name="devices_history">History</string>
+    <string name="devices_remove">Remove</string>
+
+    <string name="devices_end_access_title">End access for %1$s?</string>
+    <string name="devices_end_access_body">It stops at once, and any of its requests still waiting for you are declined. It can ask for access again; you decide then.</string>
+    <string name="devices_end_failed">Access for %1$s could not be ended. Try again.</string>
+
+    <string name="devices_remove_title">Remove %1$s?</string>
+    <string name="devices_remove_agent_body">It loses access to your vault at once and cannot connect again. Its permissions and its share rules are deleted.</string>
+    <!-- Only while the agent has a permission: %1$s is the longest status lifetime of its permissions plus 1 minute. -->
+    <string name="devices_remove_agent_services">Services it showed a permission to may accept it for up to %1$s.</string>
+    <string name="devices_remove_agent_again">To use this agent again, pair it again.</string>
+    <string name="devices_remove_desktop_body">It loses access to your vault at once and cannot connect again. To use it again, pair it again.</string>
+    <string name="devices_remove_failed">%1$s could not be removed. Try again.</string>
+</resources>

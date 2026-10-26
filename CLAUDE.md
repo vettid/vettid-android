@@ -147,6 +147,17 @@ The A2 exit test:
   tests, which need a build the staging vaults accept). `VaultManager.onBeforeLock`: a live call's hang-up reaches
   the vault before the lock (2 s at most). `CallSignalling` and `CallMachine` are internal to `:core:calls`.
 
+- Devices & agents (ANDROID-PLAN 0.1.53 "Devices & agents", step AA1 of AA1-AA5; `:feature:devices`, `DevicesManager` /
+  `DevicesRepository` in `:core:data` `devices/`, `VaultManager.devices`): the drawer destination after Vault, the list
+  (`device.list`, `leash.grant.list` for the paused agents; memory only, cleared with the feed at lock and at the hold,
+  `PhaseSteps.DEVICES`; re-read on `sync.event` `device.paired|unlinked|session`, `leash.agent.suspended`), a device's
+  page, **End access** (`device.session.end`) and **Remove** (`device.unlink`), both confirmed, neither signing anything
+  (no unlock window, no password). This phone's entry has no actions and nothing is sent for it. Ending access or removing
+  takes the device's entries out of Approvals (`ApprovalsRepository.dropDeviceRequests`). The remove text names the
+  longest `status_ttl` of the agent's grants plus 60 s, the worst case (3,660 s) when the vault cannot be asked. A device's
+  name is its own, self-asserted and never edited. Pairing (AA2), permissions (AA3), share rules (AA4) and Approvals for
+  devices (AA5) are later PRs; screens are in the catalog (`devices*`).
+
 ## Device testing
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:
