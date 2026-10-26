@@ -7,8 +7,16 @@ sealed interface AppPhase {
     /** Reading local state at start. */
     data object Starting : AppPhase
 
-    /** The member API could not be reached at start ([failure] says why). */
-    data class Unreachable(val failure: FailureKind) : AppPhase
+    /**
+     * The member API could not be reached at start ([failure] says why). [longUnreachable]: nothing has reached the vault
+     * service from this phone for [StuckScreens.LONG_UNREACHABLE] or more ([StuckScreens.longUnreachable]), or as divided
+     * by the vault's time scale ([unreachableAfterSeconds], for the text).
+     */
+    data class Unreachable(
+        val failure: FailureKind,
+        val longUnreachable: Boolean = false,
+        val unreachableAfterSeconds: Long = StuckScreens.LONG_UNREACHABLE.seconds,
+    ) : AppPhase
 
     /**
      * Nothing set up on this phone: the welcome screen (a setup code, a recovery or a transfer). The app never
@@ -25,6 +33,15 @@ sealed interface AppPhase {
     /** The vault is open and this app is its holder. */
     data object Unlocked : AppPhase
 
+    /**
+     * (ANDROID-PLAN 0.1.54) The vault sent `device.unlinked{vault_deleted}` (VAULT-MESSAGING §12.5 step 1): "Your vault is
+     * being deleted", over every other phase, until the member API no longer lists the vault ([VaultDeletion]). [slow]:
+     * still listed at the bound, "Still finishing" with "Check again".
+     * (0.1.78) [apiOnly]: "Your vault was deleted" from the member API's `410` alone, without the vault's word; [slow]
+     * is then the bound after the first 410, from which a confirmed "Remove from this phone" is offered.
+     */
+    data class Deleting(val slow: Boolean = false, val apiOnly: Boolean = false) : AppPhase
+
     // A phone that a transfer or a recovery replaced has no phase of its own: it erases itself and is
     // SignedOut, as freshly installed (owner decision, 2026-10-05; VaultManager, HolderWatch).
 }
@@ -35,6 +52,19 @@ enum class SetupStage {
 
     /** The account has a vault this device does not hold (one app per vault, §3.5.9). */
     VAULT_ELSEWHERE,
+
+    /**
+     * (A6 audit N3) An enrollment this phone posted is outstanding (its `vault.enrolled` not applied yet; after a lost
+     * answer, a crash or a restart): it is resumed ([VaultRepository.resumeEnroll]) before any new one is posted, and
+     * the PIN is not asked for again (the vault may already hold the PIN chosen then).
+     */
+    ENROLLING,
+
+    /**
+     * (A6 audit N1) A transfer to this phone whose code was compared (its `hs.fin` sent) waits for the old phone's
+     * approval: after a restart the transfer screen shows the code again and goes on waiting ([MoveRepository.transferInWaiting]).
+     */
+    TRANSFER_WAITING,
 
     /** Enrolled and paired, but the Protean Credential is not created yet (§3.5.7). */
     NEEDS_CREDENTIAL,
@@ -90,6 +120,14 @@ data class AccountInfo(
         const val ACCOUNT_CANCELED = "canceled"
     }
 }
+
+/**
+ * What the top bar, the avatar sheet and the Settings card may show of the account (ANDROID-PLAN §4 "The member's own
+ * profile"; owner decision of 2026-10-21): the account only while it comes from the open vault's snapshot (kept in memory
+ * only while the vault is open); null otherwise, and they show only the initial tile: no name, no address, not even the
+ * masked hint (which only the unlock screen shows).
+ */
+fun AccountInfo?.shownInShell(): AccountInfo? = this?.takeIf { it.hasSnapshot }
 
 /** The member's subscription (§11.13): `trial`, `active`, `expired` or `canceled`. */
 data class SubscriptionInfo(val typeName: String?, val status: String?, val paid: Boolean, val expiresAt: Instant?) {
@@ -182,6 +220,13 @@ sealed interface UnlockAttempt {
     /** [retryAfterSeconds]: when the service said when to try again (`Retry-After`, e.g. [FailureKind.SERVICE_PAUSED]). */
     data class Failed(val kind: FailureKind, val code: String?, val retryAfterSeconds: Long = 0) : UnlockAttempt
 
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9 step 5) A PIN change is unresolved and the previous PIN, sent with the current
+     * record, got `device_secret` (decided before any PIN is tested): the change went through, and the unlock now asks
+     * for the new PIN, which the next [VaultRepository.unlock] tries with the new record.
+     */
+    data object NewPinNeeded : UnlockAttempt
+
     companion object {
         /**
          * [Failed]'s code when this phone has no `user_guid` to unlock with: it was set up by a direct transfer from
@@ -241,6 +286,27 @@ data class VaultOverview(
      * "Installed from" line; null when the vault reports none or is not open.
      */
     val signer: SignerView? = null,
+    /** (Release R, VAULT-MESSAGING 0.33.0 §11.14.11) `vault.status`'s `recovery`; null from an earlier release. */
+    val recovery: RecoveryStatusView? = null,
+    /**
+     * (0.34.0, §11.10.9) Whether the vault's release offers recovery: false for a release with `recovery_r` and without
+     * `recovery_offered` (recovery is hidden: "This vault's release does not offer recovery").
+     */
+    val recoveryOffered: Boolean = true,
+)
+
+/** `vault.status`'s `recovery` for the status screen: never shown as "0 of 10" when [state] is `unknown`. */
+data class RecoveryStatusView(
+    val state: String,
+    val used: Int?,
+    val counterUnavailable: Boolean,
+    /**
+     * (§11.14.5) Unavailable at every read for 24 hours (divided by the vault's time scale when the clock started,
+     * STAGING-TIME-SCALE S8): shown with the urgency of a used attempt.
+     */
+    val unknownForADay: Boolean = false,
+    /** (STAGING-TIME-SCALE, S8) How long the counter was unavailable before [unknownForADay], in seconds, for the text. */
+    val unknownForSeconds: Long = RecoveryUnknownClock.URGENT_S,
 )
 
 /** MEMBER-API `ReleaseInfo` (advisory; the manifest decides). */
@@ -271,6 +337,9 @@ data class AttestationInfo(
     val lastReleaseFingerprint: String?,
 )
 
+/** (A6 audit N1) A transfer to this phone waiting for the old phone's approval: its code, and when its `hs.init` went out. */
+data class TransferInWaiting(val sas: String, val startedAt: Instant)
+
 /** Why an action failed, for the UI. */
 enum class FailureKind {
     NETWORK,
@@ -288,6 +357,9 @@ enum class FailureKind {
      */
     SERVICE_PAUSED,
     RELEASE_ENDED,
+
+    /** (MEMBER-API 2.11.0) `410 vault_deleted` or `410 account_deleted` to the app key; see [VaultDeletion.isGone410]. */
+    VAULT_DELETED,
     BAD_PIN,
     BAD_PASSWORD,
     BACKOFF,
@@ -299,6 +371,12 @@ enum class FailureKind {
     /** The vault refused this PHONE's attestation (the `attestation` result of an enrollment or an unlock). */
     ATTESTATION,
     ROLLBACK,
+
+    /**
+     * (0.34.0, §11.10.9) The vault's instance lacks `recovery_r` although this phone has seen release R for the vault:
+     * refused like a rollback, nothing sent.
+     */
+    CAPABILITY_ROLLBACK,
 
     /** The release manifest did not verify (signature, key, format, serial), or the vault refused the app's. */
     MANIFEST,
@@ -315,6 +393,19 @@ enum class FailureKind {
 
     /** The ENCLAVE's attestation document or descriptor did not verify: nothing was sent to it. */
     ENCLAVE,
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 6) After `update: moved` the member API still routes the vault to the release it moved
+     * from, after about a minute of fetching the route again: nothing was sent; the screens say
+     * `release_update_route_pending` and offer "Try again" and "Return to release N".
+     */
+    ROUTE_PENDING,
+
+    /**
+     * (STAGING-TIME-SCALE §4 item 4) The vault's release has a time scale this build does not accept (a production build:
+     * any but 1), in its descriptor or a transfer bundle: refused as malformed, nothing was sent to it.
+     */
+    TIME_SCALE,
     NOT_FOUND,
     CONNECTION_UNAVAILABLE,
     INVITE_INVALID,
@@ -362,7 +453,145 @@ enum class FailureKind {
      * Keystore or file failure. Nothing is reset by itself (A6 audit P4): the member tries again or erases the phone.
      */
     LOCAL_STATE,
+
+    /**
+     * A wipe of this phone did not finish, or could not start (its marker could not be written): the old vault's keys
+     * may still be here. Nothing is enrolled and no session opens until a wipe finishes ("Try again" runs it again).
+     */
+    ERASE_FAILED,
+
+    // --- release R (VAULT-MESSAGING 0.33.0 §11.14; ANDROID-PLAN 0.1.40) ---
+
+    /** This phone no longer holds the vault's keys: `device_secret` at the next epoch too, or the phone key is gone. */
+    DEVICE_SECRET,
+
+    /** The move to this phone did not finish (`transfer_incomplete`): the old phone approves it again. */
+    TRANSFER_INCOMPLETE,
+
+    /** The service is busy (`busy`, the heavy-derivation permit): nothing was used or changed; try again in a minute. */
+    BUSY,
+
+    /** The service was too slow (`retry`): nothing was used or changed; try again. */
+    RETRY,
+
+    /** The attempt record cannot be reached (`counter_unavailable`): nothing was used or changed. */
+    COUNTER_UNAVAILABLE,
+
+    /** The vault's stored data could not be opened (`stored_mismatch`): contact VettID. */
+    STORED_MISMATCH,
+
+    /** The new password breaks a rule (`weak_password`); the reason is [VaultFailure.weakPasswordReason]. */
+    WEAK_PASSWORD,
+
+    /** The phone keeps its keys in software only: no enrollment, transfer to it or recovery. */
+    HARDWARE_KEYS,
+    /**
+     * The vault's answer was too large to send to this phone (`response_too_large`, VAULT-MESSAGING 0.32.0 §8.1): an
+     * answer is never silence. Nothing changed; a list asked for again in smaller pages may fit.
+     */
+    RESPONSE_TOO_LARGE,
+
+    // --- a lost answer to a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9; ANDROID-PLAN 0.1.45) ---
+
+    /**
+     * The change got no answer: not a failure. VettID decides it ([VaultRepository.changeCheck]); the screen keeps the
+     * member's new entries and says it is checking.
+     */
+    CHANGE_CHECKING,
+
+    /**
+     * A PIN or password change is still undecided: no other change, owner check or credential operation is sent until
+     * it is ("VettID is still checking whether your last change went through.").
+     */
+    CHANGE_UNRESOLVED,
+
+    /** The vault can be reached and the PIN change is simply not decided yet (up to about 10 minutes): nothing was sent. */
+    CHANGE_UNDECIDED,
+
+    /** As [CHANGE_UNDECIDED], for a password change. */
+    CHANGE_UNDECIDED_PASSWORD,
+
+    /**
+     * (0.45.0 §11.14.9 step 3) A PIN change's check ended without a decision: the PIN is uncertain, and nothing that
+     * carries it is sent until a lock and two-step unlock settles it ("Lock and unlock now").
+     */
+    PIN_UNCERTAIN,
+
+    /**
+     * (0.45.0 §11.14.9 step 5, N1) A new phone secret got no answer and `credential.version` cannot tell whether it
+     * applied: no PIN change until a lock and unlock settles it (at no cost: the PIN did not change).
+     */
+    RENEW_UNCONFIRMED,
+
+    /**
+     * An earlier credential operation of this phone may still reach the vault: a PIN or password change waits until it
+     * is answered or can no longer apply, so that its decision can only be its own. Nothing was sent.
+     */
+    CREDENTIAL_UNSETTLED,
+
+    /**
+     * (A6 audit N3) The enrollment made the vault (its result was `ok`), but its `vault.enrolled` has not arrived yet (a
+     * cold host, the relay out of reach). Nothing is posted again: "Try again" waits for it once more.
+     */
+    ENROLL_WAITING,
+
+    /**
+     * (ANDROID-PLAN 0.1.57 (1), 0.1.58 (3)) `credential_required`: the vault has no credential, or a credential but no
+     * holder (`{"reason": "no_holder"}`), and refused before testing any PIN or password. Shown as the full screen
+     * "This phone can't use your vault" ([CredentialRequired]). Not a proof for an erase: nothing is erased.
+     */
+    CREDENTIAL_REQUIRED,
+
+    /**
+     * (ANDROID-PLAN 0.1.57 (3)) `forbidden` to a holder-only type ([VaultCodes.HOLDER_ONLY], outside an unresolved
+     * change): another app holds the vault's credential. `vault_not_holder`. Not a proof for an erase.
+     */
+    NOT_HOLDER,
     OTHER,
+}
+
+/** (VAULT-MESSAGING 0.44.0 §11.14.9) The change a lost answer is decided for. */
+enum class ChangeKind { PIN, PASSWORD }
+
+/**
+ * (VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45) Where the decision of a PIN or password change whose answer was
+ * lost stands. [open] while undecided: no other change, owner check or credential operation is sent meanwhile.
+ */
+sealed interface ChangeCheck {
+    val kind: ChangeKind
+    val open: Boolean get() = false
+
+    /** VettID is checking (resending the same request, asking `credential.version`). */
+    data class Checking(override val kind: ChangeKind) : ChangeCheck {
+        override val open: Boolean get() = true
+    }
+
+    /** The vault cannot be reached: VettID checks again when it can (at a reconnection, a start, an unlock). */
+    data class Unreachable(override val kind: ChangeKind) : ChangeCheck {
+        override val open: Boolean get() = true
+    }
+
+    /** The change went through: the usual success text. */
+    data class Applied(override val kind: ChangeKind) : ChangeCheck
+
+    /** The change did not apply and never will: "Your PIN was not changed. You can try again." */
+    data class NotApplied(override val kind: ChangeKind) : ChangeCheck
+
+    /**
+     * An answer to the request came at last and refused the change ([failure], shown as it is; [shownCode] the code
+     * `error_vault_code` names, ANDROID-PLAN 0.1.57 (2), when this phone saw it).
+     */
+    data class Refused(override val kind: ChangeKind, val failure: FailureKind, val shownCode: String? = null) : ChangeCheck
+
+    /**
+     * (ANDROID-PLAN 0.1.55, VAULT-MESSAGING 0.51.1 §11.14.9 "Another phone became the holder") The vault answered a
+     * request of the resolution `forbidden`: the change ended (the marker and the candidate cleared, the PIN not left
+     * uncertain) and the one-time notice is "Your vault moved to a new phone". Nothing is erased.
+     */
+    data class Moved(override val kind: ChangeKind) : ChangeCheck
+
+    /** The check ended without a decision (no credential, another version, a clone alarm): that answer's own path. */
+    data class Ended(override val kind: ChangeKind) : ChangeCheck
 }
 
 /**
@@ -375,7 +604,20 @@ class VaultFailure(
     val retryAfterSeconds: Long = 0,
     cause: Throwable? = null,
     val limit: VaultLimit? = null,
-) : Exception("$kind${code?.let { " ($it)" } ?: ""}${limit?.let { " [${it.name}]" } ?: ""}", cause)
+) : Exception("$kind${code?.let { " ($it)" } ?: ""}${limit?.let { " [${it.name}]" } ?: ""}", cause) {
+    /** `weak_password`'s `reason` (§11.14.7): `short`, `repeated`, `common`, `same_as_pin` or `guessable`. */
+    val weakPasswordReason: String?
+        get() = (cause as? com.vettid.core.vault.VaultOpException)?.body?.let { com.vettid.core.vault.VaultJson.str(it, "reason") }
+
+    /**
+     * (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names: for a vault error answer the app does not map
+     * ([FailureKind.OTHER] from the vault's own error response), its code checked by [VaultCodes.shown]; null for a
+     * mapped code and for every failure that is not a vault answer (network, relay, member API, host, no answer), which
+     * keep their own texts.
+     */
+    val shownCode: String?
+        get() = if (kind == FailureKind.OTHER) (cause as? com.vettid.core.vault.VaultOpException)?.code?.let(VaultCodes::shown) else null
+}
 
 /**
  * The limit a `limit` error names (VAULT-MESSAGING 0.21.0 §10.1: `{limit, max, size?}`): [name] one of the spec's
@@ -411,6 +653,38 @@ sealed interface RecoveryRegistration {
      * wrong codes are counted per recovery however they were read; null when the claim did not answer with one.
      */
     data class Refused(val code: String, val recoveryId: String? = null) : RecoveryRegistration
+
+    /**
+     * (ANDROID-PLAN 0.1.78) `409 key_in_use` at the claim of a new code reusing K: K is the vault's key, so this phone is
+     * the vault's app. The next step is the lost-ok unlock with the PIN, not a registration.
+     */
+    data object KeyInUse : RecoveryRegistration
+
+    /** (0.1.78) The earlier open's slot held a readable `ok`: that open recovered the vault; the PIN finishes it. */
+    data object EarlierOpened : RecoveryRegistration
+}
+
+/** What [MoveRepository.couldNotTell] found (ANDROID-PLAN 0.1.78 "A phone that could not tell"). */
+data class CouldNotTell(val kind: Kind, val retryAtMs: Long? = null) {
+    enum class Kind {
+        /** No open of this phone's is unanswered: the ordinary "recovery ended". */
+        NOT_APPLICABLE,
+
+        /** `200` with the recovery ended: the lost-ok unlock (a `200` alone is not proof of adoption). */
+        LOST_OK,
+
+        /** `200` and the recovery still shows `registered`: the phone opens again. */
+        OPEN_AGAIN,
+
+        /** One read says ended; the next may be at [retryAtMs] (5 minutes after the first). */
+        WAIT,
+
+        /** Two reads at least 5 minutes apart say ended: the member may start a new recovery and use this phone for it. */
+        START_NEW,
+
+        /** The read concluded nothing (network, clock, the service). */
+        UNKNOWN,
+    }
 }
 
 /** `credential.recover`'s outcome (§11.11.5). */

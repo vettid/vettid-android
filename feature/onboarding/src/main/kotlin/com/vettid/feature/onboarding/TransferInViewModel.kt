@@ -41,8 +41,17 @@ enum class TransferInStep {
     /** `device.pair.rejected` (0.10.5): "Rejected on your phone". */
     REJECTED,
 
-    /** 10 minutes without approval. */
+    /**
+     * No approval by the 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5): the one collect at
+     * the deadline brought no `device.paired`, so the handshake was dropped. A new code is offered.
+     */
     TIMED_OUT,
+
+    /**
+     * (A6 audit N1) The steps after the approval (the credential's take-over) failed: kept, and tried again (also at the
+     * next start). "Finishing the move" with Try again.
+     */
+    FINISHING_FAILED,
 
     /**
      * No `hs.resp` within 60 seconds (§6.7.1 step 2, 0.10.6): the code may have been used already, or this phone
@@ -54,6 +63,8 @@ enum class TransferInStep {
 /** Immutable UI state of the transfer on the new phone. */
 data class TransferInUiState(
     val step: TransferInStep = TransferInStep.INTRO,
+    /** (Release R) This phone made a phone key for the transfer: "Finish the move" follows the approval. */
+    val phoneSecret: Boolean = false,
     val input: String = "",
     /** Why the scanned or pasted text is not used: [FailureKind.INVITE_INVALID] or [FailureKind.INVITE_EXPIRED]. */
     val inputProblem: FailureKind? = null,
@@ -63,17 +74,22 @@ data class TransferInUiState(
     val secondsLeft: Long = 0,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorShown: String? = null,
     val errorCode: String? = null,
     /**
      * [TransferInStep.DONE]: the vault gave this phone the member's `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), so it
      * unlocks later. False after a transfer from a vault release before 0.17.0: the screen says it cannot unlock yet.
      */
     val canUnlockLater: Boolean = true,
+    /** (A6 audit N1) The member asked to cancel a transfer whose code was shown: confirmed first. */
+    val confirmCancel: Boolean = false,
 ) {
     override fun toString(): String = "TransferInUiState(step=$step, busy=$busy, error=$error, canUnlockLater=$canUnlockLater)"
 }
 
 /** What the transfer screens on the new phone can ask for. */
+@Suppress("TooManyFunctions") // one action per button of the transfer's steps
 interface TransferInActions {
     fun scan()
     fun paste()
@@ -84,6 +100,15 @@ interface TransferInActions {
     fun cancel()
     fun again()
     fun finish()
+
+    /** (A6 audit N1) Tries the steps after the approval again ([TransferInStep.FINISHING_FAILED]). */
+    fun retryFinish() {}
+
+    /** (N1) The confirmed cancel of a transfer whose code was shown. */
+    fun confirmCancel() {}
+
+    /** (N1) The cancel was not confirmed: the transfer goes on. */
+    fun dismissCancel() {}
 }
 
 /**
@@ -96,6 +121,7 @@ interface TransferInActions {
  * (`device.paired{transfer: true}`), or its rejection (`device.pair.rejected`).
  * Then the credential the vault kept is fetched and confirmed.
  */
+@Suppress("TooManyFunctions") // one action per button of the transfer's steps
 @HiltViewModel
 class TransferInViewModel @Inject constructor(
     private val move: MoveRepository,
@@ -108,6 +134,21 @@ class TransferInViewModel @Inject constructor(
 
     /** Tests set a fixed clock. */
     internal var clock: Clock = Clock.systemUTC()
+
+    init {
+        // (A6 audit N1) A transfer that waits for the old phone (a restart, or the screen left): its code again, waiting.
+        viewModelScope.launch {
+            val w = try {
+                move.transferInWaiting()
+            } catch (_: VaultFailure) {
+                null
+            } ?: return@launch
+            if (state.value.step != TransferInStep.INTRO || waiter?.isActive == true) return@launch
+            val deadline = w.startedAt.plus(WINDOW)
+            state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = w.sas, deadline = deadline) }
+            waiter = viewModelScope.launch { waitForApproval(deadline) { move.awaitTransferIn() } }
+        }
+    }
 
     override fun scan() = state.update { it.copy(step = TransferInStep.SCAN, inputProblem = null, error = null) }
 
@@ -166,21 +207,42 @@ class TransferInViewModel @Inject constructor(
                 return@launch
             }
             state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = deadline) }
-            startTicker(deadline)
-            try {
-                val canUnlock = move.awaitTransferIn()
-                ticker?.cancel()
-                state.update { it.copy(step = TransferInStep.DONE, sas = null, canUnlockLater = canUnlock) }
-            } catch (e: VaultFailure) {
-                ticker?.cancel()
-                state.update {
-                    when (e.kind) {
-                        FailureKind.REJECTED -> it.copy(step = TransferInStep.REJECTED, sas = null)
-                        FailureKind.NO_RESPONSE -> it.copy(step = TransferInStep.TIMED_OUT, sas = null)
-                        else -> it.copy(step = TransferInStep.INTRO, sas = null, error = e.kind, errorCode = e.code)
-                    }
+            waitForApproval(deadline) { move.awaitTransferIn() }
+        }
+    }
+
+    /**
+     * Waits for the old phone's approval; [deadline] is the countdown shown (the vault's 10 minutes). The wait itself runs
+     * to the one 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5), where the repository collects
+     * once and then completes or drops; nothing here extends it.
+     */
+    private suspend fun waitForApproval(deadline: Instant, wait: suspend () -> Boolean) {
+        startTicker(deadline)
+        try {
+            val canUnlock = wait()
+            ticker?.cancel()
+            val phoneSecret = vault.usesPhoneSecret
+            state.update { it.copy(step = TransferInStep.DONE, sas = null, canUnlockLater = canUnlock, phoneSecret = phoneSecret) }
+        } catch (e: VaultFailure) {
+            ticker?.cancel()
+            state.update {
+                when (e.kind) {
+                    FailureKind.REJECTED -> it.copy(step = TransferInStep.REJECTED, sas = null)
+                    FailureKind.NO_RESPONSE -> it.copy(step = TransferInStep.TIMED_OUT, sas = null, secondsLeft = 0)
+                    // The steps after the approval (the take-over): kept, and resumed (here, or at the next start).
+                    else -> it.copy(step = TransferInStep.FINISHING_FAILED, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
                 }
             }
+        }
+    }
+
+    override fun retryFinish() {
+        val s = state.value
+        if (s.step != TransferInStep.FINISHING_FAILED || waiter?.isActive == true) return
+        state.update { it.copy(busy = true, error = null, errorCode = null, errorShown = null) }
+        waiter = viewModelScope.launch {
+            waitForApproval(s.deadline ?: Instant.now(clock)) { move.awaitTransferIn() }
+            state.update { it.copy(busy = false) }
         }
     }
 
@@ -191,7 +253,7 @@ class TransferInViewModel @Inject constructor(
             when {
                 bad -> it.copy(step = from, busy = false, inputProblem = e.kind)
                 e.code == MoveRepository.CODE_HS_UNANSWERED -> it.copy(step = TransferInStep.NOT_ANSWERED, busy = false)
-                else -> it.copy(step = from, busy = false, error = e.kind, errorCode = e.code)
+                else -> it.copy(step = from, busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
             }
         }
     }
@@ -208,11 +270,30 @@ class TransferInViewModel @Inject constructor(
         }
     }
 
-    /** Leaves a transfer in progress: nothing was approved, so nothing changes; the handshake state is dropped. */
+    /**
+     * Leaves a transfer in progress. Before the code was shown nothing can have been approved: dropped at once. (A6 audit
+     * N1) Once it was shown, the old phone may have approved it, so the member confirms first ([confirmCancel]).
+     */
     override fun cancel() {
+        val step = state.value.step
+        if (step == TransferInStep.COMPARE) {
+            state.update { it.copy(confirmCancel = true) }
+            return
+        }
+        drop()
+    }
+
+    override fun confirmCancel() {
+        if (!state.value.confirmCancel) return
+        drop()
+    }
+
+    override fun dismissCancel() = state.update { it.copy(confirmCancel = false) }
+
+    private fun drop() {
         waiter?.cancel()
         ticker?.cancel()
-        state.update { it.copy(step = TransferInStep.INTRO, busy = false, sas = null, deadline = null) }
+        state.update { it.copy(step = TransferInStep.INTRO, busy = false, sas = null, deadline = null, confirmCancel = false) }
         viewModelScope.launch { abandon() }
     }
 

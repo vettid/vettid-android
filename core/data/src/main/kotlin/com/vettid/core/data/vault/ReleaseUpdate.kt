@@ -65,23 +65,35 @@ data class ReleaseUpdateOffer(
     }
 }
 
-/** The member dismissed the notice of [release] ([kind]) at [at]. */
-data class ReleaseDismissal(val release: Long, val kind: UpdateNoticeKind, val at: Instant)
+/**
+ * The member dismissed the notice of [release] ([kind]) at [at], for [duration] ([ReleaseNotices.DISMISS_FOR], divided by
+ * the vault's time scale when it was dismissed: STAGING-TIME-SCALE, S16).
+ */
+data class ReleaseDismissal(
+    val release: Long,
+    val kind: UpdateNoticeKind,
+    val at: Instant,
+    val duration: Duration = ReleaseNotices.DISMISS_FOR,
+)
 
 /** When the shell shows the release banner and when the app posts its local notification. */
 object ReleaseNotices {
     /** A dismissed banner comes back after 24 h, whatever the kind (owner decision 2026-10-09). */
     val DISMISS_FOR: Duration = Duration.ofHours(24)
 
+    /** (STAGING-TIME-SCALE, S16) How long a dismissal made now lasts on a vault of [timeScale]. */
+    fun dismissFor(timeScale: Long): Duration = Duration.ofSeconds(TimeScales.divide(DISMISS_FOR.seconds, timeScale))
+
     /**
      * Whether the banner shows for [offer] at [now]: always without a dismissal of this release and kind (a notice
-     * that turns from "available" into an end-date warning shows again), and again [DISMISS_FOR] after one. A
+     * that turns from "available" into an end-date warning shows again), and again [DISMISS_FOR] after one (the
+     * dismissal's own [ReleaseDismissal.duration]). A
      * dismissal "in the future" (the clock was set back) does not hide it either.
      */
     fun bannerVisible(offer: ReleaseUpdateOffer?, dismissal: ReleaseDismissal?, now: Instant): Boolean = when {
         offer == null -> false
         dismissal == null || dismissal.release != offer.target.number || dismissal.kind != offer.kind -> true
-        else -> now.isBefore(dismissal.at) || !now.isBefore(dismissal.at.plus(DISMISS_FOR))
+        else -> now.isBefore(dismissal.at) || !now.isBefore(dismissal.at.plus(dismissal.duration))
     }
 
     /** One local notification per release: only for a target newer than the last one notified. */
@@ -122,6 +134,15 @@ sealed interface UpdateStepResult {
     data class Failed(val kind: FailureKind, val code: String?, val retryAfterSeconds: Long = 0) : UpdateStepResult
 }
 
+/**
+ * A PIN the member typed on the update's own screen, with [ReleaseUpdateOps.pinGeneration] as it was when the screen's
+ * keypad became usable: an unlock sends nothing once that moved (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the
+ * spec). Held only while a step runs. Never printed.
+ */
+class TakenPin(val pin: String, val generation: Int) {
+    override fun toString(): String = "TakenPin(generation=$generation)"
+}
+
 /** What the update needs from the vault. */
 interface ReleaseUpdateOps {
     /** The offer for the vault as this phone knows it, from the manifest it trusts; null for none. */
@@ -130,17 +151,36 @@ interface ReleaseUpdateOps {
     /** The owner check is due or held (§3.6.5): the check comes first, the update never bypasses it. */
     fun ownerCheckDue(): Boolean
 
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) A PIN or password change is undecided: the update neither starts nor retries nor
+     * abandons (its lock and unlock would send a PIN that may be the wrong one of two); "still checking" is said instead.
+     */
+    fun changeUnresolved(): Boolean = false
+
+    /** (N6) Why the update is held, in the gate's words ([VaultRepository.changeHold]); null when it is not. */
+    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
     /** Locks the vault and waits (bounded) until the member API no longer sees it unlocked. */
     suspend fun lock()
 
     /**
      * One unlock with [pin]: approving [approve] (§11.10.3) when non-null, or abandoning the unconfirmed move
-     * ([abandon], §11.10.4); never following a move by itself. [onStarting] hears `503 release_starting`.
+     * ([abandon], §11.10.4); never following a move by itself. [onStarting] hears `503 release_starting`. Nothing is
+     * sent once [pinGeneration] moved since [pin] was taken ([ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE]).
      */
-    suspend fun unlock(pin: String, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult
+    suspend fun unlock(pin: TakenPin, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult
+
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects, as a generation
+     * ([VaultRepository.pinGeneration]): read when the update's keypad becomes usable, handed over with the PIN.
+     */
+    fun pinGeneration(): Int = 0
 
     /** An unconfirmed move can be abandoned: this phone knows the release it moved from. */
     fun canAbandon(): Boolean
+
+    /** (ANDROID-PLAN 0.1.54) The stored marker of an unconfirmed move; null for none. */
+    fun moveMarker(): MoveUnconfirmed? = null
 }
 
 /** Where the one-step update stands (owner decision 2026-10-09). */
@@ -190,7 +230,7 @@ data class UpdateProgress(
     val waitSeconds: Long = 0,
     /** The vault is open (on [from] after a refusal or an abandonment, on [to] when done). */
     val vaultOpen: Boolean = false,
-    /** "Return to release N" is offered (only while the move is unconfirmed). */
+    /** "Return to release N" is offered (only while the move is unconfirmed: the stored marker, ANDROID-PLAN 0.1.54). */
     val canAbandon: Boolean = false,
 ) {
     /** A step that waits for the member (a PIN, a choice, or "Continue"). */
@@ -217,20 +257,53 @@ interface ReleaseUpdateRepository {
     /** Whether the owner check must come first (§3.6.5). */
     fun ownerCheckDue(): Boolean
 
+    /** (§11.14.9) A PIN or password change is undecided: no update step is sent until it is. */
+    fun changeUnresolved(): Boolean = false
+
+    /** (N6) Why the update is held, observed by its screens; null when it is not. */
+    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects, as a generation
+     * ([VaultRepository.pinGeneration]): a screen reads it when its keypad becomes usable and hands it over with the PIN;
+     * an unlock sends nothing once it moved since ([ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE]).
+     */
+    val pinGeneration: Int get() = 0
+
     /**
      * The member approved [offer] with [pin] ("Approve and update"): locks, unlocks with the approval, and after
      * `moved` unlocks again with the same PIN. False when it cannot start (an update runs, or the check is due).
+     * [generation]: [pinGeneration] when the keypad became usable (null: read now).
      */
-    fun start(pin: String, offer: ReleaseUpdateOffer): Boolean
+    fun start(pin: String, offer: ReleaseUpdateOffer, generation: Int? = null): Boolean
 
-    /** [UpdateStep.BAD_PIN] or [UpdateStep.FAILED]: the approved update again; [UpdateStep.NEW_RELEASE_FAILED]: the unlock again. */
-    fun retry(pin: String)
+    /**
+     * [UpdateStep.BAD_PIN] or [UpdateStep.FAILED]: the approved update again; [UpdateStep.NEW_RELEASE_FAILED]: the unlock
+     * again. [generation] as for [start].
+     */
+    fun retry(pin: String, generation: Int? = null)
 
-    /** [UpdateStep.NEW_RELEASE_FAILED] with [UpdateProgress.canAbandon]: back to the previous release (§11.10.4). */
-    fun abandon(pin: String)
+    /**
+     * [UpdateStep.NEW_RELEASE_FAILED] with [UpdateProgress.canAbandon]: back to the previous release (§11.10.4).
+     * [generation] as for [start].
+     */
+    fun abandon(pin: String, generation: Int? = null)
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 3) The unlock screen's "Return to release N", confirmed by the member: while the stored
+     * marker has `failed` and no update is shown, the way back runs as from the update screen, whose screens then show
+     * it. False when it cannot start. [generation] as for [start].
+     */
+    fun returnToPrevious(pin: String, generation: Int? = null): Boolean = false
 
     /** Leaves the outcome (or gives up): the app follows the vault's phase again. Ignored while a step runs. */
     fun finish()
+
+    /**
+     * (ANDROID-PLAN 0.1.54 "A vault being deleted") The vault is being deleted: whatever step runs is stopped where it is
+     * (its PIN goes with it) and nothing is shown any more.
+     */
+    fun close() {}
 }
 
 /**
@@ -269,29 +342,42 @@ class ReleaseUpdateManager(
 
     override fun ownerCheckDue(): Boolean = ops.ownerCheckDue()
 
-    override fun start(pin: String, offer: ReleaseUpdateOffer): Boolean {
-        if (running() || ops.ownerCheckDue() || pin.isEmpty()) return false
+    override fun changeUnresolved(): Boolean = ops.changeUnresolved()
+
+    override val changeHold: StateFlow<FailureKind?> get() = ops.changeHold
+
+    override val pinGeneration: Int get() = ops.pinGeneration()
+
+    override fun start(pin: String, offer: ReleaseUpdateOffer, generation: Int?): Boolean {
+        if (running() || pin.isEmpty() || !mayStart()) return false
+        // The PIN as the keypad took it: whatever moves which PIN the vault expects before an unlock goes out stops it.
+        val typed = taken(pin, generation)
         progressFlow.value = UpdateProgress(UpdateStep.LOCKING, offer.current, offer.target)
-        job = scope.launch {
-            try {
-                ops.lock()
-            } catch (e: VaultFailure) {
-                // Nothing changed: the vault was not locked, or not everywhere; the member decides again.
-                set { it.copy(step = UpdateStep.FAILED, failure = e.kind, failureCode = e.code, vaultOpen = true) }
-                return@launch
+        // Checked before the lock too: a PIN taken before a change neither locks the vault nor is sent.
+        if (!refusedAsTakenBefore(typed, vaultOpen = true)) {
+            job = scope.launch {
+                try {
+                    ops.lock()
+                } catch (e: VaultFailure) {
+                    // Nothing changed: the vault was not locked, or not everywhere; the member decides again.
+                    set { it.copy(step = UpdateStep.FAILED, failure = e.kind, failureCode = e.code, vaultOpen = true) }
+                    return@launch
+                }
+                approve(typed)
             }
-            approve(pin)
         }
         return true
     }
 
-    override fun retry(pin: String) {
+    override fun retry(pin: String, generation: Int?) {
         val p = progressFlow.value ?: return
-        if (running() || pin.isEmpty()) return
+        if (running() || pin.isEmpty() || refusedWhileChangeUnresolved()) return
+        val typed = taken(pin, generation)
         when (p.step) {
-            UpdateStep.BAD_PIN -> launch { approve(pin) }
+            UpdateStep.BAD_PIN -> launch { approve(typed) }
             UpdateStep.FAILED -> launch {
                 if (p.vaultOpen) {
+                    if (refusedAsTakenBefore(typed, vaultOpen = true)) return@launch
                     try {
                         set { it.copy(step = UpdateStep.LOCKING, failure = null, failureCode = null) }
                         ops.lock()
@@ -300,25 +386,65 @@ class ReleaseUpdateManager(
                         return@launch
                     }
                 }
-                approve(pin)
+                approve(typed)
             }
-            UpdateStep.NEW_RELEASE_FAILED -> launch { reopen(pin) }
+            UpdateStep.NEW_RELEASE_FAILED -> launch { reopen(typed) }
             else -> Unit
         }
     }
 
-    override fun abandon(pin: String) {
+    override fun abandon(pin: String, generation: Int?) {
         val p = progressFlow.value ?: return
-        val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon()
-        if (running() || pin.isEmpty() || !offered) return
-        launch {
-            set { it.copy(step = UpdateStep.ABANDONING, failure = null, failureCode = null) }
-            when (val r = withStart { s -> ops.unlock(pin, approve = null, abandon = true, onStarting = s) }) {
-                UpdateStepResult.Abandoned, UpdateStepResult.Opened ->
-                    set { it.copy(step = UpdateStep.ABANDONED, vaultOpen = true, canAbandon = false) }
-                else -> newReleaseFailed(r)
-            }
+        val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon() && pin.isNotEmpty()
+        if (running() || !offered || refusedWhileChangeUnresolved()) return
+        val typed = taken(pin, generation)
+        launch { wayBack(typed) }
+    }
+
+    override fun returnToPrevious(pin: String, generation: Int?): Boolean {
+        val m = ops.moveMarker()?.takeIf { it.failed && ops.canAbandon() }
+        val idle = !running() && progressFlow.value == null
+        if (!idle || pin.isEmpty() || m == null) return false
+        // The update's screens take over (the root shows them over every phase), as if the move had just failed there.
+        progressFlow.value = UpdateProgress(UpdateStep.NEW_RELEASE_FAILED, m.from, m.to, vaultOpen = false, canAbandon = true)
+        if (!refusedWhileChangeUnresolved()) {
+            val typed = taken(pin, generation)
+            launch { wayBack(typed) }
         }
+        return true
+    }
+
+    /**
+     * The way back (§11.10.4 "Abandoning an unconfirmed move"): the unlock routed to N with `release_update.to` = N.
+     * `abandoned`, or `refused` `downgrade` (no pending move was left: it had already been abandoned), leave the vault open
+     * on N. `wrong_release` (N+1 has already opened the vault) and `410` for N (N ended) end the offer with their texts.
+     */
+    private suspend fun wayBack(typed: TakenPin) {
+        set { it.copy(step = UpdateStep.ABANDONING, failure = null, failureCode = null) }
+        val r = withStart { s -> ops.unlock(typed, approve = null, abandon = true, onStarting = s) }
+        when {
+            r == UpdateStepResult.Abandoned || r == UpdateStepResult.Opened ->
+                set { it.copy(step = UpdateStep.ABANDONED, vaultOpen = true, canAbandon = false) }
+            r is UpdateStepResult.Refused && r.code == CODE_REFUSED_DOWNGRADE ->
+                set { it.copy(step = UpdateStep.ABANDONED, vaultOpen = true, canAbandon = false) }
+            r is UpdateStepResult.Failed && r.code == CODE_WRONG_RELEASE -> wayBackEnded(CODE_RETURN_CONFIRMED)
+            r is UpdateStepResult.Failed && r.kind == FailureKind.RELEASE_ENDED -> wayBackEnded(CODE_RETURN_UNAVAILABLE)
+            else -> newReleaseFailed(r)
+        }
+    }
+
+    /** The way back is gone ([code]): the vault stays on N+1, locked; the PIN unlocks it there. */
+    private fun wayBackEnded(code: String) = set {
+        it.copy(
+            step = UpdateStep.NEW_RELEASE_FAILED, failure = FailureKind.OTHER, failureCode = code, waitSeconds = 0, vaultOpen = false,
+            canAbandon = ops.canAbandon(),
+        )
+    }
+
+    override fun close() {
+        job?.cancel()
+        job = null
+        progressFlow.value = null
     }
 
     override fun finish() {
@@ -331,6 +457,35 @@ class ReleaseUpdateManager(
 
     private fun running(): Boolean = job?.isActive == true
 
+    /**
+     * (§11.14.9 step 2; chosen) [typed] was taken before something moved which PIN the vault expects: the step fails at
+     * once, before any lock, with nothing sent ([CODE_PIN_TAKEN_BEFORE]); [vaultOpen]: the vault is as it was.
+     */
+    private fun refusedAsTakenBefore(typed: TakenPin, vaultOpen: Boolean): Boolean {
+        if (typed.generation == ops.pinGeneration()) return false
+        set {
+            it.copy(
+                step = UpdateStep.FAILED, failure = FailureKind.CREDENTIAL_UNSETTLED, failureCode = CODE_PIN_TAKEN_BEFORE,
+                vaultOpen = vaultOpen,
+            )
+        }
+        return true
+    }
+
+    /** [pin] with [generation], the [pinGeneration] when the keypad became usable; else read as the screen hands it over. */
+    private fun taken(pin: String, generation: Int?): TakenPin = TakenPin(pin, generation ?: ops.pinGeneration())
+
+    /** Neither the owner check (§3.6.5) nor an undecided PIN or password change (§11.14.9) comes first. */
+    private fun mayStart(): Boolean = !ops.ownerCheckDue() && !ops.changeUnresolved()
+
+    /** (§11.14.9) A change is undecided: nothing is sent, and the step says "still checking". */
+    private fun refusedWhileChangeUnresolved(): Boolean {
+        if (!ops.changeUnresolved()) return false
+        val why = ops.changeHold.value ?: FailureKind.CHANGE_UNRESOLVED
+        set { it.copy(failure = why, failureCode = CODE_CHANGE_HELD) }
+        return true
+    }
+
     private fun launch(block: suspend () -> Unit) {
         job = scope.launch { block() }
     }
@@ -338,7 +493,7 @@ class ReleaseUpdateManager(
     private fun set(f: (UpdateProgress) -> UpdateProgress) = progressFlow.update { it?.let(f) }
 
     /** The unlock with the approval of [UpdateProgress.to]; nothing else sends one. */
-    private suspend fun approve(pin: String) {
+    private suspend fun approve(pin: TakenPin) {
         val to = progressFlow.value?.to ?: return
         set { it.copy(step = UpdateStep.APPROVING, failure = null, failureCode = null, waitSeconds = 0, refusal = null) }
         when (val r = withStart { s -> ops.unlock(pin, approve = to, abandon = false, onStarting = s) }) {
@@ -358,7 +513,7 @@ class ReleaseUpdateManager(
     }
 
     /** After `moved`: the unlock that reaches the new release, with the same PIN, and no approval. */
-    private suspend fun reopen(pin: String) {
+    private suspend fun reopen(pin: TakenPin) {
         set { it.copy(step = UpdateStep.REOPENING, failure = null, failureCode = null, waitSeconds = 0) }
         var r = withStart { s -> ops.unlock(pin, approve = null, abandon = false, onStarting = s) }
         // Routed to the old release still (the API learns the move from its lifecycle event): it completes the
@@ -413,8 +568,30 @@ class ReleaseUpdateManager(
         /** The update's lock was asked for and is not confirmed ([LockKeeper]): the update does not move on. */
         const val CODE_LOCK_PENDING = "lock_pending"
 
+        /** (§11.14.9) The step was held: a PIN or password change is undecided, or the PIN uncertain. */
+        const val CODE_CHANGE_HELD = "change_held"
+
+        /**
+         * (§11.14.9 step 2; chosen, not in the spec) The unlock sent nothing: which PIN the vault expects may have changed
+         * since the PIN was typed ([pinGeneration]). [FailureKind.CREDENTIAL_UNSETTLED] (the "earlier request" text); the
+         * PIN is asked for again, and no PIN attempt was spent.
+         */
+        const val CODE_PIN_TAKEN_BEFORE = "pin_taken_before_change"
+
         /** [UpdateProgress.refusal] when the vault opened without saying anything of the update. */
         const val CODE_NOT_MOVED = "not_moved"
+
+        /** The way back refused as a downgrade: no pending move was left, and the vault is open on N (§11.10.4 step 4). */
+        const val CODE_REFUSED_DOWNGRADE = "downgrade"
+
+        /** An unlock result of a release the vault has left for good ([com.vettid.core.altchan.AltRequests.CODE_WRONG_RELEASE]). */
+        const val CODE_WRONG_RELEASE = "wrong_release"
+
+        /** (ANDROID-PLAN 0.1.54) The way back answered `wrong_release`: `release_update_return_confirmed`. */
+        const val CODE_RETURN_CONFIRMED = "return_confirmed"
+
+        /** (ANDROID-PLAN 0.1.54) Release N answered `410 release_unavailable` for the way back: `release_update_return_unavailable`. */
+        const val CODE_RETURN_UNAVAILABLE = "return_unavailable"
 
         /** Further waits after the API client's own (10 minutes): a release that cannot start is a failure. */
         const val MAX_START_RETRIES = 5

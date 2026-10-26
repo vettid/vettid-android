@@ -12,11 +12,15 @@ android {
             excludes += listOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
         }
     }
+    // Robolectric's API 36 runtime reaches into the JDK's file descriptor internals (AttachmentClearTest).
+    testOptions.unitTests.all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
 }
 
 dependencies {
     api(projects.core.vault)
     api(projects.core.keystore)
+    // Photo attachments: names sanitized, types sniffed, the memory-only cache (ANDROID-PLAN 0.1.39).
+    api(projects.core.media)
     api(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.serialization.json)
@@ -24,6 +28,8 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     // What's new: the release log fetch (ReleaseNotesClientTest).
     testImplementation(libs.okhttp.mockwebserver)
+    // A lock's clear with the share provider's real offers (AttachmentClearTest: SharedPhotos builds content URIs).
+    testImplementation(libs.robolectric)
     // The A5 items scenario against the local dev stack (skipped without it).
     testImplementation(projects.core.testing)
 

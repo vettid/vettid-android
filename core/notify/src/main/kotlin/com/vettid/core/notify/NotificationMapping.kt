@@ -2,6 +2,7 @@ package com.vettid.core.notify
 
 import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.data.feed.FeedManager
+import com.vettid.core.data.vault.RecoveryRefs
 import com.vettid.core.vault.FeedItem
 
 /**
@@ -11,13 +12,14 @@ import com.vettid.core.vault.FeedItem
  * priority `normal` up.
  */
 object NotificationMapping {
-    private val MESSAGES = setOf("message.received")
+    /** (VAULT-MESSAGING 0.32.0 §10.5.1) A photo that failed or was refused is about a message too. */
+    private val MESSAGES = setOf("message.received", "message.attachment_failed", "message.attachment_refused")
     private val REQUESTS = setOf(
         "connection.request", "connection.authenticate.requested", "grant.request", "share.pending",
         "critical-secret.use.request", "device.pair.pending", "device.session.pending", "approval.pending",
         "action.request", "intro.request", "location.request",
     )
-    private val CALLS = setOf("call.missed")
+    private val MISSED_CALLS = setOf("call.missed")
     private val SECURITY = setOf(
         "credential.alarm", "owner_check.locked", "owner_check.failed", "owner_check.hold_changed",
         "credential.password_failed", "credential.reset", "device.replaced", "device.transferred",
@@ -27,13 +29,29 @@ object NotificationMapping {
     /** The channel [item] notifies on; null when it does not notify. */
     fun channel(item: FeedItem): String? = when {
         item.priority == FeedManager.PRIORITY_LOW || item.kind == "guide" -> null
+        // ANDROID-PLAN 0.1.52 §4 "Event titles": one notification per recovery; a PIN change is History only.
+        FeedKinds.historyOnly(item.kind) -> null
         item.kind in MESSAGES -> Channels.MESSAGES
         item.kind in REQUESTS -> Channels.REQUESTS
-        item.kind in CALLS -> Channels.CALLS
-        item.kind in SECURITY -> Channels.SECURITY
+        item.kind in MISSED_CALLS -> Channels.MISSED_CALLS
+        item.kind in SECURITY || urgentRecovery(item) -> Channels.SECURITY
         // Connections, grants, shares, items, devices, the credential renewed, agents, location, wallet; and
         // a newer vault's kinds (priority normal and above, never low: above).
         else -> Channels.ACTIVITY
+    }
+
+    /**
+     * The urgent recovery notifications (ANDROID-PLAN 0.1.52 §4 "Event titles", owner decision of 2026-10-19): a failed
+     * `recovery.attempt` (urgent and `not_success`, or urgent with a `ref` that does not read), `recovery.counter_unavailable`
+     * and `recovery.change_required`. A successful or not urgent attempt stays on Vault activity.
+     */
+    private fun urgentRecovery(item: FeedItem): Boolean = when (item.kind) {
+        "recovery.counter_unavailable", "recovery.change_required" -> true
+        "recovery.attempt" -> item.priority == FeedManager.PRIORITY_URGENT && RecoveryRefs.attempt(item.ref)?.success != true
+        // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a host served an older recovery record; the vault makes
+        // this feed item only for `rollback`.
+        RecoveryRefs.KIND_CLOSED -> true
+        else -> false
     }
 
     /** Kinds whose screens come later (§6): the notification says to open a newer VettID. */

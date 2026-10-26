@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- The local "Vault updates" notification (ANDROID-PLAN 0.1.19): asked for once, in context; nothing is pushed. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The member's pending lock is tried again after the phone restarts too (PendingLockJob, a persisted job). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- No backup or export of vault data (ANDROID-PLAN §4): nothing leaves the
          device through Auto Backup or device-to-device transfer. -->
@@ -83,6 +85,17 @@
                 <data android:mimeType="application/json" />
             </intent-filter>
         </activity>
+
+        <!-- The member's lock survives the app being killed (owner decision 2026-10-23): a framework job, run while a
+             lock is pending, that starts the process, which goes on trying (PendingLockJob). Both distributions. -->
+        <service
+            android:name=".lock.PendingLockJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <!-- "Lock it now" on the "Your vault was opened again" notification (owner decision 2026-10-24). -->
+        <receiver
+            android:name=".lock.LockAgainReceiver"
+            android:exported="false" />
 
         <!-- Google push (Firebase Cloud Messaging) is the `full` distribution's alone: its manifest entries are in
              src/full/AndroidManifest.xml. The `foss` distribution (F-Droid) has none (README "F-Droid build"). -->

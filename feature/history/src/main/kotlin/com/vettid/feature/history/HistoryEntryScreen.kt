@@ -27,6 +27,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.CenteredTitle
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
@@ -34,6 +35,7 @@ import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 
 /** An audit entry (§10.9), read-only: what, when, the connection, device and references the vault recorded. */
@@ -55,7 +57,7 @@ fun HistoryEntryScreen(
             error != null -> NoticeCard(
                 NoticeKind.WARNING,
                 stringResource(R.string.history_error_title),
-                stringResource(error.messageRes()),
+                failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                 modifier = Modifier.padding(Spacing.xl),
                 actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.history_retry)) } },
             )
@@ -85,11 +87,22 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
             icon = categoryIcon(e.category),
             colors = com.vettid.core.ui.theme.categoryColor(categoryHue(e.category)),
         )
-        CenteredTitle(HistoryText.title(e.kind), Modifier.testTag("history_entry_title"))
+        val itemName = AuditKinds.itemOf(e.kind, e.ref)?.let { state.itemName }
+        val removedDevice = stringResource(R.string.history_device_removed)
+        val deviceName = state.deviceName ?: removedDevice.takeIf { state.devicesKnown && !state.deviceUnnamed && e.deviceId != null }
+        CenteredTitle(
+            HistoryText.title(e.kind, e.ref, EntryNames(state.connectionName, deviceName, itemName)),
+            Modifier.testTag("history_entry_title"),
+        )
+        // ANDROID-PLAN 0.1.52 §4 "Event titles": the detail lines.
+        val details = HistoryText.details(e.kind, e.ref, state.outcome)
         DetailCard(Modifier.padding(horizontal = Spacing.s)) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
                 Field(R.string.history_detail_when, e.at?.let { Times.full(it) } ?: stringResource(R.string.history_detail_unknown_time))
                 Field(R.string.history_detail_category, stringResource(AuditKinds.categoryLabel(e.category)))
+                if (details.isNotEmpty()) {
+                    Field(R.string.history_detail_details, details.joinToString("\n"), Modifier.testTag("history_entry_details"))
+                }
                 e.connectionId?.let { id ->
                     Field(R.string.history_detail_connection, state.connectionName ?: stringResource(R.string.history_connection_removed))
                     if (state.connectionExists) {
@@ -126,8 +139,9 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
                 Field(R.string.history_detail_kind, e.kind, mono = true)
                 e.deviceId?.let { id ->
                     // ANDROID-PLAN 0.1.27: the device's name ("Removed device" once unlisted), "(this phone)" for
-                    // this one; the id stays below. Without the device list, the id alone, as before.
-                    val name = state.deviceName ?: if (state.devicesKnown) stringResource(R.string.history_device_removed) else null
+                    // this one; the id stays below. Without the device list, or listed unnamed, the id alone.
+                    val removed = state.devicesKnown && !state.deviceUnnamed
+                    val name = state.deviceName ?: if (removed) stringResource(R.string.history_device_removed) else null
                     val shown = when {
                         state.thisDevice && name != null -> stringResource(R.string.history_device_this_phone, name)
                         state.thisDevice -> stringResource(R.string.history_device_this_phone_alone)

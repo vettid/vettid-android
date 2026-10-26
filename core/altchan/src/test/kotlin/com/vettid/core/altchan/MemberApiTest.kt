@@ -31,6 +31,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 /** The member API client and the alternate-channel flows against a fake member API + enclave. */
+@Suppress("LargeClass") // One class: every test shares the fake member API and its helpers.
 class MemberApiTest {
     private lateinit var server: MockWebServer
     private val enclaves = ArrayDeque<TestSupport.Enclave>()
@@ -113,8 +114,10 @@ class MemberApiTest {
                 resp(202, """{"vault_id":"0123456789abcdef0123456789abcdef","request_id":"$rid"}""")
             }
             path == "/api/vault/lock" -> {
-                val rid = StrictJson.parseObject(r.body!!.toByteArray()).string("request_id")
-                slots[rid] = """{"status":"done"}"""
+                val o = StrictJson.parseObject(r.body!!.toByteArray())
+                val rid = o.string("request_id")
+                lockBodies += o
+                slots[rid] = lockSlot
                 resp(202, "{}")
             }
             path.startsWith("/api/vault/requests/") -> {
@@ -127,6 +130,10 @@ class MemberApiTest {
     }
 
     private var statusBody = """{"vault":null,"service":"available"}"""
+
+    /** The lock requests' bodies, and the slot each lock gets. */
+    private val lockBodies = mutableListOf<com.vettid.core.crypto.json.JsonObject>()
+    private var lockSlot = """{"status":"done"}"""
     private val enrolledVaultIds = mutableListOf<String>()
     private val signed = mutableListOf<Pair<String, String>>()
     private val appKey = SoftAppKey()
@@ -221,6 +228,8 @@ class MemberApiTest {
         var state = AltState()
         var vaultId: String? = null
         var pending: PendingUnlock? = null
+        var built = 0
+        val discarded = mutableListOf<BuiltUnlock>()
         val ik = Ed25519PrivateKey.generate()
         private val relayKey = Ed25519PrivateKey.generate()
         val app = AppIdentity(ik.publicKey, kem.publicKey, RelayAddr("https://relay.vettid.test", Mailbox.id(relayKey.publicKey), relayKey.publicKey), "phone")
@@ -235,8 +244,9 @@ class MemberApiTest {
             enclave: VerifiedEnclave,
             manifest: ReleaseManifest,
             attester: Attester,
+            unlockSecret: ByteArray?,
         ): SealedRequest {
-            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, app, "v4.public.open", state, Instant.now())
+            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, app, "v4.public.open", state, Instant.now(), unlockSecret)
             state = b.state
             return b.request
         }
@@ -256,7 +266,13 @@ class MemberApiTest {
         ): BuiltUnlock {
             val b = AltRequests.buildUnlock(userGuid, vaultId!!, pin, enclave, manifest, attester, ik, "v4.public.tok", state, options, Instant.now())
             pending = b.pending
+            built++
             return b
+        }
+
+        override suspend fun discardUnlock(built: BuiltUnlock) {
+            discarded += built
+            if (pending == built.pending) pending = null
         }
 
         override suspend fun openUnlockResult(raw: ByteArray): UnlockResult {
@@ -268,8 +284,10 @@ class MemberApiTest {
     }
 
     private fun flow(
-        api: MemberApiClient = api()) = AltChannelFlow(api,
-        AltTrust(emptyList(), listOf(TestSupport.manifestKey)),
+        api: MemberApiClient = api(),
+        timeScales: (Long) -> Boolean = AltTrust.PRODUCTION_SCALES,
+    ) = AltChannelFlow(api,
+        AltTrust(emptyList(), listOf(TestSupport.manifestKey), timeScales),
     ) { d, _, m, enroll, _ ->
         val e = enclaves.first()
         assertTrue(d.contentEquals(e.descriptor))
@@ -278,6 +296,21 @@ class MemberApiTest {
     }
 
     private fun assertNotNullRelease(m: ReleaseManifest) = assertTrue(m.byPcr0(TestSupport.pcr0) != null)
+
+    /** MEMBER-API 2.5.0 "Locks" (release L): a bound lock names its unlock; the slot's code is passed on. */
+    @Test
+    fun aBoundLockNamesItsUnlockAndItsSlotsCodeIsRead() = runBlocking<Unit> {
+        val f = flow()
+        val id = "00112233445566778899aabbccddeeff"
+        lockSlot = """{"status":"done","code":"stale"}"""
+        val slot = f.lock("0123456789abcdef0123456789abcdef", unlockId = id)
+        assertEquals(Slot.DONE, slot.status)
+        assertEquals(Slot.CODE_STALE, slot.code)
+        assertEquals(id, lockBodies.last().optString("unlock_id"))
+        lockSlot = """{"status":"done"}"""
+        assertEquals(null, f.lock("0123456789abcdef0123456789abcdef").code)
+        assertFalse("unconditional: no member at all", lockBodies.last().has("unlock_id"))
+    }
 
     @Test
     fun enrollUnlockLock() = runBlocking<Unit> {
@@ -298,6 +331,39 @@ class MemberApiTest {
         assertEquals(Slot.DONE, f.lock(out.vaultId).status)
         assertTrue(log.contains("GET ${MemberApiClient.MANIFEST_PATH}"))
         assertEquals(6, log.count { it.startsWith("GET /api/vault/requests/") }) // each slot: queued, then done
+    }
+
+    /**
+     * (VAULT-MESSAGING §11.14.9 step 2) The unlock's `beforePost` runs before the request is built and again right before
+     * it is posted: a throw before the build builds nothing (no token minted, nothing recorded); a throw between the build
+     * and the post posts nothing and discards what the build recorded; otherwise the unlock goes as usual.
+     */
+    @Test
+    fun beforePostRunsBeforeEachUnlockPostAndAThrowPostsNothing() = runBlocking<Unit> {
+        val p = Party()
+        val f = flow()
+        val out = f.enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
+        p.vaultId = out.vaultId
+        p.state = AltRequests.applyEnrolled(p.state, 1)
+        val e = assertThrows(IllegalStateException::class.java) {
+            runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { error("pin taken before a change") }) }
+        }
+        assertEquals("pin taken before a change", e.message)
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        assertEquals("nothing built", 0, p.built)
+        // Moved while the request was built: not posted, and what the build recorded is discarded.
+        var calls = 0
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { check(++calls < 2) { "moved" } }) }
+        }
+        assertEquals(1, p.built)
+        assertEquals(1, p.discarded.size)
+        assertEquals(null, p.pending)
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        var checks = 0
+        assertTrue(f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { checks++ }).ok)
+        assertEquals("before the build and before the post", 2, checks)
+        assertEquals(1, log.count { it == "POST /api/vault/unlock" })
     }
 
     private suspend fun register(): RecoveryResult {
@@ -333,6 +399,190 @@ class MemberApiTest {
         recoveryResult = """{"ok":true}"""
         assertEquals(RecoveryResult(true, null), register())
         assertEquals(2, log.count { it == "POST /api/vault/recovery/register" })
+    }
+
+    /**
+     * VAULT-MESSAGING 0.34.0 §11.10.9: the request's shape is chosen from the verified instance's capabilities before
+     * anything is built; a refusal there (a vault known to have release R, an instance without it) sends nothing.
+     */
+    @Test
+    fun theInstancesCapabilitiesChooseTheShapeAndARefusalSendsNothing() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", capabilities = listOf("attachments", "recovery_offered", "recovery_r")))
+        val p = Party()
+        var seen: List<String>? = null
+        val out = flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) {
+            seen = it.capabilities
+            ByteArray(32) { 0x42 }
+        }
+        assertTrue(out.ok)
+        assertEquals(listOf("attachments", "recovery_offered", "recovery_r"), seen)
+        p.vaultId = out.vaultId
+        p.state = AltRequests.applyEnrolled(p.state, 1)
+        // An instance without recovery_r for a vault known to have it: refused before the request is built.
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a"))
+        val enrolls = log.count { it == "POST /api/vault/enroll" }
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { t -> check("recovery_r" in t.capabilities) { "rollback" }; null } }
+        }
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) { t ->
+                    check("recovery_r" in t.capabilities) { "rollback" }
+                    null
+                }
+            }
+        }
+        assertEquals(enrolls, log.count { it == "POST /api/vault/enroll" })
+        // A release before R (no list): the earlier shape, as before.
+        var plain: List<String>? = null
+        assertTrue(flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) { t -> plain = t.capabilities; null }.ok)
+        assertEquals(emptyList<String>(), plain)
+    }
+
+    /**
+     * STAGING-TIME-SCALE §4 item 4, §5.6: a production build refuses a descriptor whose `time_scale` is not 1 before
+     * anything is built or sent; a staging build accepts 1 and 24 and hands the scale to the app with the capabilities.
+     */
+    @Test
+    fun aProductionBuildRefusesAScaledInstanceAndSendsNothing() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 24))
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow().enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) {
+                    error("asked for the request's shape")
+                }
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+        assertEquals(0, log.count { it == "POST /api/vault/enroll" })
+        val p = Party().also { it.vaultId = "0123456789abcdef0123456789abcdef" }
+        assertThrows(AltRefusedException::class.java) { runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
+        assertEquals(0, log.count { it == "POST /api/vault/unlock" })
+        assertThrows(AltRefusedException::class.java) { runBlocking { flow().preflight(p.state) } }
+    }
+
+    /**
+     * STAGING-TIME-SCALE §4 item 4 (VAULT-MESSAGING §11.10.9 "Where the app reads it": a recovery's register and open
+     * read the descriptor of the instance the vault is routed to): a production build refuses a scaled instance there
+     * too, before the request is built or anything is posted.
+     */
+    @Test
+    fun aProductionBuildRefusesAScaledInstanceForARecoveryRegister() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 24))
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow().recoveryRegister(
+                    "0123456789abcdef0123456789abcdef",
+                    build = { error("built a request") },
+                    open = { _, _ -> error("opened a result") },
+                )
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+        assertEquals(0, log.count { it == "POST /api/vault/recovery/register" })
+        assertEquals(0, log.count { it.startsWith("GET /api/vault/requests/") })
+        // The same instance at real time: registered as before.
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 1))
+        assertEquals(RecoveryResult(true, null), register())
+    }
+
+    @Test
+    fun aProductionBuildRefusesAScaledInstanceForARecoveryOpen() = runBlocking<Unit> {
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 24))
+        var sent = false
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow().recoveryOpen(
+                    "0123456789abcdef0123456789abcdef",
+                    build = { _, _ -> error("built a request") },
+                    open = { _, _ -> error("opened a result") },
+                    onSent = { sent = true },
+                )
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+        assertFalse("nothing may have reached the vault, no attempt used", sent)
+        assertEquals(0, log.count { it == "POST /api/vault/recovery/open" })
+        assertEquals(0, log.count { it.startsWith("GET /api/vault/requests/") })
+    }
+
+    /** ANDROID-PLAN 0.1.80: the open's history entry is saved before the open is posted; a save that fails posts nothing. */
+    @Test
+    fun aRecoveryOpenIsPostedOnlyAfterItsHistoryWasSaved() = runBlocking<Unit> {
+        val request = SealedRequest("01JB2Z6V9K3M4N5P6Q7R8S9T60", "kid", ByteArray(8), null)
+        var postsSeenBySave = -1
+        val failed = assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                flow().recoveryOpen(
+                    "0123456789abcdef0123456789abcdef",
+                    build = { _, _ -> request },
+                    open = { _, _ -> error("opened a result") },
+                    beforePost = {
+                        postsSeenBySave = log.count { l -> l == "POST /api/vault/recovery/open" }
+                        error("history not saved")
+                    },
+                )
+            }
+        }
+        assertEquals("history not saved", failed.message)
+        assertEquals(0, postsSeenBySave)
+        assertEquals(0, log.count { it == "POST /api/vault/recovery/open" })
+        // A save that succeeds comes first: the post follows it.
+        var seen = -1
+        runCatching {
+            flow().recoveryOpen(
+                "0123456789abcdef0123456789abcdef",
+                build = { _, _ -> request },
+                open = { _, _ -> error("not answered") },
+                beforePost = { seen = log.count { l -> l == "POST /api/vault/recovery/open" } },
+            )
+        }
+        assertEquals(0, seen)
+        assertEquals(1, log.count { it == "POST /api/vault/recovery/open" })
+    }
+
+    @Test
+    fun aStagingBuildAcceptsOneAndTwentyFourOnly() = runBlocking<Unit> {
+        for (scale in listOf(null, 1L, 24L)) {
+            enclaves.clear()
+            enclaves.add(TestSupport.Enclave("inst-a", timeScale = scale))
+            var seen: Long? = null
+            val out = flow(timeScales = AltTrust.STAGING_SCALES)
+                .enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) {
+                    seen = it.timeScale
+                    null
+                }
+            assertTrue(out.ok)
+            // Absent: a release before the scale, real time.
+            assertEquals(scale ?: 1L, seen)
+        }
+        enclaves.clear()
+        enclaves.add(TestSupport.Enclave("inst-a", timeScale = 2))
+        val e = assertThrows(AltRefusedException::class.java) {
+            runBlocking {
+                flow(timeScales = AltTrust.STAGING_SCALES)
+                    .enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
+            }
+        }
+        assertEquals(AltRefusedException.Reason.TIME_SCALE, e.reason)
+    }
+
+    @Test
+    fun theTrustsTimeScales() {
+        assertTrue(AltTrust.production().acceptsTimeScale(1))
+        assertFalse(AltTrust.production().acceptsTimeScale(24))
+        assertTrue(AltTrust.staging().acceptsTimeScale(1))
+        assertTrue(AltTrust.staging().acceptsTimeScale(24))
+        assertFalse(AltTrust.staging().acceptsTimeScale(12))
+        assertFalse(AltTrust.staging().acceptsTimeScale(3_600))
+        assertTrue(AltTrust(emptyList(), emptyList(), AltTrust.DEV_STACK_SCALES).acceptsTimeScale(3_600))
     }
 
     @Test

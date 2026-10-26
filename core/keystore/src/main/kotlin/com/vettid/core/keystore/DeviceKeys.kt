@@ -16,8 +16,8 @@ interface WrappedKeyStore {
 }
 
 /** Wrapped seeds in app-private SharedPreferences (ciphertext only; the wrapping key is in the Keystore). */
-class SharedPreferencesWrappedKeyStore(context: Context) : WrappedKeyStore {
-    private val prefs = context.getSharedPreferences("vettid_device_keys", Context.MODE_PRIVATE)
+class SharedPreferencesWrappedKeyStore(context: Context, name: String = DEFAULT_NAME) : WrappedKeyStore {
+    private val prefs = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
     override fun get(slot: KeySlot): ByteArray? = prefs.getString(slot.wire, null)?.let { Base64.getDecoder().decode(it) }
 
@@ -27,7 +27,13 @@ class SharedPreferencesWrappedKeyStore(context: Context) : WrappedKeyStore {
     }
 
     override fun remove(slot: KeySlot) {
-        prefs.edit().remove(slot.wire).apply()
+        // commit(): a removal that is not durable could bring a key back after a restart.
+        prefs.edit().remove(slot.wire).commit()
+    }
+
+    companion object {
+        /** The file of the first (and normally only) device identity. */
+        const val DEFAULT_NAME = "vettid_device_keys"
     }
 }
 

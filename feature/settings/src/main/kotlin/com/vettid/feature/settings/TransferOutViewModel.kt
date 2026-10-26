@@ -3,10 +3,12 @@ package com.vettid.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -49,6 +51,8 @@ enum class TransferOutStep {
     MOVED,
 }
 
+private const val KEPT_MS_PER_SECOND = 1_000L
+
 /** Immutable UI state of the transfer on the old phone. The PIN and password live here only until the approval. */
 data class TransferOutUiState(
     val step: TransferOutStep = TransferOutStep.INTRO,
@@ -65,13 +69,25 @@ data class TransferOutUiState(
     /** The member confirmed the change of signer ([TransferOutStep.SIGNER]): the approval names the new app's class. */
     val signerConfirmed: Boolean = false,
     /**
-     * The vault answered `signer_unconfirmed`: it wants the confirmation this app had not sent. Nothing was spent
-     * or counted and the transfer is still open; the confirmation is shown, then the PIN and password again.
+     * The vault answered `signer_unconfirmed`: it wants the confirmation this app had not sent. Nothing was counted
+     * and the transfer is still open (the UTK of that attempt is spent, ANDROID-PLAN 0.1.58); the confirmation is
+     * shown, then the PIN and password again.
      */
     val signerUnconfirmed: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorShown: String? = null,
+    /**
+     * (Release R, §11.14.10) After the approval this phone keeps its keys until the new phone has finished the move, for
+     * at most 7 days ([TransferOutStep.MOVED] says so); false: it erases itself once the vault confirms.
+     */
+    val keptKeys: Boolean = false,
+    /** (STAGING-TIME-SCALE, S10) How long it keeps them at most (7 days, divided by the time scale at the approval). */
+    val keptForSeconds: Long = KeptTransfer.KEEP_MS / KEPT_MS_PER_SECOND,
+    /** (STAGING-TIME-SCALE) A staging build adds its note to that text. */
+    val stagingNote: Boolean = false,
 ) {
     val canApprove: Boolean get() = pin.length >= MIN_PIN && password.isNotEmpty() && waitSeconds == 0L && !busy
 
@@ -109,7 +125,10 @@ interface TransferOutActions {
  * 2026-10-05). A mismatch rejects it.
  */
 @HiltViewModel
-class TransferOutViewModel @Inject constructor(private val move: MoveRepository) : ViewModel(), TransferOutActions {
+class TransferOutViewModel @Inject constructor(
+    private val move: MoveRepository,
+    private val vault: VaultRepository,
+) : ViewModel(), TransferOutActions {
     private val state = MutableStateFlow(TransferOutUiState())
     val uiState: StateFlow<TransferOutUiState> = state.asStateFlow()
     private var waiter: Job? = null
@@ -127,7 +146,9 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
             val offer = try {
                 move.transferCreate()
             } catch (e: VaultFailure) {
-                state.update { it.copy(step = TransferOutStep.INTRO, busy = false, error = e.kind, errorCode = e.code) }
+                state.update {
+                    it.copy(step = TransferOutStep.INTRO, busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
+                }
                 return@launch
             }
             state.update { it.copy(step = TransferOutStep.SHOWING, busy = false, offer = offer, deadline = offer.expiresAt) }
@@ -135,7 +156,7 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
             val pending = try {
                 move.awaitTransferPending(offer.transferId, offer.expiresAt)
             } catch (e: VaultFailure) {
-                state.update { it.copy(error = e.kind, errorCode = e.code) }
+                state.update { it.copy(error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
                 null
             }
             if (pending == null) {
@@ -197,7 +218,7 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
                 move.transferReject(id)
                 state.update { TransferOutUiState(step = TransferOutStep.REJECTED) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
             }
         }
     }
@@ -224,29 +245,41 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
                 val signer = s.pending?.signer?.takeIf { s.signerConfirmed }
                 val wiped = move.transferApprove(id, s.pin, s.password, signer)
                 ticker?.cancel()
+                val kept = vault.transferKeptSince.value != null
                 state.update {
-                    it.copy(step = if (wiped) it.step else TransferOutStep.MOVED, busy = false, pin = "", password = "", offer = null)
+                    it.copy(
+                        step = if (wiped) it.step else TransferOutStep.MOVED, busy = false, pin = "", password = "", offer = null,
+                        keptKeys = kept,
+                        keptForSeconds = vault.transferKeepSeconds,
+                        stagingNote = vault.timeScale.value.stagingNote,
+                    )
                 }
             } catch (e: VaultFailure) {
                 if (e.code == CODE_SIGNER_UNCONFIRMED) {
                     signerUnconfirmed()
                     return@launch
                 }
-                state.update { it.copy(busy = false, pin = "", password = "", error = e.kind, errorCode = e.code) }
+                state.update {
+                    it.copy(busy = false, pin = "", password = "", error = e.kind, errorCode = e.code, errorShown = e.shownCode)
+                }
                 if (e.retryAfterSeconds > 0) startBackoff(e.retryAfterSeconds)
             }
         }
     }
 
     /**
-     * `signer_unconfirmed` (§6.7.1 step 3, §11.7.1): the vault refused the approval before it spent the UTK or
-     * tried the PIN, and the transfer stays open. Not a wrong PIN and no wait: the confirmation is shown (again,
-     * if the vault's view of the signer changed since the pending) and the next approval names the class. When
-     * the vault never named a class there is nothing to confirm with: the failure is shown as it is.
+     * `signer_unconfirmed` (§6.7.1 step 3, §11.7.1): the vault refused the approval before it tried the PIN, and the
+     * transfer stays open; (ANDROID-PLAN 0.1.58) the UTK of that attempt is spent, and the next approval takes a fresh
+     * one. Not a wrong PIN and no wait: the confirmation is shown (again, if the vault's view of the signer changed since
+     * the pending) and the next approval names the class. When the vault never named a class there is nothing to confirm
+     * with: the failure is shown as it is, named by `error_vault_code` (0.1.57 (2)).
      */
     private fun signerUnconfirmed() = state.update {
         if (it.pending?.signer == null) {
-            it.copy(busy = false, pin = "", password = "", error = FailureKind.OTHER, errorCode = CODE_SIGNER_UNCONFIRMED)
+            it.copy(
+                busy = false, pin = "", password = "", error = FailureKind.OTHER, errorCode = CODE_SIGNER_UNCONFIRMED,
+                errorShown = CODE_SIGNER_UNCONFIRMED,
+            )
         } else {
             it.copy(
                 step = TransferOutStep.SIGNER, busy = false, pin = "", password = "", signerConfirmed = false,

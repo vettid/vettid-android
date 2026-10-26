@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import com.vettid.core.data.R
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ConnectionInfo
+import com.vettid.core.data.vault.RecoveryRefs
 import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.vault.FeedItem
 import java.time.Instant
@@ -101,7 +102,7 @@ object FeedKinds {
     val KNOWN = setOf(
         "connection.request", "connection.request.peer_declined", "connection.added", "connection.removed",
         "connection.stale", "connection.asks_paused", "connection.authenticate.requested",
-        "message.received", "call.missed",
+        "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused",
         "grant.request", "grant.shared", "grant.revoked", "share.pending", "share.rate_limited",
         "critical-secret.use.request", "item.revealed",
         "device.pair.pending", "device.paired", "device.unlinked", "device.transferred", "device.replaced",
@@ -112,7 +113,22 @@ object FeedKinds {
         "guide",
         "leash.rate_limited", "leash.item.read", "leash.agent.suspended", "leash.referrals_limited",
         "action.request", "intro.request", "location.shared", "location.request", "wallet.signed",
+        // VAULT-MESSAGING 0.49.1 (as built since release R), ANDROID-PLAN 0.1.52 §4 "Event titles".
+        "vault.pin_changed", "device.secret_renewed", "credential.recovered", "recovery.device_paired",
+        "recovery.completed", "recovery.attempt", "recovery.change_required", "recovery.counter_unavailable",
+        "identity.rotation_failed", "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
+        // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a `rollback` closure's urgent item.
+        "recovery.generation_closed",
     )
+
+    /**
+     * Feed kinds the app neither lists nor notifies (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication): one recovery
+     * raises one notification, `recovery.completed`, and a PIN change is History only. Their audit entries show in
+     * History; the feed items stay as the vault keeps them.
+     */
+    val HISTORY_ONLY = setOf("vault.pin_changed", "credential.recovered", "recovery.device_paired")
+
+    fun historyOnly(kind: String): Boolean = kind in HISTORY_ONLY
 
     /** Kinds whose screens come later (§6): listed, with "Not available in this version of the app". */
     fun notAvailable(kind: String): Boolean =
@@ -159,6 +175,7 @@ object FeedKinds {
             ?.entries?.singleOrNull()?.let { it.name ?: it.label }
         "critical-secret.use.request" ->
             (names.approvals[FeedAsks.approvalKey(item.kind, item.ref) ?: ""] as? Approval.CriticalUse)?.itemName
+        "leash.item.run", "leash.item.proxy" -> item.ref?.let { names.items[it] }
         else -> null
     }?.takeIf { it.isNotBlank() }
 
@@ -187,6 +204,9 @@ object FeedKinds {
             "connection.asks_paused" -> FeedText(R.string.data_feed_asks_paused, listOf(first))
             "connection.authenticate.requested" -> FeedText(R.string.data_feed_authenticate, listOf(who))
             "message.received" -> FeedText(R.string.data_feed_message, listOf(who))
+            // §10.5.1 (0.32.0): an outgoing photo that failed, an incoming one refused because the vault is full.
+            "message.attachment_failed" -> FeedText(R.string.data_feed_photo_failed, listOf(who))
+            "message.attachment_refused" -> FeedText(R.string.data_feed_photo_refused, listOf(who))
             "call.missed" -> FeedText(R.string.data_feed_call_missed, listOf(who))
             "grant.request" -> when {
                 count > 1 -> FeedText(plural = R.plurals.data_feed_grant_request_batch, quantity = count, args = listOf(first, count))
@@ -233,7 +253,40 @@ object FeedKinds {
             "location.shared" -> FeedText(R.string.data_feed_location_shared, listOf(first))
             "location.request" -> FeedText(R.string.data_feed_location_request, listOf(first))
             "wallet.signed" -> FeedText(R.string.data_feed_wallet_signed)
+            "vault.pin_changed" -> FeedText(R.string.data_feed_pin_changed)
+            "device.secret_renewed" -> FeedText(R.string.data_feed_secret_renewed)
+            "credential.recovered" -> FeedText(R.string.data_feed_credential_recovered)
+            "recovery.device_paired" -> FeedText(R.string.data_feed_recovery_device_paired)
+            "recovery.completed" -> FeedText(R.string.data_feed_recovery_completed)
+            "recovery.attempt" -> recoveryAttempt(item)
+            "recovery.change_required" -> FeedText(
+                if (item.ref == REF_PASSWORD) R.string.data_feed_change_required_password else R.string.data_feed_change_required,
+            )
+            "recovery.counter_unavailable" -> FeedText(R.string.data_feed_counter_unavailable)
+            // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): the vault makes this item only for `rollback`.
+            "recovery.generation_closed" -> FeedText(R.string.data_feed_recovery_rollback)
+            "identity.rotation_failed" -> FeedText(R.string.data_feed_rotation_failed)
+            "identity.rotate_conflict" -> FeedText(R.string.data_feed_rotate_conflict, listOf(who))
+            "leash.item.run", "leash.item.proxy" -> thing?.let { FeedText(R.string.data_feed_leash_item_used, listOf(it)) }
+                ?: FeedText(R.string.data_feed_leash_item_used_any)
             else -> if (item.kind.startsWith("leash.")) FeedText(R.string.data_feed_leash) else unknown(item.kind)
+        }
+    }
+
+    /**
+     * `recovery.attempt` (decision 2 of 2026-10-19): urgent and not successful, "Someone tried to recover your vault";
+     * urgent and successful, "Your vault was recovered"; not urgent (the member completed a recovery in that generation
+     * since), "Recovery attempt n of 10". Without a `ref` that reads, the same words without the number.
+     */
+    private fun recoveryAttempt(item: FeedItem): FeedText {
+        val a = RecoveryRefs.attempt(item.ref)
+        val urgent = urgent(item)
+        return when {
+            a == null && urgent -> FeedText(R.string.data_feed_recovery_attempt_someone_any)
+            a == null -> FeedText(R.string.data_feed_recovery_attempt_any)
+            !urgent -> FeedText(R.string.data_feed_recovery_attempt, listOf(a.n, RecoveryRefs.ATTEMPTS))
+            a.success -> FeedText(R.string.data_feed_recovery_attempt_recovered, listOf(a.n, RecoveryRefs.ATTEMPTS))
+            else -> FeedText(R.string.data_feed_recovery_attempt_someone, listOf(a.n, RecoveryRefs.ATTEMPTS))
         }
     }
 
@@ -289,8 +342,21 @@ object FeedKinds {
         (item.count ?: 0) > 1 -> things(item.count ?: 0)
         item.kind == "guide" -> item.body?.takeIf { it.isNotBlank() }?.let { FeedText(literal = it.lineSequence().first()) }
         item.kind == "device.signer_changed" -> signerChange(item.ref)
-        else -> itemName(item, names)?.let { FeedText(literal = it) }
+        else -> eventLine(item) ?: itemName(item, names)?.let { FeedText(literal = it) }
     }
+
+    /** The second line of ANDROID-PLAN 0.1.52 §4 "Event titles", for the kinds that have one. */
+    private fun eventLine(item: FeedItem): FeedText? = when (item.kind) {
+        "recovery.change_required" -> FeedText(
+            if (item.ref == REF_PASSWORD) R.string.data_feed_change_required_password_body else R.string.data_feed_change_required_body,
+        )
+        "identity.rotation_failed" -> FeedText(R.string.data_feed_rotation_failed_body)
+        "identity.rotate_conflict" -> FeedText(R.string.data_feed_rotate_conflict_body)
+        "recovery.generation_closed" -> FeedText(R.string.data_feed_recovery_rollback_body)
+        else -> null
+    }
+
+    private const val REF_PASSWORD = "password"
 
     private fun things(n: Int) = FeedText(plural = R.plurals.data_feed_things, quantity = n, args = listOf(n))
 
@@ -303,7 +369,8 @@ object FeedKinds {
         return when (item.kind) {
             "connection.request.peer_declined" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Connections
             "connection.added", "connection.stale", "connection.asks_paused" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
-            "message.received", "call.missed" -> c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
+            "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused" ->
+                c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
             "share.rate_limited" -> if (c != null && !ref.isNullOrEmpty()) FeedTarget.ShareRule(c, ref) else FeedTarget.Sheet
             "item.revealed" -> if (!ref.isNullOrEmpty()) FeedTarget.Item(ref) else FeedTarget.Sheet

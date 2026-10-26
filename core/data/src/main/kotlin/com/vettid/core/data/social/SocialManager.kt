@@ -69,6 +69,10 @@ class SocialManager(
     private val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
     private val authFlow = MutableStateFlow<Map<String, AuthenticationState>>(emptyMap())
     private val messagesFlow = MutableStateFlow<Map<String, List<MessageInfo>>>(emptyMap())
+
+    /** Per conversation, where its loaded history stands (§10.5.2); dropped with its messages. */
+    private val pagingFlow = MutableStateFlow<Map<String, MessagePaging>>(emptyMap())
+    private val pages = Mutex()
     private val storedFlow = MutableStateFlow(local.events)
     private val listedFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
@@ -164,6 +168,7 @@ class SocialManager(
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
+        pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
     }
@@ -176,6 +181,7 @@ class SocialManager(
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
+        pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
@@ -219,10 +225,26 @@ class SocialManager(
         val parsed = ApprovalParser.parse(type, body, now()) ?: return
         val at = now().toEpochMilli()
         val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
+        // Noted before the suspending write, so a read that reaches its prune step in the gap keeps the batch.
+        if (parsed is Approval.ShareDecision) noteBatch(parsed)
         edit { l ->
             val others = l.events.filterNot { e -> keyOf(e) == parsed.key }
             val merged = if (parsed is Approval.ShareDecision) mergeShare(l.events, parsed, body) else text
             l.copy(events = others + StoredEvent(type, merged, at))
+        }
+        if (parsed is Approval.ShareDecision) addBatch(parsed)
+    }
+
+    /**
+     * A `share.pending` batch for a rule whose question the list holds adds to it at once, not at the next read (§10.12):
+     * the batch's items, keeping the listed item's name, `ask_rule_id` and `shared` where the batch lacks them.
+     */
+    private fun addBatch(batch: Approval.ShareDecision) = synchronized(readLock) {
+        listedFlow.update { l ->
+            l.map { a ->
+                if (a !is Approval.ShareDecision || a.key != batch.key) return@map a
+                a.copy(items = ShareQuestions.addBatch(a.items, batch.items), reason = a.reason ?: batch.reason)
+            }
         }
     }
 
@@ -345,7 +367,7 @@ class SocialManager(
     }
 
     override suspend fun refreshRequests() {
-        val list = vaultGuard { api().requestList() }
+        val list = vaultGuard(resend = true) { api().requestList() }
         val t = now()
         fun entries(k: String) = (list[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         val parsed = entries("incoming").mapNotNull { ApprovalParser.incoming(it, t) } +
@@ -379,6 +401,7 @@ class SocialManager(
             }
             "removed" -> {
                 messagesFlow.update { it - conn }
+                pagingFlow.update { it - conn }
                 authFlow.update { it - conn }
             }
         }
@@ -431,6 +454,10 @@ class SocialManager(
                 patch(conn, id) { it.copy(delivered = true, read = it.read || read) }
             }
             "message.read" -> patch(s("connection_id") ?: return, s("message_id") ?: return) { it.copy(read = true) }
+            // §10.5.1: each change of an attachment's state; the message itself is unchanged.
+            "message.attachment" -> patch(s("connection_id") ?: return, s("message_id") ?: return) { m ->
+                m.attachment?.let { a -> m.copy(attachment = a.copy(state = AttachmentState.of(s("state")), reason = s("reason"))) } ?: m
+            }
             "connection.changed", "block.added", "block.removed" -> runCatching { refresh() }
             "connection.request" -> onRequestSync(b)
             "connection.authenticate.decided" -> s("request_id")?.let { dropApproval("auth:$it") }
@@ -448,16 +475,62 @@ class SocialManager(
     }
 
     private suspend fun onShareDecided(rule: String, b: JsonObject) {
-        val done = listOf("included", "declined").flatMap { k ->
-            (b[k] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content }
-        }.toSet()
+        applyShareDecided(rule, listOf("included", "declined").flatMap { k -> ids(b, k) }.toSet())
+    }
+
+    private fun ids(b: JsonObject, k: String): List<String> =
+        (b[k] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content }
+
+    /**
+     * The items [done] (decided here or on another device) leave the questions of [rule] and of the subject's other
+     * rules, where they wait too (one answer per item and subject, §10.12); a question left empty goes. Kept events and
+     * the list, and a read now on its way.
+     */
+    private suspend fun applyShareDecided(rule: String, done: Set<String>, subjectHint: String? = null): Set<String> {
+        if (done.isEmpty()) return emptySet()
+        val known = subjectHint ?: subjectOfRule(rule)
+        // A rule of no known subject: a read now settles the rest.
+        if (known == null) scope.launch { runCatching { refreshApprovals() } }
+        val subject = known ?: "rule:$rule"
+        val applies = { d: Approval.ShareDecision -> d.ruleId == rule || ShareQuestions.subjectKey(d) == subject }
+        // The subject's questions before the removal: the one this empties has its feed item read below.
+        val asked = (listedFlow.value + storedFlow.value.mapNotNull(::parsed)).filter { it is Approval.ShareDecision && applies(it) }
+            .map { it.key }.toSet() + "share:$rule"
+        removeShareItems(done, applies) {
+            changes++
+            if (readSinces.isNotEmpty()) {
+                decidedLog += ShareMark(changes, known, rule, done)
+                if (decidedLog.size > MAX_LOG) decidedLog.removeAt(0)
+            }
+        }
+        // Every question of the subject now gone from the list and the kept events is read, not only the decided rule's:
+        // an item decided under one rule also leaves the others, and the dedupe may have hidden it from their screens.
+        return asked.filter { key -> listedFlow.value.none { it.key == key } && storedFlow.value.none { keyOf(it) == key } }
+            .onEach(::decided).toSet()
+    }
+
+    /**
+     * The items [ids] leave the share questions [applies] picks, in the list and the kept events; a question left empty
+     * goes. [mark] runs with the list change, so a read taking its result in cannot interleave (it holds the same lock).
+     */
+    private suspend fun removeShareItems(ids: Set<String>, applies: (Approval.ShareDecision) -> Boolean, mark: () -> Unit = {}) {
+        synchronized(readLock) {
+            mark()
+            listedFlow.update { l ->
+                l.mapNotNull { a ->
+                    if (a !is Approval.ShareDecision || !applies(a)) return@mapNotNull a
+                    a.copy(items = a.items.filter { it.itemId !in ids }).takeIf { it.items.isNotEmpty() }
+                }
+            }
+        }
         edit { l ->
             l.copy(
                 events = l.events.mapNotNull { e ->
-                    if (keyOf(e) != "share:$rule") return@mapNotNull e
+                    val d = parsed(e) as? Approval.ShareDecision
+                    if (d == null || !applies(d)) return@mapNotNull e
                     val o = parseBody(e.body) ?: return@mapNotNull null
                     val left = (o["items"] as? JsonArray).orEmpty().filter {
-                        ((it as? JsonObject)?.get("item_id") as? JsonPrimitive)?.content !in done
+                        ((it as? JsonObject)?.get("item_id") as? JsonPrimitive)?.content !in ids
                     }
                     if (left.isEmpty()) null else e.copy(body = enc(JsonObject(o + ("items" to JsonArray(left)))))
                 },
@@ -465,9 +538,21 @@ class SocialManager(
         }
     }
 
+    /**
+     * The subject of [rule]'s question: from the raw list first (the deduped [approvals] can hide a rule), then the kept
+     * events, then a listed item that names the rule as its `ask_rule_id` (it is the same subject's). Null if unknown.
+     */
+    private fun subjectOfRule(rule: String): String? {
+        val listed = listedFlow.value.filterIsInstance<Approval.ShareDecision>()
+        val stored = storedFlow.value.mapNotNull(::parsed).filterIsInstance<Approval.ShareDecision>()
+        (listed.firstOrNull { it.ruleId == rule } ?: stored.firstOrNull { it.ruleId == rule })
+            ?.let { return ShareQuestions.subjectKey(it) }
+        return listed.firstOrNull { d -> d.items.any { it.askRuleId == rule } }?.let(ShareQuestions::subjectOrNull)
+    }
+
     // --- ConnectionsRepository ---
 
-    override suspend fun refresh(): Unit = vaultGuard {
+    override suspend fun refresh(): Unit = vaultGuard(resend = true) {
         val a = api()
         connectionsFlow.value = a.connectionList().filter { it.kind == "connection" }.map(ApprovalParser::connection)
         val states = try {
@@ -485,13 +570,13 @@ class SocialManager(
         }
     }
 
-    override suspend fun connection(id: String): ConnectionInfo = vaultGuard {
+    override suspend fun connection(id: String): ConnectionInfo = vaultGuard(resend = true) {
         val c = ApprovalParser.connection(api().connectionGet(id))
         connectionsFlow.update { l -> if (l.any { it.id == id }) l.map { if (it.id == id) c else it } else l + c }
         c
     }
 
-    override suspend fun inviteTtls(): List<InviteTtl> = ttls ?: vaultGuard {
+    override suspend fun inviteTtls(): List<InviteTtl> = ttls ?: vaultGuard(resend = true) {
         val l = api().relayLimits()
         val max = minOf(l.openTokenMaxLifetimeSeconds, l.claimTtlSeconds)
         InviteTtl.entries.filter { it.seconds <= max }.ifEmpty { listOf(InviteTtl.TEN_MINUTES) }
@@ -502,7 +587,7 @@ class SocialManager(
         InviteInfo(i.inviteId, i.link, InviteLinks.qrPayload(i.link), ApprovalParser.instant(i.exp) ?: InviteLinks.expiry(i.link), i.remote)
     }
 
-    override suspend fun outstandingInvites(): List<OutstandingInvite> = vaultGuard {
+    override suspend fun outstandingInvites(): List<OutstandingInvite> = vaultGuard(resend = true) {
         (api().inviteList()["invites"] as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e as? JsonObject ?: return@mapNotNull null
             val id = VaultJson.str(o, "invite_id") ?: return@mapNotNull null
@@ -572,6 +657,7 @@ class SocialManager(
     private fun forget(id: String) {
         connectionsFlow.update { l -> l.filterNot { it.id == id } }
         messagesFlow.update { it - id }
+        pagingFlow.update { it - id }
         authFlow.update { it - id }
     }
 
@@ -611,16 +697,71 @@ class SocialManager(
         connectionsFlow.value.filter { it.state == ConnectionState.ACTIVE }.forEach { load(it.id) }
     }
 
-    override suspend fun load(connectionId: String) = vaultGuard {
-        val list = api().messageList(connectionId, HISTORY).map(ApprovalParser::message)
-        messagesFlow.update { m -> m + (connectionId to mergeMessages(list, m[connectionId].orEmpty())) }
+    override fun olderAvailable(connectionId: String): Flow<Boolean> =
+        pagingFlow.map { it[connectionId]?.hasOlder == true }.distinctUntilChanged()
+
+    /**
+     * The newest page (§10.5.2). Older pages the member already scrolled to stay when the new page joins them
+     * ([MessagePages.newest]); [fresh] drops them first (a position the vault no longer holds).
+     */
+    override suspend fun load(connectionId: String) = load(connectionId, fresh = false)
+
+    private suspend fun load(connectionId: String, fresh: Boolean) = vaultGuard(resend = true) {
+        val page = pageFitting { limit -> api().messagePage(connectionId, limit) }
+        val list = page.messages.map(ApprovalParser::message)
+        pages.withLock {
+            val current = messagesFlow.value[connectionId].orEmpty()
+            val paging = if (fresh) MessagePaging() else pagingFlow.value[connectionId] ?: MessagePaging()
+            val merged = MessagePages.newest(list, page.nextBefore, current, paging)
+            messagesFlow.update { it + (connectionId to merged.messages) }
+            pagingFlow.update { it + (connectionId to merged.paging) }
+        }
     }
 
-    /** The vault's list wins; messages that arrived meanwhile (newer than its last) are kept. */
-    private fun mergeMessages(fromVault: List<MessageInfo>, current: List<MessageInfo>): List<MessageInfo> {
-        val ids = fromVault.map { it.messageId }.toSet()
-        val newest = fromVault.maxOfOrNull { it.sentAt } ?: Instant.EPOCH
-        return (fromVault + current.filter { it.messageId !in ids && it.sentAt > newest }).sortedWith(ORDER)
+    /**
+     * The next older page, before the oldest loaded one (§10.5.2). A position the vault no longer holds
+     * (`not_found`: the message was deleted meanwhile, on another device) starts again from the newest page.
+     */
+    override suspend fun loadOlder(connectionId: String) {
+        val before = pagingFlow.value[connectionId]?.nextBefore ?: return
+        val page = try {
+            vaultGuard(resend = true) { pageFitting { limit -> api().messagePage(connectionId, limit, before) } }
+        } catch (e: VaultFailure) {
+            if (e.kind != FailureKind.NOT_FOUND) throw e
+            null
+        }
+        if (page == null) {
+            load(connectionId, fresh = true)
+        } else {
+            val list = page.messages.map(ApprovalParser::message)
+            pages.withLock {
+                // A reload may have replaced the position meanwhile: then this page is not the next one.
+                if (pagingFlow.value[connectionId]?.nextBefore == before) {
+                    val merged = MessagePages.older(list, page.nextBefore, messagesFlow.value[connectionId].orEmpty())
+                    messagesFlow.update { it + (connectionId to merged.messages) }
+                    pagingFlow.update { it + (connectionId to merged.paging) }
+                }
+            }
+        }
+    }
+
+    /** A message this app sent another way (a photo, [AttachmentManager]) joins its conversation. */
+    internal fun addSent(m: MessageInfo) = upsert(m)
+
+    /**
+     * A page asked for with [PAGE] messages and, when the answer could not be sealed (`response_too_large`, §8.1),
+     * asked for again with half as many, down to one: a page of long messages still arrives.
+     */
+    private suspend fun pageFitting(ask: suspend (Int) -> com.vettid.core.vault.MessagePage): com.vettid.core.vault.MessagePage {
+        var limit = PAGE
+        while (true) {
+            try {
+                return ask(limit)
+            } catch (e: com.vettid.core.vault.VaultOpException) {
+                if (e.code != CODE_TOO_LARGE || limit == 1) throw e
+                limit /= 2
+            }
+        }
     }
 
     private fun upsert(m: MessageInfo) = messagesFlow.update { map ->
@@ -628,7 +769,9 @@ class SocialManager(
         val next = if (list.any { it.messageId == m.messageId }) {
             list.map { if (it.messageId == m.messageId) m.copy(delivered = it.delivered || m.delivered, read = it.read || m.read) else it }
         } else {
-            (list + m).sortedWith(ORDER)
+            // A new message joins at the end, in the order it reached this phone (the vault's order), never by
+            // `sent_at`, the sender's clock: the pages join by that order (MessagePages).
+            list + m
         }
         map + (m.connectionId to next)
     }
@@ -675,23 +818,29 @@ class SocialManager(
 
     // --- ApprovalsRepository ---
 
-    @Suppress("CyclomaticComplexMethod")
     override suspend fun refreshApprovals() {
         val t = now()
         val a = vaultGuard { api() }
         refreshRequestsQuietly()
+        refreshApprovalsFrom(t) { readLists(a, t) }
+    }
+
+    /** What one read of the vault's lists brought; a flag is false when that list could not be read. */
+    internal class ListRead(val listed: List<Approval>, val grantsOk: Boolean, val criticalOk: Boolean, val sharesOk: Boolean)
+
+    private suspend fun readLists(a: VaultApi, t: Instant): ListRead {
         val listed = mutableListOf<Approval>()
         var grantsOk = false
         var criticalOk = false
         try {
-            vaultGuard { a.grantList() }["pending"].let { it as? JsonArray }.orEmpty()
+            vaultGuard(resend = true) { a.grantList() }["pending"].let { it as? JsonArray }.orEmpty()
                 .mapNotNullTo(listed) { (it as? JsonObject)?.let { o -> ApprovalParser.grant(o, t) } }
             grantsOk = true
         } catch (_: VaultFailure) {
             // an older release without grants: nothing listed
         }
         try {
-            vaultGuard { a.criticalUseList() }["incoming"].let { it as? JsonArray }.orEmpty()
+            vaultGuard(resend = true) { a.criticalUseList() }["incoming"].let { it as? JsonArray }.orEmpty()
                 .mapNotNullTo(listed) { (it as? JsonObject)?.let { o -> ApprovalParser.critical(o, t) } }
             criticalOk = true
         } catch (_: VaultFailure) {
@@ -703,27 +852,157 @@ class SocialManager(
         } catch (_: VaultFailure) {
             false
         }
-        listedFlow.value = listed
-        // The lists are authoritative for what they cover: drop decided or expired requests kept from events.
-        val keys = listed.map { it.key }.toSet()
-        edit { l ->
-            l.copy(
-                events = l.events.filter { e ->
-                    val p = parsed(e) ?: return@filter false
-                    val stale = (p is Approval.GrantRequest && grantsOk) || (p is Approval.CriticalUse && criticalOk) ||
-                        (p is Approval.ShareDecision && sharesOk)
-                    val exp = p.exp
-                    (!stale || p.key in keys) && (exp == null || exp.isAfter(t))
-                },
-            )
+        return ListRead(listed, grantsOk, criticalOk, sharesOk)
+    }
+
+    /**
+     * Runs a read of the lists and takes it in. What happens while it is on its way (the vault answers it as of when it
+     * looked): share items decided meanwhile stay out of it, and a `share.pending` batch that arrived meanwhile stays in,
+     * in the order the app received them (VAULT-MESSAGING 0.55.7 §10.12 "Share questions that change while the app reads
+     * the lists"). Several reads may overlap.
+     */
+    internal suspend fun refreshApprovalsFrom(t: Instant, read: suspend () -> ListRead) {
+        val since = beginRead()
+        try {
+            val r = read()
+            val listed = synchronized(readLock) {
+                // A list the vault did not answer covers nothing: what was known of it stays (§10.12).
+                val kept = listedFlow.value.filterNot { covered(it, r) }
+                (shareChangesSince(r.listed, since) + kept).also { listedFlow.value = it }
+            }
+            // The lists are authoritative for what they cover: drop decided or expired requests kept from events.
+            val keys = listed.map { it.key }.toSet()
+            val listedItems = listed.filterIsInstance<Approval.ShareDecision>()
+                .associate { d -> d.key to d.items.mapTo(mutableSetOf()) { it.itemId } }
+            val subjects = r.listed.filterIsInstance<Approval.ShareDecision>().associate { it.ruleId to ShareQuestions.subjectKey(it) }
+            edit { l ->
+                l.copy(
+                    events = l.events.mapNotNull { e ->
+                        val p = parsed(e) ?: return@mapNotNull null
+                        val exp = p.exp
+                        when {
+                            exp != null && !exp.isAfter(t) -> null
+                            !covered(p, r) -> e
+                            p is Approval.ShareDecision -> withItems(e, keptItems(p, listedItems[p.key], since, subjects))
+                            p.key in keys -> e
+                            else -> null
+                        }
+                    },
+                )
+            }
+        } finally {
+            endRead(since)
         }
         nowFlow.value = t
     }
 
+    /** Whether [a] is of a list [r] read: the vault answered that list, so it says what of it is still asked. */
+    private fun covered(a: Approval, r: ListRead): Boolean =
+        (a is Approval.GrantRequest && r.grantsOk) || (a is Approval.CriticalUse && r.criticalOk) ||
+            (a is Approval.ShareDecision && r.sharesOk)
+
+    // --- share changes during a read (§10.12) ---
+
+    private class ShareMark(val at: Int, val subject: String?, val ruleId: String, val ids: Set<String>)
+
+    private class ShareBatch(val at: Int, val key: String, val items: List<ShareItem>)
+
+    private val readLock = Any()
+    private var changes = 0
+    private val readSinces = mutableListOf<Int>()
+    private val decidedLog = mutableListOf<ShareMark>()
+    private val batchLog = mutableListOf<ShareBatch>()
+
+    private fun beginRead(): Int = synchronized(readLock) { changes.also { readSinces += it } }
+
+    /** What was decided or batched stays noted until no read that began before it is on its way. */
+    private fun endRead(since: Int) = synchronized(readLock) {
+        readSinces.remove(since)
+        val floor = readSinces.minOrNull() ?: Int.MAX_VALUE
+        decidedLog.removeAll { it.at <= floor }
+        batchLog.removeAll { it.at <= floor }
+    }
+
+    private fun noteBatch(batch: Approval.ShareDecision) = synchronized(readLock) {
+        changes++
+        if (readSinces.isNotEmpty()) {
+            batchLog += ShareBatch(changes, batch.key, batch.items)
+            if (batchLog.size > MAX_LOG) batchLog.removeAt(0)
+        }
+    }
+
+    /** A question the vault answered `not_found` for loses its noted batches: none of them comes back (§10.12 rule 3). */
+    private fun forgetBatches(key: String) = synchronized(readLock) { batchLog.removeAll { it.key == key } }
+
+    /**
+     * The decisions in [marks] about the question of [rule] for [subject]: any rule of the same subject (§10.12 rule 1).
+     * A rule whose subject was not known when decided gets it from [subjects] (the read's own entries).
+     */
+    private fun marksFor(marks: List<ShareMark>, rule: String, subject: String, subjects: Map<String, String>) =
+        marks.filter { m -> m.ruleId == rule || (m.subject ?: subjects[m.ruleId]) == subject }
+
+    /** The items of [batches], in order, less those a decision of [marks] received after their batch dropped (rule 1). */
+    private fun batchItems(batches: List<ShareBatch>, marks: List<ShareMark>): List<ShareItem> = batches.flatMap { b ->
+        val later = marks.filter { it.at > b.at }.flatMapTo(mutableSetOf()) { it.ids }
+        b.items.filter { it.itemId !in later }
+    }
+
+    /**
+     * [listed] as a read that began at change [since] brought it, with what changed during the read (§10.12): a listed
+     * share question has the read's items less those decided during the read, plus the items of the batches that arrived
+     * after the read began, less those a decision received after their batch dropped. Nothing older is added.
+     */
+    private fun shareChangesSince(listed: List<Approval>, since: Int): List<Approval> {
+        val (marks, batches) = synchronized(readLock) {
+            decidedLog.filter { it.at > since } to batchLog.filter { it.at > since }
+        }
+        if (marks.isEmpty() && batches.isEmpty()) return listed
+        val subjects = listed.filterIsInstance<Approval.ShareDecision>().associate { it.ruleId to ShareQuestions.subjectKey(it) }
+        return listed.mapNotNull { a ->
+            if (a !is Approval.ShareDecision) return@mapNotNull a
+            val mine = marksFor(marks, a.ruleId, ShareQuestions.subjectKey(a), subjects)
+            val gone = mine.flatMapTo(mutableSetOf()) { it.ids }
+            var items = a.items.filter { it.itemId !in gone }
+            val have = items.mapTo(mutableSetOf()) { it.itemId }
+            items = items + batchItems(batches.filter { it.key == a.key }, mine).filter { have.add(it.itemId) }
+            if (items.isEmpty()) null else a.copy(items = items)
+        }
+    }
+
+    /**
+     * The item ids the kept event of share question [d] may still hold after a read that began at change [since]
+     * (§10.12): for a question the read lists, its [listed] items; for one it covers but does not list, none (rule 2);
+     * either way plus the items of the batches noted after the read began, less those a decision received after their
+     * batch dropped (rule 1). Taken when the event is pruned, so a batch or decision noted after the read took its
+     * result in counts too; the event itself already lost what was decided after it ([applyShareDecided]). [subjects]: the
+     * read's rules and their subjects, for a decision whose subject was not known when it was made.
+     */
+    private fun keptItems(d: Approval.ShareDecision, listed: Set<String>?, since: Int, subjects: Map<String, String>): Set<String> {
+        val (marks, batches) = synchronized(readLock) {
+            decidedLog.filter { it.at > since } to batchLog.filter { it.at > since && it.key == d.key }
+        }
+        val mine = marksFor(marks, d.ruleId, ShareQuestions.subjectKey(d), subjects)
+        return listed.orEmpty() + batchItems(batches, mine).map { it.itemId }
+    }
+
+    /** [e] with only the items [ids] names, or null when it names none of them. */
+    private fun withItems(e: StoredEvent, ids: Set<String>): StoredEvent? {
+        val o = parseBody(e.body) ?: return null
+        val left = (o["items"] as? JsonArray).orEmpty().filter {
+            ((it as? JsonObject)?.get("item_id") as? JsonPrimitive)?.content in ids
+        }
+        val all = (o["items"] as? JsonArray).orEmpty()
+        return when {
+            left.isEmpty() -> null
+            left.size == all.size -> e
+            else -> e.copy(body = enc(JsonObject(o + ("items" to JsonArray(left)))))
+        }
+    }
+
     /** The share decisions waiting (§10.12, [SharePending.decisions]). */
     private suspend fun pendingShares(a: VaultApi, t: Instant): List<Approval.ShareDecision> = SharePending.decisions(
-        pendingPage = { after -> vaultGuard { a.sharePendingList(after = after, limit = SharePending.PAGE) } },
-        rulePage = { after -> vaultGuard { a.shareRuleList(after = after) } },
+        pendingPage = { after -> vaultGuard(resend = true) { a.sharePendingList(after = after, limit = SharePending.PAGE) } },
+        rulePage = { after -> vaultGuard(resend = true) { a.shareRuleList(after = after) } },
         names = itemNames(),
         t = t,
     )
@@ -772,19 +1051,30 @@ class SocialManager(
         ?: storedFlow.value.mapNotNull(::parsed).firstOrNull { it.key == key }
 
     /** Runs a decision; a request the vault no longer knows (`not_found`) is dropped too. */
-    private suspend fun decide(key: String, block: suspend (VaultApi) -> Unit) {
+    private suspend fun decide(key: String, block: suspend (VaultApi) -> Unit) = decideRun(key) { vaultGuard { block(api()) } }
+
+    /**
+     * [whole]: a decision answers the whole request, which goes and its feed item is read. A share decision
+     * ([decideShareWith]) is not whole: only the items the vault's answer names leave, so an item a batch added meanwhile
+     * stays (§10.12 rule 1), and the feed item is read only once the question is gone.
+     */
+    private suspend fun decideRun(key: String, whole: Boolean = true, run: suspend () -> Unit) {
         try {
-            vaultGuard { block(api()) }
+            run()
         } catch (e: VaultFailure) {
             if (e.kind == FailureKind.NOT_FOUND) {
+                // Only here: a decision the vault took keeps the question's batches (§10.12 rule 3).
+                forgetBatches(key)
                 dropApproval(key)
                 listedFlow.update { l -> l.filterNot { it.key == key } }
             }
             throw e
         }
-        dropApproval(key)
-        listedFlow.update { l -> l.filterNot { it.key == key } }
-        decided(key)
+        if (whole) {
+            dropApproval(key)
+            listedFlow.update { l -> l.filterNot { it.key == key } }
+            decided(key)
+        }
     }
 
     /** Deciding an ask marks its feed item read (ANDROID-PLAN 0.1.23, §9 question 2). */
@@ -915,16 +1205,49 @@ class SocialManager(
      * flush, nothing changed on an error); declined items are not asked again. A vault before 0.21.0 refuses that
      * form (`bad_request`, nothing changed): the two lists then go as two `{items, approve}` calls.
      */
-    override suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>) {
+    override suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>) = decideShareWith(
+        ruleId,
+        include,
+        decline,
+        both = { vaultGuard { api().shareDecide(ruleId, include, decline) } },
+        one = { items, approve -> vaultGuard { api().shareDecide(ruleId, items, approve) } },
+    )
+
+    internal suspend fun decideShareWith(
+        ruleId: String,
+        include: List<String>,
+        decline: List<String>,
+        both: suspend () -> JsonObject,
+        one: suspend (items: List<String>, approve: Boolean) -> JsonObject,
+    ) {
         if (include.isEmpty() && decline.isEmpty()) throw VaultFailure(FailureKind.OTHER, "bad_request")
-        decide("share:$ruleId") { a ->
+        // The subject, before the decision takes the rule's question out of the list and the events.
+        val subject = subjectOfRule(ruleId)
+        val answers = mutableListOf<JsonObject>()
+        decideRun("share:$ruleId", whole = false) {
             SharePending.decide(
                 include,
                 decline,
-                both = { vaultGuard { a.shareDecide(ruleId, include, decline) } },
-                one = { items, approve -> vaultGuard { a.shareDecide(ruleId, items, approve) } },
+                both = { answers.add(both()) },
+                one = { items, approve -> answers.add(one(items, approve)) },
             )
         }
+        // The vault's answer says what the decision changed (it also reaches the subject's other rules); only an answer
+        // without either list falls back to what was sent.
+        val told = answers.filter { "included" in it || "declined" in it }
+        val done = if (told.isEmpty()) {
+            (include + decline).toSet()
+        } else {
+            told.flatMap { listOf("included", "declined").flatMap { k -> ids(it, k) } }.toSet()
+        }
+        val read = applyShareDecided(ruleId, done, subject)
+        // Sent but not named by the answer: the vault did not hold them pending. They leave this rule's question here
+        // only; that is not a decision, so nothing is noted for a read on its way.
+        val ignored = (include + decline).toSet() - done
+        if (ignored.isNotEmpty()) removeShareItems(ignored, { it.ruleId == ruleId })
+        // The feed item is read only when nothing of the question is left (a batch may have added an item meanwhile).
+        val key = "share:$ruleId"
+        if (key !in read && listedFlow.value.none { it.key == key } && storedFlow.value.none { keyOf(it) == key }) decided(key)
     }
 
     override suspend fun declineDeviceRequest(key: String) {
@@ -943,12 +1266,16 @@ class SocialManager(
             .sortedByDescending { it.last?.sentAt ?: it.connection.createdAt ?: Instant.EPOCH }
 
     companion object {
-        private const val HISTORY = 200
+        /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
+        private const val PAGE = 100
+
+        /** At most this many share decisions and batches are remembered for reads on their way. */
+        private const val MAX_LOG = 64
+        private const val CODE_TOO_LARGE = "response_too_large"
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
 
         /** Longer than any request lives (§6.4: an approved incoming one, 16 days). */
         private val NAME_RETENTION: Duration = Duration.ofDays(17)
-        private val ORDER = compareBy<MessageInfo>({ it.sentAt }, { it.messageId })
         private val json = Json { ignoreUnknownKeys = true }
     }
 }

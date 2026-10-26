@@ -9,6 +9,8 @@ import com.vettid.core.crypto.altchan.AltChannel
 import com.vettid.core.crypto.altchan.DeviceAssertion
 import com.vettid.core.crypto.altchan.DeviceAttest
 import com.vettid.core.crypto.altchan.EnrollRequest
+import com.vettid.core.crypto.altchan.Passwords
+import com.vettid.core.crypto.altchan.RecoveryOpen
 import com.vettid.core.crypto.altchan.UnlockRequest
 import com.vettid.core.crypto.envelope.Timestamps
 import com.vettid.core.crypto.envelope.Ulid
@@ -30,6 +32,18 @@ class AltRefusedException(val reason: Reason) : IOException("alternate channel: 
 
         /** The device is not paired with a vault. */
         NOT_PAIRED,
+
+        /**
+         * (STAGING-TIME-SCALE §4 item 4) The vault's release has a time scale this build does not accept (a production
+         * build: any but 1): nothing is sent to it.
+         */
+        TIME_SCALE,
+
+        /**
+         * (ANDROID-PLAN 0.1.54 point 6) After `update: moved` the member API still routes the vault to the release it
+         * moved from, past the waits of [RouteWait]: the PIN is not sent to it, and nothing else is either.
+         */
+        ROUTE_PENDING,
     }
 }
 
@@ -66,7 +80,15 @@ data class UnlockOptions(
     val abandon: Boolean = false,
     val cancelRecovery: Boolean = false,
     val sendChain: Boolean = false,
-)
+    /**
+     * (VAULT-MESSAGING 0.33.0 §11.14.1, release R) The phone's unlock secret at its epoch: sent right after `pin`, and
+     * the signing string ends with its hash. Null for a vault before release R. Never logged.
+     */
+    val unlockSecret: ByteArray? = null,
+) {
+    override fun toString(): String = "UnlockOptions(approve=$approve, abandon=$abandon, cancelRecovery=$cancelRecovery, " +
+        "sendChain=$sendChain, unlockSecret=${if (unlockSecret != null) "set" else "none"})"
+}
 
 /**
  * Builds the sealed requests of the alternate channel, as vettid-vault's
@@ -77,6 +99,9 @@ data class UnlockOptions(
  */
 object AltRequests {
     const val TYPE_RECOVERY_REGISTER = "vault.recovery.register"
+
+    /** The unlock result code of a release the vault has left for good (§11.10.4 "Confirmation at release N+1"). */
+    const val CODE_WRONG_RELEASE = "wrong_release"
 
     private fun ts(now: Instant): Instant = now.truncatedTo(ChronoUnit.MILLIS)
 
@@ -95,18 +120,25 @@ object AltRequests {
         openToken: String,
         state: AltState,
         now: Instant,
+        /** (0.33.0, release R) The new phone key's secret of epoch 1; null for a release before R. */
+        unlockSecret: ByteArray? = null,
     ): BuiltEnroll {
         val t = ts(now)
         val rid = Ulid.new(t)
         val challenge = AltChannel.devattChallenge(rid, "", Timestamps.formatMillis(t))
         val attest = attester.attest(challenge)
         val nonce = Randomness.bytes(NONCE_SIZE)
-        val body = EnrollRequest(
+        val request = EnrollRequest(
             userGuid, rid, nonce, pin, app.ik(), app.kem, app.relay, openToken, app.name, attest, manifest.sha256Hex, manifest.serial,
-            app.apiKey(),
-        ).marshal()
-        val env = AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_ENROLL, rid, t, body)
-        val next = state.copy(enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number)
+            app.apiKey(), unlockSecret,
+        )
+        val body = request.marshal()
+        request.wipe()
+        val env = sealWiping(enclave, AltChannel.TYPE_ENROLL, rid, t, body, wipe = unlockSecret != null)
+        val next = state.copy(
+            enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number,
+            enrollRequestId = rid, enrollPostedMs = t.toEpochMilli(), enrollAnswered = false,
+        )
         return BuiltEnroll(SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex), next)
     }
 
@@ -158,16 +190,19 @@ object AltRequests {
                 userGuid = userGuid, vaultId = vaultId, requestId = rid, ts = tss, etkKid = enclave.descriptor.kid,
                 minStateSeq = state.stateSeq, minHeaderSeq = minHeader, pin = pin, token = token,
                 manifestSha256 = manifest.sha256Hex, toPcr0 = upd?.toPcr0 ?: "", cancelRecovery = options.cancelRecovery,
+                unlockSecret = options.unlockSecret,
             ),
         )
         val sig = ik.signRaw(signing.toByteArray())
 
         fun seal(a: DeviceAssertion): ByteArray {
-            val body = UnlockRequest(
+            val request = UnlockRequest(
                 userGuid, vaultId, rid, ik.publicKey, pin, state.stateSeq, minHeader, token, a, manifest.sha256Hex, manifest.serial,
-                update, options.cancelRecovery, sig,
-            ).marshal()
-            return AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_UNLOCK, rid, t, body)
+                update, options.cancelRecovery, sig, options.unlockSecret,
+            )
+            val body = request.marshal()
+            request.wipe()
+            return sealWiping(enclave, AltChannel.TYPE_UNLOCK, rid, t, body, wipe = options.unlockSecret != null)
         }
         val env = sealFitting(assertion, ::seal)
         return BuiltUnlock(
@@ -181,27 +216,57 @@ object AltRequests {
      * Applies an opened unlock result to the app state (§11.4, §11.10.4):
      * floors only move up; a result from another release than the attested
      * one is refused; a move records the previous release for abandonment.
+     *
+     * (ANDROID-PLAN 0.1.54) The marker of an unconfirmed move is stored with `update: moved`, in the same write that
+     * records the new release, and goes with every other unlock that opens the vault: one on N+1 confirms the move, and
+     * one on N is the way back (`abandoned`, or `refused` `downgrade`: no pending move was left), which records N. The
+     * way back answered `wrong_release` (N+1 has opened the vault, which is sealed to it for good) also clears it.
      */
     fun applyUnlock(state: AltState, p: PendingUnlock, r: UnlockResult): AltState {
         val hs = state.headerSeq.toMutableMap()
         if (!r.ok) {
             if (r.headerSeq > (hs[p.release] ?: 0)) hs[p.release] = r.headerSeq
-            return state.copy(headerSeq = hs)
+            val from = state.movedFrom
+            val wayBack = from != null && p.release == from.pcr0 && p.number == from.number
+            val s = state.copy(headerSeq = hs)
+            return if (wayBack && r.code == CODE_WRONG_RELEASE) s.withoutMove() else s
         }
         if (r.release != p.release || r.releaseNumber != p.number) throw AltResultException("result from another release")
         var s = state.copy(stateSeq = maxOf(state.stateSeq, r.stateSeq), manifestSerial = maxOf(state.manifestSerial, r.manifestSerial))
         var release = p.release
         var number = p.number
-        when (r.update?.result) {
-            "moved" -> {
-                s = s.copy(previousRelease = p.release, previousReleaseNumber = p.number)
-                release = r.update.to
-                number = p.toNumber
-            }
-            "abandoned" -> s = s.copy(previousRelease = "", previousReleaseNumber = 0)
+        if (r.update?.result == "moved") {
+            s = s.copy(previousRelease = p.release, previousReleaseNumber = p.number, moveFailed = false)
+            release = r.update.to
+            number = p.toNumber
+        } else {
+            // The vault opened on the release that answered: an unconfirmed move is confirmed (N+1) or abandoned (N).
+            s = s.withoutMove()
         }
         if (r.headerSeq > (hs[release] ?: 0)) hs[release] = r.headerSeq
         return s.copy(headerSeq = hs, release = release, releaseNumber = if (number != 0L) number else s.releaseNumber)
+    }
+
+    /** Seals [body] to the enclave; with [wipe] (a body that carries the release R unlock secret) zeroes it after. */
+    private fun sealWiping(enclave: VerifiedEnclave, type: String, rid: String, t: Instant, body: ByteArray, wipe: Boolean): ByteArray =
+        try {
+            AltChannel.sealRequest(enclave.descriptor.etk, type, rid, t, body)
+        } finally {
+            if (wipe) body.fill(0)
+        }
+
+    /**
+     * Applies an `ok` `vault.recovery.open.result` (VAULT-MESSAGING 0.33.0 §11.14.6, release R) to the app state, as an
+     * unlock result is applied: floors only move up, and the result's `release` with its `header_seq` becomes the
+     * release the next unlock names (with its `min_header_seq`). A result without a well-formed release moves only the
+     * state floor.
+     */
+    fun applyRecoveryOpen(state: AltState, stateSeq: Long, headerSeq: Long, release: String, releaseNumber: Long): AltState {
+        val s = state.copy(stateSeq = maxOf(state.stateSeq, stateSeq))
+        if (release.length != PCR_HEX || releaseNumber <= 0) return s
+        val hs = s.headerSeq.toMutableMap()
+        if (headerSeq > (hs[release] ?: 0)) hs[release] = headerSeq
+        return s.copy(headerSeq = hs, release = release, releaseNumber = releaseNumber)
     }
 
     /**
@@ -212,7 +277,7 @@ object AltRequests {
         var s = state
         if (s.enrollPcrs.length >= PCR_HEX) s = s.copy(release = s.enrollPcrs.substring(0, PCR_HEX), releaseNumber = s.enrollNumber)
         if (stateSeq != null && stateSeq > s.stateSeq) s = s.copy(stateSeq = stateSeq)
-        return s.copy(enrollNonce = null, enrollPcrs = "", enrollNumber = 0)
+        return s.withoutEnroll()
     }
 
     /**
@@ -239,6 +304,53 @@ object AltRequests {
             .string("recovery_id", code.recoveryId).string("code", code.code).raw("app", appObj).bytes()
         val env = AltChannel.sealRequest(enclave.descriptor.etk, TYPE_RECOVERY_REGISTER, rid, t, body)
         return SealedRequest(rid, enclave.descriptor.kid.toString(), env, null)
+    }
+
+    /**
+     * `vault.recovery.open` (VAULT-MESSAGING 0.33.0 §11.14.6, release R): the registered phone's PIN, password (NFC)
+     * and unlock secret, an open token for its own mailbox, the device assertion over the challenge, the verified
+     * manifest, and the signature by its identity key [ik].
+     */
+    @Suppress("LongParameterList")
+    fun buildRecoveryOpen(
+        userGuid: String,
+        vaultId: String,
+        recoveryId: String,
+        pin: String,
+        password: String,
+        unlockSecret: ByteArray,
+        enclave: VerifiedEnclave,
+        manifest: ReleaseManifest,
+        attester: Attester,
+        ik: Ed25519PrivateKey,
+        token: String,
+        now: Instant,
+    ): SealedRequest {
+        val t = ts(now)
+        val tss = Timestamps.formatMillis(t)
+        val rid = Ulid.new(t)
+        val assertion = attester.assert(AltChannel.devattChallenge(rid, vaultId, tss))
+        val secrets = Passwords.recoverySecrets(pin, password)
+        val signing = try {
+            RecoveryOpen.signingString(
+                RecoveryOpen.Fields(
+                    userGuid, vaultId, rid, recoveryId, tss, enclave.descriptor.kid, secrets, token, manifest.sha256Hex, unlockSecret,
+                ),
+            )
+        } finally {
+            secrets.fill(0)
+        }
+        val sig = ik.signRaw(signing.toByteArray())
+        val body = RecoveryOpen.marshal(
+            userGuid, vaultId, rid, recoveryId, ik.publicKey, pin, password, unlockSecret, token, assertion, manifest.sha256Hex,
+            manifest.serial, sig,
+        )
+        val env = try {
+            AltChannel.sealRequest(enclave.descriptor.etk, RecoveryOpen.TYPE, rid, t, body)
+        } finally {
+            body.fill(0)
+        }
+        return SealedRequest(rid, enclave.descriptor.kid.toString(), env, manifest.sha256Hex)
     }
 
     /** The unlock's assertion over [challenge], with the device key's chain when [withChain] and there is a usable one. */

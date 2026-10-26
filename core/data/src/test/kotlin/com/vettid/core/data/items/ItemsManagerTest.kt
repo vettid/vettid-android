@@ -195,10 +195,10 @@ class ItemsManagerTest {
     }
 
     @Test
-    fun createSendsTheCheckedContent() = scope.runTest {
+    fun createSendsTheCheckedContentAsItIs() = scope.runTest {
         val draft = ItemDraft(
-            name = " Passport ", category = "identity_document", template = "passport", sensitivity = Sensitivity.SECRET,
-            tags = listOf("Travel", "travel", "ID"), fields = listOf(DraftField(label = " Number ", kind = "text", text = "X1")),
+            name = "Passport", category = "identity_document", template = "passport", sensitivity = Sensitivity.SECRET,
+            tags = listOf("Travel", "travel", "ID"), fields = listOf(DraftField(label = "Number", kind = "text", text = "X1")),
         )
         assertEquals("01NEW", m.create(draft))
         val (content, s, tags, id, v) = ops.puts.single()
@@ -436,5 +436,39 @@ class ItemsManagerTest {
         m.clear()
         assertTrue(m.items.value.isEmpty())
         assertEquals(ListLoad.NOT_LOADED, m.load.value)
+    }
+
+    /**
+     * ANDROID-PLAN 0.1.57 (1): a request that carries the password never leaves a resend behind "This phone can't use
+     * your vault" (Try again sends nothing; the screen asks for the password again), nor does a write without one; an
+     * idempotent read is sent again.
+     */
+    @Test
+    fun onlyAReadIsResentAfterCredentialRequired() = scope.runTest {
+        val refusal = com.vettid.core.data.vault.CredentialRequired
+        refusal.clear()
+        val critical = ItemDraft(
+            name = "Phrase", category = "crypto_wallet", sensitivity = Sensitivity.CRITICAL,
+            fields = listOf(DraftField(label = "W", kind = "multiline", text = "a b")),
+        )
+        ops.criticalError = "credential_required"
+        runCatching { m.createCritical(critical, "the password") }
+        assertEquals(false, refusal.state.value?.resends)
+        refusal.tryAgain()
+        assertEquals(1, ops.calls.count { it == "putCritical:the password" })
+
+        ops.error = "credential_required"
+        runCatching { m.create(ItemDraft(name = "P", fields = listOf(DraftField("f1", "N", "text", "1")))) }
+        assertEquals(false, refusal.state.value?.resends)
+        refusal.tryAgain()
+        assertEquals(1, ops.calls.count { it == "put" })
+
+        runCatching { m.get("01A") }
+        assertEquals(true, refusal.state.value?.resends)
+        ops.error = null
+        ops.items["01A"] = item("01A", "Passport")
+        refusal.tryAgain()
+        assertEquals(2, ops.calls.count { it == "get" })
+        assertEquals(null, refusal.state.value)
     }
 }

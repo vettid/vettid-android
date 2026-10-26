@@ -27,8 +27,15 @@ import java.time.Duration
  * password and run as credential operations (§3.5.3).
  */
 @Suppress("TooManyFunctions")
-class VaultApi(val device: VaultDevice) {
-    private val cred = CredentialOps(device)
+class VaultApi(
+    val device: VaultDevice,
+    /** (Release R, §11.14.7) Whether the vault normalizes passwords to NFC; false for a vault before release R. */
+    normalizePasswords: () -> Boolean = { false },
+) {
+    private val cred = CredentialOps(device, normalizePasswords)
+
+    /** The credential operations, for the extension files of later releases ([pinChange], [secretRenew]). */
+    internal val credentialOps: CredentialOps get() = cred
 
     private fun <T> JsonObject.decode(s: KSerializer<T>): T = VaultJson.decode(s, this)
 
@@ -71,7 +78,15 @@ class VaultApi(val device: VaultDevice) {
         op("vault.enroll.confirm")
     }
 
-    suspend fun status(): VaultStatusInfo = op("vault.status").decode(VaultStatusInfo.serializer())
+    /**
+     * `vault.status`. Its `unlock_id` (release L) becomes this device's current one ([VaultDevice.unlockId]), unless
+     * the device learned of another opening while the answer was on its way.
+     */
+    suspend fun status(): VaultStatusInfo {
+        // (Release L) Applied only if no opening came between the request and its answer (VaultDevice.openingMark).
+        val mark = device.openingMark()
+        return op("vault.status").decode(VaultStatusInfo.serializer()).also { device.noteUnlockId(it.unlockId, mark) }
+    }
 
     /** `account.get` (§10.2, §11.13, 0.15.0): the member's account snapshot from the member API, display only. */
     suspend fun accountGet(): AccountView = op("account.get").decode(AccountView.serializer())
@@ -81,9 +96,14 @@ class VaultApi(val device: VaultDevice) {
      * outbox, so a lock that could not be delivered is not delivered by a later flush, and the vault drops one that
      * reaches it more than [validFor] after it was asked. A lock must never land on a vault the member has opened
      * again since. Throws without an answer within [timeout]; the caller decides what follows.
+     *
+     * (0.29.0, release L) With [unlockId] a bound lock, `vault.lock {unlock_id}`: the vault locks only if it names its
+     * current unlock, and otherwise answers `stale_lock` ([VaultOpException], [CODE_STALE_LOCK]) and does nothing.
+     * Without it, `{}`: carried out as before L. [validFor] is at most 60 s (§8.6).
      */
-    suspend fun lock(timeout: Duration = LOCK_ANSWER, validFor: Duration = LOCK_VALID) {
-        device.opOnce("vault.lock", timeout = timeout, exp = device.clockNow().plus(validFor))
+    suspend fun lock(timeout: Duration = LOCK_ANSWER, validFor: Duration = LOCK_VALID, unlockId: String? = null) {
+        val body = if (unlockId == null) VaultDevice.EMPTY else buildJsonObject { put("unlock_id", unlockId) }
+        device.opOnce("vault.lock", body, timeout = timeout, exp = device.clockNow().plus(validFor.coerceAtMost(LOCK_VALID_MAX)))
     }
 
     /**
@@ -132,9 +152,15 @@ class VaultApi(val device: VaultDevice) {
 
     // --- credential (§10.6) ---
 
-    /** Creates the Protean Credential under [password] and keeps the blob (enrollment, §3.5.7). */
-    suspend fun credentialCreate(password: String) {
-        cred.sealedOp("credential.create", { put("password", password) })
+    /**
+     * Creates the Protean Credential under [password] and keeps the blob (enrollment, §3.5.7). (0.33.0, release R)
+     * With [pin] the vault verifies it against its unlock key and arms recovery; a weak password is `weak_password`.
+     */
+    suspend fun credentialCreate(password: String, pin: String? = null) {
+        cred.sealedOp("credential.create", {
+            pin?.let { put("pin", it) }
+            put("password", password)
+        })
     }
 
     suspend fun credentialFetch() = cred.fetch()
@@ -149,16 +175,13 @@ class VaultApi(val device: VaultDevice) {
         op("credential.lock")
     }
 
-    /** Rotates the credential key (and the vault's ik and kem, §3.4). */
-    suspend fun credentialRotate(password: String) {
-        cred.credOp("credential.rotate", { put("password", password) })
-    }
-
-    suspend fun credentialChangePassword(password: String, newPassword: String) {
-        cred.credOp("credential.password.change", {
-            put("password", password)
-            put("new_password", newPassword)
-        })
+    /**
+     * Rotates the credential key (and the vault's ik and kem, §3.4). [alarmOpen]: a clone alarm is open, so the held blob
+     * is checked against `credential.version` first and refreshed when superseded (vettid.org #358,
+     * [CredentialOps.rotate]); a `rotation_required` or `credential_frozen` answer gets the same check and one retry.
+     */
+    suspend fun credentialRotate(password: String, alarmOpen: Boolean = false) {
+        cred.rotate({ put("password", password) }, alarmOpen)
     }
 
     // No `credential.delete` (VAULT-MESSAGING 0.15.2): a credential goes only with the vault (`vault.delete`);
@@ -212,24 +235,6 @@ class VaultApi(val device: VaultDevice) {
     suspend fun awaitTransferPending(transferId: String, timeout: Duration): TransferPending =
         device.awaitEvent("device.transfer.pending", timeout) { VaultJson.str(it, "transfer_id") == transferId }
             .let { TransferPending.of(transferId, it.body) }
-
-    /**
-     * `device.transfer.approve` with the blob and, sealed to a UTK, the PIN and the
-     * password. `{}` means the transfer is complete: this app has been removed.
-     * [signer] (0.27.0, §6.7.1 step 3): the new app's signer class, the holder's explicit confirmation, sent when
-     * the pending said `signer_changed`; null sends no member. Without it the vault answers `signer_unconfirmed`
-     * before it spends the UTK or tries the PIN, and the transfer stays open.
-     */
-    suspend fun transferApprove(transferId: String, pin: String, password: String, signer: String? = null) {
-        cred.credOp(
-            "device.transfer.approve",
-            {
-                put("password", password)
-                put("pin", pin)
-            },
-            extra = TransferPending.approval(transferId, signer),
-        )
-    }
 
     /** `device.transfer.reject`: cancels the transfer before or after the scan. */
     suspend fun transferReject(transferId: String) {
@@ -650,14 +655,25 @@ class VaultApi(val device: VaultDevice) {
         put("text", text)
     }.decode(SentMessage.serializer())
 
-    /** History, oldest first ([limit] 1–500). */
-    suspend fun messageList(connectionId: String, limit: Int? = null): List<Message> = VaultJson.decode(
-        ListSerializer(Message.serializer()),
-        op("message.list") {
+    /** The newest page of the history, oldest first ([limit] 1–500); [messagePage] for the older ones. */
+    suspend fun messageList(connectionId: String, limit: Int? = null): List<Message> = messagePage(connectionId, limit).messages
+
+    /**
+     * One page of `message.list` (VAULT-MESSAGING 0.32.0 §10.5.2): without [before] the page ends with the newest
+     * message, with it the messages the vault stored before that `message_id` (exclusive). Oldest first, at most
+     * [limit] (1–500) and 131,072 bytes; [MessagePage.nextBefore] continues to older ones. A [before] the vault does
+     * not hold is `not_found` (the app starts again from the newest); an answer the vault could not seal is
+     * `response_too_large` (§8.1).
+     */
+    suspend fun messagePage(connectionId: String, limit: Int? = null, before: String? = null): MessagePage {
+        val o = op("message.list") {
             put("connection_id", connectionId)
             limit?.let { put("limit", it) }
-        }["messages"] ?: JsonArray(emptyList()),
-    )
+            before?.let { put("before", it) }
+        }
+        val list = VaultJson.decode(ListSerializer(Message.serializer()), o["messages"] ?: JsonArray(emptyList()))
+        return MessagePage(list, VaultJson.str(o, "next_before")?.takeIf { it.isNotEmpty() })
+    }
 
     suspend fun messageGet(connectionId: String, messageId: String): Message = op("message.get") {
         put("connection_id", connectionId)
@@ -902,6 +918,12 @@ class VaultApi(val device: VaultDevice) {
 
         /** How long after it was asked a `vault.lock` may still be acted on. */
         val LOCK_VALID: Duration = Duration.ofSeconds(30)
+
+        /** The longest `exp` a `vault.lock` may have (§8.6, 0.29.0): it must not wait at the relay for long. */
+        val LOCK_VALID_MAX: Duration = Duration.ofSeconds(60)
+
+        /** (0.29.0, release L) `vault.lock {unlock_id}` named an unlock that is not the vault's current one. */
+        const val CODE_STALE_LOCK = "stale_lock"
 
         const val INVITE_TTL_DEFAULT = 3600
 

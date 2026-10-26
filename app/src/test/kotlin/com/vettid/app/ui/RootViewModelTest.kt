@@ -9,6 +9,7 @@ import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.testing.FakeReleaseUpdates
+import com.vettid.core.data.wipe.AppDataClear
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -52,26 +53,78 @@ class RootViewModelTest {
         override fun delete() = Unit
     }
 
+    /** What "Erase VettID's data on this phone" did, in order; [cleared] is the system's answer. */
+    private val dataSteps = mutableListOf<String>()
+    private var cleared = true
+    private val clearData = AppDataClear(
+        keyAliases = { listOf("k") },
+        deleteKey = { dataSteps += "delete $it" },
+        clearAppData = {
+            dataSteps += "clear"
+            cleared
+        },
+        known = emptyList(),
+        io = dispatcher,
+    )
+
     private fun root(vault: FakeVault, prefs: InMemoryPreferencesRepository = InMemoryPreferencesRepository()) =
-        RootViewModel(vault, vault, vault, AppLock(prefs, noKeys, noFile), FakeReleaseUpdates(), prefs)
+        RootViewModel(vault, vault, vault, AppLock(prefs, noKeys, noFile), FakeReleaseUpdates(), prefs, clearData)
+
+    @Test
+    fun afterAWipeThatDidNotFinishTheWayOutErasesTheDataAndNothingElse() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.ERASE_FAILED))
+        val vm = root(vault)
+        vm.startOver(WayOut.CLEAR_DATA)
+        advanceUntilIdle()
+        // Local only: the keys, then the system's clear; no session, nothing asked of the vault.
+        assertEquals(listOf("delete k", "clear"), dataSteps)
+        assertEquals(emptyList<String>(), vault.calls)
+        assertFalse(vm.clearDataFailed.value)
+    }
+
+    @Test
+    fun aRefusedClearIsSaidWithTheWayToDoItInSettings() = runTest(dispatcher) {
+        cleared = false
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.ERASE_FAILED))
+        val vm = root(vault)
+        vm.startOver(WayOut.CLEAR_DATA)
+        advanceUntilIdle()
+        assertTrue(vm.clearDataFailed.value)
+        assertEquals(emptyList<String>(), vault.calls)
+        assertFalse(vm.retrying.value)
+    }
 
     @Test
     fun startOverWithoutAVaultAsksTheRepositoryToForgetItAndNothingIsErased() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.NO_VAULT))
         val vm = root(vault)
-        vm.startOver()
+        vm.startOver(WayOut.START_OVER)
         advanceUntilIdle()
         assertEquals(listOf("forgetMissingVault"), vault.calls)
         assertEquals(AppPhase.SignedOut, vault.phase.value)
         assertFalse(vm.retrying.value)
     }
 
+    /** Release R: the vault confirmed this phone is still its app after 7 days: told once, until acknowledged. */
+    @Test
+    fun aMoveThatDidNotHappenIsToldUntilAcknowledged() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unlocked)
+        val vm = root(vault)
+        assertFalse(vm.moveNotDone.value)
+        vault.moveNotDone.value = true
+        assertTrue(vm.moveNotDone.value)
+        vm.acknowledgeMoveNotDone()
+        assertFalse(vm.moveNotDone.value)
+        assertTrue("acknowledgeMoveNotDone" in vault.calls)
+    }
+
     @Test
     fun startOverWithUnreadableKeysErasesThisPhone() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.LOCAL_STATE))
-        root(vault).startOver()
+        root(vault).startOver(WayOut.ERASE)
         advanceUntilIdle()
         assertEquals(listOf("eraseThisPhone"), vault.calls)
+        assertEquals("the wipe, not the system's clear of the data", emptyList<String>(), dataSteps)
     }
 
     @Test
@@ -79,16 +132,51 @@ class RootViewModelTest {
         listOf(
             AppPhase.Unreachable(FailureKind.NETWORK),
             AppPhase.Unreachable(FailureKind.CLOCK),
-            AppPhase.Unreachable(FailureKind.UNAUTHORIZED),
+            AppPhase.Unreachable(FailureKind.CLOCK, longUnreachable = true),
             AppPhase.Locked,
             AppPhase.Unlocked,
         ).forEach { phase ->
-            val vault = FakeVault(phase)
-            root(vault).startOver()
-            advanceUntilIdle()
-            assertEquals(phase.toString(), emptyList<String>(), vault.calls)
-            assertEquals(phase, vault.phase.value)
+            for (way in WayOut.entries) {
+                val vault = FakeVault(phase)
+                root(vault).startOver(way)
+                advanceUntilIdle()
+                assertEquals("$phase $way", emptyList<String>(), vault.calls)
+                assertEquals(phase, vault.phase.value)
+            }
         }
+        assertEquals("the data is erased only after a wipe that did not finish", emptyList<String>(), dataSteps)
+    }
+
+    @Test
+    fun aConfirmedWayOutIsActedOnOnlyWhileThePhaseStillOffersIt() = runTest(dispatcher) {
+        // The member confirmed one way out; the phase is now another one's (or none).
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.NO_VAULT))
+        val vm = root(vault)
+        vm.startOver(WayOut.ERASE)
+        vm.startOver(WayOut.CLEAR_DATA)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), vault.calls)
+        assertEquals(emptyList<String>(), dataSteps)
+    }
+
+    @Test
+    fun aPhoneTheAccountServiceNoLongerAcceptsMayBeErased() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unreachable(FailureKind.UNAUTHORIZED))
+        root(vault).startOver(WayOut.ERASE_OR_RECOVER)
+        advanceUntilIdle()
+        assertEquals(listOf("eraseThisPhone"), vault.calls)
+    }
+
+    @Test
+    fun aVaultUnreachableForLongMayBeErasedAndOnlyThen() = runTest(dispatcher) {
+        val long = FakeVault(AppPhase.Unreachable(FailureKind.NETWORK, longUnreachable = true))
+        root(long).startOver(WayOut.ERASE_OR_RECOVER)
+        advanceUntilIdle()
+        assertEquals(listOf("eraseThisPhone"), long.calls)
+        val short = FakeVault(AppPhase.Unreachable(FailureKind.NETWORK))
+        root(short).startOver(WayOut.ERASE_OR_RECOVER)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), short.calls)
     }
 
     @Test
@@ -113,5 +201,49 @@ class RootViewModelTest {
         advanceUntilIdle()
         assertFalse(vm.preferencesReset.value)
         assertFalse(prefs.current.value.wasReset)
+    }
+
+    /**
+     * ANDROID-PLAN 0.1.57 (1): "This phone can't use your vault" shows over the open app only; Lock vault locks and takes
+     * it away; Try again sends a request without secrets again; nothing is erased.
+     */
+    @Test
+    fun theCredentialRequiredScreenFollowsTheOpenVault() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unlocked)
+        val vm = CredentialRequiredViewModel(vault, vault)
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertTrue(vm.shown.value)
+        vm.tryAgain()
+        advanceUntilIdle()
+        assertTrue("retryCredentialRequired" in vault.calls)
+        assertFalse(vm.shown.value)
+        // Again, and Lock vault.
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertTrue(vm.shown.value)
+        vm.lockVault()
+        advanceUntilIdle()
+        assertTrue("lock" in vault.calls)
+        assertFalse(vm.shown.value)
+        assertTrue(vault.calls.none { it.contains("wipe", ignoreCase = true) || it.contains("erase", ignoreCase = true) })
+        // Never over a vault that is not open.
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertFalse(vm.shown.value)
+    }
+
+    /** A refusal raised by the owner check an unlock sends before the app opens shows once the app opens. */
+    @Test
+    fun aRefusalFromTheUnlocksCheckShowsOnceTheAppOpens() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Locked)
+        val vm = CredentialRequiredViewModel(vault, vault)
+        vault.credentialRequired.value = com.vettid.core.data.vault.CredentialRequired.Refusal()
+        advanceUntilIdle()
+        assertFalse(vm.shown.value)
+        assertFalse("clearCredentialRequired" in vault.calls)
+        vault.phase.value = AppPhase.Unlocked
+        advanceUntilIdle()
+        assertTrue(vm.shown.value)
     }
 }

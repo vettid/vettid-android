@@ -93,7 +93,8 @@ sealed interface NameChangeOutcome {
     /** A PIN or password backoff runs ([retryAfterSeconds] 0 when the vault did not say how long). */
     data class Backoff(val retryAfterSeconds: Long) : NameChangeOutcome
 
-    data class Failed(val kind: FailureKind, val code: String?) : NameChangeOutcome
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names ([VaultFailure.shownCode]), or null. */
+    data class Failed(val kind: FailureKind, val code: String?, val shownCode: String? = null) : NameChangeOutcome
 }
 
 /** The member's shared profile and the account's names (§10.8). Failures other than [NameChangeOutcome] are [VaultFailure]s. */
@@ -130,52 +131,80 @@ interface ProfileOps {
 }
 
 /**
- * [ProfileRepository] over [ProfileOps]. [onRequest] keeps a new name request with the account; [checksLeft]
- * re-reads the owner check's count after a failed PIN or password (§3.6.4: a name change counts as a check).
+ * [ProfileRepository] over [ProfileOps]. [onRequest] keeps a new name request with the account, with the [mark] read
+ * before the request was sent (the own account it belongs to); [checksLeft] re-reads the owner check's count after a
+ * failed PIN or password (§3.6.4: a name change counts as a check).
+ *
+ * The profile read is the member's own (the names and the photo): **memory only**, forgotten by [clear] whenever the vault
+ * is not open (ANDROID-PLAN §4 "The member's own profile"). An answer is kept only while [open] says the vault is open and
+ * no [clear] came since its request was sent, so a read on its way when the vault locks never brings the profile back.
  */
 class ProfileManager(
     private val ops: suspend () -> ProfileOps,
-    private val onRequest: suspend (NameRequestView) -> Unit,
+    private val onRequest: suspend (NameRequestView, mark: Int) -> Unit,
     private val checksLeft: suspend () -> Int?,
+    private val mark: () -> Int = { 0 },
+    private val open: () -> Boolean = { true },
 ) : ProfileRepository {
     private val state = MutableStateFlow<OwnProfile?>(null)
     override val profile: StateFlow<OwnProfile?> = state.asStateFlow()
 
-    /** Forgets the profile read (a wipe of this phone). */
+    private val lock = Any()
+
+    /** Moved by every [clear]: an answer to a request sent before it is dropped. */
+    @Volatile
+    private var generation = 0
+
+    /** Forgets the profile read (the vault is not open: a lock, the hold or the due state, a sign-out, a wipe). */
     fun clear() {
-        state.value = null
+        synchronized(lock) {
+            generation++
+            state.value = null
+        }
+    }
+
+    /** [f] of the profile now, kept while the vault is open and no [clear] came since [gen] was read. */
+    private fun keep(gen: Int, f: (OwnProfile?) -> OwnProfile?) {
+        synchronized(lock) {
+            if (gen == generation && open()) state.value = f(state.value)
+        }
     }
 
     override suspend fun refreshProfile() {
-        val p = vaultGuard { ops().profileGet() }
-        state.value = OwnProfile(
-            version = p.version,
-            displayName = p.name,
-            firstName = p.firstName?.takeIf { AccountNames.isValidCore(it) },
-            lastName = p.lastName?.takeIf { AccountNames.isValidCore(it) },
-            fingerprint = p.ik?.let { IkFingerprint.formatB64(it) },
-            photo = p.photo?.takeIf { it.isNotEmpty() },
-        )
+        val gen = generation
+        val p = vaultGuard(resend = true) { ops().profileGet() }
+        keep(gen) {
+            OwnProfile(
+                version = p.version,
+                displayName = p.name,
+                firstName = p.firstName?.takeIf { AccountNames.isValidCore(it) },
+                lastName = p.lastName?.takeIf { AccountNames.isValidCore(it) },
+                fingerprint = p.ik?.let { IkFingerprint.formatB64(it) },
+                photo = p.photo?.takeIf { it.isNotEmpty() },
+            )
+        }
     }
 
     override suspend fun setPhoto(photo: String) {
+        val gen = generation
         val version = vaultGuard {
             val o = ops()
             val current = state.value?.version ?: o.profileGet().version
             o.profileSetPhoto(current, photo)
         }
-        state.value = state.value?.copy(version = version, photo = photo.takeIf { it.isNotEmpty() })
+        keep(gen) { it?.copy(version = version, photo = photo.takeIf { p -> p.isNotEmpty() }) }
         runCatching { refreshProfile() }
     }
 
     override suspend fun setDisplayName(name: String) {
         val trimmed = name.trim()
+        val gen = generation
         val version = vaultGuard {
             val o = ops()
             val current = state.value?.version ?: o.profileGet().version
             o.profileSet(current, trimmed)
         }
-        state.value = state.value?.copy(version = version, displayName = trimmed)
+        keep(gen) { it?.copy(version = version, displayName = trimmed) }
         runCatching { refreshProfile() }
     }
 
@@ -184,16 +213,17 @@ class ProfileManager(
         val first = AccountNames.normalize(firstName) ?: return NameChangeOutcome.Invalid
         val last = AccountNames.normalize(lastName) ?: return NameChangeOutcome.Invalid
         return try {
+            val since = mark()
             val r = vaultGuard { ops().accountNameSet(pin, password, first, last) }
             val view = NameRequestView.of(r) ?: NameRequestView(r.seq, first, last, null, NameRequestState.PENDING)
-            onRequest(view)
+            onRequest(view, since)
             NameChangeOutcome.Requested(view)
         } catch (e: VaultFailure) {
             failed(e)
         }
     }
 
-    private suspend fun failed(e: VaultFailure): NameChangeOutcome = when (e.code) {
+    private suspend fun failed(e: VaultFailure): NameChangeOutcome = when (e.code.takeIf { !fromUtkGet(e) }) {
         CODE_TOO_SOON -> NameChangeOutcome.TooSoon(
             parseInstant((e.cause as? VaultOpException)?.body?.let { com.vettid.core.vault.VaultJson.str(it, "allowed_after") }),
         )
@@ -201,8 +231,14 @@ class ProfileManager(
         CODE_BAD_PIN -> NameChangeOutcome.BadPin(runCatching { checksLeft() }.getOrNull())
         CODE_BAD_PASSWORD -> NameChangeOutcome.BadPassword(runCatching { checksLeft() }.getOrNull())
         CODE_BACKOFF -> NameChangeOutcome.Backoff(e.retryAfterSeconds)
-        else -> NameChangeOutcome.Failed(e.kind, e.code)
+        else -> NameChangeOutcome.Failed(e.kind, e.code, e.shownCode)
     }
+
+    /**
+     * (ANDROID-PLAN 0.1.58 point 2) The refusal of the UTK resync before the request (`too_soon` there is the resync's
+     * 10 minutes, not the name's): `error_vault_code`, never the name change's own texts.
+     */
+    private fun fromUtkGet(e: VaultFailure) = (e.cause as? VaultOpException)?.type == VaultCodes.TYPE_UTK_GET
 
     private companion object {
         const val CODE_TOO_SOON = "too_soon"

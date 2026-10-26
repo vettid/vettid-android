@@ -21,6 +21,12 @@ interface WipeTargets {
     /** Every directory whose contents are erased ([marker] excepted). */
     val dirs: List<File>
 
+    /**
+     * Written when a wipe whose [marker] named [LocalWipe.REASON_MOVED_AWAY] finished (after everything was erased),
+     * removed when the member has read it; a later wipe erases it like any file.
+     */
+    val movedAwayNotice: File get() = File(marker.parentFile, LocalWipe.MOVED_AWAY_NOTICE)
+
     /** Every alias in the app's Keystore. */
     fun keyAliases(): List<String>
 
@@ -53,14 +59,24 @@ class LocalWipe(private val targets: WipeTargets, private val hooks: List<suspen
     /** Whether a wipe was started and not finished. */
     val pending: Boolean get() = targets.marker.exists()
 
-    /** Step 1: the marker, synced, before anything is deleted. */
-    fun begin() {
+    /**
+     * Step 1: the marker, synced, before anything is deleted. [reason] (only [REASON_MOVED_AWAY] today) is written in it,
+     * so that a wipe a crash interrupted still knows why it ran when [resumeIfPending] finishes it.
+     */
+    fun begin(reason: String? = null) {
         val m = targets.marker
         m.parentFile?.mkdirs()
         FileOutputStream(m).use {
-            it.write(MARKER_CONTENT)
+            it.write(reason?.toByteArray() ?: MARKER_CONTENT)
             it.fd.sync()
         }
+    }
+
+    /** Whether the last finished wipe was that of an old phone at the end of a kept transfer, not yet read. */
+    val movedAway: Boolean get() = targets.movedAwayNotice.exists()
+
+    fun acknowledgeMovedAway() {
+        targets.movedAwayNotice.delete()
     }
 
     /** Runs the in-memory resets of this process. A failing hook does not stop the others or the wipe. */
@@ -106,8 +122,12 @@ class LocalWipe(private val targets: WipeTargets, private val hooks: List<suspen
         return noKeys && targets.dirs.all { d -> d.listFiles()?.all { it == targets.marker } ?: true }
     }
 
-    /** The last step: the marker goes. */
+    /** The last step: the marker goes (after the notice its reason asks for, if any). */
     fun finish() {
+        val reason = runCatching { targets.marker.readBytes() }.getOrNull()
+        if (reason != null && reason.contentEquals(REASON_MOVED_AWAY.toByteArray())) {
+            runCatching { targets.movedAwayNotice.writeBytes(MARKER_CONTENT) }
+        }
         targets.marker.delete()
     }
 
@@ -146,6 +166,12 @@ class LocalWipe(private val targets: WipeTargets, private val hooks: List<suspen
     companion object {
         /** The marker's file name, in the no-backup directory. */
         const val MARKER = "wipe-pending"
+
+        /** The marker's reason for an old phone that removes its keys at the end of a kept transfer (release R). */
+        const val REASON_MOVED_AWAY = "moved_away"
+
+        /** The notice file of [WipeTargets.movedAwayNotice]. */
+        const val MOVED_AWAY_NOTICE = "moved-away-notice"
         private val MARKER_CONTENT = "1".toByteArray()
 
         /** Every Keystore alias the app creates. */
@@ -153,6 +179,7 @@ class LocalWipe(private val targets: WipeTargets, private val hooks: List<suspen
             AndroidKeys.ALIAS_DEVICE_ATTESTATION,
             AndroidKeys.ALIAS_SEED_WRAP,
             AndroidKeys.ALIAS_APP_DATA,
+            AndroidKeys.ALIAS_APP_API,
             KeystoreFileStore.ALIAS,
         )
     }

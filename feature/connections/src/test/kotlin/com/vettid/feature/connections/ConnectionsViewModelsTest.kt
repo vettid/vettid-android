@@ -14,7 +14,11 @@ import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.OutstandingInvite
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -35,11 +39,27 @@ class ConnectionsViewModelsTest {
     private fun link(kind: InviteKind = InviteKind.CONNECTION, exp: Long = Instant.now().plusSeconds(600).epochSecond) =
         InviteQr(kind, "https://relay.vettid.test", "abcdefghijklmnopqrstuvwxyz", ByteArray(32), ByteArray(32), exp).link()
 
+    private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    /** Refused because the daily check was due: the list reads again once the check passes (staging, release 19). */
+    @Test
+    fun aListRefusedForTheDailyCheckReloadsWhenTheCheckPasses() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        social.fail["refresh"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        val vm = ConnectionsViewModel(social, social, vault)
+        advanceUntilIdle()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.error)
+        assertEquals(2, social.calls.count { it == "refresh" })
+    }
+
     @Test
     fun listsFavouritesFirstTogglesAFavouriteAndCancelsAnInvite() = runTest {
         social.seed(listOf(FakeSocial.connection("c1", "Zed"), FakeSocial.connection("c2", "amy"), FakeSocial.connection("c3", "Bo", favorite = true)))
         social.outstanding = listOf(OutstandingInvite("i1", null, remote = true))
-        val vm = ConnectionsViewModel(social, social)
+        val vm = ConnectionsViewModel(social, social, FakeVault())
         advanceUntilIdle()
         assertEquals(listOf("c3", "c2", "c1"), vm.uiState.value.connections.map { it.id })
         assertEquals(1, vm.uiState.value.invites.size)
@@ -277,7 +297,7 @@ class ConnectionsViewModelsTest {
     /** 0.10.5: Connections lists the other members' declines until the member dismisses them. */
     @Test
     fun connectionsShowAPeerDeclineUntilDismissed() = runTest {
-        val vm = ConnectionsViewModel(social, social)
+        val vm = ConnectionsViewModel(social, social, FakeVault())
         advanceUntilIdle()
         social.peerDeclined("c3", "Morgan Lee", outgoing = true)
         advanceUntilIdle()

@@ -71,8 +71,28 @@ class MediaGuardsTest {
     }
 
     @Test
-    fun theShippedEngineOffersTheSuiteItsLibraryCanDo() {
-        assertEquals(listOf(MediaSuite.AES_128_GCM), WebRtcMediaEngine.SUITES)
+    fun noMainSourceSwitchesTheStacksTransportEncryptionOff() {
+        // FrameFormatDeviceTest (androidTest) builds a stack without DTLS-SRTP to read the frames; nothing an app is
+        // built from may: main or any build type's or flavour's source set, only test and androidTest are exempt.
+        var root = File("").absoluteFile
+        while (!File(root, "settings.gradle.kts").isFile) root = root.parentFile ?: error("repository root not found")
+        val src = "${File.separator}src${File.separator}"
+        val main = root.walkTopDown()
+            .onEnter { it.name != "build" && it.name != ".gradle" && it.name != ".git" && it.name != "local" }
+            .filter { it.isFile && (it.extension == "kt" || it.extension == "java") && src in it.path }
+            .filter { it.path.substringAfter(src).substringBefore(File.separator) !in setOf("test", "androidTest") }
+            .toList()
+        assertTrue("the walk found the main sources", main.any { it.name == "WebRtcMediaEngine.kt" })
+        assertEquals(emptyList<String>(), main.filter { it.readText().contains("disableEncryption") }.map { it.relativeTo(root).path })
+    }
+
+    @Test
+    fun theShippedEngineCanDoBothSuitesInTheRegistrysOrder() {
+        assertEquals(listOf(MediaSuite.AES_256_GCM, MediaSuite.AES_128_GCM), WebRtcMediaEngine.SUITES)
+        assertEquals(MediaSuite.PREFERENCE, MediaSuite.ordered(WebRtcMediaEngine.SUITES))
+        // The key provider's keySize: exactly 128 or 256, the only values the library does not quietly read as 128.
+        assertEquals(128, WebRtcMediaEngine.frameKeyBits(MediaSuite.AES_128_GCM))
+        assertEquals(256, WebRtcMediaEngine.frameKeyBits(MediaSuite.AES_256_GCM))
         assertNull("the stack is not started by loading the class", WebRtcRuntime.dtlsPqcTrial)
         assertEquals("WebRTC-EnableDtlsPqc/Enabled/", WebRtcRuntime.DTLS_PQC_TRIAL)
     }

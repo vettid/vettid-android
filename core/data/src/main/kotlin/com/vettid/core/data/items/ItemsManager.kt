@@ -147,7 +147,7 @@ class ItemsManager(
             val out = mutableListOf<ItemSummary>()
             var after: String? = null
             do {
-                val page = vaultGuard { ops().list(after, PAGE) }
+                val page = vaultGuard(resend = true) { ops().list(after, PAGE) }
                 page.items.mapTo(out) { summary(it) }
                 after = page.next?.takeIf { it.isNotEmpty() && page.items.isNotEmpty() }
             } while (after != null && out.size <= ItemChecks.MAX_ITEMS)
@@ -159,7 +159,7 @@ class ItemsManager(
         }
     }
 
-    override suspend fun get(itemId: String): ItemDetail = detail(vaultGuard { ops().get(itemId) }).also(::remember)
+    override suspend fun get(itemId: String): ItemDetail = detail(vaultGuard(resend = true) { ops().get(itemId) }).also(::remember)
 
     override suspend fun reveal(itemId: String): ItemDetail = detail(vaultGuard { ops().reveal(itemId) }).copy(revealed = true)
 
@@ -268,18 +268,18 @@ class ItemsManager(
     }
 
     /**
-     * The content and tags `item.put` sends (§10.7): names trimmed, tags normalised, a kept field without `value` and
-     * kept notes as `keep_notes` (0.21.0); refused here if the vault would refuse it.
+     * The content and tags `item.put` sends (§10.7): names and values as made canonical by the caller, tags normalised, a kept
+     * field without `value` and kept notes as `keep_notes` (0.21.0); refused here if the vault would refuse it.
      */
     private fun content(d: ItemDraft): Pair<ItemContent, List<String>> {
         val check = ItemChecks.check(d)
         if (!check.ok) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
         val fields = d.fields.map { f ->
             val kept = f.kept && f.fieldId != null
-            ItemField(f.fieldId, f.label.trim(), f.kind, if (kept) null else valueElement(f.value))
+            ItemField(f.fieldId, f.label, f.kind, if (kept) null else valueElement(f.value))
         }
         val content = ItemContent(
-            name = d.name.trim(),
+            name = d.name,
             category = d.category,
             template = d.template,
             fields = fields,

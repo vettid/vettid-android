@@ -8,7 +8,9 @@ import com.vettid.core.data.vault.NameRequestState
 import com.vettid.core.data.vault.NameRequestView
 import com.vettid.core.data.vault.OwnProfile
 import com.vettid.core.testing.FakeVault
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -34,16 +36,19 @@ class ProfileViewModelsTest {
 
     private val items = com.vettid.core.testing.FakeItems()
 
+    /** The JPEG bytes the screen hands over once the shot is encoded (`encodeShot`). */
+    private fun jpeg(): ByteArray = java.util.Base64.getDecoder().decode("/9j/4AAQ")
+
     // --- the shared profile ---
 
     @Test
     fun aTakenPhotoIsSentWithProfileSet() = runTest {
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
-        assertNull(vm.uiState.value.shownPhoto)
+        assertNull(vm.uiState.value.profile!!.photo)
         vm.photoEncoding()
         assertTrue(vm.uiState.value.photoBusy)
-        vm.photoTaken("/9j/4AAQ")
+        vm.photoTaken(jpeg())
         advanceUntilIdle()
         assertEquals("/9j/4AAQ", vault.lastPhoto)
         assertEquals("/9j/4AAQ", vault.profile.value!!.photo)
@@ -56,10 +61,10 @@ class ProfileViewModelsTest {
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
-        vm.photoTaken("/9j/4AAQ")
+        vm.photoTaken(jpeg())
         advanceUntilIdle()
         assertNull(vault.lastPhoto)
-        assertEquals("/9j/4AAQ", vm.uiState.value.pendingPhoto)
+        assertEquals("/9j/4AAQ", vm.uiState.value.pendingPhoto!!.base64())
         assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
         vm.savePhoto()
         advanceUntilIdle()
@@ -84,11 +89,340 @@ class ProfileViewModelsTest {
         vault.profile.value = vault.profile.value!!.copy(photo = "/9j/old")
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
-        assertEquals("/9j/old", vm.uiState.value.shownPhoto)
+        assertEquals("/9j/old", vm.uiState.value.profile!!.photo)
         vm.removePhoto()
         advanceUntilIdle()
         assertEquals("", vault.lastPhoto)
         assertNull(vault.profile.value!!.photo)
+    }
+
+    // --- drafts are dropped whenever the vault is not open (owner decision 2026-10-21) ---
+
+    @Test
+    fun aLockDropsTheEditedDisplayNameAndThePendingPhotoZeroed() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.setDisplayName("Countess")
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.photoTaken(jpeg())
+        advanceUntilIdle()
+        val pending = vm.uiState.value.pendingPhoto!!
+        assertTrue(vm.uiState.value.edited)
+        // The vault locks: the profile is forgotten.
+        vault.profile.value = null
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.displayName)
+        assertFalse(vm.uiState.value.edited)
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(pending.bytes.all { it == 0.toByte() })
+        // After the unlock nothing typed comes back: the vault's display name, no preview.
+        vault.profile.value = OwnProfile(3, "Ada", "Ada", "Lovelace", null)
+        advanceUntilIdle()
+        assertEquals("Ada", vm.uiState.value.displayName)
+        assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun aLockDuringTheEncodingKeepsNothingAndSendsNothing() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.photoEncoding()
+        // The vault locks while the shot is encoded off the main thread: the drafts are dropped first.
+        vault.profile.value = null
+        advanceUntilIdle()
+        val encoded = jpeg()
+        vm.photoTaken(encoded)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(encoded.all { it == 0.toByte() })
+        assertNull(vault.lastPhoto)
+        assertFalse(vm.uiState.value.photoBusy)
+        assertFalse(vm.uiState.value.photoUnreadable)
+    }
+
+    @Test
+    fun theHoldDuringTheEncodingKeepsNothingAndSendsNothing() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.photoEncoding()
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        val encoded = jpeg()
+        vm.photoTaken(encoded)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(encoded.all { it == 0.toByte() })
+        assertNull(vault.lastPhoto)
+        assertFalse(vm.uiState.value.photoBusy)
+    }
+
+    @Test
+    fun aLockAndUnlockDuringTheEncodingStillKeepsNothing() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.photoEncoding()
+        val open = vault.profile.value
+        vault.profile.value = null
+        advanceUntilIdle()
+        // Unlocked again before the encoding ends: the photo was taken before the lock, so it is not kept.
+        vault.profile.value = open
+        advanceUntilIdle()
+        val encoded = jpeg()
+        vm.photoTaken(encoded)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertTrue(encoded.all { it == 0.toByte() })
+        assertNull(vault.lastPhoto)
+        // The next photo, taken with the vault open, is sent as usual.
+        vm.photoEncoding()
+        vm.photoTaken(jpeg())
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+    }
+
+    @Test
+    fun aPhotoEncodedInTheViewModelIsSent() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.encodePhoto(main.dispatcher) { jpeg() }
+        assertTrue(vm.uiState.value.photoBusy)
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+        assertTrue(vm.uiState.value.photoSaved)
+        assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun aLockDuringTheViewModelsEncodingZeroesTheBytes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) {
+            vault.profile.value = null
+            jpeg().also { encoded = it }
+        }
+        advanceUntilIdle()
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+        assertFalse(vm.uiState.value.photoBusy)
+    }
+
+    @Test
+    fun theScreenGoneDuringTheEncodingZeroesTheBytes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) {
+            // The view model's scope ends while the shot is encoded (the screen gone).
+            vm.viewModelScope.cancel()
+            jpeg().also { encoded = it }
+        }
+        advanceUntilIdle()
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+    }
+
+    @Test
+    fun theScreenGoneBeforeTheEncodingStillEncodesOnceAndZeroes() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        var encoded: ByteArray? = null
+        vm.encodePhoto(main.dispatcher) { jpeg().also { encoded = it } }
+        vm.viewModelScope.cancel()
+        advanceUntilIdle()
+        // The encoding ran (it recycles the shot), and its bytes were zeroed, never kept or sent.
+        assertTrue(encoded!!.all { it == 0.toByte() })
+        assertNull(vm.uiState.value.pendingPhoto)
+        assertNull(vault.lastPhoto)
+    }
+
+    @Test
+    fun aDroppedPhotoIsMarkedWiped() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.photoTaken(jpeg())
+        advanceUntilIdle()
+        val pending = vm.uiState.value.pendingPhoto!!
+        assertFalse(pending.wiped)
+        vault.profile.value = null
+        advanceUntilIdle()
+        assertTrue(pending.wiped)
+    }
+
+    @Test
+    fun theHoldDropsTheDraftsToo() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vm.setDisplayName("Countess")
+        // Held or due: the account is no longer the open vault's (only the masked hint is left).
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.displayName)
+        assertFalse(vm.uiState.value.edited)
+    }
+
+    @Test
+    fun aDiscardedOrSavedPhotoIsZeroed() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.photoTaken(jpeg())
+        advanceUntilIdle()
+        val first = vm.uiState.value.pendingPhoto!!
+        vm.discardPhoto()
+        assertTrue(first.bytes.all { it == 0.toByte() })
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK) // taken once per call
+        vm.photoTaken(jpeg())
+        advanceUntilIdle()
+        val second = vm.uiState.value.pendingPhoto!!
+        vm.savePhoto()
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+        assertTrue(second.bytes.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun aLockDropsTheTypedNamesPinAndPassword() = runTest {
+        val vm = ChangeNameViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setFirst("Ada")
+        vm.setLast("King")
+        vm.next()
+        vm.setPin("246810")
+        vm.setPassword("pw")
+        assertEquals(ChangeNameStep.CONFIRM, vm.uiState.value.step)
+        // Locked, held or due: the account is no longer the open vault's.
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertEquals("", s.first)
+        assertEquals("", s.last)
+        assertEquals("", s.pin)
+        assertEquals("", s.password)
+        // After the unlock the member types the names again.
+        vault.account.value = AccountInfo("a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace")
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.first)
+        assertEquals("", vm.uiState.value.last)
+    }
+
+    // --- the names of a request already sent go too (ANDROID-PLAN 0.1.63, owner decision 2026-10-21) ---
+
+    @Test
+    fun aLockDropsTheNamesOfASentRequestAndTheUnlockBringsThemBackFromTheVault() = runTest {
+        val vm = atConfirm()
+        vm.submit()
+        advanceUntilIdle()
+        val sent = vm.uiState.value.request!!
+        assertEquals("King", sent.lastName)
+        // Locked: nothing about the request is kept, not even in the state's text.
+        vault.account.value = null
+        advanceUntilIdle()
+        var s = vm.uiState.value
+        assertEquals(ChangeNameStep.SENT, s.step)
+        assertNull(s.request)
+        assertFalse("King" in s.toString())
+        // After the unlock, account.get's name_request brings the request back, with its state.
+        vault.account.value = AccountInfo(
+            "a***@example.org", state = "member", firstName = "Ada", lastName = "King",
+            nameRequest = NameRequestView(sent.seq, "Ada", "King", null, NameRequestState.APPLIED),
+        )
+        advanceUntilIdle()
+        s = vm.uiState.value
+        assertEquals(ChangeNameStep.SENT, s.step)
+        assertEquals(sent.seq, s.request!!.seq)
+        assertEquals("King", s.request!!.lastName)
+        assertEquals(NameRequestState.APPLIED, s.request!!.state)
+    }
+
+    @Test
+    fun theHoldOrTheDueStateDropsTheNamesOfASentRequestToo() = runTest {
+        val vm = atConfirm()
+        vm.submit()
+        advanceUntilIdle()
+        val seq = vm.uiState.value.request!!.seq
+        // Held or due: only the masked hint is left, and an account without the snapshot brings nothing back.
+        vault.account.value = AccountInfo("a***@example.org")
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.request)
+        vault.account.value = AccountInfo(
+            "a***@example.org",
+            nameRequest = NameRequestView(seq, "Ada", "King", null, NameRequestState.PENDING),
+        )
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.request)
+        // The passed check opens the vault: the request is read again.
+        vault.account.value = AccountInfo(
+            "a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace",
+            nameRequest = NameRequestView(seq, "Ada", "King", null, NameRequestState.PENDING),
+        )
+        advanceUntilIdle()
+        assertEquals(NameRequestState.PENDING, vm.uiState.value.request!!.state)
+    }
+
+    @Test
+    fun aRequestAnsweredAfterTheLockIsNotKept() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.changeNameGate = gate
+        val vm = atConfirm()
+        vm.submit()
+        runCurrent()
+        assertTrue(vm.uiState.value.busy)
+        // The vault locks while account.name.set is on its way.
+        vault.account.value = null
+        advanceUntilIdle()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        var s = vm.uiState.value
+        assertFalse(s.busy)
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertNull(s.request)
+        assertNull(s.sentSeq)
+        assertEquals("", s.first)
+        assertEquals("", s.last)
+        // Nor after the unlock: the answer was not this screen's to keep.
+        vault.account.value = AccountInfo(
+            "a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace",
+            nameRequest = NameRequestView(1, "Ada", "King", null, NameRequestState.PENDING),
+        )
+        advanceUntilIdle()
+        s = vm.uiState.value
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertNull(s.request)
+    }
+
+    @Test
+    fun aRequestAnsweredAfterALockAndAnUnlockIsNotKept() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.changeNameGate = gate
+        val vm = atConfirm()
+        vm.submit()
+        runCurrent()
+        // Locked and opened again before the answer came: the drop counter still turns it away.
+        vault.account.value = null
+        advanceUntilIdle()
+        vault.account.value = AccountInfo("a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace")
+        advanceUntilIdle()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(ChangeNameStep.NAMES, s.step)
+        assertNull(s.request)
+        assertNull(s.sentSeq)
+    }
+
+    @Test
+    fun theTypedNamesAreFilledOnlyFromTheOpenVault() = runTest {
+        val vm = ChangeNameViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals("Ada", vm.uiState.value.first)
+        vault.account.value = null
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.first)
     }
 
     @Test

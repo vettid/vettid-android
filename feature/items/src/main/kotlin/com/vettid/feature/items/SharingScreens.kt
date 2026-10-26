@@ -91,12 +91,17 @@ internal fun sharingNameOf(n: String?): String =
 private fun Section(text: String) = SettingsSectionHeader(text)
 
 @Composable
-internal fun SharingErrorNotice(e: FailureKind?, limit: com.vettid.core.data.vault.VaultLimit?, onDismiss: () -> Unit) {
+internal fun SharingErrorNotice(
+    e: FailureKind?,
+    limit: com.vettid.core.data.vault.VaultLimit?,
+    onDismiss: () -> Unit,
+    shownCode: String? = null,
+) {
     e ?: return
     NoticeCard(
         NoticeKind.WARNING,
         stringResource(R.string.items_error_item),
-        ItemsText.failure(e, limit = limit),
+        ItemsText.failure(e, limit = limit, shownCode = shownCode),
         modifier = Modifier.padding(horizontal = Spacing.s).testTag("sharing_error"),
         actions = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.items_ok)) } },
     )
@@ -148,7 +153,7 @@ fun ConnectionSharingScreen(state: ConnectionSharingUiState, actions: Connection
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.gutter),
             )
-            SharingErrorNotice(state.error, state.limit, actions.onDismissError)
+            SharingErrorNotice(state.error, state.limit, actions.onDismissError, state.errorCode)
             if (state.loading && state.rules.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
@@ -368,7 +373,7 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.gutter),
             )
-            SharingErrorNotice(state.error, state.limit, actions.onDismissError)
+            SharingErrorNotice(state.error, state.limit, actions.onDismissError, state.errorCode)
             Spacer(Modifier.height(Spacing.m))
             when {
                 state.loading && state.received.isEmpty() -> Box(

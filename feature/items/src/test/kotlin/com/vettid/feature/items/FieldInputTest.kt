@@ -27,6 +27,9 @@ class FieldInputTest {
         assertEquals("12", FieldInput.number("1-2"))
         assertEquals("1.25", FieldInput.number("1.2.5"))
         assertEquals("0.5", FieldInput.number(".5"))
+        // The input filter, not the canonical form, reads a decimal comma as the point (a thousands comma too).
+        assertEquals("1.5", FieldInput.number("1,5"))
+        assertEquals("1.000", FieldInput.number("1,000"))
         assertEquals("-0.5", FieldInput.number("-.5"))
         // A decimal comma is a point; with a point too, commas group thousands (paste).
         assertEquals("3.5", FieldInput.number("3,5"))
@@ -117,9 +120,14 @@ class FieldInputTest {
     }
 
     @Test
-    fun aMonthAndYearStopsAtTheMonth() {
-        assertEquals("2031-04", DateInput.accept("2031-04", "20310430", monthOnly = true))
-        assertEquals("2031-04", DateInput.accept("", "2031-04-30", monthOnly = true))
+    fun aMonthAndYearIsNeverCutAFullDatePastedIsLetThroughForTheCheckToRefuse() {
+        assertEquals("2031-04-30", DateInput.accept("2031-04", "20310430", monthOnly = true))
+        assertEquals("2031-04-30", DateInput.accept("", "2031-04-30", monthOnly = true))
+        assertEquals("2031-04", DateInput.accept("", "203104", monthOnly = true))
+        // The month field then fails the check (existing date message), so the save is blocked.
+        val full = com.vettid.core.data.items.DraftField(label = "Expires", kind = FieldKinds.DATE, text = "2031-04-30", monthYear = true)
+        assertTrue(com.vettid.core.data.items.DraftProblem.VALUE_INVALID in
+            ItemChecks.check(com.vettid.core.data.items.ItemDraft(name = "C", fields = listOf(full))).fieldProblems[0].orEmpty())
         assertTrue(valid(FieldKinds.DATE, "2031-04"))
         assertEquals("2031-04", DateInput.month(YearMonth.of(2031, 4)))
         assertTrue(DateInput.isMonth("2031-04"))

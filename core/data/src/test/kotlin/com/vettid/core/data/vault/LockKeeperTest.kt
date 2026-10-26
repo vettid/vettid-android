@@ -44,11 +44,19 @@ class LockKeeperTest {
         var onAttempt: suspend () -> Unit = {}
         var throws = false
 
-        override suspend fun tryLock(first: Boolean): Boolean {
+        /** The unlock each attempt was bound to, in order. */
+        val boundTo = mutableListOf<String?>()
+
+        /** When set, the outcome of the next attempts instead of [answers]. */
+        val outcomes = ArrayDeque<LockOutcome>()
+
+        override suspend fun tryLock(first: Boolean, unlockId: String?): LockOutcome {
             attempts += clock() to first
+            boundTo += unlockId
             onAttempt()
             if (throws) error("unreachable")
-            return answers.removeFirstOrNull() ?: false
+            outcomes.removeFirstOrNull()?.let { return it }
+            return if (answers.removeFirstOrNull() == true) LockOutcome.LOCKED else LockOutcome.UNCONFIRMED
         }
     }
 
@@ -226,10 +234,10 @@ class LockKeeperTest {
     @Test
     fun anUnlockWaitsOutAnUnansweredRelayLockAlsoWhenTheLockWasConfirmedAnotherWay() = runTest {
         lateinit var k: LockKeeper
-        k = keeper(attempt = { _ ->
+        k = keeper(attempt = { _, _ ->
             k.relayLockSent(Duration.ofSeconds(30))
             delay(10_000) // no answer over the relay; then the status says it is locked
-            true
+            LockOutcome.LOCKED
         })
         assertTrue(k.ask())
         assertFalse(k.pending)
@@ -452,5 +460,137 @@ class LockKeeperTest {
         val seconds = (0..9).map { LockKeeper.defaultBackoff(it).toMillis() / 1000.0 }
         val base = listOf(1.0, 2.0, 5.0, 10.0, 30.0, 30.0, 30.0, 30.0, 60.0, 60.0)
         for ((got, want) in seconds.zip(base)) assertTrue("$got for $want", got >= want && got <= want * 1.2)
+    }
+
+    /** A store whose saves all fail (a full phone, a failed rename): [failures] counts the reports. */
+    private class FailingStore : LockRecordStore {
+        override fun load(): LockRecord = LockRecord()
+
+        override fun save(record: LockRecord) = throw java.io.IOException("no space left")
+    }
+
+    @Test
+    fun aLockWhoseRecordCannotBeSavedIsStillSentAndRetried() = runTest {
+        var failures = 0
+        vault.clock = { testScheduler.currentTime }
+        val k = LockKeeper(backgroundScope, FailingStore(), vault, { now() }, ::steps, onSaveFailed = { failures++ })
+        assertFalse(k.ask())
+        // Pending in this process, sent at once, and reported.
+        assertTrue(k.pending)
+        assertEquals(listOf(0L to true), vault.attempts)
+        assertTrue(failures > 0)
+        // Tried again on the backoff, as with a record that was saved.
+        advanceTimeBy(1_001)
+        assertEquals(listOf(0L to true, 1_000L to false), vault.attempts)
+        vault.answers += true
+        advanceTimeBy(2_001)
+        assertFalse(k.pending)
+    }
+
+    @Test
+    fun aRelayLockWhoseRecordCannotBeSavedStillHoldsAnUnlock() = runTest {
+        vault.clock = { testScheduler.currentTime }
+        val k = LockKeeper(backgroundScope, FailingStore(), vault, { now() }, ::steps)
+        k.relayLockSent(Duration.ofSeconds(30))
+        var sentAt = -1L
+        k.unlocking(opened = { it }) { true.also { sentAt = testScheduler.currentTime } }
+        assertEquals("kept in memory: 30 s and the margin", 40_000L, sentAt)
+    }
+
+    @Test
+    fun abandoningForgetsTheRelayLocksTimeInMemoryToo() = runTest {
+        vault.clock = { testScheduler.currentTime }
+        // Only in memory: the record could not be saved.
+        val k = LockKeeper(backgroundScope, FailingStore(), vault, { now() }, ::steps)
+        k.relayLockSent(Duration.ofSeconds(30))
+        // The phone was erased; a vault enrolled after it unlocks in the same process at once.
+        k.abandon()
+        var sentAt = -1L
+        k.unlocking(opened = { it }) { true.also { sentAt = testScheduler.currentTime } }
+        assertEquals(0L, sentAt)
+    }
+
+    // --- Release L: a bound lock across a process death (owner decision 2026-10-23, Q4) ---
+
+    private val id = "0123456789abcdef0123456789abcdef"
+
+    /** Killed mid-lock: the next start goes on with the same bound lock, and its confirmation clears the record. */
+    @Test
+    fun aBoundLockKilledMidwayIsTriedAgainBoundAtTheNextStart() = runTest {
+        val first = keeper()
+        val mine = first.begin(id)
+        assertEquals("on the phone before anything is sent", LockRecord(t0.toEpochMilli(), null, id), store.record)
+        // The process dies during the first attempt: nothing of `first` runs again.
+        vault.onAttempt = { kotlinx.coroutines.awaitCancellation() }
+        val asking = launch { first.ask(mine) }
+        runCurrent()
+        asking.cancel()
+        vault.onAttempt = {}
+        val later = Store(store.record)
+        val next = LockKeeper(backgroundScope, later, vault, { t0.plusSeconds(60) }, ::steps)
+        next.resume()
+        assertTrue(next.pending)
+        assertEquals(id, next.boundUnlockId)
+        vault.answers += true
+        runCurrent()
+        assertEquals("the retry names the same unlock", listOf<String?>(id, id), vault.boundTo)
+        assertFalse(next.pending)
+        assertEquals("a confirmed lock clears the record", LockRecord(), later.record)
+        assertEquals(null, next.boundUnlockId)
+    }
+
+    /** A lock that ends because the vault was opened again: not pending, not repeated, the phone held locked. */
+    @Test
+    fun aLockTheVaultSaysWasOverIsNotRetriedAndHoldsThisPhone() = runTest {
+        val k = keeper()
+        vault.outcomes += LockOutcome.OPENED_AGAIN
+        assertFalse(k.ask(k.begin(id)))
+        assertEquals(LockNotice.OpenedAgain, k.notice.value)
+        assertFalse(k.pending)
+        assertTrue(k.holdsPhone)
+        assertEquals(LockRecord(held = true), store.record)
+        advanceTimeBy(600_000)
+        assertEquals(1, vault.attempts.size)
+        // Held across a process death (review of #190, D1): a new process starts with this phone locked.
+        val later = LockKeeper(backgroundScope, Store(store.record), vault, { now() }, ::steps)
+        later.resume()
+        assertFalse(later.pending)
+        assertTrue("held in the next process too", later.holdsPhone)
+        assertEquals("and said again (review of #190, R1)", LockNotice.OpenedAgain, later.notice.value)
+        assertTrue(store.record.held)
+        // A new lock while held: pending again, and its confirmation ends the hold.
+        vault.answers += true
+        assertTrue(k.ask(k.begin(null)))
+        assertFalse(k.holdsPhone)
+        assertEquals(listOf<String?>(id, null), vault.boundTo)
+        assertFalse(store.record.held)
+    }
+
+    /**
+     * Review of #190, D2: a lock asked for while an unlock is on its way outlives it, bound to the opening that unlock
+     * made, not to the one before (which would be answered stale_lock and leave the new opening open).
+     */
+    @Test
+    fun aLockAskedDuringAnUnlockIsBoundToTheNewOpening() = runTest {
+        val k = keeper()
+        val newId = "fedcba9876543210fedcba9876543210"
+        vault.answers += true
+        k.unlocking(opened = { it }, unlockIdOf = { newId }) {
+            val n = k.begin(id) // the member locks while the unlock is on its way
+            launch { k.ask(n) }
+            true
+        }
+        runCurrent()
+        assertEquals("named the new opening", listOf<String?>(newId), vault.boundTo)
+        assertFalse(k.pending)
+        // Without a name in the unlock's result: as before L.
+        vault.answers += true
+        k.unlocking(opened = { it }) {
+            val n = k.begin(id)
+            launch { k.ask(n) }
+            true
+        }
+        runCurrent()
+        assertEquals(listOf<String?>(newId, null), vault.boundTo)
     }
 }

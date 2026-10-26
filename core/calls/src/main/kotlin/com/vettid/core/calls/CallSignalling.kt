@@ -45,6 +45,8 @@ sealed interface SignalEvent {
         /** How long to ring: the offer's lifetime by the vault's clock, not this phone's. */
         val ringFor: Duration,
         val servers: List<CallWire.IceServer>,
+        /** The suite this device will answer with, chosen when the offer was checked: the engine is made for it. */
+        val suite: MediaSuite,
     ) : SignalEvent {
         /** No SDP (it holds addresses) and no server credentials. */
         override fun toString(): String = "Offer($callId)"
@@ -74,6 +76,14 @@ sealed interface SignalEvent {
  */
 internal interface CallSignalling {
     val events: Flow<SignalEvent>
+
+    /**
+     * What a `call.start` offers of [suites], the preferred one first: the caller's engine is made for the first.
+     * Form 1 only: suite 1 ([MediaSuite.formOne]). That holds for **every** `call.start` that carries a form 1
+     * signature, a C2 start that also carries form 2 included: no second suite is offered while any `call.start`
+     * carries form 1, i.e. until form 1 is retired (VAULT-MESSAGING §10.10 "Call forms" rule 3, "Mixed releases").
+     */
+    fun offerable(suites: List<MediaSuite>): List<MediaSuite> = MediaSuite.formOne(suites)
 
     /** `call.start`. Throws [CallRefusedException] with the vault's code, [CallSecurityException], or an [IOException]. */
     suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall

@@ -55,15 +55,40 @@
     <string name="root_retry">Try again</string>
     <string name="root_clock_title">Check this phone\'s date and time</string>
     <string name="root_no_vault_title">Your account has no vault</string>
+    <!-- Approved by the owner (a wipe that did not finish). -->
+    <string name="root_erase_failed_title">VettID could not erase this phone</string>
+    <!-- Approved by the owner (the way out of a wipe that did not finish). -->
+    <string name="root_clear_data">Erase VettID\'s data on this phone</string>
+    <string name="root_clear_data_title">Erase VettID\'s data?</string>
+    <string name="root_clear_data_body">This removes everything VettID keeps on this phone and closes VettID.</string>
+    <string name="root_clear_data_confirm">Erase</string>
+    <!-- Draft text for the owner (erase-or-recover on a screen that could not be left). -->
+    <string name="root_recover">Recover your vault</string>
+    <string name="root_recover_line">Before you erase VettID here, check on your account site that your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose \"I lost my phone: recover my vault\".</string>
+    <string name="root_long_unreachable">VettID has not reached your vault for %1$s or more.</string>
+    <string name="root_clear_data_failed">VettID could not erase its data. Clear VettID\'s storage in Android Settings, or uninstall and reinstall VettID.</string>
     <string name="root_local_state_title">VettID cannot read its keys on this phone</string>
     <string name="root_start_over">Start over on this phone</string>
     <string name="root_start_over_title">Start over on this phone?</string>
     <string name="root_start_over_body">VettID asks the account service once more. If it still says that your account has no vault, VettID forgets its keys for that vault on this phone and goes back to the start, where you can set up a new vault with a setup code.\n\nOnly do this if you deleted your vault or closed your account. If the vault still exists, this phone could afterwards get back into it only with a recovery.</string>
     <string name="root_erase">Erase VettID from this phone</string>
     <string name="root_erase_title">Erase VettID from this phone?</string>
-    <string name="root_erase_body">Everything VettID keeps on this phone is erased, including its keys for your vault, and VettID goes back to the start. Your vault itself is not changed.\n\nTo get back into it you then need a recovery from the account site (it takes 24 hours and needs your PIN and credential password, and the credential backup must be on), or a move from another phone that still holds your vault.</string>
     <string name="root_preferences_reset">VettID\'s settings on this phone could not be read and were reset: the theme, the app lock (now off) and notifications. Your vault is not affected.</string>
     <string name="root_preferences_reset_ok">OK</string>
+    <!-- Release R (ANDROID-PLAN 0.1.40, §11.14.10): draft texts. -->
+    <string name="root_finish_move">Finish moving your vault to this phone: enter your PIN on this phone.</string>
+    <string name="root_finish_move_action">Finish the move</string>
+    <string name="root_move_not_done">Your vault did not move to your new phone: it still works with this phone, which keeps its keys. Start the move again when you are ready.</string>
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9 step 7, ANDROID-PLAN 0.1.46 (approved texts): a lost answer decided later. -->
+    <string name="root_change_pin_applied">Your PIN change went through. Use your new PIN from now on.</string>
+    <string name="root_change_password_applied">Your password change went through. Use your new password from now on.</string>
+    <string name="root_change_pin_not_changed">Your PIN change didn\'t go through. Your previous PIN is still your PIN.</string>
+    <string name="root_change_password_not_changed">Your password change didn\'t go through. Your previous password is still your password.</string>
+    <string name="root_change_pin_ended">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
+    <string name="root_change_password_ended">VettID couldn\'t confirm whether your password was changed, because something else changed in your vault at the same time. Either your previous or your new password may be the current one.</string>
+    <string name="root_change_lock_unlock">Lock and unlock now</string>
+    <string name="root_change_channel_title">PIN or password change</string>
+    <string name="root_moved_back">This phone is your vault\'s phone again. Start the move again when you are ready.</string>
     <string name="root_service_paused">The vault service is paused for maintenance. Try again later.</string>
     <string name="app_lock_enable_failed">The app lock cannot be used on this phone (it needs a fingerprint, face or screen lock).</string>
     <string name="canary_confirm_title">Use a test release manifest?</string>
@@ -93,4 +118,11 @@
     <string name="release_notification_ending">Your vault\'s release ends on %1$s. Tap to update to release %2$d.</string>
     <!-- The one-time note of the notification modes (ANDROID-PLAN 0.1.23, §9 question 13). -->
     <string name="notify_note">VettID now notifies you in the background. Change this in Settings → Notifications.</string>
+    <!-- Release R (ANDROID-PLAN "Transfer"): the offer to rotate after a transfer, a PIN change or a password change. Draft. -->
+    <string name="rotate_offer">You can now rotate your vault\'s keys: every older copy of your credential stops working.</string>
+    <string name="rotate_offer_action">Rotate now</string>
+    <!-- ANDROID-PLAN "Transfer" (release R), verbatim: the old phone after it removed its keys -->
+    <!-- ANDROID-PLAN 0.1.54 "A vault being deleted" (approved by the owner, 2026-10-20). -->
+    <string name="vault_deleted_notice">Your vault was deleted. To start again, get a setup code on the account site.</string>
+    <string name="root_moved_away">Your vault has moved to your new phone. VettID has removed its keys from this phone.</string>
 </resources>

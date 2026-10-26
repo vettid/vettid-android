@@ -47,6 +47,26 @@ class ProfilePhotosTest {
     }
 
     @Test
+    fun everyRejectedAttemptIsZeroedAndTheKeptOneIsNot() {
+        val attempts = mutableListOf<ByteArray>()
+        val sizes = mutableListOf<Int>()
+        val out = ProfilePhotos.encode(noise(1200, 1600), maxBytes = 8_000) { b, q ->
+            val real = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, q, it) }.toByteArray()
+            attempts += real
+            sizes += real.size
+            real
+        }
+        assertTrue("several attempts were too big", attempts.size > 1)
+        val kept = attempts.indices.filter { attempts[it] === out }
+        assertEquals(listOf(attempts.lastIndex), kept)
+        for (i in 0 until attempts.lastIndex) {
+            assertTrue("attempt $i was ${sizes[i]} bytes", sizes[i] > 8_000)
+            assertTrue("attempt $i is zeroed", attempts[i].all { it == 0.toByte() })
+        }
+        assertTrue(ProfilePhotos.isJpeg(out))
+    }
+
+    @Test
     fun theCropIsCentred() {
         val b = Bitmap.createBitmap(300, 100, Bitmap.Config.ARGB_8888)
         b.eraseColor(android.graphics.Color.RED)

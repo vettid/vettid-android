@@ -34,7 +34,15 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         channel.trySend(e)
     }
 
-    override suspend fun createOffer(): String = "v=0\r\ns=offer\r\nm=audio 9 X 111\r\n".also { calls += "createOffer" }
+    /** The suite the cryptors were made for (createOffer, acceptOffer). Like the real engine, never remade. */
+    var madeFor: MediaSuite? = null
+
+    override suspend fun createOffer(suite: MediaSuite): String {
+        check(suite in suites) { "suite ${suite.id}" }
+        madeFor = suite
+        calls += "createOffer"
+        return "v=0\r\ns=offer\r\nm=audio 9 X 111\r\n"
+    }
 
     override suspend fun startGathering(servers: List<CallWire.IceServer>) {
         calls += "startGathering(${servers.size})"
@@ -45,7 +53,9 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         onRemoteSdp()
     }
 
-    override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>): String {
+    override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>, suite: MediaSuite): String {
+        check(suite in suites) { "suite ${suite.id}" }
+        madeFor = suite
         calls += "acceptOffer"
         onRemoteSdp()
         return "v=0\r\ns=answer\r\nm=audio 9 X 111\r\n"
@@ -53,6 +63,11 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
 
     override suspend fun setKeys(suite: MediaSuite, send: ByteArray, receive: ByteArray) {
         calls += "setKeys"
+        if (suite != madeFor) {
+            send.fill(0)
+            receive.fill(0)
+            throw MediaNotEncryptedException("keys for suite ${suite.id}, cryptors made for ${madeFor?.id}")
+        }
         this.suite = suite
         sendKey = send.copyOf()
         receiveKey = receive.copyOf()
@@ -145,6 +160,9 @@ class Exchange {
     private val kCall = ByteArray(32) { (it + 3).toByte() }
     private var offered: List<Int> = emptyList()
     private var offerSdp = ""
+
+    /** What the callee's engine can do (its signalling checks an offer against it before it rings). */
+    var calleeSuites: List<MediaSuite> = listOf(MediaSuite.AES_128_GCM)
     val caller = End(true)
     val callee = End(false)
 
@@ -153,17 +171,23 @@ class Exchange {
 
         override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
             sent += "start"
-            offered = CallMedia.offerOf(suites)
+            offered = CallMedia.offerOf(MediaSuite.formOne(suites))
             offerSdp = onOffer(CallMedia.sdpWithOffer(sdp, offered))
             val ringFor = java.time.Duration.ofSeconds(45)
-            peer.deliver(SignalEvent.Offer(CALL_ID, "peer", CallMedia.sdpWithout(offerSdp), T0.plusSeconds(45), ringFor, emptyList()))
+            // As CallApi.callIncoming: the callee's suite is fixed when the offer is checked (form 1: suite 1), and
+            // an offer without one it can do does not ring.
+            val chosen = runCatching { CallMedia.choose(CallMedia.offeredIn(offerSdp), MediaSuite.formOne(calleeSuites)) }.getOrNull()
+            if (chosen != null) {
+                val sdpForEngine = CallMedia.sdpWithout(offerSdp)
+                peer.deliver(SignalEvent.Offer(CALL_ID, "peer", sdpForEngine, T0.plusSeconds(45), ringFor, emptyList(), chosen.chosen))
+            }
             return PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList())
         }
 
         override suspend fun answer(callId: String, sdp: String, suites: List<MediaSuite>): MediaKeys {
             sent += "answer"
             val chosen = try {
-                CallMedia.choose(CallMedia.offeredIn(offerSdp), suites)
+                CallMedia.choose(CallMedia.offeredIn(offerSdp), MediaSuite.formOne(suites))
             } catch (e: com.vettid.core.crypto.CryptoException) {
                 throw CallSecurityException("media suites", e)
             }

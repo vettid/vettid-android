@@ -152,6 +152,27 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
 
     override suspend fun load(connectionId: String) = call("load")
 
+    /** Older pages per connection, served newest page first by [loadOlder] (each page oldest first). */
+    val olderPages = mutableMapOf<String, ArrayDeque<List<MessageInfo>>>()
+    private val olderFlow = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+
+    /** Announces (or not) older messages for [connectionId], as the vault's `next_before` does. */
+    fun setOlder(connectionId: String, pages: List<List<MessageInfo>>) {
+        olderPages[connectionId] = ArrayDeque(pages)
+        olderFlow.update { it + (connectionId to pages.isNotEmpty()) }
+    }
+
+    override fun olderAvailable(connectionId: String): Flow<Boolean> = olderFlow.map { it[connectionId] == true }
+
+    override suspend fun loadOlder(connectionId: String) {
+        call("loadOlder")
+        val q = olderPages[connectionId] ?: return
+        val page = q.removeFirstOrNull() ?: return
+        messageMap.update { it + (connectionId to page + it[connectionId].orEmpty()) }
+        olderFlow.update { it + (connectionId to q.isNotEmpty()) }
+        recompute()
+    }
+
     override suspend fun send(connectionId: String, text: String): MessageInfo {
         call("send")
         lastText = text

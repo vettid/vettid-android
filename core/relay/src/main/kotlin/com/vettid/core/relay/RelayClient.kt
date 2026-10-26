@@ -23,9 +23,18 @@ import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
-/** A relay error response (RELAY-PROTOCOL §7.1). [code] is `http_<status>` when the body carried none. */
+/**
+ * A relay error response (RELAY-PROTOCOL §7.1). [code] is `http_<status>` when the body carried none.
+ *
+ * The exception's message is the status and the code only: the relay's own text (the body's `message`, or a body
+ * that is not JSON) is a relay answer, so it is kept in [detail] and never in the message, which logs and crash
+ * reports may carry (the owner's rule, 2026-10-23).
+ */
 class RelayException(val status: Int, val code: String, message: String, val retryAfterSeconds: Int = 0) :
-    IOException("relay: $status $code${if (message.isEmpty()) "" else ": $message"}") {
+    IOException("relay: $status $code") {
+    /** The relay's text ("" without one): never in the exception's message. */
+    val detail: String = message
+
     /**
      * 429 and 5xx are retried with backoff (§7.2), and so is a signature the relay found stale or already seen
      * ([staleSignature]); other client errors never are.
@@ -330,7 +339,18 @@ class RelayClient(
     }
 
     /** Fetches a blob deposited to this mailbox (§6.8). */
-    suspend fun getBlob(blobId: String): ByteArray = execute(Call("GET", "/v1/blob/$blobId")) { it.body.bytes() }
+    suspend fun getBlob(blobId: String, maxBytes: Long = MAX_BLOB_READ): ByteArray = execute(Call("GET", "/v1/blob/$blobId")) { resp ->
+        // At most [maxBytes] are ever held: a declared length over it is refused before reading, and so is a body
+        // that grows beyond it.
+        val declared = resp.header("Content-Length")?.toLongOrNull()
+        if (declared != null && declared > maxBytes) throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+        val b = resp.body.bytesAtMost(maxBytes + 1)
+        if (b.size > maxBytes) {
+            b.fill(0)
+            throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+        }
+        b
+    }
 
     /** Deletes a blob (idempotent). */
     suspend fun deleteBlob(blobId: String) {
@@ -393,6 +413,9 @@ class RelayClient(
         private const val ERROR_BODY_LIMIT = 4096
         private const val MAX_MESSAGE = 256
         private const val MAX_CLAIM_READ = 1 shl 20
+
+        /** The reference relay's `max_blob_bytes` (RELAY-PROTOCOL §6.8): no blob a relay keeps is larger. */
+        const val MAX_BLOB_READ = 8_388_608L
         private const val JSON = "application/json"
         private const val OCTET = "application/octet-stream"
     }

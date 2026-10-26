@@ -222,9 +222,19 @@ class HsInit(
     apiKey: ByteArray? = null,
     /** SHA-256("vettid/vms/2/sas-commit" || n_I), exactly for purposes with a SAS (§6.2, §6.3, 0.10.3). */
     sasCommit: ByteArray? = null,
+    /** (0.33.0, release R) The new phone's unlock secret, 32 bytes, only in a transfer's `hs.init` (§6.2, §11.14.10). */
+    unlockSecret: ByteArray? = null,
 ) {
     private val sasCommit = sasCommit?.copyOf()
     private val apiKey = apiKey?.copyOf()
+    private val unlockSecret = unlockSecret?.copyOf()
+
+    fun unlockSecret(): ByteArray? = unlockSecret?.copyOf()
+
+    /** Zeroes this message's copy of the unlock secret (the initiator, after [marshal]). */
+    fun wipeUnlockSecret() {
+        unlockSecret?.fill(0)
+    }
 
     fun sasCommit(): ByteArray? = sasCommit?.copyOf()
 
@@ -247,6 +257,9 @@ class HsInit(
             throw CryptoException.Format("api_key")
         }
         checkSasField(purpose, sasCommit, "sas_commit")
+        if (unlockSecret != null && (purpose != Purpose.APP || apiKey == null || unlockSecret.size != UNLOCK_SECRET_SIZE)) {
+            throw CryptoException.Format("unlock_secret")
+        }
     }
 
     fun marshal(): ByteArray {
@@ -267,6 +280,7 @@ class HsInit(
         if (rotations.isNotEmpty()) b.raw("rotations", marshalRotations(rotations))
         deviceAttest?.let { b.raw("device_attest", it.marshal()) }
         apiKey?.let { b.base64("api_key", it) }
+        unlockSecret?.let { b.base64("unlock_secret", it) }
         sasCommit?.let { b.base64("sas_commit", it) }
         return b.bytes()
     }
@@ -274,6 +288,7 @@ class HsInit(
     companion object {
         /** An SPKI DER of a P-256 key is 91 bytes; anything far larger is not one. */
         private const val MAX_API_KEY = 512
+        private const val UNLOCK_SECRET_SIZE = 32
 
         fun parse(body: ByteArray): HsInit {
             val o = StrictJson.parseObject(body)
@@ -300,6 +315,7 @@ class HsInit(
                 deviceAttest = o.optObj("device_attest")?.let { DeviceAttest.parse(it) },
                 apiKey = if (o.has("api_key")) o.base64("api_key") else null,
                 sasCommit = optSasField(o, "sas_commit"),
+                unlockSecret = if (o.has("unlock_secret")) o.base64("unlock_secret", UNLOCK_SECRET_SIZE) else null,
             )
             init.validate()
             return init

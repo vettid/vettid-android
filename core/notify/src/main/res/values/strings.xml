@@ -6,7 +6,9 @@
     <string name="notify_channel_requests">Requests</string>
     <string name="notify_channel_requests_body">Requests waiting for your decision</string>
     <string name="notify_channel_calls">Calls</string>
-    <string name="notify_channel_calls_body">Missed calls</string>
+    <string name="notify_channel_calls_body">Incoming calls</string>
+    <string name="notify_channel_missed_calls">Missed calls</string>
+    <string name="notify_channel_missed_calls_body">Calls you did not answer</string>
     <string name="notify_channel_security">Security alarms</string>
     <string name="notify_channel_security_body">A credential used somewhere else, failed checks, your vault locked or moved</string>
     <string name="notify_channel_owner_check">Daily check</string>
@@ -20,10 +22,34 @@
     <string name="notify_public_activity">New activity in VettID</string>
     <string name="notify_public_attention">VettID needs your attention</string>
     <string name="notify_newer_app">Open VettID on a newer version</string>
+    <!-- A photo message (ANDROID-PLAN 0.1.39): never the image or the thumbnail. -->
+    <string name="notify_photo">Photo</string>
+    <string name="notify_photo_caption">Photo: %1$s</string>
 
     <!-- The vault's state. -->
     <string name="notify_locked_title">Your vault is locked</string>
     <string name="notify_locked_body">You won’t be notified until you unlock it</string>
+    <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock, on Security. As ANDROID-PLAN §4 "Locking the vault" part 2 (approved by the owner 2026-10-24); %1$s the time past the deadline ("7 days"). -->
+    <string name="notify_idle_locked_title">Your vault locked itself</string>
+    <string name="notify_idle_locked_body">You hadn’t checked in for %1$s, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.</string>
+    <!-- Release L: the time not known. Approved by the owner 2026-10-24. -->
+    <string name="notify_idle_locked_body_unknown">You hadn’t checked in, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.</string>
+    <plurals name="notify_duration_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <plurals name="notify_duration_hours">
+        <item quantity="one">%1$d hour</item>
+        <item quantity="other">%1$d hours</item>
+    </plurals>
+    <plurals name="notify_duration_minutes">
+        <item quantity="one">%1$d minute</item>
+        <item quantity="other">%1$d minutes</item>
+    </plurals>
+    <plurals name="notify_duration_seconds">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
     <string name="notify_check_due_title">Daily check due</string>
     <string name="notify_check_waiting">%1$s waiting</string>
     <string name="notify_check_unknown">Something may be waiting</string>

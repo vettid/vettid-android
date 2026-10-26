@@ -1,0 +1,22 @@
+{
+  "description": "VAULT-MESSAGING 0.33.0 §11.14.7: passwords and the vault's expected verdicts (ok, or the weak_password reason) with pin 135792. The vault's estimator threshold is 10^10 guesses; the app tests its estimator against the same file with a slightly higher threshold. TEST ONLY.",
+  "pin": "135792",
+  "cases": [
+    {"password": "short", "verdict": "short"},
+    {"password": "elevenchars", "verdict": "short"},
+    {"password": "zzzzzzzzzzzzzzzz", "verdict": "repeated"},
+    {"password": "Password1234", "verdict": "common"},
+    {"password": "QWERTY123456", "verdict": "common"},
+    {"password": "135792135792", "verdict": "guessable"},
+    {"password": "abcdefghijklmn", "verdict": "guessable"},
+    {"password": "123456789012345", "verdict": "guessable"},
+    {"password": "passwordpassword1", "verdict": "guessable"},
+    {"password": "P@ssw0rdP@ssw0rd", "verdict": "guessable"},
+    {"password": "sunshinesunshine", "verdict": "guessable"},
+    {"password": "qwertyuiopasdf", "verdict": "guessable"},
+    {"password": "violet-Kestrel-91-moss", "verdict": "ok"},
+    {"password": "correct horse battery staple", "verdict": "ok"},
+    {"password": "Tq8#vLm2!pRz", "verdict": "ok"},
+    {"password": "glacier mango tuesday piano", "verdict": "ok"}
+  ]
+}

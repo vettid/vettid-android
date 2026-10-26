@@ -63,6 +63,8 @@ sealed interface ExportStep {
         val pin: String = "",
         val busy: Boolean = false,
         val error: FailureKind? = null,
+        /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+        val errorCode: String? = null,
         val retryUntil: Instant? = null,
     ) : ExportStep {
         fun canSend(now: Instant): Boolean =
@@ -84,7 +86,8 @@ sealed interface ExportStep {
     data class Done(val written: Int, val authorised: Long) : ExportStep
 
     /** A failure: [kind] of the vault's (an owner check due, the network…), or [saveFailed] writing the document. */
-    data class Failed(val kind: FailureKind?, val saveFailed: Boolean = false) : ExportStep
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names, or null. */
+    data class Failed(val kind: FailureKind?, val saveFailed: Boolean = false, val shownCode: String? = null) : ExportStep
 
     companion object {
         /** §11.3: the PIN is 6–32 ASCII digits. */
@@ -144,7 +147,7 @@ class HistoryExportViewModel @Inject constructor(
                 when {
                     refused != null -> ExportStep.Refused(refused)
                     e.kind == FailureKind.NOT_FOUND -> ExportStep.NothingToExport
-                    else -> ExportStep.Failed(e.kind)
+                    else -> ExportStep.Failed(e.kind, shownCode = e.shownCode)
                 }
             }
         }
@@ -183,11 +186,12 @@ class HistoryExportViewModel @Inject constructor(
         refusal(e)?.let { if (it == ExportRefusal.ALARM) return ExportStep.Refused(it) }
         return when (e.kind) {
             FailureKind.NOT_FOUND -> ExportStep.NothingToExport
-            FailureKind.OWNER_CHECK_REQUIRED -> ExportStep.Failed(e.kind)
+            FailureKind.OWNER_CHECK_REQUIRED -> ExportStep.Failed(e.kind, shownCode = e.shownCode)
             else -> s.copy(
                 pin = "",
                 busy = false,
                 error = e.kind,
+                errorCode = e.shownCode,
                 retryUntil = if (e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0) now().plusSeconds(e.retryAfterSeconds) else null,
             )
         }
@@ -209,16 +213,23 @@ class HistoryExportViewModel @Inject constructor(
             state.value = ExportStep.Save(ExportFiles.fileName(at, format), format)
         } catch (e: VaultFailure) {
             pending = null
-            state.value = ExportStep.Failed(e.kind)
+            state.value = ExportStep.Failed(e.kind, shownCode = e.shownCode)
         }
     }
 
     private fun row(r: AuditRecord, c: ExportContext, devices: Map<String, String>?): ExportRow = ExportRow(
         record = r,
-        label = HistoryText.title(context, r.kind),
+        label = HistoryText.title(
+            context, r.kind, r.ref,
+            EntryNames(
+                connection = r.connectionId?.let { c.connectionNames[it] },
+                device = r.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } },
+                item = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] },
+            ),
+        ),
         category = r.category.id,
         connectionName = r.connectionId?.let { c.connectionNames[it] ?: context.getString(R.string.history_connection_removed) },
-        deviceName = r.deviceId?.let { id -> devices?.let { it[id] ?: context.getString(R.string.history_device_removed) } },
+        deviceName = HistoryDevice.name(r.deviceId, devices, context.getString(R.string.history_device_removed)),
         itemName = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] ?: context.getString(R.string.history_item_deleted) },
     )
 

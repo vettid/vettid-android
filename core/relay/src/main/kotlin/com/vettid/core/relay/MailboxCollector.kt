@@ -43,6 +43,12 @@ class MailboxCollector(
      * so a request that has been out for a while found the mailbox empty: what a push wake waits for.
      */
     private val onRequest: (Boolean) -> Unit = {},
+    /**
+     * Called with the [System.nanoTime] at which a collect request went out, once that request reached the relay and
+     * everything it brought was handled: a long-poll round that returned, or a stream that delivered a message or
+     * closed normally. Proof that the mailbox was read after that time (A6 audit N3).
+     */
+    private val onReached: (Long) -> Unit = {},
 ) {
     enum class Mode { LONG_POLL, WEBSOCKET }
 
@@ -72,9 +78,15 @@ class MailboxCollector(
 
     /** One collect request (a stream until it closes, or a long-poll round), announced to [onRequest]. */
     private suspend fun round(useSocket: Boolean, handle: suspend (RelayMessage) -> Unit) {
+        val started = System.nanoTime()
         onRequest(true)
         try {
-            if (useSocket) stream(handle) else pollOnce(handle)
+            if (useSocket) {
+                stream(handle) { onReached(started) }
+            } else {
+                pollOnce(handle)
+                onReached(started)
+            }
         } finally {
             onRequest(false)
         }
@@ -89,16 +101,18 @@ class MailboxCollector(
         return msgs.size
     }
 
-    private suspend fun stream(handle: suspend (RelayMessage) -> Unit) {
+    private suspend fun stream(handle: suspend (RelayMessage) -> Unit, reached: () -> Unit) {
         val s = client.openStream()
         try {
             while (true) {
                 val m = try {
                     s.incoming.receive()
                 } catch (_: ClosedReceiveChannelException) {
+                    reached()
                     return // closed normally: reconnect
                 }
                 if (handled(m, handle) && !s.ack(m.msgId)) client.ack(m.msgId)
+                reached()
             }
         } finally {
             s.close()

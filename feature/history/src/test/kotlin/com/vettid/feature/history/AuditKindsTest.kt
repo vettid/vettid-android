@@ -37,7 +37,39 @@ class AuditKindsTest {
         "location.history.deleted", "location.history.shared", "location.history.received", "wallet.created",
         "wallet.deleted", "wallet.address_issued", "wallet.signed", "drop.suppressed", "audit.exported",
         "device.signer_bound", "device.signer_changed", "device.signer_refused",
+        // VAULT-MESSAGING 0.49.1, ANDROID-PLAN 0.1.52 §4 "Event titles": the fixed titles.
+        "vault.pin_changed", "device.secret_renewed", "recovery.armed", "recovery.presence_unrecorded",
+        "identity.rotation_failed", "connection.request.approved", "connection.request.declined",
+        // ANDROID-PLAN 0.1.60.
+        "credential.utk_resync",
+        // ANDROID-PLAN 0.1.64.
+        "credential.holder_cleared",
     )
+
+    /** Release L (VAULT-MESSAGING 0.29.0 §3.6.8): `vault.locked` with `ref` `idle` reads "Vault locked itself (not checked in)". */
+    @Test
+    fun anIdleLockHasItsOwnTitle() {
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_vault_locked_idle), AuditKinds.title("vault.locked", "idle"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_vault_locked), AuditKinds.title("vault.locked", "owner_check"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_vault_locked), AuditKinds.title("vault.locked"))
+    }
+
+    /** ANDROID-PLAN 0.1.60: the one-time keys' resync is a Security entry with its own title. */
+    @Test
+    fun aUtkResyncIsUnderSecurity() {
+        assertEquals(AuditCategory.SECURITY, AuditCategory.of("credential.utk_resync"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_credential_utk_resync), AuditKinds.title("credential.utk_resync"))
+    }
+
+    /** ANDROID-PLAN 0.1.64: the cleared credential holder is a Security entry with its own title. */
+    @Test
+    fun aHolderClearedIsUnderSecurity() {
+        assertEquals(AuditCategory.SECURITY, AuditCategory.of("credential.holder_cleared"))
+        assertEquals(
+            AuditKinds.Title.Known(R.string.history_kind_credential_holder_cleared),
+            AuditKinds.title("credential.holder_cleared"),
+        )
+    }
 
     @Test
     fun aHistoryExportIsUnderSecurityWithItsSummary() {
@@ -133,8 +165,8 @@ class AuditKindsTest {
 
     @Test
     fun droppedSummaryAndUnknown() {
-        assertEquals(AuditKinds.Title.Dropped("rate limited"), AuditKinds.title("drop.rate_limited"))
-        assertEquals(AuditKinds.Title.Dropped("owner check"), AuditKinds.title("drop.owner_check"))
+        assertEquals(AuditKinds.Title.Dropped("peer unknown"), AuditKinds.title("drop.peer_unknown"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_drop_owner_check), AuditKinds.title("drop.owner_check"))
         assertEquals(AuditKinds.Title.Summary(R.string.history_kind_leash_item_read), AuditKinds.title("leash.item.read.summary"))
         assertEquals(AuditKinds.Title.Unknown("zebra.new"), AuditKinds.title("zebra.new"))
         assertEquals(AuditKinds.Title.Unknown("drop."), AuditKinds.title("drop."))

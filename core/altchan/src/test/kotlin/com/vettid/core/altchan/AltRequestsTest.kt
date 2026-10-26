@@ -67,6 +67,27 @@ class AltRequestsTest {
         assertEquals(3, after.releaseNumber)
         assertEquals(4, after.stateSeq)
         assertNull(after.enrollNonce)
+        assertNull(after.pendingEnroll)
+    }
+
+    /**
+     * (A6 audit N3) The enrollment request is outstanding from its build: its id, its time and its nonce are in the stored
+     * state (and survive a restart), until `vault.enrolled` is applied or it is dropped.
+     */
+    @Test
+    fun anEnrollmentRequestIsKeptOutstandingAcrossARestart() {
+        val built = AltRequests.buildEnroll("guid-1", "246802", enclave.verified(manifest), manifest, TestSupport.SoftAttester(), app, "v4.public.open", AltState(), now)
+        val p = built.state.pendingEnroll!!
+        assertEquals(built.request.requestId, p.requestId)
+        assertEquals(now.truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toEpochMilli(), p.postedMs)
+        assertTrue(!p.answered)
+        val restored = AltState.parse(StrictJson.parseObject(built.state.copy(enrollAnswered = true).marshal().toByteArray()))
+        assertEquals(p.copy(answered = true), restored.pendingEnroll)
+        assertArrayEquals(built.state.enrollNonce, restored.enrollNonce)
+        assertNull(restored.withoutEnroll().pendingEnroll)
+        assertNull(restored.withoutEnroll().enrollNonce)
+        // A state of an earlier version (a nonce, no request id) has nothing to resume.
+        assertNull(AltState.parse(StrictJson.parseObject(built.state.copy(enrollRequestId = "").marshal().toByteArray())).pendingEnroll)
     }
 
     @Test
@@ -179,6 +200,25 @@ class AltRequestsTest {
         assertTrue(b.releaseChanged)
     }
 
+    /**
+     * ANDROID-PLAN 0.1.54: with the marker of an unconfirmed move stored, an unlock routed to the release the move left
+     * is still refused by the rollback check (the PIN goes there only through the way back, `abandon`).
+     */
+    @Test
+    fun theMarkerDoesNotOpenTheRollbackCheck() {
+        val att = TestSupport.SoftAttester()
+        val moved = AltState(release = "b1".repeat(48), releaseNumber = 4, previousRelease = TestSupport.pcr0, previousReleaseNumber = 3, moveFailed = true)
+        val e = assertThrows(AltRefusedException::class.java) {
+            AltRequests.buildUnlock("g", "v", "246802", enclave.verified(manifest), manifest, att, ik, "t", moved, UnlockOptions(), now)
+        }
+        assertEquals(AltRefusedException.Reason.ROLLBACK_RELEASE, e.reason)
+        assertThrows(AltRefusedException::class.java) {
+            AltRequests.buildUnlock(
+                "g", "v", "246802", enclave.verified(manifest), manifest, att, ik, "t", moved, UnlockOptions(approve = Approval(TestSupport.pcr0, 3)), now,
+            )
+        }
+    }
+
     @Test
     fun applyUnlockMovesFloorsAndRecordsMoves() {
         val p = PendingUnlock(Ulid.new(), TestSupport.pcr0, 3, 7, 4)
@@ -199,6 +239,40 @@ class AltRequestsTest {
         assertThrows(AltResultException::class.java) {
             AltRequests.applyUnlock(s0, p, UnlockResult(true, release = to, releaseNumber = 4, releaseStatus = "active"))
         }
+    }
+
+    /**
+     * Release R (VAULT-MESSAGING 0.33.0 §11.14.6): an `ok` recovery-open result moves the floors like an unlock
+     * result, and its release with its header_seq becomes what the next unlock names (`min_header_seq`).
+     */
+    @Test
+    fun applyRecoveryOpenRecordsTheReleaseAndItsHeaderSeq() {
+        val rel = "d5".repeat(48)
+        val s0 = AltState(release = TestSupport.pcr0, releaseNumber = 3, stateSeq = 9, headerSeq = mapOf(TestSupport.pcr0 to 4L))
+        val s1 = AltRequests.applyRecoveryOpen(s0, stateSeq = 12, headerSeq = 21, release = rel, releaseNumber = 13)
+        assertEquals(12, s1.stateSeq)
+        assertEquals(rel, s1.release)
+        assertEquals(13, s1.releaseNumber)
+        assertEquals(21L, s1.headerSeq[rel])
+        assertEquals(4L, s1.headerSeq[TestSupport.pcr0])
+        // Floors never move down.
+        val s2 = AltRequests.applyRecoveryOpen(s1, stateSeq = 5, headerSeq = 2, release = rel, releaseNumber = 13)
+        assertEquals(12, s2.stateSeq)
+        assertEquals(21L, s2.headerSeq[rel])
+        // Without a well-formed release, only the state floor moves.
+        val s3 = AltRequests.applyRecoveryOpen(s0, stateSeq = 15, headerSeq = 30, release = "", releaseNumber = 0)
+        assertEquals(15, s3.stateSeq)
+        assertEquals(TestSupport.pcr0, s3.release)
+        assertEquals(s0.headerSeq, s3.headerSeq)
+    }
+
+    /** Release R: the unlock secret goes into the sealed unlock, and the caller's array is left for the caller to zero. */
+    @Test
+    fun unlockCarriesTheSecretAndLeavesTheCallersCopy() {
+        val secret = ByteArray(32) { 0x42 }
+        val (_, o) = unlockBody(TestSupport.SoftAttester(), UnlockOptions(unlockSecret = secret))
+        assertArrayEquals(ByteArray(32) { 0x42 }, o.base64("unlock_secret"))
+        assertArrayEquals(ByteArray(32) { 0x42 }, secret)
     }
 
     @Test
@@ -225,6 +299,16 @@ class AltRequestsTest {
         assertEquals(true, UnlockResult.parse((ok + "true}").toByteArray()).credentialBackup)
         assertEquals(false, UnlockResult.parse((ok + "false}").toByteArray()).credentialBackup)
         assertThrows(AltResultException::class.java) { UnlockResult.parse((ok + "1}").toByteArray()) }
+        // (0.29.0, release L) unlock_id: kept when of the form; absent, "" (a release R enclave before L) or another form: none.
+        assertNull(u.unlockId)
+        val withId = """{"ok":true,"state_seq":3,"header_seq":2,"token":"t","release":"${TestSupport.pcr0}","release_number":3,"release_status":"active","manifest_serial":7,"unlock_id":"""
+        assertEquals("0123456789abcdef0123456789abcdef", UnlockResult.parse((withId + "\"0123456789abcdef0123456789abcdef\"}").toByteArray()).unlockId)
+        for (v in listOf("\"\"", "\"0123456789ABCDEF0123456789ABCDEF\"", "\"0123\"")) assertNull(v, UnlockResult.parse((withId + v + "}").toByteArray()).unlockId)
+        assertEquals(
+            EnrollResult(true, null, "abc", "0123456789abcdef0123456789abcdef"),
+            EnrollResult.parse("""{"ok":true,"vault_id":"abc","unlock_id":"0123456789abcdef0123456789abcdef"}""".toByteArray()),
+        )
+        assertEquals(EnrollResult(true, null, "abc", null), EnrollResult.parse("""{"ok":true,"vault_id":"abc","unlock_id":""}""".toByteArray()))
         val f = UnlockResult.parse("""{"ok":false,"code":"backoff","header_seq":4,"retry_after":30}""".toByteArray())
         assertEquals("backoff", f.code)
         assertEquals(30, f.retryAfterSeconds)

@@ -1,6 +1,7 @@
 package com.vettid.app
 
 import android.app.Activity
+import android.content.Context
 import android.os.Bundle
 import com.vettid.app.di.AppScope
 import com.vettid.app.distribution.DistributionApplication
@@ -11,6 +12,7 @@ import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.CrashScrubber
 import com.vettid.core.data.wipe.AndroidWipeTargets
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.notify.Channels
@@ -51,6 +53,12 @@ class VettIdApplication : DistributionApplication() {
     lateinit var feedNotifier: FeedNotifier
 
     @Inject
+    lateinit var changeNotifier: com.vettid.app.notify.ChangeDecisionNotifier
+
+    @Inject
+    lateinit var pendingLock: com.vettid.app.notify.PendingLockNotifier
+
+    @Inject
     lateinit var modes: ModeController
 
     @Inject
@@ -68,6 +76,16 @@ class VettIdApplication : DistributionApplication() {
      */
     @Inject
     lateinit var calls: CallAccess
+
+    /**
+     * The first app code of every process of the app (before any content provider and before [onCreate]): a crash
+     * from here on reaches Android's handler with class names and stack frames only, never a message (the owner's
+     * rule, 2026-10-23; [CrashScrubber]).
+     */
+    override fun attachBaseContext(base: Context) {
+        CrashScrubber.install()
+        super.attachBaseContext(base)
+    }
 
     override fun onCreate() {
         // Before injection, so before anything reads local state: a wipe of a replaced phone that the process did
@@ -94,6 +112,10 @@ class VettIdApplication : DistributionApplication() {
         // on-phone service while the mode is the service and the phone has a vault.
         runCatching { Channels.ensure(this) }
         feedNotifier.start()
+        // VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background.
+        changeNotifier.start()
+        // The member's pending lock: its job while it is pending (it survives the process), and its notice.
+        pendingLock.start()
         // Google push (ANDROID-PLAN 0.1.30; the `full` distribution): in a build with the Firebase options, Firebase
         // is initialised here, before any service runs, so that a wake that started this process is handled; the
         // registration with the vault follows the mode. Without the options, and in the `foss` distribution, neither
@@ -125,11 +147,13 @@ class VettIdApplication : DistributionApplication() {
         private var started = 0
 
         override fun onActivityStarted(activity: Activity) {
+            com.vettid.app.notify.AppForeground.visible = true
             if (started++ == 0) onForeground()
         }
 
         override fun onActivityStopped(activity: Activity) {
             if (started > 0) started--
+            com.vettid.app.notify.AppForeground.visible = started > 0
         }
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit

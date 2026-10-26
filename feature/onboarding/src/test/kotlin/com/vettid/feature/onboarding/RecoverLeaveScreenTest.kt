@@ -83,4 +83,23 @@ class RecoverLeaveScreenTest {
         rule.onNodeWithText("Try the PIN again").performClick()
         assertEquals(listOf("askStartOver", "tryPinAgain"), asked)
     }
+
+    /** After `ok` and Continue, the recovery screen hands over to the end of setup once, and not before. */
+    @Test
+    fun theOpenedPaneFinishesSetup() {
+        val vault = com.vettid.core.testing.FakeVault(
+            com.vettid.core.data.vault.AppPhase.Setup(com.vettid.core.data.vault.SetupStage.RECOVERING),
+        ).apply { phoneSecret = true }
+        val vm = RecoveryOpenViewModel(vault, vault)
+        var opened = 0
+        val state = androidx.compose.runtime.mutableStateOf(
+            RecoveryOpenUiState(step = OpenStep.DONE, outcome = com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 1)),
+        )
+        rule.setContent { RecoveryOpenPane(state.value, vm, onOpened = { opened++ }) }
+        rule.waitForIdle()
+        assertEquals(0, opened)
+        state.value = state.value.copy(opened = true)
+        rule.waitForIdle()
+        assertEquals(1, opened)
+    }
 }

@@ -168,8 +168,34 @@ class LocalWipeTest {
         LocalWipe(t).erase()
         assertEquals(LocalWipe.KNOWN_ALIASES, deleted)
         assertEquals(
-            listOf("vettid.device_attestation.v1", "vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.local_files.v1"),
+            listOf(
+                "vettid.device_attestation.v1", "vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.app_api.v1", "vettid.local_files.v1",
+            ),
             LocalWipe.KNOWN_ALIASES,
         )
+    }
+
+    /** Release R: the old phone's wipe at the end of a kept transfer leaves its notice, also when a crash interrupted it. */
+    @Test
+    fun theMovedAwayNoticeSurvivesTheWipeAndACrash() {
+        val phone = Phone()
+        phone.enrolled()
+        val wipe = LocalWipe(phone.targets)
+        wipe.begin(LocalWipe.REASON_MOVED_AWAY)
+        assertFalse(wipe.movedAway)
+        // The process dies here; the next start finishes the wipe.
+        assertTrue(LocalWipe(phone.targets).resumeIfPending())
+        assertTrue(wipe.movedAway)
+        wipe.acknowledgeMovedAway()
+        assertFalse(wipe.movedAway)
+    }
+
+    @Test
+    fun anOtherWipeLeavesNoNotice() = runTest {
+        val phone = Phone()
+        phone.enrolled()
+        val wipe = LocalWipe(phone.targets)
+        assertTrue(wipe.run())
+        assertFalse(wipe.movedAway)
     }
 }

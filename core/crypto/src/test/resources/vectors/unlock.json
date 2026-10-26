@@ -1,0 +1,33 @@
+{
+  "description": "VAULT-MESSAGING 0.33.0 §11.14.1 and §11.14.2 (release R), the §16 inputs with x computed: x = Argon2id(PIN, salt, t = 3, m = 65,536 KiB, p = 1, 32); unlock_key = HKDF-SHA-256(ikm = x || unlock_secret, salt = pepper, info = \"vettid/vms/2/unlock-key\" || 0x00 || vault_id); dek_wrap = nonce || XChaCha20-Poly1305(unlock_key, nonce, \"vettid/vms/2/dek-wrap\" || 0x00 || vault_id || 0x00 || dek_version (8), DEK); secret_check = HMAC-SHA-256(pepper, \"vettid/vms/2/unlock-secret-check\" || 0x00 || vault_id || 0x00 || unlock_secret); dek_wrap_next under the next secret's unlock key holds DEK_0 || DEK_1, aad label \"vettid/vms/2/dek-wrap-next\" with DEK_1's version. unlock_secret = HMAC-SHA-256(phone key, \"vettid/vms/2/unlock-secret\" || 0x00 || vault_id || 0x00 || epoch (8)). TEST ONLY.",
+  "vault_id": "test-vault-0001",
+  "pin": "123456",
+  "salt_hex": "47474747474747474747474747474747",
+  "kdf": {
+    "alg": "argon2id",
+    "t": 3,
+    "m": 65536,
+    "p": 1
+  },
+  "x_hex": "7f3f5be824edd5bb006262fe90a321f05c06a5d880b9fb8874451e4206db9d57",
+  "pepper_hex": "3232323232323232323232323232323232323232323232323232323232323232",
+  "unlock_secret_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "unlock_key_hex": "f01975109b4575d994ade44aeae5d667eb56f14b610d1004694a707e9702e624",
+  "dek_hex": "3535353535353535353535353535353535353535353535353535353535353535",
+  "dek_version": 1,
+  "dek_wrap_hex": "434343434343434343434343434343434343434343434343b6ba7d16dda18f732ac1f0dd4e0459a98a7963ebe441be2d21033327beb40cf38240ecd11a079150413e2e940708bbe3",
+  "secret_check_hex": "89f9fa1389f2e7ecfd0521ab27b39207d867a8acd3f99cd23ba19b3c357ccfde",
+  "next": {
+    "unlock_secret_hex": "4545454545454545454545454545454545454545454545454545454545454545",
+    "unlock_key_hex": "dd657b8c27f970d60c271e531e9477aeef25da911a5e5041be3fc7b886044802",
+    "dek1_hex": "3737373737373737373737373737373737373737373737373737373737373737",
+    "dek_version": 2,
+    "dek_wrap_next_hex": "464646464646464646464646464646464646464646464646d23dc66a19696184336943e6242c2bc602f35deea7da378cd115866207b57dbb8603d3b0c8a208676398a5409ca680b925f53cc32246f89b373d746bc441c2b9803935ab75b72a6b2e0aa5b8862c99f7",
+    "secret_check_next_hex": "c12589e53da8326b90b0e362e09f83d1ec315e22936c6069decaa686d7a01ef3"
+  },
+  "phone": {
+    "phone_key_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+    "epoch_1_hex": "84ae0b66319d60524f6dcffa6fa3c540669caa0f13a2b1cc01c49305d4af7836",
+    "epoch_2_hex": "03bbaea3348d1fdb182a3474faf655f7f444c74be38ab84423ec21f3a2587f07"
+  }
+}

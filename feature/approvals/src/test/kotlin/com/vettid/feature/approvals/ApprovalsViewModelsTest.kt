@@ -9,13 +9,17 @@ import com.vettid.core.data.social.ApprovalParser
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.GrantEntry
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -47,9 +51,25 @@ class ApprovalsViewModelsTest {
 
     private fun detail(a: Approval) = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items)
 
+    private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    /** Refused because the daily check was due: the list reads again once the check passes (staging, release 19). */
+    @Test
+    fun aListRefusedForTheDailyCheckReloadsWhenTheCheckPasses() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        social.fail["refreshApprovals"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        val vm = ApprovalsViewModel(social, social, vault)
+        advanceUntilIdle()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.error)
+        assertEquals(2, social.calls.count { it == "refreshApprovals" })
+    }
+
     @Test
     fun listsWhatTheRepositoryHolds() = runTest {
-        val vm = ApprovalsViewModel(social, social)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
         advanceUntilIdle()
         assertEquals(5, vm.uiState.value.approvals.size)
         assertTrue("refreshApprovals" in social.calls)
@@ -59,7 +79,7 @@ class ApprovalsViewModelsTest {
     @Test
     fun showsAPeerDeclineOnceUntilDismissed() = runTest {
         social.approvals.value = listOf(request, outgoing)
-        val vm = ApprovalsViewModel(social, social)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
         advanceUntilIdle()
         social.peerDeclined("p1", "Morgan", outgoing = false)
         social.peerDeclined("c9", "Jordan", outgoing = true)
@@ -217,6 +237,29 @@ class ApprovalsViewModelsTest {
         assertFalse(all.uiState.value.canApprove)
     }
 
+    /** §10.12: a tap decides only the share items the screen showed, not one a batch added just before it. */
+    @Test
+    fun aShareDecisionDecidesOnlyTheItemsShown() = runTest {
+        fun item(id: String) = com.vettid.core.data.social.ShareItem(id, id, "medical", "data")
+        val shown = Approval.ShareDecision("r1", "c1", null, listOf(item("i1"), item("i2")), "tagged", now)
+        social.approvals.value = listOf(shown)
+        val vm = detail(shown)
+        advanceUntilIdle()
+        vm.toggleShareItem("i2")
+        // A batch lands before the tap: i3 is in the live question but was never on screen.
+        social.approvals.value = listOf(shown.copy(items = shown.items + item("i3")))
+        advanceUntilIdle()
+        vm.approve(listOf("i1", "i2"))
+        advanceUntilIdle()
+        assertEquals(listOf("i1") to listOf("i2"), social.lastShare)
+        social.approvals.value = listOf(shown.copy(items = shown.items + item("i3")))
+        val other = detail(shown)
+        advanceUntilIdle()
+        other.deny(listOf("i1", "i2"))
+        advanceUntilIdle()
+        assertEquals(emptyList<String>() to listOf("i1", "i2"), social.lastShare)
+    }
+
     /** §10.12: entries ticked one by one, a category answered with the member's item, uses and lifetime chosen. */
     @Test
     fun aGrantIsDecidedEntryByEntry() = runTest {
@@ -343,7 +386,7 @@ class ApprovalsViewModelsTest {
         // One ask alone is a single entry.
         assertEquals(listOf(ApprovalEntry.One(a)), AskBatches.group(listOf(a)))
         social.approvals.value = listOf(c, g, a)
-        val vm = ApprovalsViewModel(social, social)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
         advanceUntilIdle()
         assertEquals(1, vm.uiState.value.entries.size)
     }
@@ -357,7 +400,7 @@ class ApprovalsViewModelsTest {
         )
         val jo = sam.copy(id = "c2", asks = com.vettid.core.data.social.AskState())
         social.connections.value = listOf(sam, jo)
-        val vm = ApprovalsViewModel(social, social)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
         advanceUntilIdle()
         assertEquals(listOf("c1"), vm.uiState.value.paused.map { it.id })
         vm.resumeAsks("c1")

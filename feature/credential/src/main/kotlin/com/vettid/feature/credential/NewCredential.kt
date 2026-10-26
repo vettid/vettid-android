@@ -20,18 +20,24 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.policy.PasswordPolicy
+import com.vettid.core.data.policy.PasswordRule
+import com.vettid.core.data.policy.hintRes
 import com.vettid.core.data.policy.labelRes
 import com.vettid.core.data.policy.messageRes
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.components.PasswordRuleLine
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.StrengthMeter
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,16 +55,24 @@ data class NewCredentialUiState(
     val confirm: String = "",
     val strength: PasswordPolicy.Strength = PasswordPolicy.Strength.TOO_SHORT,
     val problem: PasswordPolicy.Problem? = null,
+    /** (Release R) The vault is of release R: its password rules as the member types ([rule]) instead of the meter. */
+    val newRules: Boolean = false,
+    val rule: PasswordRule = PasswordRule.SHORT,
+    /** [rule] is the vault's verdict (`weak_password{reason}`). */
+    val refused: Boolean = false,
     val mismatch: Boolean = false,
     /** The member read that every critical item is destroyed. */
     val acknowledged: Boolean = false,
     val confirming: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
 ) {
     val filled: Boolean
-        get() = pin.length >= MIN_PIN && current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && acknowledged
+        get() = pin.length >= MIN_PIN && current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && acknowledged &&
+            !refused && (!newRules || rule.passes)
 
     override fun toString(): String = "NewCredentialUiState(busy=$busy, error=$error, done=$done)"
 
@@ -73,18 +87,24 @@ data class NewCredentialUiState(
  * one; the old credential and every critical item are destroyed. Wrong entries count as failed owner checks.
  */
 @HiltViewModel
-class NewCredentialViewModel @Inject constructor(private val repo: CredentialRepository) : ViewModel() {
-    private val state = MutableStateFlow(NewCredentialUiState())
+class NewCredentialViewModel @Inject constructor(private val repo: CredentialRepository, vault: VaultRepository) : ViewModel() {
+    private val state = MutableStateFlow(NewCredentialUiState(newRules = vault.usesPhoneSecret))
     val uiState: StateFlow<NewCredentialUiState> = state.asStateFlow()
 
     fun setPin(v: String) = state.update {
-        it.copy(pin = v.filter { c -> c.isDigit() }.take(NewCredentialUiState.MAX_PIN), error = null)
+        val pin = v.filter { c -> c.isDigit() }.take(NewCredentialUiState.MAX_PIN)
+        val rule = if (it.newRules && !it.refused && it.password.isNotEmpty()) PasswordRule.check(it.password, pin) else it.rule
+        it.copy(pin = pin, rule = rule, error = null)
     }
 
     fun setCurrent(v: String) = state.update { it.copy(current = v, error = null) }
 
     fun setPassword(v: String) = state.update {
-        it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, mismatch = false)
+        if (it.newRules) {
+            it.copy(password = v, rule = PasswordRule.check(v, it.pin), refused = false, mismatch = false)
+        } else {
+            it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, refused = false, mismatch = false)
+        }
     }
 
     fun setConfirm(v: String) = state.update { it.copy(confirm = v, mismatch = false) }
@@ -95,7 +115,7 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
     fun submit() {
         val s = state.value
         if (!s.filled || s.busy) return
-        val p = PasswordPolicy.check(s.password)
+        val p = if (s.newRules) null else PasswordPolicy.check(s.password)
         when {
             p != null -> state.update { it.copy(problem = p) }
             s.confirm != s.password -> state.update { it.copy(mismatch = true) }
@@ -112,10 +132,18 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
         viewModelScope.launch {
             try {
                 repo.newCredential(s.pin, s.current, s.password)
-                state.value = NewCredentialUiState(done = true)
+                state.value = NewCredentialUiState(newRules = s.newRules, done = true)
             } catch (e: VaultFailure) {
-                // The PIN and the current password are not kept after an answer.
-                state.update { it.copy(busy = false, error = e.kind, pin = "", current = "") }
+                // The PIN and the current password are not kept after an answer. weak_password (§11.14.7): its reason
+                // under the new password, in the same words as the app's.
+                val rule = if (e.kind == FailureKind.WEAK_PASSWORD) PasswordRule.fromVault(e.weakPasswordReason) else null
+                state.update {
+                    if (rule != null) {
+                        it.copy(busy = false, error = null, rule = rule, refused = true, pin = "", current = "")
+                    } else {
+                        it.copy(busy = false, error = e.kind, errorCode = e.shownCode, pin = "", current = "")
+                    }
+                }
             }
         }
     }
@@ -162,11 +190,15 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.password, actions.setPassword, stringResource(R.string.credential_password_new),
-            error = state.problem?.let { stringResource(it.messageRes()) },
+            error = if (state.newRules) null else state.problem?.let { failureText(it.messageRes()) },
             imeAction = ImeAction.Next,
         )
         Spacer(Modifier.height(Spacing.s))
-        StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))
+        if (state.newRules || state.refused) {
+            NewPasswordRule(state.rule, state.refused)
+        } else {
+            StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))
+        }
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.confirm, actions.setConfirm, stringResource(R.string.credential_password_confirm),
@@ -188,7 +220,7 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
         state.error?.let {
             Spacer(Modifier.height(Spacing.l))
             val title = stringResource(R.string.credential_new_title)
-            NoticeCard(NoticeKind.URGENT, title, stringResource(it.messageRes()), Modifier.testTag("error"))
+            NoticeCard(NoticeKind.URGENT, title, failureText(it.messageRes(), it.vaultCode(state.errorCode)), Modifier.testTag("error"))
         }
     }
     if (state.confirming) {
@@ -201,4 +233,16 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
             destructive = true,
         )
     }
+}
+
+/** The line under a new password on a vault of release R (ANDROID-PLAN "Passwords"); [refused]: the vault's verdict. */
+@Composable
+internal fun NewPasswordRule(rule: PasswordRule, refused: Boolean) {
+    PasswordRuleLine(
+        stringResource(rule.messageRes()),
+        passes = rule.passes && !refused,
+        hint = rule.hintRes()?.let { stringResource(it) },
+        refused = refused,
+        modifier = Modifier.testTag("password_rule"),
+    )
 }

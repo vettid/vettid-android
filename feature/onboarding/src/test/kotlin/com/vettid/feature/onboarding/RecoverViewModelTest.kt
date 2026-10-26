@@ -15,6 +15,7 @@ import com.vettid.core.testing.FakeReleaseNotes
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -25,6 +26,7 @@ import org.junit.Rule
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass")
 class RecoverViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
@@ -120,6 +122,11 @@ class RecoverViewModelTest {
         vm.scanned(qr)
         advanceUntilIdle()
         assertEquals(CodeRefusal.NOT_AVAILABLE, vm.uiState.value.refusal)
+        // 0.34.0: a release with recovery_r and without recovery_offered (nothing sent, or the vault's not_offered).
+        vault.registrations.add(RecoveryRegistration.Refused("not_offered"))
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(CodeRefusal.NOT_OFFERED, vm.uiState.value.refusal)
     }
 
     private suspend fun kotlinx.coroutines.test.TestScope.atThePin(): RecoverViewModel {
@@ -695,5 +702,89 @@ class RecoverViewModelTest {
         // What the tests above rely on: the fake is only ever handed a code whose check matched.
         assertTrue(TypedRecoveryCode.parse(typed, vault.apiOrigin) is TypedRecoveryCode.Parsed.Ok)
         assertEquals(TypedRecoveryCode.Parsed.BadCheck, TypedRecoveryCode.parse(typed.dropLast(1) + "2", vault.apiOrigin))
+    }
+
+    // --- ANDROID-PLAN 0.1.78 "A phone that could not tell" ---
+
+    private fun CouldNotTellAnswer(kind: com.vettid.core.data.vault.CouldNotTell.Kind) = com.vettid.core.data.vault.CouldNotTell(kind)
+
+    private fun TestScope.ended(kind: com.vettid.core.data.vault.CouldNotTell.Kind, undecided: Boolean = true): RecoverViewModel {
+        vault.undecidedValue = undecided
+        vault.couldNotTellAnswers.add(CouldNotTellAnswer(kind))
+        vault.fail["recoveryPreflight"] = com.vettid.core.data.vault.VaultFailure(FailureKind.UNAUTHORIZED, "unauthorized")
+        vault.recoveryStageValue = RecoveryStage.PIN
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        return vm
+    }
+
+    @Test
+    fun twoEndedReadsOfferANewRecoveryAndStartOverIsRefusedWhileUndecided() = runTest {
+        val vm = ended(com.vettid.core.data.vault.CouldNotTell.Kind.START_NEW)
+        assertEquals(RecoverStep.ENDED, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.undecided)
+        assertEquals(com.vettid.core.data.vault.CouldNotTell.Kind.START_NEW, vm.uiState.value.couldNotTell?.kind)
+        vm.askStartOver() // K is never forgotten while undecided
+        assertFalse(vm.uiState.value.confirmStartOver)
+        vm.confirmStartOver()
+        advanceUntilIdle()
+        assertFalse("abandonRecovery" in vault.calls)
+        vm.useNewCode()
+        assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
+    }
+
+    @Test
+    fun aNewCodeIsOnlyOfferedAfterTheSecondRead() = runTest {
+        val vm = ended(com.vettid.core.data.vault.CouldNotTell.Kind.WAIT)
+        assertEquals(com.vettid.core.data.vault.CouldNotTell.Kind.WAIT, vm.uiState.value.couldNotTell?.kind)
+        vm.useNewCode()
+        assertEquals(RecoverStep.ENDED, vm.uiState.value.step)
+        // Check again reads once more; the second read allows it.
+        vault.couldNotTellAnswers.add(CouldNotTellAnswer(com.vettid.core.data.vault.CouldNotTell.Kind.START_NEW))
+        vm.checkAgain()
+        advanceUntilIdle()
+        vm.useNewCode()
+        assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
+    }
+
+    @Test
+    fun a200GoesToThePinForTheLostOkUnlockAndNothingIsForgotten() = runTest {
+        val vm = ended(com.vettid.core.data.vault.CouldNotTell.Kind.LOST_OK)
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        assertFalse("abandonRecovery" in vault.calls)
+    }
+
+    @Test
+    fun keyInUseAtTheClaimGoesToThePinForTheLostOkUnlock() = runTest {
+        vault.registrations.add(RecoveryRegistration.KeyInUse)
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.scan()
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        assertFalse("abandonRecovery" in vault.calls)
+    }
+
+    @Test
+    fun withoutAnUnansweredOpenTheEndedStepIsTheOrdinaryOne() = runTest {
+        val vm = ended(com.vettid.core.data.vault.CouldNotTell.Kind.NOT_APPLICABLE, undecided = false)
+        assertEquals(RecoverStep.ENDED, vm.uiState.value.step)
+        vm.askStartOver()
+        assertTrue(vm.uiState.value.confirmStartOver)
+    }
+
+    @Test
+    fun aNewCodeCanBeUsedFromTheLostOkStepOnceTheRuleAllowedIt() = runTest {
+        vault.recoveryStageValue = RecoveryStage.PIN
+        vault.undecidedValue = true
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vm.useNewCode() // not allowed yet
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vault.newCodeAllowedValue = true // two reads allowed a new code that reuses the second identity
+        vm.useNewCode()
+        assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
     }
 }

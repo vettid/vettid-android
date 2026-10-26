@@ -12,6 +12,7 @@ import androidx.compose.ui.test.performTextInput
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.testing.FakeVault
 import com.vettid.core.ui.components.ShellChrome
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -72,7 +73,7 @@ class ConnectionsSearchTest {
     @Test
     fun theViewModelFiltersByTitleAndDisplayName() = runTest {
         val social = FakeSocial().apply { seed(listOf(ada, bo)) }
-        val vm = ConnectionsViewModel(social, social)
+        val vm = ConnectionsViewModel(social, social, FakeVault())
         advanceUntilIdle()
         assertEquals(2, vm.uiState.value.connections.size)
         vm.setQuery("BOBBY")

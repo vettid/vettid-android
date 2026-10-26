@@ -57,9 +57,11 @@ android {
     defaultConfig {
         // Same application id as the v1 app (keeps the Play listing and signing key, D1).
         applicationId = releaseApplicationId
-        // v1 ended at versionCode 7 / 1.0.55; the rewrite starts at 100 / 2.0.0.
-        versionCode = 100
-        versionName = "2.0.0-a0"
+        // v1 ended at versionCode 7 / 1.0.55; the rewrite starts at 100 / 2.0.0. 101 / 2.0.0-a1 is the first build
+        // that implements release R (VAULT-MESSAGING 0.33 §11.14); the staging channel requires it. 102 / 2.0.0-a2 adds
+        // the way out of a wipe that did not finish (erase VettID's data on this phone).
+        versionCode = 102
+        versionName = "2.0.0-a2"
     }
 
     signingConfigs {
@@ -289,6 +291,43 @@ abstract class ApplicationIdCheck : DefaultTask() {
         problems += forbiddenHosts.get().filter { it in hosts }.map { "App Link host $it belongs to another environment" }
         check(problems.isEmpty()) { "${manifest.get().asFile}: $problems" }
         logger.lifecycle("merged manifest: application id $id, its own authorities and permissions, App Link hosts $hosts")
+    }
+}
+
+/**
+ * Photo attachments need no media or storage permission (ANDROID-PLAN 0.1.39 "Choosing a photo"): photos come from
+ * the Photo Picker, which hands over only what the member picks, or from the app's own camera; Save writes through
+ * MediaStore without one. Fails if a build's merged manifest asks for one. Every variant's build runs it.
+ */
+abstract class MediaPermissionCheck : DefaultTask() {
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+        val tags = listOf("uses-permission", "uses-permission-sdk-23")
+        val asked = tags.flatMap { t ->
+            doc.getElementsByTagName(t).let { l -> (0 until l.length).map { (l.item(it) as org.w3c.dom.Element).getAttributeNS(ns, "name") } }
+        }
+        val found = asked.filter { it in FORBIDDEN }
+        check(found.isEmpty()) { "${manifest.get().asFile}: media or storage permissions $found (ANDROID-PLAN 0.1.39)" }
+        logger.lifecycle("merged manifest: no media or storage permission")
+    }
+
+    companion object {
+        val FORBIDDEN = setOf(
+            "android.permission.READ_MEDIA_IMAGES",
+            "android.permission.READ_MEDIA_VIDEO",
+            "android.permission.READ_MEDIA_AUDIO",
+            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+            "android.permission.READ_EXTERNAL_STORAGE",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
+            "android.permission.MANAGE_EXTERNAL_STORAGE",
+            "android.permission.ACCESS_MEDIA_LOCATION",
+        )
     }
 }
 
@@ -549,12 +588,12 @@ abstract class CallsApkCheck : DefaultTask() {
     companion object {
         const val LIBRARY = "libjingle_peerconnection_so.so"
 
-        /** The four libraries inside `io.github.webrtc-sdk:android:150.7871.01` (AAR SHA-256 `0a1627b1…79b0`, core/calls). */
+        /** The four libraries inside `io.github.webrtc-sdk:android:150.7871.04` (AAR SHA-256 `1872dda4…c84c`, core/calls). */
         val NATIVE_SHA256 = mapOf(
-            "arm64-v8a" to "7b299113fcd743de7dc5559686b21fc2681b2c8598347d8dc0743d2e004995ca",
-            "armeabi-v7a" to "762f3d5e1c4c69c3f02f2383540f40e1142cb631e9d99e86bdb1602f4c277559",
-            "x86_64" to "0717afcc43da0c1aabd904f9ef0653efc8f3d37b5750f39a123697e7910b623a",
-            "x86" to "80e7b1b7e07bb5a53841a8cacabf942a6f3eb8ee9759a1731741dd912f367f19",
+            "arm64-v8a" to "2b561520298d9fec3e216baf58a53fbddf4a46dfd247880cbc3821875ed20200",
+            "armeabi-v7a" to "5415e7a02ce83e983329575e7c2e46b8ced6c75baea3c41aa52b5699ccb54eda",
+            "x86_64" to "b87bbb6d6c81c50f04538cd809575de633a789cc3555af2c5eb6ec414b148908",
+            "x86" to "9a532ef72dcda8b4b9874d4f578dbd3a5eb18bce01f9f91bee883bc0962dce3c",
         )
 
         /** Type descriptors: the media stack's, and :core:calls' own. */
@@ -746,6 +785,14 @@ androidComponents {
         // checkReleasePushManifest, checkReleaseApplicationId, checkReleaseApk, checkStagingApk. `foss`:
         // checkFossReleasePushManifest, checkFossReleaseApplicationId, checkFossReleaseApk.
         val name = if (foss) v.name.cap() else v.buildType!!.cap()
+        val media = tasks.register<MediaPermissionCheck>("check${v.name.cap()}MediaPermissions") {
+            manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+        }
+        // Every build of every variant (debug, devStack, staging, release; both distributions) runs it: APKs,
+        // bundles and unit tests (not pre*Build, which the merged manifest itself depends on).
+        tasks.matching { t ->
+            t.name in setOf("assemble${v.name.cap()}", "bundle${v.name.cap()}", "test${v.name.cap()}UnitTest")
+        }.configureEach { dependsOn(media) }
         tasks.register<PushManifestCheck>("check${name}PushManifest") {
             manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
             pushConfigured.set(!foss && fcmOptions(v.buildType!!) != null)

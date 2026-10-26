@@ -25,7 +25,8 @@ class EnclaveVerifier(private val nitro: NitroVerifier = NitroVerifier()) {
      * Checks an ETK descriptor and its attestation document: the chain to the
      * pinned Nitro root, user_data = SHA-256("vettid/vms/2/etk" || descriptor),
      * an attestation less than 26 h old, no debug PCRs, release = PCR0,
-     * not_after in the future and at most 24 h after the attestation, and
+     * not_after in the future and at most 24 h + 5 min after the
+     * attestation's timestamp (the clock allowance of §11.2), and
      * PCR0–2 equal to a manifest entry (an `active` one to enroll).
      */
     fun verifyEnclave(
@@ -72,6 +73,6 @@ class EnclaveVerifier(private val nitro: NitroVerifier = NitroVerifier()) {
         /** §11.2 step 3. */
         val MAX_ATTESTATION_AGE: Duration = Duration.ofHours(26)
         val ATTESTATION_SKEW: Duration = Duration.ofMinutes(5)
-        private val MAX_DESCRIPTOR_LIFE: Duration = Duration.ofHours(24).plusSeconds(1)
+        private val MAX_DESCRIPTOR_LIFE: Duration = Duration.ofHours(24).plusMinutes(5)
     }
 }

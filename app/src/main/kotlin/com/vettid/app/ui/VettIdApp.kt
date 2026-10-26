@@ -9,6 +9,13 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -30,12 +37,18 @@ import androidx.navigation.compose.rememberNavController
 import com.vettid.app.R
 import com.vettid.core.data.lock.AppLockState
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
+import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.ui.components.FullScreenProgress
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.feature.onboarding.AppLockScreen
+import com.vettid.feature.onboarding.FinishMovePane
+import com.vettid.feature.onboarding.FinishMoveViewModel
 import com.vettid.feature.onboarding.OnboardingFlow
 import com.vettid.feature.onboarding.ReleaseUpdateFlowRoute
 import com.vettid.feature.onboarding.UnlockRoute
+import com.vettid.feature.onboarding.VaultDeletingRoute
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -53,6 +66,10 @@ private data object UnlockDest
 @Serializable
 private data object MainDest
 
+/** (ANDROID-PLAN 0.1.54) "Your vault is being deleted": above every phase, the release update included. */
+@Serializable
+private data object DeletingDest
+
 /** The one-step release update (owner decision 2026-10-09): it locks and unlocks the vault, so it is above the phases. */
 @Serializable
 private data object UpdateDest
@@ -63,7 +80,15 @@ private fun destinationOf(phase: AppPhase): Any = when (phase) {
     AppPhase.SignedOut, is AppPhase.Setup -> OnboardingDest
     AppPhase.Locked -> UnlockDest
     AppPhase.Unlocked -> MainDest
+    is AppPhase.Deleting -> DeletingDest
 }
+
+/** The root destination: the release update over every phase but "being deleted" (ANDROID-PLAN 0.1.54), which is above it. */
+private fun rootTarget(phase: AppPhase, updateShown: Boolean): Any =
+    if (updateShown && phase !is AppPhase.Deleting) UpdateDest else destinationOf(phase)
+
+/** "Finish the move" holds the screen it runs on, but never over a vault being deleted. */
+private fun holdsRoot(phase: AppPhase, finishingMove: Boolean): Boolean = finishingMove && phase !is AppPhase.Deleting
 
 /**
  * Makes [target] the only root destination, when it is not the one showing already. The effect runs again in every
@@ -71,12 +96,13 @@ private fun destinationOf(phase: AppPhase): Any = when (phase) {
  * the destination of the phase is then still on the back stack (restored, or kept by the controller while the lock
  * showed), and navigating to it again would destroy it with its ViewModels: the screen the member was on, what they
  * typed, a running enrolment or the wait for a transfer (A6 audit R1). While the app lock shows, nothing of the app
- * (the NavHost included) is composed; a phase that changed under the lock is followed on unlock.
+ * (the NavHost included) is composed; a phase that changed under the lock is followed on unlock. While [hold] ("Finish
+ * the move" is running) the destination showing stays, and the phase is followed when it ends.
  */
 @Composable
-internal fun RootDestinationEffect(nav: NavHostController, target: Any, locked: Boolean) {
-    LaunchedEffect(nav, target, locked) {
-        if (locked) return@LaunchedEffect
+internal fun RootDestinationEffect(nav: NavHostController, target: Any, locked: Boolean, hold: Boolean = false) {
+    LaunchedEffect(nav, target, locked, hold) {
+        if (locked || hold) return@LaunchedEffect
         if (nav.currentBackStackEntry?.destination?.hasRoute(target::class) == true) return@LaunchedEffect
         nav.navigate(target) {
             popUpTo(0) { inclusive = true }
@@ -118,10 +144,13 @@ fun VettIdApp(
     val portal = viewModel.portalUrl
     val nav = rememberNavController()
     val update by viewModel.updateProgress.collectAsStateWithLifecycle()
-    val target = if (update != null) UpdateDest else destinationOf(phase)
+    val target = rootTarget(phase, updateShown = update != null)
 
     val locked = lock == AppLockState.LOCKED
-    RootDestinationEffect(nav, target, locked)
+    // "Finish the move" locks and then unlocks the vault (§11.14.10): the screen it runs on stays until the unlock has
+    // answered, instead of the unlock screen in between (the phone is locked all the same; a failure then shows it).
+    val finishingMove by viewModel.finishingMove.collectAsStateWithLifecycle()
+    RootDestinationEffect(nav, target, locked, hold = holdsRoot(phase, finishingMove))
 
     // Debug builds, and the staging build made for the two-phone call tests, expose test tags as resource ids, so
     // that adb (uiautomator) can drive two phones at once.
@@ -150,32 +179,56 @@ fun VettIdApp(
                         statusBarPadding = !paused,
                     )
                 }
+                // Release R (§11.14.10): "Finish the move" and "This phone is your vault's phone again".
+                val topBanner = paused || prefsReset
+                val moveNotice = MoveNotices(viewModel, phase == AppPhase.Unlocked, appLocked = locked, statusBarPadding = !topBanner)
                 Box(
                     Modifier
                         .weight(1f)
                         .fillMaxSize()
-                        .then(if (paused || prefsReset) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+                        .then(if (topBanner || moveNotice) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
                 ) {
                     NavHost(nav, startDestination = StartingDest) {
                         composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
                         composable<UnreachableDest> {
-                            val kind = (phase as? AppPhase.Unreachable)?.failure
-                            UnreachableScreen(kind, retrying, viewModel::retry, viewModel::startOver)
+                            val unreachable = phase as? AppPhase.Unreachable
+                            val clearFailed by viewModel.clearDataFailed.collectAsStateWithLifecycle()
+                            UnreachableScreen(
+                                unreachable?.failure,
+                                retrying,
+                                viewModel::retry,
+                                viewModel::startOver,
+                                clearFailed = clearFailed,
+                                longUnreachable = unreachable?.longUnreachable == true,
+                                onRecover = { uri.openUri(portal) },
+                                unreachableAfterSeconds = unreachable?.unreachableAfterSeconds,
+                            )
                         }
                         composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
-                        composable<UnlockDest> { UnlockRoute() }
+                        composable<UnlockDest> { UnlockRoute(onOpenAccountSite = { uri.openUri(portal) }) }
                         composable<UpdateDest> { ReleaseUpdateFlowRoute() }
+                        composable<DeletingDest> {
+                            val slow = (phase as? AppPhase.Deleting)?.slow == true
+                            VaultDeletingRoute(
+                                slow = slow,
+                                apiOnly = (phase as? AppPhase.Deleting)?.apiOnly == true,
+                                onOpenAccountSite = { uri.openUri(portal) },
+                            )
+                        }
                         composable<MainDest> {
                             // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).
                             // A call covers the open app's screens and nothing else: it is composed here, inside
                             // the app lock and the unlocked destination (a build without calls: only the content).
                             CallsHost {
                                 TagColorsHost {
+                                    // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise the
+                                    // top bar and the avatar sheet show only the initial tile, never the masked hint.
+                                    val shown = account.shownInShell()
                                     AppShell(
                                         launchRoute = launchRoute,
-                                        accountName = account?.fullName ?: account?.displayEmail
+                                        accountName = shown?.fullName ?: shown?.displayEmail
                                             ?: stringResource(R.string.account_placeholder_name),
-                                        account = account,
+                                        account = shown,
                                         portalUrl = portal,
                                         alarm = alarm,
                                         onLockVault = viewModel::lockVault,
@@ -188,10 +241,123 @@ fun VettIdApp(
                 }
             }
         }
+        // ANDROID-PLAN 0.1.57 (1): "This phone can't use your vault", over the open app (never over the app lock).
+        CredentialRequiredOverlay(lock)
         if (lock == AppLockState.PENDING) FullScreenProgress(stringResource(R.string.root_starting))
+
         // A canary manifest shared to the app (VAULT-RELEASES §10.1 step 9): asked about only while the app is open.
         if (!locked && lock != AppLockState.PENDING) {
             canaryPrompt?.let { CanaryManifestDialog(it, canaryVm::confirm, canaryVm::dismiss) }
         }
+    }
+}
+
+/**
+ * Release R (§11.14.10) banners; true when one is shown. A move to this phone that is not finished is asked about at
+ * every start in the open app ([unlocked]; on the unlock screen the unlock itself finishes it), with "Finish the move" in
+ * a dialog. The old phone that took the vault back ("The move didn't finish" succeeded) is told once.
+ */
+@Suppress("CyclomaticComplexMethod") // one banner per notice, and the dialog
+@Composable
+private fun MoveNotices(viewModel: RootViewModel, unlocked: Boolean, appLocked: Boolean, statusBarPadding: Boolean): Boolean {
+    val finishMove by viewModel.finishMovePending.collectAsStateWithLifecycle()
+    val movedBack by viewModel.movedBack.collectAsStateWithLifecycle()
+    val moveNotDone by viewModel.moveNotDone.collectAsStateWithLifecycle()
+    val movedAway by viewModel.movedAway.collectAsStateWithLifecycle()
+    val deleted by viewModel.deletedNotice.collectAsStateWithLifecycle()
+    var finishMoveOpen by rememberSaveable { mutableStateOf(false) }
+    val askFinishMove = finishMove && unlocked
+    if (askFinishMove) {
+        InfoBanner(
+            stringResource(R.string.root_finish_move),
+            Modifier.testTag("finish_move_banner"),
+            actionLabel = stringResource(R.string.root_finish_move_action),
+            onAction = { finishMoveOpen = true },
+            statusBarPadding = statusBarPadding,
+        )
+    }
+    if (movedBack) {
+        InfoBanner(
+            stringResource(R.string.root_moved_back),
+            Modifier.testTag("moved_back_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeMovedBack,
+            statusBarPadding = statusBarPadding && !askFinishMove,
+        )
+    }
+    // The vault confirmed at the end of the 7 days that this phone is still its app: the move did not happen.
+    if (moveNotDone) {
+        InfoBanner(
+            stringResource(R.string.root_move_not_done),
+            Modifier.testTag("move_not_done_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeMoveNotDone,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack,
+        )
+    }
+    // The old phone removed its keys (the new phone finished the move, or 7 days passed): said once.
+    if (movedAway) {
+        InfoBanner(
+            stringResource(R.string.root_moved_away),
+            Modifier.testTag("moved_away_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeMovedAway,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone,
+        )
+    }
+    // ANDROID-PLAN 0.1.54: the vault was deleted; said once, on "no vault", until dismissed.
+    if (deleted) {
+        InfoBanner(
+            stringResource(R.string.vault_deleted_notice),
+            Modifier.testTag("vault_deleted_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeDeletedNotice,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway,
+        )
+    }
+    // VAULT-MESSAGING 0.44.0 §11.14.9: the decision of a change whose answer was lost, wherever the member is.
+    val changeDecided by viewModel.changeDecided.collectAsStateWithLifecycle()
+    changeDecided?.let { c ->
+        // (0.45.0 step 3) Ended without a decision after a PIN change: no retry, but the lock and two-step unlock that
+        // settles the PIN without spending an attempt.
+        val lockUnlock = c is ChangeCheck.Ended && c.kind == ChangeKind.PIN
+        InfoBanner(
+            stringResource(changeDecidedText(c)),
+            Modifier.testTag("change_decided_banner"),
+            actionLabel = stringResource(if (lockUnlock) R.string.root_change_lock_unlock else R.string.root_preferences_reset_ok),
+            onAction = if (lockUnlock) viewModel::lockAndUnlockForPin else viewModel::acknowledgeChangeDecided,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway && !deleted,
+        )
+    }
+    // Kept open through the lock and unlock it sends (and never dismissed while they run); never over the app lock. Once
+    // the vault is locked and the hold is over (its bound, or the outcome), the unlock screen takes over and says why.
+    val finishing by viewModel.finishingMove.collectAsStateWithLifecycle()
+    val finishVm: FinishMoveViewModel = hiltViewModel()
+    val finishState by finishVm.uiState.collectAsStateWithLifecycle()
+    val showFinishMove = finishMove && !appLocked && (unlocked || finishing)
+    if (finishMoveOpen && showFinishMove) {
+        val busy = finishState.busy
+        Dialog(
+            onDismissRequest = { if (!busy) finishMoveOpen = false },
+            properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),
+        ) {
+            Surface(shape = MaterialTheme.shapes.large) {
+                FinishMovePane(finishState, finishVm, onDone = { if (!busy) finishMoveOpen = false })
+            }
+        }
+    }
+    return askFinishMove || movedBack || moveNotDone || movedAway || deleted || changeDecided != null
+}
+
+/** The decided change's notice (ANDROID-PLAN 0.1.45; the applied and ended texts are drafts for the owner). */
+@androidx.annotation.StringRes
+internal fun changeDecidedText(c: ChangeCheck): Int {
+    val pin = c.kind == ChangeKind.PIN
+    return when (c) {
+        // (ANDROID-PLAN 0.1.55) Another phone became the holder: the existing title, alone.
+        is ChangeCheck.Moved -> com.vettid.core.data.R.string.data_feed_device_replaced
+        is ChangeCheck.Applied -> if (pin) R.string.root_change_pin_applied else R.string.root_change_password_applied
+        is ChangeCheck.Ended -> if (pin) R.string.root_change_pin_ended else R.string.root_change_password_ended
+        else -> if (pin) R.string.root_change_pin_not_changed else R.string.root_change_password_not_changed
     }
 }

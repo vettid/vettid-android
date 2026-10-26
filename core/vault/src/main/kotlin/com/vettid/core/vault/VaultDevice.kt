@@ -9,10 +9,12 @@ import com.vettid.core.altchan.AppIdentity
 import com.vettid.core.altchan.Attester
 import com.vettid.core.altchan.BuiltUnlock
 import com.vettid.core.altchan.EnrollResult
+import com.vettid.core.altchan.MovedFrom
 import com.vettid.core.altchan.PendingUnlock
 import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.RecoveryResult
 import com.vettid.core.altchan.SealedRequest
+import com.vettid.core.altchan.UnlockIds
 import com.vettid.core.altchan.UnlockOptions
 import com.vettid.core.altchan.UnlockResult
 import com.vettid.core.attestation.AttestationException
@@ -133,10 +135,19 @@ class DeviceConfig(
     val pollWait: Duration = Duration.ofSeconds(RelayClient.DEFAULT_WAIT_S),
     /** Interactive requests time out after 30 s (§8.1); a request is re-sent with the same inner id at most twice (§8.6). */
     val requestTimeout: Duration = Duration.ofSeconds(DEFAULT_TIMEOUT_S),
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) The phone's monotonic clock in milliseconds, which the vault's clock as last
+     * seen is carried forward on ([VaultDevice.vaultNow]): `SystemClock.elapsedRealtime` in the app.
+     */
+    val elapsedMs: () -> Long = { System.nanoTime() / NANOS_PER_MS },
+    /** (VAULT-MESSAGING 0.45.0 §11.14.9 step 1) How long a change waits for earlier credential operations to settle. */
+    val settleWait: Duration = Duration.ofSeconds(DEFAULT_SETTLE_WAIT_S),
 ) {
     companion object {
         const val ROLE_APP = "app"
         const val DEFAULT_TIMEOUT_S = 30L
+        const val DEFAULT_SETTLE_WAIT_S = 30L
+        private const val NANOS_PER_MS = 1_000_000L
     }
 }
 
@@ -158,7 +169,14 @@ class VaultMessage(val inner: Inner) {
  * with `{connection_id}` for `connection.invite.accept`, 0.10.2).
  */
 class VaultOpException(val type: String, val code: String, message: String = "", val body: JsonObject? = null) :
-    IOException("vault: $type: $code${if (message.isEmpty()) "" else " ($message)"}")
+    IOException("vault: $type: $code") {
+    /**
+     * The error's `message` ("" without one): `push.confirm` names the cause of a `gateway_error` there (§14.1).
+     * Never in the exception's message, which logs and crash reports may carry: the vault's text may carry vault data
+     * (the owner's rule, 2026-10-23).
+     */
+    val detail: String = message
+}
 
 /** The device is not (yet) paired with a vault, or the vault sent something it should not have. */
 class VaultStateException(message: String) : IOException("vault client: $message")
@@ -175,6 +193,9 @@ class PairingRejectedException : IOException("vault client: pairing rejected on 
 class NotATransferCodeException(val expired: Boolean = false) :
     IOException(if (expired) "vault client: the transfer code has expired" else "vault client: not a transfer code")
 
+/** (A6 audit N1) A transfer to this phone that is not finished ([VaultDevice.transferInPending]). */
+data class TransferInState(val startedAt: Instant, val sas: String?, val paired: Boolean, val userGuid: String?)
+
 /**
  * One owner device of a vault (VAULT-MESSAGING §6.7, §9.1, §11.3), the
  * Kotlin counterpart of vettid-vault's reference `client.Device`.
@@ -184,9 +205,13 @@ class NotATransferCodeException(val expired: Boolean = false) :
  *   (§13.6), decrypted, applied and persisted before the relay ack (§8.3).
  * - Responses complete the request that awaits them; events go to [events]
  *   and to an inbox that [awaitEvent] searches first.
- * - Outgoing messages are sealed in the current epoch and kept in a
- *   persisted outbox until the relay accepts them; a request that gets no
- *   answer is re-sent with the same inner id at most twice (§8.6).
+ * - Outgoing messages are sealed in the current epoch. Fire-and-forget
+ *   messages (token renewals and their answers, `call.end`: [OUTBOX_TYPES])
+ *   are kept in a persisted outbox until the relay accepts them. A request
+ *   ([request], [op]) is deposited from memory and never written to the
+ *   outbox: one whose caller was told it failed is not delivered later by a
+ *   flush (A6 audit N2). A request that gets no answer is re-sent with the
+ *   same inner id at most twice (§8.6).
  * - Tokens are refreshed in both directions (§7.2), vault-initiated rekeys
  *   answered (§6.5) and identity rotations followed (§3.4).
  * - As an [AltParty] it builds and opens the alternate channel's sealed
@@ -203,6 +228,55 @@ class VaultDevice private constructor(
     private val st: DeviceState,
 ) : AltParty {
     private val lock = Mutex()
+
+    /**
+     * Set under [lock] by [forget] and [dropKeysFromMemory]: from then on nothing is saved ([save] throws) and nothing is
+     * sent to the vault ([checkLive]). A request that was waiting for [lock] when this device was forgotten (before an
+     * erase) cannot write the state file, or make its file key again, after the erase.
+     */
+    @Volatile
+    private var forgotten = false
+
+    /**
+     * (VAULT-MESSAGING 0.29.0 §10.2 "Locks", release L) The name of the vault's current opening as this device last
+     * learned it: from the enroll, unlock or recovery-open result that opened it, and from every `vault.status`. In
+     * memory only: a new process starts without it (until a status read), and the app then locks as for a vault before
+     * L. Null from a vault before L, and for an `""` or another form (`UnlockIds`). Not a secret.
+     */
+    @Volatile
+    var unlockId: String? = null
+        private set
+
+    /**
+     * Bumped at every change of opening this device learns of (an unlock built, an enroll, unlock or recovery-open
+     * result): a `vault.status` answer is applied only if none came between its request and its answer, so an answer
+     * from the opening before never replaces the name of the one after ([noteUnlockId]).
+     */
+    private val openings = java.util.concurrent.atomic.AtomicLong()
+
+    /** The mark a `vault.status` request takes before it is sent ([noteUnlockId]). */
+    internal fun openingMark(): Long = openings.get()
+
+    /**
+     * (Release L) A lock bound to [dead] ended because the vault was opened again: the name is forgotten if it is still
+     * the one held, and a status answer in flight is not applied (a later lock is then unconditional, never bound to a
+     * dead name).
+     */
+    fun forgetUnlockId(dead: String?) {
+        synchronized(openings) {
+            if (dead != null && unlockId == dead) {
+                openings.incrementAndGet()
+                unlockId = null
+            }
+        }
+    }
+
+    private fun opened(id: String?) {
+        synchronized(openings) {
+            openings.incrementAndGet()
+            unlockId = id
+        }
+    }
     private val clock = cfg.clock
     private val relays = ConcurrentHashMap<String, RelayClient>()
     private val own: RelayClient = relayFor(cfg.relayUrl)
@@ -287,6 +361,19 @@ class VaultDevice private constructor(
     /** True while this app recovers a vault (§11.11): registered, until `credential.recover` or `credential.reset`. */
     val recovering: Boolean get() = st.recovery != null
 
+    /** The registered recovery's id: the `ctx` of this identity's handshake (§11.14.6); null when none is registered. */
+    val recoveryId: String? get() = st.recovery?.recoveryId
+
+    /** The `request_id` of the last `vault.recovery.open` this device built and has no readable answer for yet. */
+    val pendingOpenRequestId: String? get() = pendingRecoveryOpen
+
+    /**
+     * (Release R, §11.14.6) The vault is pinned from a recovery's result but the recovery is not finished (the first
+     * handshake or `credential.get` has not completed): for a phone with a phone secret, the vault answered `ok` and
+     * made this phone its app. Ends with [finishRecoveryOpen].
+     */
+    val recoveryOpenedNotFinished: Boolean get() = st.vault != null && st.recovery != null
+
     /**
      * While recovering: the vault's `credential_backup` from this app's unlock result (0.10.6, §11.11.5 step 1);
      * null before that unlock, or when the vault did not say (an older vault).
@@ -312,6 +399,11 @@ class VaultDevice private constructor(
     /** A copy of the alternate-channel state. */
     val altState: AltState get() = alt()
 
+    /** Throws once this device was forgotten ([forgotten]): nothing more is saved or sent. */
+    private fun checkLive() {
+        if (forgotten) throw VaultStateException("forgotten")
+    }
+
     private fun relayFor(url: String): RelayClient = relays.getOrPut(url.trimEnd('/')) { RelayClient(url, secrets.relay, cfg.http, clock) }
 
     private fun now(): Instant = Instant.now(clock)
@@ -319,6 +411,7 @@ class VaultDevice private constructor(
     // --- persistence ---
 
     private fun save() {
+        checkLive()
         st.vault?.let { v ->
             v.sessions = Base64s.encodeStd(keyring.export())
             v.awaiting = awaiting.mapNotNull { a ->
@@ -372,7 +465,11 @@ class VaultDevice private constructor(
             try {
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
-                    onRequest = { out -> collectRequestSince = if (out) System.nanoTime() else null },
+                    onRequest = { out ->
+                        collectRequestSince = if (out) System.nanoTime() else null
+                        if (!out) roundsEnded.incrementAndGet()
+                    },
+                    onReached = ::noteReached,
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
@@ -395,6 +492,36 @@ class VaultDevice private constructor(
      * is idempotent). Apps offer invite lifetimes within them (§6.4).
      */
     suspend fun relayLimits(): RelayLimits = own.register().limits
+
+    /** A fresh inner id (a ULID by this device's clock), for a request the member may retry as the same one. */
+    fun newRequestId(): String = Ulid.new(now())
+
+    // --- blobs (RELAY-PROTOCOL §6.8, VAULT-MESSAGING 0.32.0 §10.5.1) ---
+
+    /**
+     * Uploads [blob] to the vault's mailbox under the standing token the vault issued this device (an
+     * `owner_device` token since release A: the relay keeps one blob's room for the owner's devices). Once: the
+     * caller never uploads the same photo again after a lost answer (every abandoned upload fills the mailbox's
+     * shared storage). Returns the relay's `blob_id`.
+     */
+    suspend fun uploadBlobToVault(blob: ByteArray): String {
+        checkLive()
+        val v = requireVault()
+        if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+        val ref = try {
+            relayFor(v.relayUrl).putBlob(v.mailbox, v.token, blob)
+        } catch (x: RelayException) {
+            countRefusal(x, v.mailbox, v.token)
+            throw x
+        }
+        return ref.id
+    }
+
+    /** Fetches a blob the vault uploaded to this device's own mailbox (`blob_unknown` for any other). */
+    suspend fun fetchOwnBlob(blobId: String): ByteArray = own.getBlob(blobId)
+
+    /** Deletes a blob in this device's own mailbox (idempotent): every fetched blob is deleted, good or bad. */
+    suspend fun deleteOwnBlob(blobId: String) = own.deleteBlob(blobId)
 
     /**
      * Starts the collection again in the scope of the last [start] if it is not running (it ended, or never ran),
@@ -419,7 +546,27 @@ class VaultDevice private constructor(
     }
 
     /** One long-poll round (tests and the foreground-service path). */
-    suspend fun pollOnce(): Int = MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }
+    suspend fun pollOnce(): Int {
+        val started = System.nanoTime()
+        return MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }.also { noteReached(started) }
+    }
+
+    /** (A6 audit N3) The latest start ([System.nanoTime]) of a collect request that reached the relay; null before any. */
+    @Volatile
+    private var reachedStartNs: Long? = null
+
+    private fun noteReached(startedNs: Long) {
+        synchronized(this) {
+            val r = reachedStartNs
+            if (r == null || startedNs - r > 0) reachedStartNs = startedNs
+        }
+    }
+
+    /**
+     * (A6 audit N3) Whether a collect request that went out at or after [sinceNs] ([System.nanoTime]) reached the relay
+     * and handed on everything it brought: the mailbox was read after then. False while the relay is out of reach.
+     */
+    fun relayReadSince(sinceNs: Long): Boolean = reachedStartNs?.let { it - sinceNs >= 0 } ?: false
 
     // --- tokens (§7) ---
 
@@ -462,6 +609,31 @@ class VaultDevice private constructor(
 
     override fun vaultId(): String? = st.vaultId
 
+    override fun movedFrom(): MovedFrom? = alt().movedFrom
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 2) An unlock after the move failed on the new release for a reason not the member's:
+     * the stored marker's `failed` is set, and the unlock screen offers "Return to release N". Nothing without a marker.
+     */
+    suspend fun markMoveFailed() = lock.withLock {
+        val a = alt()
+        if (a.movedFrom == null || a.moveFailed) return@withLock
+        setAlt(a.copy(moveFailed = true))
+        save()
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.54 point 4) The way back is gone (the vault confirmed the move, or release N ended or left the
+     * manifest): the marker goes. [from], when given, must be the marker's own (a notice about another move is ignored).
+     */
+    suspend fun clearMove(from: MovedFrom? = null) = lock.withLock {
+        val a = alt()
+        val m = a.movedFrom ?: return@withLock
+        if (from != null && from != m) return@withLock
+        setAlt(a.withoutMove())
+        save()
+    }
+
     private fun appIdentity() = AppIdentity(secrets.identity.publicKey, secrets.kem.publicKey, relayAddr, st.name, secrets.apiKey)
 
     override suspend fun prepareEnroll(
@@ -470,11 +642,12 @@ class VaultDevice private constructor(
         enclave: VerifiedEnclave,
         manifest: ReleaseManifest,
         attester: Attester,
+        unlockSecret: ByteArray?,
     ): SealedRequest =
         lock.withLock {
             // §7.1: the app's open token for the vault's first deposit, ≤ 10 min.
             val open = own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES))
-            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, appIdentity(), open, alt(), now())
+            val b = AltRequests.buildEnroll(userGuid, pin, enclave, manifest, attester, appIdentity(), open, alt(), now(), unlockSecret)
             st.signerSeen = false // a new attestation is a new key (§11.7.1)
             setAlt(b.state)
             save()
@@ -482,7 +655,24 @@ class VaultDevice private constructor(
         }
 
     override suspend fun openEnrollResult(raw: ByteArray, requestId: String): EnrollResult =
-        EnrollResult.parse(AltResults.open(raw, secrets.kem, AltResults.TYPE_ENROLL_RESULT, requestId))
+        EnrollResult.parse(AltResults.open(raw, secrets.kem, AltResults.TYPE_ENROLL_RESULT, requestId)).also {
+            if (it.ok) opened(it.unlockId)
+        }
+
+    /**
+     * An unlock result's name of the opening ([unlockId]): none when the vault did not resume (a move, §11.10.6) or is
+     * before L. A failed unlock sets none: building it already cleared the name ([prepareUnlock]), and the next
+     * `vault.status` says what runs.
+     */
+    private fun noteOpened(r: UnlockResult) {
+        if (r.ok) opened(r.unlockId.takeIf { r.token != null })
+    }
+
+    /** A `vault.status`'s `unlock_id` ([unlockId]); absent or of another form: none. */
+    internal fun noteUnlockId(id: String?, mark: Long) {
+        // An opening came between the request and its answer: the answer may name the one before.
+        synchronized(openings) { if (openings.get() == mark) unlockId = UnlockIds.of(id) }
+    }
 
     override suspend fun prepareUnlock(
         userGuid: String,
@@ -496,20 +686,44 @@ class VaultDevice private constructor(
         val recovering = st.vault == null && st.recovery != null
         if (st.vault == null && !recovering) throw VaultStateException("not paired with a vault")
         // A recovering app does not know the vault's relay key yet: an open token for its mailbox (§11.11.5).
+        val issuedBefore = st.issuedExpMs
         val tok = if (recovering) own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES)) else mintForVault()
         // §11.7.1 (0.27.0): the device key's chain goes with every unlock until the vault has shown this app its
         // signer in device.list ([signerSeen]); a vault that has recorded one ignores it.
         val opts = options.copy(sendChain = !st.signerSeen)
+        // (Release L) Whatever opening was known is over or about to be: a lock asked for meanwhile names none (the
+        // unlock's result names the new one); a status answer in flight no longer applies.
+        opened(null)
         val b = AltRequests.buildUnlock(userGuid, vid, pin, enclave, manifest, attester, secrets.identity, tok, alt(), opts, now())
         pendingUnlock = b.pending
+        discardable = Discardable(b, issuedBefore, st.issuedExpMs)
         save()
         b
     }
+
+    /** The unlock last built, the standing token's issue before it, and the issue the build recorded ([discardUnlock]). */
+    private class Discardable(val built: BuiltUnlock, val issuedBefore: Long, val issuedByBuild: Long)
+
+    private var discardable: Discardable? = null
+
+    override suspend fun discardUnlock(built: BuiltUnlock) = lock.withLock {
+        val d = discardable?.takeIf { it.built === built } ?: return@withLock
+        discardable = null
+        if (pendingUnlock === built.pending) pendingUnlock = null
+        // Only the build's own issue goes back: a token minted since (a `relay.token.refresh`, maintain()) did reach the
+        // vault, and its expiry stays (restoring an older one, or 0, would delay or stop the next re-issue).
+        if (st.issuedExpMs == d.issuedByBuild) st.issuedExpMs = d.issuedBefore
+        save()
+    }
+
+    /** (Tests) When the standing token this device last issued to the vault expires, as recorded; 0 for none. */
+    internal val issuedTokenExpMs: Long get() = st.issuedExpMs
 
     override suspend fun openUnlockResult(raw: ByteArray): UnlockResult = lock.withLock {
         val p = pendingUnlock ?: throw VaultStateException("no pending unlock")
         val inner = AltResults.openInner(raw, secrets.kem, AltResults.TYPE_UNLOCK_RESULT, p.requestId)
         val r = UnlockResult.parse(inner.body).copy(at = inner.ts)
+        noteVaultTime(inner.ts)
         pendingUnlock = null
         run {
             setAlt(AltRequests.applyUnlock(alt(), p, r))
@@ -517,6 +731,7 @@ class VaultDevice private constructor(
             // key, whatever device.list showed earlier (a host can serve an older header, from before the
             // binding): the next unlock carries the chain again, until device.list shows a signer once more.
             st.signerSeen = st.signerSeen && r.code != CODE_SIGNER_REFUSED
+            noteOpened(r)
             if (r.ok) {
                 val bundle = r.vaultBundle
                 if (bundle != null && st.vault == null && st.recovery != null) adoptBundle(bundle)
@@ -544,7 +759,11 @@ class VaultDevice private constructor(
             val req = AltRequests.buildRecoveryRegister(userGuid, code, enclave, attester, appIdentity(), now())
             st.signerSeen = false // a new attestation is a new key (§11.7.1)
             st.vaultId = code.vaultId
-            st.recovery = RecoveryRecord(code.recoveryId, req.requestId)
+            // A re-register (the second identity, for a later recovery) keeps what was accepted until this one is.
+            RegistrationState(st.recovery, st.priorRecovery).begin(RecoveryRecord(code.recoveryId, req.requestId)).let {
+                st.recovery = it.recovery
+                st.priorRecovery = it.prior
+            }
             save()
             req
         }
@@ -552,8 +771,19 @@ class VaultDevice private constructor(
     /** Forgets a registration the enclave refused (§11.11.3), so that a new code can be tried. */
     suspend fun dropRecoveryRegistration() = lock.withLock {
         if (st.deviceId != null || st.vault != null) return@withLock
-        st.recovery = null
-        st.vaultId = null
+        // The registration accepted before this attempt, if any, is the one the handshake's `ctx` names.
+        RegistrationState(st.recovery, st.priorRecovery).drop().let {
+            st.recovery = it.recovery
+            st.priorRecovery = it.prior
+        }
+        if (st.recovery == null) st.vaultId = null
+        save()
+    }
+
+    /** The register was accepted: it is this identity's registration now (the one before it is no longer needed). */
+    suspend fun confirmRecoveryRegistration() = lock.withLock {
+        if (st.priorRecovery == null) return@withLock
+        st.priorRecovery = RegistrationState(st.recovery, st.priorRecovery).confirm().prior
         save()
     }
 
@@ -570,6 +800,28 @@ class VaultDevice private constructor(
     }
 
     // --- enrollment and pairing (§11.3, §6.7) ---
+
+    /**
+     * (A6 audit N3) The enrollment request this device built and whose `vault.enrolled` has not been applied: stored
+     * (with its nonce) before the request is posted, so that it outlives a lost answer, a crash and a restart.
+     */
+    val pendingEnroll: com.vettid.core.altchan.PendingEnroll? get() = alt().pendingEnroll
+
+    /** (N3) The pending enrollment's result was `ok`: its vault exists, only `vault.enrolled` is awaited. */
+    suspend fun markEnrollAnswered() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null || a.enrollAnswered) return@withLock
+        setAlt(a.copy(enrollAnswered = true))
+        save()
+    }
+
+    /** (N3) The pending enrollment made no vault (refused, or never processed): it and its nonce go. */
+    suspend fun dropPendingEnroll() = lock.withLock {
+        val a = alt()
+        if (a.pendingEnroll == null) return@withLock
+        setAlt(a.withoutEnroll())
+        save()
+    }
 
     /** Waits for vault.enrolled (§11.3), which pins the vault and gives this device its first token. */
     suspend fun awaitEnrolled(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
@@ -604,10 +856,7 @@ class VaultDevice private constructor(
         val guid = lock.withLock {
             val o = ev.body
             st.deviceId = VaultJson.str(o, "device_id")
-            VaultJson.str(o, "vault_id")?.let { st.vaultId = it }
-            val rel = VaultJson.str(o, "release")
-            val num = VaultJson.long(o, "release_number")
-            if (rel != null && rel.length == PCR_HEX && num != null && num > 0) setAlt(alt().copy(release = rel, releaseNumber = num))
+            applyPaired(o)
             save()
             transferUserGuid(o)
         }
@@ -625,17 +874,20 @@ class VaultDevice private constructor(
         id: String? = null,
         at: Instant = now(),
         apiKey: ByteArray? = null,
+        unlockSecret: ByteArray? = null,
     ) {
         val v = requireVault()
         val tok = mintForVault()
         val i = Initiator.create(
             InitiatorConfig(
                 purpose = purpose, ctx = ctx, identity = secrets.identity, staticKem = secrets.kem.publicKey, relay = relayAddr,
-                token = tok, profile = profile, deviceAttest = deviceAttest, apiKey = apiKey, responderIk = Base64s.decodeStd(v.ik),
+                token = tok, profile = profile, deviceAttest = deviceAttest, apiKey = apiKey, unlockSecret = unlockSecret,
+                responderIk = Base64s.decodeStd(v.ik),
                 responderEk = KemPublicKey.parse(Base64s.decodeStd(v.kem)),
                 responderRelayKey = Base64s.decodeStd(v.relayPk), policy = Policy.VAULT_TO_DEVICE, id = id, now = at,
             ),
         )
+        checkLive()
         relayFor(v.relayUrl).deposit(v.mailbox, depositToken, i.envelope())
         ini?.abort()
         ini = i
@@ -652,7 +904,17 @@ class VaultDevice private constructor(
      * and its `ts`). The vault answers with `hs.resp` at once; this device sends
      * `hs.fin`, and the SAS appears in [pairingSas]. Returns when `hs.init` is sent.
      */
-    suspend fun startTransfer(link: String, attester: Attester) {
+    suspend fun startTransfer(
+        link: String,
+        attester: Attester,
+        /**
+         * (0.34.0, release R §11.14.10, §11.10.9) Given the bundle's capabilities (empty when it has none) and time scale
+         * (1 when it has none), the new phone key's secret of epoch 1 for release R's `hs.init`, null for the earlier one;
+         * it may throw, and then nothing is sent. The secret is zeroed once the `hs.init` is sealed. A bundle whose time
+         * scale this build does not accept (STAGING-TIME-SCALE §4 item 4) is refused before it is asked.
+         */
+        unlockSecretFor: suspend (traits: com.vettid.core.crypto.altchan.ReleaseTraits) -> ByteArray? = { null },
+    ) {
         val q = try {
             InviteQr.parseLink(link)
         } catch (_: CryptoException) {
@@ -672,6 +934,9 @@ class VaultDevice private constructor(
                 throw NotATransferCodeException(expired = true).also { it.initCause(e) }
             }
             if (b.kind != InviteKind.APP) throw NotATransferCodeException()
+            val traits = b.traits
+            (cfg.trust ?: AltTrust(emptyList(), emptyList())).checkTimeScale(traits.timeScale)
+            val unlockSecret = unlockSecretFor(traits)
             setVault(b.vault)
             st.vaultId = null
             sasState.value = null
@@ -681,9 +946,89 @@ class VaultDevice private constructor(
             st.signerSeen = false // a new attestation is a new key (§11.7.1)
             val profile = JsonBuilder().string("name", st.name).bytes()
             // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
-            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey)
+            try {
+                startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey, unlockSecret = unlockSecret)
+            } finally {
+                unlockSecret?.fill(0)
+            }
+            st.transferIn = TransferInRecord(at.toEpochMilli())
             save()
         }
+    }
+
+    // --- the recovery open (VAULT-MESSAGING 0.33.0 §11.14.6, release R) ---
+
+    private var pendingRecoveryOpen: String? = null
+
+    /**
+     * `vault.recovery.open`: the registered phone's PIN, password and unlock secret, with an open token for its own
+     * mailbox (the vault's relay key is not known yet), signed by its identity key.
+     */
+    suspend fun prepareRecoveryOpen(
+        userGuid: String,
+        pin: String,
+        password: String,
+        unlockSecret: ByteArray,
+        enclave: VerifiedEnclave,
+        manifest: ReleaseManifest,
+        attester: Attester,
+    ): SealedRequest = lock.withLock {
+        val vid = st.vaultId ?: throw VaultStateException("no vault id")
+        val rec = st.recovery ?: throw VaultStateException("no recovery registered")
+        val tok = own.mintOpenToken(st.relayUrl, Duration.ofMinutes(OPEN_TOKEN_MINUTES))
+        val req = AltRequests.buildRecoveryOpen(
+            userGuid, vid, rec.recoveryId, pin, password, unlockSecret, enclave, manifest, attester, secrets.identity, tok, now(),
+        )
+        pendingRecoveryOpen = req.requestId
+        req
+    }
+
+    /**
+     * Opens `vault.recovery.open.result`; on `ok` pins the vault from the bundle and keeps the token, so that the
+     * phone's first handshake follows (`hs.init` with `ctx` = `recovery_id`, then `credential.get`).
+     */
+    suspend fun openRecoveryOpenResult(raw: ByteArray, requestId: String): com.vettid.core.crypto.altchan.RecoveryOpen.Result =
+        lock.withLock {
+            val body = AltResults.open(raw, secrets.kem, com.vettid.core.crypto.altchan.RecoveryOpen.TYPE_RESULT, requestId)
+            val r = com.vettid.core.crypto.altchan.RecoveryOpen.Result.parse(body)
+            pendingRecoveryOpen = null
+            if (r.ok) {
+                // (0.56.1) A recovery open is an opening: its `unlock_id` ("" from a release before L: none).
+                opened(UnlockIds.of(r.unlockId))
+                r.vaultBundle()?.let { adoptBundle(it) }
+                st.vault?.let { v ->
+                    v.token = r.token
+                    v.tokenExpMs = heldFromVault(r.token)?.toEpochMilli() ?: 0
+                }
+                // As after an unlock: the state floor, and the release with its header_seq for the next unlock's
+                // rollback check (min_header_seq).
+                setAlt(AltRequests.applyRecoveryOpen(alt(), r.stateSeq, r.headerSeq, r.release, r.releaseNumber))
+                save()
+            }
+            r
+        }
+
+    /**
+     * After an `ok` open: `hs.init` with purpose `app` and `ctx` = `recovery_id` (accepted without approval, as the
+     * first app's), deposited with the token from the result.
+     */
+    suspend fun completeRecoveryOpen(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
+        lock.withLock {
+            val v = requireVault()
+            val rec = st.recovery ?: throw VaultStateException("no recovery registered")
+            if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+            startInit(Purpose.APP, rec.recoveryId, v.token, null)
+            save()
+        }
+        // The recovery stays registered until the credential is here too (finishRecoveryOpen).
+        awaitPaired(timeout)
+    }
+
+    /** (Release R) The recovered phone holds the credential: the recovery is over ([recoveryOpenedNotFinished] false). */
+    suspend fun finishRecoveryOpen() = lock.withLock {
+        if (st.deviceId == null) throw VaultStateException("not paired")
+        st.recovery = null
+        save()
     }
 
     /**
@@ -693,15 +1038,105 @@ class VaultDevice private constructor(
      * need, or null when the vault sent none (a release before 0.17.0): the transfer
      * is complete either way.
      */
-    suspend fun awaitTransfer(timeout: Duration): String? = awaitPaired(timeout)
+    suspend fun awaitTransfer(timeout: Duration): String? {
+        // (A6 audit N1) Applied by the handler already (a restart, or after the screen stopped waiting): nothing to wait for.
+        lock.withLock { st.transferIn?.takeIf { it.paired && st.deviceId != null } }?.let { return it.userGuid }
+        return awaitPaired(timeout)
+    }
 
-    /** Drops a transfer this device started and has not completed (left the screen, timed out). */
+    /**
+     * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
+     * was never answered, or at the transfer's 11-minute deadline after its collect (A6 audit N1; VAULT-MESSAGING 0.56.2
+     * §11.14.10 rule 5). Under the device's lock, and never once `device.paired` was applied: a paired device keeps
+     * everything.
+     */
     suspend fun abandonTransfer() = lock.withLock {
         if (st.deviceId != null) return@withLock
         dropPairing()
         st.vault = null
+        st.transferIn = null
         sasState.value = null
         save()
+    }
+
+    /**
+     * (A6 audit N1) The transfer to this phone that is not finished: started (its `hs.init` sent), with its SAS once
+     * `hs.fin` was sent, and paired once `device.paired{transfer: true}` was applied. Null when there is none.
+     */
+    val transferInPending: TransferInState?
+        get() = st.transferIn?.let { TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid) }
+
+    /** Collect rounds of the running collection that ended, their messages handled (A6 audit N1). */
+    private val roundsEnded = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * (A6 audit N1) Waits until the collection's round that is out now (if any) has ended, its messages handled: a message
+     * it leased from the relay (a `device.paired`) is invisible to any other collect until then. The caller bounds it.
+     */
+    suspend fun awaitCollectorRound() {
+        if (!collecting || collectRequestSince == null) return
+        val before = roundsEnded.get()
+        while (collecting && roundsEnded.get() == before) kotlinx.coroutines.delay(ROUND_POLL_MS)
+    }
+
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) What the transfer's deadline reads before anything is dropped:
+     * the collection's round in flight (it may hold a leased `device.paired`), one collect of its own ([collectOnce]),
+     * and the round in flight after it. The caller bounds the whole (30 s) and then decides; [abandonTransfer] keeps
+     * everything once `device.paired` was applied.
+     */
+    suspend fun deadlineCollect() {
+        awaitCollectorRound()
+        collectOnce()
+        awaitCollectorRound()
+    }
+
+    /**
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` and `max` at
+     * its cap, each message handled (a transfer's `device.paired` applied) and acked. Transport failures are thrown; the
+     * caller bounds the time.
+     */
+    suspend fun collectOnce(): Int {
+        val msgs = own.collect(Duration.ZERO, Int.MAX_VALUE)
+        for (m in msgs) {
+            try {
+                handle(m)
+                own.ack(m.msgId)
+            } catch (_: LeaveUnacked) {
+                // redelivered after its lease
+            }
+        }
+        return msgs.size
+    }
+
+    /** (N1) The app has taken the transferred vault's credential over: the transfer to this phone is finished. */
+    suspend fun finishTransferIn() = lock.withLock {
+        if (st.deviceId == null || st.transferIn == null) return@withLock
+        st.transferIn = null
+        save()
+    }
+
+    /**
+     * (N1) Applies a transfer's `device.paired` (§6.7.1 step 4) in the message handler, whether or not a screen waits for
+     * it: the device record, the vault id, the release and the member's `user_guid`, kept until [finishTransferIn]. Only
+     * for a transfer this device started and is still waiting for.
+     */
+    private fun applyTransferPaired(body: ByteArray) {
+        val tr = st.transferIn ?: return
+        if (st.deviceId != null || tr.paired) return
+        val o = VaultJson.parseObject(body)
+        if ((o["transfer"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true) return
+        applyPaired(o)
+        st.transferIn = tr.copy(paired = true, userGuid = transferUserGuid(o))
+        pairedState.value = true
+    }
+
+    private fun applyPaired(o: JsonObject) {
+        VaultJson.str(o, "device_id")?.let { st.deviceId = it }
+        VaultJson.str(o, "vault_id")?.let { st.vaultId = it }
+        val rel = VaultJson.str(o, "release")
+        val num = VaultJson.long(o, "release_number")
+        if (rel != null && rel.length == PCR_HEX && num != null && num > 0) setAlt(alt().copy(release = rel, releaseNumber = num))
     }
 
     // --- sending (§8) ---
@@ -792,14 +1227,36 @@ class VaultDevice private constructor(
     }
 
     /**
+     * (A6 audit N2) One deposit of a request ([request], [requestWithId]): sealed in the current epoch, the epoch's send
+     * counter saved, and handed to the relay client from memory, **never written to the outbox**. A relay failure is
+     * the caller's (the request fails, and the member is told so); nothing of it is kept, so no later flush, start or
+     * unlock delivers a request the member was told had failed (a second message, a PIN change or an owner check
+     * carried out later, a credential operation with an old blob replayed after a successful retry). The relay client
+     * may still repeat the same envelope within this one hand-over (429, 5xx, a transport error); the vault drops a
+     * second copy by its inner id (§8.2).
+     */
+    private suspend fun sendRequestLocked(id: String, type: String, body: JsonObject, exp: Instant?) {
+        val v = requireVault()
+        val ep = keyring.current() ?: throw VaultStateException("no session with the vault")
+        if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+        val env = ep.seal(Inner(id = id, type = type, ts = now(), exp = exp, body = VaultJson.bytes(body)))
+        save() // the epoch's send counter
+        depositToVault(v, env)
+    }
+
+    /**
      * Deposits an outbox entry; removes it once the relay accepted it, or on a terminal relay error (rethrown). A
      * transport failure, 429, 5xx and a stale or replayed signature (`timestamp_stale`, `replay_detected`: the relay
      * applied nothing, and every attempt is signed afresh, [RelayException.staleSignature]) keep it for the next flush.
      */
     private suspend fun deliver(e: OutboxEntry) {
+        checkLive()
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
             st.outbox.remove(e)
+            // (M1) An entry an earlier app version queued (no exp): sent now, the vault acts on it in its next batch; from
+            // here it is settled like a request with an exp of now + 10 minutes, unless it is answered first.
+            if (st.unsettled[e.id] == LEGACY_UNSENT) st.unsettled[e.id] = vaultNow().plus(LEGACY_SENT_WINDOW).toEpochMilli()
             save()
         } catch (x: RelayException) {
             if (x.retryable) {
@@ -809,6 +1266,9 @@ class VaultDevice private constructor(
             }
             countRefusal(x, e.mailbox, e.token)
             st.outbox.remove(e)
+            // (P3) Only a request no copy of which was ever accepted (an earlier version's, never sent) is dropped here;
+            // a tracked one stays until it is answered or past its exp: an earlier copy may have reached the vault.
+            if (st.unsettled[e.id] == LEGACY_UNSENT) st.unsettled.remove(e.id)
             save()
             throw x
         }
@@ -826,6 +1286,7 @@ class VaultDevice private constructor(
 
     /** A deposit straight to the vault (handshake messages, outside the outbox), its refusal counted as [deliver]'s. */
     private suspend fun depositToVault(v: VaultRecord, payload: ByteArray) {
+        checkLive()
         try {
             relayFor(v.relayUrl).deposit(v.mailbox, v.token, payload)
         } catch (x: RelayException) {
@@ -863,17 +1324,26 @@ class VaultDevice private constructor(
      * within the request timeout, the same envelope id is re-sent at most
      * twice (§8.6); the vault answers a duplicate from its response cache.
      */
-    suspend fun request(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): VaultMessage {
-        val id = Ulid.new(now())
+    suspend fun request(
+        type: String,
+        body: JsonObject = EMPTY,
+        timeout: Duration = cfg.requestTimeout,
+        /**
+         * The inner id, for a request the member retries as the same request (§8.2: the vault answers it from its
+         * cache or handles it once; a photo's `message.send`, §10.5.1 "Retry"). A fresh one by default.
+         */
+        innerId: String? = null,
+    ): VaultMessage {
+        val id = innerId ?: Ulid.new(now())
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendLocked(id, type, body, null, null, null) }
+            lock.withLock { sendRequestLocked(id, type, body, null) }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, null) }
+                if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, null) }
             }
             throw VaultStateException("$type: no response")
         } finally {
@@ -882,8 +1352,8 @@ class VaultDevice private constructor(
     }
 
     /** [request], returning the body of an ok response or throwing [VaultOpException]. */
-    suspend fun op(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): JsonObject {
-        val r = request(type, body, timeout)
+    suspend fun op(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout, innerId: String? = null): JsonObject {
+        val r = request(type, body, timeout, innerId)
         if (r.inner.status != Inner.STATUS_OK) {
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
@@ -920,10 +1390,95 @@ class VaultDevice private constructor(
             found
         }
 
+    /**
+     * State events ([HELD_TYPES]) collected while [holdEvents] is in force, oldest first; handed on or given back by
+     * [endHold]. Every other event is left on the relay meanwhile ([leaveForLater]).
+     */
+    private val held = ArrayDeque<VaultMessage>()
+
+    /** How many [holdEvents] are in force (guarded by [inbox]). */
+    private var holds = 0
+
+    /** Events left on the relay during the current hold (guarded by [inbox]); for the caller's log. */
+    private var leftCount = 0
+
+    /** Whether events are being held back now ([holdEvents]). */
+    val holdingEvents: Boolean get() = synchronized(inbox) { holds > 0 }
+
+    /**
+     * How many events the last hold to end left on the relay (redelivered after the relay's visibility timeout, and
+     * handled then as any event).
+     */
+    @Volatile
+    var leftOnRelay: Int = 0
+        private set
+
+    /**
+     * Holds back every event the collection brings from now on: none reaches [events] or the inbox until [endHold].
+     * Answers to requests ([request], [op]) and the session's own messages (tokens, rekeys, `device.paired`) are handled
+     * as always. The vault's state events ([HELD_TYPES], at most [HELD_MAX]) are kept here; every other event (messages,
+     * feed items, requests, grants, `sync.event`) is not acked and stays on the relay, unseen, so that it is handled when
+     * the relay delivers it again, after the hold, whatever happens to this process. For the app's opening of a vault
+     * that is still locked on this phone: the requests sent before the app opens get their answers, nothing else the
+     * vault sent is handed on while it is locked here, and nothing is lost.
+     */
+    fun holdEvents() {
+        synchronized(inbox) {
+            if (holds == 0) leftCount = 0
+            holds++
+        }
+    }
+
+    /**
+     * Whether an event of [type] is left on the relay now: during a hold, every type but the state types, and those too
+     * once [HELD_MAX] are held (none is ever evicted).
+     */
+    private fun leaveForLater(type: String): Boolean = synchronized(inbox) {
+        if (holds == 0) return@synchronized false
+        val leave = type !in HELD_TYPES || held.size >= HELD_MAX
+        if (leave) leftCount++
+        leave
+    }
+
+    /**
+     * Ends one [holdEvents]. When it was the last one: with [deliver], the held state events are handed on in the order
+     * they came, ahead of anything collected after them, and nothing is returned; without it, they are handed on to
+     * nobody and returned to the caller (which takes the vault's state from them). While another hold is in force,
+     * nothing changes and nothing is returned. At most [HELD_MAX] (the events flow's buffer) are held, so none is dropped
+     * on its way out.
+     */
+    suspend fun endHold(deliver: Boolean): List<VaultMessage> = lock.withLock {
+        // Under the device's lock, which every collected message is handled under: no message can come between the
+        // held ones and those that follow.
+        val out = synchronized(inbox) {
+            if (holds == 0) return@withLock emptyList()
+            holds--
+            if (holds > 0) return@withLock emptyList()
+            leftOnRelay = leftCount
+            val all = held.toList()
+            held.clear()
+            if (deliver) all.forEach { addToInbox(it) }
+            all
+        }
+        if (!deliver) return@withLock out
+        if (out.isNotEmpty()) inboxVersion.value++
+        out.forEach { eventFlow.tryEmit(it) }
+        emptyList()
+    }
+
+    private fun addToInbox(m: VaultMessage) {
+        inbox.add(m)
+        while (inbox.size > INBOX_MAX) inbox.removeAt(0)
+    }
+
     private fun publish(m: VaultMessage) {
         synchronized(inbox) {
-            inbox.add(m)
-            while (inbox.size > INBOX_MAX) inbox.removeAt(0)
+            // During a hold only what [leaveForLater] let through reaches here (and a sealed `vault.enrolled`): kept.
+            if (holds > 0) {
+                held.addLast(m)
+                return
+            }
+            addToInbox(m)
         }
         inboxVersion.value++
         eventFlow.tryEmit(m)
@@ -935,6 +1490,8 @@ class VaultDevice private constructor(
      * ([LeaveUnacked]): the relay delivers it again, and it is opened once `hs.fin` has arrived (§6.3, §8.4).
      */
     internal suspend fun handle(m: RelayMessage) = lock.withLock {
+        // Collected before this device was forgotten: nothing of it is kept, and nothing is answered.
+        if (forgotten) return@withLock
         val t = now()
         if (st.seen.containsKey(m.msgId)) return@withLock
         st.seen[m.msgId] = t.toEpochMilli()
@@ -945,6 +1502,11 @@ class VaultDevice private constructor(
             st.seen.remove(m.msgId)
             save()
             throw LeaveUnacked(e.message ?: "early").apply { initCause(e) }
+        } catch (e: LeftForLater) {
+            // An event during a hold ([holdEvents]): neither seen nor acked, so the relay delivers it again after the hold.
+            st.seen.remove(m.msgId)
+            save()
+            throw LeaveUnacked("held").apply { initCause(e) }
         } catch (_: CryptoException) {
             // dropped (§13.6: a message that does not verify changes nothing)
         } catch (_: AttestationException) {
@@ -1003,13 +1565,20 @@ class VaultDevice private constructor(
             timeDrops.tryEmit(inner.type)
             throw e
         }
+        noteVaultTime(inner.ts)
         if (st.seenInner.containsKey(inner.id)) return
+        // During a hold, an event (not an answer, not the session's own messages) is left on the relay: nothing of it is
+        // recorded, so it is handled in full when it comes again.
+        if (inner.re == null && inner.type !in SESSION_TYPES && leaveForLater(inner.type)) throw LeftForLater()
         st.seenInner[inner.id] = t.toEpochMilli()
         prune(st.seenInner, t)
         when (inner.type) {
             // §10.3 (0.10.3, 0.10.4): every device.paired carries the device's standing token (after enrollment
             // or recovery a fresh one); it replaces the token of hs.resp before maintain() looks at it.
-            "device.paired" -> storeVaultToken(VaultJson.parseObject(inner.body))
+            "device.paired" -> {
+                storeVaultToken(VaultJson.parseObject(inner.body))
+                applyTransferPaired(inner.body)
+            }
             // §6.7 (0.10.5): only a device still waiting for device.paired acts on it; a paired one drops it.
             TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
@@ -1022,6 +1591,9 @@ class VaultDevice private constructor(
             "identity.rotate" -> followRotation(inner.body)
         }
         val re = inner.re
+        // (0.44.0, §11.14.9) An answer to a credential operation settles it, also one that comes after its wait ended.
+        if (re != null) noteAnswerTime(inner.ts)
+        if (re != null && st.unsettled.remove(re) != null) save()
         if (re != null) {
             if (inner.status != Inner.STATUS_OK && inner.error?.code == CODE_OWNER_CHECK_REQUIRED) ownerCheckRefusals.tryEmit(inner.type)
             pending[re]?.complete(inner)
@@ -1031,6 +1603,9 @@ class VaultDevice private constructor(
         maintain(t)
     }
 
+    /** An event left on the relay during a hold ([leaveForLater]). */
+    private class LeftForLater : Exception("left for later")
+
     /**
      * `device.pair.rejected` (§6.7, 0.10.5): stop waiting, drop the handshake's epoch
      * and the request token of its `hs.resp`. Nothing is sent back (the vault has
@@ -1038,6 +1613,7 @@ class VaultDevice private constructor(
      */
     private fun dropPairing() {
         sasState.value = null
+        st.transferIn = null
         ini?.abort()
         ini = null
         awaiting.forEach { it.resp.abort() }
@@ -1117,6 +1693,9 @@ class VaultDevice private constructor(
         }
         if (res.epoch.suite > v.suite) v.suite = res.epoch.suite
         keyring.activate(res.epoch, t)
+        // (A6 audit N1) The SAS of a transfer to this phone is stored with the session before hs.fin goes out: a transfer
+        // whose hs.fin may have reached the vault always has it, and is shown again (and resumed) after a restart.
+        st.transferIn?.let { tr -> if (res.sas != null) st.transferIn = tr.copy(sas = res.sas) }
         save()
         depositToVault(v, res.fin)
         res.sas?.let { sasState.value = it }
@@ -1180,6 +1759,35 @@ class VaultDevice private constructor(
         put("token", tok)
     }
 
+    /**
+     * (VAULT-MESSAGING §11.14.10; owner decision 2026-10-23) A fresh standing token for this device's mailbox, with its
+     * full 30 days, sent to the vault (`relay.token.issued{kind: "standing", token}`, §7.1, §7.2): the old phone does
+     * this while it is still the vault's app, right before each approval of a transfer it sends, so that the vault can
+     * deliver `device.unlinked{transferred}` for as long as possible. Deposited once, outside the outbox, and returns
+     * only once the relay accepted it (201), so that the approval deposited after it reaches the vault's mailbox after
+     * it. The earlier token is not revoked. Throws when it could not be deposited (and this phone's record of the token
+     * the vault holds stays as it was).
+     */
+    suspend fun renewIssuedToken() {
+        lock.withLock {
+            // An older token still queued (a maintain() whose deposit failed) must not flush after this one and replace
+            // the fresh 30 days at the vault: dropped first, under the same lock.
+            if (st.outbox.removeAll { it.type == TYPE_TOKEN_ISSUED }) save()
+            val before = st.issuedExpMs
+            val tok = mintForVault()
+            var sent = false
+            try {
+                sendOnceLocked(Ulid.new(now()), TYPE_TOKEN_ISSUED, standing(tok), null)
+                sent = true
+            } finally {
+                if (!sent) {
+                    st.issuedExpMs = before
+                    save()
+                }
+            }
+        }
+    }
+
     /** Refreshes tokens in both directions (§7.2). */
     private suspend fun maintain(t: Instant) {
         val v = st.vault ?: return
@@ -1187,7 +1795,7 @@ class VaultDevice private constructor(
         try {
             if (st.issuedExpMs != 0L && Duration.between(t, Instant.ofEpochMilli(st.issuedExpMs)) < ISSUE_BEFORE) {
                 val tok = mintForVault()
-                sendLocked(null, "relay.token.issued", standing(tok), null, null, null)
+                sendLocked(null, TYPE_TOKEN_ISSUED, standing(tok), null, null, null)
             }
             val exp = Instant.ofEpochMilli(v.tokenExpMs)
             if (Duration.between(t, exp) < REFRESH_BEFORE && t.isBefore(exp)) {
@@ -1211,8 +1819,8 @@ class VaultDevice private constructor(
         save()
     }
 
-    internal suspend fun keepCredential(blob: String, version: Long) = lock.withLock {
-        st.credential = CredentialCopy(blob, version)
+    internal suspend fun keepCredential(blob: String, version: Long, key: String? = null) = lock.withLock {
+        st.credential = CredentialCopy(blob, version, key)
         save()
     }
 
@@ -1222,8 +1830,9 @@ class VaultDevice private constructor(
     }
 
     /**
-     * Puts back a UTK the vault did not spend (`signer_unconfirmed`, §6.7.1 step 3: refused before the UTK is
-     * spent), first in the pool, so that the retry is sealed to the same one.
+     * Puts back a UTK that never left the phone (the request that would have presented it was not sent), first in the
+     * pool. A UTK that was sent is spent whatever the answer (VAULT-MESSAGING 0.52.0, ANDROID-PLAN 0.1.58) and never
+     * comes back here.
      */
     internal suspend fun returnUtk(u: UtkRecord) = lock.withLock {
         if (st.utks.none { it.id == u.id }) st.utks.add(0, u)
@@ -1264,17 +1873,26 @@ class VaultDevice private constructor(
     /** The credential version this app holds, or null. */
     val credentialVersion: Long? get() = st.credential?.version
 
+    /** The credential key (§10.6 `key`) of the held blob, when an answer named it; null: not known. */
+    val credentialKey: String? get() = st.credential?.key
+
     /** Sends [type] with a caller-chosen inner id and awaits the response (sealed credential payloads bind the id). */
-    internal suspend fun requestWithId(id: String, type: String, body: JsonObject, timeout: Duration = cfg.requestTimeout): VaultMessage {
+    internal suspend fun requestWithId(
+        id: String,
+        type: String,
+        body: JsonObject,
+        timeout: Duration = cfg.requestTimeout,
+        exp: Instant? = null,
+    ): VaultMessage {
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendLocked(id, type, body, null, null, null) }
+            lock.withLock { sendRequestLocked(id, type, body, exp) }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, null) }
+                if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, exp) }
             }
             throw VaultStateException("$type: no response")
         } finally {
@@ -1284,8 +1902,145 @@ class VaultDevice private constructor(
 
     internal fun newId(): String = Ulid.new(now())
 
-    /** Forgets the vault and every key's state on this device (sign-out, transfer away). */
+    // --- the vault's clock, and a change request kept for resending (VAULT-MESSAGING 0.44.0 §11.14.9) ---
+
+    /** The `ts` of the newest message from the vault, and [DeviceConfig.elapsedMs] when it arrived; in memory only. */
+    private var vaultTs: Instant? = null
+    private var vaultTsAtMs = 0L
+    private val vaultClockLock = Any()
+
+    /**
+     * (0.45.0 §11.14.9, N4) The newest `ts` the vault stamped on an **answer**: the batch property of §11.14.9 ("one clock
+     * reading per batch, the `ts` of every answer from it") is stated for answers, so only they settle a request.
+     */
+    private var answerTs: Instant? = null
+
+    private fun noteAnswerTime(ts: Instant) {
+        synchronized(vaultClockLock) {
+            if (answerTs?.isBefore(ts) != false) answerTs = ts
+        }
+    }
+
+    private fun noteVaultTime(ts: Instant) {
+        val at = cfg.elapsedMs()
+        synchronized(vaultClockLock) {
+            val last = vaultTs
+            // The newest answer, carried forward: an older message delivered late does not move the clock back.
+            if (last == null || ts.isAfter(last.plusMillis(at - vaultTsAtMs))) {
+                vaultTs = ts
+                vaultTsAtMs = at
+            }
+        }
+    }
+
+    /**
+     * The vault's clock as this phone last saw it (§11.14.9 step 1): the `ts` of the newest message from the vault plus
+     * the time elapsed since on the phone's monotonic clock, or the phone's own clock before any message.
+     */
+    fun vaultNow(): Instant = synchronized(vaultClockLock) {
+        vaultTs?.plusMillis((cfg.elapsedMs() - vaultTsAtMs).coerceAtLeast(0)) ?: now()
+    }
+
+    /**
+     * Sends [k] (the same inner id, body and `exp`, each time in a new envelope) at most [sends] times while its `exp`
+     * has not passed by [vaultNow], waiting [timeout] after each; its answer, or null. Deposited directly, never through
+     * the outbox, so the request is never written to the phone's storage; a relay failure counts as no answer. The
+     * answer is awaited until [dropKept], so an answer that comes late, to any of the sends, is not lost.
+     */
+    internal suspend fun sendKept(k: KeptChange, sends: Int, timeout: Duration = cfg.requestTimeout): VaultMessage? {
+        pending.putIfAbsent(k.innerId, k.answer)
+        k.release = { pending.remove(k.innerId, k.answer) }
+        repeat(sends) {
+            k.answered()?.let { return it }
+            // The vault drops a copy whose exp has passed, unanswered: nothing more to send.
+            if (!vaultNow().isBefore(k.exp)) return k.answered()
+            try {
+                lock.withLock { sendOnceLocked(k.innerId, k.type, k.body, k.exp) }
+            } catch (_: IOException) {
+                // Not delivered (a relay error, no session): no answer from this send.
+            }
+            withTimeoutOrNull(timeout.toMillis()) { k.answer.await() }?.let { return VaultMessage(it) }
+            ensureCollecting()
+        }
+        return k.answered()
+    }
+
+    /**
+     * (§11.14.9, M1) A credential operation [id] with [exp] is about to be sent: unsettled until its answer arrives
+     * ([handle]) or the vault's clock is past [exp] plus [SETTLE_MARGIN].
+     */
+    internal suspend fun trackCredential(id: String, exp: Instant) = lock.withLock {
+        st.unsettled[id] = exp.toEpochMilli()
+        save()
+    }
+
+    /** [id] got its answer. */
+    internal suspend fun settleCredential(id: String) = lock.withLock {
+        if (st.unsettled.remove(id) != null) save()
+    }
+
+    /**
+     * No credential operation of this phone can still reach the vault: each was answered, or the newest `ts` the vault
+     * stamped (never the phone's estimate) is more than [SETTLE_MARGIN] past its `exp`.
+     */
+    internal suspend fun credentialSettled(): Boolean = lock.withLock {
+        val seen = synchronized(vaultClockLock) { answerTs }?.toEpochMilli()
+        if (pruneSettled(st.unsettled, seen)) save()
+        st.unsettled.isEmpty()
+    }
+
+    /**
+     * (0.45.0 §11.14.9 step 1) Flushes the outbox and waits, at most [DeviceConfig.settleWait], until no credential
+     * operation of this phone can still reach the vault ([credentialSettled]). False: some did not settle in time.
+     */
+    internal suspend fun awaitCredentialSettled(): Boolean {
+        if (credentialSettled()) return true
+        runCatching { flushOutbox() }
+        return withTimeoutOrNull(cfg.settleWait.toMillis()) {
+            var probed = false
+            while (!credentialSettled()) {
+                // (N3) In a quiet session no answer may come to move the vault's clock: once every entry should have
+                // expired by the phone's estimate, one request that is not a credential operation fetches a stamped one.
+                if (!probed && expiredByEstimate()) {
+                    probed = true
+                    runCatching { requestOnce("credential.version", timeout = cfg.requestTimeout) }
+                    continue
+                }
+                kotlinx.coroutines.delay(SETTLE_POLL_MS)
+            }
+            true
+        } ?: false
+    }
+
+    /** Every unsettled entry is past its `exp` plus the margin by [vaultNow] (an estimate: it only triggers a probe). */
+    private suspend fun expiredByEstimate(): Boolean = lock.withLock {
+        val now = vaultNow().toEpochMilli()
+        st.unsettled.isNotEmpty() && st.unsettled.values.all { exp -> exp != LEGACY_UNSENT && now > exp + SETTLE_MARGIN.toMillis() }
+    }
+
+    /** Stops awaiting [k]'s answer: the change is decided. */
+    internal fun dropKept(k: KeptChange) {
+        pending.remove(k.innerId, k.answer)
+        k.release = null
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.54) The vault is being deleted: collection stops and the session keys leave memory now; the stored
+     * state goes with [forget] once the vault is gone. Nothing is saved after it.
+     */
+    suspend fun dropKeysFromMemory() = lock.withLock {
+        forgotten = true
+        stop()
+        keyring.destroy()
+    }
+
+    /**
+     * Forgets the vault and every key's state on this device (a wipe, a deletion, a start-over, a new redeem). Taken under
+     * [lock], so it waits for a send in progress; after it, saves are refused and sends fail ([forgotten]).
+     */
     suspend fun forget() = lock.withLock {
+        forgotten = true
+        opened(null)
         stop()
         keyring.destroy()
         cfg.store.clear()
@@ -1303,12 +2058,46 @@ class VaultDevice private constructor(
     companion object {
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
+        private const val TYPE_TOKEN_ISSUED = "relay.token.issued"
         private const val EVENT_BUFFER = 256
         /** §10.1 (0.13.0): the vault is past its owner-check deadline (§3.6.3). */
         const val CODE_OWNER_CHECK_REQUIRED = "owner_check_required"
         private const val INBOX_MAX = 500
+
+        /**
+         * At most this many state events are kept during a hold ([holdEvents]), the events flow's buffer, so that handing
+         * them on drops none; beyond it they too stay on the relay. None is ever evicted.
+         */
+        private const val HELD_MAX = EVENT_BUFFER
+
+        /**
+         * The vault's state events, kept during a hold: their whole handling is the app's state (the lock notice, the
+         * owner check's hold, a replacement, the credential alarm), taken even while the phone stays locked. Everything
+         * else, `sync.event` included (it also feeds the lists), stays on the relay until the hold ends.
+         */
+        val HELD_TYPES = setOf("vault.locking", "vault.held", "device.unlinked", "credential.alarm")
+
+        /** The session's own messages, handled as they come whatever is held. */
+        private val SESSION_TYPES =
+            setOf("device.paired", TYPE_PAIR_REJECTED, "relay.token.issued", "relay.token.refresh", "identity.rotate")
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
+        private const val ROUND_POLL_MS = 50L
+
+        /** (§11.14.9) How long after its `exp`, by the vault's clock, an unanswered request can no longer apply. */
+        val SETTLE_MARGIN: Duration = Duration.ofMinutes(1)
+        private const val SETTLE_POLL_MS = 250L
+
+        /** (M1) An outbox entry of an earlier app version, not sent yet: unsettled until it is answered or sent. */
+        internal const val LEGACY_UNSENT = Long.MAX_VALUE / 2
+        private val LEGACY_SENT_WINDOW: Duration = Duration.ofMinutes(10)
+
+        /**
+         * Drops from [unsettled] (inner id to `exp`, epoch ms) every request the vault can no longer act on: the newest
+         * `ts` it stamped ([seenMs]; null: none seen yet, nothing dropped) is more than [SETTLE_MARGIN] past its `exp`.
+         */
+        internal fun pruneSettled(unsettled: MutableMap<String, Long>, seenMs: Long?): Boolean =
+            seenMs != null && unsettled.values.removeAll { exp -> seenMs > exp + SETTLE_MARGIN.toMillis() }
         private const val OPEN_TOKEN_MINUTES = 10L
         private const val AWAIT_DEFAULT_S = 90L
         private const val SECONDS_PER_MINUTE = 60L
@@ -1338,9 +2127,33 @@ class VaultDevice private constructor(
             return g.takeIf { it.length in 1..USER_GUID_MAX && it.all { c -> c.code in PRINTABLE_MIN..PRINTABLE_MAX } }
         }
 
+        /**
+         * (A6 audit N2) The only types the outbox keeps: messages that are not requests the member waits for, and that
+         * mean the same whenever they arrive (a standing token for the vault, a token renewal and its answer, the end
+         * of a call). Every request is deposited from memory ([sendRequestLocked]).
+         */
+        internal val OUTBOX_TYPES = setOf("relay.token.issued", "relay.token.refresh", "call.end")
+
+        /**
+         * (A6 audit N2) A state written by an app version that put requests in the outbox: every entry that is not of
+         * [OUTBOX_TYPES] is a request whose caller was told it failed (or never heard, the app having ended), and is
+         * dropped unsent. A credential operation among them that had never been sent ([LEGACY_UNSENT]) stays unsettled
+         * for [LEGACY_SENT_WINDOW] from now, as one sent now would: an earlier copy of it may have reached the vault.
+         */
+        internal fun dropLegacyRequests(st: DeviceState, now: Instant) {
+            if (st.requestsOutOfOutbox) return
+            val dropped = st.outbox.filter { it.type !in OUTBOX_TYPES }
+            st.outbox.removeAll(dropped.toSet())
+            val until = now.plus(LEGACY_SENT_WINDOW).toEpochMilli()
+            for (e in dropped) if (st.unsettled[e.id] == LEGACY_UNSENT) st.unsettled[e.id] = until
+            st.requestsOutOfOutbox = true
+        }
+
         /** A new device with fresh state; registers its mailbox on its relay. */
         suspend fun create(cfg: DeviceConfig, secrets: DeviceSecrets): VaultDevice {
-            val d = VaultDevice(cfg, secrets, DeviceState(cfg.role, cfg.name, cfg.relayUrl.trimEnd('/')))
+            val d = VaultDevice(
+                cfg, secrets, DeviceState(cfg.role, cfg.name, cfg.relayUrl.trimEnd('/'), outboxTracked = true, requestsOutOfOutbox = true),
+            )
             d.own.register()
             d.save()
             return d
@@ -1350,6 +2163,13 @@ class VaultDevice private constructor(
         fun load(cfg: DeviceConfig, secrets: DeviceSecrets): VaultDevice? {
             val b = cfg.store.load() ?: return null
             val st = stateJson.decodeFromString(DeviceState.serializer(), String(b))
+            // (M1) A state of an app version before 0.45.0: what its outbox holds may be a credential operation without an
+            // exp, so it counts as unsettled until it is answered or sent.
+            if (!st.outboxTracked) {
+                for (e in st.outbox) st.unsettled.putIfAbsent(e.id, LEGACY_UNSENT)
+                st.outboxTracked = true
+            }
+            dropLegacyRequests(st, Instant.now(cfg.clock))
             return VaultDevice(cfg, secrets, st)
         }
     }

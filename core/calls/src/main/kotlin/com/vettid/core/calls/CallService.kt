@@ -102,11 +102,13 @@ class CallService : Service() {
             Intent(this, CallService::class.java).setAction(ACTION_HANG_UP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        // On the lock screen: that a call is going on, never with whom (the public version has no name).
+        // On the lock screen: that a call is going on, never with whom (the public version has no name). Both are
+        // silent: on the Calls channel only the ringing notification makes a sound (the ringtone).
         val public = NotificationCompat.Builder(this, Channels.CALLS)
             .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
             .setContentTitle(getString(R.string.core_calls_notification_public))
             .setContentText(getString(R.string.core_calls_notification_ongoing))
+            .setSilent(true)
             .build()
         return NotificationCompat.Builder(this, Channels.CALLS)
             .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)

@@ -8,6 +8,7 @@
     <string name="data_failure_vault_unavailable">The vault service is not available yet. Try again later.</string>
     <string name="data_failure_service_paused">The vault service is paused for maintenance. Try again later.</string>
     <string name="data_failure_release_ended">The vault software release your vault is sealed to has ended. The vault can no longer be opened.</string>
+    <string name="data_failure_vault_deleted">Your vault was deleted.</string>
     <string name="data_failure_bad_pin">That PIN is not correct.</string>
     <string name="data_failure_bad_password">That credential password is not correct.</string>
     <string name="data_failure_backoff">Too many wrong attempts. Wait before trying again.</string>
@@ -15,6 +16,7 @@
     <string name="data_failure_rotation_required">Your credential must be rotated before it can be used again.</string>
     <string name="data_failure_not_supported">Your vault\'s software release does not support this yet.</string>
     <string name="data_failure_no_response">Your vault did not answer in time. Try again.</string>
+    <string name="data_failure_enroll_waiting">Your vault was created but has not answered this phone yet. Nothing was lost. Try again in a minute: VettID picks up where it stopped.</string>
     <string name="data_failure_vault_exists">Your account already has a vault, held by another app.</string>
     <string name="data_failure_attestation">This phone could not be verified. VettID needs a phone with hardware key attestation and a locked, verified boot.</string>
     <string name="data_failure_rollback">The vault is served by an older software release than this phone last used. VettID did not send your PIN.</string>
@@ -22,7 +24,21 @@
     <string name="data_failure_manifest_unavailable">The list of vault releases could not be loaded, so your vault\'s software could not be checked. Nothing was sent to your vault. Check your connection and try again.</string>
     <string name="data_failure_release_unknown">Your vault runs a release that is not in this app\'s list of vault releases, so VettID did not ask for your PIN and sent nothing. The app loads the list again each time you try. Try again; if this keeps happening, update VettID.</string>
     <string name="data_failure_enclave">Your vault\'s software could not be verified. Nothing was sent to it: not your PIN, nor anything else. Try again; if this keeps happening, do not enter your PIN anywhere else and contact VettID support.</string>
+    <string name="data_failure_time_scale">This vault\'s software is not for this app. Contact VettID.</string>
     <string name="data_failure_not_found">Nothing was found.</string>
+    <!-- Release R (ANDROID-PLAN 0.1.40), draft texts for the owner's wording. -->
+    <string name="data_failure_device_secret">This phone no longer holds the keys of your vault. That happens when the app\'s data was cleared or the phone was set up again from a backup. Nothing was disclosed. Whether you can get back into the vault depends on one of its settings. If its credential backup was on (the usual case), you can recover it: start a recovery on the account site. It takes one to three days, and you need your PIN and your password. If you had turned credential backup off, this vault cannot be brought back; you can delete it on the account site and start a new one. If you still have a phone on which VettID works, use \'Move to a new phone\' there instead. The account site tells you which of these applies.</string>
+    <!-- The same on a vault with a time scale (staging): a recovery's shortest and longest time as they run there, e.g. "1 hour" to "3 hours" -->
+    <string name="data_failure_device_secret_scaled">This phone no longer holds the keys of your vault. That happens when the app\'s data was cleared or the phone was set up again from a backup. Nothing was disclosed. Whether you can get back into the vault depends on one of its settings. If its credential backup was on (the usual case), you can recover it: start a recovery on the account site. It takes %1$s to %2$s, and you need your PIN and your password. If you had turned credential backup off, this vault cannot be brought back; you can delete it on the account site and start a new one. If you still have a phone on which VettID works, use \'Move to a new phone\' there instead. The account site tells you which of these applies.</string>
+    <string name="data_failure_transfer_incomplete">The move to this phone did not finish. Approve it again on your old phone.</string>
+    <string name="data_failure_busy">The service is busy right now. Nothing was used or changed. Try again in a minute.</string>
+    <string name="data_failure_retry">The service was too slow just now. Nothing was used or changed. Try again.</string>
+    <string name="data_failure_counter_unavailable">We cannot check the attempt record now. Nothing was used or changed. Try again later.</string>
+    <string name="data_failure_stored_mismatch">The vault\'s stored data could not be opened. Contact VettID.</string>
+    <string name="data_failure_weak_password">This password is not strong enough.</string>
+    <string name="data_failure_capability_rollback">This vault\'s software is older than the software this phone last used with it. Contact VettID.</string>
+    <string name="data_failure_hardware_keys">This phone cannot keep your vault\'s keys in its secure hardware.</string>
+    <string name="data_failure_response_too_large">Your vault\'s answer was too large to send to this phone. Nothing was changed. Try again later.</string>
     <string name="data_failure_connection_unavailable">This connection cannot be reached right now. Try again later.</string>
     <string name="data_failure_invite_invalid">That is not a VettID invitation. Check the link or code and try again.</string>
     <string name="data_failure_invite_expired">This invitation has expired. Ask for a new one.</string>
@@ -38,8 +54,26 @@
     <string name="data_failure_signer_refused">This vault no longer accepts this installation of VettID. Update the app, or recover your vault with a current version.</string>
     <string name="data_failure_clock">VettID\'s account service refused this phone\'s requests because the phone\'s date and time are more than a few minutes off. Turn on automatic date and time in the phone\'s settings, then try again.</string>
     <string name="data_failure_no_vault">VettID\'s account service says that your account has no vault. That is what it says after a vault was deleted or an account closed, and it can also be a fault of the service. If you did not delete your vault, do not start over: try again later.</string>
+    <!-- Approved by the owner (a wipe that did not finish). -->
+    <string name="data_failure_erase_failed">VettID could not remove your vault\'s keys from this phone. Try again. If it keeps failing, erase VettID\'s data on this phone. Your vault itself is not affected: afterwards you can set VettID up again or recover your vault from your account.</string>
     <string name="data_failure_local_state">VettID could not read the keys it keeps on this phone for your vault. Nothing was deleted or changed. Try again, or restart the phone and open VettID again. If it stays like this, this phone cannot open your vault any more, and the way back is to erase VettID here and recover your vault.</string>
+    <!-- VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45 (approved text, shared with the iPhone app). -->
+    <string name="data_failure_change_unresolved">VettID is still checking whether your last change went through. Try again when your vault can be reached.</string>
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9, ANDROID-PLAN 0.1.46 (approved texts, shared with the iPhone app). -->
+    <string name="data_failure_change_undecided">VettID is still checking whether your last PIN change went through. This can take up to about 10 minutes. Try again then.</string>
+    <string name="data_failure_change_undecided_password">VettID is still checking whether your last password change went through. This can take up to about 10 minutes. Try again then.</string>
+    <string name="data_failure_credential_unsettled">VettID is still finishing an earlier request to your vault. Nothing was changed. Try again in a minute.</string>
+    <string name="data_failure_pin_uncertain">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9 step 5 (approved by the owner 2026-10-18): a new phone secret without an answer that the version cannot decide. -->
+    <string name="data_failure_renew_unconfirmed">VettID couldn\'t confirm your last new phone secret. Before you change your PIN, lock your vault and unlock it again: your PIN hasn\'t changed, so this doesn\'t use an attempt.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
+    <!-- ANDROID-PLAN 0.1.57 §4 "Vault error codes the app does not map" (approved by the owner 2026-10-20). -->
+    <string name="vault_credential_required_title">This phone can\'t use your vault</string>
+    <string name="vault_credential_required_body">Your vault does not count this phone as the one that holds its credential, so it refused the request. Nothing was disclosed, and your PIN and password were not checked. This usually means a recovery of your vault was started and has not finished. If you recovered your vault on another phone, open VettID on that phone and unlock it to finish. Otherwise, start a recovery on the account site: it takes one to three days, and you need your PIN and your password. If another phone of yours now opens your vault, use \'Move to a new phone\' there instead.</string>
+    <!-- STAGING-TIME-SCALE §5.2: on a vault with a time scale, the recovery's waits computed. -->
+    <string name="vault_credential_required_body_scaled">Your vault does not count this phone as the one that holds its credential, so it refused the request. Nothing was disclosed, and your PIN and password were not checked. This usually means a recovery of your vault was started and has not finished. If you recovered your vault on another phone, open VettID on that phone and unlock it to finish. Otherwise, start a recovery on the account site: it takes %1$s to %2$s, and you need your PIN and your password. If another phone of yours now opens your vault, use \'Move to a new phone\' there instead.</string>
+    <!-- The body; its title is data_feed_device_replaced ("Your vault moved to a new phone"). -->
+    <string name="vault_not_holder">Another phone now holds your vault\'s credential, so this phone can\'t do this. Nothing was disclosed. Use VettID on the phone that holds it now. If you no longer have that phone, start a recovery on the account site.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>
     <string name="data_pin_problem_short">Use at least %1$d digits.</string>
     <string name="data_pin_problem_long">Use at most %1$d digits.</string>
@@ -52,6 +86,14 @@
     <string name="data_password_problem_weak">Make it stronger: longer, or a few unrelated words.</string>
     <string name="data_password_problem_pin">Do not reuse your PIN.</string>
     <string name="data_password_problem_control">Remove tabs and other control characters.</string>
+    <!-- ANDROID-PLAN "Passwords" (release R), verbatim -->
+    <string name="data_password_rule_short">Use at least 12 characters.</string>
+    <string name="data_password_rule_repeated">That is one character repeated.</string>
+    <string name="data_password_rule_common">That is a very common password.</string>
+    <string name="data_password_rule_pin">Don\'t use your PIN as your password.</string>
+    <string name="data_password_rule_guessable">This is easy to guess. Add more words or make it less predictable.</string>
+    <string name="data_password_rule_guessable_hint">Avoid names, dates and keyboard runs.</string>
+    <string name="data_password_rule_ok">Strong enough.</string>
     <string name="data_strength_too_short">Too short</string>
     <string name="data_strength_weak">Weak</string>
     <string name="data_strength_fair">Fair</string>
@@ -102,6 +144,8 @@
     <string name="data_feed_authenticate">%1$s asks you to confirm it is you</string>
     <string name="data_feed_message">New message from %1$s</string>
     <string name="data_feed_call_missed">Missed call from %1$s</string>
+    <string name="data_feed_photo_failed">Photo to %1$s not delivered</string>
+    <string name="data_feed_photo_refused">Photo from %1$s refused: your vault is full</string>
     <string name="data_feed_grant_request">%1$s asks for %2$s</string>
     <string name="data_feed_grant_request_any">%1$s asks for an item</string>
     <plurals name="data_feed_grant_request_batch">
@@ -157,5 +201,30 @@
     <string name="data_feed_location_shared">%1$s shared a location</string>
     <string name="data_feed_location_request">%1$s asks for your location</string>
     <string name="data_feed_wallet_signed">A wallet transaction was signed</string>
+    <!-- ANDROID-PLAN 0.1.52 §4 "Event titles" (approved by the owner 2026-10-19) -->
+    <string name="data_feed_pin_changed">Your PIN was changed</string>
+    <string name="data_feed_secret_renewed">Your phone now uses a new secret for your vault</string>
+    <string name="data_feed_credential_recovered">Your credential was restored from its backup</string>
+    <string name="data_feed_recovery_device_paired">Your new phone was connected to your vault</string>
+    <string name="data_feed_recovery_completed">Recovery finished: your vault is on your new phone</string>
+    <string name="data_feed_recovery_attempt_someone">Someone tried to recover your vault (attempt %1$d of %2$d)</string>
+    <string name="data_feed_recovery_attempt_someone_any">Someone tried to recover your vault</string>
+    <string name="data_feed_recovery_attempt_recovered">Your vault was recovered (attempt %1$d of %2$d)</string>
+    <string name="data_feed_recovery_attempt">Recovery attempt %1$d of %2$d</string>
+    <string name="data_feed_recovery_attempt_any">Recovery attempt</string>
+    <string name="data_feed_change_required_password">Choose a stronger password to keep recovery on</string>
+    <string name="data_feed_change_required_password_body">Your password is too weak for recovery. Recovery stays off until you change it.</string>
+    <string name="data_feed_change_required">Change your PIN or password to turn recovery back on</string>
+    <string name="data_feed_change_required_body">Recovery attempts were used. A change gives you 10 new attempts.</string>
+    <string name="data_feed_counter_unavailable">Your vault cannot check its recovery attempts</string>
+    <!-- VAULT-MESSAGING 0.50.0 rollback (owner decisions of 2026-10-20; approved) -->
+    <string name="data_feed_recovery_rollback">Your vault was given an older recovery record</string>
+    <string name="data_feed_recovery_rollback_body">A host may have served an older copy of your vault\'s recovery record, one on which recovery attempts had already been used. Your vault moved past it. If you did not try to recover your vault, change your PIN and your password now, and contact VettID.</string>
+    <string name="data_feed_rotation_failed">Your vault could not update its keys</string>
+    <string name="data_feed_rotation_failed_body">Your connections still know your old keys. VettID will offer the update again.</string>
+    <string name="data_feed_rotate_conflict">%1$s: verify again</string>
+    <string name="data_feed_rotate_conflict_body">This connection\'s vault announced two different new keys. That can mean someone holds an old copy of their vault. Nothing is sent or received until you check.</string>
+    <string name="data_feed_leash_item_used">An agent used %1$s</string>
+    <string name="data_feed_leash_item_used_any">An agent used an item</string>
     <string name="data_feed_unknown">Activity: %1$s</string>
 </resources>

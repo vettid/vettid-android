@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -47,12 +48,15 @@ import com.vettid.core.data.vault.NameRequestState
 import com.vettid.core.data.vault.NameRequestView
 import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
 import java.time.Instant
@@ -209,7 +213,7 @@ fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActi
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.settings_profile_error),
-                    limit ?: stringResource(it.messageRes()),
+                    limit ?: failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                     actions = { TextButton(onClick = actions.onDismiss) { Text(stringResource(R.string.settings_done)) } },
                 )
             }
@@ -446,8 +450,8 @@ private fun ConfirmStep(state: ChangeNameUiState, actions: ChangeNameActions) {
                 m == ChangeNameMessage.Backoff -> Text(stringResource(R.string.settings_name_backoff))
                 m is ChangeNameMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
-                    stringResource(R.string.settings_name_title),
-                    stringResource(m.kind.messageRes()),
+                    stringResource(m.kind.titleRes(R.string.settings_name_title)),
+                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode)),
                     modifier = Modifier.testTag("name_failed"),
                 )
                 else -> Unit
@@ -459,8 +463,18 @@ private fun ConfirmStep(state: ChangeNameUiState, actions: ChangeNameActions) {
 @Composable
 private fun SentStep(state: ChangeNameUiState, actions: ChangeNameActions) {
     val r = state.request
-    val name = r?.let { AccountNames.isolate("${it.firstName} ${it.lastName}") } ?: AccountNames.isolate(state.requestedName)
-    val (title, body, icon) = when (r?.state) {
+    if (r == null) {
+        // The vault is not open (ANDROID-PLAN 0.1.63): nothing about the request, which comes back after the unlock.
+        FormScaffold(
+            title = stringResource(R.string.settings_name_title),
+            primaryLabel = stringResource(R.string.settings_name_done),
+            onPrimary = actions.onClose,
+            modifier = Modifier.testTag("change_name_sent_hidden"),
+        ) {}
+        return
+    }
+    val name = AccountNames.isolate("${r.firstName} ${r.lastName}")
+    val (title, body, icon) = when (r.state) {
         NameRequestState.APPLIED -> Triple(
             stringResource(R.string.settings_name_applied_title),
             stringResource(R.string.settings_name_applied_body, name),
@@ -482,7 +496,7 @@ private fun SentStep(state: ChangeNameUiState, actions: ChangeNameActions) {
         body = body,
         primaryLabel = stringResource(R.string.settings_name_done),
         onPrimary = actions.onClose,
-        modifier = Modifier.testTag("change_name_sent_${(r?.state ?: NameRequestState.PENDING).name.lowercase()}"),
+        modifier = Modifier.testTag("change_name_sent_${r.state.name.lowercase()}"),
         header = { HeaderGlyph(icon) },
     ) {}
 }
@@ -492,6 +506,20 @@ private fun waitText(seconds: Long): String = "%d:%02d".format(seconds / SECONDS
 private const val SECONDS_PER_MINUTE = 60L
 private const val WARN_LEFT = 3
 
+/** The photo being previewed (its bytes, zeroed when it is saved or dropped), else the vault's. */
+@Composable
+private fun rememberShownPhoto(state: SharedProfileUiState): androidx.compose.ui.graphics.ImageBitmap? {
+    val pending = state.pendingPhoto
+    // A dropped photo (its bytes zeroed) is neither decoded nor shown, even from a state not yet replaced.
+    val preview = androidx.compose.runtime.remember(pending) {
+        pending?.takeUnless { it.wiped }?.let {
+            com.vettid.core.ui.components.ProfilePhotos.decodeImage(it.bytes)?.asImageBitmap()
+        }
+    }
+    val shared = rememberProfilePhoto(state.profile?.photo)
+    return preview?.takeUnless { pending?.wiped == true } ?: shared
+}
+
 /**
  * The profile photo (§10.8): the vault's, or a taken one as a preview until it is saved; "Take a photo" ("Retake
  * photo" when one is shared) opens the in-app camera (owner feedback 2026-10-08: no picture is chosen from the
@@ -500,7 +528,7 @@ private const val WARN_LEFT = 3
 @Composable
 private fun PhotoCard(state: SharedProfileUiState, actions: SharedProfileActions) {
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
-    val photo = rememberProfilePhoto(state.shownPhoto)
+    val photo = rememberShownPhoto(state)
     val enabled = state.profile != null && !state.photoBusy && !state.busy
     val buttonModifier = Modifier.heightIn(min = Spacing.touchTarget)
     DetailCard(Modifier.testTag("profile_photo")) {

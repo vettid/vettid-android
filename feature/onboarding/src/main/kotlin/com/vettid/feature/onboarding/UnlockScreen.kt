@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Checkbox
@@ -19,9 +20,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -32,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.LockNotice
+import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
@@ -43,6 +50,12 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNote
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -50,9 +63,9 @@ import java.time.format.FormatStyle
 
 /** The unlock screen, driven by [UnlockViewModel]. */
 @Composable
-fun UnlockRoute(viewModel: UnlockViewModel = hiltViewModel()) {
+fun UnlockRoute(viewModel: UnlockViewModel = hiltViewModel(), onOpenAccountSite: () -> Unit = {}) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    UnlockContent(state, viewModel)
+    UnlockContent(state, viewModel, onOpenAccountSite)
 }
 
 /** `m:ss` for a backoff countdown. */
@@ -60,23 +73,42 @@ fun formatWait(seconds: Long): String = "%d:%02d".format(seconds / SECONDS_PER_M
 
 private const val SECONDS_PER_MINUTE = 60
 
-/** The unlock screen for [state] (stateless). */
+/**
+ * The unlock screen for [state] (stateless). [onOpenAccountSite]: "Recover your vault" (keys gone, or recover-only).
+ * [onContactSupport]: "Contact support" (recover-only), false when no mail app took it ([SupportMail]).
+ */
 @Suppress("CyclomaticComplexMethod", "LongMethod")
 @Composable
-fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
+fun UnlockContent(
+    state: UnlockUiState,
+    actions: UnlockActions,
+    onOpenAccountSite: () -> Unit = {},
+    onContactSupport: (() -> Boolean)? = null,
+) {
+    val context = LocalContext.current
+    val contactSupport = onContactSupport ?: { SupportMail.open(context) }
     val p = state.preflight
     val blocked = state.preflightError == FailureKind.RELEASE_ENDED || p?.rollback == true || state.stateRollback
     FormScaffold(
         title = stringResource(R.string.unlock_title),
         body = state.email?.let { stringResource(R.string.unlock_body_account, it) } ?: stringResource(R.string.unlock_body),
         primaryLabel = when {
+            // ANDROID-PLAN 0.1.54: "Return" was confirmed without a PIN; the PIN typed now goes to the way back.
+            state.returnAsked -> stringResource(R.string.release_update_return, state.move?.fromNumber?.toInt() ?: 0)
             state.preflightError != null && !blocked -> stringResource(R.string.unlock_retry)
             blocked || state.recoveryPending -> null
             else -> stringResource(R.string.unlock_submit)
         },
-        onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submit,
-        primaryEnabled = if (state.preflightError != null) state.retryAllowed else state.submitAllowed,
+        onPrimary = if (state.preflightError != null && !state.returnAsked) actions::retryPreflight else actions::submit,
+        primaryEnabled = when {
+            state.returnAsked -> state.returnSubmitAllowed
+            state.preflightError != null -> state.retryAllowed
+            else -> state.submitAllowed
+        },
         busy = state.busy || state.loading || state.erasing,
+        // ANDROID-PLAN 0.1.54: a "Return" waiting for its PIN can be left for the ordinary unlock.
+        secondaryLabel = if (state.returnAsked) stringResource(com.vettid.core.ui.R.string.core_ui_cancel) else null,
+        onSecondary = actions::dismissReturn,
         header = {
             Spacer(Modifier.height(Spacing.l))
             Icon(
@@ -96,6 +128,26 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     Text(label, style = MaterialTheme.typography.bodyMedium)
                 }
             }
+            if (state.keptCheckWaiting) {
+                // §11.14.10 (owner decision 2026-10-23): the 7 days are over, the vault has not confirmed the move yet.
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.onboarding_kept_check_waiting_title),
+                    stringResource(R.string.onboarding_kept_check_waiting),
+                    modifier = Modifier.testTag("kept_check_waiting"),
+                )
+            }
+            if (state.keptTransfer) {
+                // Release R (§11.14.10): the old phone after a transfer's approval.
+                NoticeCard(
+                    NoticeKind.INFO,
+                    stringResource(R.string.onboarding_move_didnt_finish),
+                    stringResource(R.string.onboarding_kept_transfer) + "\n\n" +
+                        stringResource(R.string.onboarding_move_didnt_finish_body),
+                    modifier = Modifier.testTag("kept_transfer"),
+                )
+                if (state.stagingNote) StagingTimeNote()
+            }
             state.preflightError?.let {
                 NoticeCard(
                     // The vault's software did not verify: alarming, unlike a list that is stale or could not be loaded.
@@ -107,7 +159,11 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                             else -> R.string.unlock_title
                         },
                     ),
-                    stringResource(it.messageRes()),
+                    if (it == FailureKind.ROUTE_PENDING) {
+                        stringResource(R.string.release_update_route_pending, state.move?.toNumber?.toInt() ?: 0)
+                    } else {
+                        failureText(it.messageRes())
+                    },
                     modifier = Modifier.testTag("unlock_preflight_error"),
                 )
             }
@@ -153,9 +209,24 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     announce = LiveRegionMode.Polite,
                     actions = { TextButton(onClick = actions::dismissLockNotice) { Text(stringResource(R.string.unlock_lock_ok)) } },
                 )
+                // (Release L) The vault was opened again after this lock: not locked, and said so. This phone stays locked.
+                LockNotice.OpenedAgain -> NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.unlock_lock_opened_again_title),
+                    stringResource(R.string.unlock_lock_opened_again_body),
+                    modifier = Modifier.testTag("unlock_lock_opened_again"),
+                    announce = LiveRegionMode.Assertive,
+                    actions = {
+                        // (Owner decision 2026-10-24) A fresh lock of the vault as it is now.
+                        TextButton(onClick = actions::lockAgain, modifier = Modifier.testTag("unlock_lock_again")) {
+                            Text(stringResource(R.string.unlock_lock_again))
+                        }
+                        TextButton(onClick = actions::dismissLockNotice) { Text(stringResource(R.string.unlock_lock_ok)) }
+                    },
+                )
                 LockNotice.None -> Unit
             }
-            if (state.refused && !state.notRecognised) {
+            if (state.refused && !state.notRecognised && !state.keptCheckWaiting) {
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.unlock_refused_title),
@@ -170,12 +241,44 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     stringResource(R.string.unlock_owner_check_locked_body),
                     modifier = Modifier.testTag("unlock_owner_check_locked"),
                 )
+            } else if (state.idleLocked != null) {
+                // (Release L, §3.6.8; ANDROID-PLAN §4 "Locking the vault" part 2) It locked itself: why, then the unlock
+                // and the check on this screen.
+                val after = state.idleLocked.afterSeconds
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.unlock_idle_locked_title),
+                    // The staging note where a scaled wait is shown (ANDROID-PLAN 0.1.44).
+                    if (after != null) {
+                        // One day is "1 day", as the setting names it (approved by the owner 2026-10-24).
+                        val words = if (after == SECONDS_PER_DAY) {
+                            pluralStringResource(com.vettid.core.ui.R.plurals.core_ui_duration_days, 1, 1)
+                        } else {
+                            durationText(after)
+                        }
+                        stringResource(R.string.unlock_idle_locked_body, words)
+                    } else {
+                        stringResource(R.string.unlock_idle_locked_body_unknown)
+                    } + stagingNoteSuffix(),
+                    modifier = Modifier.testTag("unlock_idle_locked"),
+                )
             } else if (state.checkDue) {
                 NoticeCard(
                     NoticeKind.INFO,
                     stringResource(R.string.unlock_owner_check_title),
                     stringResource(R.string.unlock_owner_check_body),
                     modifier = Modifier.testTag("unlock_owner_check"),
+                )
+            }
+            state.moveFailure?.let { f ->
+                // Release R (§11.14.10): "Finish the move" locked the vault, and its unlock did not open it.
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.onboarding_finish_move_title),
+                    failureText(f.messageRes()),
+                    modifier = Modifier.testTag("unlock_move_failure"),
+                    announce = LiveRegionMode.Polite,
+                    actions = { TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) } },
                 )
             }
             if (state.stateRollback) {
@@ -192,15 +295,59 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     stringResource(R.string.unlock_recovery_body),
                     modifier = Modifier.testTag("recovery_pending"),
                     actions = {
-                        TextButton(onClick = actions::cancelRecoveryAndUnlock, enabled = !state.busy) {
+                        TextButton(onClick = actions::cancelRecoveryAndUnlock, enabled = state.cancelAllowed) {
                             Text(stringResource(R.string.unlock_recovery_cancel), color = MaterialTheme.colorScheme.error)
                         }
                     },
                 )
+                if (state.phoneSecret) {
+                    // Release R: the owner check follows the cancel at once (the PIN, kept from the unlock, and the password).
+                    SecretField(
+                        value = state.password,
+                        onValueChange = actions::setPassword,
+                        label = stringResource(R.string.unlock_password_label),
+                        enabled = !state.busy,
+                        onImeAction = actions::cancelRecoveryAndUnlock,
+                        modifier = Modifier.testTag("unlock_cancel_password"),
+                    )
+                }
+                if (state.busy) {
+                    // The screen has no primary button here, so its busy indicator is not shown: the cancel, and the owner
+                    // check that follows it, show their progress here.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+                            .testTag("unlock_recovery_cancelling"),
+                    ) {
+                        CircularProgressIndicator(Modifier.height(20.dp).width(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(Spacing.m))
+                        Text(stringResource(R.string.unlock_recovery_cancelling), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
-            // Never a PIN field while the last check of the vault's software failed.
+            state.move?.takeIf { state.returnOffered }?.let { m -> MoveUnconfirmedNotice(m, enabled = !state.busy, actions::askReturn) }
+            // Never a PIN field while the last check of the vault's software failed (the way back asks for its own PIN).
             val verified = p != null && state.preflightError == null
-            if (!blocked && !state.recoveryPending && verified) {
+            val unlockPin = !blocked && !state.recoveryPending && verified
+            if (unlockPin || state.returnAsked) {
+                // VAULT-MESSAGING 0.44.0 §11.14.9 step 5: an unresolved PIN change asks for the previous PIN first, and for
+                // the new one only after the vault showed that it holds the change.
+                if (state.newPinStep) {
+                    NoticeCard(
+                        NoticeKind.SUCCESS,
+                        stringResource(R.string.unlock_new_pin_title),
+                        stringResource(R.string.unlock_new_pin_body),
+                        modifier = Modifier.testTag("unlock_new_pin"),
+                        announce = LiveRegionMode.Polite,
+                    )
+                } else if (state.previousPinStep) {
+                    NoticeCard(
+                        NoticeKind.INFO,
+                        stringResource(R.string.unlock_previous_pin_title),
+                        stringResource(R.string.unlock_previous_pin_body),
+                        modifier = Modifier.testTag("unlock_previous_pin"),
+                    )
+                }
                 Spacer(Modifier.height(Spacing.s))
                 val waitText = if (state.waitSeconds > 0) stringResource(R.string.unlock_wait, formatWait(state.waitSeconds)) else null
                 SecretField(
@@ -208,14 +355,14 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     onValueChange = actions::setPin,
                     label = stringResource(R.string.unlock_pin_label),
                     isPin = true,
-                    enabled = state.pinAllowed,
+                    enabled = state.pinAllowed || (state.returnAsked && state.returnPinAllowed),
                     error = if (state.message == UnlockMessage.BadPin) stringResource(R.string.unlock_bad_pin) else null,
                     supporting = waitText,
-                    imeAction = if (state.checkDue) ImeAction.Next else ImeAction.Done,
-                    onImeAction = if (state.checkDue) ({}) else actions::submit,
+                    imeAction = if (state.checkDue && !state.returnAsked) ImeAction.Next else ImeAction.Done,
+                    onImeAction = if (state.checkDue && !state.returnAsked) ({}) else actions::submit,
                     modifier = Modifier.testTag("unlock_pin"),
                 )
-                if (state.checkDue) {
+                if (state.checkDue && !state.returnAsked) {
                     // §3.6.5: a locked vault past its deadline asks for the PIN and the password on one screen.
                     SecretField(
                         value = state.password,
@@ -227,6 +374,13 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     )
                 }
                 when (val m = state.message) {
+                    // Release R (§11.14.10): the old phone's "The move didn't finish" could not open the vault.
+                    UnlockMessage.MoveBackFailed -> NoticeCard(
+                        NoticeKind.URGENT,
+                        stringResource(R.string.onboarding_move_didnt_finish),
+                        stringResource(R.string.onboarding_move_back_failed),
+                        modifier = Modifier.testTag("move_back_failed"),
+                    )
                     is UnlockMessage.UpdateRefused -> NoticeCard(
                         NoticeKind.WARNING,
                         stringResource(R.string.unlock_title),
@@ -239,10 +393,13 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                             if (m.kind == FailureKind.SERVICE_PAUSED || m.kind == FailureKind.VAULT_UNAVAILABLE) NoticeKind.WARNING
                                 else NoticeKind.URGENT,
                             stringResource(R.string.unlock_title),
-                            when (m.code) {
-                                UnlockViewModel.CODE_UNREADABLE -> stringResource(R.string.unlock_unreadable)
-                                UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
-                                else -> stringResource(m.kind.messageRes())
+                            when {
+                                m.code == UnlockViewModel.CODE_UNREADABLE -> stringResource(R.string.unlock_unreadable)
+                                m.code == UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
+                                // ANDROID-PLAN 0.1.54 point 6: still routed to release N after the retries.
+                                m.kind == FailureKind.ROUTE_PENDING ->
+                                    stringResource(R.string.release_update_route_pending, state.move?.toNumber?.toInt() ?: 0)
+                                else -> failureText(m.kind.messageRes())
                             },
                             modifier = Modifier.testTag("unlock_failed"),
                         )
@@ -251,13 +408,36 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                 }
             }
             if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)
-            if (state.notRecognised) NotRecognisedNotice(state.erasing, actions::askErase)
+            // An ended release or a rollback wins: no erase there, whatever else the last answers said.
+            when {
+                state.recoverOnly -> RecoverOnlyNotice(onOpenAccountSite, contactSupport)
+                // §11.14.10 (owner decision 2026-10-23): waiting for the vault's answer, the notice above; no erase offer.
+                state.keptCheckWaiting -> Unit
+                state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
+                state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
+            }
         }
     }
-    if (state.eraseConfirm) {
+    state.move?.takeIf { state.returnConfirm }?.let { m ->
+        ConfirmDialog(
+            title = stringResource(R.string.release_update_return_confirm_title, m.fromNumber.toInt()),
+            text = stringResource(R.string.release_update_return_confirm_body, m.fromNumber.toInt(), m.toNumber.toInt()),
+            confirmLabel = stringResource(R.string.release_update_return, m.fromNumber.toInt()),
+            onConfirm = actions::confirmReturn,
+            onDismiss = actions::dismissReturn,
+            modifier = Modifier.testTag("unlock_return_confirm"),
+        )
+    }
+    if (state.eraseConfirm && state.eraseOffered) {
         ConfirmDialog(
             title = stringResource(R.string.unlock_erase_confirm_title),
-            text = stringResource(R.string.unlock_erase_confirm_body),
+            // A phone without its vault's keys: the root screen's text, which says what a recovery then needs.
+            text = stringResource(
+                if (state.keysGone && !state.notRecognised) com.vettid.core.ui.R.string.core_ui_erase_phone_body
+                else R.string.unlock_erase_confirm_body,
+                // The erase text's recovery wait (unused by the other text).
+                scaledDurationText(Durations.DAY),
+            ) + stagingNoteSuffix(),
             confirmLabel = stringResource(R.string.unlock_erase_confirm),
             onConfirm = actions::confirmErase,
             onDismiss = actions::dismissErase,
@@ -265,6 +445,25 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
             destructive = true,
         )
     }
+}
+
+/**
+ * (ANDROID-PLAN 0.1.54 point 3) The new release has not opened the vault since the move, and the move is not confirmed
+ * ([m] with `failed`): trying again with the PIN, or "Return to release N", which asks first.
+ */
+@Composable
+private fun MoveUnconfirmedNotice(m: MoveUnconfirmed, enabled: Boolean, onReturn: () -> Unit) {
+    NoticeCard(
+        NoticeKind.WARNING,
+        stringResource(R.string.release_update_new_failed_title, m.toNumber.toInt()),
+        stringResource(R.string.unlock_move_unconfirmed, m.toNumber.toInt(), m.fromNumber.toInt()),
+        modifier = Modifier.testTag("unlock_move_unconfirmed"),
+        actions = {
+            TextButton(onClick = onReturn, enabled = enabled, modifier = Modifier.testTag("unlock_return")) {
+                Text(stringResource(R.string.release_update_return, m.fromNumber.toInt()))
+            }
+        },
+    )
 }
 
 /**
@@ -295,6 +494,69 @@ private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
 }
 
 /**
+ * This phone no longer holds the vault's keys ([UnlockUiState.keysGone]): recover-or-erase. "Recover your vault" first
+ * (the account site, where a recovery starts); "Erase VettID from this phone" opens the erase confirmation. Neither
+ * unlocks or opens anything.
+ */
+@Composable
+private fun StuckNotice(erasing: Boolean, onErase: () -> Unit, onRecover: () -> Unit) {
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(R.string.unlock_stuck_title),
+        stringResource(R.string.unlock_stuck_body),
+        modifier = Modifier.testTag("unlock_stuck"),
+        actions = {
+            TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
+                Text(stringResource(R.string.unlock_recover))
+            }
+            TextButton(onClick = onErase, enabled = !erasing, modifier = Modifier.testTag("erase_phone")) {
+                Text(stringResource(R.string.unlock_erase), color = MaterialTheme.colorScheme.error)
+            }
+        },
+    )
+    if (erasing) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
+            CircularProgressIndicator(Modifier.height(20.dp).width(20.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(Spacing.m))
+            Text(stringResource(R.string.unlock_erasing), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/**
+ * The vault cannot be opened and erasing this phone would not help ([UnlockUiState.recoverOnly]: an ended release, a
+ * rollback): "Recover your vault" (the account site) first, "Contact support" second (an email with nothing of the
+ * member's in it; without a mail app the address is shown to copy). No erase.
+ */
+@Composable
+private fun RecoverOnlyNotice(onRecover: () -> Unit, onContactSupport: () -> Boolean) {
+    var noMailApp by rememberSaveable { mutableStateOf(false) }
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(R.string.unlock_stuck_title),
+        stringResource(R.string.unlock_recover_only_body),
+        modifier = Modifier.testTag("unlock_recover_only"),
+        actions = {
+            TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
+                Text(stringResource(R.string.unlock_recover))
+            }
+            TextButton(onClick = { noMailApp = !onContactSupport() }, modifier = Modifier.testTag("contact_support")) {
+                Text(stringResource(R.string.unlock_contact_support))
+            }
+        },
+    )
+    if (noMailApp) {
+        SelectionContainer {
+            Text(
+                SupportMail.ADDRESS,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.testTag("support_address"),
+            )
+        }
+    }
+}
+
+/**
  * The vault's release does not accept this installation of VettID (`signer_refused`, VAULT-MESSAGING 0.27.0
  * §11.7.1; the text is the spec's). Not a wrong PIN: nothing counts and nothing waits. [help] shows how to recover
  * or transfer the vault (both start elsewhere: the account site, or another phone where the vault is open).
@@ -316,7 +578,7 @@ private fun SignerRefusedNotice(help: Boolean, onHelp: (Boolean) -> Unit) {
         NoticeCard(
             NoticeKind.INFO,
             stringResource(R.string.unlock_signer_refused_help_title),
-            stringResource(R.string.unlock_signer_refused_help_body),
+            stringResource(R.string.unlock_signer_refused_help_body, scaledDurationText(Durations.DAY)),
             modifier = Modifier.testTag("signer_refused_help_text"),
         )
     }
@@ -406,3 +668,6 @@ internal fun PreflightNotices(
         }
     }
 }
+
+/** A day in seconds: the idle lock's "1 day". */
+private const val SECONDS_PER_DAY = 86_400L

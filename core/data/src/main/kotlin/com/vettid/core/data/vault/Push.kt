@@ -2,6 +2,7 @@ package com.vettid.core.data.vault
 
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
+import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonArray
@@ -10,13 +11,19 @@ import kotlinx.serialization.json.JsonObject
 /**
  * The vault's push state for this app (VAULT-MESSAGING 0.24.1 §14.1), as `push.register` answers it and
  * `device.list` shows it on the app's entry while it has a registration. [lastResult] is `sent`, `rate_limited` or
- * `gateway_error`, null before the first wake. The vault keeps no token, so none is here.
+ * `gateway_error`, null before the first wake. The vault keeps no token, so none is here. Since 0.30.0 `push.register`
+ * may answer [STATE_PENDING]: the gateway sent a challenge code to the token, and the registration is complete only
+ * once `push.confirm` returns it (`device.list` shows only the registration in force, never a pending one).
  */
 data class PushStateView(val platform: String, val appId: String, val state: String, val lastResult: String? = null) {
     val active: Boolean get() = state == STATE_ACTIVE
 
+    /** Waiting for `push.confirm` with the code the gateway pushed to the token (0.30.0). */
+    val pending: Boolean get() = state == STATE_PENDING
+
     companion object {
         const val STATE_ACTIVE = "active"
+        const val STATE_PENDING = "pending"
         const val RESULT_GATEWAY_ERROR = "gateway_error"
     }
 }
@@ -41,6 +48,37 @@ sealed interface PushRegisterOutcome {
     data object NoAnswer : PushRegisterOutcome
 }
 
+/** How the vault answered `push.confirm` (VAULT-MESSAGING 0.30.0 §14.1). */
+sealed interface PushConfirmOutcome {
+    /** The registration is in force: the push state (`active`). */
+    data class Confirmed(val push: PushStateView) : PushConfirmOutcome
+
+    /**
+     * `gateway_error` with message `challenge_expired` or `challenge_invalid`: the vault dropped its pending
+     * registration (10 minutes passed, or the gateway refused the code). Register again.
+     */
+    data object ChallengeFailed : PushConfirmOutcome
+
+    /**
+     * Another `gateway_error` (`retry_after` from a 429 or 502, when given): the gateway could not be reached, and
+     * the vault normally keeps its pending registration, so the same code may be sent again within the 10 minutes.
+     * (A refusal for good is answered the same way; the next `push.confirm` then gets [NoPending].)
+     */
+    data class GatewayError(val retryAfterSeconds: Long? = null) : PushConfirmOutcome
+
+    /** `bad_request` with message `no_pending_registration`: the vault has nothing to confirm. Register again. */
+    data object NoPending : PushConfirmOutcome
+
+    /** `unavailable`: the vault's release has no push gateway (or does not know the type). */
+    data object Unavailable : PushConfirmOutcome
+
+    /** Any other refusal (`bad_request`, `forbidden`, `credential_required`): [code]. */
+    data class Refused(val code: String) : PushConfirmOutcome
+
+    /** No answer (no network, a timeout, the vault not open on this phone): the pending registration is untouched. */
+    data object NoAnswer : PushConfirmOutcome
+}
+
 /**
  * What the Google push mode needs of the vault on this phone (ANDROID-PLAN 0.1.30, Notification modes 4;
  * VAULT-MESSAGING §14): the registration ops over the app's end-to-end session (the app never talks to the push
@@ -55,6 +93,12 @@ interface PushVault {
 
     /** `push.register{platform, token, app_id}`; never throws. */
     suspend fun pushRegister(platform: String, token: String, appId: String): PushRegisterOutcome
+
+    /**
+     * `push.confirm{code}` (0.30.0) with the challenge code the gateway pushed to this app's token; never throws.
+     * The code is never logged or stored.
+     */
+    suspend fun pushConfirm(code: String): PushConfirmOutcome
 
     /** `push.unregister{}`; false when the vault did not answer `{}` (not open, no network). */
     suspend fun pushUnregister(): Boolean
@@ -110,11 +154,33 @@ object PushWire {
         }
     }
 
+    /** The outcome of a `push.confirm` that failed with [f] (0.30.0 §14.1). */
+    fun confirmOutcome(f: VaultFailure): PushConfirmOutcome {
+        val message = (f.cause as? VaultOpException)?.detail
+        return when (f.code) {
+            "gateway_error" -> if (message == MESSAGE_CHALLENGE_EXPIRED || message == MESSAGE_CHALLENGE_INVALID) {
+                PushConfirmOutcome.ChallengeFailed
+            } else {
+                PushConfirmOutcome.GatewayError(f.retryAfterSeconds.takeIf { it > 0 })
+            }
+            "bad_request" -> if (message == MESSAGE_NO_PENDING) PushConfirmOutcome.NoPending else PushConfirmOutcome.Refused("bad_request")
+            "unavailable", "unsupported_type" -> PushConfirmOutcome.Unavailable
+            null -> PushConfirmOutcome.NoAnswer
+            else -> when (f.kind) {
+                FailureKind.NETWORK, FailureKind.NO_RESPONSE -> PushConfirmOutcome.NoAnswer
+                else -> PushConfirmOutcome.Refused(f.code)
+            }
+        }
+    }
+
     /** The `reason` of a `push.token-needed`; `token_gone` when it has none. */
     fun reason(m: VaultMessage): String = VaultJson.str(m.body, "reason") ?: REASON_TOKEN_GONE
 
     const val REASON_TOKEN_GONE = "token_gone"
     const val REASON_BLOB_INVALID = "blob_invalid"
+    const val MESSAGE_CHALLENGE_EXPIRED = "challenge_expired"
+    const val MESSAGE_CHALLENGE_INVALID = "challenge_invalid"
+    const val MESSAGE_NO_PENDING = "no_pending_registration"
 }
 
 /**

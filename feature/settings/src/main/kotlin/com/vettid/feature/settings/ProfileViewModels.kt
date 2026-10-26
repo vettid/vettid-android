@@ -16,7 +16,11 @@ import com.vettid.core.data.vault.NameRequestView
 import com.vettid.core.data.vault.OwnProfile
 import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.shownInShell
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import javax.inject.Inject
 
@@ -37,10 +42,15 @@ data class SharedProfileUiState(
     val busy: Boolean = false,
     val saved: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1: `profile_items`, `profile_size`). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
-    /** A photo taken and encoded (base64 JPEG, at most 65,536 bytes), shown as a preview until saved or dropped. */
-    val pendingPhoto: String? = null,
+    /**
+     * A photo taken and encoded (a JPEG of at most 65,536 bytes), shown as a preview until saved or dropped; its bytes
+     * are zeroed then, and whenever the vault is not open ([PendingPhoto.wipe]).
+     */
+    val pendingPhoto: PendingPhoto? = null,
     /** The taken photo is being encoded, or the photo is being saved. */
     val photoBusy: Boolean = false,
     /** The taken photo could not be encoded. */
@@ -53,9 +63,6 @@ data class SharedProfileUiState(
     val pickingItem: Boolean = false,
     val itemsBusy: Boolean = false,
 ) {
-    /** The photo to show: the one being previewed, else the vault's. */
-    val shownPhoto: String? get() = pendingPhoto ?: profile?.photo
-
     /** The display name's limit (§10.8: at most 128 bytes). */
     val tooLong: Boolean get() = displayName.trim().toByteArray(Charsets.UTF_8).size > MAX_DISPLAY_NAME_BYTES
 
@@ -71,8 +78,43 @@ data class SharedProfileUiState(
 }
 
 /**
+ * A taken photo before it is saved (VAULT-MESSAGING §10.8): the JPEG bytes, in memory only. [wipe] zeroes them once the
+ * photo is saved or dropped, or the vault is no longer open (ANDROID-PLAN §4 "The member's own profile").
+ */
+class PendingPhoto(private val jpeg: ByteArray) {
+    /** The bytes for the preview (not a copy: zeroed by [wipe]). */
+    val bytes: ByteArray get() = jpeg
+
+    /** The standard base64 `profile.set{photo}` takes. */
+    fun base64(): String = java.util.Base64.getEncoder().encodeToString(jpeg)
+
+    /** Whether [wipe] ran: the bytes are zeros, and the preview decodes nothing from them. */
+    @Volatile
+    var wiped: Boolean = false
+        private set
+
+    fun wipe() {
+        wiped = true
+        jpeg.fill(0)
+    }
+
+    companion object {
+        /** [base64] (`ProfilePhotos.encodeBase64`'s) as bytes, or null when it is not base64. */
+        fun of(base64: String): PendingPhoto? = try {
+            PendingPhoto(java.util.Base64.getDecoder().decode(base64))
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+}
+
+/**
  * Settings → Shared profile (ANDROID-PLAN 0.1.10): the account's names read-only (changed only through
  * [ChangeNameViewModel]), the display name edited with `profile.set`, which never names the core.
+ *
+ * (ANDROID-PLAN 0.1.62, owner decision of 2026-10-21) The drafts (an edited display name, a taken photo not yet saved)
+ * are dropped whenever the vault is not open (the profile forgotten, or the account no longer from the open vault: a
+ * lock, the hold or the due state); the member types them again after the unlock.
  */
 @HiltViewModel
 @Suppress("TooManyFunctions")
@@ -84,10 +126,22 @@ class SharedProfileViewModel @Inject constructor(
     private val state = MutableStateFlow(SharedProfileUiState(account = accounts.account.value, profile = profiles.profile.value))
     val uiState: StateFlow<SharedProfileUiState> = state.asStateFlow()
 
+    /** How many times the drafts were dropped ([dropDrafts]); a photo encoded across a drop is not kept. */
+    private var drops = 0L
+
+    /** [drops] when the taken photo began encoding ([photoEncoding]), or null when none is being encoded. */
+    private var encodingSince: Long? = null
+
     init {
-        viewModelScope.launch { accounts.account.collect { a -> state.update { it.copy(account = a) } } }
+        viewModelScope.launch {
+            accounts.account.collect { a ->
+                state.update { it.copy(account = a) }
+                if (a.shownInShell() == null) dropDrafts()
+            }
+        }
         viewModelScope.launch {
             profiles.profile.collect { p ->
+                if (p == null) dropDrafts()
                 state.update { it.copy(profile = p, displayName = if (it.edited) it.displayName else p?.displayName ?: "") }
             }
         }
@@ -95,7 +149,7 @@ class SharedProfileViewModel @Inject constructor(
             try {
                 profiles.refreshProfile()
             } catch (e: VaultFailure) {
-                state.update { it.copy(error = e.kind) }
+                state.update { it.copy(error = e.kind, errorCode = e.shownCode) }
             }
         }
         viewModelScope.launch { accounts.refreshAccount() }
@@ -127,7 +181,7 @@ class SharedProfileViewModel @Inject constructor(
                 items.setTags(i.itemId, i.version, tags)
                 state.update { it.copy(itemsBusy = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(itemsBusy = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(itemsBusy = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -143,32 +197,94 @@ class SharedProfileViewModel @Inject constructor(
                 profiles.setDisplayName(s.displayName.trim())
                 state.update { it.copy(busy = false, edited = false, saved = true, displayName = s.displayName.trim()) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
 
     fun dismiss() = state.update { it.copy(saved = false, error = null, photoUnreadable = false, photoSaved = false) }
 
-    /** The taken photo is being encoded (off the main thread, by the screen). */
-    fun photoEncoding() = state.update { it.copy(photoBusy = true, photoUnreadable = false, photoSaved = false, error = null) }
-
     /**
-     * The photo the member took and accepted ("Use photo"), encoded (`ProfilePhotos.encodeBase64`), sent with
-     * `profile.set{photo}`; it stays as a preview (with "Save photo") if the vault refuses. Null: it could not be
-     * encoded.
+     * The photo the member accepted ("Use photo"): [encode] (blocking: `encodeShot`) runs on [encodeOn] in this view
+     * model's scope, then [photoTaken] takes the JPEG bytes on the main thread. The encoding always runs once started
+     * (it recycles the shot); if the scope ends meanwhile (the screen gone), the bytes are zeroed, never kept.
      */
-    fun photoTaken(base64: String?) {
-        state.update { it.copy(pendingPhoto = base64, photoBusy = false, photoUnreadable = base64 == null) }
-        if (base64 != null) sendPhoto(base64)
+    fun encodePhoto(encodeOn: CoroutineDispatcher = Dispatchers.Default, encode: () -> ByteArray?) {
+        photoEncoding()
+        viewModelScope.launch(encodeOn, CoroutineStart.ATOMIC) {
+            val jpeg = encode()
+            var handedOver = false
+            try {
+                // Not dispatched once the scope is cancelled; when it runs, photoTaken owns the bytes (zeroes or keeps
+                // them, and a kept photo is zeroed by onCleared).
+                withContext(Dispatchers.Main.immediate) {
+                    handedOver = true
+                    photoTaken(jpeg)
+                }
+            } finally {
+                if (!handedOver) jpeg?.fill(0)
+            }
+        }
     }
 
-    fun discardPhoto() = state.update { it.copy(pendingPhoto = null, photoUnreadable = false) }
+    /** The taken photo is being encoded (off the main thread, [encodePhoto]). */
+    fun photoEncoding() {
+        encodingSince = drops
+        state.update { it.copy(photoBusy = true, photoUnreadable = false, photoSaved = false, error = null) }
+    }
+
+    /**
+     * The photo the member took and accepted ("Use photo"), encoded (`ProfilePhotos.encode`: the JPEG bytes, kept by
+     * the [PendingPhoto]), sent with `profile.set{photo}`; it stays as a preview (with "Save photo") if the vault
+     * refuses. Null: it could not be encoded.
+     *
+     * The encoding runs off the main thread, so the vault may have closed meanwhile (a lock, the hold or the due state),
+     * and the drafts were dropped before this answer: then the bytes are zeroed, nothing is kept or sent, even if the
+     * vault has opened again since.
+     */
+    fun photoTaken(jpeg: ByteArray?) {
+        val since = encodingSince
+        encodingSince = null
+        if ((since != null && since != drops) || !vaultOpen()) {
+            jpeg?.fill(0)
+            state.update { it.copy(photoBusy = false, photoUnreadable = false) }
+            return
+        }
+        val photo = jpeg?.let { PendingPhoto(it) }
+        val old = state.value.pendingPhoto
+        state.update { it.copy(pendingPhoto = photo, photoBusy = false, photoUnreadable = photo == null) }
+        if (old !== photo) old?.wipe()
+        if (photo != null) sendPhoto(photo.base64())
+    }
+
+    fun discardPhoto() {
+        val old = state.value.pendingPhoto
+        state.update { it.copy(pendingPhoto = null, photoUnreadable = false) }
+        old?.wipe()
+    }
 
     /** `profile.set{photo}` with the previewed photo. */
     fun savePhoto() {
         val photo = state.value.pendingPhoto ?: return
-        sendPhoto(photo)
+        sendPhoto(photo.base64())
+    }
+
+    /**
+     * The vault is not open: the edited display name and the taken photo go (its bytes zeroed), and nothing typed is
+     * kept for after the unlock.
+     */
+    private fun dropDrafts() {
+        drops++
+        val old = state.value.pendingPhoto
+        state.update { it.copy(displayName = "", edited = false, pendingPhoto = null, photoUnreadable = false, saved = false) }
+        old?.wipe()
+    }
+
+    /** The vault is open: the account is the open vault's and the profile is known (the opposite of [dropDrafts]'s). */
+    private fun vaultOpen(): Boolean = accounts.account.value.shownInShell() != null && profiles.profile.value != null
+
+    override fun onCleared() {
+        state.value.pendingPhoto?.wipe()
     }
 
     /** `profile.set{photo: ""}`: no photo. */
@@ -180,9 +296,11 @@ class SharedProfileViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 profiles.setPhoto(photo)
+                val old = state.value.pendingPhoto
                 state.update { it.copy(photoBusy = false, pendingPhoto = null, photoSaved = true) }
+                old?.wipe()
             } catch (e: VaultFailure) {
-                state.update { it.copy(photoBusy = false, error = e.kind) }
+                state.update { it.copy(photoBusy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -211,7 +329,8 @@ sealed interface ChangeNameMessage {
     /** The vault (or VettID) did not accept the names. */
     data object Invalid : ChangeNameMessage
 
-    data class Failed(val kind: FailureKind) : ChangeNameMessage
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names, or null. */
+    data class Failed(val kind: FailureKind, val shownCode: String? = null) : ChangeNameMessage
 }
 
 /** Immutable UI state of the change-name flow. */
@@ -230,8 +349,13 @@ data class ChangeNameUiState(
     /** `too_soon` from the vault: when the next change may be applied (null: not said). */
     val tooSoon: Boolean = false,
     val allowedAfter: Instant? = null,
-    /** The request sent from this screen, updated from the account (`name_request`). */
+    /**
+     * The request sent from this screen, updated from the account (`name_request`); null whenever the vault is not
+     * open (its names are not kept, ANDROID-PLAN 0.1.63), and back from `account.get` after the unlock.
+     */
     val request: NameRequestView? = null,
+    /** The `seq` of the request sent from this screen (no names): finds it again in `account.get` after the unlock. */
+    val sentSeq: Long? = null,
 ) {
     val firstCheck: AccountNames.Check get() = AccountNames.check(first)
     val lastCheck: AccountNames.Check get() = AccountNames.check(last)
@@ -249,7 +373,8 @@ data class ChangeNameUiState(
     val submitAllowed: Boolean
         get() = step == ChangeNameStep.CONFIRM && !busy && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
 
-    override fun toString(): String = "ChangeNameUiState(step=$step, busy=$busy, message=$message, wait=$waitSeconds, request=$request)"
+    override fun toString(): String =
+        "ChangeNameUiState(step=$step, busy=$busy, message=$message, wait=$waitSeconds, request=${request?.state})"
 
     companion object {
         const val MIN_PIN = 6
@@ -264,6 +389,16 @@ data class ChangeNameUiState(
  * request as the account reports it: pending, applied or refused. `too_soon` (from the snapshot, the vault or the
  * member API) says when the next change may be made.
  */
+/**
+ * (ANDROID-PLAN 0.1.62, owner decision of 2026-10-21) The names typed, the PIN and the password are dropped whenever the
+ * vault is not open (the account no longer from the open vault: a lock, the hold or the due state); the member types
+ * them again after the unlock.
+ *
+ * (ANDROID-PLAN 0.1.63, owner decision of 2026-10-21) The names of a request already sent are dropped too: while the
+ * vault is not open nothing about the request is shown. Only its `seq` stays, and after the unlock the request (its
+ * names and state) comes back from `account.get`'s `name_request`. An `account.name.set` answered after a drop is not
+ * kept.
+ */
 @HiltViewModel
 class ChangeNameViewModel @Inject constructor(
     private val profiles: ProfileRepository,
@@ -273,13 +408,17 @@ class ChangeNameViewModel @Inject constructor(
     val uiState: StateFlow<ChangeNameUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
+    /** Counts the drops: an answer to a request sent before the latest drop is not kept. */
+    private var drops = 0
+
     init {
         viewModelScope.launch {
             accounts.account.collect { a ->
+                if (a.shownInShell() == null) dropDrafts()
+                val open = a.shownInShell()
                 state.update { s ->
-                    val ours = s.request
-                    val latest = a?.nameRequest?.takeIf { ours != null && it.seq == ours.seq }
-                    s.copy(account = a, request = latest ?: ours)
+                    val latest = open?.nameRequest?.takeIf { s.sentSeq != null && it.seq == s.sentSeq }
+                    s.copy(account = a, request = if (open == null) null else latest ?: s.request)
                 }
             }
         }
@@ -287,6 +426,29 @@ class ChangeNameViewModel @Inject constructor(
     }
 
     private fun initial(a: AccountInfo?) = ChangeNameUiState(account = a, first = a?.firstName ?: "", last = a?.lastName ?: "")
+
+    /**
+     * The vault is not open: nothing typed is kept (the names, the PIN, the password), nor the names of a request
+     * already sent; an answer still on its way is not kept either.
+     */
+    private fun dropDrafts() {
+        drops++
+        ticker?.cancel()
+        state.update {
+            it.copy(
+                step = if (it.step == ChangeNameStep.SENT) ChangeNameStep.SENT else ChangeNameStep.NAMES,
+                first = "",
+                last = "",
+                checked = false,
+                pin = "",
+                password = "",
+                busy = false,
+                message = null,
+                waitSeconds = 0,
+                request = null,
+            )
+        }
+    }
 
     /** Whether the snapshot says a change now would be refused (`name_change.allowed_after` ahead). */
     fun tooSoonBySnapshot(now: Instant = Instant.now()): Boolean = state.value.account?.nameChangeTooSoon(now) == true
@@ -325,12 +487,16 @@ class ChangeNameViewModel @Inject constructor(
         val s = state.value
         if (!s.submitAllowed) return
         state.update { it.copy(busy = true, message = null) }
+        val sentAt = drops
         viewModelScope.launch {
             val r = try {
                 profiles.changeName(s.pin, s.password, s.first, s.last)
             } catch (e: VaultFailure) {
-                NameChangeOutcome.Failed(e.kind, e.code)
+                NameChangeOutcome.Failed(e.kind, e.code, e.shownCode)
             }
+            // A lock, the hold or the due state came while the request was on its way: the answer (and the names it
+            // carries) is not kept; after the unlock the request comes back from `account.get` (ANDROID-PLAN 0.1.63).
+            if (sentAt != drops || state.value.account.shownInShell() == null) return@launch
             // Neither secret is kept beyond the answer (as for the owner check, §3.6.5).
             state.update { it.copy(busy = false, pin = "", password = "") }
             apply(r)
@@ -339,7 +505,8 @@ class ChangeNameViewModel @Inject constructor(
 
     private fun apply(r: NameChangeOutcome) {
         when (r) {
-            is NameChangeOutcome.Requested -> state.update { it.copy(step = ChangeNameStep.SENT, request = r.request) }
+            is NameChangeOutcome.Requested ->
+                state.update { it.copy(step = ChangeNameStep.SENT, request = r.request, sentSeq = r.request.seq) }
             is NameChangeOutcome.TooSoon ->
                 state.update { it.copy(step = ChangeNameStep.NAMES, tooSoon = true, allowedAfter = r.allowedAfter) }
             NameChangeOutcome.Invalid -> state.update { it.copy(step = ChangeNameStep.NAMES, message = ChangeNameMessage.Invalid) }
@@ -349,7 +516,7 @@ class ChangeNameViewModel @Inject constructor(
                 state.update { it.copy(message = ChangeNameMessage.Backoff) }
                 startBackoff(r.retryAfterSeconds)
             }
-            is NameChangeOutcome.Failed -> state.update { it.copy(message = ChangeNameMessage.Failed(r.kind)) }
+            is NameChangeOutcome.Failed -> state.update { it.copy(message = ChangeNameMessage.Failed(r.kind, r.shownCode)) }
         }
     }
 

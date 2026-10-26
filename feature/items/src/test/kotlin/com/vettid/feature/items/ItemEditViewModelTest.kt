@@ -111,20 +111,28 @@ class ItemEditViewModelTest {
     }
 
     @Test
-    fun aPhoneIsStoredInInternationalFormatAndAnUnknownOneAsTyped() = runTest {
-        // Owner request 2026-10-09: the input holds the dialable characters; saving formats, never blocks.
+    fun aPhoneIsStoredInE164AndAnUnknownOneAsDialableCharacters() = runTest {
+        // Owner request 2026-10-09: the input holds the dialable characters; saving stores E.164 (owner decision 2026-10-22), never blocks.
         val vm = vm(template = "phone_number")
         vm.setFieldText(0, PhoneInput.raw("+44 20 7946 0958"))
         vm.save()
         advanceUntilIdle()
-        assertEquals(FieldValue.Text("+44 20 7946 0958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
+
+        val withExt = vm(template = "phone_number")
+        withExt.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 ext. 123"))
+        // The marker stays in the draft (and so the note shows) until the save drops it.
+        assertEquals("+442079460958ext. 123", withExt.uiState.value.draft.fields.single().text)
+        withExt.save()
+        advanceUntilIdle()
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue(withExt.uiState.value.savedId!!).fields.single().value)
 
         val unknown = vm(template = "phone_number")
         unknown.setFieldText(0, "55512")
         unknown.save()
         advanceUntilIdle()
-        // Kept as the member saw it while typing.
-        assertEquals(FieldValue.Text("555-12"), items.stored.getValue(unknown.uiState.value.savedId!!).fields.single().value)
+        // Kept as its dialable characters only.
+        assertEquals(FieldValue.Text("55512"), items.stored.getValue(unknown.uiState.value.savedId!!).fields.single().value)
     }
 
     @Test
@@ -148,6 +156,175 @@ class ItemEditViewModelTest {
             assertEquals(emptyList<String>(), d.tags)
             assertEquals(listOf(kind), d.fields.map { it.kind })
         }
+    }
+
+    @Test
+    fun anUntouchedPhoneIsSentAsStoredAndAnEditedOneCanonically() = runTest {
+        val old = FakeItems.item("01P", "Mum").copy(
+            fields = listOf(com.vettid.core.data.items.ItemFieldView("f1", "Phone", "phone", FieldValue.Text("+44 20 7946 0958"))),
+        )
+        items.add(old)
+        val vm = vm(itemId = "01P")
+        advanceUntilIdle()
+        vm.setName("Mother")
+        vm.save()
+        advanceUntilIdle()
+        // Owner decision 2026-10-22: the older spaced value is not re-stored unless the member edits that field.
+        assertEquals(FieldValue.Text("+44 20 7946 0958"), items.stored.getValue("01P").fields.single().value)
+        vm.setFieldText(0, PhoneInput.raw("+44 20 7946 0958 "))
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(FieldValue.Text("+442079460958"), items.stored.getValue("01P").fields.single().value)
+    }
+
+    private fun view(id: String, label: String, kind: String, v: String) =
+        com.vettid.core.data.items.ItemFieldView(id, label, kind, FieldValue.Text(v))
+
+    /** An older item whose values are not in canonical form (written by an earlier build or another app). */
+    private fun oldItem() = FakeItems.item("01C", " Old  item ").copy(
+        fields = listOf(
+            view("f1", " Count ", "number", "007"),
+            view("f2", "Mail", "email", " Sam@Example.COM "),
+            view("f3", "Site", "url", "Example.com/A"),
+            view("f4", "Note", "text", "  padded  "),
+            view("f5", "Key", "otp", "jbsw y3dp ehpk 3pxp"),
+            com.vettid.core.data.items.ItemFieldView("f6", "Home", "address", FieldValue.Address(AddressValue(street = " 1  High St ", postalCode = "al1 1aa", country = "GB"))),
+            view("f7", "Pin", "password", "  keep  me  "),
+        ),
+        notes = "  notes as typed ",
+    )
+
+    @Test
+    fun olderValuesAreShownUnchangedAndSentAsStoredUntilTheirFieldIsEdited() = runTest {
+        items.add(oldItem())
+        val vm = vm(itemId = "01C")
+        advanceUntilIdle()
+        // Shown as stored: nothing is rewritten on loading.
+        assertEquals(listOf("007", " Sam@Example.COM ", "Example.com/A", "  padded  ", "jbsw y3dp ehpk 3pxp"), vm.uiState.value.draft.fields.take(5).map { it.text })
+        assertEquals(" Old  item ", vm.uiState.value.draft.name)
+        // A change elsewhere (the tags) saves every field byte for byte as stored, name and labels included.
+        vm.setTagInput("x")
+        vm.addTag()
+        vm.save()
+        advanceUntilIdle()
+        val stored = items.stored.getValue("01C")
+        assertEquals(oldItem().fields.map { it.label to it.value }, stored.fields.map { it.label to it.value })
+        assertEquals(" Old  item ", stored.name)
+        assertEquals("  notes as typed ", stored.notes)
+    }
+
+    @Test
+    fun aFieldTheMemberEditedIsStoredCanonicallyAndTheOthersAreNot() = runTest {
+        items.add(oldItem())
+        val vm = vm(itemId = "01C")
+        advanceUntilIdle()
+        vm.setFieldText(0, " +-0.50 ")
+        vm.setFieldText(1, " Sam@Example.COM")
+        vm.setFieldText(2, "HTTP://Example.COM/A")
+        vm.setFieldText(3, " x ")
+        vm.setFieldText(4, "jbsw y3dp ehpk 3pxq")
+        vm.setFieldAddress(5, AddressValue(street = " 2  High   St ", postalCode = "al1  1ab", country = "gb"))
+        vm.setFieldLabel(0, "  Count  ")
+        vm.setName("  Renamed  ")
+        vm.save()
+        advanceUntilIdle()
+        val stored = items.stored.getValue("01C")
+        assertEquals("Renamed", stored.name)
+        assertEquals("Count", stored.fields[0].label)
+        assertEquals(
+            listOf(
+                FieldValue.Text("-0.50"),
+                FieldValue.Text("Sam@example.com"),
+                FieldValue.Text("http://example.com/A"),
+                FieldValue.Text("x"),
+                FieldValue.Text("otpauth://totp/Key?secret=JBSWY3DPEHPK3PXQ&algorithm=SHA1&digits=6&period=30"),
+                FieldValue.Address(AddressValue(street = "2 High St", postalCode = "AL1 1AB", country = "GB")),
+                // The password was not touched: as stored, spaces and all.
+                FieldValue.Text("  keep  me  "),
+            ),
+            stored.fields.map { it.value },
+        )
+    }
+
+    @Test
+    fun aNewFieldIsStoredCanonicallyAndAFailingResultRefusesTheSave() = runTest {
+        val vm = vm()
+        vm.setName("  New  ")
+        vm.addField("Key & co", FieldKinds.OTP)
+        vm.addField("Site", FieldKinds.URL)
+        vm.addField("Count", FieldKinds.NUMBER)
+        vm.setFieldText(0, "JBSWY3DPEHPK3PXP")
+        vm.setFieldText(1, "Example.com/A")
+        vm.setFieldText(2, "SHORT")
+        vm.save()
+        advanceUntilIdle()
+        // A number that is not a number still shows the existing message, nothing is sent.
+        assertTrue(vm.uiState.value.showErrors)
+        assertNull(vm.uiState.value.savedId)
+        assertEquals(setOf(2), vm.uiState.value.check.fieldProblems.keys)
+        vm.setFieldText(2, " +007 ")
+        vm.save()
+        advanceUntilIdle()
+        val stored = items.stored.getValue(vm.uiState.value.savedId!!)
+        assertEquals("New", stored.name)
+        assertEquals(
+            listOf(
+                FieldValue.Text("otpauth://totp/Key%20%26%20co?secret=JBSWY3DPEHPK3PXP&algorithm=SHA1&digits=6&period=30"),
+                FieldValue.Text("https://example.com/A"),
+                FieldValue.Text("007"),
+            ),
+            stored.fields.map { it.value },
+        )
+    }
+
+    private fun dateOf(id: String) = (items.stored.getValue(id).fields.first { it.kind == "date" }.value as FieldValue.Text).text
+
+    @Test
+    fun aDateIsAMonthWhereTheHintOrTheStoredFormSaysSoAndKeepsItsStoredForm() = runTest {
+        // A new payment card: the template's hint makes "Expires" a month; a full date there is refused, never cut.
+        val card = vm(template = "payment_card")
+        card.setName("Card")
+        card.setFieldText(2, "2031-04-30")
+        card.save()
+        advanceUntilIdle()
+        assertNull(card.uiState.value.savedId)
+        assertTrue(DraftProblem.VALUE_INVALID in card.uiState.value.check.fieldProblems[2].orEmpty())
+        card.setFieldText(2, "2031-04")
+        card.save()
+        advanceUntilIdle()
+        assertEquals("2031-04", dateOf(card.uiState.value.savedId!!))
+
+        // Stored YYYY-MM-DD in a month-hint template stays a day value when edited.
+        items.add(FakeItems.item("01D", "Card").copy(template = "payment_card", fields = listOf(view("f1", "Expires", "date", "2031-04-30"))))
+        val day = vm(itemId = "01D")
+        advanceUntilIdle()
+        day.setFieldText(0, "2031-05-31")
+        day.save()
+        advanceUntilIdle()
+        assertEquals("2031-05-31", dateOf("01D"))
+
+        // A stored month in a template without the hint stays a month.
+        items.add(FakeItems.item("01M", "Plain").copy(fields = listOf(view("f1", "Until", "date", "2031-04"))))
+        val month = vm(itemId = "01M")
+        advanceUntilIdle()
+        month.setFieldText(0, "2032-01")
+        month.save()
+        advanceUntilIdle()
+        assertEquals("2032-01", dateOf("01M"))
+
+        // A new date field without the hint is a day; a month typed into it is stored as YYYY-MM.
+        val blank = vm()
+        blank.setName("Dates")
+        blank.addField("Day", FieldKinds.DATE)
+        blank.addField("Month", FieldKinds.DATE)
+        blank.setFieldText(0, "2031-04-30")
+        blank.setFieldText(1, "2031-04")
+        blank.save()
+        advanceUntilIdle()
+        assertEquals(
+            listOf(FieldValue.Text("2031-04-30"), FieldValue.Text("2031-04")),
+            items.stored.getValue(blank.uiState.value.savedId!!).fields.map { it.value },
+        )
     }
 
     @Test

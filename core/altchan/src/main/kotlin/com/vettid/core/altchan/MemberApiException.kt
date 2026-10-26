@@ -16,7 +16,13 @@ class MemberApiException(
     val retryAfterSeconds: Int = 0,
     /** `vault_unavailable`: the body's `service` (1.2.0: `"paused"` while the operator paused the vault service). */
     val service: String? = null,
-) : IOException("member API $status $code${if (message.isEmpty()) "" else ": $message"}") {
+) : IOException("member API $status $code") {
+    /**
+     * The API's text ("" without one). Never in the exception's message, which logs and crash reports may carry: an
+     * answer's text may carry account data (the owner's rule, 2026-10-23).
+     */
+    val detail: String = message
+
     /**
      * MEMBER-API 1.2.0 "Vault service pause": the operator paused the vault service. Temporary: try again
      * after [retryAfterSeconds]. The operator's reason is never sent to members (and never read here).
@@ -45,6 +51,12 @@ class MemberApiException(
         const val RELEASE_STARTING = "release_starting"
         const val VAULT_UNAVAILABLE = "vault_unavailable"
         const val RECOVERY_ACTIVE = "recovery_active"
+
+        /** 2.12.0: a recovery claim with a key in use (the vault's `app_key`, or a live `app_key_pending`); `409`. */
+        const val KEY_IN_USE = "key_in_use"
+
+        /** Proposed with "A recovery that ended without the phone" (vettid.org #415): `410`, a recovering key whose recovery ended. */
+        const val RECOVERY_ENDED = "recovery_ended"
         const val RECOVERY_NOT_AVAILABLE = "recovery_not_available"
 
         /** 2.1.0: the vault keeps no backup copy of its credential and cannot be recovered (`reason: "no_backup"`). */

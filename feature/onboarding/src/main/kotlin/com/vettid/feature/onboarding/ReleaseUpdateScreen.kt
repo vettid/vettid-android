@@ -41,6 +41,7 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.StepList
 import com.vettid.core.ui.components.StepState
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
 import java.time.Instant
@@ -91,12 +92,21 @@ fun ReleaseUpdateContent(state: ReleaseUpdateUiState, actions: ReleaseUpdateActi
                             modifier = Modifier.testTag("release_update_check_first"),
                         )
                     }
+                    // VAULT-MESSAGING 0.44.0 §11.14.9: no update while a PIN or password change is being decided.
+                    state.changeHold?.let { why ->
+                        NoticeCard(
+                            NoticeKind.WARNING,
+                            stringResource(R.string.release_update_title),
+                            failureText(why.messageRes()),
+                            modifier = Modifier.testTag("release_update_change_unresolved"),
+                        )
+                    }
                     SecretField(
                         value = state.pin,
                         onValueChange = actions::setPin,
                         label = stringResource(R.string.unlock_pin_label),
                         isPin = true,
-                        enabled = !state.checkDue,
+                        enabled = state.pinAllowed,
                         onImeAction = actions::approve,
                         modifier = Modifier.testTag("release_update_pin"),
                     )
@@ -260,7 +270,8 @@ fun ReleaseUpdateFlowContent(state: ReleaseUpdateFlowUiState, actions: ReleaseUp
             header = { UpdateIcon() },
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
-                if (p.step == UpdateStep.FAILED) {
+                // (§11.14.9) Also on the PIN step: a change being decided holds the update ("still checking").
+                if (p.step == UpdateStep.FAILED || p.failureCode == ReleaseUpdateManager.CODE_CHANGE_HELD) {
                     NoticeCard(NoticeKind.WARNING, stringResource(R.string.release_update_failed_title), failureText(p))
                 }
                 UpdatePin(state, actions, p)
@@ -332,7 +343,13 @@ private fun failureText(p: UpdateProgress): String = when {
     p.failure == FailureKind.BAD_PIN -> stringResource(R.string.unlock_bad_pin)
     p.failure == FailureKind.BACKOFF -> stringResource(R.string.release_update_backoff)
     p.failureCode == ReleaseUpdateManager.CODE_RELEASE_STARTING -> stringResource(R.string.release_update_start_failed)
-    else -> stringResource((p.failure ?: FailureKind.OTHER).messageRes())
+    // ANDROID-PLAN 0.1.54: still routed to release N after the retries; the way back answered `wrong_release` or `410`.
+    p.failure == FailureKind.ROUTE_PENDING -> stringResource(R.string.release_update_route_pending, p.to.number.toInt())
+    p.failureCode == ReleaseUpdateManager.CODE_RETURN_CONFIRMED ->
+        stringResource(R.string.release_update_return_confirmed, p.to.number.toInt(), p.from.number.toInt())
+    p.failureCode == ReleaseUpdateManager.CODE_RETURN_UNAVAILABLE ->
+        stringResource(R.string.release_update_return_unavailable, p.from.number.toInt())
+    else -> failureText((p.failure ?: FailureKind.OTHER).messageRes())
 }
 
 /** The refusal codes of §11.10.4 step 4, and a step 6 write failure, in the member's words. */

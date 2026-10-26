@@ -55,6 +55,8 @@ data class ConnectionSharingUiState(
     val loading: Boolean = true,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
     val confirmRevoke: GrantView? = null,
@@ -106,7 +108,7 @@ class ConnectionSharingViewModel @Inject constructor(
                     it.copy(rules = rules, given = given, loading = false, connectionName = connections.nameOf(id) ?: it.connectionName)
                 }
             } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -122,7 +124,7 @@ class ConnectionSharingViewModel @Inject constructor(
                 state.update { it.copy(busy = false) }
                 load()
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -217,6 +219,8 @@ data class RuleEditUiState(
     val loading: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
     val confirmDelete: Boolean = false,
@@ -320,7 +324,7 @@ class RuleEditViewModel @Inject constructor(
                     state.update { it.copy(loading = false) }
                 }
             } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -407,7 +411,7 @@ class RuleEditViewModel @Inject constructor(
                 val p = sharing.preview(state.value.draft)
                 state.update { it.copy(preview = p, previewing = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(previewing = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(previewing = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -421,7 +425,7 @@ class RuleEditViewModel @Inject constructor(
                 sharing.saveRule(s.draft)
                 state.update { it.copy(busy = false, done = true, dirty = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -439,7 +443,7 @@ class RuleEditViewModel @Inject constructor(
                 sharing.deleteRule(id)
                 state.update { it.copy(busy = false, done = true, dirty = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -470,6 +474,8 @@ data class SharedWithYouUiState(
     val fetching: String? = null,
     val loading: Boolean = true,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
     val confirmGiveUp: GrantView? = null,
@@ -514,7 +520,7 @@ class SharedWithYouViewModel @Inject constructor(
                 val r = g.received.filter { it.connectionId == id }.sortedWith(GRANT_ORDER)
                 state.update { it.copy(received = r, requested = g.requested.filter { a -> a.connectionId == id }, loading = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, error = e.kind, limit = e.limit) }
+                state.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -538,7 +544,7 @@ class SharedWithYouViewModel @Inject constructor(
                 }
                 state.update { it.copy(fetching = null) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(fetching = null, error = e.kind, limit = e.limit) }
+                state.update { it.copy(fetching = null, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -556,7 +562,7 @@ class SharedWithYouViewModel @Inject constructor(
                 state.update { it.copy(ask = null, asked = true) }
                 load()
             } catch (e: VaultFailure) {
-                state.update { it.copy(ask = f.copy(busy = false), error = e.kind, limit = e.limit) }
+                state.update { it.copy(ask = f.copy(busy = false), error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }
@@ -575,7 +581,7 @@ class SharedWithYouViewModel @Inject constructor(
                 state.update { it.copy(opened = it.opened - g.grantId) }
                 load()
             } catch (e: VaultFailure) {
-                state.update { it.copy(error = e.kind, limit = e.limit) }
+                state.update { it.copy(error = e.kind, errorCode = e.shownCode, limit = e.limit) }
             }
         }
     }

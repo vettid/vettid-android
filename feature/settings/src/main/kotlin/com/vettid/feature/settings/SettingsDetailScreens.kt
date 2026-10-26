@@ -27,6 +27,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.collapse
 import androidx.compose.ui.semantics.expand
@@ -47,11 +49,14 @@ import com.vettid.core.data.policy.messageArg
 import com.vettid.core.data.policy.messageRes
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CanaryManifestView
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseInfoView
 import com.vettid.core.data.vault.SignerView
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.components.DetailScaffold
@@ -67,6 +72,14 @@ import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsSectionHeader
 import com.vettid.core.ui.components.excludeFromAutofill
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.LocalTimeScale
+import com.vettid.core.ui.format.RECOVERY_QUIET_S
+import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdTheme
 import java.time.Instant
@@ -80,9 +93,9 @@ private fun formatDate(s: String?): String? = s?.let {
 }
 
 @Composable
-private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?) {
+private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?, shownCode: String? = null) {
     Column(Modifier.padding(Spacing.gutter)) {
-        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), stringResource(error.messageRes()))
+        NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), failureText(error.messageRes(), error.vaultCode(shownCode)))
         if (retry != null) {
             Spacer(Modifier.height(Spacing.l))
             SecondaryButton(stringResource(R.string.settings_retry), retry)
@@ -116,7 +129,7 @@ private fun SignerDetails(signer: SignerView) {
     NoticeCard(
         NoticeKind.INFO,
         stringResource(signer.signerClass.installedFromRes()),
-        stringResource(R.string.settings_signer_explanation) + "\n\n" +
+        stringResource(R.string.settings_signer_explanation, scaledDurationText(Durations.DAY)) + "\n\n" +
             stringResource(R.string.settings_signer_digest, signer.digest.chunked(DIGEST_GROUP).joinToString(" ")),
         modifier = Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s).testTag("signer_details"),
     )
@@ -127,7 +140,14 @@ private const val DIGEST_GROUP = 8
 /** Vault status (stateless). */
 @Suppress("CyclomaticComplexMethod")
 @Composable
-fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBack: () -> Unit, signerDetails: Boolean = false) {
+fun VaultStatusContent(
+    state: LoadState<VaultOverview>,
+    retry: () -> Unit,
+    onBack: () -> Unit,
+    signerDetails: Boolean = false,
+    onChangePin: () -> Unit = {},
+    onChangePassword: () -> Unit = {},
+) {
     DetailScaffold(onBackClick = onBack, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_status_title))
@@ -135,7 +155,7 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
             var signerOpen by rememberSaveable { mutableStateOf(signerDetails) }
             when {
                 state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
-                v == null -> LoadFailure(state.error ?: FailureKind.OTHER, retry)
+                v == null -> LoadFailure(state.error ?: FailureKind.OTHER, retry, state.errorCode)
                 else -> {
                     v.release?.let { r ->
                         releaseNotice(r)?.let {
@@ -146,6 +166,7 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                             )
                         }
                     }
+                    if (v.recoveryOffered) v.recovery?.let { RecoveryNotices(it, onChangePin, onChangePassword) }
                     SettingsGroup {
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_state),
@@ -213,7 +234,12 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
                         SettingsDivider()
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_recovery),
-                            v.recoveryState ?: stringResource(R.string.settings_status_recovery_none),
+                            if (!v.recoveryOffered) {
+                                stringResource(R.string.settings_recovery_not_offered)
+                            } else {
+                                v.recovery?.let { r -> statusLine(recoveryStatusText(r)) }
+                                    ?: v.recoveryState ?: stringResource(R.string.settings_status_recovery_none)
+                            },
                             icon = Icons.Outlined.Restore,
                         )
                         SettingsDivider()
@@ -247,6 +273,55 @@ fun VaultStatusContent(state: LoadState<VaultOverview>, retry: () -> Unit, onBac
     }
 }
 
+/**
+ * Release R (ANDROID-PLAN "Owner check and status"): the recovery counter unavailable at every read for a day, with the
+ * urgency of a used attempt; and used attempts ("if that was not you"), with the password and PIN changes. The PIN change
+ * opened from here warns first that the PIN alone gives whoever is guessing ten new tries at the same password.
+ */
+@Composable
+private fun RecoveryNotices(r: com.vettid.core.data.vault.RecoveryStatusView, onChangePin: () -> Unit, onChangePassword: () -> Unit) {
+    val title = stringResource(R.string.settings_status_recovery)
+    val pad = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
+    if (r.unknownForADay) {
+        // Real time (production, and every vault at scale 1): the approved words. STAGING-TIME-SCALE S8, S7 otherwise:
+        // the clock's period as it started, and the quiet period as the vault runs it, with the staging note.
+        val realTime = LocalTimeScale.current.scale <= 1 && r.unknownForSeconds == Durations.DAY
+        val text = if (realTime) {
+            stringResource(R.string.settings_recovery_unknown_day)
+        } else {
+            stringResource(
+                R.string.settings_recovery_unknown_day_scaled,
+                durationText(r.unknownForSeconds),
+                scaledDurationText(RECOVERY_QUIET_S),
+            ) + stagingNoteSuffix()
+        }
+        NoticeCard(NoticeKind.URGENT, title, text, pad.testTag("recovery_unknown_day"))
+    }
+    val used = r.used
+    if (r.state == "armed" && used != null && used in 1 until RECOVERY_ATTEMPTS) {
+        NoticeCard(
+            NoticeKind.URGENT,
+            title,
+            stringResource(R.string.settings_recovery_status_used, used),
+            pad.testTag("recovery_attempts_used"),
+            actions = {
+                androidx.compose.material3.TextButton(onClick = onChangePassword, modifier = Modifier.testTag("attempts_change_password")) {
+                    Text(stringResource(R.string.settings_recovery_change_password))
+                }
+                androidx.compose.material3.TextButton(onClick = onChangePin, modifier = Modifier.testTag("attempts_change_pin")) {
+                    Text(stringResource(R.string.settings_pin_submit))
+                }
+            },
+        )
+    }
+}
+
+private const val RECOVERY_ATTEMPTS = 10
+
+/** A [StatusText] in words. */
+@Composable
+private fun statusLine(t: StatusText): String = t.arg?.let { stringResource(t.res, it) } ?: stringResource(t.res)
+
 /** The vault PIN change (stateless). */
 @Suppress("CyclomaticComplexMethod")
 @Composable
@@ -257,17 +332,65 @@ fun ChangePinContent(
     onConfirm: (String) -> Unit,
     onSubmit: () -> Unit,
     onBack: () -> Unit,
+    onPassword: (String) -> Unit = {},
+    onLockAndUnlock: () -> Unit = {},
 ) {
     FormScaffold(
         title = stringResource(if (state.done) R.string.settings_pin_done else R.string.settings_pin_title),
-        body = if (state.done) null else stringResource(R.string.settings_pin_body),
+        body = when {
+            state.done && state.withPassword -> stringResource(R.string.settings_pin_done_recovery)
+            state.done -> null
+            else -> stringResource(R.string.settings_pin_body)
+        },
         primaryLabel = stringResource(if (state.done) R.string.settings_done else R.string.settings_pin_submit),
         onPrimary = if (state.done) onBack else onSubmit,
-        primaryEnabled = state.done || (state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
+        primaryEnabled = state.done ||
+            (!state.checking && state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
         busy = state.busy,
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        // VAULT-MESSAGING 0.44.0 §11.14.9: a change whose answer was lost is decided, not repeated.
+        state.check?.let { c ->
+            val text = when (c) {
+                is ChangeCheck.Checking -> R.string.settings_pin_checking
+                is ChangeCheck.Unreachable -> R.string.settings_pin_unreachable
+                is ChangeCheck.NotApplied -> R.string.settings_pin_not_changed
+                is ChangeCheck.Ended -> R.string.settings_pin_ended
+                // (ANDROID-PLAN 0.1.55) "Your vault moved to a new phone", no "Try again".
+                is ChangeCheck.Moved -> com.vettid.core.data.R.string.data_feed_device_replaced
+                else -> null
+            }
+            if (text != null) {
+                NoticeCard(
+                    if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended || c is ChangeCheck.Moved) {
+                        NoticeKind.WARNING
+                    } else {
+                        NoticeKind.INFO
+                    },
+                    stringResource(R.string.settings_pin_title),
+                    stringResource(text),
+                    Modifier.testTag("pin_change_check"),
+                    announce = LiveRegionMode.Polite,
+                    // (0.45.0 step 3) No "Try again": the lock and two-step unlock settles the PIN without an attempt.
+                    actions = if (c is ChangeCheck.Ended) {
+                        { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
+                    } else {
+                        null
+                    },
+                )
+                Spacer(Modifier.height(Spacing.l))
+            }
+        }
+        if (state.fromAttempts && state.withPassword) {
+            NoticeCard(
+                NoticeKind.WARNING,
+                stringResource(R.string.settings_pin_title),
+                stringResource(R.string.settings_pin_password_too),
+                Modifier.testTag("pin_password_too"),
+            )
+            Spacer(Modifier.height(Spacing.l))
+        }
         SecretField(state.current, onCurrent, stringResource(R.string.settings_pin_current), isPin = true, imeAction = ImeAction.Next)
         Spacer(Modifier.height(Spacing.l))
         val problem = state.problem
@@ -282,16 +405,29 @@ fun ChangePinContent(
         )
         Spacer(Modifier.height(Spacing.l))
         SecretField(
-            state.confirm, onConfirm, stringResource(R.string.settings_pin_confirm), isPin = true, onImeAction = onSubmit,
+            state.confirm, onConfirm, stringResource(R.string.settings_pin_confirm), isPin = true,
+            imeAction = if (state.withPassword) ImeAction.Next else ImeAction.Done,
+            onImeAction = if (state.withPassword) ({}) else onSubmit,
             error = if (state.mismatch) stringResource(R.string.settings_pin_mismatch) else null,
         )
+        if (state.withPassword) {
+            // Release R (§11.14.9): the credential password goes with the change.
+            Spacer(Modifier.height(Spacing.l))
+            SecretField(state.password, onPassword, stringResource(R.string.settings_pin_password), onImeAction = onSubmit)
+        }
         state.error?.let {
             Spacer(Modifier.height(Spacing.l))
             NoticeCard(
                 NoticeKind.URGENT,
-                stringResource(R.string.settings_pin_title),
-                stringResource(it.messageRes()),
+                stringResource(it.titleRes(R.string.settings_pin_title)),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
+                // (0.45.0 §11.14.9) An uncertain PIN or an unconfirmed new phone secret: settled by a lock and unlock.
+                actions = if (it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) {
+                    { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
+                } else {
+                    null
+                },
             )
         }
     }
@@ -308,9 +444,21 @@ fun RecoveryContent(
 ) {
     val r = state.recovery
     val active = r != null && r.state in setOf("pending", "available", "registered")
+    if (!state.offered) {
+        // (0.34.0, §11.10.9) A release with recovery_r and without recovery_offered: no recovery to start.
+        FormScaffold(
+            title = stringResource(R.string.settings_recovery_title),
+            body = stringResource(R.string.settings_recovery_not_offered),
+            primaryLabel = stringResource(R.string.settings_recovery_transfer),
+            onPrimary = onTransfer,
+            onBack = onBack,
+            modifier = Modifier.testTag("recovery_not_offered"),
+        ) {}
+        return
+    }
     FormScaffold(
         title = stringResource(R.string.settings_recovery_title),
-        body = stringResource(R.string.settings_recovery_body),
+        body = stringResource(R.string.settings_recovery_body, scaledDurationText(Durations.DAY)),
         primaryLabel = stringResource(R.string.settings_recovery_open),
         onPrimary = onOpenAccountSite,
         busy = state.busy || state.loading,
@@ -318,6 +466,7 @@ fun RecoveryContent(
         secondaryLabel = if (active) null else stringResource(R.string.settings_recovery_transfer),
         onSecondary = onTransfer,
     ) {
+        StagingTimeNoteIfShown()
         if (state.backupOff) {
             NoticeCard(
                 NoticeKind.WARNING,
@@ -341,7 +490,11 @@ fun RecoveryContent(
         }
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
-            NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_recovery_title), stringResource(it.messageRes()))
+            NoticeCard(
+                NoticeKind.WARNING,
+                stringResource(R.string.settings_recovery_title),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
+            )
         }
     }
 }
@@ -366,7 +519,7 @@ fun AttestationContent(
             val a = state.value
             when {
                 state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
-                a == null -> LoadFailure(state.error ?: FailureKind.OTHER, null)
+                a == null -> LoadFailure(state.error ?: FailureKind.OTHER, null, state.errorCode)
                 else -> {
                     SettingsSectionHeader(stringResource(R.string.settings_attestation_device))
                     SettingsGroup {
@@ -531,8 +684,8 @@ fun DeleteVaultContent(state: DeleteVaultUiState, actions: DeleteVaultActions) {
             Spacer(Modifier.height(Spacing.l))
             NoticeCard(
                 NoticeKind.URGENT,
-                stringResource(R.string.settings_delete_title),
-                stringResource(it.messageRes()),
+                stringResource(it.titleRes(R.string.settings_delete_title)),
+                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
             )
         }

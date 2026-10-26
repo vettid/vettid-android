@@ -28,6 +28,12 @@ internal data class DeviceState(
     var credential: CredentialCopy? = null,
     val utks: MutableList<UtkRecord> = mutableListOf(),
     var recovery: RecoveryRecord? = null,
+    /**
+     * (ANDROID-PLAN 0.1.80) The registration this identity last had accepted, kept while a re-register for a later recovery is
+     * undecided: a re-register that fails before the vault restores it, so the handshake's `ctx` stays the `recovery_id` this
+     * identity LAST registered for.
+     */
+    var priorRecovery: RecoveryRecord? = null,
     val outbox: MutableList<OutboxEntry> = mutableListOf(),
     /**
      * The vault has shown this app a signer on its own `device.list` entry (VAULT-MESSAGING 0.27.0 §11.7.1): the
@@ -35,6 +41,44 @@ internal data class DeviceState(
      * key, whose signer the vault has not shown yet) and after an unlock answered `signer_refused`.
      */
     var signerSeen: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) Credential operations sent and not answered yet: inner id to the request's
+     * `exp` (epoch ms, the vault's clock). Kept across restarts (the outbox may still deliver one): until each is
+     * answered, or the vault's clock is past its `exp` plus a minute, no PIN or password change is sent, so that a
+     * version one above the change's can only come from the change.
+     */
+    val unsettled: MutableMap<String, Long> = mutableMapOf(),
+    /**
+     * The outbox's entries are tracked in [unsettled]. False only in a state written by an app version before 0.45.0:
+     * its outbox entries carry no `exp` and are tracked at the first load ([VaultDevice.LEGACY_UNSENT]).
+     */
+    var outboxTracked: Boolean = false,
+    /**
+     * (A6 audit N2) The outbox holds only fire-and-forget messages ([VaultDevice.OUTBOX_TYPES]); requests are never
+     * written to it. False only in a state written by an app version that queued requests there: they are dropped at
+     * the first load ([VaultDevice.dropLegacyRequests]).
+     */
+    var requestsOutOfOutbox: Boolean = false,
+    /**
+     * (A6 audit N1) A direct transfer to this phone (§6.7.1) that this phone started and has not finished: kept from
+     * its `hs.init` until the app has taken the credential over ([VaultDevice.finishTransferIn]) or drops it (a
+     * rejection, a confirmed cancel, the 11-minute deadline). With the keyring stored after `hs.resp`, a `device.paired`
+     * that arrives after a restart, or after the screen stopped waiting, still completes the transfer.
+     */
+    var transferIn: TransferInRecord? = null,
+)
+
+/**
+ * (A6 audit N1) The transfer to this phone: when its `hs.init` went out (epoch ms), the SAS once `hs.fin` was sent,
+ * and, once `device.paired{transfer: true}` was applied, the member's `user_guid` from it (null from a vault release
+ * before 0.17.0).
+ */
+@Serializable
+internal data class TransferInRecord(
+    val startedMs: Long,
+    val sas: String? = null,
+    val paired: Boolean = false,
+    val userGuid: String? = null,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */
@@ -64,7 +108,15 @@ internal data class AwaitingRekey(val createdMs: Long, val state: String)
 
 /** This app's copy of the Protean Credential (§3.5): the sealed blob, useless without the vault's CEK and the password. */
 @Serializable
-internal data class CredentialCopy(val blob: String, val version: Long)
+internal data class CredentialCopy(
+    val blob: String,
+    val version: Long,
+    /**
+     * The credential key's public key (§10.6 `key`) under which [blob] was issued, when an answer named it (a rotation,
+     * a reset, or `credential.version` right after a fetch); null: not known, and then only the version is compared.
+     */
+    val key: String? = null,
+)
 
 /** An issued one-time transaction key (§3.5.4). */
 @Serializable
@@ -76,6 +128,18 @@ internal data class UtkRecord(val id: String, val ek: String, val expiresAtMs: L
  */
 @Serializable
 internal data class RecoveryRecord(val recoveryId: String, val requestId: String = "", val credentialBackup: Boolean? = null)
+
+/**
+ * (ANDROID-PLAN 0.1.80) What a re-register does to an identity's registration: the one accepted before stays until the new
+ * one is, and a failed attempt restores it, so the handshake's `ctx` is the `recovery_id` the identity LAST registered for.
+ */
+internal data class RegistrationState(val recovery: RecoveryRecord?, val prior: RecoveryRecord?) {
+    fun begin(next: RecoveryRecord) = RegistrationState(next, prior ?: recovery)
+
+    fun drop() = RegistrationState(prior, null)
+
+    fun confirm() = copy(prior = null)
+}
 
 /** A deposit not yet answered 201 by the relay (§8.3: the entry goes once the relay accepted it). */
 @Serializable

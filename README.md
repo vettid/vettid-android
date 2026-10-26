@@ -211,6 +211,14 @@ vault (`push.register`), the vault asks the VettID push gateway for a wake, and
 on a wake the app collects from its relay and decrypts on the phone as the
 on-phone service does. The app never talks to the gateway.
 
+Registration has two steps (PUSH-GATEWAY 0.5.0, VAULT-MESSAGING 0.30.0 §14.1):
+`push.register` may answer `pending`, the gateway then pushes a data message
+`{"c": "<code>"}` to the token, and the app returns the code to its vault with
+`push.confirm` within 10 minutes. That message is not a wake (nothing is
+collected or shown), and the code is never logged or stored on disk. Until the
+registration is confirmed, the on-phone service keeps running. The `foss` build
+receives no push, so it never registers and never sees a challenge.
+
 There is no `google-services.json` and no Google Services Gradle plugin. A build
 gets Google push from four **Gradle properties per build type** (the values of
 the Firebase console's app settings; they identify the app and are not secrets,

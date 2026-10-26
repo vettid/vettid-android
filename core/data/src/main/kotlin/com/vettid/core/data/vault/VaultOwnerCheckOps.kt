@@ -10,6 +10,11 @@ import kotlinx.serialization.json.JsonElement
 internal class VaultOwnerCheckOps(private val api: VaultApi) : OwnerCheckOps {
     override suspend fun status(): OwnerCheckStatus? = api.status().ownerCheck
 
+    override suspend fun statusAndRecovery(): Pair<OwnerCheckStatus?, com.vettid.core.vault.RecoveryStatus?> =
+        api.status().let { it.ownerCheck to it.recovery }
+
+    override suspend fun statusRead(): StatusRead = api.status().let { StatusRead(it.ownerCheck, it.recovery, it.timeScale) }
+
     override suspend fun check(pin: String, password: String, hold: Boolean?, holdOffUntil: String?): OwnerCheckPassed =
         api.ownerCheck(pin, password, hold, holdOffUntil)
 

@@ -30,14 +30,25 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.WaitingCounts
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.format.LocalTimeScale
+import com.vettid.core.ui.format.RECOVERY_QUIET_S
+import com.vettid.core.ui.format.StagingTimeNote
+import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.durationText
+import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.scaledDurationText
+import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
 
@@ -69,26 +80,22 @@ fun OwnerCheckRoute(
     OwnerCheckContent(state.copy(mode = mode), viewModel, onCancel = cancel)
 }
 
-/** Hours of an interval, for the texts. */
-@Composable
-private fun hoursText(seconds: Long): String {
-    val h = (seconds / SECONDS_PER_HOUR).toInt().coerceAtLeast(1)
-    return pluralStringResource(R.plurals.ownercheck_hours, h, h)
-}
-
-private const val SECONDS_PER_HOUR = 3_600L
-
 /** The owner-check screen for [state] (stateless). */
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCancel: () -> Unit) {
     val v = state.view
-    val interval = hoursText(v?.intervalSeconds ?: OwnerCheckView.MAX_INTERVAL_S)
+    // STAGING-TIME-SCALE: the interval as it runs (the setting divided by the vault's time scale), from seconds.
+    val interval = durationText(state.timeScale.scaledSeconds(v?.intervalSeconds ?: OwnerCheckView.MAX_INTERVAL_S))
     val (title, body) = when (state.mode) {
         OwnerCheckMode.GATED -> stringResource(R.string.ownercheck_title_gated) to stringResource(R.string.ownercheck_body_gated, interval)
         OwnerCheckMode.VOLUNTARY -> stringResource(R.string.ownercheck_title_voluntary) to
             stringResource(R.string.ownercheck_body_voluntary, interval)
         OwnerCheckMode.HOLD_OFF -> stringResource(R.string.ownercheck_title_hold_off) to stringResource(R.string.ownercheck_body_hold_off)
+    }
+    if (state.passedUnrecorded) {
+        PresenceAfterCheck(title, actions)
+        return
     }
     FormScaffold(
         title = title,
@@ -113,7 +120,17 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+            if (state.timeScale.stagingNote) StagingTimeNote()
+            if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
+            // (Release L, §3.6.8) The held and daily-check screens say when the vault locks itself.
+            idleLockAtOf(state.mode, v, Instant.now())?.let {
+                Text(
+                    stringResource(R.string.ownercheck_idle_lock_at, Times.full(it)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("owner_check_idle_lock_at"),
+                )
+            }
             if (state.mode == OwnerCheckMode.HOLD_OFF) {
                 NoticeCard(
                     NoticeKind.WARNING,
@@ -164,10 +181,11 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 )
                 m is OwnerCheckMessage.Backoff ->
                     Text(stringResource(R.string.ownercheck_backoff), style = MaterialTheme.typography.bodyMedium)
+                // (ANDROID-PLAN 0.1.57) "Not the holder" under "Your vault moved to a new phone"; an unmapped code named.
                 m is OwnerCheckMessage.Failed -> NoticeCard(
                     NoticeKind.URGENT,
-                    title,
-                    stringResource(m.kind.messageRes()),
+                    if (m.kind == FailureKind.NOT_HOLDER) stringResource(m.kind.titleRes(0)) else title,
+                    failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode)),
                     modifier = Modifier.testTag("owner_check_failed"),
                 )
                 else -> Unit
@@ -179,11 +197,55 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 private const val WARN_LEFT = 3
 
 /**
+ * The presence notice's body: in real time (production, and every vault at scale 1) the approved words ("three days");
+ * on a vault with a time scale the quiet period as it runs there (STAGING-TIME-SCALE S7; owner decision 2026-10-19).
+ */
+@Composable
+fun presenceBody(): String = if (LocalTimeScale.current.scale <= 1) {
+    stringResource(R.string.ownercheck_presence_body)
+} else {
+    stringResource(R.string.ownercheck_presence_body_scaled, scaledDurationText(RECOVERY_QUIET_S))
+}
+
+/** ANDROID-PLAN "Owner check and status" (release R): the vault could not record that the member was here. */
+@Composable
+private fun PresenceNotice() {
+    NoticeCard(
+        NoticeKind.WARNING,
+        stringResource(R.string.ownercheck_presence_title),
+        presenceBody() + stagingNoteSuffix(),
+        modifier = Modifier.testTag("owner_check_presence"),
+        announce = androidx.compose.ui.semantics.LiveRegionMode.Polite,
+    )
+}
+
+/** The check passed, but the presence was not recorded: the notice, then the member goes on. */
+@Composable
+private fun PresenceAfterCheck(title: String, actions: OwnerCheckActions) {
+    FormScaffold(
+        title = title,
+        primaryLabel = stringResource(R.string.onboarding_continue),
+        onPrimary = actions::acknowledgePresence,
+        modifier = Modifier.testTag("owner_check_passed_unrecorded"),
+    ) {
+        PresenceNotice()
+    }
+}
+
+/**
  * What the gated check shows of what is waiting (§3.6.5). [counts] null: the vault has not said yet (no `vault.held`
  * and no `owner_check.waiting` in `vault.status` so far), which is never shown as zero. [held] null: the hold is not
  * known either.
  */
 data class WaitingCardModel(val counts: WaitingCounts?, val held: Boolean?)
+
+/**
+ * (Release L, VAULT-MESSAGING 0.29.0 §3.6.8) When the vault locks itself if no check is passed, as it last said: on the
+ * gated check (held, or due with the hold off) only; null for a vault before L, and once that time has passed (a call
+ * in progress delays the lock; the line would name a time gone by).
+ */
+fun idleLockAtOf(mode: OwnerCheckMode, v: OwnerCheckView?, now: Instant): Instant? =
+    v?.idleLockAt?.takeIf { mode == OwnerCheckMode.GATED && now.isBefore(it) }
 
 /**
  * The waiting card whenever the check gates the app ([OwnerCheckMode.GATED]), also while the phone's clock has passed

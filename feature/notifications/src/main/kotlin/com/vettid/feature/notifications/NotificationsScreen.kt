@@ -97,6 +97,7 @@ import com.vettid.core.data.feed.FeedText
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ClearFiltersChip
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailScaffold
@@ -108,6 +109,7 @@ import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.rememberProfilePhoto
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.categoryColor
@@ -212,7 +214,7 @@ fun NotificationsScreen(state: NotificationsUiState, actions: NotificationsActio
     val snackbar = remember { SnackbarHostState() }
     val archivedText = stringResource(R.string.notifications_archived_snackbar)
     val undoText = stringResource(R.string.notifications_undo)
-    val errorText = state.error?.let { stringResource(it.messageRes()) }
+    val errorText = state.error?.let { failureText(it.messageRes(), it.vaultCode(state.errorCode)) }
     LaunchedEffect(state.undo) {
         if (state.undo == null) return@LaunchedEffect
         val r = snackbar.showSnackbar(archivedText, undoText, duration = SnackbarDuration.Short)
@@ -517,7 +519,7 @@ fun FeedRow(
                         supporting,
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (attention) colors.onErrorContainer else colors.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = secondLineMaxLines(item),
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -557,6 +559,14 @@ fun FeedRow(
 }
 
 private val ATTENTION_BAR = 4.dp
+
+/**
+ * How many lines of its second line a row shows (ANDROID-PLAN 0.1.56): up to 3 for an `urgent` item, in Needs attention
+ * and in its day, 1 for every other; a longer line is cut with an ellipsis and shown in full in the detail sheet.
+ */
+internal fun secondLineMaxLines(item: FeedItem): Int = if (item.priority == FeedManager.PRIORITY_URGENT) URGENT_SECOND_LINES else 1
+
+private const val URGENT_SECOND_LINES = 3
 private val LIST_BOTTOM = 96.dp
 
 /** The connection's tile where the item names one; else the kind's icon in its History category colour. */
@@ -615,9 +625,10 @@ object FeedIcons {
 }
 
 /**
- * The detail sheet (ANDROID-PLAN 0.1.23, 4): the label, the exact time, the connection or item as History resolves
- * them; "This is no longer waiting" for an ask that is gone; "Not available in this version of the app" for kinds
- * that come later; an unknown kind shows the kind itself; a guide its body.
+ * The detail sheet (ANDROID-PLAN 0.1.23, 4): the label and under it the row's second line in full (0.1.56), the
+ * exact time, the connection or item as History resolves them; "This is no longer waiting" for an ask that is gone;
+ * "Not available in this version of the app" for kinds that come later; an unknown kind shows the kind itself; a
+ * guide its body.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -638,6 +649,11 @@ fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.semantics { heading() },
         )
+        // A guide's second line is its body's first line, and the sheet shows the whole body below.
+        FeedKinds.supporting(item, names)?.takeIf { item.kind != "guide" }?.let { line ->
+            Spacer(Modifier.height(Spacing.xs))
+            Text(line.text(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("feed_sheet_second_line"))
+        }
         Spacer(Modifier.height(Spacing.s))
         FeedManager.at(item)?.let { SheetLine(stringResource(R.string.notifications_sheet_time), Times.full(it)) }
         if (item.connectionId != null) {

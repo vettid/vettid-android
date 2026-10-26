@@ -53,9 +53,13 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.policy.labelRes
 import com.vettid.core.data.policy.messageRes
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.titleRes
+import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.data.R as DataR
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.FullScreenProgress
@@ -72,6 +76,7 @@ import com.vettid.core.ui.components.SettingsSwitchRow
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.StrengthMeter
 import com.vettid.core.ui.components.TopLevelScaffold
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdTheme
 import kotlinx.serialization.Serializable
@@ -95,6 +100,13 @@ data object CredentialAlarmRoute
 
 @Serializable
 data object CredentialNewRoute
+
+/**
+ * (ANDROID-PLAN 0.1.51, owner decision 2026-10-19) "New credential" (`credential.reset`) is hidden: Settings → Security →
+ * Credential does not show its row and [CredentialNewRoute] is not registered, until §4 "A lost answer to New
+ * credential" (VAULT-MESSAGING 0.48.0 §11.14.9) is implemented and tested. The screen and the repository method stay.
+ */
+internal const val NEW_CREDENTIAL_SHOWN = false
 
 /** Registers the Credential destinations. [navigate] opens a route; [onBack] pops one. */
 fun NavGraphBuilder.credentialDestination(
@@ -122,7 +134,7 @@ fun NavGraphBuilder.credentialDestination(
                 changePassword = { navigate(CredentialPasswordRoute) },
                 rotate = { navigate(CredentialRotateRoute) },
                 reviewAlarm = { navigate(CredentialAlarmRoute) },
-                newCredential = { navigate(CredentialNewRoute) },
+                newCredential = { if (NEW_CREDENTIAL_SHOWN) navigate(CredentialNewRoute) },
             ),
         )
         LaunchedEffect(state.notice) { if (state.notice == CredentialNotice.BACKUP_ON) onOwnerCheck() }
@@ -130,23 +142,25 @@ fun NavGraphBuilder.credentialDestination(
     composable<CredentialPasswordRoute> {
         val vm: ChangePasswordViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        ChangePasswordContent(state, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::submit, onBack)
+        ChangePasswordContent(state, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::submit, onBack, vm::setPin)
     }
     composable<CredentialRotateRoute> {
         val vm: RotateViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
         RotateContent(state, vm::setPassword, vm::submit, onBack)
     }
-    composable<CredentialNewRoute> {
-        val vm: NewCredentialViewModel = hiltViewModel()
-        val state by vm.uiState.collectAsStateWithLifecycle()
-        NewCredentialContent(
-            state,
-            NewCredentialActions(
-                vm::setPin, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::setAcknowledged,
-                vm::submit, vm::cancelConfirm, vm::confirm, onBack,
-            ),
-        )
+    if (NEW_CREDENTIAL_SHOWN) {
+        composable<CredentialNewRoute> {
+            val vm: NewCredentialViewModel = hiltViewModel()
+            val state by vm.uiState.collectAsStateWithLifecycle()
+            NewCredentialContent(
+                state,
+                NewCredentialActions(
+                    vm::setPin, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::setAcknowledged,
+                    vm::submit, vm::cancelConfirm, vm::confirm, onBack,
+                ),
+            )
+        }
     }
     composable<CredentialAlarmRoute> {
         val vm: AlarmViewModel = hiltViewModel()
@@ -205,7 +219,11 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                 Modifier.fillMaxSize().padding(Spacing.xl),
                 verticalArrangement = Arrangement.Center,
             ) {
-                NoticeCard(NoticeKind.WARNING, stringResource(R.string.credential_title), stringResource(state.error.messageRes()))
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(state.error.titleRes(R.string.credential_title)),
+                    failureText(state.error.messageRes(), state.error.vaultCode(state.errorCode)),
+                )
                 Spacer(Modifier.height(Spacing.l))
                 SecondaryButton(stringResource(R.string.credential_retry), actions.retry)
             }
@@ -232,7 +250,10 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                     if (state.error != null || state.notice != null) {
                         Spacer(Modifier.height(Spacing.s))
                         val (kind, text) = when {
-                            state.error != null -> NoticeKind.URGENT to stringResource(state.error.messageRes())
+                            state.error != null -> NoticeKind.URGENT to failureText(
+                                state.error.messageRes(),
+                                state.error.vaultCode(state.errorCode),
+                            )
                             state.notice == CredentialNotice.BACKUP_ON ->
                                 NoticeKind.SUCCESS to stringResource(R.string.credential_backup_on_done)
                             state.notice == CredentialNotice.BACKUP_OFF ->
@@ -240,7 +261,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             else -> NoticeKind.SUCCESS to ""
                         }
                         NoticeCard(
-                            kind, stringResource(R.string.credential_title), text,
+                            kind, stringResource(state.error?.titleRes(R.string.credential_title) ?: R.string.credential_title), text,
                             modifier = Modifier.padding(horizontal = Spacing.gutter),
                             actions = { TextButton(onClick = actions.dismissNotice) { Text(stringResource(R.string.credential_done)) } },
                         )
@@ -334,15 +355,17 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             ),
                             modifier = Modifier.testTag("backup_switch"),
                         )
-                        SettingsDivider()
-                        SettingsRow(
-                            stringResource(R.string.credential_new_title),
-                            actions.newCredential,
-                            icon = Icons.Outlined.RestartAlt,
-                            iconTint = MaterialTheme.colorScheme.error,
-                            supporting = stringResource(R.string.credential_new_supporting),
-                            modifier = Modifier.testTag("new_credential_row"),
-                        )
+                        if (NEW_CREDENTIAL_SHOWN) {
+                            SettingsDivider()
+                            SettingsRow(
+                                stringResource(R.string.credential_new_title),
+                                actions.newCredential,
+                                icon = Icons.Outlined.RestartAlt,
+                                iconTint = MaterialTheme.colorScheme.error,
+                                supporting = stringResource(R.string.credential_new_supporting),
+                                modifier = Modifier.testTag("new_credential_row"),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(Spacing.xxl))
                 }
@@ -358,6 +381,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
             confirmLabel = stringResource(R.string.credential_open),
             busy = state.busy,
             error = state.windowError,
+            errorCode = state.windowErrorCode,
             onConfirm = actions.openWindow,
             onDismiss = { actions.showWindowDialog(false) },
         )
@@ -382,6 +406,8 @@ fun PasswordDialog(
     error: FailureKind?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    errorCode: String? = null,
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -395,7 +421,7 @@ fun PasswordDialog(
                     value = password,
                     onValueChange = onPassword,
                     label = stringResource(R.string.credential_password_label),
-                    error = error?.let { stringResource(it.messageRes()) },
+                    error = error?.let { failureText(it.messageRes(), it.vaultCode(errorCode)) },
                     onImeAction = onConfirm,
                     enabled = !busy,
                     modifier = Modifier.testTag("dialog_password"),
@@ -486,10 +512,15 @@ fun BackupOffDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun ErrorCard(error: FailureKind?) {
+private fun ErrorCard(error: FailureKind?, code: String? = null) {
     if (error == null) return
     Spacer(Modifier.height(Spacing.l))
-    NoticeCard(NoticeKind.URGENT, stringResource(R.string.credential_title), stringResource(error.messageRes()), Modifier.testTag("error"))
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(error.titleRes(R.string.credential_title)),
+        failureText(error.messageRes(), error.vaultCode(code)),
+        Modifier.testTag("error"),
+    )
 }
 
 /** The password change (stateless). */
@@ -501,17 +532,20 @@ fun ChangePasswordContent(
     onConfirm: (String) -> Unit,
     onSubmit: () -> Unit,
     onBack: () -> Unit,
+    onPin: (String) -> Unit = {},
 ) {
     FormScaffold(
         title = stringResource(if (state.done) R.string.credential_change_done else R.string.credential_change_title),
         body = if (state.done) null else stringResource(R.string.credential_change_body),
         primaryLabel = stringResource(if (state.done) R.string.credential_done else R.string.credential_change_submit),
         onPrimary = if (state.done) onBack else onSubmit,
-        primaryEnabled = state.done || (state.current.isNotEmpty() && state.password.isNotEmpty() && state.confirm.isNotEmpty()),
+        primaryEnabled = state.done || state.canSubmit,
         busy = state.busy,
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        ChangeCheckNotice(state.check)
+        if (state.askPin) ChangePasswordPin(state.pin, onPin)
         SecretField(
             state.current,
             onCurrent,
@@ -521,20 +555,55 @@ fun ChangePasswordContent(
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.password, onPassword, stringResource(R.string.credential_password_new),
-            error = state.problem?.let { stringResource(it.messageRes()) }
+            error = state.problem?.takeIf { !state.newRules }?.let { failureText(it.messageRes()) }
                 ?: if (state.same) stringResource(R.string.credential_password_same) else null,
             imeAction = androidx.compose.ui.text.input.ImeAction.Next,
         )
         Spacer(Modifier.height(Spacing.s))
-        StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))
+        if (state.newRules || state.refused) {
+            NewPasswordRule(state.rule, state.refused)
+        } else {
+            StrengthMeter(level = state.strength.ordinal, label = stringResource(state.strength.labelRes()))
+        }
         Spacer(Modifier.height(Spacing.l))
         SecretField(
             state.confirm, onConfirm, stringResource(R.string.credential_password_confirm),
             error = if (state.mismatch) stringResource(R.string.credential_password_mismatch) else null,
             onImeAction = onSubmit,
         )
-        ErrorCard(state.error)
+        ErrorCard(state.error, state.errorCode)
     }
+}
+
+/** VAULT-MESSAGING 0.44.0 §11.14.9: a password change whose answer was lost is decided, not repeated. */
+@Composable
+private fun ChangeCheckNotice(c: ChangeCheck?) {
+    val text = when (c) {
+        is ChangeCheck.Checking -> R.string.credential_change_checking
+        is ChangeCheck.Unreachable -> R.string.credential_change_unreachable
+        is ChangeCheck.NotApplied -> R.string.credential_change_not_changed
+        is ChangeCheck.Ended -> R.string.credential_change_ended
+        // (ANDROID-PLAN 0.1.55) "Your vault moved to a new phone", no "Try again".
+        is ChangeCheck.Moved -> DataR.string.data_feed_device_replaced
+        else -> return
+    }
+    NoticeCard(
+        if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended || c is ChangeCheck.Moved) NoticeKind.WARNING else NoticeKind.INFO,
+        stringResource(R.string.credential_change_title),
+        stringResource(text),
+        Modifier.testTag("password_change_check"),
+    )
+    Spacer(Modifier.height(Spacing.l))
+}
+
+/** Release R (§11.14.9): the vault verifies its PIN with the password change. */
+@Composable
+private fun ChangePasswordPin(pin: String, onPin: (String) -> Unit) {
+    SecretField(
+        pin, onPin, stringResource(R.string.credential_change_pin), isPin = true,
+        imeAction = androidx.compose.ui.text.input.ImeAction.Next, modifier = Modifier.testTag("change_password_pin"),
+    )
+    Spacer(Modifier.height(Spacing.l))
 }
 
 /** The credential rotation (stateless). */
@@ -557,7 +626,7 @@ fun RotateContent(state: RotateUiState, onPassword: (String) -> Unit, onSubmit: 
             onImeAction = onSubmit,
             modifier = Modifier.testTag("password"),
         )
-        ErrorCard(state.error)
+        ErrorCard(state.error, state.errorCode)
     }
 }
 

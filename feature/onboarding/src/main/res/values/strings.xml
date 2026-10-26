@@ -78,6 +78,7 @@
 
     <!-- Progress -->
     <string name="onboarding_progress_title">Setting up your vault</string>
+    <string name="onboarding_pin_from_before">The PIN you chose when you started setting up this phone.</string>
     <string name="onboarding_progress_body">This takes a moment. Keep VettID open.</string>
     <string name="onboarding_step_enroll">Verifying the vault service and this phone</string>
     <string name="onboarding_step_wait">Creating your vault</string>
@@ -93,7 +94,7 @@
     <string name="onboarding_done_title">Your vault is ready</string>
     <string name="onboarding_done_body">Your vault is enrolled, this phone holds its credential, and only your PIN opens it.</string>
     <string name="onboarding_done_next_title">Next: your first connection</string>
-    <string name="onboarding_done_next_body">Invite someone with a QR code or a link, compare the safety code, and start messaging. Connections arrive in the next update.</string>
+    <string name="onboarding_done_next_body">Invite someone with a QR code or a link, compare the safety code, and start messaging.</string>
     <string name="onboarding_done_go">Go to VettID</string>
 
     <!-- Development -->
@@ -108,10 +109,20 @@
     <string name="unlock_lock_try_again">Try again</string>
     <string name="unlock_lock_confirmed">Your vault is locked.</string>
     <string name="unlock_lock_ok">OK</string>
+    <!-- Release L (VAULT-MESSAGING 0.29.0 §10.2 "Locks"): the vault answered that the unlock this lock was for is over (stale_lock / stale). Approved by the owner 2026-10-24. -->
+    <string name="unlock_lock_opened_again_title">Your vault was opened again</string>
+    <!-- Release L (owner decision 2026-10-24): the button on "Your vault was opened again" and on its notification. Draft, for the owner's approval. -->
+    <string name="unlock_lock_again">Lock it now</string>
+    <string name="unlock_lock_opened_again_body">Your vault was unlocked again after you locked it, so it did not lock and may be open now. This phone is locked.</string>
     <string name="unlock_title">Unlock your vault</string>
     <string name="unlock_body">Enter your vault PIN.</string>
     <string name="unlock_body_account">Enter the vault PIN for %1$s.</string>
     <string name="unlock_pin_label">Vault PIN</string>
+    <!-- VAULT-MESSAGING 0.44.0 §11.14.9 step 5, ANDROID-PLAN 0.1.45 (approved texts, shared with the iPhone app). -->
+    <string name="unlock_previous_pin_title">Enter your previous PIN</string>
+    <string name="unlock_previous_pin_body">Your last PIN change got no answer. If it went through, VettID will ask for your new PIN next.</string>
+    <string name="unlock_new_pin_title">Your PIN change went through.</string>
+    <string name="unlock_new_pin_body">Enter your new PIN.</string>
     <string name="unlock_submit">Unlock</string>
     <string name="unlock_checking">Checking your vault\'s software</string>
     <string name="unlock_retry">Try again</string>
@@ -134,6 +145,7 @@
     <string name="unlock_recovery_title">A recovery is in progress</string>
     <string name="unlock_recovery_body">Someone started a recovery of this vault from the account site, so it is locked for this phone. If that was you on a new phone, let it finish there. If it was not you, cancel it now: unlocking here with your PIN cancels the recovery.</string>
     <string name="unlock_recovery_cancel">Cancel the recovery and unlock</string>
+    <string name="unlock_recovery_cancelling">Cancelling the recovery…</string>
     <string name="unlock_rollback_state_title">Your vault\'s state is older than expected</string>
     <string name="unlock_rollback_state_body">The vault\'s stored state is older than state this phone has already seen. Someone may have restored an old copy. Contact VettID support before you continue.</string>
     <string name="unlock_update_refused">The update was refused (%1$s). Your vault stayed on its current release.</string>
@@ -142,12 +154,18 @@
     <string name="unlock_not_recognised_title">Your vault did not recognise this phone</string>
     <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>
     <string name="unlock_erase">Erase VettID from this phone</string>
+    <!-- Draft text for the owner (erase-or-recover on a screen that could not be left). -->
+    <string name="unlock_stuck_title">This phone cannot open your vault</string>
+    <string name="unlock_stuck_body">This phone no longer holds your vault\'s keys. Before you erase VettID here, check on your account site that your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose \"I lost my phone: recover my vault\".</string>
+    <string name="unlock_recover_only_body">Erasing VettID from this phone would not help. Recover your vault from your account site, or contact VettID support at support@vettid.org.</string>
+    <string name="unlock_contact_support">Contact support</string>
+    <string name="unlock_recover">Recover your vault</string>
     <string name="unlock_signer_refused_title">This installation is not accepted</string>
     <string name="unlock_signer_refused_body">This vault no longer accepts this installation of VettID. Update the app, or recover your vault with a current version.</string>
     <string name="unlock_signer_refused_help">How to recover your vault</string>
     <string name="unlock_signer_refused_help_hide">Hide</string>
     <string name="unlock_signer_refused_help_title">Recovering or moving your vault</string>
-    <string name="unlock_signer_refused_help_body">First update VettID from where you installed it and try again: your PIN was not counted as wrong.\n\nIf that does not help, recover your vault. Start a recovery on the account site, install a current version of VettID (on this phone after removing this one, or on another phone) and choose \"I lost my phone: recover my vault\" on its first screen, then scan or type the recovery code. A recovery takes 24 hours and needs your PIN and your credential password.\n\nMoving your vault to a new phone directly is not possible while this phone cannot open it.</string>
+    <string name="unlock_signer_refused_help_body">First update VettID from where you installed it and try again: your PIN was not counted as wrong.\n\nIf that does not help, recover your vault. Start a recovery on the account site, install a current version of VettID (on this phone after removing this one, or on another phone) and choose \"I lost my phone: recover my vault\" on its first screen, then scan or type the recovery code. A recovery takes %1$s and needs your PIN and your credential password.\n\nMoving your vault to a new phone directly is not possible while this phone cannot open it.</string>
     <string name="unlock_refused_title">Your vault is refusing this phone</string>
     <string name="unlock_refused_body">Messages from this phone to your vault keep being refused. If you moved VettID to another phone, this one may have been replaced. Enter your PIN to check with your vault.</string>
     <string name="unlock_erase_confirm_title">Erase VettID from this phone?</string>
@@ -173,7 +191,7 @@
 
     <!-- Recovery on this phone (§11.11) -->
     <string name="recover_title">Recover your vault</string>
-    <string name="recover_body">Your account site shows a recovery QR code 24 hours after you start a recovery there. Open it (Vault, then Recovery, then Show the code) and scan it with this phone, or type the code shown under it.</string>
+    <string name="recover_body">Your account site shows a recovery QR code %1$s after you start a recovery there. Open it (Vault, then Recovery, then Show the code) and scan it with this phone, or type the code shown under it.</string>
     <string name="recover_need_title">You will need</string>
     <string name="recover_need_body">The recovery code from the account site, your vault PIN and your credential password. This phone then replaces your old one, which erases VettID the next time it reaches your vault.</string>
     <string name="recover_scan">Scan the code</string>
@@ -186,7 +204,7 @@
     <string name="recover_scan_not_code">That is not a VettID recovery code.</string>
     <string name="recover_scan_other_environment">That code is from another VettID environment (%1$s), not the one this app uses.</string>
     <string name="recover_scan_no_api">That recovery code is from an older account site. Reload the recovery page on the account site and scan the new code.</string>
-    <string name="recover_not_available">This recovery is not available: its code may not be ready yet (24 hours after the request), or the recovery was cancelled, used or has expired. Check the account site.</string>
+    <string name="recover_not_available">This recovery is not available: its code may not be ready yet (%1$s after the request), or the recovery was cancelled, used or has expired. Check the account site.</string>
     <!-- The code typed instead of scanned (VAULT-MESSAGING 0.25.0 §11.11.10; ANDROID-PLAN 0.1.33) -->
     <string name="recover_type">Type the code instead</string>
     <string name="recover_scan_instead">Scan instead</string>
@@ -260,7 +278,13 @@
     <string name="transfer_in_rejected_title">Rejected on your phone</string>
     <string name="transfer_in_rejected_body">The move was rejected on your old phone. Nothing changed: your vault stays with your old phone. To try again, show a new code on the old phone.</string>
     <string name="transfer_in_timeout_title">The transfer timed out</string>
-    <string name="transfer_in_timeout_body">It was not approved within 10 minutes. Nothing changed. Show a new code on your old phone to try again.</string>
+    <string name="transfer_in_timeout_body">It was not approved in time. Nothing changed. Show a new code on your old phone to try again.</string>
+    <string name="transfer_in_keep_waiting">Keep waiting</string>
+    <string name="transfer_in_finishing_title">Finishing the move</string>
+    <string name="transfer_in_finishing_body">Your old phone approved the move. This phone could not finish it yet. Try again.</string>
+    <string name="transfer_in_cancel_title">Cancel the move?</string>
+    <string name="transfer_in_cancel_body">If you already approved the move on your old phone, don\'t cancel: your vault is moving to this phone, and cancelling here loses it. Cancel only if you did not approve it.</string>
+    <string name="transfer_in_cancel_confirm">Cancel the move</string>
     <string name="transfer_in_no_answer">Your vault did not answer. The code may have been used already, or this phone could not be verified. Show a new code on your old phone.</string>
     <string name="transfer_in_again">Try again</string>
     <string name="transfer_in_no_answer_title">No answer from your vault</string>
@@ -329,4 +353,127 @@
     <string name="release_update_return_confirm_body">Your vault goes back to release %1$d and opens there. You can approve release %2$d again later.</string>
     <string name="release_update_abandoned_title">Back on release %1$d</string>
     <string name="release_update_abandoned_body">Your vault runs release %1$d again and is open. You can update to release %2$d later.</string>
+    <!-- ANDROID-PLAN 0.1.54 "The way back to release N after leaving or a restart" (approved by the owner, 2026-10-20). -->
+    <string name="unlock_move_unconfirmed">Your vault moved to release %1$d and has not opened there yet. You can try again with your PIN, or return to release %2$d.</string>
+    <string name="release_update_route_pending">Your vault moved to release %1$d, but VettID is not ready to open it there yet. Try again in a minute.</string>
+    <string name="release_update_return_confirmed">Release %1$d has already opened your vault, so it can\'t go back to release %2$d. Unlock it with your PIN.</string>
+    <string name="release_update_return_unavailable">Release %1$d is no longer available, so your vault can\'t go back to it. Try again with your PIN, or contact VettID.</string>
+    <!-- ANDROID-PLAN 0.1.54 "A vault being deleted" (approved by the owner, 2026-10-20). -->
+    <string name="vault_deleting_title">Your vault is being deleted</string>
+    <string name="vault_deleting_body">VettID is erasing everything in your vault. This usually takes a few minutes. Nothing in it can be opened or restored. You will get an email when it is done.</string>
+    <string name="vault_deleting_slow_title">Still finishing</string>
+    <string name="vault_deleting_slow_body">Your vault can no longer be opened, but this phone cannot confirm that VettID has finished deleting it. When you get the email that your vault was deleted, or the account site offers to set up a new vault, remove VettID from this phone.</string>
+    <string name="vault_deleting_check_again">Check again</string>
+    <string name="vault_deleting_still">VettID has not finished yet. Tap Check again later, or check the account site.</string>
+    <string name="vault_deleting_unreachable">VettID couldn\'t be reached. Check your connection and try again.</string>
+    <!-- DRAFT texts for the owner's approval (a deletion this phone cannot confirm; member-confirmed removal). -->
+    <string name="vault_deleting_unconfirmed">This phone can\'t confirm the deletion.</string>
+    <string name="vault_deleting_cannot_confirm">VettID answered, but this phone cannot confirm that the deletion is finished. When you get the email that your vault was deleted, or the account site offers to set up a new vault, remove VettID from this phone.</string>
+    <string name="vault_deleting_clock_hint">Also check that the date and time on this phone are right.</string>
+    <string name="vault_deleting_remove">Remove from this phone</string>
+    <string name="vault_deleting_remove_confirm_title">Remove VettID from this phone?</string>
+    <string name="vault_deleting_remove_confirm_body">Your vault can never be opened again, and nothing on this phone is needed to finish deleting it. This removes VettID\'s data on this phone only: its keys, your account details and the app\'s settings. It works without a connection and cannot be undone.</string>
+    <string name="vault_deleting_remove_confirm">Remove</string>
+    <!-- DRAFT (ANDROID-PLAN 0.1.78, pending the owner's wording): the member API's 410 without the vault's own word. -->
+    <string name="vault_deleted_api_title">Your vault was deleted</string>
+    <string name="vault_deleted_api_body">VettID says your vault was deleted. This phone has not yet heard it from the vault itself, so it keeps your keys. Nothing on this phone is erased until the vault confirms it or you remove VettID from this phone. It checks again whenever you open VettID.</string>
+    <string name="vault_deleted_api_slow_body">VettID says your vault was deleted, but this phone has not heard it from the vault itself. You can remove VettID from this phone, or keep it: if the vault confirms the deletion, this phone removes VettID by itself.</string>
+    <string name="vault_deleted_api_remove_confirm_body">VettID says your vault was deleted, but the vault itself has not confirmed it. If it still exists, you can get it back only with a recovery code and your credential backup; without them you would lose it. This removes VettID\'s data on this phone only: its keys, your account details and the app\'s settings. It works without a connection and cannot be undone.</string>
+    <string name="vault_deleted_api_again">VettID still says your vault was deleted. This phone is waiting for the vault itself.</string>
+    <string name="vault_deleting_account_site">Open the account site</string>
+    <!-- Release R (ANDROID-PLAN 0.1.40, VAULT-MESSAGING 0.33.0 §11.14.6): draft texts for the owner's wording. -->
+    <string name="recover_not_offered">This vault\'s release does not offer recovery.</string>
+    <string name="onboarding_open_title">Your PIN and your password</string>
+    <string name="onboarding_open_pin">Vault PIN</string>
+    <string name="onboarding_open_password">Credential password</string>
+    <string name="onboarding_open_show">Show</string>
+    <string name="onboarding_open_hide">Hide</string>
+    <string name="onboarding_open_ten">Enter both. You have 10 attempts in total for this vault, not 10 a day.</string>
+    <string name="onboarding_open_continue">Continue</string>
+    <string name="onboarding_open_check">This is what will be sent. PIN: %1$s. Password: %2$s. Look at both. A wrong entry uses one of your attempts.</string>
+    <string name="onboarding_open_send">Send</string>
+    <string name="onboarding_open_change">Change</string>
+    <string name="onboarding_open_warning_title">Before you send</string>
+    <string name="onboarding_open_second">This is your second attempt. If it is wrong too, you can try again in 24 hours, and the wait gets longer after every further wrong attempt.</string>
+    <!-- The same on a vault with a time scale (staging): the wait after a wrong second attempt as it runs there, e.g. "10 minutes" -->
+    <string name="onboarding_open_second_scaled">This is your second attempt. If it is wrong too, you can try again in %1$s, and the wait gets longer after every further wrong attempt.</string>
+    <string name="onboarding_open_few_left">You have %1$d attempts left. If they are all wrong, this vault cannot be recovered and you would have to start over with an empty one. Check both entries before you go on.</string>
+    <string name="onboarding_open_answer_title">Recovery</string>
+    <string name="onboarding_open_try_again">Try again</string>
+    <string name="onboarding_open_countdown">Next attempt possible in %1$s</string>
+    <string name="onboarding_open_ok">The vault is recovered. You used %1$d of your 10 attempts. They do not come back. Change your PIN or your password now to get 10 new ones.</string>
+    <string name="onboarding_open_wrong">PIN or password is wrong. The vault does not tell us which. %1$d of 10 attempts left.</string>
+    <string name="onboarding_open_wrong_wait">PIN or password is wrong. The vault does not tell us which. %1$d of 10 attempts left. Your next attempt is possible on %2$s.</string>
+    <string name="onboarding_open_wrong_again">That is the same PIN and password as your last attempt, and they are still wrong. This was not counted. Change one of them before you try again.</string>
+    <string name="onboarding_open_attempt_lost">Something went wrong on the way and one attempt was used without being tested. %1$d of 10 left. Your PIN and password were not judged wrong. A slow or interrupted service can cause this.</string>
+    <string name="onboarding_open_quiet">This vault\'s app was used with its PIN and password recently. A vault can be recovered only some time after that: from %1$s at the earliest.</string>
+    <string name="onboarding_open_quiet_nodate">This vault cannot be recovered yet: it has no record of when its app was last used with its PIN and password. Try again later.</string>
+    <string name="onboarding_open_wait">You can try again on %1$s.</string>
+    <string name="onboarding_open_quiet_nothing">This vault\'s app was used with its PIN and password recently. A vault can be recovered only some time after that: from %1$s at the earliest. Nothing was used.</string>
+    <string name="onboarding_open_quiet_used">The vault\'s app was used with its PIN and password while this attempt was on its way, or the service recorded that it was. One attempt was used without being tested. %1$d left.</string>
+    <string name="onboarding_open_wait_nothing">You can try again on %1$s. Nothing was used.</string>
+    <string name="onboarding_open_retry_used">Something went wrong on the way. One attempt was used, and your PIN and password were not judged wrong. %1$d of 10 left. Try again.</string>
+    <string name="onboarding_open_unreadable">We could not read the vault\'s answer. This attempt may have been used. If it recovered your vault, your PIN finishes it.</string>
+    <string name="onboarding_open_lost_title">Finish with your PIN</string>
+    <string name="onboarding_open_lost_body">If your last attempt recovered your vault but its answer was lost, your PIN finishes the recovery on this phone. This does not use any of your attempts.</string>
+    <string name="onboarding_open_lost_not_here">Your vault was not recovered onto this phone by the last attempt. Go back and try again.</string>
+    <string name="onboarding_open_back">Back to the recovery</string>
+    <string name="onboarding_open_wait_nodate">You cannot try again yet. Try again later.</string>
+    <string name="onboarding_open_attempts_left">Attempts left: %1$d of 10.</string>
+    <string name="onboarding_open_busy">The service is busy right now. Nothing was used. Try again in a minute.</string>
+    <string name="onboarding_open_retry">The service was too slow just now. Nothing was used. Try again.</string>
+    <string name="onboarding_open_stored_mismatch">The vault\'s stored data could not be opened. Nothing was used. Contact VettID.</string>
+    <string name="onboarding_open_stored_mismatch_right">Your entry was right, but the vault\'s stored data could not be opened. Contact VettID.</string>
+    <string name="onboarding_open_exhausted">All 10 attempts for this vault have been used. It cannot be recovered. You can delete it on the account site and start over.</string>
+    <string name="onboarding_open_closed">The PIN or the password of this vault was changed, or its recovery was turned off, after this recovery began. This recovery cannot continue.</string>
+    <string name="onboarding_open_not_armed">Recovery was not set up for this vault.</string>
+    <string name="onboarding_open_counter_unavailable">We cannot check the attempt record now. Nothing was used. Try again later.</string>
+    <string name="onboarding_open_right_incomplete">The last attempt was right but could not be completed. %1$d of 10 left. You can try again on %2$s.</string>
+    <string name="onboarding_open_other">The vault answered %1$s.</string>
+    <string name="onboarding_open_ok_plain">The vault is recovered. The attempts you used do not come back. Change your PIN or your password now to get 10 new ones.</string>
+    <string name="onboarding_open_no_recovery">This recovery has ended: it was cancelled, it expired or it was completed. Nothing was used. To go on, start a new recovery on the account site.</string>
+    <string name="onboarding_open_no_recovery_unanswered">This recovery has ended. Your last attempt got no answer, and it may have recovered your vault on the way: your PIN finishes it on this phone. Do this before you start a new recovery.</string>
+    <string name="onboarding_open_expired">This recovery has expired. Nothing was used. To go on, start a new recovery on the account site.</string>
+    <string name="onboarding_open_attestation">The vault did not accept this phone\'s app. Nothing was used. Update VettID to continue.</string>
+    <string name="onboarding_open_manifest">The vault\'s list of releases could not be checked. Nothing was used. Try again later.</string>
+    <string name="onboarding_open_wrong_release">The vault is being updated right now. Nothing was used. Try again in a few minutes.</string>
+    <string name="onboarding_open_bad_request">The vault could not read this phone\'s request. Nothing was used. Update VettID to continue.</string>
+    <string name="onboarding_open_new_recovery">Start a new recovery</string>
+    <string name="onboarding_open_finish_title">Finish the recovery</string>
+    <string name="onboarding_open_finish_body">Your vault was recovered onto this phone, but this phone could not open it yet. Enter your PIN to finish. This does not use any of your attempts.</string>
+    <string name="onboarding_open_finish_go">Finish</string>
+    <string name="onboarding_open_finish_bad_pin">That PIN is wrong. This did not use any of your recovery attempts.</string>
+    <string name="onboarding_open_finish_backoff">Too many wrong PINs. Wait a little, then try again. This did not use any of your recovery attempts.</string>
+    <string name="onboarding_open_finish_gone">Your vault no longer accepts this phone. It may have been recovered onto another phone, or deleted.</string>
+    <string name="onboarding_open_finish_erase_body">This erases VettID\'s data on this phone only: its keys, your account details and the app\'s settings. It cannot be undone.\n\nYour vault was recovered onto this phone and may still count on it. Erase only if your vault now works on another phone, or if you are sure it is gone.</string>
+    <string name="onboarding_open_finish_failed">Your vault could not be opened from this phone just now. Try again. This did not use any of your recovery attempts.</string>
+    <!-- Transfer from release R (§11.14.10). -->
+    <string name="onboarding_finish_move_title">Finish the move</string>
+    <string name="onboarding_finish_move_body">Enter your PIN on this phone to finish moving your vault.</string>
+    <string name="onboarding_finish_move_done">Your vault is on this phone now.</string>
+    <string name="onboarding_finish_move_later">Later</string>
+    <string name="onboarding_kept_check_waiting_title">Waiting for your vault</string>
+    <string name="onboarding_kept_check_waiting">Your vault has not confirmed the move to this phone. Once your new phone opens your vault, remove VettID from this phone.</string>
+    <string name="onboarding_kept_transfer">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, and until your vault has confirmed it. Once your new phone works, you can remove VettID from this phone. Before you give this phone away, remove VettID from it or reset it.</string>
+    <string name="onboarding_move_didnt_finish">The move didn\'t finish</string>
+    <string name="onboarding_move_didnt_finish_body">Use this if your new phone cannot open your vault. If your new phone opens the vault, ignore this.</string>
+    <string name="onboarding_move_back_failed">Your vault could not be opened from this phone. Contact VettID within a day of the failed move: it may be repairable.</string>
+    <!-- ANDROID-PLAN "Owner check and status" (release R), verbatim, in two parts -->
+    <string name="ownercheck_presence_title">Your vault could not record that you were here.</string>
+    <string name="ownercheck_presence_body">If this stays for three days, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
+    <!-- The same on a vault with a time scale (staging): the recovery quiet period as it runs there, e.g. "3 hours" -->
+    <string name="ownercheck_presence_body_scaled">If this stays for %1$s, your vault is no longer protected against a recovery started by someone else. Try again later. If it does not go away, contact VettID.</string>
+    <!-- ANDROID-PLAN 0.1.78 "A phone that could not tell". The next two are approved by the owner. -->
+    <string name="recover_could_not_tell">We could not tell whether your last attempt recovered the vault. You can start a new recovery on the account site and use this phone for it; nothing on this phone is deleted.</string>
+    <string name="onboarding_open_took_phone">Your vault took this phone, but it cannot be unlocked right now. Contact VettID.</string>
+    <!-- DRAFT texts, pending the owner. -->
+    <string name="recover_could_not_recover">This phone could not recover your vault. Nothing on this phone is deleted. Contact VettID at support@vettid.org.</string>
+    <string name="recover_other_vault">This recovery code is for a different vault than the one this phone is recovering. Nothing was registered, and nothing on this phone is deleted.</string>
+    <string name="onboarding_open_contact_support">Email %1$s</string>
+    <string name="recover_undecided_checking">Checking whether your last attempt recovered the vault. Nothing on this phone is deleted.</string>
+    <string name="recover_undecided_wait">We are still checking whether your last attempt recovered the vault. This phone looks again in a few minutes. Nothing on this phone is deleted.</string>
+    <string name="recover_undecided_unknown">We could not check just now whether your last attempt recovered the vault. Nothing on this phone is deleted. Try again later.</string>
+    <string name="recover_undecided_check_again">Check again</string>
+    <string name="recover_undecided_new_code">Use a new recovery code</string>
+    <string name="onboarding_open_again">Your recovery is still open. Enter your PIN and your password to open it again.</string>
 </resources>

@@ -110,6 +110,8 @@ data class TagsUiState(
     val busy: Boolean = false,
     val dialog: TagDialog? = null,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
 ) {
@@ -207,7 +209,8 @@ class TagsViewModel @Inject constructor(private val sharing: SharingRepository) 
                     }
                 } else if (d.description != d.tag.description.orEmpty()) {
                     run {
-                        sharing.setTag(n, d.description, d.tag.color)
+                        // Colour and icon come from the registry as it is when sent (the colour keeper may have stored one).
+                        sharing.setTagDescription(n, d.description)
                         done()
                     }
                 } else {
@@ -252,7 +255,12 @@ class TagsViewModel @Inject constructor(private val sharing: SharingRepository) 
                 state.update { it.copy(busy = false, loading = false) }
             } catch (e: VaultFailure) {
                 val keep = e.kind != FailureKind.IN_USE
-                state.update { it.copy(busy = false, loading = false, error = e.kind, limit = e.limit, dialog = it.dialog.takeIf { keep }) }
+                state.update {
+                    it.copy(
+                        busy = false, loading = false, error = e.kind, errorCode = e.shownCode, limit = e.limit,
+                        dialog = it.dialog.takeIf { keep },
+                    )
+                }
             }
         }
     }
@@ -316,7 +324,7 @@ fun TagsScreen(state: TagsUiState, actions: TagsActions, modifier: Modifier = Mo
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.items_error_item),
-                    ItemsText.failure(e, limit = state.limit),
+                    ItemsText.failure(e, limit = state.limit, shownCode = state.errorCode),
                     modifier = Modifier.padding(horizontal = Spacing.s).testTag("tags_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
                 )
@@ -452,12 +460,11 @@ private const val SWATCHES_PER_ROW = 5
 private fun changeText(c: TagChange, renaming: Boolean): String {
     val items = pluralStringResource(R.plurals.items_tags_change_items, c.items, c.items)
     if (!renaming || c.sharesTotal == 0) return items
-    val auto = c.shares.count { it.mode == ShareMode.AUTO }
-    val asked = c.sharesTotal - auto
     return listOfNotNull(
         items,
-        auto.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_shared, it, it) },
-        asked.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_asked, it, it) },
+        c.sharedNow.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_shared, it, it) },
+        c.asked.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_tags_change_asked, it, it) },
+        c.unlisted.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_share_preview_more, it, it) },
     ).joinToString(" ")
 }
 

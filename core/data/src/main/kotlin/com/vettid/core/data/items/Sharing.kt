@@ -20,8 +20,13 @@ data class TagView(
 /** The tag registry as last listed; [version] is what `tag.set`, `.delete` and `.merge` name (§10.1). */
 data class TagRegistry(val version: Long, val tags: List<TagView>)
 
-/** An item a tag change would share, and how (§10.8 `tag.merge`'s `shares`). */
-data class SharePreview(val ruleId: String, val itemId: String, val mode: ShareMode)
+/**
+ * An item a tag change would share, and how (§10.8 `tag.merge`'s `shares`). An `auto` share that an `ask` rule holds
+ * back carries that rule's id ([askRuleId], 0.23.1): it stays pending, so it is not [sharedAutomatically].
+ */
+data class SharePreview(val ruleId: String, val itemId: String, val mode: ShareMode, val askRuleId: String? = null) {
+    val sharedAutomatically: Boolean get() = mode == ShareMode.AUTO && askRuleId == null
+}
 
 /**
  * What a tag delete or merge does, or would do with `dry_run` (§10.8): [items] changed, [rules] changed, and the
@@ -33,7 +38,16 @@ data class TagChange(
     val rules: Int = 0,
     val shares: List<SharePreview> = emptyList(),
     val sharesTotal: Int = 0,
-)
+) {
+    /** Listed shares that go out at once. */
+    val sharedNow: Int get() = shares.count { it.sharedAutomatically }
+
+    /** Listed shares the member is asked about (an `ask` rule, or an `auto` one that an `ask` rule holds back). */
+    val asked: Int get() = shares.count { !it.sharedAutomatically }
+
+    /** Shares counted in [sharesTotal] but not listed (the list is cut short): their mode is not known (owner decision 2026-10-22). */
+    val unlisted: Int get() = (sharesTotal - shares.size).coerceAtLeast(0)
+}
 
 /** A share rule's mode (§10.12): `ask` (the default: the member decides each new item) or `auto`. */
 enum class ShareMode(val wire: String) {

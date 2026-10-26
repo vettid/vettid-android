@@ -71,6 +71,8 @@ object AltChannel {
         /** The release_update target, "" without one. */
         val toPcr0: String = "",
         val cancelRecovery: Boolean = false,
+        /** (0.33.0, release R) The phone's unlock secret: the string ends with hex(SHA-256(unlock_secret)). */
+        val unlockSecret: ByteArray? = null,
     )
 
     /**
@@ -104,6 +106,10 @@ object AltChannel {
             f.toPcr0,
         )
         if (f.cancelRecovery) lines.add("cancel_recovery")
+        f.unlockSecret?.let {
+            if (it.size != UnlockSecret.SIZE) throw CryptoException.Format("unlock field")
+            lines.add(Bytes.hex(Bytes.sha256(it)))
+        }
         return lines.joinToString("\n")
     }
 
@@ -152,10 +158,18 @@ class EnrollRequest(
     val manifestSerial: Long,
     /** The app key (§11.3, §11.12, 0.15.0): SPKI DER of a P-256 key; REQUIRED since 0.15.0, null only for older vectors. */
     apiKey: ByteArray? = null,
+    /** (0.33.0, release R) The phone's unlock secret (epoch 1), right after `pin`; null for a vault before release R. */
+    unlockSecret: ByteArray? = null,
 ) {
+    private val unlockSecret = unlockSecret?.copyOf()
     private val nonce = nonce.copyOf()
     private val ik = ik.copyOf()
     private val apiKey = apiKey?.copyOf()
+
+    /** Zeroes this request's copy of the unlock secret (after [marshal]). */
+    fun wipe() {
+        unlockSecret?.fill(0)
+    }
 
     fun marshal(): ByteArray {
         if (nonce.size != 32 || !AltChannel.isValidPin(pin) || !Bytes.isLowerHex(manifestSha256, 64) || manifestSerial < 1) {
@@ -175,6 +189,7 @@ class EnrollRequest(
             .string("request_id", requestId)
             .base64("nonce", nonce)
             .string("pin", pin)
+            .also { b -> unlockSecret?.let { b.base64("unlock_secret", it) } }
             .raw("app", app)
             .string("manifest_sha256", manifestSha256)
             .uint("manifest_serial", manifestSerial)
@@ -198,9 +213,17 @@ class UnlockRequest(
     val update: ReleaseUpdate? = null,
     val cancelRecovery: Boolean = false,
     sig: ByteArray,
+    /** (0.33.0, release R) The phone's unlock secret, right after `pin`; null for a vault before release R. */
+    unlockSecret: ByteArray? = null,
 ) {
+    private val unlockSecret = unlockSecret?.copyOf()
     private val deviceIk = deviceIk.copyOf()
     private val sig = sig.copyOf()
+
+    /** Zeroes this request's copy of the unlock secret (after [marshal]). */
+    fun wipe() {
+        unlockSecret?.fill(0)
+    }
 
     /** `release_update` (§11.10.3). */
     class ReleaseUpdate(val to: String, val toRelease: Long, val approval: DeviceAssertion)
@@ -217,6 +240,7 @@ class UnlockRequest(
             .string("request_id", requestId)
             .base64("device_ik", deviceIk)
             .string("pin", pin)
+            .also { b -> unlockSecret?.let { b.base64("unlock_secret", it) } }
             .uint("min_state_seq", minStateSeq)
             .uint("min_header_seq", minHeaderSeq)
             .string("token", token)
@@ -243,8 +267,15 @@ class Descriptor private constructor(
     val release: String,
     val notAfter: Instant,
     private val raw: ByteArray,
+    /** (0.34.0, release R) The release's capabilities (§11.10.9); empty for a release before R. */
+    val capabilities: List<String> = emptyList(),
+    /** (0.43.0, STAGING-TIME-SCALE) The release's time scale (§11.10.8); 1 for a release before the scale. */
+    val timeScale: Long = TimeScale.REAL,
 ) {
     fun bytes(): ByteArray = raw.copyOf()
+
+    /** The capabilities and the time scale, as the app chooses from them (§11.10.9). */
+    val traits: ReleaseTraits get() = ReleaseTraits(capabilities, timeScale)
 
     companion object {
         private const val MAX = 4096
@@ -269,11 +300,21 @@ class Descriptor private constructor(
             val release = o.string("release")
             if (!isValidPcr(release)) throw CryptoException.Format("descriptor release")
             val notAfter = Timestamps.parseSeconds(o.string("not_after"))
-            return Descriptor(instanceId, kid, etk, release, notAfter, b.copyOf())
+            return Descriptor(instanceId, kid, etk, release, notAfter, b.copyOf(), Capabilities.parse(o), TimeScale.parse(o))
         }
 
-        /** Writes a descriptor in §11.2 member order (tests and tooling). */
-        fun marshal(instanceId: String, etk: KemPublicKey, release: String, notAfter: Instant): ByteArray = JsonBuilder()
+        /**
+         * Writes a descriptor in §11.2 member order (tests and tooling); [capabilities] only when given (release R),
+         * [timeScale] only when given (a release with the scale).
+         */
+        fun marshal(
+            instanceId: String,
+            etk: KemPublicKey,
+            release: String,
+            notAfter: Instant,
+            capabilities: List<String>? = null,
+            timeScale: Long? = null,
+        ): ByteArray = JsonBuilder()
             .uint("v", 1)
             .uint("suite", Suite.SUITE_2.toLong())
             .string("instance_id", instanceId)
@@ -281,6 +322,8 @@ class Descriptor private constructor(
             .string("etk", Base64s.encodeStd(etk.bytes()))
             .string("release", release)
             .string("not_after", Timestamps.formatSeconds(notAfter))
+            .also { b -> capabilities?.let { Capabilities.write(b, it) } }
+            .also { b -> timeScale?.let { TimeScale.write(b, it) } }
             .bytes()
     }
 }

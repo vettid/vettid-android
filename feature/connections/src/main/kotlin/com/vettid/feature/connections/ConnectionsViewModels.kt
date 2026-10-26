@@ -26,7 +26,9 @@ import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,6 +53,8 @@ data class ConnectionsUiState(
     /** Requests the other member declined (0.10.5), until dismissed here or in Approvals. */
     val peerDeclines: List<PeerDecline> = emptyList(),
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The top bar's search by name (owner request 2026-10-08); while it is set only matching connections show. */
     val query: String = "",
     /** Whether there is any connection to search. */
@@ -74,6 +78,7 @@ internal fun ConnectionInfo.matches(query: String): Boolean {
 class ConnectionsViewModel @Inject constructor(
     private val repo: ConnectionsRepository,
     private val approvals: ApprovalsRepository,
+    private val ownerCheck: OwnerCheckRepository,
 ) : ViewModel() {
     private val local = MutableStateFlow(ConnectionsUiState())
 
@@ -88,6 +93,12 @@ class ConnectionsViewModel @Inject constructor(
 
     init {
         refresh()
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        viewModelScope.launch {
+            ownerCheck.checkCleared().collect {
+                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+            }
+        }
     }
 
     fun refresh() {
@@ -98,7 +109,7 @@ class ConnectionsViewModel @Inject constructor(
                 val invites = repo.outstandingInvites()
                 local.update { it.copy(loading = false, invites = invites) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -130,7 +141,7 @@ class ConnectionsViewModel @Inject constructor(
             try {
                 block()
             } catch (e: VaultFailure) {
-                local.update { it.copy(error = e.kind) }
+                local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -155,6 +166,8 @@ data class InviteUiState(
     /** The request arrived already approved by in-person auto-approval (§6.4), not by this member here. */
     val autoApproved: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 )
 
 /**
@@ -232,7 +245,7 @@ class InviteViewModel @Inject constructor(
                 val inv = connections.createInvite(state.value.ttl)
                 state.update { it.copy(busy = false, step = InviteStep.SHOWING, invite = inv) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -256,7 +269,7 @@ class InviteViewModel @Inject constructor(
                     if (it.step == InviteStep.CONNECTED) it.copy(busy = false) else it.copy(busy = false, step = InviteStep.CONNECTING)
                 }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -289,7 +302,7 @@ class InviteViewModel @Inject constructor(
                 block()
                 state.update { if (finish) InviteUiState(ttls = it.ttls, ttl = it.ttl) else it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -333,6 +346,8 @@ data class AcceptUiState(
     val connectionName: String? = null,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 )
 
 /**
@@ -421,7 +436,7 @@ class AcceptViewModel @Inject constructor(
                 // The code may have arrived already (the handshake is quick): show it.
                 runCatching { approvals.refreshRequests() }
             } catch (e: VaultFailure) {
-                state.update { it.copy(step = AcceptStep.INPUT, error = e.kind) }
+                state.update { it.copy(step = AcceptStep.INPUT, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -437,7 +452,7 @@ class AcceptViewModel @Inject constructor(
                     if (it.step == AcceptStep.COMPARE) it.copy(busy = false, step = AcceptStep.APPROVED) else it.copy(busy = false)
                 }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -451,7 +466,7 @@ class AcceptViewModel @Inject constructor(
                 approvals.declineOutgoing(id)
                 state.update { it.copy(busy = false, step = AcceptStep.ENDED, end = RequestEnd.DECLINED) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -504,6 +519,8 @@ data class ConnectionDetailUiState(
     val gone: Boolean = false,
     val notice: DetailNotice? = null,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** Both directions of sharing with this connection (VAULT-ITEMS §6, VAULT-MESSAGING §10.12). */
     val sharing: DetailSharing = DetailSharing(),
     /** This build and this vault have calls and none is going on: the pill has "Call". */
@@ -579,7 +596,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 val c = repo.connection(id)
                 local.update { it.copy(loading = false, connection = c) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind, gone = e.kind == FailureKind.NOT_FOUND) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode, gone = e.kind == FailureKind.NOT_FOUND) }
             }
         }
         loadSharing()
@@ -660,7 +677,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 block()
                 local.update { it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind) }
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }

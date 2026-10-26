@@ -15,7 +15,9 @@ import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultLimit
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.data.vault.message
+import com.vettid.core.ui.format.failureText
 
 /** The member-facing names of sensitivities, kinds and categories, and the Vault screens' messages. */
 object ItemsText {
@@ -55,11 +57,12 @@ object ItemsText {
         else -> R.string.items_kind_other
     }
 
-    /** What a value of [kind] must look like, for an invalid one (§10.7). */
+    /** What a value of [kind] must look like, for an invalid one (§10.7); [monthYear]: a date entered as a month and year. */
     @StringRes
-    fun kindRule(kind: String): Int = when (kind) {
+    fun kindRule(kind: String, monthYear: Boolean = false): Int = when (kind) {
         FieldKinds.NUMBER -> R.string.items_rule_number
-        FieldKinds.DATE -> R.string.items_rule_date
+        // A month-and-year field names its own form for any invalid value, a full date included (VAULT-MESSAGING 0.55.5).
+        FieldKinds.DATE -> if (monthYear) R.string.items_rule_month else R.string.items_rule_date
         FieldKinds.EMAIL -> R.string.items_rule_email
         FieldKinds.PHONE -> R.string.items_rule_phone
         FieldKinds.URL -> R.string.items_rule_url
@@ -71,17 +74,17 @@ object ItemsText {
     @Composable
     fun category(id: String): String = ItemTemplates.category(id)?.let { stringResource(it.label) } ?: ItemTemplates.customLabel(id)
 
-    /** The message of one draft problem ([kind]: the field's, for an invalid value). */
+    /** The message of one draft problem ([kind] and [monthYear]: the field's, for an invalid value). */
     @Composable
     @Suppress("CyclomaticComplexMethod") // one message per problem
-    fun problem(p: DraftProblem, kind: String = FieldKinds.TEXT): String = when (p) {
+    fun problem(p: DraftProblem, kind: String = FieldKinds.TEXT, monthYear: Boolean = false): String = when (p) {
         DraftProblem.NAME_EMPTY -> stringResource(R.string.items_problem_name_empty)
         DraftProblem.NAME_TOO_LONG -> stringResource(R.string.items_problem_name_long)
         DraftProblem.BAD_CHARACTER -> stringResource(R.string.items_problem_bad_character)
         DraftProblem.CATEGORY_INVALID -> stringResource(R.string.items_problem_category)
         DraftProblem.LABEL_EMPTY -> stringResource(R.string.items_problem_label_empty)
         DraftProblem.LABEL_TOO_LONG -> stringResource(R.string.items_problem_label_long)
-        DraftProblem.VALUE_INVALID -> stringResource(kindRule(kind))
+        DraftProblem.VALUE_INVALID -> stringResource(kindRule(kind, monthYear))
         DraftProblem.VALUE_TOO_LONG -> stringResource(R.string.items_problem_value_long)
         DraftProblem.NOTES_TOO_LONG -> stringResource(R.string.items_problem_notes_long)
         DraftProblem.TOO_MANY_FIELDS -> stringResource(R.string.items_problem_fields)
@@ -105,6 +108,8 @@ object ItemsText {
         critical: Boolean = false,
         profile: Boolean = false,
         limit: VaultLimit? = null,
+        /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names, or null; an item's `bad_request` keeps its text. */
+        shownCode: String? = null,
     ): String = when {
         kind == FailureKind.LIMIT && limit != null -> limit(limit)
         kind == FailureKind.LIMIT && profile -> stringResource(R.string.items_error_limit_profile)
@@ -113,9 +118,13 @@ object ItemsText {
         kind == FailureKind.LIMIT -> stringResource(R.string.items_error_limit)
         kind == FailureKind.CONFLICT -> stringResource(R.string.items_error_conflict)
         kind == FailureKind.NOT_FOUND -> stringResource(R.string.items_error_not_found)
+        kind == FailureKind.OTHER && shownCode != null && shownCode != CODE_BAD_REQUEST ->
+            failureText(kind.messageRes(), kind.vaultCode(shownCode))
         kind == FailureKind.OTHER -> stringResource(R.string.items_error_refused)
-        else -> stringResource(kind.messageRes())
+        else -> failureText(kind.messageRes())
     }
+
+    private const val CODE_BAD_REQUEST = "bad_request"
 
     /** A named limit (VAULT-MESSAGING 0.21.0 §10.1) in the member's words, with its bound. */
     @Composable

@@ -64,8 +64,10 @@ import com.vettid.core.data.vault.ReleaseUpdateInbox
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.vault.VaultManager
+import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
+import com.vettid.core.data.wipe.AppDataClear
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.relay.NetworkGate
 import com.vettid.core.relay.TransportRetry
@@ -104,8 +106,15 @@ object AppModule {
     @AppScope
     fun scope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + safetyNet)
 
-    /** A relay or transport error that escapes a coroutine of the process scope is logged, never fatal. */
-    private val safetyNet = RelaySafetyNet(onRelayError = { e -> android.util.Log.w("VettID", "relay error not handled: ${e.message}") })
+    /**
+     * A relay or transport error that escapes a coroutine of the process scope is logged, never fatal; anything else
+     * crashes. Class names only, never a message (the owner's rule, 2026-10-23); the stack frames are kept in every
+     * build (the owner, 2026-10-23: they carry no data, and a crash report without them cannot be traced).
+     */
+    private val safetyNet = RelaySafetyNet(
+        onRelayError = { e -> android.util.Log.w("VettID", RelaySafetyNet.relayLine(e)) },
+        fatal = RelaySafetyNet.crash(keepFrames = true),
+    )
 
     /** One pool for every client derived from [http]; emptied when the network changes or the app comes back (VettIdApplication). */
     @Provides
@@ -140,6 +149,11 @@ object AppModule {
         @AppScope scope: CoroutineScope,
         wipe: LocalWipe,
     ): VaultManager = VaultManager(context, env, http, scope, deviceName = Build.MODEL ?: "Android", wiper = wipe)
+
+    /** The way out of a wipe that did not finish: VettID's data on this phone erased by the system (local only). */
+    @Provides
+    @Singleton
+    fun appDataClear(@ApplicationContext context: Context): AppDataClear = AppDataClear.android(context)
 
     /** The wipe of a replaced phone (owner decision, 2026-10-05): what it erases, and the in-memory state it resets. */
     @Provides
@@ -178,6 +192,9 @@ object AppModule {
 
     @Provides
     fun ownerCheckRepository(m: VaultManager): OwnerCheckRepository = m.ownerCheck
+
+    @Provides
+    fun timeScaleSource(m: VaultManager): TimeScaleSource = m
 
     @Provides
     fun profileRepository(m: VaultManager): ProfileRepository = m.profile
@@ -230,6 +247,8 @@ object AppModule {
             override suspend fun save(m: PushMemory) = prefs.setPushMemory(m)
         },
         mode = { prefs.preferences.first().effectiveNotificationMode },
+        // Steps only: the registrar never passes a token or a challenge code here.
+        log = { android.util.Log.i("PushRegistrar", it) },
     )
 
     @Provides
@@ -283,7 +302,7 @@ object AppModule {
         @AppScope scope: CoroutineScope,
     ): FeedNotifier = FeedNotifier(
         scope,
-        VaultNotifySource(m, scope),
+        VaultNotifySource(m, scope) { context.resources },
         prefs.preferences.map { NotifySettings(it.effectiveNotificationMode, it.notificationPreviews) }
             .stateIn(scope, SharingStarted.Eagerly, NotifySettings(NotificationMode.OFF)), // until the preferences are read
         visibility.visible,
@@ -312,6 +331,24 @@ object AppModule {
         m: VaultManager,
     ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope, notes) { m.phase.value == AppPhase.SignedOut }
 
+    /** VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background. */
+    @Provides
+    @Singleton
+    fun changeDecisionNotifier(
+        @ApplicationContext context: Context,
+        m: VaultManager,
+        @AppScope scope: CoroutineScope,
+    ): com.vettid.app.notify.ChangeDecisionNotifier = com.vettid.app.notify.ChangeDecisionNotifier(context, m, scope)
+
+    /** Release L's Q4 (owner decision 2026-10-23): the pending lock's job, and its notice in the background. */
+    @Provides
+    @Singleton
+    fun pendingLockNotifier(
+        @ApplicationContext context: Context,
+        m: VaultManager,
+        @AppScope scope: CoroutineScope,
+    ): com.vettid.app.notify.PendingLockNotifier = com.vettid.app.notify.PendingLockNotifier(context, m, scope)
+
     /** No vault on this phone: no notification of VettID stays (owner report 2026-10-11). */
     @Provides
     @Singleton
@@ -332,6 +369,9 @@ object AppModule {
 
     @Provides
     fun messagesRepository(m: VaultManager): MessagesRepository = m.social
+
+    @Provides
+    fun attachmentsRepository(m: VaultManager): com.vettid.core.data.social.AttachmentsRepository = m.attachments
 
     @Provides
     fun approvalsRepository(m: VaultManager): ApprovalsRepository = m.social

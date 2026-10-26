@@ -2,6 +2,7 @@ package com.vettid.feature.history
 
 import androidx.annotation.StringRes
 import com.vettid.core.data.vault.AuditCategory
+import com.vettid.core.data.vault.RecoveryRefs
 
 /**
  * Member-facing text of the audit log's kinds (VAULT-MESSAGING §10.9): one title per kind the spec names, the
@@ -13,6 +14,8 @@ object AuditKinds {
     val ITEM_REF_KINDS = setOf(
         "item.added", "item.updated", "item.deleted", "item.sensitivity_changed", "item.revealed",
         "share.included", "share.declined", "share.withdrawn", "leash.item.read", "leash.item.used",
+        // ANDROID-PLAN 0.1.52 §4 "Event titles" (VAULT-MESSAGING 0.42.0 §10.9: `ref` = `item_id`).
+        "leash.item.run", "leash.item.proxy", "leash.item.changed",
     )
 
     /** The item an entry refers to, if any. */
@@ -31,6 +34,11 @@ object AuditKinds {
     }
 
     const val KIND_EXPORTED = "audit.exported"
+
+    const val KIND_LOCKED = "vault.locked"
+
+    /** (Release L) `vault.locked`'s `ref` for the idle lock (§3.6.8). */
+    const val REF_IDLE = "idle"
 
     /**
      * What a signer entry's `ref` says (VAULT-MESSAGING 0.27.0 §10.9, §11.7.1; classes, never digests):
@@ -72,15 +80,199 @@ object AuditKinds {
         data class Dropped(val reason: String) : Title
 
         data class Unknown(val kind: String) : Title
+
+        /** [res] with a number read from the entry's `ref` ([n]) and the number of recovery attempts ([of]). */
+        data class Counted(@param:StringRes val res: Int, val n: Int, val of: Int = RecoveryRefs.ATTEMPTS) : Title
+
+        /**
+         * [res] with the name of the entry's connection, device or item ([who]); [anyRes] when that name is not known or
+         * the connection, device or item is gone (the title drops the name).
+         */
+        data class Named(@param:StringRes val res: Int, @param:StringRes val anyRes: Int, val who: Who) : Title
     }
 
-    @Suppress("ReturnCount")
-    fun title(kind: String): Title {
+    /** Whose name a [Title.Named] shows. */
+    enum class Who { CONNECTION, DEVICE, ITEM }
+
+    /**
+     * How the entry of [kind] with [ref] reads (ANDROID-PLAN 0.1.52 §4 "Event titles"): titles that depend on `ref`
+     * first, then those that name the connection, device or item, then the fixed titles.
+     */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
+    fun title(kind: String, ref: String? = null): Title {
+        when (kind) {
+            KIND_ATTEMPT -> return RecoveryRefs.attempt(ref)?.let { Title.Counted(R.string.history_kind_recovery_attempt, it.n) }
+                ?: Title.Known(R.string.history_kind_recovery_attempt_any)
+            KIND_ATTEMPTS_USED -> return RecoveryRefs.attemptsUsed(ref)
+                ?.let { Title.Counted(R.string.history_kind_recovery_attempts_used, it) }
+                ?: Title.Known(R.string.history_kind_recovery_attempts_used_any)
+            KIND_CLOSED -> return Title.Known(closedTitle(RecoveryRefs.closure(ref)?.reason))
+            // (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself: `vault.locked` with `ref` `idle`.
+            KIND_LOCKED -> if (ref == REF_IDLE) return Title.Known(R.string.history_kind_vault_locked_idle)
+        }
+        NAMED[kind]?.let { return it }
         TITLES[kind]?.let { return Title.Known(it) }
         if (kind.endsWith(SUMMARY)) TITLES[kind.removeSuffix(SUMMARY)]?.let { return Title.Summary(it) }
+        if (kind.startsWith(DROP) && kind.endsWith(MALFORMED)) return Title.Known(R.string.history_kind_drop_malformed)
         if (kind.startsWith(DROP) && kind.length > DROP.length) return Title.Dropped(kind.removePrefix(DROP).replace('_', ' '))
         return Title.Unknown(kind)
     }
+
+    @StringRes
+    private fun closedTitle(reason: String?): Int = when (reason) {
+        "pin" -> R.string.history_kind_recovery_closed_pin
+        "password" -> R.string.history_kind_recovery_closed_password
+        "reset" -> R.string.history_kind_recovery_closed_reset
+        "backup_off" -> R.string.history_kind_recovery_closed_backup_off
+        "exhausted" -> R.string.history_kind_recovery_closed_exhausted
+        "delete" -> R.string.history_kind_recovery_closed_delete
+        RecoveryRefs.REASON_ROLLBACK -> R.string.history_kind_recovery_closed_rollback
+        else -> R.string.history_kind_recovery_closed
+    }
+
+    /**
+     * Entries History does not list (ANDROID-PLAN 0.1.52 §4 "Event titles", decision 4): `recovery.open` (its outcome is
+     * the matching attempt's detail), `device.unlinked_sent`, `drop.call_glare`, and (owner decision of 2026-10-20) a
+     * generation closed as `stale`, the harmless case. They stay in the log, in the chain check and in an export. A
+     * generation closed as `rollback` (a host served an older recovery record) is shown.
+     */
+    fun hidden(kind: String, ref: String?): Boolean = when (kind) {
+        RecoveryRefs.KIND_OPEN, "device.unlinked_sent", "drop.call_glare" -> true
+        KIND_CLOSED -> RecoveryRefs.closure(ref)?.reason == RecoveryRefs.REASON_STALE
+        else -> false
+    }
+
+    /** One line of an entry's **Details**. */
+    sealed interface Detail {
+        data class Line(@param:StringRes val res: Int) : Detail
+
+        /**
+         * A line that names a duration the vault's time scale divides: [res] in real time, else [scaledRes] with
+         * [realSeconds] as the vault runs it (STAGING-TIME-SCALE).
+         */
+        data class Scaled(@param:StringRes val res: Int, @param:StringRes val scaledRes: Int, val realSeconds: Long) : Detail
+
+        /** [res] with a name the vault recorded ([name]). */
+        data class Named(@param:StringRes val res: Int, val name: String) : Detail
+    }
+
+    /** What is known of a `not_success` attempt's outcome (the matching `recovery.open`, [RecoveryRefs.outcomes]). */
+    sealed interface Outcome {
+        /** [phoneName]: the attempting phone's self-reported name, shown only as such; null when the entry has none. */
+        data class Matched(val outcome: String, val phoneName: String? = null) : Outcome
+
+        /** The entries were read and none matches: "Details not available." */
+        data object None : Outcome
+
+        /** Not read (yet), or the read failed: no outcome line. */
+        data object Unknown : Outcome
+
+        /** The vault wrote this attempt again as `success`: "Later successful." instead of the not-success lines. */
+        data object LaterSuccessful : Outcome
+    }
+
+    /** The detail lines of ANDROID-PLAN 0.1.52 §4 "Event titles" for the entry of [kind] with [ref]. */
+    @Suppress("CyclomaticComplexMethod")
+    fun details(kind: String, ref: String?, outcome: Outcome = Outcome.Unknown): List<Detail> = when (kind) {
+        KIND_ATTEMPT -> attemptDetails(ref, outcome)
+        KIND_ATTEMPTS_USED -> listOf(Detail.Line(R.string.history_detail_recovery_attempts_used))
+        "recovery.armed" -> listOf(Detail.Line(R.string.history_detail_recovery_armed))
+        KIND_CLOSED -> closedDetails(ref)
+        "recovery.presence_unrecorded" -> listOf(
+            Detail.Scaled(R.string.history_detail_presence_unrecorded, R.string.history_detail_presence_unrecorded_scaled, QUIET_SECONDS),
+        )
+        "identity.rotation_failed" -> listOf(Detail.Line(R.string.history_detail_rotation_failed))
+        "identity.rotate_conflict" -> listOf(Detail.Line(R.string.history_detail_rotate_conflict))
+        "push.registered" -> when (ref) {
+            "fcm" -> listOf(Detail.Line(R.string.history_detail_push_google))
+            "apns" -> listOf(Detail.Line(R.string.history_detail_push_apple))
+            else -> emptyList()
+        }
+        "push.unregistered" -> when (ref) {
+            "app" -> listOf(Detail.Line(R.string.history_detail_push_off_app))
+            "transferred" -> listOf(Detail.Line(R.string.history_detail_push_off_transferred))
+            "replaced" -> listOf(Detail.Line(R.string.history_detail_push_off_replaced))
+            else -> emptyList()
+        }
+        "push.token_gone" -> listOf(Detail.Line(R.string.history_detail_push_token_gone))
+        "leash.item.run" -> listOf(Detail.Line(R.string.history_detail_leash_item_run))
+        "leash.item.proxy" -> listOf(Detail.Line(R.string.history_detail_leash_item_proxy))
+        "credential.utk_resync" -> listOf(Detail.Line(R.string.history_detail_credential_utk_resync))
+        "credential.holder_cleared" -> listOf(Detail.Line(R.string.history_detail_credential_holder_cleared))
+        else -> emptyList()
+    }
+
+    @Suppress("ReturnCount")
+    private fun attemptDetails(ref: String?, outcome: Outcome): List<Detail> {
+        val a = RecoveryRefs.attempt(ref) ?: return emptyList()
+        if (a.success) return listOf(Detail.Line(R.string.history_detail_attempt_success))
+        if (outcome == Outcome.LaterSuccessful) return listOf(Detail.Line(R.string.history_detail_attempt_later_success))
+        val line = when (outcome) {
+            is Outcome.Matched -> outcomeLine(outcome.outcome)
+            Outcome.None -> Detail.Line(R.string.history_detail_attempt_no_details)
+            Outcome.Unknown, Outcome.LaterSuccessful -> null
+        }
+        // Self-reported: shown in that form only, and never changing the title, the priority or the channel.
+        val phone = (outcome as? Outcome.Matched)?.phoneName?.let { Detail.Named(R.string.history_detail_attempt_phone, it) }
+        return listOfNotNull(Detail.Line(R.string.history_detail_attempt_not_success), line, phone)
+    }
+
+    /** A counted open's outcome in words (§11.14.11); null for one this app does not know. */
+    fun outcomeLine(outcome: String): Detail? = when (outcome) {
+        "wrong" -> Detail.Line(R.string.history_detail_outcome_wrong)
+        "attempt_lost" -> Detail.Line(R.string.history_detail_outcome_attempt_lost)
+        "quiet" -> Detail.Scaled(R.string.history_detail_outcome_quiet, R.string.history_detail_outcome_quiet_scaled, QUIET_SECONDS)
+        "wait" -> Detail.Line(R.string.history_detail_outcome_wait)
+        "exhausted" -> Detail.Line(R.string.history_detail_outcome_exhausted)
+        "closed" -> Detail.Line(R.string.history_detail_outcome_closed)
+        else -> null
+    }
+
+    @Suppress("ReturnCount")
+    private fun closedDetails(ref: String?): List<Detail> {
+        val c = RecoveryRefs.closure(ref) ?: return emptyList()
+        val first = when (c.reason) {
+            "pin", "password", "reset" -> R.string.history_detail_recovery_closed_reset
+            "backup_off" -> R.string.history_detail_recovery_closed_backup_off
+            "exhausted" -> R.string.history_detail_recovery_closed_exhausted
+            "delete" -> R.string.history_detail_recovery_closed_delete
+            RecoveryRefs.REASON_ROLLBACK -> R.string.history_detail_recovery_closed_rollback
+            else -> return emptyList()
+        }
+        return listOfNotNull(Detail.Line(first), Detail.Line(R.string.history_detail_recovery_closed_unconfirmed).takeIf { c.unconfirmed })
+    }
+
+    const val KIND_ATTEMPT = RecoveryRefs.KIND_ATTEMPT
+    const val KIND_ATTEMPTS_USED = "recovery.attempts_used"
+    const val KIND_CLOSED = "recovery.generation_closed"
+
+    /** The quiet period (§11.14.5): three days, divided by the vault's time scale. */
+    private const val QUIET_SECONDS = 3 * 86_400L
+    private const val MALFORMED = "_malformed"
+
+    private val SECRET_USED =
+        Title.Named(R.string.history_kind_leash_item_secret_used, R.string.history_kind_leash_item_secret_used_any, Who.ITEM)
+
+    /** The titles that name the entry's connection, device or item (ANDROID-PLAN 0.1.52 §4 "Event titles"). */
+    private val NAMED: Map<String, Title.Named> = mapOf(
+        "identity.rotate_conflict" to
+            Title.Named(R.string.history_kind_rotate_conflict, R.string.history_kind_rotate_conflict_any, Who.CONNECTION),
+        "identity.rotate_resolved" to
+            Title.Named(R.string.history_kind_rotate_resolved, R.string.history_kind_rotate_resolved_any, Who.CONNECTION),
+        "call.permission_off" to
+            Title.Named(R.string.history_kind_call_permission_off, R.string.history_kind_call_permission_off_any, Who.CONNECTION),
+        "call.permission_on" to
+            Title.Named(R.string.history_kind_call_permission_on, R.string.history_kind_call_permission_on_any, Who.CONNECTION),
+        "push.registered" to Title.Named(R.string.history_kind_push_registered, R.string.history_kind_push_registered_any, Who.DEVICE),
+        "push.unregistered" to
+            Title.Named(R.string.history_kind_push_unregistered, R.string.history_kind_push_unregistered_any, Who.DEVICE),
+        "push.token_gone" to
+            Title.Named(R.string.history_kind_push_token_gone, R.string.history_kind_push_token_gone_any, Who.DEVICE),
+        "leash.item.run" to SECRET_USED,
+        "leash.item.proxy" to SECRET_USED,
+        "leash.item.changed" to
+            Title.Named(R.string.history_kind_leash_item_changed, R.string.history_kind_leash_item_changed_any, Who.ITEM),
+    )
 
     /** The filter chip label of each category (ANDROID-PLAN 0.1.11). */
     @StringRes
@@ -156,6 +348,10 @@ object AuditKinds {
         "credential.alarm.confirmed" to R.string.history_kind_credential_alarm_confirmed,
         "credential.alarm.resolved" to R.string.history_kind_credential_alarm_resolved,
         "credential.reset" to R.string.history_kind_credential_reset,
+        // ANDROID-PLAN 0.1.60 (VAULT-MESSAGING 0.52.0 §3.5.4): History only, no feed item.
+        "credential.utk_resync" to R.string.history_kind_credential_utk_resync,
+        // ANDROID-PLAN 0.1.64: History only, no feed item.
+        "credential.holder_cleared" to R.string.history_kind_credential_holder_cleared,
         "audit.exported" to R.string.history_kind_audit_exported,
         "recovery.requested" to R.string.history_kind_recovery_requested,
         "recovery.replaced" to R.string.history_kind_recovery_replaced,
@@ -195,6 +391,10 @@ object AuditKinds {
         "wallet.signed" to R.string.history_kind_wallet_signed,
         "message.sent" to R.string.history_kind_message_sent,
         "message.received" to R.string.history_kind_message_received,
+        "message.attachment_sent" to R.string.history_kind_photo_sent,
+        "message.attachment_received" to R.string.history_kind_photo_received,
+        "message.attachment_failed" to R.string.history_kind_photo_failed,
+        "message.attachment_refused" to R.string.history_kind_photo_refused,
         "call.outgoing" to R.string.history_kind_call_outgoing,
         "call.incoming" to R.string.history_kind_call_incoming,
         "call.answered" to R.string.history_kind_call_answered,
@@ -239,6 +439,26 @@ object AuditKinds {
         "drop.ask_cooldown" to R.string.history_kind_drop_ask_cooldown,
         "drop.ask_pending" to R.string.history_kind_drop_ask_pending,
         "drop.ask_rate" to R.string.history_kind_drop_ask_rate,
+        "drop.attachment_rate" to R.string.history_kind_drop_attachment_rate,
+        "drop.attachment_malformed" to R.string.history_kind_drop_attachment_malformed,
         "drop.grant_rate_limited" to R.string.history_kind_drop_grant_rate_limited,
+        // ANDROID-PLAN 0.1.52 §4 "Event titles" (VAULT-MESSAGING 0.49.1 §10.9, §11.14.11).
+        "vault.pin_changed" to R.string.history_kind_vault_pin_changed,
+        "device.secret_renewed" to R.string.history_kind_device_secret_renewed,
+        "recovery.armed" to R.string.history_kind_recovery_armed,
+        "recovery.presence_unrecorded" to R.string.history_kind_recovery_presence_unrecorded,
+        "identity.rotation_failed" to R.string.history_kind_identity_rotation_failed,
+        "connection.request.approved" to R.string.history_kind_connection_request_approved,
+        "connection.request.declined" to R.string.history_kind_connection_request_declined,
+        "drop.call_off" to R.string.history_kind_drop_call_off,
+        "drop.call_rate" to R.string.history_kind_drop_call_rate,
+        "drop.call_share" to R.string.history_kind_drop_call_share,
+        "drop.one_app" to R.string.history_kind_drop_one_app,
+        "drop.owner_check" to R.string.history_kind_drop_owner_check,
+        "drop.profile_ik_mismatch" to R.string.history_kind_drop_profile_ik_mismatch,
+        "drop.grant_duplicate" to R.string.history_kind_drop_grant_duplicate,
+        "drop.grant_limit" to R.string.history_kind_drop_grant_limit,
+        "drop.critical_signature" to R.string.history_kind_drop_critical_signature,
+        "drop.rate_limited" to R.string.history_kind_drop_rate_limited,
     )
 }

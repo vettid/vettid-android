@@ -7,6 +7,7 @@ import com.vettid.core.data.vault.HoldOff
 import com.vettid.core.data.vault.OwnerCheckOutcome
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckView
+import com.vettid.core.data.vault.TimeScaleView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -51,7 +52,8 @@ sealed interface OwnerCheckMessage {
 
     data object Backoff : OwnerCheckMessage
 
-    data class Failed(val kind: FailureKind, val code: String?) : OwnerCheckMessage
+    /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names, or null. */
+    data class Failed(val kind: FailureKind, val code: String?, val shownCode: String? = null) : OwnerCheckMessage
 }
 
 /** Immutable UI state of the owner-check screen. */
@@ -68,6 +70,15 @@ data class OwnerCheckUiState(
     /** The check passed: the screen closes. */
     val passed: Boolean = false,
     val locking: Boolean = false,
+    /**
+     * (Release R, §11.14.5) The vault could not record that the member was here (`present_recorded: false`): the
+     * presence notice, until a later answer or `vault.status` says the presence was recorded.
+     */
+    val presenceUnrecorded: Boolean = false,
+    /** The check passed with the presence not recorded: the screen stays with the notice until the member goes on. */
+    val passedUnrecorded: Boolean = false,
+    /** (STAGING-TIME-SCALE) The vault's time scale: the interval as it runs, and the staging note. */
+    val timeScale: TimeScaleView = TimeScaleView(),
 ) {
     val submitAllowed: Boolean get() = !busy && !locking && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
 
@@ -87,6 +98,9 @@ interface OwnerCheckActions {
     fun setHoldOff(choice: HoldOffChoice)
     fun submit()
     fun lockVault()
+
+    /** After a check that passed with the presence notice: the member read it; the screen closes. */
+    fun acknowledgePresence() {}
 }
 
 /**
@@ -101,12 +115,14 @@ class OwnerCheckViewModel @Inject constructor(
     private val repo: OwnerCheckRepository,
     private val vault: VaultRepository,
 ) : ViewModel(), OwnerCheckActions {
-    private val state = MutableStateFlow(OwnerCheckUiState(view = repo.ownerCheck.value))
+    private val state = MutableStateFlow(OwnerCheckUiState(view = repo.ownerCheck.value, timeScale = vault.timeScale.value))
     val uiState: StateFlow<OwnerCheckUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
+        viewModelScope.launch { repo.presenceUnrecorded.collect { p -> state.update { it.copy(presenceUnrecorded = p) } } }
+        viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(timeScale = t) } } }
     }
 
     /** Opens the screen for [mode], with nothing entered; a check sent right after an unlock says how it went. */
@@ -114,7 +130,10 @@ class OwnerCheckViewModel @Inject constructor(
         ticker?.cancel()
         val after = repo.unlockCheckOutcome.value
         repo.consumeUnlockCheckOutcome()
-        state.value = OwnerCheckUiState(mode = mode, view = repo.ownerCheck.value, message = after?.let { messageOf(it) })
+        state.value = OwnerCheckUiState(
+            mode = mode, view = repo.ownerCheck.value, message = after?.let { messageOf(it) },
+            presenceUnrecorded = repo.presenceUnrecorded.value, timeScale = vault.timeScale.value,
+        )
         if (after is OwnerCheckOutcome.Backoff) startBackoff(after.retryAfterSeconds)
         viewModelScope.launch { runCatching { repo.refreshOwnerCheck() } }
     }
@@ -122,8 +141,12 @@ class OwnerCheckViewModel @Inject constructor(
     /** Leaves the screen without a check (not while gated): forgets what was entered. */
     fun cancel() {
         ticker?.cancel()
-        state.update { OwnerCheckUiState(mode = it.mode, view = it.view) }
+        state.update {
+            OwnerCheckUiState(mode = it.mode, view = it.view, presenceUnrecorded = it.presenceUnrecorded, timeScale = it.timeScale)
+        }
     }
+
+    override fun acknowledgePresence() = state.update { if (it.passedUnrecorded) it.copy(passed = true) else it }
 
     override fun setPin(v: String) = state.update {
         it.copy(pin = v.filter { c -> c.isDigit() }.take(OwnerCheckUiState.MAX_PIN), message = null)
@@ -146,10 +169,18 @@ class OwnerCheckViewModel @Inject constructor(
             val r = try {
                 repo.check(s.pin, s.password, holdOff)
             } catch (e: VaultFailure) {
-                OwnerCheckOutcome.Failed(e.kind, e.code)
+                OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
             }
-            // §3.6.5: neither entry is kept beyond the answer.
-            state.update { it.copy(busy = false, pin = "", password = "", passed = r == OwnerCheckOutcome.Passed, message = messageOf(r)) }
+            // §3.6.5: neither entry is kept beyond the answer. §11.14.5: a check that passed without the presence recorded
+            // keeps the screen, with the notice, until the member goes on.
+            val passed = r == OwnerCheckOutcome.Passed
+            val unrecorded = passed && repo.presenceUnrecorded.value
+            state.update {
+                it.copy(
+                    busy = false, pin = "", password = "", passed = passed && !unrecorded, passedUnrecorded = unrecorded,
+                    presenceUnrecorded = if (passed) repo.presenceUnrecorded.value else it.presenceUnrecorded, message = messageOf(r),
+                )
+            }
             if (r is OwnerCheckOutcome.Backoff) startBackoff(r.retryAfterSeconds)
         }
     }
@@ -171,7 +202,7 @@ class OwnerCheckViewModel @Inject constructor(
         is OwnerCheckOutcome.BadPin -> OwnerCheckMessage.BadPin(r.checksLeft)
         is OwnerCheckOutcome.BadPassword -> OwnerCheckMessage.BadPassword(r.checksLeft)
         is OwnerCheckOutcome.Backoff -> OwnerCheckMessage.Backoff
-        is OwnerCheckOutcome.Failed -> OwnerCheckMessage.Failed(r.kind, r.code)
+        is OwnerCheckOutcome.Failed -> OwnerCheckMessage.Failed(r.kind, r.code, r.shownCode)
     }
 
     private fun startBackoff(seconds: Long) {

@@ -41,14 +41,30 @@ class ReleaseUpdateManagerTest {
 
         override fun ownerCheckDue() = due
 
+        var changeUnresolved = false
+
+        override fun changeUnresolved() = changeUnresolved
+
         override suspend fun lock() {
             log += "lock"
             lockFails?.let { throw it }
         }
 
-        override suspend fun unlock(pin: String, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+        /** What [pinGeneration] reads; [taken] records the reading each unlock's PIN came with. */
+        var generation = 0
+        val taken = mutableListOf<Int>()
+
+        override fun pinGeneration() = generation
+
+        override suspend fun unlock(pin: TakenPin, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+            // As the vault manager: nothing is sent with a PIN taken before which PIN the vault expects moved.
+            taken += pin.generation
+            if (pin.generation != generation) {
+                log += "refused"
+                return UpdateStepResult.Failed(FailureKind.CREDENTIAL_UNSETTLED, ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE)
+            }
             log += "unlock"
-            unlocks += Call(pin, approve?.number, abandon)
+            unlocks += Call(pin.pin, approve?.number, abandon)
             if (startingCallbacks > 0) {
                 startingCallbacks--
                 onStarting(5)
@@ -58,6 +74,11 @@ class ReleaseUpdateManagerTest {
         }
 
         override fun canAbandon() = abandonable
+
+        /** The stored marker of an unconfirmed move (ANDROID-PLAN 0.1.54). */
+        var marker: MoveUnconfirmed? = null
+
+        override fun moveMarker() = marker
     }
 
     private fun TestScope.manager(ops: Ops) = ReleaseUpdateManager(backgroundScope, ops)
@@ -358,5 +379,243 @@ class ReleaseUpdateManagerTest {
         m.refreshOffer()
         assertTrue(m.offerKnown.value)
         assertNull(m.offer.value)
+    }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9 (H1): while a PIN or password change is undecided the update sends nothing: it
+     * does not start, and a retry or a return to the previous release is held with "still checking". Its lock and
+     * unlock would send a PIN that may be the wrong one of two.
+     */
+    @Test
+    fun noUpdateStepIsSentWhileAChangeIsUnresolved() = runTest {
+        val ops = Ops()
+        ops.changeUnresolved = true
+        val m = manager(ops)
+        assertTrue(m.changeUnresolved())
+        assertFalse(m.start("2468", offer))
+        runCurrent()
+        assertTrue(ops.log.isEmpty())
+        // A failed update (the PIN step) and a new release that did not open: held too.
+        ops.changeUnresolved = false
+        ops.results += UpdateStepResult.BadPin(0)
+        assertTrue(m.start("2468", offer))
+        runCurrent()
+        assertEquals(UpdateStep.BAD_PIN, m.progress.value!!.step)
+        val sent = ops.log.size
+        ops.changeUnresolved = true
+        m.retry("1357")
+        runCurrent()
+        assertEquals("nothing sent", sent, ops.log.size)
+        assertEquals(FailureKind.CHANGE_UNRESOLVED, m.progress.value!!.failure)
+        assertEquals(UpdateStep.BAD_PIN, m.progress.value!!.step)
+        ops.changeUnresolved = false
+        ops.results += UpdateStepResult.Moved
+        ops.results += UpdateStepResult.Failed(FailureKind.NETWORK, null)
+        m.retry("1357")
+        runCurrent()
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
+        val sent2 = ops.log.size
+        ops.changeUnresolved = true
+        m.abandon("1357")
+        m.retry("1357")
+        runCurrent()
+        assertEquals(sent2, ops.log.size)
+        assertEquals(FailureKind.CHANGE_UNRESOLVED, m.progress.value!!.failure)
+    }
+
+    // --- (VAULT-MESSAGING §11.14.9 step 2; chosen) a PIN taken before which PIN the vault expects moved ---
+
+    /**
+     * A PIN change (or anything that moves which PIN the vault expects) while the member typed: the approval's unlock
+     * sends nothing, the step fails with the "earlier request" text and `pin_taken_before_change`, and the PIN typed again
+     * with a fresh reading goes as usual.
+     */
+    @Test
+    fun aPinTakenBeforeAChangeSendsNothingAndIsAskedAgain() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val reading = m.pinGeneration
+        ops.generation++ // a PIN change began while the PIN was typed
+        assertTrue(m.start("2468", offer, reading))
+        runCurrent()
+        assertTrue("refused before the lock: nothing locked, nothing sent", ops.log.isEmpty())
+        assertTrue(ops.taken.isEmpty())
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.FAILED, p.step)
+        assertEquals(FailureKind.CREDENTIAL_UNSETTLED, p.failure)
+        assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, p.failureCode)
+        assertTrue("the vault is as it was", p.vaultOpen)
+        assertTrue(p.waiting)
+        // "Try again" with the same old reading: refused again before the lock.
+        m.retry("2468", reading)
+        runCurrent()
+        assertTrue(ops.log.isEmpty())
+        m.retry("1357", m.pinGeneration)
+        runCurrent()
+        assertEquals(listOf("lock", "unlock"), ops.log)
+        assertEquals(listOf(Call("1357", 5, false)), ops.unlocks)
+        assertEquals(listOf(1), ops.taken)
+    }
+
+    /** The reopen after `moved` goes with the approval's reading: a change decided in between stops it too. */
+    @Test
+    fun theReopenAfterAMoveChecksTheSameReading() = runTest {
+        val ops = Ops()
+        ops.results += UpdateStepResult.Moved
+        val m = manager(ops)
+        ops.whileStarting = { ops.generation++ }
+        ops.startingCallbacks = 1 // the approval's unlock: a change decided while it is on its way
+        assertTrue(m.start("2468", offer, m.pinGeneration))
+        runCurrent()
+        assertEquals(listOf("lock", "unlock", "refused"), ops.log)
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
+        assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, p.failureCode)
+        // Typed again: the reopen goes, and so does the way back.
+        ops.results += UpdateStepResult.Opened
+        m.retry("2468", m.pinGeneration)
+        runCurrent()
+        assertEquals(UpdateStep.DONE, m.progress.value!!.step)
+    }
+
+    /** Without a reading from the keypad, the PIN's generation is read as it is handed over. */
+    @Test
+    fun withoutAReadingThePinIsTakenAtHandover() = runTest {
+        val ops = Ops()
+        ops.generation = 7
+        val m = manager(ops)
+        assertTrue(m.start("2468", offer))
+        runCurrent()
+        assertEquals(listOf(7), ops.taken)
+        assertEquals(UpdateStep.REFUSED, m.progress.value!!.step)
+    }
+
+    /** "Return to release N" with a PIN taken before a change sends nothing either. */
+    @Test
+    fun anAbandonWithAPinTakenBeforeAChangeSendsNothing() = runTest {
+        val ops = Ops()
+        ops.results += UpdateStepResult.Moved
+        ops.results += UpdateStepResult.Failed(FailureKind.NETWORK, null)
+        val m = manager(ops)
+        assertTrue(m.start("2468", offer, m.pinGeneration))
+        runCurrent()
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
+        val reading = m.pinGeneration
+        ops.generation++
+        m.abandon("2468", reading)
+        runCurrent()
+        assertEquals("refused", ops.log.last())
+        assertTrue(ops.unlocks.none { it.abandon })
+        assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, m.progress.value!!.failureCode)
+    }
+
+    // --- ANDROID-PLAN 0.1.54 "The way back to release N after leaving or a restart" ---
+
+    private val failedMarker = MoveUnconfirmed(4, rel(4).pcr0, 5, rel(5).pcr0, failed = true)
+
+    @Test
+    fun theUnlockScreensReturnRunsTheWayBackFromTheMarkerAndRecordsN() = runTest {
+        val ops = Ops()
+        ops.marker = failedMarker
+        ops.results += UpdateStepResult.Abandoned
+        val m = manager(ops)
+        assertTrue(m.returnToPrevious("2468"))
+        runCurrent()
+        assertEquals(listOf(Call("2468", null, true)), ops.unlocks)
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.ABANDONED, p.step)
+        assertEquals(4L, p.from.number)
+        assertEquals(5L, p.to.number)
+        assertTrue(p.vaultOpen)
+        assertFalse(p.canAbandon)
+    }
+
+    @Test
+    fun noWayBackWithoutAFailedMarkerOrWhileAnUpdateIsShown() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        assertFalse(m.returnToPrevious("2468")) // no marker
+        ops.marker = failedMarker.copy(failed = false)
+        assertFalse(m.returnToPrevious("2468")) // before `failed`: the unlock screen unlocks as usual
+        ops.marker = failedMarker
+        assertFalse(m.returnToPrevious("")) // no PIN
+        ops.abandonable = false
+        assertFalse(m.returnToPrevious("2468"))
+        ops.abandonable = true
+        ops.results += UpdateStepResult.Failed(FailureKind.NO_RESPONSE, null)
+        assertTrue(m.returnToPrevious("2468"))
+        runCurrent()
+        assertFalse(m.returnToPrevious("2468")) // its outcome is shown
+        assertEquals(1, ops.unlocks.size)
+        runCurrent()
+        assertTrue(ops.unlocks.all { it.abandon && it.approve == null })
+    }
+
+    @Test
+    fun theWayBackRefusedAsADowngradeIsBackOnN() = runTest {
+        val ops = Ops()
+        ops.marker = failedMarker
+        ops.results += UpdateStepResult.Refused("downgrade")
+        val m = manager(ops)
+        m.returnToPrevious("2468")
+        runCurrent()
+        assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
+        assertTrue(m.progress.value!!.vaultOpen)
+    }
+
+    @Test
+    fun theWayBackAnsweredWrongReleaseOr410EndsTheOfferWithItsText() = runTest {
+        for ((r, code) in listOf(
+            UpdateStepResult.Failed(FailureKind.OTHER, "wrong_release") to ReleaseUpdateManager.CODE_RETURN_CONFIRMED,
+            UpdateStepResult.Failed(FailureKind.RELEASE_ENDED, "release_unavailable") to ReleaseUpdateManager.CODE_RETURN_UNAVAILABLE,
+        )) {
+            val ops = Ops()
+            ops.marker = failedMarker
+            ops.results += r
+            val m = manager(ops)
+            m.returnToPrevious("2468")
+            ops.abandonable = false // the vault manager cleared the marker with that answer
+            runCurrent()
+            val p = m.progress.value!!
+            assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
+            assertEquals(code, p.failureCode)
+            assertFalse(p.canAbandon)
+            assertFalse(p.vaultOpen)
+        }
+    }
+
+    @Test
+    fun theUpdateScreensWayBackAlsoTakesADowngradeAsBackOnN() = runTest {
+        val ops = Ops()
+        ops.results += UpdateStepResult.Moved
+        ops.results += UpdateStepResult.Failed(FailureKind.ROUTE_PENDING, "route_pending")
+        ops.results += UpdateStepResult.Refused("downgrade")
+        val m = manager(ops)
+        m.start("2468", offer)
+        runCurrent()
+        // Still routed to N after the retries (point 6): the neutral failure, with "Try again" and "Return to release N".
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
+        assertEquals(FailureKind.ROUTE_PENDING, p.failure)
+        assertTrue(p.canAbandon)
+        m.abandon("2468")
+        runCurrent()
+        assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
+    }
+
+    @Test
+    fun closeStopsTheStepAndShowsNothing() = runTest {
+        val ops = Ops()
+        ops.startingCallbacks = 1
+        ops.results += UpdateStepResult.Failed(FailureKind.VAULT_UNAVAILABLE, ReleaseUpdateManager.CODE_RELEASE_STARTING, 30)
+        val m = manager(ops)
+        m.start("2468", offer)
+        runCurrent()
+        m.close()
+        assertNull(m.progress.value)
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertNull(m.progress.value)
+        assertEquals(1, ops.unlocks.size) // the wait for the starting release was stopped: nothing more sent
     }
 }

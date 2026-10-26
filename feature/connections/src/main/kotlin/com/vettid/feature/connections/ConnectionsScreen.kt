@@ -55,6 +55,7 @@ import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.OutstandingInvite
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.ConnectionRow
@@ -66,6 +67,7 @@ import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.rememberTopBarSearch
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
 
@@ -299,7 +301,7 @@ fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: C
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.connections_error_title),
-                    body = stringResource(error.messageRes()),
+                    body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                     modifier = Modifier.padding(Spacing.xl),
                     actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.connections_retry)) } },
                 )
@@ -345,7 +347,7 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.connections_error_title),
-                    body = stringResource(error.messageRes()),
+                    body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.connections_ok)) } },
                 )
@@ -499,10 +501,10 @@ private fun SheetOption(icon: ImageVector, title: Int, body: Int, tag: String, o
 
 /** A failure line under a form (shared by the connect screens). */
 @Composable
-internal fun FailureText(kind: FailureKind?, modifier: Modifier = Modifier) {
+internal fun FailureText(kind: FailureKind?, modifier: Modifier = Modifier, shownCode: String? = null) {
     if (kind == null) return
     Text(
-        stringResource(kind.messageRes()),
+        failureText(kind.messageRes(), kind.vaultCode(shownCode)),
         color = MaterialTheme.colorScheme.error,
         style = MaterialTheme.typography.bodyMedium,
         modifier = modifier.testTag("failure"),

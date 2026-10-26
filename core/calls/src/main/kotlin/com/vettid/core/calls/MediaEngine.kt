@@ -67,14 +67,20 @@ class MediaNotEncryptedException(what: String) : IllegalStateException("media no
  * - [setKeys] takes the keys into the stack and wipes the arrays it was given.
  */
 interface MediaEngine {
-    /** The suites this engine can encrypt with ([MediaSuite.PREFERENCE] order): what the device offers and accepts. */
+    /**
+     * The suites this engine can encrypt with ([MediaSuite.PREFERENCE] order): what the device offers and accepts,
+     * cut down by the call's form ([CallSignalling.offerable]; form 1: suite 1 only, `MediaSuite.formOne`).
+     */
     val suites: List<MediaSuite>
 
     /** One collector (the call). Events from the moment the engine exists are kept for it. */
     val events: Flow<MediaEvent>
 
-    /** The caller's SDP offer. Nothing is gathered and nothing is sent yet. */
-    suspend fun createOffer(): String
+    /**
+     * The caller's SDP offer, with the frame cryptors made for [suite]: the only suite the call can then use (the
+     * first, and under form 1 the only, suite it offers). Nothing is gathered and nothing is sent yet.
+     */
+    suspend fun createOffer(suite: MediaSuite): String
 
     /** The caller, once its vault has answered `call.start`: start gathering addresses, with [servers] and no others. */
     suspend fun startGathering(servers: List<CallWire.IceServer>)
@@ -82,10 +88,17 @@ interface MediaEngine {
     /** The caller takes the answer. [setKeys] comes first. */
     suspend fun acceptAnswer(sdp: String)
 
-    /** The callee, when the member answers: takes the offer and returns the SDP answer. Gathering starts. */
-    suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>): String
+    /**
+     * The callee, when the member answers: takes the offer and returns the SDP answer, with the frame cryptors made
+     * for [suite], the one chosen when the offer was checked. Gathering starts.
+     */
+    suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>, suite: MediaSuite): String
 
-    /** The call's two frame keys for [suite]. Both arrays are wiped before this returns. */
+    /**
+     * The call's two frame keys for [suite], which must be the suite the cryptors were made for ([createOffer],
+     * [acceptOffer]): the cryptors are never remade, so keys for another suite are refused (the call ends). Both
+     * arrays are wiped before this returns.
+     */
     suspend fun setKeys(suite: MediaSuite, send: ByteArray, receive: ByteArray)
 
     /** The other device's addresses. Only after its SDP has been applied ([acceptAnswer], [acceptOffer]). */

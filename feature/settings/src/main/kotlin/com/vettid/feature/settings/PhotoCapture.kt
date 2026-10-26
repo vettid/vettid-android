@@ -156,17 +156,17 @@ class PhotoCaptureViewModel @Inject constructor() : ViewModel() {
 
 /**
  * The selected square of the shot as `profile.set{photo}` takes it (VAULT-MESSAGING §10.8): exactly the square under
- * the round frame ([PhotoSelection.crop]), which [ProfilePhotos.encodeBase64] scales down and re-encodes as a JPEG of
+ * the round frame ([PhotoSelection.crop]), which [ProfilePhotos.encode] scales down and re-encodes as a JPEG of
  * at most 65,536 bytes; re-encoding the pixels writes no EXIF or location. Recycles the shot. Null when it cannot be
- * encoded. Blocking: call off the main thread.
+ * encoded. Blocking: call off the main thread. The caller keeps (and zeroes) the JPEG bytes.
  */
-internal fun encodeShot(selection: PhotoSelection): String? {
+internal fun encodeShot(selection: PhotoSelection): ByteArray? {
     val shot = selection.shot
     var square: Bitmap? = null
     return try {
         val c = selection.crop
         square = Bitmap.createBitmap(shot, c.left, c.top, c.side, c.side)
-        ProfilePhotos.encodeBase64(square)
+        ProfilePhotos.encode(square)
     } catch (_: IllegalArgumentException) {
         null
     } catch (_: IllegalStateException) {

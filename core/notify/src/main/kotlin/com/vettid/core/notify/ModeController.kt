@@ -122,8 +122,8 @@ class ModeController(
     companion object {
         /**
          * Whether [p] means a vault on this phone: true when it is open or locked (or the service is unreachable
-         * with one); false when there is none (the welcome screen, a wipe, a setup in progress); null while the
-         * phase is not known yet (keep what runs).
+         * with one); false when there is none (the welcome screen, a wipe, a setup in progress, a vault being deleted,
+         * ANDROID-PLAN 0.1.54); null while the phase is not known yet (keep what runs).
          */
         fun enrolled(p: AppPhase): Boolean? = when (p) {
             AppPhase.Starting -> null
@@ -135,13 +135,14 @@ class ModeController(
 
 /**
  * A phone without a vault shows no notification of VettID: whenever the phase is [AppPhase.SignedOut] (the welcome
- * screen: at app start with no vault, after a wipe, a deleted vault, a dropped setup code), [cancelAll] runs. This
+ * screen: at app start with no vault, after a wipe, a deleted vault, a dropped setup code) or [AppPhase.Deleting] (a vault
+ * being deleted, ANDROID-PLAN 0.1.54: its posted notifications go at once), [cancelAll] runs. This
  * also clears what an earlier build left behind (owner report 2026-10-11: the on-phone service's notification on a
  * phone that had given its vault away). A running foreground service keeps its notification through Android's
  * `cancelAll`; it removes its own when it stops ([ServiceNotice]).
  */
 class NoVaultSweep(private val scope: CoroutineScope, private val phase: Flow<AppPhase>, private val cancelAll: () -> Unit) {
     fun start() {
-        scope.launch { phase.filter { it == AppPhase.SignedOut }.collect { runCatching { cancelAll() } } }
+        scope.launch { phase.filter { it == AppPhase.SignedOut || it is AppPhase.Deleting }.collect { runCatching { cancelAll() } } }
     }
 }

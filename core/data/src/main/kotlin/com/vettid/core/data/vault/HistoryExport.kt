@@ -104,12 +104,14 @@ internal class VaultAuditExportOps(private val api: VaultApi) : AuditExportOps {
     override suspend fun deviceNames(): Map<String, String> = devicesOf(api.deviceList())
 
     companion object {
-        /** `device.list`'s `{devices: [{id, name, …}]}` as id → name (unnamed devices left out). */
+        /**
+         * `device.list`'s `{devices: [{id, name, …}]}` as id → name. An unnamed device (the app's own peer) is kept
+         * with an empty name: it is listed, so never "Removed device" (ANDROID-PLAN 0.1.27).
+         */
         fun devicesOf(o: JsonObject): Map<String, String> = (o["devices"] as? JsonArray).orEmpty().mapNotNull { e ->
             val d = e as? JsonObject ?: return@mapNotNull null
             val id = (d["id"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return@mapNotNull null
-            val name = (d["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            id to name
+            id to (d["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
         }.toMap()
     }
 }
@@ -152,7 +154,7 @@ class HistoryExportManager(
         while (before != null && out.size < want && pages < MAX_PAGES) {
             currentCoroutineContext().ensureActive()
             val cursor: Long = before
-            val page = vaultGuard { audit().auditList(f.connectionId, f.kinds, cursor, pageSize, f.q, f.since, f.until) }
+            val page = vaultGuard(resend = true) { audit().auditList(f.connectionId, f.kinds, cursor, pageSize, f.q, f.since, f.until) }
             pages++
             for (e in page.entries) {
                 if (out.size >= want) break
@@ -168,7 +170,7 @@ class HistoryExportManager(
         return out
     }
 
-    override suspend fun deviceNames(): Map<String, String> = vaultGuard { ops().deviceNames() }
+    override suspend fun deviceNames(): Map<String, String> = vaultGuard(resend = true) { ops().deviceNames() }
 
     companion object {
         /** VAULT-MESSAGING 0.22.0 §10.9: `limit` 100 keeps each page well under the claim-check threshold. */

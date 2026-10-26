@@ -50,6 +50,59 @@ interface PushProvider {
 
     /** Called by the provider when the push service rotated the token: register the new one. */
     var onNewToken: (() -> Unit)?
+
+    /**
+     * Called by the provider when a registration's challenge arrives (PUSH-GATEWAY 0.5.0 §6: FCM data `{"c": code}`):
+     * the code, already checked by [PushChallenge.code], goes to the vault (`push.confirm`). A provider that can
+     * receive no push (the `foss` distribution) keeps the default and never calls it.
+     */
+    var onChallenge: ((String) -> Unit)?
+        get() = null
+        set(_) = Unit
+}
+
+/** What a push message is (PUSH-GATEWAY 0.5.0 §6, §11.1). */
+sealed interface PushMessage {
+    /** "Collect": the gateway's wake (`{"w": "1"}`), and any other message, as before 0.5.0. */
+    data object Wake : PushMessage
+
+    /** A registration's challenge: the code goes to the vault only. Its text never shows the code. */
+    class Challenge(val code: String) : PushMessage {
+        override fun toString(): String = "Challenge"
+    }
+
+    /** A `c` that is not a code: dropped (neither a wake nor a challenge). */
+    data object Malformed : PushMessage
+}
+
+/**
+ * A registration's challenge (PUSH-GATEWAY 0.5.0 §5.1, §6; VAULT-MESSAGING 0.30.0 §14.1). The gateway pushes a random
+ * code to the token being registered, and the app hands it to its own vault (`push.confirm`), which proves that the
+ * token is this app's. A challenge is not a wake: nothing is collected or shown for it, and the code is never logged
+ * or stored on disk.
+ */
+object PushChallenge {
+    /** The data key of the challenge's code. */
+    const val KEY = "c"
+
+    /** The data key of a wake. */
+    const val WAKE_KEY = "w"
+
+    const val MAX_LENGTH = 64
+
+    /** 1–64 base64url characters (unpadded), as the vault accepts it. */
+    fun valid(code: String): Boolean =
+        code.length in 1..MAX_LENGTH && code.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
+
+    /** What the push message with [data] is: a challenge has `c` and no `w`; everything else is a wake. */
+    fun classify(data: Map<String, String>): PushMessage {
+        val code = data[KEY]
+        return when {
+            code == null || WAKE_KEY in data -> PushMessage.Wake
+            valid(code) -> PushMessage.Challenge(code)
+            else -> PushMessage.Malformed
+        }
+    }
 }
 
 /** No push service at all (tests, and a build without one). */
@@ -79,6 +132,10 @@ object NoGooglePushProvider : PushProvider {
         set(_) = Unit
 
     override var onNewToken: (() -> Unit)?
+        get() = null
+        set(_) = Unit
+
+    override var onChallenge: ((String) -> Unit)?
         get() = null
         set(_) = Unit
 }

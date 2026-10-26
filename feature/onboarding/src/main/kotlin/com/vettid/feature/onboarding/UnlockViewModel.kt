@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.LockNotice
+import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseNotes
@@ -31,11 +33,47 @@ sealed interface UnlockMessage {
     data class UpdateRefused(val code: String) : UnlockMessage
 
     data class Failed(val kind: FailureKind, val code: String?) : UnlockMessage
+
+    /**
+     * (Release R, §11.14.10) "The move didn't finish" failed: this old phone could not open the vault with its own keys
+     * after approving a transfer. "Contact VettID within a day of the failed move: it may be repairable."
+     */
+    data object MoveBackFailed : UnlockMessage
 }
 
+/** Failures that say nothing about this phone's keys (the network, the service): never "the move back failed". */
+private val TRANSIENT_FAILURES = setOf(
+    FailureKind.NETWORK, FailureKind.SERVICE_PAUSED, FailureKind.VAULT_UNAVAILABLE, FailureKind.NO_RESPONSE,
+    FailureKind.RATE_LIMITED, FailureKind.BUSY, FailureKind.RETRY, FailureKind.CLOCK, FailureKind.MANIFEST_UNAVAILABLE,
+)
+
+/**
+ * The message of a failed unlock: on an old phone that keeps its keys after approving a transfer ([keptTransfer]) any
+ * failure that is not temporary means its own keys no longer open the vault (`device_secret`, an unreadable answer, …).
+ */
+internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean): UnlockMessage =
+    if (keptTransfer && r.kind !in TRANSIENT_FAILURES) UnlockMessage.MoveBackFailed else UnlockMessage.Failed(r.kind, r.code)
+
 /** Immutable UI state of the unlock screen. */
+private const val KEPT_MS_PER_SECOND = 1_000L
+
 data class UnlockUiState(
     val loading: Boolean = true,
+    /**
+     * (Release R, §11.14.10) This phone approved a transfer and keeps the keys until the new phone has finished the
+     * move: the screen says so, and its unlock is "The move didn't finish".
+     */
+    val keptTransfer: Boolean = false,
+    /**
+     * (§11.14.10; owner decision 2026-10-23) The 7 days are over and the vault has not confirmed the move yet: this phone
+     * keeps its keys and says "Your vault has not confirmed the move to this phone…", instead of any erase offer (also
+     * after the relay's `token_revoked`): the phone's keys go only on the vault's own answer.
+     */
+    val keptCheckWaiting: Boolean = false,
+    /** (STAGING-TIME-SCALE, S10) How long the kept transfer lasts at most: 7 days, divided by the time scale at the approval. */
+    val keptForSeconds: Long = KeptTransfer.KEEP_MS / KEPT_MS_PER_SECOND,
+    /** (STAGING-TIME-SCALE) A staging build adds its note to the kept transfer's text. */
+    val stagingNote: Boolean = false,
     val email: String? = null,
     val preflight: PreflightInfo? = null,
     val preflightError: FailureKind? = null,
@@ -72,6 +110,13 @@ data class UnlockUiState(
      */
     val notRecognised: Boolean = false,
     /**
+     * This phone no longer holds the vault's keys (`device_secret`): erase-or-recover is offered, "Recover your vault"
+     * first. Screen state: kept while the member types (the failure's message goes) and through a failure that did not
+     * reach the vault (a network failure, a pause, a busy service); cleared by any answer of the vault (an attestation
+     * or `transfer_incomplete` refusal included) and by a new release check.
+     */
+    val keysGone: Boolean = false,
+    /**
      * The open app was sent here because the relay kept refusing this phone's messages to the vault
      * ([VaultRepository.refusedByVault]): a phone replaced while the vault stayed unlocked on the new one never
      * sees this screen otherwise. Not proof: the PIN asks the enclave, and an unreadable result then sets
@@ -96,7 +141,67 @@ data class UnlockUiState(
     val password: String = "",
     /** The vault locked after ten failed checks (§3.6.4). */
     val lockedByOwnerCheck: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself because no check was passed in time: said here,
+     * with the unlock and the check on the same screen.
+     */
+    val idleLocked: com.vettid.core.data.vault.IdleLocked? = null,
+    /**
+     * (Release R, ANDROID-PLAN "Other screens") The vault has a phone secret: cancelling a recovery from here sends the
+     * owner check at once, so the password is asked for with it.
+     */
+    val phoneSecret: Boolean = false,
+    /**
+     * (Release R, §11.14.10) Why the last "Finish the move" did not open the vault (`transfer_incomplete`: "Approve it
+     * again on your old phone", a wrong PIN, a wait), said here after its lock sent the app to this screen.
+     */
+    val moveFailure: FailureKind? = null,
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9 step 5) A PIN change got no answer and is not decided yet: the screen asks for the
+     * previous PIN ("Enter your previous PIN"), which goes with the current record.
+     */
+    val previousPinStep: Boolean = false,
+    /**
+     * The previous PIN got `device_secret`: the change went through, and the screen asks for the new PIN ("Your PIN change
+     * went through. Enter your new PIN."), which the next unlock tries with the new record.
+     */
+    val newPinStep: Boolean = false,
+    /**
+     * (ANDROID-PLAN 0.1.54) The stored marker of a release move that is not confirmed; with `failed`, "Return to release N"
+     * is offered above the keypad at every start until the marker is cleared.
+     */
+    val move: MoveUnconfirmed? = null,
+    /** The "Return to release N?" confirmation is open. */
+    val returnConfirm: Boolean = false,
+    /** The member confirmed "Return" without a PIN typed: the keypad asks for it, and the PIN goes to the way back. */
+    val returnAsked: Boolean = false,
 ) {
+    /** (0.1.54 point 3) "Return to release N" is offered: the marker has `failed`. */
+    val returnOffered: Boolean get() = move?.failed == true
+
+    /** The PIN for the way back may be typed: offered, and nothing running or waiting. */
+    val returnPinAllowed: Boolean get() = returnOffered && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy && !erasing
+
+    /** The way back may be started with the PIN typed. */
+    val returnSubmitAllowed: Boolean get() = returnPinAllowed && pin.length >= MIN_PIN_LENGTH
+
+    /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
+    val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
+
+    /**
+     * The vault cannot be opened from here and erasing this phone would not help (owner decision: a way forward, no
+     * erase): the vault's release ended, or a rollback of the release or of the vault's state. The screen offers
+     * "Recover your vault" (the account site) and contacting VettID support. Nothing unlocks or opens anything.
+     */
+    val recoverOnly: Boolean
+        get() = preflightError == FailureKind.RELEASE_ENDED || preflight?.rollback == true || stateRollback
+
+    /**
+     * "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone;
+     * never on a [recoverOnly] screen, which wins over both.
+     */
+    val eraseOffered: Boolean get() = !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
+
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
 
@@ -138,7 +243,7 @@ interface UnlockActions {
     /** Shows or hides the recovery and transfer help under the `signer_refused` notice. */
     fun showSignerHelp(show: Boolean)
 
-    /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.notRecognised]). */
+    /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.eraseOffered]). */
     fun askErase()
 
     /** Closes it; nothing is erased. */
@@ -150,8 +255,23 @@ interface UnlockActions {
     /** The member has read that the vault confirmed the lock. */
     fun dismissLockNotice() = Unit
 
+    /** (Release L) "Lock it now" on "Your vault was opened again". */
+    fun lockAgain() = Unit
+
+    /** The member has read why "Finish the move" did not finish. */
+    fun dismissMoveFailure() = Unit
+
     /** The member confirmed: erases this phone ([AccountRepository.eraseThisPhone]), then the welcome screen. */
     fun confirmErase()
+
+    /** (ANDROID-PLAN 0.1.54) "Return to release N": opens its confirmation (only when [UnlockUiState.returnOffered]). */
+    fun askReturn() = Unit
+
+    /** Closes it, and drops a "Return" waiting for its PIN; nothing is sent. */
+    fun dismissReturn() = Unit
+
+    /** "Return", confirmed: with the PIN typed the way back starts; without one the keypad asks for it first. */
+    fun confirmReturn() = Unit
 }
 
 /**
@@ -174,7 +294,9 @@ class UnlockViewModel @Inject constructor(
     ownerCheck: OwnerCheckRepository,
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), UnlockActions {
-    private val state = MutableStateFlow(UnlockUiState(email = account.account.value?.emailHint?.takeIf { it.isNotEmpty() }))
+    private val state = MutableStateFlow(
+        UnlockUiState(email = account.account.value?.emailHint?.takeIf { it.isNotEmpty() }, phoneSecret = vault.usesPhoneSecret),
+    )
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
     private var ticker: Job? = null
     private var serviceTicker: Job? = null
@@ -185,15 +307,42 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch { vault.refusedByVault.collect { r -> state.update { it.copy(refused = r) } } }
         viewModelScope.launch { vault.lockNotice.collect { n -> state.update { it.copy(lock = n) } } }
         viewModelScope.launch {
-            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> (v?.gated(Instant.now()) == true) to locked }
-                .collect { (due, locked) -> state.update { it.copy(checkDue = due || locked, lockedByOwnerCheck = locked) } }
+            vault.transferKeptSince.collect { k ->
+                state.update { it.copy(keptTransfer = k != null, keptForSeconds = vault.transferKeepSeconds) }
+            }
+        }
+        viewModelScope.launch { vault.transferCheckWaiting.collect { w -> state.update { it.copy(keptCheckWaiting = w) } } }
+        viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(stagingNote = t.stagingNote) } } }
+        viewModelScope.launch { vault.finishMoveFailure.collect { f -> state.update { it.copy(moveFailure = f) } } }
+        // ANDROID-PLAN 0.1.54: the offer follows the stored marker (a cleared marker takes the offer, and its dialog, away).
+        viewModelScope.launch {
+            vault.moveUnconfirmed.collect { m ->
+                state.update {
+                    val offered = m?.failed == true
+                    it.copy(move = m, returnConfirm = it.returnConfirm && offered, returnAsked = it.returnAsked && offered)
+                }
+            }
+        }
+        // §11.14.9 step 5: which PIN is asked for follows the vault manager's state, so that the PIN typed is always the
+        // one the next unlock sends with the matching record (also on a screen made afresh).
+        viewModelScope.launch {
+            combine(vault.pinChangeUnresolved, vault.newPinAsked) { u, n -> u to (u && n) }
+                .collect { (u, n) -> state.update { it.copy(previousPinStep = u, newPinStep = n) } }
+        }
+        viewModelScope.launch {
+            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.idleLocked) { v, locked, _ ->
+                Triple(v?.gated(Instant.now()) == true, locked, ownerCheck.idleLockedNow(Instant.now()))
+            }.collect { (due, locked, idle) ->
+                state.update { it.copy(checkDue = due || locked || idle != null, lockedByOwnerCheck = locked, idleLocked = idle) }
+            }
         }
     }
 
     override fun retryPreflight() {
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
-        state.update { it.copy(loading = true, preflightError = null, preflight = null) }
+        // So does an open erase confirmation: it does not come back by itself while the check runs or after it.
+        state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false, eraseConfirm = false) }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
@@ -224,13 +373,47 @@ class UnlockViewModel @Inject constructor(
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
 
-    override fun submit() = attempt(cancelRecovery = false)
+    override fun submit() = if (state.value.returnAsked) wayBack() else attempt(cancelRecovery = false)
 
-    override fun cancelRecoveryAndUnlock() = attempt(cancelRecovery = true)
+    override fun askReturn() = state.update { if (it.returnOffered && !it.busy && !it.erasing) it.copy(returnConfirm = true) else it }
+
+    override fun dismissReturn() = state.update { it.copy(returnConfirm = false, returnAsked = false) }
+
+    override fun confirmReturn() {
+        val s = state.value
+        if (!s.returnConfirm) return
+        state.update { it.copy(returnConfirm = false) }
+        // The unlock screen's PIN is used, or the keypad asks for it first (ANDROID-PLAN 0.1.54 point 3).
+        if (s.returnSubmitAllowed) wayBack() else state.update { it.copy(returnAsked = it.returnOffered, message = null) }
+    }
+
+    /**
+     * The way back, with the PIN typed, only after the member's confirmed "Return to release N": the release update's own
+     * steps run it and show it over this screen ([VaultRepository.returnToPreviousRelease]). The PIN is dropped here.
+     */
+    private fun wayBack() {
+        val s = state.value
+        if (!s.returnSubmitAllowed) return
+        val started = vault.returnToPreviousRelease(s.pin)
+        state.update {
+            if (started) {
+                it.copy(pin = "", returnAsked = false, message = null)
+            } else {
+                // Nothing was sent (an update is shown, or the offer just went): said, and the member chooses again.
+                val why = UnlockMessage.Failed(FailureKind.OTHER, CODE_RETURN_NOT_STARTED)
+                it.copy(pin = "", returnAsked = it.returnOffered, message = why)
+            }
+        }
+    }
+
+    override fun cancelRecoveryAndUnlock() {
+        if (!state.value.cancelAllowed) return
+        attempt(cancelRecovery = true)
+    }
 
     override fun showSignerHelp(show: Boolean) = state.update { it.copy(signerHelp = show && it.signerRefused) }
 
-    override fun askErase() = state.update { if (it.notRecognised && !it.erasing) it.copy(eraseConfirm = true) else it }
+    override fun askErase() = state.update { if (it.eraseOffered && !it.erasing) it.copy(eraseConfirm = true) else it }
 
     override fun dismissErase() = state.update { it.copy(eraseConfirm = false) }
 
@@ -238,21 +421,31 @@ class UnlockViewModel @Inject constructor(
 
     override fun dismissLockNotice() = vault.dismissLockNotice()
 
+    override fun lockAgain() {
+        viewModelScope.launch { vault.lockAgain() }
+    }
+
+    override fun dismissMoveFailure() = vault.acknowledgeFinishMoveFailure()
+
     override fun confirmErase() {
         val s = state.value
-        if (!s.eraseConfirm || !s.notRecognised || s.erasing) return
+        if (!s.eraseConfirm || !s.eraseOffered || s.erasing) return
         state.update { it.copy(eraseConfirm = false, erasing = true, pin = "") }
         // The phase becomes SignedOut at the end: the root shows the welcome screen and drops this screen.
         viewModelScope.launch { account.eraseThisPhone() }
     }
 
+    @Suppress("CyclomaticComplexMethod") // one branch per §11.4 answer
     private fun attempt(cancelRecovery: Boolean) {
         val s = state.value
         if (!s.submitAllowed || s.erasing) return
         state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
             val offer = if (s.approveOffer) s.preflight?.offer else null
-            val r = if (s.checkDue) {
+            val r = if (cancelRecovery && s.phoneSecret) {
+                // Release R: after a cancel from the app, the owner check at once, which records the member's presence.
+                vault.unlockCancellingRecovery(s.pin, s.password, offer)
+            } else if (s.checkDue) {
                 vault.unlockWithCheck(s.pin, s.password, offer, cancelRecovery)
             } else {
                 vault.unlock(s.pin, offer, cancelRecovery)
@@ -262,12 +455,16 @@ class UnlockViewModel @Inject constructor(
                 it.copy(
                     password = "", notRecognised = notRecognisedAfter(r, it.notRecognised),
                     signerRefused = signerRefusedAfter(r, it.signerRefused),
+                    keysGone = keysGoneAfter(r, it.keysGone),
                 )
             }
             when (r) {
                 // §11.7.1: not a PIN failure: no "wrong PIN" text, no count, no backoff. The notice says what to do.
                 UnlockAttempt.SignerRefused -> state.update { it.copy(busy = false, pin = "", message = null) }
                 UnlockAttempt.Success -> state.update { it.copy(busy = false, pin = "", recoveryPending = false) }
+                // §11.14.9 step 5: decided before any PIN was tested; the PIN typed is not reused for the new record (the
+                // screen asks for the new PIN from [VaultRepository.newPinAsked]).
+                UnlockAttempt.NewPinNeeded -> state.update { it.copy(busy = false, pin = "", message = null) }
                 is UnlockAttempt.BadPin -> {
                     state.update { it.copy(busy = false, pin = "", message = UnlockMessage.BadPin) }
                     startBackoff(r.retryAfterSeconds)
@@ -282,7 +479,7 @@ class UnlockViewModel @Inject constructor(
                 is UnlockAttempt.UpdateRefused -> state.update { it.copy(busy = false, pin = "", message =
                     UnlockMessage.UpdateRefused(r.code)) }
                 is UnlockAttempt.Failed -> {
-                    state.update { it.copy(busy = false, pin = "", message = UnlockMessage.Failed(r.kind, r.code)) }
+                    state.update { it.copy(busy = false, pin = "", message = unlockFailedMessage(r, s.keptTransfer)) }
                     // A paused service (503, never proof of anything, never a wipe): wait as it asked, no automatic retry.
                     if (r.kind == FailureKind.SERVICE_PAUSED) startServiceWait(r.retryAfterSeconds)
                 }
@@ -304,6 +501,12 @@ class UnlockViewModel @Inject constructor(
      * vault accepted this installation's signer after all, e.g. on another release), kept through failures that
      * never reached the enclave (network, a paused service).
      */
+    private fun keysGoneAfter(r: UnlockAttempt, before: Boolean): Boolean = when {
+        r is UnlockAttempt.Failed && r.kind == FailureKind.DEVICE_SECRET -> true
+        r is UnlockAttempt.Failed && r.kind in TRANSIENT_FAILURES -> before
+        else -> false
+    }
+
     private fun signerRefusedAfter(r: UnlockAttempt, before: Boolean): Boolean = when (r) {
         UnlockAttempt.SignerRefused -> true
         is UnlockAttempt.Failed -> before
@@ -336,6 +539,9 @@ class UnlockViewModel @Inject constructor(
     }
 
     companion object {
+        /** (ANDROID-PLAN 0.1.54) The way back could not start; nothing was sent. */
+        const val CODE_RETURN_NOT_STARTED = "return_not_started"
+
         /** The unlock result this phone could not read ([com.vettid.core.data.vault.VaultFailure] code). */
         const val CODE_UNREADABLE = "unreadable_result"
 

@@ -29,6 +29,7 @@ import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.vault.CanaryManifestInbox
 import com.vettid.core.data.vault.ReleaseUpdateInbox
+import com.vettid.core.data.vault.SCALED_FAILURE_TEXTS
 import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.lock.AppLock
@@ -44,6 +45,8 @@ import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.ui.components.LocalUserPresence
 import com.vettid.core.ui.components.UserPresence
 import com.vettid.core.ui.components.protectFromCapture
+import com.vettid.core.ui.format.LocalTimeScale
+import com.vettid.core.ui.format.UiTimeScale
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -83,6 +86,10 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var notificationTaps: com.vettid.core.notify.NotificationOpenInbox
 
+    /** The vault's time scale (STAGING-TIME-SCALE §5.2), for the texts of every screen ([LocalTimeScale]). */
+    @Inject
+    lateinit var timeScales: com.vettid.core.data.vault.TimeScaleSource
+
     /** The CancellationSignal of a prompt this activity shows ([AppLock.prompts] says whether one is in flight). */
     private var promptCancel: CancellationSignal? = null
 
@@ -118,7 +125,13 @@ class MainActivity : ComponentActivity() {
             val controller = remember(themeMode) {
                 ThemeController(themeMode) { m -> lifecycleScope.launch { prefs.setTheme(m.toPreference()) } }
             }
-            CompositionLocalProvider(LocalThemeController provides controller, LocalUserPresence provides presence) {
+            val t by timeScales.timeScale.collectAsStateWithLifecycle()
+            val uiTimeScale = remember(t) { UiTimeScale(t.scale, t.stagingNote, SCALED_FAILURE_TEXTS) }
+            CompositionLocalProvider(
+                LocalThemeController provides controller,
+                LocalUserPresence provides presence,
+                LocalTimeScale provides uiTimeScale,
+            ) {
                 VettIdTheme(themeMode = themeMode) {
                     if (catalog != null) {
                         catalog()

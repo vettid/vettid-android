@@ -6,6 +6,7 @@ import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.AttestationInfo
+import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.CredentialStatus
@@ -51,6 +52,37 @@ import java.time.Instant
 class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository, ProfileRepository {
     val calls = mutableListOf<String>()
+
+    /** (VAULT-MESSAGING 0.44.0 §11.14.9) The decision of a change whose answer was lost, as a test sets it. */
+    override val changeCheck = MutableStateFlow<ChangeCheck?>(null)
+
+    /** (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault"; Try again and clear recorded in [calls]. */
+    override val credentialRequired = MutableStateFlow<com.vettid.core.data.vault.CredentialRequired.Refusal?>(null)
+
+    override suspend fun retryCredentialRequired() {
+        calls += "retryCredentialRequired"
+        credentialRequired.value = null
+    }
+
+    override fun clearCredentialRequired() {
+        calls += "clearCredentialRequired"
+        credentialRequired.value = null
+    }
+    var changeCheckAcknowledged = 0
+
+    override fun acknowledgeChangeCheck() {
+        changeCheckAcknowledged++
+        changeCheck.value = changeCheck.value?.takeIf { it.open }
+    }
+
+    /** (§11.14.9 step 2) Why a lock-and-unlock flow is held, as a test sets it. */
+    override val changeHold = MutableStateFlow<FailureKind?>(null)
+
+    /** (§11.14.9 step 5) A PIN change is unresolved: the unlock's two steps. */
+    override val pinChangeUnresolved = MutableStateFlow(false)
+
+    /** As the vault manager: set by [UnlockAttempt.NewPinNeeded], kept through a network failure, cleared by any other answer. */
+    override val newPinAsked = MutableStateFlow(false)
 
     /** MEMBER-API 1.2.0: the vault service paused (the banner). */
     override val servicePaused = MutableStateFlow(false)
@@ -122,6 +154,10 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         calls += "retryLock"
     }
 
+    override suspend fun lockAgain() {
+        calls += "lockAgain"
+    }
+
     override fun dismissLockNotice() {
         calls += "dismissLockNotice"
         lockNotice.value = com.vettid.core.data.vault.LockNotice.None
@@ -161,10 +197,200 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         phase.value = AppPhase.SignedOut
     }
 
+    // --- ANDROID-PLAN 0.1.54 ---
+
+    /** The stored marker of an unconfirmed release move, as a test sets it. */
+    override val moveUnconfirmed = MutableStateFlow<com.vettid.core.data.vault.MoveUnconfirmed?>(null)
+
+    /** What [returnToPreviousRelease] answers. */
+    var returnResult = true
+
+    override fun returnToPreviousRelease(pin: String): Boolean {
+        calls += "returnToPreviousRelease:$pin"
+        return returnResult
+    }
+
+    /** What each "Check again" answers in turn (then [com.vettid.core.data.vault.DeletionCheck.LISTED]). */
+    val deletionChecks = ArrayDeque<com.vettid.core.data.vault.DeletionCheck>()
+
+    /** When set, each "Check again" waits for it before answering. */
+    var deletionCheckGate: CompletableDeferred<Unit>? = null
+
+    override suspend fun checkDeletion(): com.vettid.core.data.vault.DeletionCheck {
+        calls += "checkDeletion"
+        deletionCheckGate?.await()
+        val r = deletionChecks.removeFirstOrNull() ?: com.vettid.core.data.vault.DeletionCheck.LISTED
+        if (r == com.vettid.core.data.vault.DeletionCheck.GONE) phase.value = AppPhase.SignedOut
+        return r
+    }
+
+    override val deletedNotice = MutableStateFlow(false)
+
+    override fun acknowledgeDeletedNotice() {
+        calls += "acknowledgeDeletedNotice"
+        deletedNotice.value = false
+    }
+
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) {
-        call("enroll")
+        // (A6 audit N3) A failure with [pendingAfterFailure] leaves the request outstanding (a lost answer).
+        try {
+            call("enroll")
+        } catch (e: VaultFailure) {
+            if (pendingAfterFailure) pending = true
+            throw e
+        }
+        pending = false
         lastPin = pin
         listOf(EnrollStep.ENROLL, EnrollStep.WAIT_FOR_VAULT, EnrollStep.HANDSHAKE).forEach(onStep)
+    }
+
+    /** (A6 audit N3) An enrollment posted earlier is outstanding ([enrollPending]); a failure of "enroll" leaves it so. */
+    var pending = false
+    var pendingAfterFailure = false
+    override val enrollPending: Boolean get() = pending
+
+    /** (N3) What [resumeEnroll] finds: true, the vault was made (pinned and paired); false, nothing outstanding made one. */
+    var resumeMadeVault = true
+
+    override suspend fun resumeEnroll(onStep: (EnrollStep) -> Unit): Boolean {
+        call("resumeEnroll")
+        listOf(EnrollStep.ENROLL, EnrollStep.WAIT_FOR_VAULT, EnrollStep.HANDSHAKE).forEach(onStep)
+        pending = false
+        return resumeMadeVault
+    }
+
+    // --- release R ---
+
+    /** This phone holds a phone secret (a vault of release R). */
+    var phoneSecret = false
+    override val usesPhoneSecret: Boolean get() = phoneSecret
+
+    /** The vault came here by a direct transfer ([movedIn]). */
+    var movedInFlag = false
+    override val movedIn: Boolean get() = movedInFlag
+
+    /** The PIN the last `credential.create` and `credential.password.change` carried (release R). */
+    var lastCredentialPin: String? = null
+    var lastPasswordChangePin: String? = null
+
+    /** What [recoveryOpen] answers, in order; an empty queue answers `ok`. */
+    val recoveryOpenOutcomes = ArrayDeque<com.vettid.core.data.vault.RecoveryOpenOutcome>()
+    var recoveryOpenedValue = false
+    override var recoveryAttemptsUsed: Int? = null
+    override val transferKeptSince = MutableStateFlow<Instant?>(null)
+    override val transferCheckWaiting = MutableStateFlow(false)
+    override val finishMovePending = MutableStateFlow(false)
+    override val finishMoveFailure = MutableStateFlow<FailureKind?>(null)
+
+    override fun acknowledgeFinishMoveFailure() {
+        finishMoveFailure.value = null
+    }
+
+    /** What [pinGeneration] reads; [finishMoveTaken] records the reading each "Finish the move" PIN came with. */
+    override var pinGeneration = 0
+    val finishMoveTaken = mutableListOf<Int?>()
+
+    /** As the vault manager: nothing is sent once [pinGeneration] moved since [taken]; otherwise lock, then unlock. */
+    override suspend fun finishMove(pin: String, taken: Int?): UnlockAttempt {
+        finishMoveTaken += taken
+        if (taken != null && taken != pinGeneration) {
+            return UnlockAttempt.Failed(FailureKind.CREDENTIAL_UNSETTLED, "pin_taken_before_change")
+        }
+        lock()
+        return unlock(pin)
+    }
+    override val movedBack = MutableStateFlow(false)
+
+    override val moveNotDone = MutableStateFlow(false)
+
+    override fun acknowledgeMoveNotDone() {
+        calls += "acknowledgeMoveNotDone"
+        moveNotDone.value = false
+    }
+
+    override fun acknowledgeMovedBack() {
+        calls += "acknowledgeMovedBack"
+        movedBack.value = false
+    }
+
+    override suspend fun recoveryOpen(pin: String, password: String): com.vettid.core.data.vault.RecoveryOpenOutcome {
+        call("recoveryOpen")
+        lastPin = pin
+        lastPassword = password
+        return recoveryOpenOutcomes.removeFirstOrNull() ?: com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 1)
+    }
+
+    override suspend fun recoveryOpened(): Boolean = recoveryOpenedValue
+
+    /** (ANDROID-PLAN 0.1.78) What [couldNotTell] answers in turn (then NOT_APPLICABLE), whether a lost-ok is due, and the lock. */
+    val couldNotTellAnswers = ArrayDeque<com.vettid.core.data.vault.CouldNotTell>()
+    var lostOkDueValue = false
+    var undecidedValue = false
+    override val recoveryUndecided: Boolean get() = undecidedValue
+    override fun lostOkDue(): Boolean = lostOkDueValue
+    var newCodeAllowedValue = false
+    override fun newCodeAllowed(): Boolean = newCodeAllowedValue
+
+    override suspend fun couldNotTell(): com.vettid.core.data.vault.CouldNotTell {
+        call("couldNotTell")
+        return couldNotTellAnswers.removeFirstOrNull()
+            ?: com.vettid.core.data.vault.CouldNotTell(com.vettid.core.data.vault.CouldNotTell.Kind.NOT_APPLICABLE)
+    }
+
+    /** What [resumeLostOk] answers, in order; an empty queue answers `ok`. */
+    val lostOkOutcomes = ArrayDeque<com.vettid.core.data.vault.RecoveryOpenOutcome>()
+
+    override suspend fun resumeLostOk(pin: String): com.vettid.core.data.vault.RecoveryOpenOutcome {
+        call("resumeLostOk")
+        lastPin = pin
+        return lostOkOutcomes.removeFirstOrNull() ?: com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 2, attemptUsed = false)
+    }
+
+    /** (0.34.0) Whether the vault's release offers recovery. */
+    var recoveryOfferedValue = true
+    override val recoveryOffered: Boolean get() = recoveryOfferedValue
+
+    /**
+     * Whether setup was finished on this phone (`finishSetup`); a recovered phone is a new install, so false. Like the
+     * account record's `setupComplete`.
+     */
+    var setupComplete = false
+
+    /** Set by a test: a lock was asked for and is not confirmed (VaultManager's `LockKeeper.pending`). */
+    var lockPending = false
+
+    /**
+     * Set by a test: [finishRecoveryOpen] returns with the phone still at [SetupStage.FINISHING] instead of finishing
+     * setup, as an app that did not open by itself; for the recovery screen's own hand-over to the end of setup.
+     */
+    var recoveryOpenLeavesFinishing = false
+
+    /**
+     * As VaultManager's (`RecoveryOpenFinish`): a pending lock first (Locked, and `lock_pending`); then the vault's own
+     * unlock ends (`afterUnlocked`) in the open app when setup is complete, otherwise in [SetupStage.FINISHING], and
+     * setup is finished under [finishSetup]'s gate; an app that did not open is `not_opened`. The finish here is not
+     * recorded in [calls]: `finishSetup` there is always a screen's. Not modelled: VaultManager's generation check (a lock
+     * or a wipe while the phase is computed or the record written); that is `RecoveryOpenFinishTest`'s.
+     */
+    override suspend fun finishRecoveryOpen() {
+        call("finishRecoveryOpen")
+        if (lockPending) {
+            phase.value = AppPhase.Locked
+            throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_LOCK_PENDING)
+        }
+        phase.value = if (setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
+        if (setupComplete || recoveryOpenLeavesFinishing) return
+        if (!finishSetupGated()) throw VaultFailure(FailureKind.OTHER, MoveRepository.CODE_NOT_OPENED)
+    }
+
+    override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit, pin: String?) {
+        lastCredentialPin = pin?.takeIf { phoneSecret }
+        createCredential(password, backup, onStep)
+    }
+
+    override suspend fun changePassword(password: String, newPassword: String, pin: String?) {
+        lastPasswordChangePin = pin?.takeIf { phoneSecret }
+        changePassword(password, newPassword)
     }
 
     override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit) {
@@ -175,9 +401,17 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         phase.value = AppPhase.Setup(SetupStage.FINISHING)
     }
 
+    /** As VaultManager's, under its gate (`FinishSetupGate`): only from [SetupStage.FINISHING], never with a lock pending. */
     override suspend fun finishSetup() {
         call("finishSetup")
+        finishSetupGated()
+    }
+
+    private fun finishSetupGated(): Boolean {
+        if (phase.value != AppPhase.Setup(SetupStage.FINISHING) || lockPending) return false
+        setupComplete = true
         phase.value = AppPhase.Unlocked
+        return true
     }
 
     override suspend fun preflight(): PreflightInfo {
@@ -192,8 +426,33 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastCancelRecovery = cancelRecovery
         val r = unlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
         if (r !is UnlockAttempt.Failed) refusedByVault.value = false // a sealed answer, as VaultManager
+        if (!(r is UnlockAttempt.Failed && r.kind in setOf(FailureKind.NETWORK, FailureKind.NO_RESPONSE))) {
+            newPinAsked.value = r == UnlockAttempt.NewPinNeeded
+        }
         if (r == UnlockAttempt.Success) phase.value = AppPhase.Unlocked
         return r
+    }
+
+    /** The password the last unlock that cancelled a recovery sent with its owner check (release R). */
+    var lastCancelCheckPassword: String? = null
+
+    override suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView?): UnlockAttempt {
+        lastCancelCheckPassword = password
+        return unlock(pin, approve, true)
+    }
+
+    /** The PIN and password of the last `vault.secret.renew` (release R). */
+    var lastRenew: Pair<String, String>? = null
+
+    override suspend fun renewPhoneSecret(pin: String, password: String) {
+        call("renewPhoneSecret")
+        lastRenew = pin to password
+    }
+
+    override val rotateOffered = MutableStateFlow(false)
+
+    override fun dismissRotateOffer() {
+        rotateOffered.value = false
     }
 
     override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
@@ -364,7 +623,16 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return transferGaveUserGuid
     }
 
-    override suspend fun abandonTransferIn() = call("abandonTransferIn")
+    override suspend fun abandonTransferIn() {
+        call("abandonTransferIn")
+        waitingTransfer = null
+    }
+
+    /** (A6 audit N1) A transfer to this phone that waits for the old phone, as a restart finds it ([transferInWaiting]). */
+    var waitingTransfer: com.vettid.core.data.vault.TransferInWaiting? = null
+
+    /** A read: not recorded in [calls]. */
+    override suspend fun transferInWaiting(): com.vettid.core.data.vault.TransferInWaiting? = waitingTransfer
 
     override suspend fun transferCreate(): TransferOfferView {
         call("transferCreate")
@@ -416,6 +684,12 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override val lockedByOwnerCheck = MutableStateFlow(false)
     override val unlockCheckOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
     override val notices = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
+    override val presenceUnrecorded = MutableStateFlow(false)
+    override val checkAfterCancel = MutableStateFlow(false)
+
+    override fun consumeCheckAfterCancel() {
+        checkAfterCancel.value = false
+    }
 
     /** Scripted answers to [check] (default: passed). */
     val checkResults = ArrayDeque<OwnerCheckOutcome>()
@@ -447,6 +721,21 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         call("setCheckInterval")
         lastInterval = seconds
         ownerCheck.value = ownerCheck.value?.copy(intervalSeconds = seconds)
+    }
+
+    /** (Release L) The idle lock: null for a vault before L. */
+    override val idleLocked = MutableStateFlow<com.vettid.core.data.vault.IdleLocked?>(null)
+    override val idleLockSetting = MutableStateFlow<com.vettid.core.data.vault.IdleLockSetting?>(null)
+
+    override suspend fun refreshIdleLockSetting() {
+        call("refreshIdleLockSetting")
+    }
+
+    /** As the vault: a shorter value at once, a longer one after the next check (the lowest since then in force). */
+    override suspend fun setIdleLockAfter(seconds: Long) {
+        call("setIdleLockAfter")
+        val before = idleLockSetting.value ?: return
+        idleLockSetting.value = com.vettid.core.data.vault.IdleLockSetting(seconds, minOf(before.inForceSeconds, seconds))
     }
 
     override suspend fun turnHoldOn() {
@@ -488,8 +777,12 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         profile.value = profile.value?.let { it.copy(photo = photo.takeIf { p -> p.isNotEmpty() }, version = it.version + 1) }
     }
 
+    /** When set, [changeName] waits on it after it is called (an `account.name.set` still on its way). */
+    var changeNameGate: CompletableDeferred<Unit>? = null
+
     override suspend fun changeName(pin: String, password: String, firstName: String, lastName: String): NameChangeOutcome {
         call("changeName")
+        changeNameGate?.await()
         lastPin = pin
         lastPassword = password
         lastNames = firstName to lastName

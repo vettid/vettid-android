@@ -55,6 +55,10 @@
         <item quantity="one">You will be asked about sharing %1$d item.</item>
         <item quantity="other">You will be asked about sharing %1$d items.</item>
     </plurals>
+    <plurals name="items_share_preview_more">
+        <item quantity="one">%1$d more may be shared.</item>
+        <item quantity="other">%1$d more may be shared.</item>
+    </plurals>
 
     <!-- What a connection can see (VAULT-ITEMS §6, VAULT-MESSAGING §10.12) -->
     <string name="items_sharing_this_connection">this connection</string>

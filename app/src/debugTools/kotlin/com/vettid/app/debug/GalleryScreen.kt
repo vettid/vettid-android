@@ -549,6 +549,7 @@ private fun NoticesGallery() {
         com.vettid.core.ui.components.SettingsGroup {
             com.vettid.core.ui.components.SettingsInfoRow("Info row", "A read-only value")
         }
+        com.vettid.core.ui.format.StagingTimeNote(Modifier.padding(horizontal = Spacing.gutter))
     }
 }
 

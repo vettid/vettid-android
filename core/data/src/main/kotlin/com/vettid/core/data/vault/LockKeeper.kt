@@ -26,8 +26,23 @@ import java.time.Instant
  * - [relayLockUntilMs]: a `vault.lock` was sent over the relay, got no answer, and may be acted on by the vault
  *   until then (its `exp`, plus a margin). It outlives the confirmation of the lock: the request may still be
  *   waiting in the mailbox of the vault, which collects again at the next unlock. No unlock is sent before it.
+ *   (Release L) Only for a lock not bound to its unlock: a bound one that arrives late is answered `stale_lock`.
+ * - [unlockId] (VAULT-MESSAGING 0.29.0 §10.2 "Locks", release L): the unlock the pending lock ends, from the vault's
+ *   own word (the enroll, unlock or recovery-open result, or `vault.status`). With it the lock is **bound**: every
+ *   attempt names it, over the relay and through the member API, and a process started later goes on with the same
+ *   bound lock. Null: a vault before L, or a phone that did not hold the value; the lock is then made as before L.
+ * - [held] (release L): the last lock ended because the vault was opened again since ([LockNotice.OpenedAgain]): the
+ *   phone stays locked, also in a later process, until an unlock on this phone succeeds (or the vault is no longer
+ *   this phone's).
  */
-data class LockRecord(val pendingSinceMs: Long? = null, val relayLockUntilMs: Long? = null)
+data class LockRecord(
+    val pendingSinceMs: Long? = null,
+    val relayLockUntilMs: Long? = null,
+    val unlockId: String? = null,
+    val held: Boolean = false,
+    /** Held, and since confirmed locked after all ([LockNotice.ConfirmedLate]): a new process says nothing new. */
+    val heldConfirmed: Boolean = false,
+)
 
 /** Where [LockRecord] is kept: with the app's durable account record. */
 interface LockRecordStore {
@@ -57,15 +72,36 @@ sealed interface LockNotice {
 
     /** The vault has now confirmed a lock that was in doubt: said once, until dismissed or the next unlock. */
     data object ConfirmedLate : LockNotice
+
+    /**
+     * (Release L) The vault said that the unlock this lock was for is over: it was opened again since (`stale_lock`,
+     * or the slot's `stale`), and the status did not say it is locked now. The lock is finished and not repeated
+     * (VAULT-MESSAGING §10.2 "Locks"), but the vault is **not** known to be locked: it may be open. This phone stays
+     * locked until the member unlocks it here ([LockKeeper.holdsPhone]). Said until dismissed or the next unlock.
+     */
+    data object OpenedAgain : LockNotice
+}
+
+/** What one try to lock the vault found out. */
+enum class LockOutcome {
+    /** The vault is known to be locked: the lock is confirmed. */
+    LOCKED,
+
+    /** (Release L) The vault runs under a newer unlock than the one the lock was for: the lock is over, not confirmed. */
+    OPENED_AGAIN,
+
+    /** Nothing that decides: the lock stays pending and is tried again. */
+    UNCONFIRMED,
 }
 
 /** One try to lock the vault. */
 fun interface LockAttempt {
     /**
-     * Tells the vault to lock and says whether it is **known** to be locked now. [first] is the attempt made at
-     * once when the member asked; later ones are retries. Never throws for an unreachable vault: that is `false`.
+     * Tells the vault to lock and says what is **known** now. [first] is the attempt made at once when the member
+     * asked; later ones are retries. [unlockId]: the unlock the lock is bound to ([LockRecord.unlockId]), null for a
+     * lock made as before release L. Never throws for an unreachable vault: that is [LockOutcome.UNCONFIRMED].
      */
-    suspend fun tryLock(first: Boolean): Boolean
+    suspend fun tryLock(first: Boolean, unlockId: String?): LockOutcome
 }
 
 /**
@@ -89,8 +125,14 @@ fun interface LockAttempt {
  * Retries: [backoff] after each failed attempt, and at once on [retryNow] (the member's "Try again"), which is
  * honoured once in [retryNowEvery] at most.
  *
+ * **A record that cannot be saved never stops a lock.** The lock is pending in this process first, then sent and
+ * retried; the save follows, and its failure is only reported ([onSaveFailed]). The relay lock's time is kept in
+ * memory as well, beside the record. What is lost with a failed save is only the lock's survival of a process death.
+ *
  * **Retries live in this process.** When the process dies they stop until something starts the app again (the
- * member, the on-phone service, a push wake, the boot receiver); [resume] then goes on.
+ * member, the on-phone service, a push wake, the boot receiver, and (release L, owner decision 2026-10-23) the
+ * app's pending-lock job, which Android runs while a lock is pending whether or not the app was killed); [resume]
+ * then goes on, bound to the same unlock as before ([LockRecord.unlockId]).
  */
 @Suppress("TooManyFunctions") // one small function per thing that can happen to a lock
 class LockKeeper(
@@ -100,6 +142,9 @@ class LockKeeper(
     private val now: () -> Instant = Instant::now,
     private val backoff: (attempts: Int) -> Duration = ::defaultBackoff,
     private val retryNowEvery: Duration = RETRY_NOW_EVERY,
+    private val onSaveFailed: (Exception) -> Unit = {},
+    /** (Release L) A lock ended as [LockNotice.OpenedAgain]: the opening it was bound to is dead; its name is to be forgotten. */
+    private val onOpenedAgain: (dead: String?) -> Unit = {},
 ) {
     private val gate = Mutex()
     private val noticeFlow = MutableStateFlow<LockNotice>(LockNotice.None)
@@ -111,9 +156,32 @@ class LockKeeper(
     @Volatile
     private var epoch = 0L
 
+    /** An unanswered relay lock's time ([relayLockSent]), kept here too: a record that could not be saved still holds an unlock. */
+    @Volatile
+    private var relayUntilMs: Long? = null
+
     /** How many locks were asked for: an unlock supersedes only those asked for before it began. */
     @Volatile
     private var asks = 0L
+
+    /** The unlock the pending lock is bound to ([LockRecord.unlockId]); kept here too, beside the record. */
+    @Volatile
+    private var boundTo: String? = null
+
+    /** (Release L) The lock ended as [LockNotice.OpenedAgain]: this phone stays locked until an unlock here. */
+    @Volatile
+    private var held = false
+
+    /**
+     * (Release L) The opening the last lock was bound to when it ended as "opened again": dead, so a `vault.locking` that
+     * names it says nothing about the vault now. Memory only (a new process knows no name; only a status read decides).
+     */
+    @Volatile
+    private var deadId: String? = null
+
+    /** How many unlocks succeeded here; a "Lock it now" status read taken before one is not applied after it ([rebind]). */
+    @Volatile
+    private var openings = 0L
 
     /** What to tell the member; [LockNotice.Unconfirmed] exactly while a lock is pending. */
     val notice: StateFlow<LockNotice> = noticeFlow.asStateFlow()
@@ -122,32 +190,56 @@ class LockKeeper(
     val pending: Boolean get() = noticeFlow.value is LockNotice.Unconfirmed
 
     /**
+     * This phone is to stay locked whatever the vault's status says: a lock is [pending], or (release L) one ended
+     * because the vault was opened again since ([LockNotice.OpenedAgain]; until an unlock on this phone succeeds,
+     * whether or not the member dismissed the notice). Kept on the phone ([LockRecord.held]): a new process starts
+     * held too.
+     */
+    val holdsPhone: Boolean get() = pending || held
+
+    /** The unlock the pending lock is bound to; null without a pending lock, or for one made as before release L. */
+    val boundUnlockId: String? get() = if (pending) boundTo else null
+
+    /**
      * At a process start: a lock that was pending when the process ended is pending now, and is tried again. It is
      * shown as in doubt from the start: it was not confirmed for as long as the process was gone.
      */
     fun resume() {
-        val since = store.load().pendingSinceMs ?: return
+        val r = store.load()
+        // (Release L) A lock that ended as "opened again": this phone is still locked, whatever the status says, and
+        // the member is told again (the screen's card, and the notification an earlier process posted stays).
+        if (r.held) {
+            held = true
+            if (!pending && !r.heldConfirmed) noticeFlow.value = LockNotice.OpenedAgain
+        }
+        val since = r.pendingSinceMs ?: return
         synchronized(this) {
             if (pending) return
             epoch++
             asks++
+            boundTo = r.unlockId
             noticeFlow.value = LockNotice.Unconfirmed(Instant.ofEpochMilli(since), 1)
             startRetries(epoch, atOnce = true)
         }
     }
 
     /**
-     * The member asks for a lock: pending from here on, durably, before anything is sent and before anything else
-     * is done for the lock. Returns the lock's number, for [ask].
+     * The member asks for a lock: pending from here on, in this process and then durably, before anything is sent and
+     * before anything else is done for the lock. Returns the lock's number, for [ask]. A save that fails is reported and
+     * changes nothing else: the lock is sent and retried all the same. [unlockId] (release L): the vault's current
+     * unlock as this phone knows it, to which the lock is bound; null makes the lock as before L.
      */
-    fun begin(): Long = synchronized(this) {
+    fun begin(unlockId: String? = null): Long = synchronized(this) {
         retries?.cancel()
         retries = null
         val t = now()
-        store.save(store.load().copy(pendingSinceMs = t.toEpochMilli()))
+        boundTo = unlockId
         noticeFlow.value = LockNotice.Unconfirmed(t, 0)
         asks++
-        ++epoch
+        deadId = null
+        val mine = ++epoch
+        write { it.copy(pendingSinceMs = t.toEpochMilli(), unlockId = unlockId) }
+        mine
     }
 
     /**
@@ -157,14 +249,49 @@ class LockKeeper(
     suspend fun ask(mine: Long = begin()): Boolean =
         // In the keeper's scope: the caller may go away, the attempt and what follows it do not.
         scope.async {
-            val ok = tryOnce(mine, first = true)
-            if (!ok) synchronized(this@LockKeeper) { if (epoch == mine && pending) startRetries(mine, atOnce = false) }
-            ok
+            val over = tryOnce(mine, first = true)
+            if (!over) synchronized(this@LockKeeper) { if (epoch == mine && pending) startRetries(mine, atOnce = false) }
+            // Over because the vault was opened again since: not locked.
+            over && !held
         }.await()
+
+    /** (Release L) The last lock ended as [LockNotice.OpenedAgain], and no unlock here followed: not known locked. */
+    val openedAgain: Boolean get() = held
+
+    /** The dead opening's name while held and no lock is pending; null otherwise, or when it was not known. */
+    val deadUnlockId: String? get() = if (held && !pending) deadId else null
+
+    /** (Release L, "Lock it now") The mark taken before the status read whose answer [rebind] may apply. */
+    fun openingMark(): Long = openings
+
+    /**
+     * (Release L, "Lock it now") Binds the lock [mine], begun unbound, to [unlockId] before its first attempt; nothing
+     * if another lock or an unlock took its place meanwhile. Null leaves it unbound (as before L). [mark]
+     * ([openingMark], taken before the status was read): an unlock that succeeded since makes the answer one of the
+     * opening before, which is dropped (the F1 rule): the lock keeps what that unlock bound it to, or stays unbound.
+     */
+    fun rebind(mine: Long, unlockId: String?, mark: Long) {
+        synchronized(this) {
+            if (epoch != mine || !pending || openings != mark) return
+            if (unlockId == null) return
+            boundTo = unlockId
+            write { it.copy(unlockId = unlockId) }
+        }
+    }
 
     /** Evidence from elsewhere that the vault is locked (its `vault.locking`, a status read): a pending lock is confirmed. */
     fun confirmed() {
-        synchronized(this) { if (pending) confirm(late = (noticeFlow.value as LockNotice.Unconfirmed).inDoubt) }
+        synchronized(this) {
+            when {
+                pending -> confirm(late = (noticeFlow.value as LockNotice.Unconfirmed).inDoubt)
+                // (Release L) Held after "opened again", and now locked after all: said so. The phone stays held
+                // (an unlock here ends that), and the record keeps it.
+                held && noticeFlow.value == LockNotice.OpenedAgain -> {
+                    noticeFlow.value = LockNotice.ConfirmedLate
+                    write { it.copy(heldConfirmed = true) }
+                }
+            }
+        }
     }
 
     /**
@@ -186,13 +313,18 @@ class LockKeeper(
      */
     fun relayLockSent(validFor: Duration) {
         synchronized(this) {
-            store.save(store.load().copy(relayLockUntilMs = now().plus(validFor).plus(RELAY_MARGIN).toEpochMilli()))
+            val until = now().plus(validFor).plus(RELAY_MARGIN).toEpochMilli()
+            relayUntilMs = until
+            write { it.copy(relayLockUntilMs = until) }
         }
     }
 
     /** The vault answered the relay lock: it has acted on it, nothing of it is on its way any more. */
     fun relayLockAnswered() {
-        synchronized(this) { store.save(store.load().copy(relayLockUntilMs = null)) }
+        synchronized(this) {
+            relayUntilMs = null
+            write { it.copy(relayLockUntilMs = null) }
+        }
     }
 
     /**
@@ -204,14 +336,24 @@ class LockKeeper(
             epoch++
             retries?.cancel()
             retries = null
-            if (store.load() != LockRecord()) store.save(LockRecord())
+            boundTo = null
+            held = false
+            deadId = null
+            relayUntilMs = null // nothing of this phone's is on its way to a vault it still holds
+            write { if (it != LockRecord()) LockRecord() else null }
             noticeFlow.value = LockNotice.None
         }
     }
 
-    /** The member has read [LockNotice.ConfirmedLate]. */
+    /**
+     * The member has read [LockNotice.ConfirmedLate] or [LockNotice.OpenedAgain]. The phone stays locked after the
+     * second all the same ([holdsPhone]): only an unlock here ends that.
+     */
     fun dismissConfirmed() {
-        synchronized(this) { if (noticeFlow.value == LockNotice.ConfirmedLate) noticeFlow.value = LockNotice.None }
+        synchronized(this) {
+            val n = noticeFlow.value
+            if (n == LockNotice.ConfirmedLate || n == LockNotice.OpenedAgain) noticeFlow.value = LockNotice.None
+        }
     }
 
     /**
@@ -220,19 +362,36 @@ class LockKeeper(
      * unlock succeeded, a lock asked for before it began is over (the member opened the vault again, later than
      * they locked it) and none of its attempts will ever be made.
      */
-    suspend fun <T> unlocking(opened: (T) -> Boolean, unlock: suspend () -> T): T = gate.withLock {
+    suspend fun <T> unlocking(
+        opened: (T) -> Boolean,
+        unlockIdOf: (T) -> String? = { null },
+        unlock: suspend () -> T,
+    ): T = gate.withLock {
         val before = asks
         settle().takeIf { it > 0 }?.let { delay(it) }
         val result = unlock()
         if (opened(result)) {
             synchronized(this) {
+                openings++
                 // A lock asked for while this unlock was on its way is newer than it: it stays, and is tried next.
                 if (asks == before) {
                     epoch++
                     retries?.cancel()
                     retries = null
-                    if (store.load() != LockRecord()) store.save(LockRecord())
+                    boundTo = null
+                    held = false
+                    deadId = null
+                    relayUntilMs = null
+                    write { if (it != LockRecord()) LockRecord() else null }
                     noticeFlow.value = LockNotice.None
+                } else if (pending) {
+                    // (Release L) The newer lock names the opening this unlock made, never the one it ended (a lock
+                    // bound to that one would be answered stale_lock and leave this opening open).
+                    val id = unlockIdOf(result)
+                    boundTo = id
+                    held = false
+                    deadId = null
+                    write { it.copy(unlockId = id, held = false, heldConfirmed = false) }
                 }
             }
         }
@@ -241,40 +400,70 @@ class LockKeeper(
 
     /** How long an unanswered relay lock may still be acted on (never more than [SETTLE_MAX], whatever the clock says). */
     private fun settle(): Long {
-        val until = store.load().relayLockUntilMs ?: return 0
+        val stored = try {
+            store.load().relayLockUntilMs
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            onSaveFailed(e)
+            null
+        }
+        val until = listOfNotNull(stored, relayUntilMs).maxOrNull() ?: return 0
         return (until - now().toEpochMilli()).coerceIn(0, SETTLE_MAX.toMillis())
     }
 
-    /** One attempt of lock [mine], unless it is no longer the pending one. True when the lock is confirmed. */
+    /**
+     * One attempt of lock [mine], unless it is no longer the pending one. True when the lock is over: confirmed, or
+     * (release L) ended because the vault was opened again since ([LockNotice.OpenedAgain]).
+     */
     private suspend fun tryOnce(mine: Long, first: Boolean): Boolean = gate.withLock {
-        if (epoch != mine || !pending) return@withLock !pending
-        val ok = try {
-            attempt.tryLock(first)
+        val bound = synchronized(this) {
+            if (epoch != mine || !pending) return@withLock !pending
+            boundTo
+        }
+        val outcome = try {
+            attempt.tryLock(first, bound)
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-            false
+            LockOutcome.UNCONFIRMED
         }
         synchronized(this) {
             if (epoch != mine || !pending) return@withLock !pending
             val n = noticeFlow.value as LockNotice.Unconfirmed
-            if (ok) {
+            when (outcome) {
                 // Confirmed before anything failed: the member was never told otherwise, so there is nothing to take back.
-                confirm(late = n.inDoubt)
-            } else {
-                noticeFlow.value = n.copy(attempts = n.attempts + 1)
+                LockOutcome.LOCKED -> confirm(late = n.inDoubt)
+                LockOutcome.OPENED_AGAIN -> end(LockNotice.OpenedAgain)
+                LockOutcome.UNCONFIRMED -> noticeFlow.value = n.copy(attempts = n.attempts + 1)
             }
         }
-        ok
+        outcome != LockOutcome.UNCONFIRMED
     }
 
-    private fun confirm(late: Boolean) {
+    private fun confirm(late: Boolean) = end(if (late) LockNotice.ConfirmedLate else LockNotice.None)
+
+    /** The pending lock is over with [notice]; nothing of it is tried again. */
+    private fun end(notice: LockNotice) {
         epoch++
         retries?.cancel()
         retries = null
-        // The relay lock's time stays: its request may still be waiting for the vault.
-        store.save(store.load().copy(pendingSinceMs = null))
-        noticeFlow.value = if (late) LockNotice.ConfirmedLate else LockNotice.None
+        val dead = boundTo
+        boundTo = null
+        held = notice == LockNotice.OpenedAgain
+        deadId = if (held) dead else null
+        if (held) onOpenedAgain(dead)
+        // The relay lock's time stays: its request may still be waiting for the vault. Held is kept on the phone too.
+        write { it.copy(pendingSinceMs = null, unlockId = null, held = held, heldConfirmed = false) }
+        noticeFlow.value = notice
+    }
+
+    /** Saves [f] of the record ([f] null: nothing to save); a failure is reported, never thrown: the lock goes on. */
+    @Suppress("TooGenericExceptionCaught") // a disk, a rename, a full phone: whatever it is, the lock is not stopped
+    private fun write(f: (LockRecord) -> LockRecord?) {
+        try {
+            f(store.load())?.let { store.save(it) }
+        } catch (e: Exception) {
+            onSaveFailed(e)
+        }
     }
 
     /** Tries until confirmed or replaced: [atOnce] (a process start) or after the first backoff (a failed first attempt). */

@@ -39,6 +39,8 @@ class InitiatorConfig(
     val deviceAttest: DeviceAttest? = null,
     /** A transfer's app key (§6.2, 0.15.0): SPKI DER, only with purpose app. */
     val apiKey: ByteArray? = null,
+    /** (0.33.0, release R) A transfer's unlock secret (§6.2, §11.14.10): 32 bytes, only with [apiKey]. */
+    val unlockSecret: ByteArray? = null,
     /** hs.init sender_kid all-zero instead of kid(staticKem). */
     val anonymousSender: Boolean = false,
     /** The pinned ik_R (or the stored ik for rekey/reconnect). */
@@ -202,24 +204,32 @@ class Initiator private constructor(
                     deviceAttest = cfg.deviceAttest,
                     apiKey = cfg.apiKey,
                     sasCommit = nI?.let { Schedule.sasCommit(it) },
+                    unlockSecret = cfg.unlockSecret,
                 )
-                val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = body.marshal())
-                return if (rekey) {
-                    // §6.2: a rekey hs.init travels in session mode under the
-                    // current epoch, and K_s is that epoch's rk.
-                    val cur = cfg.current!!
-                    val ks = cur.rkCopy()
-                    Initiator(cfg, body, eph, cur.seal(inner), ks, nI)
-                } else {
-                    val padded = Inner.encode(inner, Mode.SEALED)
-                    try {
-                        val senderKid = if (cfg.anonymousSender) Kid.ANONYMOUS else cfg.staticKem.kid
-                        val sealer = Sealer(cfg.responderEk!!, senderKid)
-                        val env = sealer.seal(padded)
-                        Initiator(cfg, body, eph, env, sealer.export(Labels.HS_KS, Suite.KEY_SIZE), nI)
-                    } finally {
-                        Bytes.wipe(padded)
+                val bodyBytes = body.marshal()
+                // (Release R) A transfer's unlock secret: the message's copy and the marshalled body are zeroed once sealed.
+                body.wipeUnlockSecret()
+                val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = bodyBytes)
+                try {
+                    return if (rekey) {
+                        // §6.2: a rekey hs.init travels in session mode under the
+                        // current epoch, and K_s is that epoch's rk.
+                        val cur = cfg.current!!
+                        val ks = cur.rkCopy()
+                        Initiator(cfg, body, eph, cur.seal(inner), ks, nI)
+                    } else {
+                        val padded = Inner.encode(inner, Mode.SEALED)
+                        try {
+                            val senderKid = if (cfg.anonymousSender) Kid.ANONYMOUS else cfg.staticKem.kid
+                            val sealer = Sealer(cfg.responderEk!!, senderKid)
+                            val env = sealer.seal(padded)
+                            Initiator(cfg, body, eph, env, sealer.export(Labels.HS_KS, Suite.KEY_SIZE), nI)
+                        } finally {
+                            Bytes.wipe(padded)
+                        }
                     }
+                } finally {
+                    if (cfg.unlockSecret != null) Bytes.wipe(bodyBytes)
                 }
             } catch (e: CryptoException) {
                 eph.destroy()

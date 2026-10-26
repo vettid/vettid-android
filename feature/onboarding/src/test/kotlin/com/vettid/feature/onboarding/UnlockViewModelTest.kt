@@ -45,6 +45,34 @@ class UnlockViewModelTest {
         assertNull(vault.lastApproved)
     }
 
+    /**
+     * Release R (§11.14.10): on the old phone after a transfer's approval, an unlock its own keys cannot make is "The move
+     * didn't finish" failing ("Contact VettID within a day"), never the "start a recovery" text; a network failure is
+     * said as that.
+     */
+    @Test
+    fun theMoveBackFailingSaysContactVettId() = runTest {
+        vault.transferKeptSince.value = Instant.parse("2026-10-16T10:00:00Z")
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.keptTransfer)
+        vault.unlockResults.add(UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret"))
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(UnlockMessage.MoveBackFailed, vm.uiState.value.message)
+        vault.unlockResults.add(UnlockAttempt.Failed(FailureKind.NETWORK, null))
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(UnlockMessage.Failed(FailureKind.NETWORK, null), vm.uiState.value.message)
+        // Without a kept transfer the failure is the usual one.
+        assertEquals(
+            UnlockMessage.Failed(FailureKind.DEVICE_SECRET, "device_secret"),
+            unlockFailedMessage(UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret"), keptTransfer = false),
+        )
+    }
+
     private fun view(state: OwnerCheckState, deadline: Instant) =
         OwnerCheckView(state, deadline, 86_400, 0, hold = true, holdOffUntil = null)
 
@@ -164,6 +192,18 @@ class UnlockViewModelTest {
         assertTrue(vm.uiState.value.pinAllowed)
     }
 
+    /** Release R: a "Finish the move" that did not open the vault says why on the unlock screen it leads to. */
+    @Test
+    fun aFailedFinishTheMoveIsShownHere() = runTest {
+        vault.finishMoveFailure.value = FailureKind.TRANSFER_INCOMPLETE
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertEquals(FailureKind.TRANSFER_INCOMPLETE, vm.uiState.value.moveFailure)
+        vm.dismissMoveFailure()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.moveFailure)
+    }
+
     @Test
     fun recoveryPendingThenCancelAndUnlock() = runTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending
@@ -177,6 +217,31 @@ class UnlockViewModelTest {
         vm.cancelRecoveryAndUnlock()
         advanceUntilIdle()
         assertTrue(vault.lastCancelRecovery)
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+    }
+
+    /** Release R (ANDROID-PLAN "Other screens"): a cancel from the app asks for the password and sends the owner check with it. */
+    @Test
+    fun releaseRCancelSendsTheOwnerCheck() = runTest {
+        vault.phoneSecret = true
+        vault.unlockResults += UnlockAttempt.RecoveryPending
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.recoveryPending)
+        assertFalse("the password first", vm.uiState.value.cancelAllowed)
+        vm.cancelRecoveryAndUnlock()
+        advanceUntilIdle()
+        assertFalse(vault.lastCancelRecovery)
+        vm.setPassword("the password")
+        assertTrue(vm.uiState.value.cancelAllowed)
+        vm.cancelRecoveryAndUnlock()
+        advanceUntilIdle()
+        assertTrue(vault.lastCancelRecovery)
+        assertEquals("the password", vault.lastCancelCheckPassword)
+        assertEquals("", vm.uiState.value.password)
         assertEquals(AppPhase.Unlocked, vault.phase.value)
     }
 
@@ -347,6 +412,21 @@ class UnlockViewModelTest {
         assertFalse(vm.uiState.value.eraseConfirm)
         assertEquals(AppPhase.SignedOut, vault.phase.value)
         assertNull(vault.account.value)
+    }
+
+    @Test
+    fun tryAgainClosesAnOpenEraseConfirmation() = runTest {
+        val vm = unrecognised()
+        vm.askErase()
+        assertTrue(vm.uiState.value.eraseConfirm)
+        vm.retryPreflight()
+        assertFalse("closed while the release check runs", vm.uiState.value.eraseConfirm)
+        advanceUntilIdle()
+        assertFalse("still closed after it", vm.uiState.value.eraseConfirm)
+        assertTrue("the offer itself stays", vm.uiState.value.eraseOffered)
+        vm.confirmErase() // a stale confirm from the closed dialog
+        advanceUntilIdle()
+        assertFalse("eraseThisPhone" in vault.calls)
     }
 
     @Test
@@ -562,5 +642,65 @@ class UnlockViewModelTest {
         vm.dismissLockNotice()
         advanceUntilIdle()
         assertEquals(com.vettid.core.data.vault.LockNotice.None, vm.uiState.value.lock)
+    }
+
+    /**
+     * VAULT-MESSAGING 0.44.0 §11.14.9 step 5: with a PIN change unresolved the screen asks for the previous PIN; when the
+     * vault shows (`device_secret`, before any PIN is tested) that the change went through it asks for the new PIN, and
+     * the PIN typed first is not reused: each PIN the member types is the one the vault tests.
+     */
+    @Test
+    fun anUnresolvedPinChangeAsksForThePreviousPinThenTheNewOne() = runTest {
+        vault.pinChangeUnresolved.value = true
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.previousPinStep)
+        assertFalse(vm.uiState.value.newPinStep)
+        vault.unlockResults.add(UnlockAttempt.NewPinNeeded)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("40281795", vault.lastPin)
+        with(vm.uiState.value) {
+            assertTrue(newPinStep)
+            assertEquals("the previous PIN is not kept for the new record", "", pin)
+            assertNull(message)
+            assertFalse("not \"this phone no longer holds the keys\"", keysGone)
+        }
+        // A failure that never reached the vault keeps the step.
+        vault.unlockResults.add(UnlockAttempt.Failed(FailureKind.NETWORK, null))
+        vm.setPin("59173048")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.newPinStep)
+        vm.setPin("59173048")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("59173048", vault.lastPin)
+        assertEquals(3, vault.calls.count { it == "unlock" })
+        assertFalse(vm.uiState.value.newPinStep)
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+        // Decided: the prompt is the usual one again.
+        vault.pinChangeUnresolved.value = false
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.previousPinStep)
+    }
+
+    /** A wrong new PIN (the candidate matched, so the change is confirmed) ends the second step: the next try is as usual. */
+    @Test
+    fun aWrongNewPinEndsTheSecondStep() = runTest {
+        vault.pinChangeUnresolved.value = true
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vault.unlockResults.add(UnlockAttempt.NewPinNeeded)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        vault.unlockResults.add(UnlockAttempt.BadPin(0))
+        vm.setPin("11112222")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.newPinStep)
+        assertEquals(UnlockMessage.BadPin, vm.uiState.value.message)
     }
 }

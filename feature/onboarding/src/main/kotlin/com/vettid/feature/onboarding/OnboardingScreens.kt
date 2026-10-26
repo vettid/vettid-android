@@ -41,24 +41,26 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vettid.core.data.policy.PasswordPolicy
+import com.vettid.core.data.policy.PasswordRule
 import com.vettid.core.data.policy.PinPolicy
-import com.vettid.core.data.policy.labelRes
+import com.vettid.core.data.policy.hintRes
 import com.vettid.core.data.policy.messageArg
 import com.vettid.core.data.policy.messageRes
 import com.vettid.core.data.vault.EnrollStep
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.RookLogo
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.StepList
-import com.vettid.core.ui.components.StrengthMeter
+import com.vettid.core.ui.components.PasswordRuleLine
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.visibleSecretKeyboard
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
@@ -131,7 +133,19 @@ fun OnboardingContent(
         OnboardingStep.PASSWORD -> PasswordScreen(state, actions, back)
         OnboardingStep.BACKUP -> BackupScreen(state, actions, back)
         OnboardingStep.PROGRESS -> ProgressScreen(state, actions)
-        OnboardingStep.DONE -> DoneScreen(actions)
+        OnboardingStep.DONE -> when {
+            // After a direct transfer (also after a restart): the move's own last screen, never the enrollment's.
+            state.movedIn && state.finishMovePending -> {
+                val finish: FinishMoveViewModel = hiltViewModel()
+                val finishState by finish.uiState.collectAsStateWithLifecycle()
+                FinishMovePane(finishState, finish, actions::finish)
+            }
+            state.movedIn -> MovedScreen(
+                stringResource(if (state.phoneSecret) R.string.onboarding_finish_move_done else R.string.onboarding_moved_transferred_body),
+                actions::finish,
+            )
+            else -> DoneScreen(actions)
+        }
         OnboardingStep.RECOVER -> recover(actions::leaveMove, actions::newVaultAfterMove, onOpenAccountSite)
         OnboardingStep.TRANSFER_IN -> transferIn(actions::leaveMove)
     }
@@ -140,7 +154,11 @@ fun OnboardingContent(
 @Composable
 private fun ErrorText(state: OnboardingUiState, override: FailureKind? = null, overrideText: String? = null) {
     val kind = state.error ?: return
-    val text = if (override != null && kind == override && overrideText != null) overrideText else stringResource(kind.messageRes())
+    val text = if (override != null && kind == override && overrideText != null) {
+        overrideText
+    } else {
+        failureText(kind.messageRes(), kind.vaultCode(state.errorShown))
+    }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(NoticeKind.URGENT, stringResource(R.string.onboarding_progress_failed), text, Modifier.testTag("error"))
 }
@@ -331,6 +349,7 @@ fun VaultElsewhereScreen(state: OnboardingUiState, actions: OnboardingActions, o
         NoticeCard(
             NoticeKind.WARNING,
             stringResource(R.string.onboarding_elsewhere_recovery_title),
+            // No vault on this screen yet, so no time scale: the real wait.
             stringResource(R.string.onboarding_elsewhere_recovery_body),
             modifier = Modifier.testTag("elsewhere_recovery"),
             actions = {
@@ -394,24 +413,28 @@ fun PinConfirmScreen(state: OnboardingUiState, actions: OnboardingActions, onBac
     }
 }
 
-/** The label of a strength level. */
+/** The line under a new password for [rule]: the rule it breaks, or "Strong enough." ([refused]: the vault's verdict). */
 @Composable
-fun strengthLabel(s: PasswordPolicy.Strength): String = stringResource(s.labelRes())
-
-/** The message for a password that breaks [PasswordPolicy]. */
-@Composable
-fun passwordProblemText(p: PasswordPolicy.Problem): String = stringResource(p.messageRes())
+fun PasswordRuleText(rule: PasswordRule, refused: Boolean, modifier: Modifier = Modifier) {
+    PasswordRuleLine(
+        stringResource(rule.messageRes()),
+        passes = rule.passes && !refused,
+        hint = rule.hintRes()?.let { stringResource(it) },
+        refused = refused,
+        modifier = modifier,
+    )
+}
 
 /**
- * A new credential password with its confirmation and the strength meter
- * (onboarding; the credential feature has its own copy for password changes).
+ * A new credential password with its confirmation and, under it, the password rules of release R as the member types
+ * (ANDROID-PLAN "Passwords"; the credential feature has its own copy for password changes).
  */
 @Composable
 fun NewPasswordFields(
     password: String,
     confirm: String,
-    strength: PasswordPolicy.Strength,
-    problem: PasswordPolicy.Problem?,
+    rule: PasswordRule,
+    refused: Boolean,
     mismatch: Boolean,
     onPassword: (String) -> Unit,
     onConfirm: (String) -> Unit,
@@ -421,12 +444,11 @@ fun NewPasswordFields(
         value = password,
         onValueChange = onPassword,
         label = stringResource(R.string.onboarding_password_label),
-        error = problem?.let { passwordProblemText(it) },
         imeAction = ImeAction.Next,
         modifier = Modifier.testTag("password"),
     )
     Spacer(Modifier.height(Spacing.s))
-    StrengthMeter(level = strength.ordinal, label = strengthLabel(strength))
+    PasswordRuleText(rule, refused, Modifier.testTag("password_rule"))
     Spacer(Modifier.height(Spacing.l))
     SecretField(
         value = confirm,
@@ -445,11 +467,25 @@ fun PasswordScreen(state: OnboardingUiState, actions: OnboardingActions, onBack:
         body = stringResource(R.string.onboarding_password_body),
         primaryLabel = stringResource(R.string.onboarding_continue),
         onPrimary = actions::submitPassword,
-        primaryEnabled = state.password.isNotEmpty() && state.passwordConfirm.isNotEmpty(),
+        primaryEnabled = state.canSubmitPassword,
         onBack = onBack,
     ) {
+        if (state.askPin) {
+            // Release R (§11.14.9): the vault verifies its PIN when the credential is created.
+            SecretField(
+                value = state.pin,
+                onValueChange = actions::setPin,
+                label = stringResource(R.string.unlock_pin_label),
+                isPin = true,
+                // (A6 audit N3) After a resumed enrollment the vault holds the PIN chosen when it was started.
+                supporting = if (state.pinFromBefore) stringResource(R.string.onboarding_pin_from_before) else null,
+                imeAction = ImeAction.Next,
+                modifier = Modifier.testTag("credential_pin"),
+            )
+            Spacer(Modifier.height(Spacing.m))
+        }
         NewPasswordFields(
-            state.password, state.passwordConfirm, state.passwordStrength, state.passwordProblem, state.passwordMismatch,
+            state.password, state.passwordConfirm, state.passwordRule, state.passwordRefused, state.passwordMismatch,
             actions::setPassword, actions::setPasswordConfirm, actions::submitPassword,
         )
         ErrorText(state)
@@ -550,19 +586,21 @@ private fun stepLabel(s: EnrollStep): String = stringResource(
 @Composable
 fun ProgressScreen(state: OnboardingUiState, actions: OnboardingActions) {
     val failed = state.progressFailed || (state.error != null && !state.busy)
-    val expired = failed && state.error == FailureKind.UNAUTHORIZED && !state.credentialOnly
+    // A pending app key lasts an hour (MEMBER-API 2.0.0): after a 401 only a new setup code helps. (Review M3) A vault
+    // that was made but has not answered yet: try again, or use another code.
+    val expired = state.error == FailureKind.UNAUTHORIZED && !state.credentialOnly
+    val otherCode = failed && (expired || state.error == FailureKind.ENROLL_WAITING)
     FormScaffold(
         title = stringResource(R.string.onboarding_progress_title),
         body = stringResource(R.string.onboarding_progress_body),
         primaryLabel = if (failed) stringResource(R.string.onboarding_progress_retry) else null,
         onPrimary = actions::run,
-        // A pending app key lasts an hour (MEMBER-API 2.0.0): after a 401 only a new setup code helps.
         secondaryLabel = when {
             !failed -> null
-            expired -> stringResource(R.string.onboarding_other_code)
+            otherCode -> stringResource(R.string.onboarding_other_code)
             else -> stringResource(R.string.onboarding_progress_edit)
         },
-        onSecondary = if (expired) actions::useAnotherCode else actions::editAfterFailure,
+        onSecondary = if (otherCode) actions::useAnotherCode else actions::editAfterFailure,
     ) {
         StepList(state.progress.map { (s, st) -> stepLabel(s) to st }, Modifier.testTag("progress"))
         ErrorText(state)

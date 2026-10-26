@@ -3,6 +3,8 @@ package com.vettid.core.push.fcm
 import android.content.Context
 import android.content.pm.PackageManager
 import com.vettid.core.notify.PushAvailability
+import com.vettid.core.notify.PushChallenge
+import com.vettid.core.notify.PushMessage
 import com.vettid.core.notify.PushProvider
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -69,6 +71,23 @@ class FcmPushProvider(
     override var onWake: (suspend () -> Boolean)? = null
 
     override var onNewToken: (() -> Unit)? = null
+
+    override var onChallenge: ((String) -> Unit)? = null
+
+    /**
+     * A push message arrived with [data] ([VettIdMessagingService]). A registration's challenge (`{"c": code}`, no
+     * `w`; PUSH-GATEWAY 0.5.0 §6) is not a wake: its code goes to the registration ([onChallenge]) and nothing is
+     * collected or shown. A `c` that is not a code is dropped. Everything else is a wake ([wake]), whose content is
+     * not read. True when done.
+     */
+    suspend fun received(data: Map<String, String>): Boolean = when (val m = PushChallenge.classify(data)) {
+        is PushMessage.Challenge -> {
+            onChallenge?.invoke(m.code)
+            true
+        }
+        PushMessage.Malformed -> true
+        PushMessage.Wake -> wake()
+    }
 
     /**
      * A push message arrived ([VettIdMessagingService]; its content is never read): the collect, for at most

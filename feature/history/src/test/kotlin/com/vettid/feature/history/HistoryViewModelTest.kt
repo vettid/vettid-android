@@ -6,8 +6,11 @@ import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.vault.AuditOps
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HistoryManager
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.testing.FakeItems
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.testing.FakeVault
 import com.vettid.core.vault.AuditEntry
 import com.vettid.core.vault.AuditPage
 import com.vettid.core.vault.VaultOpException
@@ -25,6 +28,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
 
 /**
  * The History screen's loads end (owner, 2026-10-08, staging S5): History of one connection, opened from its detail,
@@ -70,12 +74,13 @@ class HistoryViewModelTest {
         seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE)))
     }
 
-    private fun vm(vault: Vault, connectionId: String? = "c1") = HistoryViewModel(
+    private fun vm(vault: Vault, connectionId: String? = "c1", owner: FakeVault = FakeVault()) = HistoryViewModel(
         SavedStateHandle(listOfNotNull(connectionId?.let { "connectionId" to it }).toMap()),
         HistoryManager { vault },
         social,
         RuntimeEnvironment.getApplication(),
         FakeItems(),
+        owner,
     )
 
     /** Runs the test dispatcher until [done] (the vault call itself runs on the IO dispatcher). */
@@ -189,6 +194,72 @@ class HistoryViewModelTest {
         assertEquals("audit.exported", s.entries.first().kind)
         assertTrue(s.end)
     }
+
+    /**
+     * Two refreshes in a row (found while porting to iOS): the first one's end cleared `refreshing` while the second,
+     * chained after it, was still reading, so the list's end coming into view ran `pager.more()` next to
+     * `pager.refresh()` on the same pager and entries went missing. No older page is read until the last refresh ends.
+     */
+    @Test
+    fun noOlderPageIsReadWhileAChainedRefreshRuns() = runTest(main.dispatcher) {
+        val first = (999L downTo 950L).toList().toLongArray()
+        val firstRefresh = CountDownLatch(1)
+        val secondRefresh = CountDownLatch(1)
+        val vault = Vault(
+            { page(*first, next = 950) },
+            { firstRefresh.await(); page(*first, next = 950) },
+            // The second refresh finds a new entry: its end is seen in the list (1000 on top).
+            { secondRefresh.await(); page(1000L, *first, next = 950) },
+            { page(949, 948) },
+        )
+        val model = vm(vault)
+        settle(model, ::idle)
+        model.refresh()
+        settleCalls(vault, 2)
+        model.refresh()
+        firstRefresh.countDown()
+        // The second refresh is reading: the first one has ended.
+        settleCalls(vault, 3)
+        advanceUntilIdle()
+        // The list's end comes into view: refused while the refresh reads (no load begun, nothing sent).
+        model.loadMore()
+        assertFalse(model.uiState.value.loadingMore)
+        advanceUntilIdle()
+        assertEquals(3, vault.calls.size)
+        secondRefresh.countDown()
+        val s0 = settle(model) { idle(it) && it.entries.firstOrNull()?.seq == 1000L }
+        assertEquals(51, s0.entries.size)
+        model.loadMore()
+        val s = settle(model) { idle(it) && it.end }
+        assertEquals(53, s.entries.size)
+        assertEquals(listOf(null, null, null, 950L), vault.calls.map { it["before_seq"] })
+    }
+
+    /** Runs the test dispatcher until the vault has had [n] requests. */
+    private fun TestScope.settleCalls(vault: Vault, n: Int) {
+        repeat(SETTLE_ROUNDS) {
+            advanceUntilIdle()
+            if (vault.calls.size >= n) return
+            Thread.sleep(SETTLE_SLEEP_MS)
+        }
+        throw AssertionError("the vault had ${vault.calls.size} requests, not $n")
+    }
+
+    /** Refused because the daily check was due: History reads again once the check passes (staging, release 19). */
+    @Test
+    fun aListRefusedForTheDailyCheckReloadsWhenTheCheckPasses() = runTest(main.dispatcher) {
+        val owner = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        val vault = Vault({ throw VaultOpException("connection.audit.list", "owner_check_required") }, { page(900) })
+        val model = vm(vault, owner = owner)
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, settle(model, ::idle).error)
+        owner.ownerCheck.value = check(OwnerCheckState.OK)
+        val s = settle(model) { idle(it) && it.entries.isNotEmpty() }
+        assertNull(s.error)
+        assertEquals(listOf(900L), s.entries.map { it.seq })
+        assertEquals(2, vault.calls.size)
+    }
+
+    private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
     @Test
     fun aFailureIsShownNotSpunOn() = runTest(main.dispatcher) {

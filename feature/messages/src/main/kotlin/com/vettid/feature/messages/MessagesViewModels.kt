@@ -7,17 +7,27 @@ import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
 import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.NoCallAccess
+import android.graphics.Bitmap
+import com.vettid.core.data.social.AttachmentManager
+import com.vettid.core.data.social.AttachmentsRepository
 import com.vettid.core.data.social.ConnectionInfo
+import com.vettid.core.data.social.PendingPhoto
+import com.vettid.core.media.PhotoException
+import com.vettid.core.media.PreparedPhoto
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -35,6 +45,8 @@ data class MessagesUiState(
     /** True when the member has no active connection at all (the empty state then suggests an invite). */
     val noConnections: Boolean = true,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     /** The top bar's search (owner request 2026-10-08): connection names and the latest message, on this phone. */
     val query: String = "",
     /** Whether there is any conversation at all (the search is offered then). */
@@ -50,7 +62,10 @@ internal fun ConversationSummary.matches(query: String): Boolean {
 
 /** Messages (ANDROID-PLAN §4, Proton's inbox): conversations by connection, the Unread chip. */
 @HiltViewModel
-class MessagesViewModel @Inject constructor(private val repo: MessagesRepository) : ViewModel() {
+class MessagesViewModel @Inject constructor(
+    private val repo: MessagesRepository,
+    private val ownerCheck: OwnerCheckRepository,
+) : ViewModel() {
     private val local = MutableStateFlow(MessagesUiState())
 
     val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations) { s, all ->
@@ -63,6 +78,12 @@ class MessagesViewModel @Inject constructor(private val repo: MessagesRepository
 
     init {
         refresh()
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        viewModelScope.launch {
+            ownerCheck.checkCleared().collect {
+                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+            }
+        }
     }
 
     fun refresh() {
@@ -72,7 +93,7 @@ class MessagesViewModel @Inject constructor(private val repo: MessagesRepository
                 repo.refreshConversations()
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -102,6 +123,20 @@ data class ConversationUiState(
     val calls: List<CallHistoryEntry> = emptyList(),
     /** The member tapped Call where the vault has no calls: say so. */
     val callsNotAvailable: Boolean = false,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
+    /** Older messages remain in the vault (VAULT-MESSAGING 0.32.0 §10.5.2): scrolling to the top loads them. */
+    val olderAvailable: Boolean = false,
+    /** An older page is being read. */
+    val loadingOlder: Boolean = false,
+    /** The vault has photo attachments (VAULT-MESSAGING 0.32.0 §10.5.1): the composer offers the photo button. */
+    val photosAvailable: Boolean = false,
+    /** The app's own camera screen is open (ANDROID-PLAN 0.1.39 "Take a photo"). */
+    val capturing: Boolean = false,
+    /** Photos picked or taken, prepared in memory, waiting for Send or Cancel. */
+    val photoDraft: PhotoDraft? = null,
+    /** Changes at every clear of the attachment memory: the bubbles drop their decoded thumbnails. */
+    val photoGeneration: Long = 0,
 ) {
     val canSend: Boolean get() = connection?.state == ConnectionState.ACTIVE && draft.isNotBlank() && !sending && !tooLong
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
@@ -123,18 +158,33 @@ data class ConversationUiState(
 private const val HISTORY_AGAIN_MS = 2_000L
 
 @HiltViewModel
+@Suppress("TooManyFunctions") // the conversation's and its photos' actions
 class ConversationViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val messages: MessagesRepository,
     private val connections: ConnectionsRepository,
+    private val attachments: AttachmentsRepository,
     private val calls: CallAccess = NoCallAccess,
 ) : ViewModel() {
     private val connectionId: String = checkNotNull(savedState[ConversationRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConversationUiState(connectionId))
 
     val uiState: StateFlow<ConversationUiState> =
-        combine(local, messages.messages(connectionId), connections.connections, calls.availability) { s, ms, cs, call ->
-            s.copy(messages = ms, connection = cs.firstOrNull { it.id == connectionId } ?: s.connection, call = call)
+        combine(
+            local,
+            messages.messages(connectionId),
+            connections.connections,
+            messages.olderAvailable(connectionId),
+            attachments.available,
+            calls.availability,
+        ) { s, ms, cs, older, photos, call ->
+            s.copy(
+                messages = ms,
+                connection = cs.firstOrNull { it.id == connectionId } ?: s.connection,
+                olderAvailable = older,
+                photosAvailable = photos,
+                call = call,
+            )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
     init {
@@ -163,7 +213,15 @@ class ConversationViewModel @Inject constructor(
                 messages.load(connectionId)
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
+            }
+        }
+        viewModelScope.launch {
+            // A lock, the hold or due state, a wipe or an unlink (ANDROID-PLAN 0.1.39 "Memory only"): the draft, the
+            // pending upload and the thumbnails shown go, and the bubbles read their thumbnails again.
+            attachments.cleared.drop(1).collect { gen ->
+                dropPhotos(discard = false)
+                local.update { it.copy(photoGeneration = gen) }
             }
         }
         viewModelScope.launch {
@@ -196,7 +254,24 @@ class ConversationViewModel @Inject constructor(
                 local.update { it.copy(sending = false, draft = "") }
             } catch (e: VaultFailure) {
                 // The draft stays so that the member can retry.
-                local.update { it.copy(sending = false, error = e.kind) }
+                local.update { it.copy(sending = false, error = e.kind, errorCode = e.shownCode) }
+            }
+        }
+    }
+
+    /**
+     * The member scrolled to the top: the next older page (§10.5.2), one at a time. `response_too_large` (§8.1) and
+     * every other failure are shown; the list keeps what it has, and the next scroll to the top tries again.
+     */
+    fun loadOlder() {
+        if (local.value.loadingOlder || !uiState.value.olderAvailable) return
+        local.update { it.copy(loadingOlder = true) }
+        viewModelScope.launch {
+            try {
+                messages.loadOlder(connectionId)
+                local.update { it.copy(loadingOlder = false) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(loadingOlder = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -210,7 +285,7 @@ class ConversationViewModel @Inject constructor(
             try {
                 messages.delete(connectionId, m.messageId)
             } catch (e: VaultFailure) {
-                local.update { it.copy(error = e.kind) }
+                local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -228,6 +303,194 @@ class ConversationViewModel @Inject constructor(
     }
 
     fun dismissCallNotice() = local.update { it.copy(callsNotAvailable = false) }
+
+    // --- photos (ANDROID-PLAN 0.1.39) ---
+
+    /** The upload being sent, kept for Retry (the same request) or Cancel (a discard). */
+    private var pendingPhoto: PendingPhoto? = null
+
+    fun startCapture() = local.update { it.copy(capturing = true) }
+
+    fun stopCapture() = local.update { it.copy(capturing = false) }
+
+    /** The pass that reads and prepares picked pictures, the send loop, and whether the member cancelled. */
+    private var photoJob: Job? = null
+
+    @Volatile
+    private var photosCancelled = false
+
+    /**
+     * Pictures the Photo Picker handed over, read into memory and prepared one at a time (bounds, orientation, JPEG,
+     * thumbnail): only one source and one prepared photo are being worked on at once. [sources] read one each; a
+     * pick that cannot be read or prepared is counted and said.
+     */
+    fun onPicked(sources: List<suspend () -> ByteArray?>) {
+        if (sources.isEmpty()) return
+        photosCancelled = false
+        local.update { it.copy(photoDraft = PhotoDraft(preparing = true)) }
+        photoJob = viewModelScope.launch {
+            val ready = mutableListOf<PreparedPhoto>()
+            var problem: PhotoProblem? = null
+            var failed = 0
+            try {
+                for (read in sources.take(PhotoDraft.MAX_PHOTOS)) {
+                    if (photosCancelled) break
+                    val src = try {
+                        read()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                    val failure = prepareOne(src, ready)
+                    if (failure != null) {
+                        failed++
+                        problem = failure
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancelled (Cancel, a clear, the screen gone): nothing prepared is kept.
+                ready.forEach { it.wipe() }
+                throw e
+            }
+            if (photosCancelled) {
+                ready.forEach { it.wipe() }
+                return@launch
+            }
+            val shownFailures = if (ready.isEmpty()) 0 else failed
+            local.update { it.copy(photoDraft = PhotoDraft(photos = ready, problem = problem, failedPicks = shownFailures)) }
+        }
+    }
+
+    /** Prepares one picked picture into [ready] and zeroes its source; the problem when it cannot be used. */
+    private suspend fun prepareOne(src: ByteArray?, ready: MutableList<PreparedPhoto>): PhotoProblem? {
+        if (src == null || src.isEmpty()) return PhotoProblem.UNREADABLE
+        return try {
+            ready += attachments.prepare(src)
+            null
+        } catch (e: PhotoException) {
+            PhotoProblem.of(e.failure)
+        } finally {
+            src.fill(0)
+        }
+    }
+
+    /** A shot from the app's camera, upright, in memory (no file); recycled here once prepared. */
+    fun onShot(shot: Bitmap) {
+        local.update { it.copy(capturing = false, photoDraft = PhotoDraft(preparing = true)) }
+        viewModelScope.launch {
+            val draft = try {
+                PhotoDraft(photos = listOf(attachments.prepare(shot)))
+            } catch (e: PhotoException) {
+                PhotoDraft(problem = PhotoProblem.of(e.failure))
+            } finally {
+                shot.recycle()
+            }
+            local.update { it.copy(photoDraft = draft) }
+        }
+    }
+
+    fun setPhotoCaption(v: String) = local.update { s ->
+        s.copy(photoDraft = s.photoDraft?.copy(caption = v, problem = null))
+    }
+
+    /**
+     * Sends the draft's photos one after another, each as its own message, the caption with the first; the next
+     * upload starts after the previous message's answer. A lost answer stops with Retry offered (the same request,
+     * no new upload); a full mailbox or vault says so; any other refusal ends that photo. Cancel is offered only
+     * between requests ([PhotoDraft.inFlight]); a cancel stops the loop before the next photo is begun.
+     */
+    @Suppress("CyclomaticComplexMethod")
+    fun sendPhotos() {
+        val draft = local.value.photoDraft ?: return
+        if (draft.sending || draft.preparing || draft.photos.isEmpty()) return
+        photosCancelled = false
+        local.update { it.copy(photoDraft = draft.copy(sending = true, problem = null)) }
+        photoJob = viewModelScope.launch {
+            var d = draft
+            while (d.photos.isNotEmpty()) {
+                if (photosCancelled) return@launch
+                val p = pendingPhoto ?: attachments.begin(connectionId, if (d.sent == 0) d.caption.trim() else "", d.photos.first())
+                pendingPhoto = p
+                local.update { s -> s.copy(photoDraft = s.photoDraft?.copy(inFlight = true)) }
+                try {
+                    attachments.send(p)
+                    pendingPhoto = null
+                    d = d.copy(photos = d.photos.drop(1), sent = d.sent + 1)
+                    if (photosCancelled) return@launch
+                    local.update { it.copy(photoDraft = d.copy(sending = true, inFlight = false)) }
+                } catch (e: VaultFailure) {
+                    if (photosCancelled) return@launch
+                    val retry = AttachmentManager.retryable(e)
+                    val problem = when {
+                        e.code == AttachmentManager.CODE_QUOTA -> PhotoProblem.MAILBOX_FULL
+                        e.kind == FailureKind.LIMIT -> PhotoProblem.VAULT_FULL
+                        retry -> PhotoProblem.NO_ANSWER
+                        else -> PhotoProblem.NOT_SENT
+                    }
+                    if (!retry && e.code != AttachmentManager.CODE_QUOTA) {
+                        // Final for this photo: it is dropped, the others wait for Send.
+                        pendingPhoto = null
+                        d = d.copy(photos = d.photos.drop(1))
+                    }
+                    local.update { it.copy(photoDraft = d.copy(sending = false, inFlight = false, problem = problem, retry = retry)) }
+                    return@launch
+                }
+            }
+            local.update { it.copy(photoDraft = null) }
+        }
+    }
+
+    /**
+     * Cancel: no further photo is begun, an upload not yet sent is discarded at the vault, and the prepared photos
+     * are wiped. Not while a request is on its way (the vault may already act on it): the screen disables it then.
+     */
+    fun cancelPhotos() {
+        val draft = local.value.photoDraft
+        if (draft?.inFlight == true) return
+        dropPhotos(discard = true)
+    }
+
+    /** Everything of the photos in this conversation goes: the draft, the pending upload, the camera. */
+    private fun dropPhotos(discard: Boolean) {
+        photosCancelled = true
+        photoJob?.cancel()
+        photoJob = null
+        val draft = local.value.photoDraft
+        val p = pendingPhoto
+        pendingPhoto = null
+        local.update { it.copy(photoDraft = null, capturing = false) }
+        if (p != null && discard) attachments.abandon(p)
+        draft?.photos?.forEach { it.wipe() }
+    }
+
+    fun dismissPhotoProblem() = local.update { s ->
+        s.copy(photoDraft = s.photoDraft?.takeIf { it.photos.isNotEmpty() }?.copy(problem = null))
+    }
+
+    /**
+     * A message's thumbnail, from memory or fetched (`part: "thumb"`); null when it cannot be had. One that arrives after
+     * a clear (ANDROID-PLAN "Memory only, wiped at lock") is zeroed and not shown.
+     */
+    suspend fun thumbnail(messageId: String): ByteArray? {
+        val generation = attachments.cleared.value
+        val t = attachments.cachedThumbnail(connectionId, messageId) ?: try {
+            attachments.thumbnail(connectionId, messageId)
+        } catch (_: VaultFailure) {
+            null
+        }
+        if (t != null && attachments.cleared.value != generation) {
+            t.fill(0)
+            return null
+        }
+        return t
+    }
+
+    override fun onCleared() {
+        // Leaving the conversation is a Cancel: an upload not sent is discarded at the vault.
+        pendingPhoto?.let(attachments::abandon)
+        local.value.photoDraft?.photos?.forEach { it.wipe() }
+    }
 }
 
 /** Immutable UI state of the new-message picker. */
@@ -235,6 +498,8 @@ data class NewMessageUiState(
     val loading: Boolean = true,
     val connections: List<ConnectionInfo> = emptyList(),
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 )
 
 /** The compose button: pick an active connection to write to. */
@@ -255,7 +520,7 @@ class NewMessageViewModel @Inject constructor(private val repo: ConnectionsRepos
                 repo.refresh()
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }

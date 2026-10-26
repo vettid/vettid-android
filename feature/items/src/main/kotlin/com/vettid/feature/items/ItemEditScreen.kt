@@ -88,6 +88,7 @@ import com.vettid.core.ui.components.RemovableTagChip
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.visibleSecretKeyboard
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.theme.Spacing
 
@@ -241,6 +242,7 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                         critical = d.sensitivity == Sensitivity.CRITICAL,
                         profile = state.inProfile,
                         limit = state.limit,
+                        shownCode = state.errorCode,
                     ),
                     modifier = Modifier.testTag("item_edit_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
@@ -319,7 +321,10 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                         }
                         else -> null
                     },
-                    modifier = Modifier.fillMaxWidth().testTag("item_edit_notes"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (secret) Modifier.excludeFromAutofill() else Modifier)
+                        .testTag("item_edit_notes"),
                 )
             }
             if (d.keepNotes) {
@@ -603,13 +608,17 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
         ?: DraftProblem.BAD_CHARACTER.takeIf { it in problems && ItemChecks.labelProblems(f.label.trim()).isNotEmpty() }
     val valueProblem = (problems - setOfNotNull(DraftProblem.LABEL_EMPTY, DraftProblem.LABEL_TOO_LONG, labelProblem)).firstOrNull()
     // A value that is not (yet) one of its kind says its rule while the member types (owner request 2026-10-08).
-    val live = DraftProblem.VALUE_INVALID.takeIf { !f.kept && FieldInput.incomplete(f.kind, f.text) }
-    val error = labelProblem?.let { ItemsText.problem(it) } ?: (valueProblem ?: live)?.let { ItemsText.problem(it, f.kind) }
+    val fullDateInMonth = f.kind == FieldKinds.DATE && f.monthYear && f.text.length > MONTH_LENGTH
+    val live = DraftProblem.VALUE_INVALID.takeIf {
+        !f.kept && (fullDateInMonth || FieldInput.incomplete(f.kind, if (f.kind == FieldKinds.PHONE) PhoneInput.main(f.text) else f.text))
+    }
+    val error = labelProblem?.let { ItemsText.problem(it) } ?: (valueProblem ?: live)?.let { ItemsText.problem(it, f.kind, f.monthYear) }
     // A kept value is not at hand (§10.7 Kept values): the field stays empty until the member types a new one.
     val region = phoneRegion()
     val hint = when {
         f.kept -> stringResource(R.string.items_field_kind_kept, kindName)
         // Never a block: a number libphonenumber does not know is saved as typed (owner request 2026-10-09).
+        f.kind == FieldKinds.PHONE && PhoneInput.hasExtension(f.text) -> stringResource(R.string.items_phone_extension_note)
         f.kind == FieldKinds.PHONE && PhoneInput.doubtful(f.text, region) -> stringResource(R.string.items_phone_check)
         else -> kindName
     }
@@ -721,7 +730,13 @@ private fun ValueEditor(
     secret: Boolean,
     onValue: (String) -> Unit,
 ) {
-    val tag = input.fillMaxWidth().testTag("item_edit_field_value_$i")
+    // A value of a secret or critical item (and a one-time-code seed) is never offered to a password manager to save or
+    // fill, whatever its kind (as SecretField).
+    val keepFromAutofill = secret || f.kind == FieldKinds.OTP
+    val tag = input
+        .fillMaxWidth()
+        .then(if (keepFromAutofill) Modifier.excludeFromAutofill() else Modifier)
+        .testTag("item_edit_field_value_$i")
     if (f.kind == FieldKinds.PASSWORD) {
         return SecretField(
             value = f.text,
@@ -978,7 +993,7 @@ private fun AddressPart(
                 KeyboardOptions(capitalization = capitalization, imeAction = ime?.action ?: ImeAction.Next)
             },
             keyboardActions = ime?.keyboardActions ?: KeyboardActions.Default,
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth().then(if (secret) Modifier.excludeFromAutofill() else Modifier),
         )
     }
 }
@@ -1175,3 +1190,6 @@ private fun SizeNote(state: ItemEditUiState) {
 }
 
 private const val KB = 1024
+
+/** `YYYY-MM`. */
+private const val MONTH_LENGTH = 7

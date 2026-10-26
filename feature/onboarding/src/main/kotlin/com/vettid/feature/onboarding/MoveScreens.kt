@@ -38,8 +38,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.vault.CouldNotTell
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.CameraPermission
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
@@ -53,6 +55,10 @@ import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.visibleSecretKeyboard
 import com.vettid.core.ui.components.rememberCameraPermission
+import com.vettid.core.ui.format.Durations
+import com.vettid.core.ui.format.StagingTimeNoteIfShown
+import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 import java.time.Instant
@@ -120,13 +126,13 @@ private fun Waiting(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun Failure(kind: FailureKind?, text: String? = null, modifier: Modifier = Modifier) {
+private fun Failure(kind: FailureKind?, text: String? = null, modifier: Modifier = Modifier, shownCode: String? = null) {
     if (kind == null && text == null) return
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(
         NoticeKind.URGENT,
         stringResource(R.string.recover_failed_title),
-        text ?: stringResource(kind!!.messageRes()),
+        text ?: failureText(kind!!.messageRes(), kind.vaultCode(shownCode)),
         modifier.testTag("error"),
     )
 }
@@ -166,6 +172,8 @@ fun RecoverContent(
     onOpenAccountSite: () -> Unit,
     camera: (@Composable (Modifier) -> Unit)? = null,
     secureTyping: Boolean = true,
+    /** The release-R pane's view model; null: Hilt's (a test passes its own). */
+    recoveryOpen: RecoveryOpenViewModel? = null,
 ) {
     val leaveable = state.step in setOf(RecoverStep.INTRO, RecoverStep.LOADING)
     val back: () -> Unit = { if (!actions.back() && leaveable) onLeave() }
@@ -200,7 +208,17 @@ fun RecoverContent(
                 modifier = Modifier.testTag("registering_starting"),
             )
         }
-        RecoverStep.PIN -> RecoverPin(state, actions)
+        // Release R (ANDROID-PLAN 0.1.40): the PIN and the password on one screen, checked before they are sent.
+        RecoverStep.PIN -> if (state.phoneSecret) {
+            val open: RecoveryOpenViewModel = recoveryOpen ?: hiltViewModel()
+            val openState by open.uiState.collectAsStateWithLifecycle()
+            // The `ok` text is the recovered phone's last setup screen: once the vault opened, setup is finished.
+            RecoveryOpenPane(
+                openState, open, onStartOver = actions::askStartOver, onOpened = actions::finish, onNewCode = actions::useNewCode,
+            )
+        } else {
+            RecoverPin(state, actions)
+        }
         RecoverStep.PASSWORD -> FormScaffold(
             title = stringResource(R.string.recover_password_title),
             body = stringResource(R.string.recover_password_body),
@@ -228,7 +246,7 @@ fun RecoverContent(
             )
             when {
                 state.errorCode == RecoverViewModel.CODE_REQUIRED -> Failure(null, stringResource(R.string.recover_required))
-                state.error != null && state.error != FailureKind.BAD_PASSWORD -> Failure(state.error)
+                state.error != null && state.error != FailureKind.BAD_PASSWORD -> Failure(state.error, shownCode = state.errorShown)
             }
         }
         RecoverStep.NO_BACKUP -> {
@@ -251,33 +269,68 @@ fun RecoverContent(
         }
         RecoverStep.ENDED -> FormScaffold(
             title = stringResource(R.string.recover_ended_title),
-            primaryLabel = stringResource(R.string.recover_start_over),
-            onPrimary = actions::askStartOver,
+            primaryLabel = endedPrimaryLabel(state),
+            onPrimary = if (state.undecided) endedUndecidedAction(state, actions) else actions::askStartOver,
             busy = state.busy,
-            secondaryLabel = stringResource(R.string.recover_ended_retry),
+            secondaryLabel = if (state.undecided) null else stringResource(R.string.recover_ended_retry),
             onSecondary = actions::tryPinAgain,
             modifier = Modifier.testTag("recover_ended"),
         ) {
-            // The step is reached by itself (the PIN step's answer): announced, as the code's refusals are.
-            Text(
-                stringResource(R.string.recover_ended_body),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_ended_body"),
-            )
-            Spacer(Modifier.height(Spacing.l))
-            NoticeCard(
-                NoticeKind.INFO,
-                stringResource(R.string.recover_ended_next_title),
-                stringResource(R.string.recover_ended_next),
-            )
-            if (state.error != null) Failure(state.error)
+            if (state.undecided) EndedUndecided(state) else EndedPlain(state)
         }
         RecoverStep.DONE -> MovedScreen(
             body = stringResource(R.string.onboarding_moved_recovered_body),
             onGo = actions::finish,
         )
     }
+}
+
+/** (0.1.78) The ended step after an open whose answer was lost: the primary action depends on what status with K said. */
+@Composable
+private fun endedPrimaryLabel(state: RecoverUiState): String? = when {
+    !state.undecided -> stringResource(R.string.recover_start_over)
+    state.couldNotTell?.kind == CouldNotTell.Kind.START_NEW -> stringResource(R.string.recover_undecided_new_code)
+    state.couldNotTell == null -> null
+    else -> stringResource(R.string.recover_undecided_check_again)
+}
+
+private fun endedUndecidedAction(state: RecoverUiState, actions: RecoverActions): () -> Unit =
+    if (state.couldNotTell?.kind == CouldNotTell.Kind.START_NEW) actions::useNewCode else actions::checkAgain
+
+/** The text of the undecided ended step: the approved sentence once a new recovery may start, a draft while it is checked. */
+@Composable
+private fun EndedUndecided(state: RecoverUiState) {
+    val text = when (state.couldNotTell?.kind) {
+        CouldNotTell.Kind.START_NEW -> R.string.recover_could_not_tell
+        CouldNotTell.Kind.WAIT -> R.string.recover_undecided_wait
+        CouldNotTell.Kind.UNKNOWN -> R.string.recover_undecided_unknown
+        else -> R.string.recover_undecided_checking
+    }
+    Text(
+        stringResource(text),
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_undecided_body"),
+    )
+    if (state.error != null) Failure(state.error, shownCode = state.errorShown)
+}
+
+@Composable
+private fun EndedPlain(state: RecoverUiState) {
+    // The step is reached by itself (the PIN step's answer): announced, as the code's refusals are.
+    Text(
+        stringResource(R.string.recover_ended_body),
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("recover_ended_body"),
+    )
+    Spacer(Modifier.height(Spacing.l))
+    NoticeCard(
+        NoticeKind.INFO,
+        stringResource(R.string.recover_ended_next_title),
+        stringResource(R.string.recover_ended_next),
+    )
+    if (state.error != null) Failure(state.error, shownCode = state.errorShown)
 }
 
 private const val MIN_PIN = 6
@@ -324,14 +377,14 @@ private fun ClaimFailure(state: RecoverUiState) {
     } else {
         null
     }
-    Failure(state.error, wait)
+    Failure(state.error, wait, shownCode = state.errorShown)
 }
 
 @Composable
 private fun RecoverIntro(state: RecoverUiState, actions: RecoverActions, onBack: (() -> Unit)?, onOpenAccountSite: () -> Unit) {
     FormScaffold(
         title = stringResource(R.string.recover_title),
-        body = stringResource(R.string.recover_body),
+        body = stringResource(R.string.recover_body, scaledDurationText(Durations.DAY)),
         primaryLabel = if (state.step == RecoverStep.LOADING) null else stringResource(R.string.recover_scan),
         onPrimary = actions::scan,
         busy = state.busy || state.step == RecoverStep.LOADING,
@@ -340,6 +393,7 @@ private fun RecoverIntro(state: RecoverUiState, actions: RecoverActions, onBack:
         onSecondary = actions::type,
         onBack = onBack,
     ) {
+        StagingTimeNoteIfShown()
         NoticeCard(NoticeKind.INFO, stringResource(R.string.recover_need_title), stringResource(R.string.recover_need_body))
         CodeRefusalNotice(state)
         ClaimFailure(state)
@@ -362,8 +416,10 @@ private fun CodeRefusalNotice(state: RecoverUiState) {
         CodeRefusal.RETRY -> stringResource(R.string.recover_code_retry)
         CodeRefusal.NOT_A_CODE -> stringResource(R.string.recover_scan_not_code)
         CodeRefusal.OTHER_ENVIRONMENT -> stringResource(R.string.recover_scan_other_environment, state.otherApi ?: "")
+        CodeRefusal.OTHER_VAULT -> stringResource(R.string.recover_other_vault)
         CodeRefusal.NO_API -> stringResource(R.string.recover_scan_no_api)
-        CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available)
+        CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available, scaledDurationText(Durations.DAY))
+        CodeRefusal.NOT_OFFERED -> stringResource(R.string.recover_not_offered)
     }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(
@@ -405,7 +461,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                 NoticeCard(
                     if (blocked) NoticeKind.URGENT else NoticeKind.WARNING,
                     stringResource(R.string.recover_pin_title),
-                    stringResource(it.messageRes()),
+                    failureText(it.messageRes()),
                     Modifier.testTag("preflight_error"),
                 )
             }
@@ -423,7 +479,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                     modifier = Modifier.testTag("recover_pin"),
                 )
             }
-            if (state.error != null) Failure(state.error)
+            if (state.error != null) Failure(state.error, shownCode = state.errorShown)
         }
     }
 }
@@ -464,7 +520,20 @@ fun TransferInContent(
     camera: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val back: () -> Unit = { if (!actions.back()) onLeave() }
-    BackHandler(enabled = state.step != TransferInStep.DONE) { back() }
+    BackHandler(enabled = state.step != TransferInStep.DONE && state.step != TransferInStep.FINISHING_FAILED) { back() }
+    // (A6 audit N1) Cancelling once the code was shown: the old phone may already have approved the move.
+    if (state.confirmCancel) {
+        ConfirmDialog(
+            title = stringResource(R.string.transfer_in_cancel_title),
+            text = stringResource(R.string.transfer_in_cancel_body),
+            confirmLabel = stringResource(R.string.transfer_in_cancel_confirm),
+            onConfirm = actions::confirmCancel,
+            onDismiss = actions::dismissCancel,
+            destructive = true,
+            dismissLabel = stringResource(R.string.transfer_in_keep_waiting),
+            modifier = Modifier.testTag("transfer_cancel_confirm"),
+        )
+    }
     when (state.step) {
         TransferInStep.INTRO -> FormScaffold(
             title = stringResource(R.string.transfer_in_title),
@@ -476,7 +545,11 @@ fun TransferInContent(
             onBack = back,
         ) {
             NoticeCard(NoticeKind.INFO, stringResource(R.string.recover_need_title), stringResource(R.string.transfer_in_need_body))
-            Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)
+            Failure(
+                state.error,
+                if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null,
+                shownCode = state.errorShown,
+            )
         }
         TransferInStep.SCAN -> FormScaffold(
             title = stringResource(R.string.transfer_in_scan_title),
@@ -489,7 +562,11 @@ fun TransferInContent(
         ) {
             ScannerBox(actions::scanned, camera)
             InputProblem(state.inputProblem)
-            Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)
+            Failure(
+                state.error,
+                if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null,
+                shownCode = state.errorShown,
+            )
         }
         TransferInStep.PASTE -> FormScaffold(
             title = stringResource(R.string.transfer_in_paste_title),
@@ -514,7 +591,11 @@ fun TransferInContent(
                 )
             }
             InputProblem(state.inputProblem)
-            Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)
+            Failure(
+                state.error,
+                if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null,
+                shownCode = state.errorShown,
+            )
         }
         TransferInStep.CONNECTING -> FormScaffold(
             title = stringResource(R.string.transfer_in_title),
@@ -533,20 +614,29 @@ fun TransferInContent(
             secondaryLabel = stringResource(R.string.transfer_in_cancel),
             onSecondary = actions::cancel,
         ) {
+            // (A6 audit N1) The screen stays on while the member approves on the old phone.
+            KeepScreenOn()
             state.sas?.let { SasBox(it) }
             Spacer(Modifier.height(Spacing.l))
             Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
         }
-        TransferInStep.DONE -> MovedScreen(
-            stringResource(
-                if (state.canUnlockLater) {
-                    R.string.onboarding_moved_transferred_body
-                } else {
-                    R.string.onboarding_moved_transferred_no_guid_body
-                },
-            ),
-            actions::finish,
-        )
+        // Release R (§11.14.10): the new phone finishes the move with its own secret before anything else.
+        TransferInStep.DONE -> if (state.phoneSecret) {
+            val finish: FinishMoveViewModel = hiltViewModel()
+            val finishState by finish.uiState.collectAsStateWithLifecycle()
+            FinishMovePane(finishState, finish, actions::finish)
+        } else {
+            MovedScreen(
+                stringResource(
+                    if (state.canUnlockLater) {
+                        R.string.onboarding_moved_transferred_body
+                    } else {
+                        R.string.onboarding_moved_transferred_no_guid_body
+                    },
+                ),
+                actions::finish,
+            )
+        }
         TransferInStep.REJECTED -> FormScaffold(
             title = stringResource(R.string.transfer_in_rejected_title),
             body = stringResource(R.string.transfer_in_rejected_body),
@@ -556,6 +646,7 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_rejected"),
         ) {}
+        // (A6 audit N1) The 11-minute deadline passed with no approval (after one collect): dropped; a new code.
         TransferInStep.TIMED_OUT -> FormScaffold(
             title = stringResource(R.string.transfer_in_timeout_title),
             body = stringResource(R.string.transfer_in_timeout_body),
@@ -565,6 +656,17 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_timed_out"),
         ) {}
+        // (A6 audit N1) Approved, but the take-over failed: kept, tried again.
+        TransferInStep.FINISHING_FAILED -> FormScaffold(
+            title = stringResource(R.string.transfer_in_finishing_title),
+            body = stringResource(R.string.transfer_in_finishing_body),
+            primaryLabel = stringResource(R.string.transfer_in_again),
+            onPrimary = actions::retryFinish,
+            busy = state.busy,
+            modifier = Modifier.testTag("transfer_finishing_failed"),
+        ) {
+            Failure(state.error, null, shownCode = state.errorShown)
+        }
         TransferInStep.NOT_ANSWERED -> FormScaffold(
             title = stringResource(R.string.transfer_in_no_answer_title),
             body = stringResource(R.string.transfer_in_no_answer),
@@ -574,6 +676,16 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_not_answered"),
         ) {}
+    }
+}
+
+/** (A6 audit N1) Keeps the screen on while it is shown. */
+@Composable
+private fun KeepScreenOn() {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
     }
 }
 

@@ -4,6 +4,17 @@ import android.content.res.Resources
 import androidx.annotation.StringRes
 import com.vettid.core.data.R
 
+/**
+ * (STAGING-TIME-SCALE §5.2; owner decision 2026-10-19) The failure texts that say an approved duration in words in real
+ * time, each with its `_scaled` variant for a vault with a time scale, where the durations are computed: for the app's
+ * root to hand to `UiTimeScale.scaledTexts`.
+ */
+val SCALED_FAILURE_TEXTS: Map<Int, Int> = mapOf(
+    R.string.data_failure_device_secret to R.string.data_failure_device_secret_scaled,
+    // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault": "one to three days".
+    R.string.vault_credential_required_body to R.string.vault_credential_required_body_scaled,
+)
+
 /** The member-facing message of a failure (strings in this module, `data_failure_*`). */
 @Suppress("CyclomaticComplexMethod") // one string per kind
 @StringRes
@@ -16,6 +27,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.VAULT_UNAVAILABLE -> R.string.data_failure_vault_unavailable
     FailureKind.SERVICE_PAUSED -> R.string.data_failure_service_paused
     FailureKind.RELEASE_ENDED -> R.string.data_failure_release_ended
+    FailureKind.VAULT_DELETED -> R.string.data_failure_vault_deleted
     FailureKind.BAD_PIN -> R.string.data_failure_bad_pin
     FailureKind.BAD_PASSWORD -> R.string.data_failure_bad_password
     FailureKind.BACKOFF -> R.string.data_failure_backoff
@@ -30,6 +42,9 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.MANIFEST_UNAVAILABLE -> R.string.data_failure_manifest_unavailable
     FailureKind.RELEASE_UNKNOWN -> R.string.data_failure_release_unknown
     FailureKind.ENCLAVE -> R.string.data_failure_enclave
+    // The update and unlock screens say `release_update_route_pending`, which names the releases; elsewhere the generic text.
+    FailureKind.ROUTE_PENDING -> R.string.data_failure_vault_unavailable
+    FailureKind.TIME_SCALE -> R.string.data_failure_time_scale
     FailureKind.NOT_FOUND -> R.string.data_failure_not_found
     FailureKind.CONNECTION_UNAVAILABLE -> R.string.data_failure_connection_unavailable
     FailureKind.INVITE_INVALID -> R.string.data_failure_invite_invalid
@@ -47,8 +62,44 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.CLOCK -> R.string.data_failure_clock
     FailureKind.NO_VAULT -> R.string.data_failure_no_vault
     FailureKind.LOCAL_STATE -> R.string.data_failure_local_state
+    FailureKind.ERASE_FAILED -> R.string.data_failure_erase_failed
+    FailureKind.DEVICE_SECRET -> R.string.data_failure_device_secret
+    FailureKind.TRANSFER_INCOMPLETE -> R.string.data_failure_transfer_incomplete
+    FailureKind.BUSY -> R.string.data_failure_busy
+    FailureKind.RETRY -> R.string.data_failure_retry
+    FailureKind.COUNTER_UNAVAILABLE -> R.string.data_failure_counter_unavailable
+    FailureKind.STORED_MISMATCH -> R.string.data_failure_stored_mismatch
+    FailureKind.WEAK_PASSWORD -> R.string.data_failure_weak_password
+    FailureKind.HARDWARE_KEYS -> R.string.data_failure_hardware_keys
+    FailureKind.CAPABILITY_ROLLBACK -> R.string.data_failure_capability_rollback
+    FailureKind.RESPONSE_TOO_LARGE -> R.string.data_failure_response_too_large
+    FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNRESOLVED -> R.string.data_failure_change_unresolved
+    FailureKind.CHANGE_UNDECIDED -> R.string.data_failure_change_undecided
+    FailureKind.CHANGE_UNDECIDED_PASSWORD -> R.string.data_failure_change_undecided_password
+    FailureKind.PIN_UNCERTAIN -> R.string.data_failure_pin_uncertain
+    FailureKind.RENEW_UNCONFIRMED -> R.string.data_failure_renew_unconfirmed
+    FailureKind.CREDENTIAL_UNSETTLED -> R.string.data_failure_credential_unsettled
+    FailureKind.ENROLL_WAITING -> R.string.data_failure_enroll_waiting
+    // (ANDROID-PLAN 0.1.57) The full screen shows the title with its body ([CredentialRequired]); inline, the title.
+    FailureKind.CREDENTIAL_REQUIRED -> R.string.vault_credential_required_title
+    // Its title is "Your vault moved to a new phone" (data_feed_device_replaced) where a screen shows one.
+    FailureKind.NOT_HOLDER -> R.string.vault_not_holder
     FailureKind.OTHER -> R.string.data_failure_other
 }
+
+/**
+ * (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names for this failure: [shownCode] ([VaultFailure.shownCode])
+ * for an unmapped vault code ([FailureKind.OTHER]); null otherwise, and [messageRes] applies.
+ */
+fun FailureKind.vaultCode(shownCode: String?): String? = shownCode?.takeIf { this == FailureKind.OTHER }
+
+/**
+ * (ANDROID-PLAN 0.1.57 (3)) The title a screen's failure notice takes: "Your vault moved to a new phone" for
+ * [FailureKind.NOT_HOLDER], otherwise [screenTitle].
+ */
+@StringRes
+fun FailureKind.titleRes(@StringRes screenTitle: Int): Int =
+    if (this == FailureKind.NOT_HOLDER) R.string.data_feed_device_replaced else screenTitle
 
 /** A limit's member-facing text: [res] formatted with [args] (counts, or kilobytes for a size; at most two). */
 data class LimitText(@param:StringRes val res: Int, val args: List<Long> = emptyList()) {

@@ -260,17 +260,25 @@ internal class CallMachine(
         return true
     }
 
+    @Suppress("ReturnCount")
     private fun startOutgoing(connectionId: String) {
         val s = newSession(connectionId, CallDirection.OUTGOING)
         publish(s)
         if (!openEngine(s)) return
         val engine = s.engine ?: return
+        // What this start offers (form 1: suite 1). The engine's cryptors are made for its first suite, the only
+        // one the call can use: an answer that names another is refused by the engine, never remade for.
+        val offered = signalling.offerable(engine.suites)
+        if (offered.isEmpty()) {
+            finish(s, CallEnd.NOT_ENCRYPTED, null)
+            return
+        }
         s.lane.trySend {
-            val sdp = engine.createOffer()
+            val sdp = engine.createOffer(offered.first())
             // Not cancelled by a hang-up: once `call.start` may have left, its answer is needed to end the call.
             withContext(NonCancellable) {
                 try {
-                    val placed = signalling.start(connectionId, sdp, engine.suites)
+                    val placed = signalling.start(connectionId, sdp, offered)
                     post(Msg.Placed(s.seq, placed, elapsedMs()))
                 } catch (e: CallRefusedException) {
                     post(Msg.Failed(s.seq, refusal(e.code)))
@@ -323,7 +331,8 @@ internal class CallMachine(
         val engine = s.engine ?: return
         // The callee gathers no address before the member answers (CALLS-PLAN §2 step 6).
         s.lane.trySend {
-            val sdp = engine.acceptOffer(offer.sdp, offer.servers)
+            // The cryptors are made for the suite chosen when the offer was checked, the one the keys will be for.
+            val sdp = engine.acceptOffer(offer.sdp, offer.servers, offer.suite)
             post(Msg.Gathering(s.seq))
             // Not cancellable between the answer's return and the keys' hand-over: a hang-up at that instant must
             // not leave the keys with nobody to wipe them.

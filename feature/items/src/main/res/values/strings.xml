@@ -57,6 +57,7 @@
     <string name="items_rule_text">Remove line breaks and control characters</string>
     <string name="items_rule_number">Enter a number, such as 42 or -3.5</string>
     <string name="items_rule_date">Enter a date as YYYY-MM-DD or YYYY-MM</string>
+    <string name="items_rule_month">Enter a month and year, such as 2033-05</string>
     <string name="items_rule_email">Enter an email address, such as name@example.com</string>
     <string name="items_rule_phone">Use digits, spaces and + - ( ) . only</string>
     <string name="items_rule_url">Enter a full web address, such as https://example.com</string>
@@ -216,6 +217,7 @@
     <string name="items_save">Save</string>
     <string name="items_save_item">Save item</string>
     <string name="items_phone_check">Check this number</string>
+    <string name="items_phone_extension_note">Extensions aren\'t saved; add it to the item\'s notes.</string>
     <string name="items_name">Name</string>
     <string name="items_category">Category</string>
     <string name="items_cd_choose_category">Choose a category</string>

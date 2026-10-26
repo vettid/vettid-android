@@ -76,12 +76,23 @@ class GuardTest {
     fun everyCheckOfTheVaultsSoftwareHasItsOwnText() {
         val texts = listOf(
             FailureKind.ATTESTATION, FailureKind.MANIFEST, FailureKind.MANIFEST_UNAVAILABLE, FailureKind.RELEASE_UNKNOWN, FailureKind.ENCLAVE,
-            FailureKind.NETWORK, FailureKind.ROLLBACK,
+            FailureKind.NETWORK, FailureKind.ROLLBACK, FailureKind.TIME_SCALE,
         ).map { it.messageRes() }
         assertEquals(texts.size, texts.toSet().size)
         assertEquals(com.vettid.core.data.R.string.data_failure_release_unknown, FailureKind.RELEASE_UNKNOWN.messageRes())
         assertEquals(com.vettid.core.data.R.string.data_failure_enclave, FailureKind.ENCLAVE.messageRes())
         assertEquals(com.vettid.core.data.R.string.data_failure_manifest_unavailable, FailureKind.MANIFEST_UNAVAILABLE.messageRes())
+    }
+
+    /**
+     * STAGING-TIME-SCALE §4 item 4: a release with a time scale this build refuses is said as "This vault's software is
+     * not for this app. Contact VettID.", never as a network or manifest failure.
+     */
+    @Test
+    fun aRefusedTimeScaleHasItsOwnKindAndText() = runTest {
+        val e = com.vettid.core.altchan.AltRefusedException(com.vettid.core.altchan.AltRefusedException.Reason.TIME_SCALE)
+        assertEquals(FailureKind.TIME_SCALE, kindOf(e))
+        assertEquals(com.vettid.core.data.R.string.data_failure_time_scale, FailureKind.TIME_SCALE.messageRes())
     }
 
     @Test

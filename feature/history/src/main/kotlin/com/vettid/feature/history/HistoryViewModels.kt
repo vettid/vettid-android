@@ -15,7 +15,10 @@ import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.AuditRequest
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HistoryRepository
+import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.RecoveryRefs
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -63,9 +67,20 @@ data class HistoryUiState(
     /** The unfiltered log did not chain (§10.9): the red banner. */
     val chainBroken: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 ) {
     val connections: List<ConnectionOption>
         get() = connectionNames.map { (id, name) -> ConnectionOption(id, name) }.sortedBy { it.name.lowercase() }
+
+    /**
+     * The entries the list shows: [entries] without the hidden kinds (ANDROID-PLAN 0.1.52 §4 "Event titles"), which
+     * stay in [entries] for the chain check.
+     */
+    val shown: List<AuditRecord> by lazy { entries.filterNot { AuditKinds.hidden(it.kind, it.ref) } }
+
+    /** Nothing to show and nothing filtered: "No history yet" (with hidden entries read and more to read, the list loads on). */
+    val emptyHistory: Boolean get() = shown.isEmpty() && filter.isEmpty && (end || entries.isEmpty())
 }
 
 /** Builds the filter of the History screen from the member's choices (kept pure for tests). */
@@ -112,6 +127,7 @@ class HistoryViewModel @Inject constructor(
     private val connections: ConnectionsRepository,
     @param:ApplicationContext private val context: Context,
     private val items: ItemsRepository,
+    private val ownerCheck: OwnerCheckRepository,
 ) : ViewModel() {
     private val state = MutableStateFlow(HistoryUiState(filter = AuditFilter(connectionId = saved.get<String>("connectionId"))))
     val uiState: StateFlow<HistoryUiState> = state.asStateFlow()
@@ -120,6 +136,14 @@ class HistoryViewModel @Inject constructor(
     private val pager = HistoryPager(history, localText = { localText(it) })
     private var job: Job? = null
     private var refreshing = false
+
+    /**
+     * Bumped by every [refresh] and [reload]: a finishing refresh clears [refreshing] only while its generation is
+     * still the current one. Without it, an earlier refresh's end cleared the flag while a later refresh chained after
+     * it was still reading, and [loadMore] ran `pager.more()` next to `pager.refresh()` on the same pager, whose
+     * snapshot and cursor writes interleaved and lost entries (found while porting to iOS).
+     */
+    private var generation = 0L
 
     init {
         viewModelScope.launch {
@@ -133,6 +157,12 @@ class HistoryViewModel @Inject constructor(
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         loadDevices(refresh = false)
         reload()
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        viewModelScope.launch {
+            ownerCheck.checkCleared().collect {
+                if (state.value.error == FailureKind.OWNER_CHECK_REQUIRED) retry()
+            }
+        }
     }
 
     /** The device names (ANDROID-PLAN 0.1.27), best effort: without them rows name no device. */
@@ -151,11 +181,13 @@ class HistoryViewModel @Inject constructor(
      */
     private fun localText(r: AuditRecord): List<String> {
         val c = r.connectionId?.let { known[it] }
+        val item = AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] }
+        val device = r.deviceId?.let { state.value.deviceNames?.get(it)?.ifEmpty { null } }
         return AuditFilter.kindText(r.kind) + listOfNotNull(
-            HistoryText.title(context, r.kind),
+            HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item)),
             c?.name, c?.firstName, c?.lastName, c?.accountName,
-            AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] },
-            r.deviceId?.let { state.value.deviceNames?.get(it) },
+            item,
+            device,
         )
     }
 
@@ -198,6 +230,9 @@ class HistoryViewModel @Inject constructor(
 
     private fun reload(debounce: Boolean = false) {
         job?.cancel()
+        // A refresh it cancelled does not clear the flag (no longer current): the reload does, loading in its place.
+        generation++
+        refreshing = false
         state.update { it.copy(loading = true, error = null, entries = if (debounce) it.entries else emptyList()) }
         job = viewModelScope.launch {
             if (debounce) delay(SEARCH_DEBOUNCE_MS)
@@ -222,13 +257,14 @@ class HistoryViewModel @Inject constructor(
         // A device may have been paired or removed meanwhile.
         loadDevices(refresh = true)
         val before = job
+        val gen = ++generation
         refreshing = true
         job = viewModelScope.launch {
             try {
                 before?.join()
                 load { pager.refresh() }
             } finally {
-                refreshing = false
+                if (gen == generation) refreshing = false
             }
         }
     }
@@ -257,7 +293,7 @@ class HistoryViewModel @Inject constructor(
                 )
             }
         } catch (e: VaultFailure) {
-            state.update { it.copy(loading = false, loadingMore = false, error = e.kind) }
+            state.update { it.copy(loading = false, loadingMore = false, error = e.kind, errorCode = e.shownCode) }
         }
     }
 
@@ -280,11 +316,17 @@ data class HistoryEntryUiState(
     val deviceName: String? = null,
     /** The device list was read, so a device it does not hold was removed. */
     val devicesKnown: Boolean = false,
+    /** The entry's device is listed without a name: known, not removed. */
+    val deviceUnnamed: Boolean = false,
     /** The entry's device is this phone. */
     val thisDevice: Boolean = false,
+    /** A `not_success` recovery attempt's outcome, from the matching `recovery.open` (ANDROID-PLAN 0.1.52). */
+    val outcome: AuditKinds.Outcome = AuditKinds.Outcome.Unknown,
     val loading: Boolean = true,
     val missing: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 )
 
 /** One audit entry (read-only): from the entries History read, else `audit.list{before_seq: seq + 1, limit: 1}`. */
@@ -316,13 +358,54 @@ class HistoryEntryViewModel @Inject constructor(
                     it.copy(
                         entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
                         itemName = i?.name, itemExists = i != null,
-                        deviceName = e?.deviceId?.let { id -> devices?.get(id) }, devicesKnown = devices != null,
+                        deviceName = e?.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } }, devicesKnown = devices != null,
+                        deviceUnnamed = e?.deviceId?.let { id -> devices?.get(id)?.isEmpty() } == true,
                         thisDevice = e?.deviceId != null && e.deviceId == history.selfDeviceId(),
                     )
                 }
+                if (e != null) loadOutcome(e)
             } catch (f: VaultFailure) {
-                state.update { it.copy(loading = false, error = f.kind) }
+                state.update { it.copy(loading = false, error = f.kind, errorCode = f.shownCode) }
             }
         }
+    }
+
+    /**
+     * A `not_success` attempt's outcome (ANDROID-PLAN 0.1.52 §4 "Event titles"): the `recovery.open` and
+     * `recovery.attempt` entries of the hour on each side, matched by time ([RecoveryRefs.outcomes]). A failed read
+     * leaves the outcome unknown (no line), never "Details not available".
+     */
+    @Suppress("ReturnCount")
+    private suspend fun loadOutcome(e: AuditRecord) {
+        val at = e.at ?: return
+        if (e.kind != RecoveryRefs.KIND_ATTEMPT || RecoveryRefs.attempt(e.ref)?.success != false) return
+        val since = at.minus(OUTCOME_SPAN)
+        val until = at.plus(OUTCOME_SPAN)
+        val read = try {
+            history.auditPage(
+                AuditRequest(
+                    kinds = listOf(RecoveryRefs.KIND_OPEN, RecoveryRefs.KIND_ATTEMPT), since = since, until = until, limit = OUTCOME_LIMIT,
+                ),
+            ).entries
+        } catch (_: VaultFailure) {
+            return
+        }
+        // A vault that ignored the range or the kinds: kept to what was asked.
+        val near = read.filter { r ->
+            (r.kind == RecoveryRefs.KIND_OPEN || r.kind == RecoveryRefs.KIND_ATTEMPT) &&
+                r.at?.let { !it.isBefore(since) && it.isBefore(until) } == true
+        }
+        val entries = if (near.any { it.seq == e.seq }) near else near + e
+        val outcome = when {
+            RecoveryRefs.laterSuccessful(e, entries) -> AuditKinds.Outcome.LaterSuccessful
+            else -> RecoveryRefs.matches(entries)[e.seq]?.let { AuditKinds.Outcome.Matched(it.outcome, it.phoneName) }
+                ?: AuditKinds.Outcome.None
+        }
+        state.update { it.copy(outcome = outcome) }
+    }
+
+    private companion object {
+        val OUTCOME_SPAN: Duration = Duration.ofHours(1)
+        const val OUTCOME_LIMIT = 100
     }
 }

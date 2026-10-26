@@ -127,7 +127,7 @@
     <string name="settings_signer_installed_google_play">Installed from: Google Play (signed by Google)</string>
     <string name="settings_signer_installed_vettid">Installed from: F-Droid or direct (signed by VettID)</string>
     <string name="settings_signer_installed_development">Development build</string>
-    <string name="settings_signer_explanation">The Google Play version is signed by Google, so it trusts Google\'s signing; the F-Droid and direct versions are signed by VettID and do not. To change version, transfer your vault to the other version on another phone, or reinstall and recover it, which takes 24 hours.</string>
+    <string name="settings_signer_explanation">The Google Play version is signed by Google, so it trusts Google\'s signing; the F-Droid and direct versions are signed by VettID and do not. To change version, transfer your vault to the other version on another phone, or reinstall and recover it, which takes %1$s.</string>
     <string name="settings_signer_details_shown">Details shown</string>
     <string name="settings_signer_details_hidden">Details hidden</string>
     <string name="settings_signer_digest">Signing certificate (SHA-256): %1$s</string>
@@ -149,10 +149,17 @@
     <string name="settings_pin_same">Choose a PIN different from the current one.</string>
     <string name="settings_pin_submit">Change PIN</string>
     <string name="settings_pin_done">Your vault PIN was changed.</string>
+    <!-- VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45 (approved texts, shared with the iPhone app). -->
+    <string name="settings_pin_checking">Your vault hasn\'t answered yet, so VettID is checking whether your PIN was changed. Keep your new PIN at hand.</string>
+    <string name="settings_pin_not_changed">Your PIN was not changed. You can try again.</string>
+    <!-- VAULT-MESSAGING 0.45.0 §11.14.9, ANDROID-PLAN 0.1.46 (approved texts). -->
+    <string name="settings_pin_ended">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
+    <string name="settings_pin_lock_unlock">Lock and unlock now</string>
+    <string name="settings_pin_unreachable">VettID can\'t reach your vault right now, so it doesn\'t know yet whether your PIN was changed. It will check as soon as it can. Keep both your old and your new PIN at hand.</string>
 
     <!-- Recovery -->
     <string name="settings_recovery_title">Recovery</string>
-    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after 24 hours the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone then erases VettID the next time it reaches your vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
+    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after %1$s the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone then erases VettID the next time it reaches your vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
     <string name="settings_recovery_transfer">Move to a new phone</string>
     <string name="settings_recovery_backup_off">No recovery: your credential backup is off. If this phone is lost, broken, reset or replaced without a transfer, your vault cannot be recovered; it can only be deleted and replaced, and everything in it is lost.</string>
     <string name="settings_recovery_none">No recovery is in progress.</string>
@@ -265,4 +272,30 @@
     <string name="settings_canary_remove">Stop using the test manifest</string>
     <string name="settings_canary_remove_title">Stop using the test manifest?</string>
     <string name="settings_canary_remove_body">VettID\'s published release list is used again. A vault on a release that is not published yet cannot be unlocked from this phone until VettID publishes it.</string>
+    <!-- Release R (ANDROID-PLAN 0.1.40), draft texts. -->
+    <string name="settings_pin_password">Credential password</string>
+    <string name="settings_pin_done_recovery">Your PIN was changed. Your vault\'s recovery now has 10 new attempts for the new PIN and your password.</string>
+    <string name="settings_recovery_status_armed">Recovery: on. Attempts used: %1$d of 10.</string>
+    <string name="settings_recovery_status_used">Recovery attempts used: %1$d of 10. If that was not you, change your password now, and your PIN as well. That gives you 10 new attempts and ends the old ones.</string>
+    <string name="settings_recovery_status_exhausted">All 10 recovery attempts were used. Recovery is off until you change your PIN or your password.</string>
+    <string name="settings_recovery_status_needs_check">Recovery: set up at your next check.</string>
+    <string name="settings_recovery_status_off">Recovery: off (credential backup is off).</string>
+    <string name="settings_recovery_status_unknown">Recovery: cannot be checked right now.</string>
+    <string name="settings_recovery_not_offered">This vault\'s release does not offer recovery.</string>
+    <string name="settings_transfer_moved_kept_body">Finish the move on your new phone. This phone keeps your vault\'s keys until your new phone has finished the move, and until your vault has confirmed it. Once your new phone works, you can remove VettID from this phone. Before you give this phone away, remove VettID from it or reset it.</string>
+    <string name="settings_recovery_status_change_required">Recovery is off until you choose a new password that meets the rules.</string>
+    <!-- Release R (ANDROID-PLAN "Other screens"): Settings → Security → New phone secret -->
+    <string name="settings_security_new_secret">New phone secret</string>
+    <string name="settings_security_new_secret_body">If you fear that something ran as VettID on this phone</string>
+    <string name="settings_new_secret_body">Your vault gives this phone a new secret. Your PIN stays the same, and the old secret opens nothing your vault stores from now on. Enter your PIN and your password.</string>
+    <string name="settings_new_secret_not_enough">If something ran as VettID on this phone, a new secret alone is not enough: move your vault to another phone, or recover it.</string>
+    <string name="settings_new_secret_submit">Make a new secret</string>
+    <string name="settings_new_secret_done">Your phone now uses a new secret for this vault.</string>
+    <!-- ANDROID-PLAN "Change PIN" (release R), verbatim -->
+    <string name="settings_pin_password_too">Changing only the PIN gives whoever is guessing ten new tries at the same password. Change your password too.</string>
+    <!-- ANDROID-PLAN "Owner check and status" (release R), verbatim -->
+    <string name="settings_recovery_unknown_day">For a day your vault has not been able to check its recovery attempts or record that you were here. If this goes on for three days, your vault is no longer protected against a recovery started by someone else, and until it ends you cannot change your PIN or password. This is a fault of the VettID service or an attack on it. Contact VettID.</string>
+    <!-- STAGING-TIME-SCALE S8: the same notice on a vault with a time scale; %1$s the clock's period, %2$s the quiet period as it runs. -->
+    <string name="settings_recovery_unknown_day_scaled">For %1$s your vault has not been able to check its recovery attempts or record that you were here. If this goes on for %2$s, your vault is no longer protected against a recovery started by someone else, and until it ends you cannot change your PIN or password. This is a fault of the VettID service or an attack on it. Contact VettID.</string>
+    <string name="settings_recovery_change_password">Change password</string>
 </resources>

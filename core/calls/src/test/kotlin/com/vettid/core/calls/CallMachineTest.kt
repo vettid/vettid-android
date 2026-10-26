@@ -29,7 +29,15 @@ class CallMachineTest {
     private fun CallMachine.ended() = state.value as CallState.Ended
 
     private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1") =
-        SignalEvent.Offer(callId, connectionId, "v=0\r\ns=offer\r\n", T0.plusSeconds(45), Duration.ofSeconds(45), emptyList())
+        SignalEvent.Offer(
+            callId,
+            connectionId,
+            "v=0\r\ns=offer\r\n",
+            T0.plusSeconds(45),
+            Duration.ofSeconds(45),
+            emptyList(),
+            MediaSuite.AES_128_GCM,
+        )
 
     private fun answer() =
         SignalEvent.Answer(CALL_ID, "v=0\r\ns=answer\r\n", MediaKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 5 }, ByteArray(32) { 6 }))
@@ -689,7 +697,7 @@ class CallMachineTest {
     )
 
     private fun TestScope.pair(callerSuites: List<MediaSuite>, calleeSuites: List<MediaSuite>): Pair {
-        val x = Exchange()
+        val x = Exchange().also { it.calleeSuites = calleeSuites }
         val a = FakeEngines(callerSuites)
         val b = FakeEngines(calleeSuites)
         return Pair(x, machine(x.caller, a), machine(x.callee, b), a, b)
@@ -720,21 +728,26 @@ class CallMachineTest {
     }
 
     @Test
-    fun twoSuiteOneAndTwoDevicesTalkOnSuiteTwo() = runTest {
+    fun twoDevicesThatCanDoSuiteTwoTalkOnSuiteOneInFormOneWithCryptorsMadeForIt() = runTest {
+        // Form 1 offers and chooses suite 1 only (VAULT-MESSAGING "Call forms", rules 1 and 3).
         val p = pair(both, both)
         talk(p)
         assertEquals(CallPhase.ACTIVE, (p.caller.state.value as CallState.Live).phase)
         assertEquals(CallPhase.ACTIVE, (p.callee.state.value as CallState.Live).phase)
-        assertEquals(MediaSuite.AES_256_GCM, p.callerEngines.last.suite)
-        assertEquals(MediaSuite.AES_256_GCM, p.calleeEngines.last.suite)
+        for (e in listOf(p.callerEngines.last, p.calleeEngines.last)) {
+            // Made for the call's suite before any SDP, and keyed for that same suite: nothing is remade.
+            assertEquals(MediaSuite.AES_128_GCM, e.madeFor)
+            assertEquals(MediaSuite.AES_128_GCM, e.suite)
+        }
     }
 
     @Test
-    fun aSuiteListCutDownOnTheWayGivesNoCallNotAWeakerOne() = runTest {
+    fun aSuiteListChangedOnTheWayGivesNoCall() = runTest {
         val p = pair(both, both)
-        p.x.onOffer = { it.replace("a=vettid-media-suites:2 1", "a=vettid-media-suites:1") }
+        p.x.onOffer = { it.replace("a=vettid-media-suites:1", "a=vettid-media-suites:2 1") }
         talk(p)
-        // Both devices set keys for suite 1, but not the same keys: nothing decrypts, both end the call.
+        // The callee answers 1 from the changed list, the caller derives with the list it sent: both set keys for
+        // suite 1, but not the same keys: nothing decrypts, both end the call.
         assertEquals(MediaSuite.AES_128_GCM, p.callerEngines.last.suite)
         assertEquals(MediaSuite.AES_128_GCM, p.calleeEngines.last.suite)
         assertFalse(p.callerEngines.last.sendKey.contentEquals(p.calleeEngines.last.receiveKey))
@@ -745,30 +758,62 @@ class CallMachineTest {
 
     @Test
     fun aChoiceRewrittenOnTheWayGivesNoCall() = runTest {
-        val p = pair(both, both)
-        p.x.onAnswer = { it.replace("a=vettid-media-suite:2", "a=vettid-media-suite:1") }
-        talk(p)
-        assertEquals(MediaSuite.AES_128_GCM, p.callerEngines.last.suite)
-        assertEquals(MediaSuite.AES_256_GCM, p.calleeEngines.last.suite)
-        assertEquals(CallEnd.NOT_ENCRYPTED, (p.caller.state.value as CallState.Ended).reason)
-        assertEquals(CallEnd.NOT_ENCRYPTED, (p.callee.state.value as CallState.Ended).reason)
-
         // A choice that was never offered is refused when it is read: the caller sets no key at all.
-        val q = pair(one, both)
-        q.x.onAnswer = { it.replace("a=vettid-media-suite:1", "a=vettid-media-suite:2") }
-        talk(q)
-        assertEquals(CallEnd.NOT_ENCRYPTED, (q.caller.state.value as CallState.Ended).reason)
-        assertNull(q.callerEngines.last.suite)
-        assertEquals("the callee is told", CallEnd.FAILED, (q.callee.state.value as CallState.Ended).reason)
+        for ((a, b) in listOf(one to both, both to both)) {
+            val q = pair(a, b)
+            q.x.onAnswer = { it.replace("a=vettid-media-suite:1", "a=vettid-media-suite:2") }
+            talk(q)
+            assertEquals(CallEnd.NOT_ENCRYPTED, (q.caller.state.value as CallState.Ended).reason)
+            assertNull(q.callerEngines.last.suite)
+            assertEquals("the callee is told", CallEnd.FAILED, (q.callee.state.value as CallState.Ended).reason)
+        }
     }
 
     @Test
-    fun noSuiteInCommonGivesNoCall() = runTest {
+    fun aCallStartNeverOffersAnythingButSuiteOne() {
+        // Guard (VAULT-MESSAGING "Call forms" rule 3, "Mixed releases"): whatever the engine can do, what a
+        // `call.start` offers is [1] or nothing, until form 1 is retired.
+        val s = FakeSignalling()
+        for (suites in listOf(one, both, listOf(MediaSuite.AES_256_GCM), MediaSuite.entries.toList(), emptyList())) {
+            val offered = s.offerable(suites)
+            assertTrue("$suites -> $offered", offered.isEmpty() || offered == one)
+            assertEquals(MediaSuite.AES_128_GCM in suites, offered == one)
+        }
+    }
+
+    @Test
+    fun aDeviceWithoutSuiteOnePlacesNoFormOneCall() = runTest {
         val p = pair(listOf(MediaSuite.AES_256_GCM), one)
-        talk(p)
-        assertEquals(CallEnd.NOT_ENCRYPTED, (p.callee.state.value as CallState.Ended).reason)
-        assertNull(p.calleeEngines.last.suite)
-        assertEquals(CallEnd.FAILED, (p.caller.state.value as CallState.Ended).reason)
-        assertEquals("end($CALL_ID, failed)", p.x.callee.sent.last())
+        p.caller.call("peer")
+        runCurrent()
+        assertEquals(CallEnd.NOT_ENCRYPTED, (p.caller.state.value as CallState.Ended).reason)
+        assertTrue("nothing was sent", p.x.caller.sent.isEmpty())
+    }
+
+    @Test
+    fun aFormOneOfferWithoutSuiteOneDoesNotRing() = runTest {
+        val p = pair(one, both)
+        p.x.onOffer = { it.replace("a=vettid-media-suites:1", "a=vettid-media-suites:2") }
+        p.caller.call("peer")
+        runCurrent()
+        assertTrue("the callee's engine was never made", p.calleeEngines.created.isEmpty())
+        assertFalse(p.callee.state.value is CallState.Live)
+    }
+
+    @Test
+    fun keysForAnotherSuiteThanTheCryptorsWereMadeForEndTheCall() = runTest {
+        // The engine never remakes its cryptors: keys for another suite are refused, and the call ends as not encrypted.
+        val s = FakeSignalling()
+        val e = FakeEngines(both)
+        val m = machine(s, e)
+        s.answerResult = { MediaKeys(MediaSuite.AES_256_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 }) }
+        s.deliver(offer())
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertEquals(MediaSuite.AES_128_GCM, e.last.madeFor)
+        assertNull("no key was taken", e.last.suite)
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+        assertTrue(e.last.closed)
     }
 }

@@ -5,6 +5,7 @@ import com.vettid.core.vault.HeldCounts
 import com.vettid.core.vault.HeldNotice
 import com.vettid.core.vault.OwnerCheckPassed
 import com.vettid.core.vault.OwnerCheckStatus
+import com.vettid.core.vault.RecoveryStatus
 import com.vettid.core.vault.Settings
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
@@ -30,10 +31,19 @@ interface OwnerCheckOps {
 
     suspend fun check(pin: String, password: String, hold: Boolean?, holdOffUntil: String?): OwnerCheckPassed
 
+    /** `vault.status`'s `owner_check` and (release R) `recovery`, from one read. */
+    suspend fun statusAndRecovery(): Pair<OwnerCheckStatus?, RecoveryStatus?> = status() to null
+
+    /** `vault.status`'s `owner_check`, (release R) `recovery` and (0.43.0) `time_scale`, from one read. */
+    suspend fun statusRead(): StatusRead = statusAndRecovery().let { (o, r) -> StatusRead(o, r) }
+
     suspend fun settingsGet(): Settings
 
     suspend fun settingsSet(version: Long, set: Map<String, JsonElement>)
 }
+
+/** One `vault.status` read for the owner check: [ownerCheck], [recovery], and [timeScale] (null when absent). */
+data class StatusRead(val ownerCheck: OwnerCheckStatus?, val recovery: RecoveryStatus?, val timeScale: Long? = null)
 
 /**
  * The app's side of the daily owner check (VAULT-MESSAGING 0.13.0 §3.6): follows the vault's deadline and hold,
@@ -52,13 +62,53 @@ class OwnerCheckManager(
     private val onPassed: () -> Unit,
     /** Marks feed items read (the feed's `FeedManager`, the one source of the notices, ANDROID-PLAN 0.1.23). */
     private val readNotices: suspend (List<String>) -> Unit = {},
+    /**
+     * (Release R) Each `vault.status`'s `recovery`, for the clock of a counter that stays unavailable (§11.14.5), with
+     * the [mark] read before the status was asked for (the account record it belongs to).
+     */
+    private val onRecoveryStatus: suspend (RecoveryStatus?, mark: Int) -> Unit = { _, _ -> },
+    /**
+     * (STAGING-TIME-SCALE §5.2, VAULT-MESSAGING 0.43.0 §11.10.8) Each `vault.status`'s `time_scale` (null when absent),
+     * with the [mark] read before the status was asked for, before the deadline it came with is taken in: the early
+     * warning (S2) is reckoned with the scale of the vault that set the deadline.
+     */
+    private val onTimeScale: suspend (Long?, mark: Int) -> Unit = { _, _ -> },
     private val now: () -> Instant = Instant::now,
+    private val mark: () -> Int = { 0 },
 ) : OwnerCheckRepository {
     private val saved = restore()
     private val view = MutableStateFlow(saved?.toView())
     private val locked = MutableStateFlow(false)
     private val unlockOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
     private val noticeFlow = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
+    private val presenceFlow = MutableStateFlow(saved?.presenceUnrecorded == true)
+    private val checkAfterCancelFlow = MutableStateFlow(false)
+
+    /** (Release L) The vault locked itself; kept on the phone until it opens again. */
+    private val idleFlow = MutableStateFlow(saved?.takeIf { it.idleLocked }?.let { IdleLocked(it.idleAfter) })
+
+    /** (Release L) The lowest idle-lock value set since the last check, when one was set; null: the set value is in force. */
+    private var idleInForce: Long? = saved?.idleInForce
+
+    /**
+     * (Release L) How long past the deadline the vault locks itself, as read while the check was not yet due (then
+     * `idle_lock_at` − `deadline` is the value in force; past the deadline an unlock's extra hour or a call can move
+     * `idle_lock_at`, and the difference no longer says how long the member was away). Null: never read.
+     */
+    private var idleAfterKnown: Long? = saved?.idleAfterKnown
+
+    /** The time scale of the last `vault.status` read (1 without one): an idle-lock value as it runs. */
+    private var lastTimeScale: Long = 1
+
+    /** (Release L) The member locked the vault on this phone since it last opened. */
+    private var lockedHere: Boolean = saved?.lockedHere == true
+    private val idleSettingFlow = MutableStateFlow<IdleLockSetting?>(null)
+
+    /**
+     * (Release R) When the check whose presence was not recorded passed, on the vault's clock (its answer's deadline less
+     * its interval), so that only a presence recorded since then ends the notice; null when the answer did not say.
+     */
+    private var presenceCheckAt: Instant? = instant(saved?.presenceCheckAt)
 
     /** The `ts` of the newest `vault.held` applied (kept with the view: an older one never overwrites newer counts). */
     private var heldTs: Instant? = instant(saved?.heldTs)
@@ -67,6 +117,14 @@ class OwnerCheckManager(
     override val lockedByOwnerCheck: StateFlow<Boolean> = locked.asStateFlow()
     override val unlockCheckOutcome: StateFlow<OwnerCheckOutcome?> = unlockOutcome.asStateFlow()
     override val notices: StateFlow<List<OwnerCheckNotice>> = noticeFlow.asStateFlow()
+    override val presenceUnrecorded: StateFlow<Boolean> = presenceFlow.asStateFlow()
+    override val checkAfterCancel: StateFlow<Boolean> = checkAfterCancelFlow.asStateFlow()
+    override val idleLocked: StateFlow<IdleLocked?> = idleFlow.asStateFlow()
+    override val idleLockSetting: StateFlow<IdleLockSetting?> = idleSettingFlow.asStateFlow()
+
+    override fun consumeCheckAfterCancel() {
+        checkAfterCancelFlow.value = false
+    }
 
     // --- what the vault tells ---
 
@@ -76,13 +134,26 @@ class OwnerCheckManager(
             "vault.held" -> onHeld(m)
             "sync.event" -> when (VaultJson.str(m.body, "kind")) {
                 // Another device saw a check pass (§3.6.3); the holder learns it from its own answer.
-                "owner_check" -> update { v ->
-                    val deadline = instant(VaultJson.str(m.body, "deadline")) ?: v.deadline
-                    v.copy(state = OwnerCheckState.OK, deadline = deadline, failures = 0, waiting = null)
+                "owner_check" -> {
+                    // A passed check: the idle lock's time moved with the deadline (the vault says it again), and a
+                    // longer idle-lock value set before it is in force now (§3.6.8).
+                    checkPassedForIdleLock()
+                    update { v ->
+                        val deadline = instant(VaultJson.str(m.body, "deadline")) ?: v.deadline
+                        v.copy(state = OwnerCheckState.OK, deadline = deadline, failures = 0, waiting = null, idleLockAt = null)
+                    }
                 }
                 "settings.changed" -> scope.launch { runCatching { refreshOwnerCheck() } }
             }
-            "vault.locking" -> if (VaultJson.str(m.body, "reason") == REASON_OWNER_CHECK) locked.value = true
+            "vault.locking" -> when (VaultJson.str(m.body, "reason")) {
+                REASON_OWNER_CHECK -> locked.value = true
+                // (Release L, §3.6.8) It locked itself: said on the unlock screen and in the notification, with how
+                // long past the deadline that was, as the vault last said.
+                REASON_IDLE -> {
+                    idleFlow.value = IdleLocked(idleAfterKnown)
+                    view.value?.let { set(it) }
+                }
+            }
         }
     }
 
@@ -95,7 +166,13 @@ class OwnerCheckManager(
         val counts = n.waiting.toCounts()
         val base = view.value ?: unknownHeld()
         val state = if (base.holdOff(now())) OwnerCheckState.DUE else OwnerCheckState.HELD
-        set(base.copy(state = state, deadline = instant(n.deadline) ?: base.deadline, waiting = counts))
+        set(
+            base.copy(
+                state = state, deadline = instant(n.deadline) ?: base.deadline, waiting = counts,
+                // (Release L) A vault.held from a release before L says nothing of the idle lock: what was read stays.
+                idleLockAt = instant(n.idleLockAt) ?: base.idleLockAt,
+            ),
+        )
     }
 
     /** A request was answered `owner_check_required` (§3.6.3): the vault is past its deadline. */
@@ -110,7 +187,16 @@ class OwnerCheckManager(
 
     /** The vault opened (an unlock, or the app started with it unlocked): re-read the check (the notices come with the feed). */
     fun onOpened() {
+        endIdleLocked()
         scope.launch { runCatching { refreshOwnerCheck() } }
+    }
+
+    /** The vault is open again: it no longer is locked by itself. */
+    private fun endIdleLocked() {
+        if (idleFlow.value == null && !lockedHere) return
+        idleFlow.value = null
+        lockedHere = false
+        view.value?.let { set(it) }
     }
 
     /**
@@ -119,12 +205,27 @@ class OwnerCheckManager(
      */
     suspend fun afterUnlock(pin: String, password: String) {
         locked.value = false
+        endIdleLocked()
         val v = try {
             readStatus()
         } catch (_: VaultFailure) {
             null
         }
         if (v != null && v.gated(now())) unlockOutcome.value = check(pin, password, null)
+    }
+
+    /**
+     * (Release R, ANDROID-PLAN "Other screens") Right after an unlock that cancelled a recovery: the owner check at once,
+     * with the same entries, whatever the deadline, because it records that the member is present (§11.14.5). A check
+     * that does not pass waits in [unlockCheckOutcome], and [checkAfterCancel] asks for the check screen.
+     */
+    suspend fun afterCancelledRecovery(pin: String, password: String) {
+        locked.value = false
+        val r = check(pin, password, null)
+        if (r != OwnerCheckOutcome.Passed) {
+            unlockOutcome.value = r
+            checkAfterCancelFlow.value = true
+        }
     }
 
     // --- OwnerCheckRepository ---
@@ -134,7 +235,13 @@ class OwnerCheckManager(
     }
 
     private suspend fun readStatus(): OwnerCheckView? {
-        val st = vaultGuard { ops().status() } ?: return view.value
+        val since = mark()
+        val (st0, recovery, timeScale) = vaultGuard(resend = true) { ops().statusRead() }
+        runCatching { onTimeScale(timeScale, since) }
+        lastTimeScale = timeScale?.takeIf { it >= 1 } ?: 1
+        presenceFromStatus(recovery)
+        runCatching { onRecoveryStatus(recovery, since) }
+        val st = st0 ?: return view.value
         val prev = view.value
         val state = when (st.state) {
             "held" -> OwnerCheckState.HELD
@@ -150,6 +257,8 @@ class OwnerCheckManager(
             holdOffUntil = instant(st.holdOffUntil),
             // 0.19.0: the status says what is waiting; from an older vault only `vault.held` does.
             waiting = if (state == OwnerCheckState.OK) null else st.waiting?.toCounts() ?: prev?.waiting,
+            // (Release L) As the vault computes it now; absent before L.
+            idleLockAt = instant(st.idleLockAt),
         )
         set(v)
         return v
@@ -161,6 +270,10 @@ class OwnerCheckManager(
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
             locked.value = false
             heldTs = null
+            presenceFromCheck(r)
+            idleFlow.value = null
+            lockedHere = false
+            checkPassedForIdleLock()
             set(
                 OwnerCheckView(
                     state = OwnerCheckState.OK,
@@ -183,7 +296,7 @@ class OwnerCheckManager(
         CODE_BAD_PIN -> OwnerCheckOutcome.BadPin(checksLeftAfterFailure())
         CODE_BAD_PASSWORD -> OwnerCheckOutcome.BadPassword(checksLeftAfterFailure())
         CODE_BACKOFF -> OwnerCheckOutcome.Backoff(retryAfter(e))
-        else -> OwnerCheckOutcome.Failed(e.kind, e.code)
+        else -> OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
     }
 
     /** A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). */
@@ -229,6 +342,54 @@ class OwnerCheckManager(
         if (current.settings[key] != value) o.settingsSet(current.version, mapOf(key to value))
     }
 
+    override fun idleLockedNow(now: Instant): IdleLocked? = idleFlow.value
+        ?: view.value?.idleLockAt?.takeIf { !lockedHere && !now.isBefore(it) }?.let { IdleLocked(idleAfterKnown) }
+
+    override fun onLockedHere() {
+        lockedHere = true
+        view.value?.let { set(it) }
+    }
+
+    // --- the idle lock's setting (release L, §3.6.8) ---
+
+    override suspend fun refreshIdleLockSetting() {
+        val st = vaultGuard { ops().settingsGet() }
+        val seconds = (st.settings[KEY_IDLE] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull()
+        idleSettingFlow.value = seconds?.let { settingOf(it) }
+    }
+
+    override suspend fun setIdleLockAfter(seconds: Long) {
+        require(seconds in IdleLockSetting.CHOICES_S)
+        if (idleSettingFlow.value == null) runCatching { refreshIdleLockSetting() }
+        val before = idleSettingFlow.value ?: throw VaultFailure(FailureKind.NOT_SUPPORTED)
+        setSetting(KEY_IDLE, JsonPrimitive(seconds))
+        // The vault keeps the lowest value since the last check (owner decision 2026-10-23): a longer one waits for it.
+        val inForce = minOf(before.inForceSeconds, seconds)
+        idleInForce = inForce.takeIf { it < seconds }
+        idleSettingFlow.value = IdleLockSetting(seconds, inForce)
+        view.value?.let { set(it) }
+        // A shorter value moves the idle lock's time at once.
+        runCatching { readStatus() }
+    }
+
+    private fun settingOf(seconds: Long): IdleLockSetting = IdleLockSetting(seconds, minOf(seconds, idleInForce ?: seconds))
+
+    /** A check passed: the value set is the one in force from now on. */
+    private fun checkPassedForIdleLock() {
+        // The value set is in force from now on (a longer one set before the check included): the time said at an idle
+        // lock is that value as it runs on this vault (second review of #191, G1).
+        val setting = idleSettingFlow.value
+        if (setting != null) {
+            idleAfterKnown = TimeScales.divide(setting.seconds, lastTimeScale)
+        } else if (idleInForce != null) {
+            // A longer value waited for this check, but its value is not loaded (a new process that has not read the
+            // setting): the time is not known, so the notice says so rather than the shorter value read before.
+            idleAfterKnown = null
+        }
+        idleInForce = null
+        idleSettingFlow.value?.let { idleSettingFlow.value = IdleLockSetting(it.seconds) }
+    }
+
     override fun consumeUnlockCheckOutcome() {
         unlockOutcome.value = null
     }
@@ -253,6 +414,36 @@ class OwnerCheckManager(
         return OwnerCheckNotice(item.itemId, item.kind, item.ref, instant(item.at), urgent = item.priority == PRIORITY_URGENT)
     }
 
+    /** §11.14.5: `present_recorded` false starts the notice; true ends it; absent (before release R) changes nothing. */
+    private fun presenceFromCheck(r: OwnerCheckPassed) {
+        when (r.recovery?.presentRecorded) {
+            false -> {
+                val deadline = instant(r.deadline)
+                val interval = r.intervalSeconds
+                presenceCheckAt = if (deadline != null && interval != null) deadline.minusSeconds(interval) else null
+                presenceFlow.value = true
+            }
+            true -> {
+                presenceCheckAt = null
+                presenceFlow.value = false
+            }
+            null -> Unit
+        }
+    }
+
+    /** A `vault.status` whose presence was recorded at or after the check that could not record it ends the notice. */
+    private fun presenceFromStatus(r: RecoveryStatus?) {
+        val at = instant(r?.presentRecordedAt)
+        // Without the check's time (an answer without deadline or interval) no status can show it was recorded since.
+        val since = presenceCheckAt
+        val recordedSince = at != null && since != null && !at.isBefore(since)
+        if (presenceFlow.value && recordedSince) {
+            presenceCheckAt = null
+            presenceFlow.value = false
+            view.value?.let { set(it) }
+        }
+    }
+
     /** Forgets everything (a wipe, a deleted vault). */
     fun clear() {
         view.value = null
@@ -260,6 +451,14 @@ class OwnerCheckManager(
         unlockOutcome.value = null
         noticeFlow.value = emptyList()
         heldTs = null
+        presenceFlow.value = false
+        presenceCheckAt = null
+        checkAfterCancelFlow.value = false
+        idleFlow.value = null
+        idleInForce = null
+        idleAfterKnown = null
+        lockedHere = false
+        idleSettingFlow.value = null
         runCatching { persist(ByteArray(0)) }
     }
 
@@ -274,7 +473,16 @@ class OwnerCheckManager(
 
     private fun set(v: OwnerCheckView) {
         view.value = v
-        runCatching { persist(json.encodeToString(Saved.serializer(), Saved.of(v, heldTs)).toByteArray()) }
+        // Before the deadline the idle lock's time is the deadline plus the value in force (§3.6.8).
+        val d = v.deadline
+        if (v.state == OwnerCheckState.OK && d != null && now().isBefore(d)) v.idleAfterSeconds?.let { idleAfterKnown = it }
+        val idle = idleFlow.value
+        val saved = Saved.of(v, heldTs).copy(
+            presenceUnrecorded = presenceFlow.value, presenceCheckAt = presenceCheckAt?.toString(),
+            idleLocked = idle != null, idleAfter = idle?.afterSeconds, idleInForce = idleInForce,
+            idleAfterKnown = idleAfterKnown, lockedHere = lockedHere,
+        )
+        runCatching { persist(json.encodeToString(Saved.serializer(), saved).toByteArray()) }
     }
 
     private fun restore(): Saved? = try {
@@ -301,11 +509,22 @@ class OwnerCheckManager(
         val holdOffUntil: String? = null,
         val waiting: SavedCounts? = null,
         val heldTs: String? = null,
+        /** (Release R) The presence notice is showing ([presenceUnrecorded]), and since which check. */
+        val presenceUnrecorded: Boolean = false,
+        val presenceCheckAt: String? = null,
+        /** (Release L) [idleLockAt]; the vault locked itself ([idleLocked], [idleAfter]); [idleInForce]. */
+        val idleLockAt: String? = null,
+        val idleLocked: Boolean = false,
+        val idleAfter: Long? = null,
+        val idleInForce: Long? = null,
+        val idleAfterKnown: Long? = null,
+        val lockedHere: Boolean = false,
     ) {
         fun toView() = OwnerCheckView(
             runCatching { OwnerCheckState.valueOf(state) }.getOrDefault(OwnerCheckState.OK),
             instant(deadline), interval, failures, hold, instant(holdOffUntil),
             waiting = waiting?.let { WaitingCounts(it.messages, it.requests, it.calls, it.other) },
+            idleLockAt = instant(idleLockAt),
         )
 
         companion object {
@@ -313,6 +532,7 @@ class OwnerCheckManager(
                 v.state.name, v.deadline?.toString(), v.intervalSeconds, v.failures, v.hold, v.holdOffUntil?.toString(),
                 waiting = v.waiting?.let { SavedCounts(it.messages, it.requests, it.calls, it.other) },
                 heldTs = heldTs?.toString(),
+                idleLockAt = v.idleLockAt?.toString(),
             )
         }
     }
@@ -322,6 +542,12 @@ class OwnerCheckManager(
 
     companion object {
         const val REASON_OWNER_CHECK = "owner_check"
+
+        /** (Release L, §3.6.8) `vault.locking`'s reason for the idle lock. */
+        const val REASON_IDLE = "idle"
+
+        /** (Release L, §10.8) The idle lock's setting. */
+        const val KEY_IDLE = "idle_lock.after_seconds"
         const val KEY_INTERVAL = "owner_check.interval_seconds"
         const val KEY_HOLD = "owner_check.hold"
         private const val CODE_BAD_PIN = "bad_pin"

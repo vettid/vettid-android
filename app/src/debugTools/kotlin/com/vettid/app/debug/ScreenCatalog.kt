@@ -246,6 +246,8 @@ private object NoRecover : RecoverActions {
     override fun dismissStartOver() = Unit
     override fun confirmStartOver() = Unit
     override fun tryPinAgain() = Unit
+    override fun checkAgain() = Unit
+    override fun useNewCode() = Unit
     override fun finish() = Unit
 }
 
@@ -564,7 +566,7 @@ object ScreenCatalog {
             Ob(
                 onboarding.copy(
                     step = OnboardingStep.PASSWORD, password = "correct horse battery", passwordConfirm = "correct horse battery",
-                    passwordStrength = PasswordPolicy.Strength.GOOD,
+                    passwordRule = com.vettid.core.data.policy.PasswordRule.OK,
                 ),
             )
         },
@@ -690,6 +692,9 @@ object ScreenCatalog {
         "unlock.lock_confirmed" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), lock = com.vettid.core.data.vault.LockNotice.ConfirmedLate), NoUnlock)
         },
+        "unlock.lock_opened_again" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), lock = com.vettid.core.data.vault.LockNotice.OpenedAgain), NoUnlock)
+        },
         "unlock.refused" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), refused = true), NoUnlock)
         },
@@ -738,6 +743,14 @@ object ScreenCatalog {
                 NoUnlock,
             )
         },
+        // Release L (§3.6.8): the vault locked itself; the unlock and the check on this screen.
+        "unlock.idle_locked" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), checkDue = true,
+                    idleLocked = com.vettid.core.data.vault.IdleLocked(604_800)),
+                NoUnlock,
+            )
+        },
         "unlock.owner_check_locked" to {
             UnlockContent(
                 UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), checkDue = true,
@@ -750,6 +763,10 @@ object ScreenCatalog {
             NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, confirming = true), NewCredentialActions())
         },
         "owner_check.held" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView), NoOwnerCheck) {} },
+        // Release L (§3.6.8): the held screen says when the vault locks itself.
+        "owner_check.held_idle_lock" to {
+            OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView.copy(idleLockAt = Instant.now().plusSeconds(6 * 86_400L))), NoOwnerCheck) {}
+        },
         // Past the deadline by the phone's clock, before the vault said what is waiting: never shown as zero.
         "owner_check.unknown" to {
             OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, okView.copy(deadline = Instant.now().minusSeconds(60))), NoOwnerCheck) {}
@@ -779,6 +796,13 @@ object ScreenCatalog {
         "root.no_vault_confirm" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NO_VAULT, false, {}, {}, confirming = true) },
         "root.local_state" to { com.vettid.app.ui.UnreachableScreen(FailureKind.LOCAL_STATE, false, {}, {}) },
         "root.local_state_confirm" to { com.vettid.app.ui.UnreachableScreen(FailureKind.LOCAL_STATE, false, {}, {}, confirming = true) },
+        "root.erase_failed" to { com.vettid.app.ui.UnreachableScreen(FailureKind.ERASE_FAILED, false, {}, {}) },
+        "root.unauthorized" to { com.vettid.app.ui.UnreachableScreen(FailureKind.UNAUTHORIZED, false, {}, {}) },
+        "root.long_unreachable" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NETWORK, false, {}, {}, longUnreachable = true) },
+        "root.erase_failed_confirm" to { com.vettid.app.ui.UnreachableScreen(FailureKind.ERASE_FAILED, false, {}, {}, confirming = true) },
+        "root.erase_failed_clear_refused" to {
+            com.vettid.app.ui.UnreachableScreen(FailureKind.ERASE_FAILED, false, {}, {}, clearFailed = true)
+        },
         "root.preferences_reset" to {
             com.vettid.core.ui.components.InfoBanner(
                 stringResource(com.vettid.app.R.string.root_preferences_reset),
@@ -861,6 +885,19 @@ object ScreenCatalog {
         },
         "settings.owner_check_offer" to {
             SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), OwnerCheckSettingsUiState(okView, offerCheck = true))
+        },
+        // Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock's setting, and a longer value waiting for the next check.
+        "settings.idle_lock" to {
+            SettingsContent(
+                SettingsUiState(account = sampleAccount), SettingsActions(),
+                OwnerCheckSettingsUiState(okView, idleLock = com.vettid.core.data.vault.IdleLockSetting(604_800)),
+            )
+        },
+        "settings.idle_lock_next_check" to {
+            SettingsContent(
+                SettingsUiState(account = sampleAccount), SettingsActions(),
+                OwnerCheckSettingsUiState(okView, idleLock = com.vettid.core.data.vault.IdleLockSetting(2_592_000, 604_800), idleLongerNote = true),
+            )
         },
         "shell.deletion" to {
             Column {
@@ -967,6 +1004,71 @@ object ScreenCatalog {
         "messages.empty" to { MessagesScreen(MessagesUiState(loading = false), chrome) },
         "messages.unread" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations.filter { it.unread > 0 }, unreadOnly = true, noConnections = false, searchable = true), chrome) },
         "messages.conversation" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, draft = "See you there"), ConversationActions()) },
+        "messages.conversation_older" to {
+            ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, olderAvailable = true), ConversationActions())
+        },
+        "messages.conversation_older_loading" to {
+            ConversationScreen(
+                ConversationUiState("c1", sam, thread, loading = false, olderAvailable = true, loadingOlder = true),
+                ConversationActions(),
+            )
+        },
+        "messages.conversation_too_large" to {
+            ConversationScreen(
+                ConversationUiState("c1", sam, thread, loading = false, olderAvailable = true, error = FailureKind.RESPONSE_TOO_LARGE),
+                ConversationActions(),
+            )
+        },
+        "messages.conversation_photos" to {
+            val photos = thread + listOf(
+                com.vettid.core.data.social.AttachmentState.SENDING to null,
+                com.vettid.core.data.social.AttachmentState.DELIVERED to null,
+                com.vettid.core.data.social.AttachmentState.FAILED to "unsupported",
+                com.vettid.core.data.social.AttachmentState.FETCHING to null,
+                com.vettid.core.data.social.AttachmentState.FAILED to "rate",
+            ).mapIndexed { i, (st, reason) ->
+                thread.last().copy(
+                    messageId = "p$i",
+                    outgoing = i < 3,
+                    text = if (i == 0) "The view from here" else "",
+                    sentAt = thread.last().sentAt.plusSeconds(60L * (i + 1)),
+                    attachment = com.vettid.core.data.social.AttachmentInfo("a$i", st, reason, width = 2_560, height = 1_920),
+                )
+            }
+            ConversationScreen(ConversationUiState("c1", sam, photos, loading = false, photosAvailable = true), ConversationActions())
+        },
+        "messages.photo_draft" to {
+            ConversationScreen(
+                ConversationUiState(
+                    "c1", sam, thread, loading = false, photosAvailable = true,
+                    photoDraft = com.vettid.feature.messages.PhotoDraft(
+                        photos = listOf(com.vettid.core.media.PreparedPhoto(ByteArray(4), ByteArray(4), 2_560, 1_920)),
+                        caption = "The view from here",
+                    ),
+                ),
+                ConversationActions(),
+            )
+        },
+        "messages.photo_draft_retry" to {
+            ConversationScreen(
+                ConversationUiState(
+                    "c1", sam, thread, loading = false, photosAvailable = true,
+                    photoDraft = com.vettid.feature.messages.PhotoDraft(
+                        photos = listOf(com.vettid.core.media.PreparedPhoto(ByteArray(4), ByteArray(4), 2_560, 1_920)),
+                        problem = com.vettid.feature.messages.PhotoProblem.NO_ANSWER,
+                        retry = true,
+                    ),
+                ),
+                ConversationActions(),
+            )
+        },
+        "messages.photo_viewer_failed" to {
+            com.vettid.feature.messages.PhotoViewerScreen(
+                com.vettid.feature.messages.PhotoViewerUiState(loading = false, error = FailureKind.OTHER, problemText = null),
+                {},
+                {},
+            )
+        },
         "messages.conversation_empty" to { ConversationScreen(ConversationUiState("c2", alex, emptyList(), loading = false), ConversationActions()) },
         "messages.conversation_stale" to { ConversationScreen(ConversationUiState("c3", jo, emptyList(), loading = false), ConversationActions()) },
         "messages.delete" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, deleting = thread[1]), ConversationActions()) },
@@ -1261,7 +1363,7 @@ object ScreenCatalog {
             SharedProfileContent(
                 SharedProfileUiState(
                     sampleAccount, OwnProfile(3, "Sam", "Sam", "Rivera", "9a1f bb7d 873e eafb 494b ef94 f072 7b25"), displayName = "Sam",
-                    pendingPhoto = SAMPLE_PHOTO,
+                    pendingPhoto = com.vettid.feature.settings.PendingPhoto.of(SAMPLE_PHOTO),
                 ),
                 SharedProfileActions(),
             )

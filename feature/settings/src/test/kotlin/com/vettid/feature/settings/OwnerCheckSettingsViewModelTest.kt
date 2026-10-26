@@ -61,4 +61,25 @@ class OwnerCheckSettingsViewModelTest {
         advanceUntilIdle()
         assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
     }
+
+    /** Release L (§3.6.8): no row for a vault before L; a longer value is said to take effect after the next check. */
+    @Test
+    fun theIdleLockSettingSaysWhenALongerValueTakesEffect() = runTest {
+        val vm = OwnerCheckSettingsViewModel(vault)
+        advanceUntilIdle()
+        assertEquals("a vault before L: no row", null, vm.uiState.value.idleLock)
+        vault.idleLockSetting.value = com.vettid.core.data.vault.IdleLockSetting(604_800)
+        advanceUntilIdle()
+        vm.setIdleLock(86_400)
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.vault.IdleLockSetting(86_400), vm.uiState.value.idleLock)
+        assertFalse("shorter: at once, nothing to say", vm.uiState.value.idleLongerNote)
+        vm.setIdleLock(2_592_000)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.idleLongerNote)
+        assertTrue(vm.uiState.value.idleLock!!.afterNextCheck)
+        vm.dismissIdleNote()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.idleLongerNote)
+    }
 }

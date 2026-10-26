@@ -3,11 +3,15 @@ package com.vettid.feature.credential
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.policy.PasswordPolicy
+import com.vettid.core.data.policy.PasswordRule
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.CredentialStatus
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,11 +35,14 @@ data class CredentialUiState(
     val windowUntil: Instant? = null,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val notice: CredentialNotice? = null,
     /** The unlock-window password dialog. */
     val windowDialog: Boolean = false,
     val windowPassword: String = "",
     val windowError: FailureKind? = null,
+    val windowErrorCode: String? = null,
 ) {
     override fun toString(): String = "CredentialUiState(loading=$loading, busy=$busy, error=$error, alarm=${alarm?.state})"
 }
@@ -63,7 +70,7 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
                 val st = repo.status()
                 local.update { it.copy(loading = false, status = st) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind) }
+                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -81,7 +88,7 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
                 repo.openUnlockWindow(pw)
                 local.update { it.copy(busy = false, windowDialog = false, windowPassword = "") }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, windowError = e.kind, windowPassword = "") }
+                local.update { it.copy(busy = false, windowError = e.kind, windowErrorCode = e.shownCode, windowPassword = "") }
             }
         }
     }
@@ -109,7 +116,7 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
                 block()
                 local.update { it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind) }
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -117,49 +124,181 @@ class CredentialViewModel @Inject constructor(private val repo: CredentialReposi
 
 /** Immutable UI state of the password change. */
 data class ChangePasswordUiState(
+    /**
+     * (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) The vault has a phone secret: `credential.password.change` carries the
+     * PIN, which the vault verifies, so the screen asks for it.
+     */
+    val askPin: Boolean = false,
+    val pin: String = "",
     val current: String = "",
     val password: String = "",
     val confirm: String = "",
     val strength: PasswordPolicy.Strength = PasswordPolicy.Strength.TOO_SHORT,
     val problem: PasswordPolicy.Problem? = null,
+    /**
+     * (Release R) The vault is of release R: the new password follows its rules as the member types ([rule]; ANDROID-PLAN
+     * "Passwords") instead of the earlier meter ([strength], [problem]), which a vault before release R keeps.
+     */
+    val newRules: Boolean = false,
+    val rule: PasswordRule = PasswordRule.SHORT,
+    /** [rule] is the vault's verdict (`weak_password{reason}`). */
+    val refused: Boolean = false,
     val mismatch: Boolean = false,
     val same: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.44.0 §11.14.9) The change got no answer and VettID is deciding it ([ChangeCheck.Checking],
+     * [ChangeCheck.Unreachable]), or decided that it did not apply ([ChangeCheck.NotApplied]). The entries are kept.
+     */
+    val check: ChangeCheck? = null,
 ) {
-    override fun toString(): String = "ChangePasswordUiState(busy=$busy, error=$error, done=$done)"
+    /**
+     * A change is being decided, or its check ended without a decision (L2: no new try that could spend an attempt with
+     * the wrong secret): nothing is sent from this screen.
+     */
+    val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended
+
+    /** The PIN, when it is asked ([askPin]): digits, at least 6. */
+    val pinReady: Boolean get() = !askPin || pin.length >= MIN_PIN && pin.all { it.isDigit() }
+
+    /** Every field the change needs is filled in, and no change is being decided (§11.14.9). */
+    val canSubmit: Boolean
+        get() = current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && pinReady && !refused &&
+            (!newRules || rule.passes) && !checking
+
+    override fun toString(): String =
+        "ChangePasswordUiState(askPin=$askPin, newRules=$newRules, busy=$busy, error=$error, done=$done, check=$check)"
+
+    /**
+     * (§11.14.9 step 4) A refused change: the entry that was wrong is cleared, the new ones are kept. An undecided earlier
+     * change keeps every entry.
+     */
+    internal fun afterRefusal(kind: FailureKind): ChangePasswordUiState = when (kind) {
+        FailureKind.BAD_PASSWORD -> copy(current = "")
+        FailureKind.BAD_PIN -> copy(pin = "")
+        // Refused with nothing sent: every entry stays.
+        FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNDECIDED,
+        FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
+        FailureKind.RENEW_UNCONFIRMED,
+        -> this
+        else -> copy(current = "", pin = "")
+    }
+
+    private companion object {
+        const val MIN_PIN = 6
+        const val MAX_PIN = 32
+    }
+
+    internal fun withPin(v: String): ChangePasswordUiState {
+        val pin = v.filter { it.isDigit() }.take(MAX_PIN)
+        // "Don't use your PIN as your password." follows the PIN as it is typed too.
+        val rule = if (newRules && !refused && password.isNotEmpty()) PasswordRule.check(password, pin) else rule
+        return copy(pin = pin, rule = rule, error = null)
+    }
 }
 
-/** `credential.password.change` (§10.6): the current password, a new one with the strength rules. */
+/**
+ * `credential.password.change` (§10.6): the current password, a new one with the strength rules; on a vault of release R
+ * also the PIN (§11.14.9).
+ */
 @HiltViewModel
-class ChangePasswordViewModel @Inject constructor(private val repo: CredentialRepository) : ViewModel() {
-    private val state = MutableStateFlow(ChangePasswordUiState())
+class ChangePasswordViewModel @Inject constructor(
+    private val repo: CredentialRepository,
+    private val vault: VaultRepository,
+) : ViewModel() {
+    private val state = MutableStateFlow(ChangePasswordUiState(askPin = vault.usesPhoneSecret, newRules = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePasswordUiState> = state.asStateFlow()
+
+    init {
+        // §11.14.9: a password change whose answer was lost is decided by VettID; this screen shows where that stands.
+        viewModelScope.launch {
+            vault.changeCheck.collect { c -> if (c != null && c.kind == ChangeKind.PASSWORD) onCheck(c) }
+        }
+    }
+
+    private fun onFailure(e: VaultFailure) {
+        // weak_password (§11.14.7): its reason under the new password, in the same words as the app's.
+        // Also on the earlier meter: a vault's verdict is always shown, and the same password not sent again.
+        val rule = if (e.kind == FailureKind.WEAK_PASSWORD) PasswordRule.fromVault(e.weakPasswordReason) else null
+        when {
+            // §11.14.9: no answer is not a failure; the entries stay and the check's state follows.
+            e.kind == FailureKind.CHANGE_CHECKING -> {
+                state.update { it.copy(busy = false, error = null) }
+                vault.changeCheck.value?.takeIf { it.kind == ChangeKind.PASSWORD }?.let(::onCheck)
+                return
+            }
+            rule != null -> state.update { it.copy(busy = false, error = null, rule = rule, refused = true, current = "", pin = "") }
+            else -> state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode).afterRefusal(e.kind) }
+        }
+        following = false
+        vault.acknowledgeChangeCheck()
+    }
+
+    /**
+     * This screen follows a change: one it sent, or one being decided when it opened. Only then is a decision shown here
+     * (and acknowledged); an old decision never opens the screen as "done" (the shell's notice says it once).
+     */
+    private var following = false
+
+    private fun onCheck(c: ChangeCheck) {
+        if (c.open) following = true
+        // Not this screen's change, or its own answer is still on its way (handled where it returns).
+        if (!following || !c.open && state.value.busy) return
+        when (c) {
+            // (ANDROID-PLAN 0.1.55) Moved: another phone became the holder; said here as the one-time notice.
+            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
+                state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.Applied -> state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
+            is ChangeCheck.Refused -> state.update {
+                it.copy(busy = false, check = null, error = c.failure, errorCode = c.shownCode).afterRefusal(c.failure)
+            }
+        }
+        if (!c.open) {
+            following = false
+            vault.acknowledgeChangeCheck()
+        }
+    }
+
+    fun setPin(v: String) = state.update { it.withPin(v) }
 
     fun setCurrent(v: String) = state.update { it.copy(current = v, error = null) }
 
-    fun setPassword(v: String) = state.update { it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, mismatch =
-        false, same = false) }
+    fun setPassword(v: String) = state.update {
+        if (it.newRules) {
+            val pin = if (it.askPin) it.pin else null
+            it.copy(password = v, rule = PasswordRule.check(v, pin), refused = false, mismatch = false, same = false)
+        } else {
+            it.copy(password = v, strength = PasswordPolicy.strength(v), problem = null, refused = false, mismatch = false, same = false)
+        }
+    }
 
     fun setConfirm(v: String) = state.update { it.copy(confirm = v, mismatch = false) }
 
     fun submit() {
         val s = state.value
-        val p = PasswordPolicy.check(s.password)
+        val p = if (s.newRules) null else PasswordPolicy.check(s.password)
         when {
-            s.current.isEmpty() -> return
+            // (§11.14.9) Nothing is sent while a change is being decided.
+            s.checking || s.current.isEmpty() || !s.pinReady -> return
+            s.refused || s.newRules && !s.rule.passes -> return
             p != null -> state.update { it.copy(problem = p) }
             s.password == s.current -> state.update { it.copy(same = true) }
             s.confirm != s.password -> state.update { it.copy(mismatch = true) }
             else -> {
-                state.update { it.copy(busy = true, error = null) }
+                state.update { it.copy(busy = true, error = null, check = null) }
+                following = true
                 viewModelScope.launch {
                     try {
-                        repo.changePassword(s.current, s.password)
-                        state.update { ChangePasswordUiState(done = true) }
+                        repo.changePassword(s.current, s.password, s.pin.takeIf { s.askPin })
+                        state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
+                        following = false
+                        vault.acknowledgeChangeCheck() // said here: not again by the shell
                     } catch (e: VaultFailure) {
-                        state.update { it.copy(busy = false, error = e.kind, current = "") }
+                        onFailure(e)
                     }
                 }
             }
@@ -172,6 +311,8 @@ data class RotateUiState(
     val password: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
     val done: Boolean = false,
 ) {
     override fun toString(): String = "RotateUiState(busy=$busy, error=$error, done=$done)"
@@ -194,7 +335,7 @@ class RotateViewModel @Inject constructor(private val repo: CredentialRepository
                 repo.rotate(pw)
                 state.update { RotateUiState(done = true) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, password = "") }
             }
         }
     }
@@ -211,6 +352,8 @@ data class AlarmUiState(
     val password: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
+    val errorCode: String? = null,
 ) {
     override fun toString(): String = "AlarmUiState(step=$step, busy=$busy, error=$error)"
 }
@@ -260,7 +403,7 @@ class AlarmViewModel @Inject constructor(private val repo: CredentialRepository)
                 repo.confirmAlarm(mine)
                 state.update { it.copy(busy = false, step = AlarmStep.ROTATE) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, step = AlarmStep.ASK) }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, step = AlarmStep.ASK) }
             }
         }
     }
@@ -276,7 +419,7 @@ class AlarmViewModel @Inject constructor(private val repo: CredentialRepository)
                 repo.rotate(pw)
                 state.update { it.copy(busy = false, password = "", step = AlarmStep.RESOLVED) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind, password = "") }
+                state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, password = "") }
             }
         }
     }

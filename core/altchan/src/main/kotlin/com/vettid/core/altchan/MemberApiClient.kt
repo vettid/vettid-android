@@ -47,6 +47,15 @@ class Slot(val status: String, envelope: ByteArray?, val code: String?) {
 
         /** The host's clear marker on a successful `recovery_register` (0.10.6); the app ignores it. */
         const val RECOVERY_REGISTERED = "recovery_registered"
+
+        /**
+         * A lock's codes beside `done` (MEMBER-API 2.5.0 "Locks", release L), the host's word: the vault was running
+         * and is now locked; no instance was running it; it runs under a newer unlock and nothing was done. A `done`
+         * without a code is from a release before L and says only that the request was read.
+         */
+        const val CODE_LOCKED = "locked"
+        const val CODE_NOT_RUNNING = "not_running"
+        const val CODE_STALE = "stale"
     }
 }
 
@@ -340,9 +349,14 @@ class MemberApiClient(
         call("POST", "/api/vault/unlock", body)
     }
 
-    /** Asks for a lock (no envelope). */
-    suspend fun lock(vaultId: String, requestId: String) {
-        call("POST", "/api/vault/lock", JsonBuilder().string("vault_id", vaultId).string("request_id", requestId).build())
+    /**
+     * Asks for a lock (no envelope). With [unlockId] (MEMBER-API 2.5.0, release L) a bound lock: the vault locks only
+     * if it names its current unlock; without, an unconditional one.
+     */
+    suspend fun lock(vaultId: String, requestId: String, unlockId: String? = null) {
+        val b = JsonBuilder().string("vault_id", vaultId).string("request_id", requestId)
+        unlockId?.let { b.string("unlock_id", it) }
+        call("POST", "/api/vault/lock", b.build())
     }
 
     /** One look at a response slot. */
@@ -416,6 +430,11 @@ class MemberApiClient(
     /** Posts a sealed vault.recovery.register (no manifest_sha256). */
     suspend fun recoveryRegister(vaultId: String, instanceId: String, r: SealedRequest) {
         call("POST", "/api/vault/recovery/register", posted(r, "vault_id" to vaultId, "instance_id" to instanceId), vault = vaultId)
+    }
+
+    /** `vault.recovery.open` (VAULT-MESSAGING 0.33.0 §11.14.6, release R): routed to the vault's leased instance. */
+    suspend fun recoveryOpen(vaultId: String, instanceId: String, r: SealedRequest) {
+        call("POST", "/api/vault/recovery/open", posted(r, "vault_id" to vaultId, "instance_id" to instanceId), vault = vaultId)
     }
 
     companion object {
