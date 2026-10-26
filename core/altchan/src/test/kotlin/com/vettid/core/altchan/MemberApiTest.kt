@@ -43,6 +43,7 @@ class MemberApiTest {
     private var instanceMovedFirst = false
     private var recoveryResult = """{"ok":true}"""
     private var slotCode: String? = null
+    private var expireFirstRegister = false
     private val kem = KemPrivateKey.generate()
 
     private fun resp(
@@ -110,7 +111,7 @@ class MemberApiTest {
                 val rid = o.string("request_id")
                 assertEquals(rid, e.open(Base64s.decodeStd(o.string("envelope"))).id)
                 val sealed = Base64s.encodeStd(TestSupport.sealResult(kem.publicKey, AltResults.TYPE_RECOVERY_RESULT, rid, recoveryResult))
-                slots[rid] = """{"status":"done","envelope":"$sealed"${slotCode?.let { ",\"code\":\"$it\"" } ?: ""}}"""
+                if (expireFirstRegister) expireFirstRegister = false else slots[rid] = """{"status":"done","envelope":"$sealed"${slotCode?.let { ",\"code\":\"$it\"" } ?: ""}}"""
                 resp(202, """{"vault_id":"0123456789abcdef0123456789abcdef","request_id":"$rid"}""")
             }
             path == "/api/vault/lock" -> {
@@ -386,6 +387,54 @@ class MemberApiTest {
         assertEquals(RecoveryResult(true, null), register())
         assertEquals(1, log.count { it == "POST /api/vault/recovery/register" }) // not retried as an error
         assertEquals(2, log.count { it.startsWith("GET /api/vault/requests/") })
+    }
+
+    /** VAULT-MESSAGING §11.14.6: [onPosted] runs once the `202` came, so a failed poll after it is known to be after the POST. */
+    @Test
+    fun aPollThatFailsAfterThe202IsAfterThePostNotBeforeTheVault() = runBlocking<Unit> {
+        val code = RecoveryCode("0123456789abcdef0123456789abcdef", Ulid.new(), "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0")
+        val app = Party().app
+        var built = 0
+        var posted = 0
+        assertThrows(java.io.IOException::class.java) {
+            runBlocking {
+                flow().recoveryRegister(
+                    code.vaultId,
+                    build = { e ->
+                        built++
+                        AltRequests.buildRecoveryRegister("guid-1", code, e, TestSupport.SoftAttester(), app, Instant.now())
+                    },
+                    open = { _, _ -> error("opened a result") },
+                    onPosted = {
+                        posted++
+                        server.close() // the network goes after the 202: the slot poll fails
+                    },
+                )
+            }
+        }
+        assertEquals(1, built)
+        assertEquals(1, posted)
+    }
+
+    /** An `expired` slot posts again with a new request: [build] runs and [onPosted] reports per POST. */
+    @Test
+    fun anExpiredSlotPostsAgainAndEachPostIsReported() = runBlocking<Unit> {
+        expireFirstRegister = true
+        val code = RecoveryCode("0123456789abcdef0123456789abcdef", Ulid.new(), "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0")
+        val app = Party().app
+        val events = mutableListOf<String>()
+        val r = flow().recoveryRegister(
+            code.vaultId,
+            build = { e ->
+                events += "build"
+                AltRequests.buildRecoveryRegister("guid-1", code, e, TestSupport.SoftAttester(), app, Instant.now())
+            },
+            open = { raw, rid -> RecoveryResult.parse(AltResults.open(raw, kem, AltResults.TYPE_RECOVERY_RESULT, rid)) },
+            onPosted = { events += "posted" },
+        )
+        assertEquals(RecoveryResult(true, null), r)
+        assertEquals(listOf("build", "posted", "build", "posted"), events)
+        assertEquals(2, log.count { it == "POST /api/vault/recovery/register" })
     }
 
     @Test

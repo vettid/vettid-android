@@ -239,13 +239,20 @@ internal object Rules {
 
     /**
      * Whether a failed register left N unregistered: it did not reach the vault (the release starting or the vault
-     * unavailable, a rate limit, `recovery_not_available`, no network; [status] null) AND it was the FIRST attempt for this code.
-     * A repeat for the same code ([repeatForSameCode]) may have been the second copy of a register that went through: the member
-     * API answers `409` to any repeat once the first was recorded.
+     * unavailable, a rate limit, `recovery_not_available`, no network before the POST; [status] null) AND this POST was the
+     * FIRST for this code AND no `202` came for it ([accepted]: after a `202` any failure, a failed poll too, is "maybe
+     * registered"). A repeat for the same code ([repeatForSameCode], decided per POST) may have been the second copy of a
+     * register that went through: the member API answers `409` to any repeat once the first was recorded.
      */
-    fun registerFailedBeforeVault(repeatForSameCode: Boolean, status: Int?, code: String?): Boolean =
-        !repeatForSameCode &&
+    fun registerFailedBeforeVault(repeatForSameCode: Boolean, accepted: Boolean, status: Int?, code: String?): Boolean =
+        !repeatForSameCode && !accepted &&
             (status == null || status == HTTP_TOO_MANY || status == HTTP_UNAVAILABLE || code == "recovery_not_available")
+
+    /**
+     * Whether the POST about to be sent is a repeat for its code, decided per POST: an earlier register flow tried this code
+     * ([triedBefore]), or an earlier POST of this flow got its `202` ([acceptedEarlierInFlow]: an `expired` slot posts again).
+     */
+    fun isRepeatPost(triedBefore: Boolean, acceptedEarlierInFlow: Boolean): Boolean = triedBefore || acceptedEarlierInFlow
 
     /** A repeat for the same code answered `recovery_not_available`, or a readable `used`: maybe registered, not refused. */
     fun maybeRegistered(repeatForSameCode: Boolean, code: String?): Boolean =

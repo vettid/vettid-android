@@ -94,15 +94,41 @@ class RecoveryReuseTest {
 
     @Test
     fun aFirstRegisterThatFailedBeforeTheVaultMayBeTriedAgainWithTheSameN() {
-        assertTrue(Rules.registerFailedBeforeVault(false, null, null)) // no network
-        assertTrue(Rules.registerFailedBeforeVault(false, 503, "release_starting"))
-        assertTrue(Rules.registerFailedBeforeVault(false, 503, "vault_unavailable"))
-        assertTrue(Rules.registerFailedBeforeVault(false, 429, "rate_limited"))
-        assertTrue(Rules.registerFailedBeforeVault(false, 409, "recovery_not_available"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, null, null)) // no network
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 503, "release_starting"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 503, "vault_unavailable"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 429, "rate_limited"))
+        assertTrue(Rules.registerFailedBeforeVault(false, false, 409, "recovery_not_available"))
         // Anything else may have reached the vault: N stays unknown.
-        assertFalse(Rules.registerFailedBeforeVault(false, 500, "internal"))
-        assertFalse(Rules.registerFailedBeforeVault(false, 504, "http_504"))
-        assertFalse(Rules.registerFailedBeforeVault(false, 400, "bad_request"))
+        assertFalse(Rules.registerFailedBeforeVault(false, false, 500, "internal"))
+        assertFalse(Rules.registerFailedBeforeVault(false, false, 504, "http_504"))
+        assertFalse(Rules.registerFailedBeforeVault(false, false, 400, "bad_request"))
+    }
+
+    @Test
+    fun aFailureAfterThe202IsNeverBeforeTheVault() {
+        // A poll that failed (no network, a 503, a 429) or a slot that never answered, after the register was accepted.
+        for ((status, code) in listOf<Pair<Int?, String?>>(
+            null to null, 503 to "release_starting", 503 to "vault_unavailable", 429 to "rate_limited", 409 to "recovery_not_available",
+        )) {
+            assertFalse("$status $code", Rules.registerFailedBeforeVault(false, true, status, code))
+        }
+        // Before the POST (no 202) the same failures are still before the vault.
+        assertTrue(Rules.registerFailedBeforeVault(false, false, null, null))
+    }
+
+    @Test
+    fun aRepostInTheSameFlowAfterAnExpiredSlotIsARepeat() {
+        // The first POST of a first flow is not a repeat; the re-post after its 202 and an expired slot is.
+        assertFalse(Rules.isRepeatPost(triedBefore = false, acceptedEarlierInFlow = false))
+        val repeat = Rules.isRepeatPost(triedBefore = false, acceptedEarlierInFlow = true)
+        assertTrue(repeat)
+        // Answered 409 recovery_not_available or used: maybe registered (status signed with K), never before the vault.
+        assertTrue(Rules.maybeRegistered(repeat, "recovery_not_available"))
+        assertTrue(Rules.maybeRegistered(repeat, "used"))
+        assertFalse(Rules.registerFailedBeforeVault(repeat, false, 409, "recovery_not_available"))
+        // An earlier flow's POST for the same code makes the first POST of this flow a repeat too.
+        assertTrue(Rules.isRepeatPost(triedBefore = true, acceptedEarlierInFlow = false))
     }
 
     @Test
@@ -110,7 +136,7 @@ class RecoveryReuseTest {
         for ((status, code) in listOf<Pair<Int?, String?>>(
             null to null, 503 to "release_starting", 429 to "rate_limited", 409 to "recovery_not_available",
         )) {
-            assertFalse("$status $code", Rules.registerFailedBeforeVault(true, status, code))
+            assertFalse("$status $code", Rules.registerFailedBeforeVault(true, false, status, code))
         }
         assertTrue(Rules.maybeRegistered(true, "recovery_not_available"))
         assertTrue(Rules.maybeRegistered(true, "used"))

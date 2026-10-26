@@ -3401,19 +3401,33 @@ class VaultManager(
         // N may have registered once this is posted, whatever comes back: kept as unknown, never registered again, tried
         // by the lost-ok unlock. A definite refusal below takes it back.
         val before = local.reuse ?: r
-        val repeat = before.registerTried == code.recoveryId
+        // Decided per POST (in [build]): a first POST for this code is not a repeat; one after an earlier `202` (an expired
+        // slot posts again) or after an earlier open flow's POST for this code is. [accepted]: this POST got its `202`.
+        var repeat = before.registerTried == code.recoveryId
+        var accepted = false
+        var acceptedBefore = false
         markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, registerTried = code.recoveryId) }
         val since = record.recordGeneration
         val res = try {
             s.alt.recoveryRegister(
                 code.vaultId,
-                build = { e -> buildReuseRegister(s, code, e, since) },
+                build = { e ->
+                    repeat = Rules.isRepeatPost(repeat, acceptedBefore)
+                    accepted = false
+                    buildReuseRegister(s, code, e, since)
+                },
                 open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+                onPosted = {
+                    accepted = true
+                    acceptedBefore = true
+                },
             )
         } catch (e: VaultFailure) {
             if (e.code != CODE_NOT_OFFERED) throw e
             return RegisterAnswer.Refused(CODE_NOT_OFFERED)
         } catch (e: MemberApiException) {
+            // After the `202` any failure (the slot poll too) is "maybe registered": N's state stays, status signed with K decides.
+            if (accepted) return maybeRegistered(s, code)
             when (e.code) {
                 // K became a key in use between the claim and the register: no claim key; nothing was recorded.
                 MemberApiException.UNAUTHORIZED -> {
@@ -3432,7 +3446,7 @@ class VaultManager(
                     if (Rules.maybeRegistered(repeat, e.code)) return maybeRegistered(s, code) else null
                 else -> {
                     // A first attempt that did not reach the vault leaves N unregistered: the same N, K and code may try again.
-                    if (Rules.registerFailedBeforeVault(repeat, e.status, e.code)) {
+                    if (Rules.registerFailedBeforeVault(repeat, accepted, e.status, e.code)) {
                         s.device.dropRecoveryRegistration()
                         backToEarlier(before)
                     }
@@ -3440,7 +3454,9 @@ class VaultManager(
                 }
             }
         } catch (e: IOException) {
-            if (Rules.registerFailedBeforeVault(repeat, null, null)) {
+            // A failure after the `202` (the poll, a slot that never answered) is not "before the vault".
+            if (accepted) return maybeRegistered(s, code)
+            if (Rules.registerFailedBeforeVault(repeat, accepted, null, null)) {
                 s.device.dropRecoveryRegistration()
                 backToEarlier(before)
             }
