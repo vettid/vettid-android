@@ -315,6 +315,18 @@ class PairingManager(
             watchFrom = now()
             flow.value = PairingState(c, busy = true)
         }
+        // Once sent, everything up to the settled stage runs to its end: a screen that left (a cancelled caller) must not
+        // strand the pairing busy and watching.
+        withContext(NonCancellable) {
+            try {
+                settle(gen, p, sessionSeconds)
+            } finally {
+                synchronized(lock) { watching = false }
+            }
+        }
+    }
+
+    private suspend fun settle(gen: Int, p: PendingPairing, sessionSeconds: Int?) {
         try {
             sent { ops().approve(p.pairingId, sessionSeconds) }
         } catch (e: VaultFailure) {
@@ -330,7 +342,6 @@ class PairingManager(
         runCatching { onPaired() }
         val id = findAgent(p)
         synchronized(lock) {
-            watching = false
             if (gen == generation && flow.value.stage is PairingStage.Paired) flow.value = PairingState(PairingStage.Paired(p.name, id))
         }
     }
@@ -421,6 +432,8 @@ class PairingManager(
             id = when (val st = s.stage) {
                 is PairingStage.Code -> st.code.pairingId
                 is PairingStage.Compare -> if (s.busy) return else st.pending.pairingId
+                // A late handshake of the expired code may still be live: the vault is told this one is not wanted.
+                is PairingStage.CodeExpired -> st.pairingId
                 else -> {
                     if (!s.busy) flow.value = PairingState()
                     return

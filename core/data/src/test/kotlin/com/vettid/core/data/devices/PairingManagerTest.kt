@@ -305,6 +305,40 @@ class PairingManagerTest {
     }
 
     @Test
+    fun aScreenThatLeavesWhileTheApprovalIsInFlightDoesNotStrandThePairing() = runTest {
+        val ops = Ops().apply { onApprove = { throw java.io.IOException() } }
+        val m = manager(ops)
+        m.start()
+        m.onEvent(pending())
+        val screen = launch { m.approve(3600) }
+        while ("approve:p1:3600" !in ops.calls) {
+            delay(1)
+            Thread.sleep(1)
+        }
+        screen.cancel()
+        screen.join()
+        assertFalse(m.state.value.busy)
+        assertEquals(PairingStage.Ended, m.state.value.stage)
+        // Nothing is left watching or busy: a new code can be made.
+        ops.created = obj("""{"pairing_id":"p2","link":"${link()}"}""")
+        m.acknowledge()
+        m.start()
+        assertEquals("p2", (m.state.value.stage as PairingStage.Code).code.pairingId)
+    }
+
+    @Test
+    fun cancellingAnExpiredCodeStillTellsTheVault() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.start()
+        clock = clock.plusSeconds(601)
+        advanceTimeBy(601_000)
+        m.cancel()
+        assertEquals(PairingStage.Idle, m.state.value.stage)
+        assertEquals(listOf("create", "reject:p1"), ops.calls)
+    }
+
+    @Test
     fun anUnansweredApprovalThatTheFeedItemConfirmsIsPaired() = runTest {
         val ops = Ops().apply { onApprove = { throw java.io.IOException() } }
         val m = manager(ops)
