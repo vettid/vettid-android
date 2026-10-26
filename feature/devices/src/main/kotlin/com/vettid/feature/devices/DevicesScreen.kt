@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.navigationBarsPadding
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
@@ -66,7 +67,11 @@ fun DevicesScreen(
 ) {
     val snackbar = remember { SnackbarHostState() }
     val removed = state.removedName?.let { n ->
-        if (n.isEmpty()) stringResource(R.string.devices_removed_unnamed) else stringResource(R.string.devices_removed, n)
+        if (n.isEmpty()) {
+            stringResource(R.string.devices_removed_unnamed)
+        } else {
+            stringResource(R.string.devices_removed, AccountNames.isolate(n))
+        }
     }
     LaunchedEffect(removed) {
         val text = removed ?: return@LaunchedEffect

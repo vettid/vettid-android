@@ -67,6 +67,7 @@ data class DevicePageActions(
     val onDismissConfirm: () -> Unit = {},
     val onDismissFailure: () -> Unit = {},
     val onAccessEndedShown: () -> Unit = {},
+    val onRetry: () -> Unit = {},
 )
 
 /**
@@ -94,14 +95,16 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         overlay = {
             if (d != null) {
                 FloatingPillActionBar(
-                    listOf(
-                        PillAction(Icons.Outlined.History, stringResource(R.string.devices_history), { actions.onHistory(d.name) }),
+                    listOfNotNull(
+                        // An empty name would open the unfiltered log: no History for it.
+                        PillAction(Icons.Outlined.History, stringResource(R.string.devices_history), { actions.onHistory(d.name) })
+                            .takeIf { d.name.isNotEmpty() },
                         PillAction(
                             Icons.Outlined.DeleteOutline,
                             stringResource(R.string.devices_remove),
                             actions.onRemove,
                             destructive = true,
-                        ),
+                        ).takeIf { d.actionable },
                     ),
                 )
             }
@@ -109,8 +112,18 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         },
     ) {
         if (d == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (!state.loaded) CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            Box(Modifier.fillMaxSize().padding(Spacing.xl), contentAlignment = Alignment.Center) {
+                val e = state.loadError
+                when {
+                    e != null -> NoticeCard(
+                        kind = NoticeKind.WARNING,
+                        title = stringResource(R.string.devices_error_title),
+                        body = failureText(e.messageRes(), e.vaultCode(state.loadErrorCode)),
+                        modifier = Modifier.testTag("device_load_failed"),
+                        actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.devices_retry)) } },
+                    )
+                    !state.loaded -> CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
             }
         } else {
             PageContent(state, d, actions, now)
@@ -190,7 +203,9 @@ private fun FailureNotice(state: DeviceUiState, f: DeviceFailure, name: String, 
     }
     NoticeCard(
         kind = NoticeKind.WARNING,
-        title = stringResource(R.string.devices_error_title),
+        title = stringResource(
+            if (f == DeviceFailure.END_ACCESS) R.string.devices_end_failed_title else R.string.devices_remove_failed_title,
+        ),
         body = body,
         modifier = Modifier.padding(horizontal = Spacing.s).testTag("device_failure"),
         actions = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.devices_ok)) } },
@@ -203,7 +218,7 @@ private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: 
     DetailCard(Modifier.testTag("access_card")) {
         CardTitle(stringResource(R.string.devices_access))
         Text(DeviceText.access(d, now), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("access_status"))
-        if (d.hasAccess(now)) {
+        if (d.actionable && d.hasAccess(now)) {
             Spacer(Modifier.height(Spacing.m))
             SecondaryButton(
                 stringResource(R.string.devices_end_access),
@@ -211,7 +226,7 @@ private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: 
                 enabled = !busy,
                 modifier = Modifier.testTag("end_access"),
             )
-        } else {
+        } else if (d.actionable) {
             Spacer(Modifier.height(Spacing.xs))
             Text(
                 stringResource(if (d.isAgent) R.string.devices_no_access_agent else R.string.devices_no_access_desktop),

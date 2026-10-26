@@ -54,6 +54,12 @@ data class DeviceInfo(
     /** The key's fingerprint (8 groups of 4 hex digits, as on a connection's page); null when `ik` does not read. */
     val fingerprint: String? get() = ik?.let { IkFingerprint.formatB64(it) }
 
+    /**
+     * Whether End access and Remove are offered: never for this phone, nor for any other `app` entry (the vault refuses
+     * `device.unlink` of the app with `forbidden`, §10.3).
+     */
+    val actionable: Boolean get() = !thisPhone && kind != KIND_APP
+
     /** Whether [sessionExpiresAt] is still ahead at [now]. */
     fun hasAccess(now: Instant): Boolean = sessionExpiresAt?.isAfter(now) == true
 
@@ -72,15 +78,23 @@ object DeviceWire {
     /** The longest name shown (code points); longer ones are cut. A self-asserted name is data, not text to trust. */
     const val MAX_NAME = 64
 
-    /** [name] as shown: control and format characters dropped, white space collapsed, trimmed, cut at [MAX_NAME]. */
+    /**
+     * [name] as shown, by code point (as `RecoveryRefs` does): control, format (bidi marks, tag characters), line and
+     * paragraph separators and unassigned code points dropped, white space collapsed, trimmed, cut at [MAX_NAME].
+     */
     fun cleanName(name: String?): String {
-        val s = name.orEmpty().filter { c -> !c.isISOControl() && Character.getType(c) != Character.FORMAT.toInt() }
-        val collapsed = s.trim().replace(Regex("\\s+"), " ")
-        return if (collapsed.codePointCount(0, collapsed.length) <= MAX_NAME) {
-            collapsed
-        } else {
-            collapsed.substring(0, collapsed.offsetByCodePoints(0, MAX_NAME)).trim()
-        }
+        val kept = name.orEmpty().codePoints().filter { !hidden(it) }.toArray()
+        val collapsed = String(kept, 0, kept.size).replace(WHITE_SPACE, " ").trim()
+        val capped = collapsed.codePoints().limit(MAX_NAME.toLong()).toArray()
+        return String(capped, 0, capped.size).trim()
+    }
+
+    private val WHITE_SPACE = Regex("[\\s\\p{Z}]+")
+
+    private fun hidden(cp: Int): Boolean {
+        val type = Character.getType(cp)
+        return Character.isISOControl(cp) || type == Character.FORMAT.toInt() || type == Character.LINE_SEPARATOR.toInt() ||
+            type == Character.PARAGRAPH_SEPARATOR.toInt() || type == Character.UNASSIGNED.toInt()
     }
 
     private fun JsonObject.s(k: String) = VaultJson.str(this, k)
@@ -130,7 +144,7 @@ object DeviceWire {
      * The `status_ttl` of each grant in a `leash.grant.list{agent_id}` answer, in seconds (§10.11: 60-3,600, default
      * 900 when absent). A grant that does not read counts as the longest.
      */
-    fun statusTtls(body: JsonObject): List<Long> = (body["grants"] as? JsonArray).orEmpty().map { g ->
+    fun statusTtls(body: JsonObject): List<Long> = (body["grants"] as? JsonArray)?.map { g ->
         val ttl = ((g as? JsonObject)?.get("status_ttl") as? JsonPrimitive)
         when {
             g !is JsonObject -> MAX_STATUS_TTL
@@ -138,7 +152,8 @@ object DeviceWire {
             ttl.isString -> MAX_STATUS_TTL
             else -> ttl.longOrNull?.coerceIn(MIN_STATUS_TTL, MAX_STATUS_TTL) ?: MAX_STATUS_TTL
         }
-    }
+        // A body that does not read as a list of grants is the worst case, never "no permission".
+    } ?: listOf(MAX_STATUS_TTL)
 
     const val MIN_STATUS_TTL = 60L
     const val DEFAULT_STATUS_TTL = 900L
@@ -291,20 +306,29 @@ class DevicesManager(
     }
 
     override suspend fun endAccess(deviceId: String) {
-        guardNotThisPhone(deviceId)
+        guardActionable(deviceId)
+        val gen = synchronized(lock) { generation }
         vaultGuard { ops().endAccess(deviceId) }
-        patch(deviceId) { it.copy(sessionExpiresAt = null) }
+        // A lock came meanwhile: the list is not this vault-open's any more; Approvals are still cleaned.
+        synchronized(lock) {
+            if (gen == generation) {
+                list.value = list.value.map { if (it.id == deviceId) it.copy(sessionExpiresAt = null) else it }
+            }
+        }
         deviceGone(deviceId)
         refreshQuietly()
     }
 
     override suspend fun remove(deviceId: String) {
-        guardNotThisPhone(deviceId)
+        guardActionable(deviceId)
         val name = list.value.firstOrNull { it.id == deviceId }?.name.orEmpty()
+        val gen = synchronized(lock) { generation }
         vaultGuard { ops().unlink(deviceId) }
         synchronized(lock) {
-            list.value = list.value.filterNot { it.id == deviceId }
-            removedFlow.value = name
+            if (gen == generation) {
+                list.value = list.value.filterNot { it.id == deviceId }
+                removedFlow.value = name
+            }
         }
         deviceGone(deviceId)
         refreshQuietly()
@@ -323,15 +347,11 @@ class DevicesManager(
         removedFlow.value = null
     }
 
-    /** The app's own entry has no actions (`forbidden` from the vault): nothing is sent for it. */
-    private fun guardNotThisPhone(deviceId: String) {
+    /** The app's own entry, and any other `app`, has no actions (`forbidden` from the vault): nothing is sent for it. */
+    private fun guardActionable(deviceId: String) {
         val own = self()
         if (own != null && deviceId == own) throw VaultFailure(FailureKind.OTHER, "forbidden")
-        if (list.value.firstOrNull { it.id == deviceId }?.thisPhone == true) throw VaultFailure(FailureKind.OTHER, "forbidden")
-    }
-
-    private fun patch(id: String, f: (DeviceInfo) -> DeviceInfo) {
-        synchronized(lock) { list.value = list.value.map { if (it.id == id) f(it) else it } }
+        if (list.value.firstOrNull { it.id == deviceId }?.actionable == false) throw VaultFailure(FailureKind.OTHER, "forbidden")
     }
 
     /** The vault has done it: a failure of the Approvals clean-up must not turn it into a failed request. */

@@ -54,7 +54,7 @@ class DevicesViewModel @Inject constructor(
         }.stateIn(viewModelScope, SharingStarted.Eagerly, DevicesUiState())
 
     init {
-        refresh()
+        // The screen reads the list when it shows (`refresh`): once on opening, once on every return.
         // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
         viewModelScope.launch {
             ownerCheck.checkCleared().collect {
@@ -100,6 +100,9 @@ data class DeviceUiState(
     val accessEnded: Boolean = false,
     /** The device was removed here: the screen leaves. */
     val removed: Boolean = false,
+    /** The list could not be read and no device is known: the page says so and offers Retry. */
+    val loadError: FailureKind? = null,
+    val loadErrorCode: String? = null,
 ) {
     /** This phone's own entry has no page (it has no actions). */
     val gone: Boolean get() = loaded && (device == null || device.thisPhone)
@@ -123,12 +126,19 @@ class DeviceViewModel @Inject constructor(
 
     init {
         // A page opened from a feed item (or after a process start) may be the first reader of the list.
-        viewModelScope.launch { runCatching { repo.refresh() } }
+        refresh()
     }
 
-    /** On return to the page. */
+    /** On opening, on Retry. */
     fun refresh() {
-        viewModelScope.launch { runCatching { repo.refresh() } }
+        viewModelScope.launch {
+            try {
+                repo.refresh()
+                local.update { it.copy(loadError = null, loadErrorCode = null) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(loadError = e.kind, loadErrorCode = e.shownCode) }
+            }
+        }
     }
 
     fun askEndAccess() {
@@ -142,7 +152,7 @@ class DeviceViewModel @Inject constructor(
      */
     fun askRemove() {
         val d = uiState.value.device ?: return
-        if (local.value.busy || d.thisPhone) return
+        if (local.value.busy || !d.actionable) return
         local.update { it.copy(busy = true, failure = null, error = null, errorCode = null) }
         viewModelScope.launch {
             val bound = if (d.isAgent) repo.removalBoundSeconds(d.id) else 0L
@@ -154,7 +164,7 @@ class DeviceViewModel @Inject constructor(
 
     fun confirm() {
         val s = local.value
-        val d = uiState.value.device?.takeIf { !it.thisPhone && !s.busy }
+        val d = uiState.value.device?.takeIf { it.actionable && !s.busy }
         val what = s.confirm
         if (d == null || what == null) return
         local.update { it.copy(confirm = null, busy = true) }

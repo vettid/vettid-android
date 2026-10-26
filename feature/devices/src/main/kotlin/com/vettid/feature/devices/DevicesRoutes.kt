@@ -49,7 +49,6 @@ fun NavGraphBuilder.devicesDestination(chrome: ShellChrome, host: DevicesHost) {
     composable<DeviceRoute> {
         val vm: DeviceViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        LaunchedEffect(Unit) { vm.refresh() }
         DevicePageContent(vm, state, host)
     }
 }
@@ -67,6 +66,7 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
             onDismissConfirm = vm::dismissConfirm,
             onDismissFailure = vm::dismissFailure,
             onAccessEndedShown = vm::accessEndedShown,
+            onRetry = vm::refresh,
         ),
         now = rememberNow(),
     )

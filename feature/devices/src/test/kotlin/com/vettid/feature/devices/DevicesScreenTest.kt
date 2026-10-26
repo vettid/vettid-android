@@ -3,6 +3,7 @@ package com.vettid.feature.devices
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -76,9 +77,56 @@ class DevicesScreenTest {
     }
 
     @Test
+    fun aNameThatCouldPassForThePhoneOrVettIdIsShownWithItsRole() {
+        list(state(phone, agent.copy(id = "a8", name = "this PHONE", paused = false), desktop.copy(id = "d8", name = "VettID")))
+        rule.onNodeWithText("this PHONE (Agent)").assertIsDisplayed()
+        rule.onNodeWithText("VettID (Desktop)").assertIsDisplayed()
+    }
+
+    @Test
+    fun aFailedActionHasItsOwnTitle() {
+        page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.END_ACCESS))
+        rule.onNodeWithText("Access not ended").assertIsDisplayed()
+    }
+
+    @Test
+    fun aFailedRemovalTitleIsNotLoadingYourDevices() {
+        page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.REMOVE))
+        rule.onNodeWithText("Not removed").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Could not load", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aPageThatCannotReadTheListOffersRetry() {
+        var retried = 0
+        page(
+            DeviceUiState(loadError = com.vettid.core.data.vault.FailureKind.NETWORK),
+            DevicePageActions(onRetry = { retried++ }),
+        )
+        rule.onNodeWithText("Try again").performClick()
+        assertEquals(1, retried)
+    }
+
+    @Test
+    fun anotherAppEntryOffersNeitherEndAccessNorRemove() {
+        val old = DeviceInfo("app2", "app", "Old phone", ik, null, null, now.plusSeconds(600))
+        page(DeviceUiState(device = old, loaded = true))
+        rule.onNodeWithText("Phone").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("End access").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithContentDescription("Remove").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aDeviceWithoutANameHasNoHistoryButton() {
+        page(DeviceUiState(device = agent.copy(name = ""), loaded = true))
+        assertEquals(0, rule.onAllNodesWithContentDescription("History").fetchSemanticsNodes().size)
+    }
+
+    @Test
     fun theRemovedNameIsToldInASnackbar() {
         list(state(phone, agent).copy(removedName = "Old agent"))
-        rule.onNodeWithText("Old agent was removed").assertIsDisplayed()
+        // The name sits in bidirectional isolation marks.
+        rule.onNodeWithText("was removed", substring = true).assertIsDisplayed()
     }
 
     private fun page(state: DeviceUiState, actions: DevicePageActions = DevicePageActions()) =

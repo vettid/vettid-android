@@ -21,12 +21,22 @@ internal object DeviceText {
         d.isAgent -> stringResource(R.string.devices_role_agent)
         d.kind == DeviceInfo.KIND_DESKTOP -> stringResource(R.string.devices_role_desktop)
         d.thisPhone -> stringResource(R.string.devices_this_phone)
+        d.kind == DeviceInfo.KIND_APP -> stringResource(R.string.devices_role_phone)
         else -> DeviceWire.cleanName(d.kind).ifEmpty { stringResource(R.string.devices_role_unknown) }
     }
 
     /** The name as shown in a heading or a row: a device with no name is named by its role. */
     @Composable
-    fun name(d: DeviceInfo): String = d.name.ifEmpty { stringResource(R.string.devices_unnamed, role(d)) }
+    fun name(d: DeviceInfo): String {
+        val shown = d.name.ifEmpty { return stringResource(R.string.devices_unnamed, role(d)) }
+        // A self-asserted name that could pass for the phone itself or for VettID is shown with its role.
+        val phone = stringResource(R.string.devices_this_phone)
+        return if (shown.equals(phone, ignoreCase = true) || shown.equals("VettID", ignoreCase = true)) {
+            stringResource(R.string.devices_name_with_role, shown, role(d))
+        } else {
+            shown
+        }
+    }
 
     /** The name inside a sentence: bidirectionally isolated (a self-asserted name may run either way, §10.8). */
     @Composable

@@ -122,6 +122,9 @@ class DevicesManagerTest {
         assertEquals(listOf("a1"), d.map { it.id })
         // Control and format characters dropped, white space collapsed.
         assertEquals("Red Team", d[0].name)
+        // A tag character (U+E0041) is dropped whole, not by UTF-16 half.
+        assertEquals("ab", DeviceWire.cleanName("a\uDB40\uDC41b"))
+        assertEquals("a b", DeviceWire.cleanName("a\u2003\u00a0b"))
         assertEquals(DeviceWire.MAX_NAME, DeviceWire.cleanName("x".repeat(200)).length)
     }
 
@@ -219,9 +222,9 @@ class DevicesManagerTest {
         m.onEvent(sync("message.read"))
         ops.gate!!.complete(Unit)
         settle { ops.calls.count { it == "list" } >= 2 }
-        Thread.sleep(SLEEP_MS * 5)
-        advanceUntilIdle()
-        assertEquals(2, ops.calls.count { it == "list" })
+        // A deterministic end: a read through the same lock runs after every queued one, and counts as the third.
+        m.refresh()
+        assertEquals(3, ops.calls.count { it == "list" })
     }
 
     @Test
@@ -266,6 +269,40 @@ class DevicesManagerTest {
         assertEquals(listOf("a-old"), gone)
         m.dismissRemoved()
         assertNull(m.removed.value)
+    }
+
+    @Test
+    fun aLockDuringARemovalLeavesTheClearedListAloneButStillCleansApprovals() = runTest {
+        val ops = Ops().apply { devices = fleet }
+        val gone = mutableListOf<String>()
+        lateinit var m: DevicesManager
+        val locking = object : DevicesOps by ops {
+            override suspend fun unlink(deviceId: String) {
+                ops.unlink(deviceId)
+                m.clear() // the vault locks while the request is on its way
+            }
+        }
+        m = DevicesManager(this, ops = { locking }, self = { "me" }, onDeviceGone = { gone += it })
+        m.refresh()
+        m.remove("a-old")
+        assertTrue(m.devices.value.isEmpty())
+        assertNull(m.removed.value)
+        assertEquals(listOf("a-old"), gone)
+    }
+
+    @Test
+    fun anotherAppEntryIsNeverEndedOrRemoved() = runTest {
+        val ops = Ops().apply { devices = list(dev("me", "app", "Pixel"), dev("app2", "app", "Old phone")) }
+        val m = manager(ops)
+        m.refresh()
+        for (act in listOf<suspend () -> Unit>({ m.endAccess("app2") }, { m.remove("app2") })) {
+            try {
+                act()
+                fail("expected a failure")
+            } catch (_: VaultFailure) {
+            }
+        }
+        assertTrue(ops.calls.none { it.startsWith("end:") || it.startsWith("unlink:") })
     }
 
     @Test
@@ -333,6 +370,8 @@ class DevicesManagerTest {
 
     @Test
     fun aGrantThatDoesNotReadCountsAsTheLongest() {
+        assertEquals(listOf(3_600L), DeviceWire.statusTtls(obj("""{"grants":"nope"}""")))
+        assertEquals(listOf(3_600L), DeviceWire.statusTtls(obj("""{}""")))
         val ttls = DeviceWire.statusTtls(obj("""{"grants":[{"status_ttl":"x"},{"status_ttl":99999},"junk",{"status_ttl":10}]}"""))
         assertEquals(listOf(3_600L, 3_600L, 3_600L, 60L), ttls)
     }

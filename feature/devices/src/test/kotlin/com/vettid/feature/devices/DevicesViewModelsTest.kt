@@ -38,8 +38,9 @@ class DevicesViewModelsTest {
     @Test
     fun theListIsReadWhenItOpensAndShowsWhatTheRepositoryHolds() = runTest {
         val vm = DevicesViewModel(devices, FakeVault())
+        vm.refresh()
         advanceUntilIdle()
-        assertTrue("refresh" in devices.calls)
+        assertEquals(1, devices.calls.count { it == "refresh" })
         assertEquals(3, vm.uiState.value.devices.size)
         assertFalse(vm.uiState.value.onlyThisPhone)
     }
@@ -57,6 +58,7 @@ class DevicesViewModelsTest {
         val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
         devices.fail["refresh"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
         val vm = DevicesViewModel(devices, vault)
+        vm.refresh()
         advanceUntilIdle()
         assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
         vault.ownerCheck.value = check(OwnerCheckState.OK)
@@ -187,6 +189,32 @@ class DevicesViewModelsTest {
         devices.load.value = ListLoad.NOT_LOADED
         advanceUntilIdle()
         assertFalse("not before the list was read", vm.uiState.value.gone)
+    }
+
+    @Test
+    fun aListThatCannotBeReadIsShownOnThePageWithRetry() = runTest {
+        devices.devices.value = emptyList()
+        devices.fail["refresh"] = VaultFailure(FailureKind.NETWORK)
+        val vm = page("a1")
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.loadError)
+        vm.refresh()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.loadError)
+        assertEquals(2, devices.calls.count { it == "refresh" })
+    }
+
+    @Test
+    fun anotherAppEntryHasNoActions() = runTest {
+        devices.devices.value = devices.devices.value + DeviceInfo("app2", "app", "Old phone", null, null, null, null)
+        val vm = page("app2")
+        advanceUntilIdle()
+        vm.askEndAccess()
+        vm.askRemove()
+        advanceUntilIdle()
+        vm.confirm()
+        advanceUntilIdle()
+        assertTrue(devices.calls.none { it.startsWith("endAccess") || it.startsWith("remove") })
     }
 
     @Test
