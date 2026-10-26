@@ -515,13 +515,16 @@ class VaultManager(
                         onPosted = { posts.accepted() },
                     )
                 } catch (e: VaultFailure) {
+                    // Every attestation key of this identity is listed: nothing was made or sent (fail secure).
+                    if (e.code == AttestationKeys.CODE_KEYS_FULL) return RecoveryRegistration.Refused(AttestationKeys.CODE_KEYS_FULL)
                     if (e.code != CODE_NOT_OFFERED) throw e
                     return RecoveryRegistration.Refused(CODE_NOT_OFFERED)
                 } catch (e: MemberApiException) {
+                    posts.answered(e.status, e.code)
                     // 2.1.0: a recovery the enclave refused (no backup copy) is `unavailable`: the register is refused too.
                     if (e.code == MemberApiException.RECOVERY_UNAVAILABLE) {
                         s.device.dropRecoveryRegistration()
-                        forgetUnregistered(slot, posts, RegisterKeys.End.KEEP)
+                        forgetUnregistered(slot, posts, lastRefused = false)
                         return RecoveryRegistration.Refused(CODE_NO_BACKUP)
                     }
                     if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
@@ -530,7 +533,7 @@ class VaultManager(
                 return when {
                     r == null -> {
                         s.device.dropRecoveryRegistration()
-                        forgetUnregistered(slot, posts, RegisterKeys.End.NOT_FORWARDED)
+                        forgetUnregistered(slot, posts, lastRefused = false)
                         RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
                     }
                     r.ok -> {
@@ -539,7 +542,7 @@ class VaultManager(
                     }
                     else -> {
                         s.device.dropRecoveryRegistration()
-                        forgetUnregistered(slot, posts, RegisterKeys.End.REFUSED)
+                        forgetUnregistered(slot, posts, lastRefused = true)
                         RecoveryRegistration.Refused(r.code ?: "retry")
                     }
                 }
@@ -1303,7 +1306,20 @@ class VaultManager(
     }
 
     /** (0.1.78) The phone's device identities: slot 0 normally, a second only while a reused-key recovery is undecided. */
-    private val slots = IdentitySlots(app, app.noBackupFilesDir)
+    private val slots = IdentitySlots(app, app.noBackupFilesDir, recoveryIdOf = { migrationRecoveryId(it) })
+
+    /**
+     * The `recovery_id` the identity in [slot] is recovering for, as far as this process knows it (the migration's tag of the
+     * key of the builds before slots): the reuse record's, or the device in use's while it is recovering; else null.
+     */
+    private fun migrationRecoveryId(slot: Int): String? {
+        val r = local.reuse
+        return when {
+            r != null && slot == r.earlierSlot -> r.earlierRecoveryId
+            r != null && slot == r.newSlot -> r.newRecoveryId
+            else -> session?.device?.takeIf { slot == slots.active && it.recovering }?.recoveryId
+        }
+    }
 
     /**
      * The attester of identity [slot] (the one in use by default, [AttestationKeys]): an attestation is a new key of the
@@ -1313,8 +1329,8 @@ class VaultManager(
         SlotAttester(slots.attestation, slot, recoveryId, signWith) { env.attester(it) }
 
     /** The keys of [posts] that are settled not registered ([RegisterKeys]) are deleted from [slot]. */
-    private suspend fun forgetUnregistered(slot: Int, posts: RegisterKeys, end: RegisterKeys.End) {
-        io { slots.attestation.remove(slot, posts.notRegistered(end)) }
+    private suspend fun forgetUnregistered(slot: Int, posts: RegisterKeys, lastRefused: Boolean) {
+        io { slots.attestation.remove(slot, posts.notRegistered(lastRefused)) }
     }
 
     /**
@@ -3139,6 +3155,8 @@ class VaultManager(
                 attempt = { alias -> openOnce(s, rec, pin, password, secret, alias) },
                 code = { it.code },
                 ok = { it.ok },
+                // The key the `ok` open was signed with is never deleted at the handshake.
+                onOk = { alias -> io { slots.attestation.markOpened(slots.active, alias) } },
             )
         } finally {
             secret.fill(0)
@@ -3345,7 +3363,10 @@ class VaultManager(
         }
         val v = a.vault
         if (v == null || a.servicePaused) return Rules.Read.Unknown
-        return Rules.Read.Listed(registered = v.recoveryState == RECOVERY_REGISTERED)
+        return Rules.Read.Listed(
+            registered = v.recoveryState == RECOVERY_REGISTERED,
+            unregistered = v.recoveryState == RECOVERY_PENDING || v.recoveryState == RECOVERY_AVAILABLE,
+        )
     }
 
     @Suppress("CyclomaticComplexMethod", "ComplexCondition") // the two reads, the clock, and one answer per decision
@@ -3590,11 +3611,14 @@ class VaultManager(
                 },
             )
         } catch (e: VaultFailure) {
+            // Every attestation key of N is listed: nothing was made or sent (fail secure).
+            if (e.code == AttestationKeys.CODE_KEYS_FULL) return RegisterAnswer.Refused(AttestationKeys.CODE_KEYS_FULL)
             if (e.code != CODE_NOT_OFFERED) throw e
             return RegisterAnswer.Refused(CODE_NOT_OFFERED)
         } catch (e: MemberApiException) {
             val o = fail(e.status, e.code)
-            forgetUnregistered(slot, posts, RegisterKeys.endOf(e.status, e.code))
+            posts.answered(e.status, e.code)
+            forgetUnregistered(slot, posts, lastRefused = false)
             return when {
                 o == Rules.RegisterOutcome.MAYBE_REGISTERED -> maybeRegistered(s, code)
                 o == Rules.RegisterOutcome.DROP_UNAUTHORIZED -> RegisterAnswer.Unauthorized
@@ -3606,12 +3630,12 @@ class VaultManager(
             // A failure after the `202` (the poll, a slot that never answered) is not "before the vault".
             val o = fail(null, null)
             // No answer: this POST may have been queued, so its key stays.
-            forgetUnregistered(slot, posts, RegisterKeys.End.KEEP)
+            forgetUnregistered(slot, posts, lastRefused = false)
             if (o == Rules.RegisterOutcome.MAYBE_REGISTERED) return maybeRegistered(s, code)
             throw e
         }
         // A readable refusal settles its own POST: that POST's key was not recorded (the vault keeps an earlier one).
-        if (res?.ok == false) forgetUnregistered(slot, posts, RegisterKeys.End.REFUSED)
+        if (res?.ok == false) forgetUnregistered(slot, posts, lastRefused = true)
         if (res?.ok == true) {
             s.device.confirmRecoveryRegistration()
             markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
@@ -3635,7 +3659,16 @@ class VaultManager(
      * (the prior one is not restored) and status signed with K decides, `registered` there meaning registered for this recovery.
      */
     private suspend fun maybeRegistered(s: Session, code: RecoveryCode): RegisterAnswer {
-        if ((readStatusWithK(s) as? Rules.Read.Listed)?.registered != true) return RegisterAnswer.Refused(CODE_RETRY)
+        val read = readStatusWithK(s) as? Rules.Read.Listed
+        if (read?.registered != true) {
+            // The recovery is active and not registered, and no open was ever sent for it: this identity's keys made for it
+            // past any queue were not recorded (a later POST for it is a new key), so they no longer fill its list.
+            if (read?.unregistered == true && local.sentOpens.none { it.recoveryId == code.recoveryId }) {
+                val slot = slots.active
+                io { slots.attestation.settleNotRegistered(slot, code.recoveryId, SETTLE_AFTER_MS) }
+            }
+            return RegisterAnswer.Refused(CODE_RETRY)
+        }
         s.device.confirmRecoveryRegistration()
         markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
         phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
@@ -4541,6 +4574,11 @@ class VaultManager(
         const val CODE_OTHER_VAULT = "other_vault"
         private const val CODE_TRANSFER_INCOMPLETE = "transfer_incomplete"
         private const val RECOVERY_REGISTERED = "registered"
+        private const val RECOVERY_PENDING = "pending"
+        private const val RECOVERY_AVAILABLE = "available"
+
+        /** A register POST queued this long ago is past the member API's queue (5.5 minutes) with a wide margin. */
+        private const val SETTLE_AFTER_MS = 30L * 60 * 1000
 
         /** (0.1.78) The lost-ok unlock's outcomes for [RecoveryOpenOutcome.code]: open again, or a new recovery with K. */
         const val CODE_OPEN_AGAIN = "open_again"

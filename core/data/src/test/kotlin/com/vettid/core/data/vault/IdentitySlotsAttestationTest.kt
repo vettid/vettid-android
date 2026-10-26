@@ -39,7 +39,7 @@ class IdentitySlotsAttestationTest {
     private fun slots(): IdentitySlots {
         val app = RuntimeEnvironment.getApplication()
         lateinit var s: IdentitySlots
-        s = IdentitySlots(app, File(app.noBackupFilesDir, "t").apply { mkdirs() }, AttestationKeys(store, keys) { s.active })
+        s = IdentitySlots(app, File(app.noBackupFilesDir, "t").apply { mkdirs() }, AttestationKeys(store, keys, { s.active }))
         return s
     }
 
@@ -77,6 +77,6 @@ class IdentitySlotsAttestationTest {
         s.resetToSingle()
         assertEquals(0, s.active)
         assertTrue(ks.isEmpty())
-        assertTrue(store.m.isEmpty())
+        assertTrue(store.m.keys.all { it < 0 })
     }
 }

@@ -1010,8 +1010,11 @@ class VaultDevice private constructor(
 
     /**
      * After an `ok` open: `hs.init` with purpose `app` and `ctx` = `recovery_id` (accepted without approval, as the
-     * first app's), deposited with the token from the result. [ctx]: the `recovery_id` of the registration whose attested
-     * key answered the `ok` (VAULT-MESSAGING §11.14.6 "Pairing"), when the app knows it; else the one registered last.
+     * first app's), deposited with the token from the result. [ctx]: the `recovery_id` to pair with (VAULT-MESSAGING
+     * §11.14.6 "Pairing": the app tries each one the identity registered for, newest first); null: the one registered last.
+     * Each call starts a new initiator and aborts the one before: an `hs.resp` is taken only when it is sealed to the current
+     * initiator's ephemeral key ([process]), so a late `hs.resp` to an earlier `ctx` is dropped, and the `ctx` that
+     * completed is always the one of the last call that returned.
      */
     suspend fun completeRecoveryOpen(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S), ctx: String? = null) {
         lock.withLock {

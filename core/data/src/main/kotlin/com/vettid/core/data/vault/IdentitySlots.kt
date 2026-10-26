@@ -18,13 +18,20 @@ import java.io.File
  * half-finished swap. [clear] removes a slot only when the caller says the vault answered `ok` and the pairing completed.
  *
  * Each slot also has its own device attestation keys ([attestation]); they go with the slot. The single key of the builds
- * before slots is taken over by the slot in use before the slot in use first changes ([AttestationKeys.migrate]).
+ * before slots is listed by every slot that holds an identity before the slot in use first changes ([AttestationKeys.migrate]).
  */
-internal class IdentitySlots(private val app: Context, private val dir: File, attestationKeys: AttestationKeys? = null) {
+internal class IdentitySlots(
+    private val app: Context,
+    private val dir: File,
+    attestationKeys: AttestationKeys? = null,
+    /** The `recovery_id` a slot's device state names while it is recovering (the migration's tag), else null. */
+    recoveryIdOf: (Int) -> String? = { null },
+) {
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** The device attestation keys of every slot. */
-    val attestation: AttestationKeys = attestationKeys ?: AttestationKeys(PrefsAttestationStore(app), KeystoreAliases) { active }
+    val attestation: AttestationKeys = attestationKeys
+        ?: AttestationKeys(PrefsAttestationStore(app), KeystoreAliases, { active }, { exists(it) }, recoveryIdOf)
 
     /** The slot in use. A value that is not a slot reads as 0. */
     var active: Int

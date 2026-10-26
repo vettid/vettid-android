@@ -595,6 +595,7 @@ object ScreenCatalog {
             Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.OTHER_ENVIRONMENT, otherApi = "https://account.staging.vettid.org"))
         },
         "recover.not_available" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.NOT_AVAILABLE)) },
+        "recover.too_many_attempts" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.TOO_MANY_ATTEMPTS)) },
         "recover.bad_code" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.BAD_CODE, wrongCodes = 2)) },
         "recover.voided" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.VOIDED, wrongCodes = 5)) },
         "recover.too_early" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.TOO_EARLY)) },

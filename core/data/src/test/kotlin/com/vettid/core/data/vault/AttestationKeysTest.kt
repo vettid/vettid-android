@@ -24,6 +24,9 @@ class AttestationKeysTest {
         val keys = linkedSetOf<String>()
         val failing = mutableSetOf<String>()
 
+        /** Keys that are listed and present but cannot sign (a Keystore fault). */
+        val broken = mutableSetOf<String>()
+
         override fun exists(alias: String) = alias in keys
 
         override fun delete(alias: String) {
@@ -51,6 +54,7 @@ class AttestationKeysTest {
 
         override fun assert(message: ByteArray): DeviceAssertion {
             check(alias in ks.keys) { "no attestation key" }
+            check(alias !in ks.broken) { "keystore fault" }
             signed += alias
             return DeviceAssertion.android(alias.toByteArray())
         }
@@ -81,7 +85,12 @@ class AttestationKeysTest {
                 slotInUse = v
             }
 
-        fun newRing() = AttestationKeys(store, ks) { slotInUse }
+        /** The slots that hold an identity, and the recovery_id each device state names while recovering. */
+        val existing = mutableSetOf<Int>()
+        val recovering = mutableMapOf<Int, String>()
+        var now = 1_000_000L
+
+        fun newRing() = AttestationKeys(store, ks, { slotInUse }, { it in existing }, { recovering[it] }, { now })
 
         /** A process restart: the lists and keys stay, the ring is made anew. */
         fun restart() {
@@ -157,7 +166,7 @@ class AttestationKeysTest {
         posts.accepted()
         assertTrue("the first key is never replaced", a1 in p.ks.keys)
         // `used` settles the re-post only: its key goes, the first stays (maybe registered, confirmed by status with K).
-        p.ring.remove(1, posts.notRegistered(RegisterKeys.End.REFUSED))
+        p.ring.remove(1, posts.notRegistered(lastRefused = true))
         assertEquals(listOf(a1), p.ring.candidates(1).map { it.alias })
         assertFalse(a2 in p.ks.keys)
         // The open signs with A1 and is not refused.
@@ -176,7 +185,7 @@ class AttestationKeysTest {
         val a2 = p.buildRegister(1, "R1", posts)
         posts.accepted()
         // No answer to the re-post: both may be held, both stay.
-        p.ring.remove(1, posts.notRegistered(RegisterKeys.End.KEEP))
+        p.ring.remove(1, posts.notRegistered(lastRefused = false))
         assertEquals(listOf(a2, a1), p.ring.candidates(1).map { it.alias })
         // Newest first: `attestation`, then the first key's `ok`. Both stay until the handshake (a recovery).
         assertEquals("ok", p.open(1, vault))
@@ -198,7 +207,8 @@ class AttestationKeysTest {
         p.active = 1
         val posts = RegisterKeys()
         val n1 = p.buildRegister(1, "R2", posts)
-        p.ring.remove(1, posts.notRegistered(RegisterKeys.endOf(503, "release_starting")))
+        posts.answered(503, "release_starting")
+        p.ring.remove(1, posts.notRegistered(lastRefused = false))
         assertFalse(n1 in p.ks.keys)
         // Back to E: its open and its lost-ok unlock sign with E's key.
         p.active = 0
@@ -219,7 +229,7 @@ class AttestationKeysTest {
         val nPosts = RegisterKeys()
         val n1 = p.buildRegister(1, "R2", nPosts)
         // N's POST got no answer at all: its key stays (it may have been queued), in N's slot only.
-        p.ring.remove(1, nPosts.notRegistered(RegisterKeys.End.KEEP))
+        p.ring.remove(1, nPosts.notRegistered(lastRefused = false))
         assertTrue(n1 in p.ks.keys)
         assertEquals(listOf(e1), p.ring.candidates(0).map { it.alias })
         assertEquals("ok", p.open(0, e))
@@ -257,7 +267,8 @@ class AttestationKeysTest {
         // No key of a build before slots: nothing to take over.
         val fresh = Phone()
         assertNull(fresh.ring.current(0))
-        assertTrue(fresh.store.m.isEmpty())
+        assertNull(fresh.store.m[0])
+        assertNull(fresh.store.m[1])
     }
 
     @Test
@@ -288,27 +299,145 @@ class AttestationKeysTest {
     fun registerKeysGoOnlyWhenTheirPostIsSettledNotRegistered() {
         val p = Phone()
         val posts = RegisterKeys()
-        // POST 1 answered `409 instance_moved` (no 202: never forwarded), POST 2 `202` then `expired`, POST 3 the last.
+        // POST 1 posted again without its 202 (`instance_moved`, not known to be unforwarded), POST 2 `202` then `expired`,
+        // POST 3 the last.
         val k1 = p.buildRegister(0, "R", posts)
         val k2 = p.buildRegister(0, "R", posts)
         posts.accepted()
         val k3 = p.buildRegister(0, "R", posts)
-        assertEquals(listOf(k1), posts.notRegistered(RegisterKeys.End.KEEP))
-        assertEquals(listOf(k1, k3), posts.notRegistered(RegisterKeys.End.NOT_FORWARDED))
-        posts.accepted()
-        assertEquals(listOf(k1), posts.notRegistered(RegisterKeys.End.NOT_FORWARDED))
-        assertEquals(listOf(k1, k3), posts.notRegistered(RegisterKeys.End.REFUSED))
-        assertFalse(k2 in posts.notRegistered(RegisterKeys.End.REFUSED))
-        // Only the answers that never forward a POST settle it.
-        val notForwarded = listOf(429 to "rate_limited", 503 to "vault_unavailable", 401 to "unauthorized", 409 to "recovery_not_available")
-        for ((status, code) in notForwarded) {
-            assertEquals(code, RegisterKeys.End.NOT_FORWARDED, RegisterKeys.endOf(status, code))
-        }
-        assertEquals(RegisterKeys.End.NOT_FORWARDED, RegisterKeys.endOf(409, "instance_moved"))
-        for ((status, code) in listOf(502 to null, 500 to "internal", 409 to "recovery_unavailable", null to null)) {
-            assertEquals("$status $code", RegisterKeys.End.KEEP, RegisterKeys.endOf(status, code))
-        }
-        assertTrue(RegisterKeys().notRegistered(RegisterKeys.End.REFUSED).isEmpty())
+        assertTrue(posts.notRegistered(lastRefused = false).isEmpty())
+        // The last POST answered `429`: never forwarded, its key goes; the others stay.
+        posts.answered(429, "rate_limited")
+        assertEquals(listOf(k3), posts.notRegistered(lastRefused = false))
+        // After a 202 no answer settles a POST, but its own readable refusal does.
+        val q = RegisterKeys()
+        val j1 = p.buildRegister(0, "R", q)
+        q.accepted()
+        q.answered(503, "release_starting")
+        assertTrue(q.notRegistered(lastRefused = false).isEmpty())
+        assertEquals(listOf(j1), q.notRegistered(lastRefused = true))
+        assertFalse(k1 in posts.notRegistered(lastRefused = true) || k2 in posts.notRegistered(lastRefused = true))
+        assertTrue(RegisterKeys().notRegistered(lastRefused = true).isEmpty())
+    }
+
+    @Test
+    fun onlyTheAnswersThatNeverForwardAPostSettleIt() {
+        val notForwarded = listOf(
+            429 to "rate_limited", 429 to null, 503 to "release_starting", 503 to "vault_unavailable", 401 to "unauthorized",
+            409 to "recovery_not_available",
+        )
+        for ((status, code) in notForwarded) assertEquals("$status $code", RegisterKeys.End.NOT_FORWARDED, RegisterKeys.endOf(status, code))
+        val kept = listOf(
+            409 to "instance_moved", 401 to "clock_skew", 503 to "something_new", 503 to null, 502 to null, 500 to "internal",
+            409 to "recovery_unavailable", null to null,
+        )
+        for ((status, code) in kept) assertEquals("$status $code", RegisterKeys.End.KEEP, RegisterKeys.endOf(status, code))
+    }
+
+    @Test
+    fun upgradedMidRecoveryTheOldKeyIsTaggedAndSurvivesTheHandshake() = runTest {
+        // An install of a build before slots, recovering for R1 with its one key (the vault's binding).
+        val p = Phone(0)
+        p.ks.keys += AndroidKeys.ALIAS_DEVICE_ATTESTATION
+        p.existing += 0
+        p.recovering[0] = "R1"
+        assertEquals(listOf(AttestationKeys.Entry(AndroidKeys.ALIAS_DEVICE_ATTESTATION, "R1")), p.ring.candidates(0))
+        // After the upgrade it registers again (R2) with a new key the vault never recorded.
+        val k2 = p.attester(0, "R2").also { it.attest(ByteArray(32)) }.made!!
+        val vault = Vault().apply { held = AndroidKeys.ALIAS_DEVICE_ATTESTATION }
+        // The open falls back to the old key, answered ok, which marks it.
+        assertEquals("ok", p.ring.tryKeys(
+            0,
+            attempt = { alias -> p.attester(0, signWith = alias).assert(ByteArray(32)); vault.answer(p.signed.last()) },
+            code = { it },
+            ok = { it == "ok" },
+            onOk = { p.ring.markOpened(0, it) },
+        ))
+        // hs.init with R2 completes: R2's key stays, and the old key too (the ok open's).
+        p.ring.keepRegistration(0, "R2")
+        assertEquals(setOf(k2, AndroidKeys.ALIAS_DEVICE_ATTESTATION), p.ring.candidates(0).map { it.alias }.toSet())
+        // Untagged (its registration not known): it is not deleted at the handshake either.
+        val q = Phone(0)
+        q.ks.keys += AndroidKeys.ALIAS_DEVICE_ATTESTATION
+        q.existing += 0
+        val j2 = q.attester(0, "R2").also { it.attest(ByteArray(32)) }.made!!
+        q.ring.keepRegistration(0, "R2")
+        assertEquals(setOf(j2, AndroidKeys.ALIAS_DEVICE_ATTESTATION), q.ring.candidates(0).map { it.alias }.toSet())
+    }
+
+    @Test
+    fun upgradedDuringAReuseTheOldKeyIsListedByBothIdentities() {
+        // A reuse in progress: E in slot 0 (R1), N in slot 1 (R2); the one key may be either's.
+        val p = Phone(1)
+        p.ks.keys += AndroidKeys.ALIAS_DEVICE_ATTESTATION
+        p.existing += setOf(0, 1)
+        p.recovering[0] = "R1"
+        p.recovering[1] = "R2"
+        assertEquals(AttestationKeys.Entry(AndroidKeys.ALIAS_DEVICE_ATTESTATION, "R1"), p.ring.current(0))
+        assertEquals(AttestationKeys.Entry(AndroidKeys.ALIAS_DEVICE_ATTESTATION, "R2"), p.ring.current(1))
+        // Once only: a restart (the marker) lists nothing again, even after a slot dropped it.
+        p.ring.clear(0)
+        p.restart()
+        assertNull(p.ring.current(0))
+        // E's slot cleared after N paired: the key stays in the Keystore, N still signs with it.
+        assertTrue(AndroidKeys.ALIAS_DEVICE_ATTESTATION in p.ks.keys)
+        assertEquals(AndroidKeys.ALIAS_DEVICE_ATTESTATION, p.ring.current(1)?.alias)
+        // Removed from the last slot that lists it: deleted.
+        p.ring.remove(1, listOf(AndroidKeys.ALIAS_DEVICE_ATTESTATION))
+        assertFalse(AndroidKeys.ALIAS_DEVICE_ATTESTATION in p.ks.keys)
+    }
+
+    @Test
+    fun theKeyOfAnOkOpenSurvivesKeepRegistration() {
+        val p = Phone(1)
+        val a1 = p.attester(1, "R1").also { it.attest(ByteArray(32)) }.made!!
+        val a3 = p.attester(1, "R3").also { it.attest(ByteArray(32)) }.made!!
+        val a2 = p.attester(1, "R2").also { it.attest(ByteArray(32)) }.made!!
+        p.ring.markOpened(1, a1)
+        p.restart()
+        p.ring.keepRegistration(1, "R2")
+        assertEquals(listOf(a2, a1), p.ring.candidates(1).map { it.alias })
+        assertFalse(a3 in p.ks.keys)
+    }
+
+    @Test
+    fun statusWithKSettlesOnlyOldUnopenedKeysOfThatRecovery() {
+        val p = Phone(1)
+        val old = p.attester(1, "R").also { it.attest(ByteArray(32)) }.made!!
+        val opened = p.attester(1, "R").also { it.attest(ByteArray(32)) }.made!!
+        p.ring.markOpened(1, opened)
+        val other = p.attester(1, "Q").also { it.attest(ByteArray(32)) }.made!!
+        p.now += 31 * 60 * 1000L
+        val recent = p.attester(1, "R").also { it.attest(ByteArray(32)) }.made!!
+        p.ring.settleNotRegistered(1, "R", 30 * 60 * 1000L)
+        assertEquals(setOf(opened, other, recent), p.ring.candidates(1).map { it.alias }.toSet())
+        assertFalse(old in p.ks.keys)
+    }
+
+    @Test
+    fun anUnlockOkOutsideARecoveryDropsItsRegistrationsOtherKeys() = runTest {
+        val p = Phone(0)
+        val r1 = p.attester(0, "R1").also { it.attest(ByteArray(32)) }.made!!
+        val r1b = p.attester(0, "R1").also { it.attest(ByteArray(32)) }.made!!
+        val q = p.attester(0, "Q").also { it.attest(ByteArray(32)) }.made!!
+        val vault = Vault().apply { held = r1 }
+        assertEquals("ok", p.unlock(0, vault, recovering = false))
+        assertEquals(setOf(r1, q), p.ring.candidates(0).map { it.alias }.toSet())
+        assertFalse(r1b in p.ks.keys)
+    }
+
+    @Test
+    fun aKeyThatCannotSignIsSkipped() = runTest {
+        val p = Phone(0)
+        val good = p.attester(0, "R").also { it.attest(ByteArray(32)) }.made!!
+        val bad = p.attester(0, "R").also { it.attest(ByteArray(32)) }.made!!
+        p.ks.broken += bad
+        val vault = Vault().apply { held = good }
+        assertEquals("ok", p.open(0, vault))
+        assertEquals(listOf<String?>(good), vault.asked)
+        // Every key broken: the last failure is thrown, nothing answered.
+        p.ks.broken += good
+        assertThrows(IllegalStateException::class.java) { kotlinx.coroutines.runBlocking { p.open(0, Vault()) } }
     }
 
     @Test
@@ -332,7 +461,7 @@ class AttestationKeysTest {
         p.ks.failing.clear()
         p.ring.clear(0)
         assertTrue(p.ks.keys.isEmpty())
-        assertTrue(p.store.m.isEmpty())
+        assertNull(p.store.m[0])
     }
 
     @Test
@@ -436,6 +565,6 @@ class AttestationKeysTest {
             }
         }
         assertTrue(AndroidKeys.ALIAS_DEVICE_ATTESTATION in com.vettid.core.data.wipe.LocalWipe.KNOWN_ALIASES)
-        assertEquals("vettid.device_attestation.v1.slot1.15", slotAlias(1, 15))
+        assertEquals("vettid.device_attestation.v1.slot1.63", slotAlias(1, 63))
     }
 }

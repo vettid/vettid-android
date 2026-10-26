@@ -420,6 +420,7 @@ private fun CodeRefusalNotice(state: RecoverUiState) {
         CodeRefusal.NO_API -> stringResource(R.string.recover_scan_no_api)
         CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available, scaledDurationText(Durations.DAY))
         CodeRefusal.NOT_OFFERED -> stringResource(R.string.recover_not_offered)
+        CodeRefusal.TOO_MANY_ATTEMPTS -> stringResource(R.string.recover_too_many_attempts)
     }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(

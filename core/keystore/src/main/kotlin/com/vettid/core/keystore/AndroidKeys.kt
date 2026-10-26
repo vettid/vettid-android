@@ -44,7 +44,7 @@ object AndroidKeys {
         (0 until DEVICE_ATTESTATION_SLOTS).flatMap { s -> (0 until DEVICE_ATTESTATION_KEYS_PER_SLOT).map { deviceAttestationAlias(s, it) } }
 
     const val DEVICE_ATTESTATION_SLOTS = 2
-    const val DEVICE_ATTESTATION_KEYS_PER_SLOT = 16
+    const val DEVICE_ATTESTATION_KEYS_PER_SLOT = 64
 
     internal fun keyStore(): KeyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
 
