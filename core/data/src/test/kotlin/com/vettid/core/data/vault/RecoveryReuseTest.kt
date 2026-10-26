@@ -450,9 +450,11 @@ class RecoveryReuseTest {
         assertEquals(listOf("rid1", "rid2"), answer(l, "rid2", "wrong"))
         // A wait verdict for open 2 removes open 2 only; open 1 stays unanswered.
         assertEquals(listOf("rid1"), answer(l, "rid2", "wait"))
+        // `attestation` answers only its own open too (decided at step 1); the earlier one stays.
+        assertEquals(listOf("rid1"), answer(l, "rid2", "attestation"))
         assertTrue(Rules.undecided(true, null))
         // A lone open: `wrong` and `expired` leave it, a refusal before the spend too.
-        for (c in listOf("wrong", "expired", "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet")) {
+        for (c in listOf("wrong", "expired", "busy", "wrong_again", "attempt_lost", "closed", "counter_unavailable", "wait", "quiet", "attestation")) {
             assertEquals(c, emptyList<String>(), answer(sent("rid1"), "rid1", c))
         }
         // The same open is not listed twice.
