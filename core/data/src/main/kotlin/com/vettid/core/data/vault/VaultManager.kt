@@ -1317,27 +1317,27 @@ class VaultManager(
         io { slots.attestation.remove(slot, posts.notRegistered(end)) }
     }
 
-    /** The `recovery_id` of the registration whose key answered the `ok` the identity in use pairs after (null: its last). */
-    private suspend fun pairingCtx(): String? = io { slots.attestation.current(slots.active)?.recoveryId }
-
-    /** After the handshake: the identity in use keeps the key that answered its `ok` (its current one) and no other. */
-    private suspend fun keepPairedKey() {
-        io {
-            val slot = slots.active
-            slots.attestation.current(slot)?.let { slots.attestation.keepOnly(slot, it.alias) }
-        }
-    }
-
     /**
-     * The lost-ok unlock (§11.14.6 "A lost `ok`") with the identity's keys, newest first, each once, while it is answered
-     * `attestation`; the key answered `ok` is the identity's current one from then on.
+     * The recovered identity's handshake (VAULT-MESSAGING §11.14.6 "Pairing"): `hs.init` with each `recovery_id` the identity
+     * in use registered for, newest first, each waiting [wait] (null: the device's default), and the last one's timeout
+     * thrown. Once one completes, the vault's binding is the attested key of the registration it named: that registration's
+     * keys stay and the identity's other keys go ([AttestationKeys.keepRegistration]).
      */
-    private suspend fun unlockTryingKeys(s: Session, pin: String): UnlockOutcome = slots.attestation.tryKeys(
-        slots.active,
-        attempt = { alias -> unlockWithSecret(s, pin, UnlockOptions(), null, null, signer = attester(signWith = alias)) },
-        code = { it.result.code },
-        ok = { it.ok },
-    )
+    private suspend fun pairWithEach(d: com.vettid.core.vault.VaultDevice, wait: Duration?) {
+        val slot = slots.active
+        val contexts = io { slots.attestation.pairingContexts(slot, d.recoveryId) }
+        var i = 0
+        while (true) {
+            val ctx = contexts[i++]
+            try {
+                if (wait == null) d.completeRecoveryOpen(ctx = ctx) else d.completeRecoveryOpen(wait, ctx)
+                break
+            } catch (e: TimeoutCancellationException) {
+                if (i == contexts.size) throw e
+            }
+        }
+        io { slots.attestation.keepRegistration(slot, contexts[i - 1]) }
+    }
 
 
     /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
@@ -2201,7 +2201,6 @@ class VaultManager(
      * `device_secret` is tried once more with the next epoch (the answer to a change of secret may have been lost);
      * when that opens the vault, the phone moves to that epoch. A missing phone key is [FailureKind.DEVICE_SECRET].
      */
-    @Suppress("ReturnCount")
     private suspend fun unlockWithSecret(
         s: Session,
         pin: String,
@@ -2209,7 +2208,30 @@ class VaultManager(
         release: String?,
         onStarting: ((Long) -> Unit)?,
         pinTaken: Int? = null,
-        signer: com.vettid.core.altchan.Attester = attester(),
+    ): UnlockOutcome {
+        // (ANDROID-PLAN §4 step 5) Signed with the identity's newest key; on a readable `attestation` (decided before the PIN,
+        // not counted) with its other keys, newest first, each once. Outside a recovery the key answered `ok` is the vault's
+        // binding: the identity's other keys that served no registration go.
+        val slot = slots.active
+        return slots.attestation.tryKeys(
+            slot,
+            attempt = { alias -> unlockWithSecretOnce(s, pin, opts, release, onStarting, pinTaken, attester(slot, signWith = alias)) },
+            code = { it.result.code },
+            ok = { it.ok },
+            onOk = { alias -> if (!s.device.recovering) io { slots.attestation.keepAfterUnlock(slot, alias) } },
+        )
+    }
+
+    /** One [unlockWithSecret], signed by [signer]. */
+    @Suppress("ReturnCount", "LongParameterList")
+    private suspend fun unlockWithSecretOnce(
+        s: Session,
+        pin: String,
+        opts: UnlockOptions,
+        release: String?,
+        onStarting: ((Long) -> Unit)?,
+        pinTaken: Int?,
+        signer: com.vettid.core.altchan.Attester,
     ): UnlockOutcome {
         val phone = local.phone
         // Right before each request is posted: a held-back unlock would otherwise still go out (and may mint a token).
@@ -3210,7 +3232,7 @@ class VaultManager(
         if (d.recoveryOpenedNotFinished) {
             return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true).also { completeOpens(it) }
         }
-        val u = unlockTryingKeys(s, pin)
+        val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
         when {
             !u.ok -> RecoveryOpenOutcome(u.result.code ?: "retry", local.recoveryAttemptsUsed, opened = true, attemptUsed = false)
             // A result without `vault_bundle`: this phone is not the one a completed recovery made the app.
@@ -3234,19 +3256,17 @@ class VaultManager(
         if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
         // Only now, with the credential on this phone, is the recovery over (until then the phone resumes it).
         d.finishRecoveryOpen()
-        // The handshake completed: the key that answered the `ok` is the one the vault binds; the identity's others go.
-        keepPairedKey()
         return RecoveryOpenOutcome("ok", used)
     }
 
     /** The recovered phone's handshake; unanswered, an unlock with its own key and the handshake again. The unlock's refusal code. */
     private suspend fun pairRecovered(s: Session, pin: String, resuming: Boolean): String? = try {
-        s.device.completeRecoveryOpen(if (resuming) RESUME_HANDSHAKE_WAIT else Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S), pairingCtx())
+        pairWithEach(s.device, if (resuming) RESUME_HANDSHAKE_WAIT else Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
         null
     } catch (e: TimeoutCancellationException) {
         android.util.Log.i("VaultManager", "the recovered phone's handshake was not answered: unlocking with its own key")
         unlockOwn(s, pin, e) ?: run {
-            s.device.completeRecoveryOpen(ctx = pairingCtx())
+            pairWithEach(s.device, null)
             null
         }
     }
@@ -3664,7 +3684,7 @@ class VaultManager(
         val d = s.device
         if (!local.phone.inUse || !d.recovering) return LostOkAnswer.Refused(CODE_NO_RECOVERY)
         if (d.recoveryOpenedNotFinished) return LostOkAnswer.Ok
-        val u = unlockTryingKeys(s, pin)
+        val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
         return when {
             !u.ok -> if (u.result.code == CODE_TRANSFER_INCOMPLETE) {
                 LostOkAnswer.TransferIncomplete
@@ -3738,7 +3758,7 @@ class VaultManager(
                     val d = session().device
                     if (d.deviceId != null) return PairAnswer.PAIRED
                     return try {
-                        d.completeRecoveryOpen(Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S), pairingCtx())
+                        pairWithEach(d, Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
                         PairAnswer.PAIRED
                     } catch (e: TimeoutCancellationException) {
                         android.util.Log.i("VaultManager", "no hs.resp for the new identity: trying the earlier one")
@@ -3756,7 +3776,6 @@ class VaultManager(
                 if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
                 s.device.finishRecoveryOpen()
                 reuseCleanup(result.identity, openOk = true, pairingComplete = true)
-                keepPairedKey()
                 RecoveryOpenOutcome("ok", used)
             }
             is Pairing.Result.Failed -> {

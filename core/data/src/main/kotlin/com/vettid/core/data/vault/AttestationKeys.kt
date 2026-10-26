@@ -15,14 +15,15 @@ import com.vettid.core.keystore.KeystoreException
  * request (§11.7), so each attestation (an enrollment, a transfer, every recovery register POST, a re-post included) is a
  * new key under a new alias of its slot ([AndroidKeys.deviceAttestationAlias]); nothing replaces a key that is listed.
  * The vault may hold the key of any register POST it may have recorded, so a key goes only when its POST is settled not
- * registered ([RegisterKeys]), with its slot ([clear]), or after the handshake, when the key that answered the `ok` is the
- * one kept ([keepOnly]).
+ * registered ([RegisterKeys]), with its slot ([clear]), after the handshake (the keys of the registration whose
+ * `recovery_id` completed it stay, [keepRegistration]), or, outside a recovery, when an unlock with another key was
+ * answered `ok` and the key served no registration ([keepAfterUnlock]).
  *
- * Each slot keeps its keys in order, newest last, with the `recovery_id` each was registered for (null: an enrollment, a
- * transfer, or the key of a build before slots). Opens and unlocks sign with the newest ([current]); an `ok` with another
- * key makes that one the newest ([promote]). The key of the builds before slots ([AndroidKeys.ALIAS_DEVICE_ATTESTATION]) is
- * taken over, not deleted, by the slot in use the first time the keys are read ([migrate]): an enrolled phone keeps
- * unlocking with it.
+ * Each slot keeps its keys in the order they were made, newest last, with the `recovery_id` each was registered for (null:
+ * an enrollment, a transfer, or the key of a build before slots). Opens and unlocks sign with the newest ([current]) and,
+ * on `attestation`, with the others, newest first ([tryKeys]). The key of the builds before slots
+ * ([AndroidKeys.ALIAS_DEVICE_ATTESTATION]) is taken over, not deleted, by the slot in use the first time the keys are read
+ * ([migrate]): an enrolled phone keeps unlocking with it.
  */
 internal class AttestationKeys(private val store: Store, private val keys: Keys, private val active: () -> Int) {
     /** Where each slot's list is kept; [write] is durable before it returns, and throws when it is not. */
@@ -86,12 +87,41 @@ internal class AttestationKeys(private val store: Store, private val keys: Keys,
         return generate(alias)
     }
 
-    /** [alias] answered an `ok`: it is [slot]'s newest from now on. */
+    /**
+     * The `recovery_id`s [slot] registered for, newest registration first, then [last] (the one its device state names) if
+     * no key lists it: each is a `ctx` the identity's `hs.init` may try (VAULT-MESSAGING §11.14.6 "Pairing"). Never empty:
+     * null stands for the device's own.
+     */
     @Synchronized
-    fun promote(slot: Int, alias: String) {
+    fun pairingContexts(slot: Int, last: String?): List<String?> {
+        migrate()
+        val ids = load(slot).asReversed().mapNotNull { it.recoveryId }.distinct()
+        val all = if (last != null && last !in ids) ids + last else ids
+        return all.ifEmpty { listOf(null) }
+    }
+
+    /**
+     * The handshake completed with `ctx` = [recoveryId]: the vault's binding is that registration's attested key, so [slot]
+     * keeps that registration's keys and deletes its others. A `ctx` no key of the slot was registered for (none, an
+     * enrollment's, a build's before slots) deletes nothing (fail secure).
+     */
+    @Synchronized
+    fun keepRegistration(slot: Int, recoveryId: String?) {
+        if (recoveryId == null) return
         val list = load(slot)
-        val e = list.firstOrNull { it.alias == alias } ?: return
-        if (list.last() != e) save(slot, list.filter { it.alias != alias } + e)
+        if (list.none { it.recoveryId == recoveryId }) return
+        remove(slot, list.filter { it.recoveryId != recoveryId }.map { it.alias })
+    }
+
+    /**
+     * Outside a recovery an unlock signed with [alias] was answered `ok`: that key is the vault's binding, and [slot]'s
+     * other keys that served no registration (an enrollment's or a transfer's re-post) go. Keys of a registration stay.
+     */
+    @Synchronized
+    fun keepAfterUnlock(slot: Int, alias: String) {
+        val list = load(slot)
+        if (list.none { it.alias == alias }) return
+        remove(slot, list.filter { it.alias != alias && it.recoveryId == null }.map { it.alias })
     }
 
     /** Deletes [aliases] of [slot]; one the Keystore could not delete stays listed. */
@@ -102,14 +132,6 @@ internal class AttestationKeys(private val store: Store, private val keys: Keys,
         val list = load(slot)
         val gone = aliases.filter { a -> list.any { it.alias == a } && deleted(a) }.toSet()
         if (gone.isNotEmpty()) save(slot, list.filter { it.alias !in gone })
-    }
-
-    /** After the handshake: [slot] keeps [alias] alone. */
-    @Synchronized
-    fun keepOnly(slot: Int, alias: String) {
-        val list = load(slot)
-        if (list.none { it.alias == alias }) return
-        remove(slot, list.map { it.alias }.filter { it != alias })
     }
 
     /** Every key of [slot] goes, the listed ones and any of its aliases left unlisted. */
@@ -142,17 +164,23 @@ internal class AttestationKeys(private val store: Store, private val keys: Keys,
 
     /**
      * [attempt] with [slot]'s keys, newest first, each once, while the answer is a readable `attestation` (decided before
-     * the PIN, never counted): the vault may hold an earlier register's key (VAULT-MESSAGING §11.14.6). The key that is
-     * answered `ok` becomes the newest. With no key, one attempt with none ([SlotAttester] then signs with nothing).
+     * the PIN, never counted): the vault may hold an earlier POST's key (VAULT-MESSAGING §11.14.6). [onOk] hears the key
+     * that was answered `ok`. With no key, one attempt with none ([SlotAttester] then signs with nothing).
      */
-    suspend fun <T> tryKeys(slot: Int, attempt: suspend (alias: String?) -> T, code: (T) -> String?, ok: (T) -> Boolean): T {
+    suspend fun <T> tryKeys(
+        slot: Int,
+        attempt: suspend (alias: String?) -> T,
+        code: (T) -> String?,
+        ok: (T) -> Boolean,
+        onOk: suspend (alias: String) -> Unit = {},
+    ): T {
         val aliases = candidates(slot).map { it.alias }
         if (aliases.isEmpty()) return attempt(null)
         var i = 0
         while (true) {
             val alias = aliases[i++]
             val r = attempt(alias)
-            if (ok(r)) promote(slot, alias)
+            if (ok(r)) onOk(alias)
             if (ok(r) || code(r) != CODE_ATTESTATION || i == aliases.size) return r
         }
     }

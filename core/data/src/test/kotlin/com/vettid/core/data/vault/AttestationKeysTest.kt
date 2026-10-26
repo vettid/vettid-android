@@ -99,6 +99,36 @@ class AttestationKeysTest {
             return a.made!!
         }
 
+        /**
+         * An unlock as the app sends it (VaultManager.unlockWithSecret): newest first while `attestation`; outside a
+         * recovery the key answered `ok` stays and the identity's other keys that served no registration go.
+         */
+        suspend fun unlock(slot: Int, vault: Vault, recovering: Boolean): String = ring.tryKeys(
+            slot,
+            attempt = { alias ->
+                attester(slot, signWith = alias).assert(ByteArray(32))
+                vault.answer(signed.last())
+            },
+            code = { it },
+            ok = { it == "ok" },
+            onOk = { alias -> if (!recovering) ring.keepAfterUnlock(slot, alias) },
+        )
+
+        /**
+         * The handshake as the app sends it (VaultManager.pairWithEach): each `recovery_id` newest first until one
+         * completes ([completes]), then that registration's keys are kept. The ctx that completed, or null.
+         */
+        fun pair(slot: Int, last: String?, completes: (String?) -> Boolean, tried: MutableList<String?>): String? {
+            for (ctx in ring.pairingContexts(slot, last)) {
+                tried += ctx
+                if (completes(ctx)) {
+                    ring.keepRegistration(slot, ctx)
+                    return ctx
+                }
+            }
+            return null
+        }
+
         /** An open (or a lost-ok unlock) of [slot] as the app sends it: its keys, newest first, while `attestation`. */
         suspend fun open(slot: Int, vault: Vault): String = ring.tryKeys(
             slot,
@@ -148,15 +178,14 @@ class AttestationKeysTest {
         // No answer to the re-post: both may be held, both stay.
         p.ring.remove(1, posts.notRegistered(RegisterKeys.End.KEEP))
         assertEquals(listOf(a2, a1), p.ring.candidates(1).map { it.alias })
-        // Newest first: `attestation`, then the first key's `ok`, which makes it the identity's key from now on.
+        // Newest first: `attestation`, then the first key's `ok`. Both stay until the handshake (a recovery).
         assertEquals("ok", p.open(1, vault))
         assertEquals(listOf<String?>(a2, a1), vault.asked)
-        assertEquals(a1, p.ring.current(1)?.alias)
-        // A restart keeps it.
+        assertTrue(a1 in p.ks.keys && a2 in p.ks.keys)
+        // After a restart the same order finds it again, each key once.
         p.restart()
-        assertEquals(a1, p.ring.current(1)?.alias)
-        p.attester(1).assert(ByteArray(32))
-        assertEquals(a1, p.signed.last())
+        assertEquals("ok", p.open(1, vault))
+        assertEquals(listOf<String?>(a2, a1, a2, a1), vault.asked)
     }
 
     @Test
@@ -242,7 +271,7 @@ class AttestationKeysTest {
         val none = Vault()
         assertEquals("attestation", p.open(0, none))
         assertEquals(3, none.asked.size)
-        assertEquals(keys[0], none.asked.first())
+        assertEquals(keys.reversed(), none.asked)
         // Any other answer stops at once (a wrong PIN, a wait: the key is the vault's).
         var n = 0
         val r = p.ring.tryKeys(0, attempt = { n++; "bad_pin" }, code = { it }, ok = { false })
@@ -307,25 +336,79 @@ class AttestationKeysTest {
     }
 
     @Test
-    fun pairingKeepsTheKeyThatAnsweredTheOk() = runTest {
+    fun pairingKeepsTheKeyOfTheRegistrationWhoseRecoveryIdCompletedTheHandshake() = runTest {
+        // The counter-case (review 2026-10-26): R1's open stored step 2; N registered R2 with A2; R2's open stored the state
+        // but its header write failed. The header still binds A1, so A1's lost-ok unlock answers `ok`; the invitation is
+        // R2's, so hs.init with ctx R2 completes, and the binding is then A2.
         val p = Phone(1)
         val vault = Vault()
-        // N registered for R1 with A1 (the vault adopted it), then again for R2 with A2.
         val a1 = p.attester(1, "R1").also { it.attest(ByteArray(32)) }.made!!
         val a2 = p.attester(1, "R2").also { it.attest(ByteArray(32)) }.made!!
         vault.held = a1
-        // The lost-ok unlock: A2 is refused `attestation`, A1 answers `ok`.
-        assertEquals("ok", p.open(1, vault))
-        // N pairs with the recovery_id of the registration whose key answered the ok.
-        assertEquals("R1", p.ring.current(1)?.recoveryId)
-        // Before the handshake completes both keys stay.
+        assertEquals("ok", p.unlock(1, vault, recovering = true))
+        assertEquals(listOf<String?>(a2, a1), vault.asked)
+        // Before the handshake completes both keys stay (a recovery: nothing is dropped at the unlock).
         assertTrue(a1 in p.ks.keys && a2 in p.ks.keys)
-        // After it: that key is kept, N's others go.
-        p.ring.keepOnly(1, p.ring.current(1)!!.alias)
-        assertEquals(listOf(a1), p.ring.candidates(1).map { it.alias })
+        // hs.init with each recovery_id N registered for, newest first: R2 completes.
+        val tried = mutableListOf<String?>()
+        assertEquals("R2", p.pair(1, last = "R2", completes = { it == "R2" }, tried = tried))
+        assertEquals(listOf<String?>("R2"), tried)
+        // The binding is R2's key: A2 stays, A1 goes.
+        assertEquals(listOf(a2), p.ring.candidates(1).map { it.alias })
+        assertFalse(a1 in p.ks.keys)
+        // The vault now binds A2, and the next unlock signs with it.
+        vault.held = a2
+        assertEquals("ok", p.unlock(1, vault, recovering = false))
+        assertEquals(a2, p.signed.last())
+    }
+
+    @Test
+    fun pairingTriesEachRecoveryIdNewestFirstAndKeepsAllWhenNoKeyNamesIt() {
+        val p = Phone(1)
+        val a1 = p.attester(1, "R1").also { it.attest(ByteArray(32)) }.made!!
+        val a1b = p.attester(1, "R1").also { it.attest(ByteArray(32)) }.made!!
+        val a2 = p.attester(1, "R2").also { it.attest(ByteArray(32)) }.made!!
+        // No hs.resp for R2: R1 completes; both of R1's keys stay (either may be the one recorded), R2's goes.
+        val tried = mutableListOf<String?>()
+        assertEquals("R1", p.pair(1, last = "R2", completes = { it == "R1" }, tried = tried))
+        assertEquals(listOf<String?>("R2", "R1"), tried)
+        assertEquals(listOf(a1b, a1), p.ring.candidates(1).map { it.alias })
         assertFalse(a2 in p.ks.keys)
-        p.attester(1).assert(ByteArray(32))
-        assertEquals(a1, p.signed.last())
+        // The key of a build before slots names no registration: the device's own recovery_id, and nothing is deleted.
+        val old = Phone(0)
+        old.ks.keys += AndroidKeys.ALIAS_DEVICE_ATTESTATION
+        val t2 = mutableListOf<String?>()
+        assertEquals("R9", old.pair(0, last = "R9", completes = { true }, tried = t2))
+        assertEquals(listOf<String?>("R9"), t2)
+        assertEquals(AndroidKeys.ALIAS_DEVICE_ATTESTATION, old.ring.current(0)?.alias)
+        // No recovery_id at all: one hs.init with the device's own.
+        assertEquals(listOf<String?>(null), Phone().ring.pairingContexts(0, null))
+    }
+
+    @Test
+    fun anOrdinaryUnlockFallsBackToTheBoundEnrollmentKeyWhichIsKept() = runTest {
+        // An enrollment re-posted after an `expired` slot: the vault recorded the first POST's key, the phone made a second.
+        val p = Phone(0)
+        val e1 = p.attester(0).also { it.attest(ByteArray(32)) }.made!!
+        val e2 = p.attester(0).also { it.attest(ByteArray(32)) }.made!!
+        val vault = Vault().apply { held = e1 }
+        assertEquals("ok", p.unlock(0, vault, recovering = false))
+        assertEquals(listOf<String?>(e2, e1), vault.asked)
+        // Outside a recovery the bound key stays and the identity's other keys that served no registration go.
+        assertEquals(listOf(e1), p.ring.candidates(0).map { it.alias })
+        assertFalse(e2 in p.ks.keys)
+        assertEquals("ok", p.unlock(0, vault, recovering = false))
+        assertEquals(listOf<String?>(e2, e1, e1), vault.asked)
+        // Fail secure: a registration's key is never dropped by an unlock, nor anything while recovering.
+        val q = Phone(0)
+        val r1 = q.attester(0, "R1").also { it.attest(ByteArray(32)) }.made!!
+        val k = q.attester(0).also { it.attest(ByteArray(32)) }.made!!
+        val k2 = q.attester(0).also { it.attest(ByteArray(32)) }.made!!
+        val v = Vault().apply { held = k }
+        assertEquals("ok", q.unlock(0, v, recovering = true))
+        assertEquals(setOf(r1, k, k2), q.ks.keys.toSet())
+        assertEquals("ok", q.unlock(0, v, recovering = false))
+        assertEquals(setOf(r1, k), q.ks.keys.toSet())
     }
 
     @Test
