@@ -48,7 +48,7 @@ internal object DevicesCatalog {
         "devices.empty" to { Screen(list(phone)) },
         "devices.loading" to { Screen(DevicesUiState(load = ListLoad.LOADING)) },
         "devices.failed" to { Screen(DevicesUiState(load = ListLoad.FAILED, error = FailureKind.NETWORK)) },
-        "devices.removed" to { Screen(list(phone, agent).copy(removedName = "Old agent")) },
+        "devices.removed" to { Screen(list(phone, agent).copy(removedDevice = agent.copy(name = "Old agent"))) },
         "devices.page_agent" to { Page(DeviceUiState(device = agent, loaded = true)) },
         "devices.page_no_access" to { Page(DeviceUiState(device = paused, loaded = true)) },
         "devices.page_desktop" to { Page(DeviceUiState(device = desktop, loaded = true)) },

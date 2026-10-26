@@ -66,13 +66,8 @@ fun DevicesScreen(
     onRemovedShown: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
-    val removed = state.removedName?.let { n ->
-        if (n.isEmpty()) {
-            stringResource(R.string.devices_removed_unnamed)
-        } else {
-            stringResource(R.string.devices_removed, AccountNames.isolate(n))
-        }
-    }
+    // The name as the list shows it (a name that could pass for the phone or VettID comes with its role).
+    val removed = state.removedDevice?.let { stringResource(R.string.devices_removed, AccountNames.isolate(DeviceText.name(it))) }
     LaunchedEffect(removed) {
         val text = removed ?: return@LaunchedEffect
         onRemovedShown()

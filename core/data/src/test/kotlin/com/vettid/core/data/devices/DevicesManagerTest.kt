@@ -12,6 +12,7 @@ import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -190,14 +191,12 @@ class DevicesManagerTest {
     fun theListIsClearedAtLockAndALateReadIsNotApplied() = runTest {
         val ops = Ops().apply { devices = fleet; gate = CompletableDeferred() }
         val m = manager(ops)
-        m.refreshQuietly()
+        val job = async { m.refresh() }
         settle { ops.calls.contains("list") }
         // The vault locks while the read is on its way.
         m.clear()
         ops.gate!!.complete(Unit)
-        settle { ops.calls.size >= 1 }
-        Thread.sleep(SLEEP_MS * 5)
-        advanceUntilIdle()
+        job.await()
         assertTrue(m.devices.value.isEmpty())
         assertEquals(ListLoad.NOT_LOADED, m.load.value)
         // And what was read is dropped at a clear, with the "removed" notice.
@@ -265,7 +264,7 @@ class DevicesManagerTest {
         m.refresh()
         m.remove("a-old")
         assertTrue(m.devices.value.none { it.id == "a-old" })
-        assertEquals("Old agent", m.removed.value)
+        assertEquals("Old agent", m.removed.value?.name)
         assertEquals(listOf("a-old"), gone)
         m.dismissRemoved()
         assertNull(m.removed.value)

@@ -28,7 +28,7 @@ internal object DeviceText {
     /** The name as shown in a heading or a row: a device with no name is named by its role. */
     @Composable
     fun name(d: DeviceInfo): String {
-        val shown = d.name.ifEmpty { return stringResource(R.string.devices_unnamed, role(d)) }
+        val shown = d.name.ifEmpty { return stringResource(R.string.devices_unnamed, role(d).lowercase()) }
         // A self-asserted name that could pass for the phone itself or for VettID is shown with its role.
         val phone = stringResource(R.string.devices_this_phone)
         return if (shown.equals(phone, ignoreCase = true) || shown.equals("VettID", ignoreCase = true)) {

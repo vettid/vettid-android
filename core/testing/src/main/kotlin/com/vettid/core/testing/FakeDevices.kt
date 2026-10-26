@@ -18,7 +18,7 @@ class FakeDevices : DevicesRepository {
 
     override val devices = MutableStateFlow<List<DeviceInfo>>(emptyList())
     override val load = MutableStateFlow(ListLoad.LOADED)
-    override val removed = MutableStateFlow<String?>(null)
+    override val removed = MutableStateFlow<DeviceInfo?>(null)
 
     private fun call(name: String) {
         calls += name
@@ -38,7 +38,7 @@ class FakeDevices : DevicesRepository {
 
     override suspend fun remove(deviceId: String) {
         call("remove:$deviceId")
-        removed.value = devices.value.firstOrNull { it.id == deviceId }?.name.orEmpty()
+        removed.value = devices.value.firstOrNull { it.id == deviceId }
         devices.value = devices.value.filterNot { it.id == deviceId }
     }
 

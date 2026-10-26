@@ -73,7 +73,7 @@ class DevicesScreenTest {
     @Test
     fun aDeviceWithoutANameIsNamedByItsRole() {
         list(state(phone, agent.copy(name = "", paused = false)))
-        rule.onNodeWithText("Unnamed Agent").assertIsDisplayed()
+        rule.onNodeWithText("Unnamed agent").assertIsDisplayed()
     }
 
     @Test
@@ -123,8 +123,14 @@ class DevicesScreenTest {
     }
 
     @Test
+    fun aRemovedDeviceNamedLikeThePhoneIsNeverToldAsThePhone() {
+        list(state(phone, agent).copy(removedDevice = desktop.copy(name = "This phone")))
+        rule.onNodeWithText("This phone (Desktop)", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun theRemovedNameIsToldInASnackbar() {
-        list(state(phone, agent).copy(removedName = "Old agent"))
+        list(state(phone, agent).copy(removedDevice = agent.copy(name = "Old agent")))
         // The name sits in bidirectional isolation marks.
         rule.onNodeWithText("was removed", substring = true).assertIsDisplayed()
     }

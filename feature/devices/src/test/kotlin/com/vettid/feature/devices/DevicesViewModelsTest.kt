@@ -71,12 +71,12 @@ class DevicesViewModelsTest {
     fun theRemovedNameReachesTheListOnceUntilItIsShown() = runTest {
         val vm = DevicesViewModel(devices, FakeVault())
         advanceUntilIdle()
-        devices.removed.value = "Claude"
+        devices.removed.value = agent
         advanceUntilIdle()
-        assertEquals("Claude", vm.uiState.value.removedName)
+        assertEquals("Claude", vm.uiState.value.removedDevice?.name)
         vm.removedShown()
         advanceUntilIdle()
-        assertNull(vm.uiState.value.removedName)
+        assertNull(vm.uiState.value.removedDevice)
     }
 
     @Test
@@ -140,7 +140,7 @@ class DevicesViewModelsTest {
         advanceUntilIdle()
         assertEquals(listOf("remove:a1"), devices.calls.filter { it.startsWith("remove:") })
         assertTrue(vm.uiState.value.removed)
-        assertEquals("Claude", devices.removed.value)
+        assertEquals("Claude", devices.removed.value?.name)
     }
 
     @Test

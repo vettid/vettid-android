@@ -28,8 +28,8 @@ data class DevicesUiState(
     val error: FailureKind? = null,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
-    /** The name of the device just removed on its page ("" when it had none): the snackbar "<name> was removed". */
-    val removedName: String? = null,
+    /** The device just removed on its page: the snackbar "<name> was removed". */
+    val removedDevice: DeviceInfo? = null,
 ) {
     /** Only this phone is listed: "No agents yet". */
     val onlyThisPhone: Boolean get() = devices.none { !it.thisPhone }
@@ -50,7 +50,7 @@ class DevicesViewModel @Inject constructor(
 
     val uiState: StateFlow<DevicesUiState> =
         combine(local, repo.devices, repo.load, repo.removed) { s, list, load, removed ->
-            s.copy(devices = list, load = load, removedName = removed)
+            s.copy(devices = list, load = load, removedDevice = removed)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, DevicesUiState())
 
     init {
@@ -142,7 +142,8 @@ class DeviceViewModel @Inject constructor(
     }
 
     fun askEndAccess() {
-        if (local.value.busy) return
+        val d = uiState.value.device
+        if (local.value.busy || d == null || !d.actionable) return
         local.update { it.copy(confirm = DeviceConfirm.END_ACCESS, failure = null, error = null, errorCode = null) }
     }
 

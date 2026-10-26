@@ -196,8 +196,8 @@ interface DevicesRepository {
 
     val load: StateFlow<ListLoad>
 
-    /** The name of the device the member just removed, for the list's "<name> was removed"; until [dismissRemoved]. */
-    val removed: StateFlow<String?>
+    /** The device the member just removed, for the list's "<name> was removed"; until [dismissRemoved]. */
+    val removed: StateFlow<DeviceInfo?>
 
     /** Reads the list (`device.list`, and `leash.grant.list` for the paused agents). Throws the vault's failure. */
     suspend fun refresh()
@@ -239,7 +239,7 @@ class DevicesManager(
     private val lock = Any()
     private val list = MutableStateFlow<List<DeviceInfo>>(emptyList())
     private val loadState = MutableStateFlow(ListLoad.NOT_LOADED)
-    private val removedFlow = MutableStateFlow<String?>(null)
+    private val removedFlow = MutableStateFlow<DeviceInfo?>(null)
     private val reads = Mutex()
 
     /** Bumped by [clear]: a read that started before it is not applied after it. */
@@ -250,7 +250,7 @@ class DevicesManager(
 
     override val devices: StateFlow<List<DeviceInfo>> = list.asStateFlow()
     override val load: StateFlow<ListLoad> = loadState.asStateFlow()
-    override val removed: StateFlow<String?> = removedFlow.asStateFlow()
+    override val removed: StateFlow<DeviceInfo?> = removedFlow.asStateFlow()
 
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
@@ -321,13 +321,13 @@ class DevicesManager(
 
     override suspend fun remove(deviceId: String) {
         guardActionable(deviceId)
-        val name = list.value.firstOrNull { it.id == deviceId }?.name.orEmpty()
+        val known = list.value.firstOrNull { it.id == deviceId }
         val gen = synchronized(lock) { generation }
         vaultGuard { ops().unlink(deviceId) }
         synchronized(lock) {
             if (gen == generation) {
                 list.value = list.value.filterNot { it.id == deviceId }
-                removedFlow.value = name
+                removedFlow.value = known
             }
         }
         deviceGone(deviceId)
