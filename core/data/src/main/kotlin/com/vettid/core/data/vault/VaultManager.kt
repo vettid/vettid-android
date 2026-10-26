@@ -34,11 +34,9 @@ import com.vettid.core.data.feed.VaultFeedOps
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.keystore.AndroidKeys
 import com.vettid.core.keystore.DeviceAttestationKey
-import com.vettid.core.keystore.DeviceKeys
 import com.vettid.core.keystore.KeySlot
 import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.keystore.SeedWrapKey
-import com.vettid.core.keystore.SharedPreferencesWrappedKeyStore
 import com.vettid.core.vault.DeviceConfig
 import com.vettid.core.vault.DeviceSecrets
 import com.vettid.core.vault.VaultApi
@@ -458,6 +456,10 @@ class VaultManager(
             }
 
             override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = guard {
+                // (0.1.78) Undecided: a new code only reuses K (the claim, the earlier open's slot, a new identity), or is refused.
+                reuseGate()?.let {
+                    return@guard reuseRegister(code.vaultId, claim = { gateway.claimRecovery(code.vaultId, code.recoveryId) }) { code }
+                }
                 if (!session().device.recovering) freshDeviceIfUnpaired()
                 // §11.11.7 (0.15.0): the claim gives this phone's key the right to register, and names the member.
                 val claimed = try {
@@ -469,6 +471,11 @@ class VaultManager(
             }
 
             override suspend fun registerTypedRecovery(typed: TypedRecoveryCode): RecoveryRegistration = guard {
+                reuseGate()?.let {
+                    return@guard reuseRegister(null, claim = { gateway.claimRecoveryByLocator(typed.locator) }) {
+                        typed.recoveryCode(it, apiOrigin)
+                    }
+                }
                 if (!session().device.recovering) freshDeviceIfUnpaired()
                 val claimed = try {
                     gateway.claimRecoveryByLocator(typed.locator)
@@ -478,7 +485,7 @@ class VaultManager(
                 val code = typed.recoveryCode(claimed, apiOrigin)
                 when (val r = registerClaimed(code, claimed)) {
                     is RecoveryRegistration.Refused -> r.copy(recoveryId = code.recoveryId)
-                    is RecoveryRegistration.Registered -> r
+                    else -> r
                 }
             }
 
@@ -1219,10 +1226,15 @@ class VaultManager(
         SessionGate.open(record, session) {
             io {
                 val trust: AltTrust = env.trust(http)
-                val keys = deviceKeys()
-                for (slot in KeySlot.entries) if (!keys.has(slot)) keys.generate(slot)
+                val slot = slots.active
+                val keys = slots.keys(slot)
+                // Fail secure: while an open's answer is unknown, a slot with missing keys is never replaced by new ones.
+                if (!Rules.mayGenerateKeys(undecidedNow()) && !slots.exists(slot)) {
+                    throw VaultFailure(FailureKind.LOCAL_STATE, CODE_UNDECIDED)
+                }
+                for (k in KeySlot.entries) if (!keys.has(k)) keys.generate(k)
                 val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY), gateway.appKey())
-                val store = KeystoreFileStore(File(app.noBackupFilesDir, DEVICE_FILE), "vault-device")
+                val store = KeystoreFileStore(slots.file(slot), "vault-device")
                 val cfg = DeviceConfig(
                     name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust,
                     elapsedMs = { android.os.SystemClock.elapsedRealtime() },
@@ -1252,7 +1264,9 @@ class VaultManager(
         }
     }
 
-    private fun deviceKeys() = DeviceKeys(SeedWrapKey.wrapper(), SharedPreferencesWrappedKeyStore(app))
+    /** (0.1.78) The phone's device identities: slot 0 normally, a second only while a reused-key recovery is undecided. */
+    private val slots = IdentitySlots(app, app.noBackupFilesDir)
+
 
     /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
     private suspend fun dropSession(forget: Boolean) = mutex.withLock {
@@ -1274,10 +1288,12 @@ class VaultManager(
         if (forget) {
             steps.step {
                 io {
-                    val keys = deviceKeys()
+                    // (0.1.78) Both identities go: slot 0 is made anew, a second one is removed.
+                    slots.resetToSingle()
+                    val keys = slots.keys(0)
                     KeySlot.entries.forEach { keys.generate(it) }
                     gateway.newAppKey() // the app key is per vault (§11.12.2)
-                    File(app.noBackupFilesDir, DEVICE_FILE).delete()
+                    slots.file(0).delete()
                 }
             }
             alarmFlow.value = null
@@ -1630,6 +1646,7 @@ class VaultManager(
     override suspend fun forgetSetupCode() {
         val paired = session?.device?.deviceId != null
         if (paired) return // a vault on this phone is never dropped this way
+        if (!Rules.mayForget(undecidedNow())) return // K is never forgotten while an open's answer is unknown
         if (session != null) dropSession(forget = true)
         lockKeeper.abandon() // no vault on this phone: nothing to lock
         io { resetLocal(LocalAccount()) }
@@ -2919,6 +2936,8 @@ class VaultManager(
 
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
+        // (0.1.78) K is never forgotten while an open's answer is unknown.
+        if (!Rules.mayForget(undecidedNow())) throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
         val d = session().device
         // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
         val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null
@@ -2986,8 +3005,17 @@ class VaultManager(
         val s = session()
         val phone = local.phone
         if (!phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
-        if (s.device.recoveryOpenedNotFinished) return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
+        if (s.device.recoveryOpenedNotFinished) {
+            val resumed = if (local.reuse != null) {
+                finishReuse(pin, local.recoveryAttemptsUsed, resuming = true)
+            } else {
+                finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
+            }
+            completeOpens(resumed)
+            return@guard resumed
+        }
         val afterUnanswered = local.recoveryOpenUnanswered
+        var sentRid: String? = null
         val secret = phoneSecrets.secret(phone)
         val r = try {
             s.alt.recoveryOpen(
@@ -2998,17 +3026,55 @@ class VaultManager(
                     s.device.prepareRecoveryOpen(local.userGuid, pin, password, secret, e, m, env.attester())
                 },
                 open = { raw, rid -> s.device.openRecoveryOpenResult(raw, rid) },
-                onSent = { if (!local.recoveryOpenUnanswered) io { updateLocal(rec) { it.copy(recoveryOpenUnanswered = true) } } },
+                // (0.1.78) The open's entry is saved durably BEFORE it is posted; a save that fails posts nothing. Every open sent
+                // is kept (sticky) until the vault answered `ok` and the pairing completed.
+                beforePost = { rid ->
+                    sentRid = rid
+                    val recoveryIdNow = s.device.recoveryId ?: ""
+                    val ok = io {
+                        record.update(rec) {
+                            val l = Ledger.afterSent(it.recoveryOpenUnanswered, it.sentOpens, rid, recoveryIdNow, slots.active)
+                            it.copy(recoveryOpenUnanswered = true, sentOpens = l)
+                        }
+                    }
+                    if (!ok) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_HISTORY_NOT_SAVED)
+                },
             )
         } finally {
             secret.fill(0)
         }
         val used = if (r.counted) r.used else null
-        io { updateLocal(rec) { it.copy(recoveryOpenUnanswered = false, recoveryAttemptsUsed = used ?: it.recoveryAttemptsUsed) } }
-        if (!r.ok) {
-            return@guard RecoveryOpenOutcome(r.code, used, r.retryAt, afterUnanswered = afterUnanswered, attemptUsed = r.attemptUsed)
+        io {
+            updateLocal(rec) {
+                // Only this open is answered; an earlier one that got no answer stays unanswered.
+                val left = Ledger.afterAnswer(it.recoveryOpenUnanswered, it.sentOpens, sentRid, r.code, r.ok)
+                val attempts = used ?: it.recoveryAttemptsUsed
+                it.copy(recoveryOpenUnanswered = left.isNotEmpty(), sentOpens = left, recoveryAttemptsUsed = attempts)
+            }
         }
-        finishOpened(s, pin, used, resuming = false).copy(attemptUsed = r.attemptUsed)
+        if (!r.ok) {
+            val reuseNow = local.reuse
+            return@guard RecoveryOpenOutcome(
+                r.code, used, r.retryAt, afterUnanswered = afterUnanswered, attemptUsed = r.attemptUsed,
+                // Recovery is ruled out until the owner's app arms a new generation; not terminal (a later recovery reuses N).
+                contactCouldNotRecover = reuseNow != null && Rules.showCouldNotRecover(reuseNow.keyInUse, reuseNow.newRegistered, r.code),
+            )
+        }
+        val out = if (local.reuse != null) finishReuse(pin, used, resuming = false) else finishOpened(s, pin, used, resuming = false)
+        completeOpens(out)
+        out.copy(attemptUsed = r.attemptUsed)
+    }
+
+    /** `ok`, the pairing and the credential completed ([finishOpened] answers `ok` only then): nothing is unanswered any more. */
+    private suspend fun completeOpens(out: RecoveryOpenOutcome) {
+        if (!Ledger.completes(out.ok, paired = out.ok, credential = out.ok)) return
+        val rec = record.recordGeneration
+        io {
+            updateLocal(rec) {
+                val none = it.sentOpens.isEmpty() && !it.recoveryOpenUnanswered
+                if (none) null else it.copy(sentOpens = emptyList(), recoveryOpenUnanswered = false)
+            }
+        }
     }
 
     /**
@@ -3019,17 +3085,20 @@ class VaultManager(
      * was under way), then `credential.get`. No attempt is used. Without a bundle the recovery did not complete here.
      */
     override suspend fun resumeLostOk(pin: String): RecoveryOpenOutcome = guard {
+        local.reuse?.let { return@guard reuseLostOk(pin, it) }
         val s = session()
         val d = s.device
         if (!local.phone.inUse || !d.recovering) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_recovery")
-        if (d.recoveryOpenedNotFinished) return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true)
+        if (d.recoveryOpenedNotFinished) {
+            return@guard finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = true).also { completeOpens(it) }
+        }
         val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
         when {
             !u.ok -> RecoveryOpenOutcome(u.result.code ?: "retry", local.recoveryAttemptsUsed, opened = true, attemptUsed = false)
             // A result without `vault_bundle`: this phone is not the one a completed recovery made the app.
             !d.recoveryOpenedNotFinished ->
                 RecoveryOpenOutcome(CODE_NO_BUNDLE, local.recoveryAttemptsUsed, opened = true, attemptUsed = false)
-            else -> finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = false).copy(attemptUsed = false)
+            else -> finishOpened(s, pin, local.recoveryAttemptsUsed, resuming = false).also { completeOpens(it) }.copy(attemptUsed = false)
         }
     }
 
@@ -3082,6 +3151,489 @@ class VaultManager(
     private suspend fun unlockOwn(s: Session, pin: String, cause: Throwable): String? {
         val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
         return if (u.ok) null else u.result.code ?: throw VaultFailure(FailureKind.NO_RESPONSE, "recovery_unlock", cause = cause)
+    }
+
+    // --- a phone that could not tell (ANDROID-PLAN 0.1.78; VAULT-MESSAGING 0.59.0 §11.14.6) ---
+
+    /**
+     * An open of this phone's has no readable answer, or a reused-key recovery is under way. A device that is no longer
+     * recovering has nothing undecided.
+     */
+    private fun undecidedNow(): Boolean = Rules.undecided(local.sentOpens.isNotEmpty() || local.recoveryOpenUnanswered, local.reuse)
+
+    override val recoveryUndecided: Boolean get() = undecidedNow()
+
+    override fun lostOkDue(): Boolean = local.reuse?.lostOkDue == true
+
+    override fun newCodeAllowed(): Boolean = local.reuse?.startNew == true
+
+    /**
+     * The record when the member may use a new code with K (two reads said ended). While undecided and not yet allowed, a
+     * new code is refused: registering again would overwrite the earlier recovery ([CODE_UNDECIDED]).
+     */
+    private fun reuseGate(): ReuseRecord? {
+        val r = local.reuse
+        return when (Rules.gateNewCode(undecidedNow(), r?.startNew == true)) {
+            Rules.Gate.REUSE -> r
+            Rules.Gate.REFUSE -> throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
+            Rules.Gate.FRESH -> null
+        }
+    }
+
+    /** One write of the reuse record; a write the record drops (stale, closed, unreadable) stops the step, fail secure. */
+    private suspend fun persistReuse(next: ReuseRecord) {
+        val rec = record.recordGeneration
+        val ok = io { record.update(rec) { it.copy(reuse = next) } }
+        if (!ok) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_REUSE_NOT_SAVED)
+    }
+
+    private suspend fun markReuse(f: (ReuseRecord) -> ReuseRecord) {
+        local.reuse?.let { persistReuse(f(it)) }
+    }
+
+    /** Status signed with K, as a [Rules.Read]. A `401` that is the phone's clock ([MemberApiException.CLOCK_SKEW]) concludes nothing. */
+    @Suppress("ReturnCount", "SwallowedException") // a refusal or a fault is one of the two reads that conclude nothing or ended
+    private suspend fun readStatusWithK(s: Session): Rules.Read {
+        val a = try {
+            s.member.vaultStatusAnswer()
+        } catch (e: MemberApiException) {
+            val ended = e.code == MemberApiException.UNAUTHORIZED ||
+                (e.status == HTTP_GONE && e.code == MemberApiException.RECOVERY_ENDED)
+            return if (ended) Rules.Read.Ended else Rules.Read.Unknown
+        } catch (e: IOException) {
+            return Rules.Read.Unknown
+        }
+        val v = a.vault
+        if (v == null || a.servicePaused) return Rules.Read.Unknown
+        return Rules.Read.Listed(registered = v.recoveryState == RECOVERY_REGISTERED)
+    }
+
+    @Suppress("CyclomaticComplexMethod", "ComplexCondition") // the two reads, the clock, and one answer per decision
+    override suspend fun couldNotTell(): CouldNotTell = guard {
+        val none = CouldNotTell(CouldNotTell.Kind.NOT_APPLICABLE)
+        if (!Rules.applies(local.recoveryOpenUnanswered, local.reuse)) return@guard none
+        val s = session()
+        val reuse = local.reuse ?: ReuseRecord(
+            earlierSlot = slots.active,
+            earlierRecoveryId = s.device.recoveryId ?: return@guard none,
+        )
+        // Both clocks: the wall clock and the monotonic one (a reboot resets it, a set clock disagrees with it).
+        val now = Rules.Clock(System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())
+        val (decision, seen) = Rules.afterRead(
+            readStatusWithK(s), Rules.Seen(reuse.endedSeen, reuse.listedSeen), now, secondIdentity = reuse.newRegistered,
+        )
+        val listed = decision == Rules.Decision.LostOk || decision == Rules.Decision.OpenAgain
+        persistReuse(
+            reuse.copy(
+                endedSeen = seen.ended,
+                listedSeen = seen.listed,
+                startNew = decision == Rules.Decision.StartNew || decision == Rules.Decision.KeepBoth || (reuse.startNew && !listed),
+                lostOkDue = decision == Rules.Decision.LostOk || decision == Rules.Decision.KeepBoth ||
+                    (reuse.lostOkDue && decision != Rules.Decision.OpenAgain),
+            ),
+        )
+        when (decision) {
+            Rules.Decision.NotApplicable -> none
+            Rules.Decision.LostOk, Rules.Decision.KeepBoth -> CouldNotTell(CouldNotTell.Kind.LOST_OK)
+            Rules.Decision.OpenAgain -> CouldNotTell(CouldNotTell.Kind.OPEN_AGAIN)
+            is Rules.Decision.Wait -> CouldNotTell(CouldNotTell.Kind.WAIT, decision.atMs)
+            Rules.Decision.StartNew -> CouldNotTell(CouldNotTell.Kind.START_NEW)
+            Rules.Decision.Unknown -> CouldNotTell(CouldNotTell.Kind.UNKNOWN)
+        }
+    }
+
+    /** Switches the identity in use: the session is dropped (not forgotten) and the next one is made from [slot]'s keys and state. */
+    private suspend fun switchIdentity(slot: Int) {
+        if (slots.active == slot) return
+        val d = session?.device
+        dropSession(forget = false)
+        d?.let {
+            runCatching { it.dropKeysFromMemory() }
+            liveDevices.remove(it)
+        }
+        io { slots.active = slot }
+    }
+
+    private fun slotOf(r: ReuseRecord, identity: Identity): Int? = if (identity == Identity.EARLIER) r.earlierSlot else r.newSlot
+
+    /**
+     * A new code with K (the claim, the earlier open's slot once, a new identity): [NewRecovery]. Nothing is deleted. The
+     * phone secret record is kept: the new open carries the earlier open's `unlock_secret`.
+     */
+    private suspend fun reuseRegister(
+        namedVault: String?,
+        claim: suspend () -> Claimed,
+        codeOf: (Claimed) -> RecoveryCode,
+    ): RecoveryRegistration {
+        if (!local.phone.inUse) throw VaultFailure(FailureKind.NOT_SUPPORTED, "no_phone_secret")
+        // A scanned code for another vault is refused before anything is sent.
+        if (!Rules.sameVault(local.vaultId, namedVault)) return RecoveryRegistration.Refused(CODE_OTHER_VAULT)
+        var claimed: Claimed? = null
+        var code: RecoveryCode? = null
+        val result = NewRecovery(
+            object : NewRecovery.Ports {
+                override suspend fun claim(): ClaimAnswer = try {
+                    val c = claim()
+                    claimed = c
+                    code = codeOf(c)
+                    // The claim names the vault: another one than the earlier open's is refused, nothing registered.
+                    val named = c.vaultId ?: code?.vaultId
+                    if (Rules.sameVault(local.vaultId, named)) ClaimAnswer.Claimed else ClaimAnswer.Refused(CODE_OTHER_VAULT)
+                } catch (e: MemberApiException) {
+                    if (e.code == MemberApiException.KEY_IN_USE) {
+                        ClaimAnswer.KeyInUse
+                    } else {
+                        ClaimAnswer.Refused((claimRefusal(e) as? RecoveryRegistration.Refused)?.code ?: CODE_RETRY)
+                    }
+                }
+
+                override suspend fun pollEarlierOpen(): EarlierOpen = pollEarlier()
+
+                override suspend fun registerNew(): RegisterAnswer = registerNewIdentity(code!!, claimed!!)
+
+                override suspend fun lostOkDue() = markReuse { it.copy(lostOkDue = true, startNew = false, keyInUse = true) }
+            },
+        ).run()
+        return when (result) {
+            NewRecovery.Result.Registered -> RecoveryRegistration.Registered(claimed!!.emailHint)
+            NewRecovery.Result.KeyInUse -> RecoveryRegistration.KeyInUse
+            NewRecovery.Result.EarlierOk -> RecoveryRegistration.EarlierOpened
+            NewRecovery.Result.RegisterUnauthorized -> RecoveryRegistration.Refused(CODE_RETRY, code?.recoveryId)
+            is NewRecovery.Result.Refused -> RecoveryRegistration.Refused(result.code, code?.recoveryId)
+        }
+    }
+
+    /**
+     * Looks once at the slot of every open that got no readable answer (the ledger, not only the newest): "a readable answer
+     * decides it". Each is opened with its own identity's keys (a temporary device for the slot not in use). Never twice.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun pollEarlier(): EarlierOpen {
+        local.reuse ?: return EarlierOpen.Undecided
+        for (o in Ledger.toPoll(local.sentOpens)) {
+            val rec0 = record.recordGeneration
+            io { updateLocal(rec0) { it.copy(sentOpens = Ledger.polled(it.sentOpens, o.rid)) } }
+            val res = readOpenAnswer(o) ?: continue
+            val rec = record.recordGeneration
+            val used = if (res.counted) res.used else null
+            io {
+                updateLocal(rec) {
+                    val left = Ledger.afterAnswer(it.recoveryOpenUnanswered, it.sentOpens, o.rid, res.code, res.ok)
+                    val attempts = used ?: it.recoveryAttemptsUsed
+                it.copy(recoveryOpenUnanswered = left.isNotEmpty(), sentOpens = left, recoveryAttemptsUsed = attempts)
+                }
+            }
+            if (res.ok) {
+                markReuse { it.copy(lostOkDue = false, startNew = false) }
+                switchIdentity(o.slot)
+                phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+                return EarlierOpen.Ok
+            }
+        }
+        return EarlierOpen.Undecided
+    }
+
+    /** The readable answer in the slot of [o], or null (queued, expired, random bytes, a fault). */
+    @Suppress("ReturnCount", "TooGenericExceptionCaught", "SwallowedException") // anything unreadable leaves it undecided
+    private suspend fun readOpenAnswer(o: SentOpen): com.vettid.core.crypto.altchan.RecoveryOpen.Result? {
+        val slot = try {
+            session().member.slot(o.rid)
+        } catch (e: MemberApiException) {
+            return null
+        } catch (e: IOException) {
+            return null
+        }
+        val env = slot.envelope()
+        if (slot.status != Slot.DONE || env == null) return null
+        return try {
+            withDeviceOf(o.slot) { it.openRecoveryOpenResult(env, o.rid) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** [f] on the device of [slot]: the one in use, or a temporary one for the other slot (its keys leave memory after). */
+    @Suppress("ReturnCount")
+    private suspend fun <T> withDeviceOf(slot: Int, f: suspend (com.vettid.core.vault.VaultDevice) -> T): T? {
+        if (slot == slots.active) return f(session().device)
+        if (!io { slots.exists(slot) }) return null
+        val d = io {
+            val keys = slots.keys(slot)
+            val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY), gateway.appKey())
+            val cfg = DeviceConfig(
+                name = deviceName, relayUrl = env.endpoints.relayUrl, http = http,
+                store = KeystoreFileStore(slots.file(slot), "vault-device"), trust = env.trust(http),
+                elapsedMs = { android.os.SystemClock.elapsedRealtime() },
+            )
+            com.vettid.core.vault.VaultDevice.load(cfg, secrets)
+        } ?: return null
+        return try {
+            f(d)
+        } finally {
+            runCatching { d.dropKeysFromMemory() }
+        }
+    }
+
+    /** The new identity in the other slot (made once, kept across a failed register), registered with the same K. */
+    @Suppress("ReturnCount", "ThrowsCount", "CyclomaticComplexMethod", "LongMethod") // one branch per answer of the register
+    private suspend fun registerNewIdentity(code: RecoveryCode, claimed: Claimed): RegisterAnswer {
+        var r = local.reuse ?: throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
+        val slot = r.newSlot ?: slots.other(r.earlierSlot)
+        if (r.newSlot == null) {
+            // The slot is named before it is made: a crash in between leaves a slot to make, never an unnamed identity.
+            r = r.copy(newSlot = slot)
+            persistReuse(r)
+        }
+        if (!io { slots.exists(slot) }) {
+            // Fail secure: N's keys are never replaced once N was (or may have been) registered.
+            if (!Rules.mayMakeNewKeysForN(r.newRegistered, r.newRecoveryId)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_UNDECIDED)
+            io {
+                slots.file(slot).delete()
+                val k = slots.keys(slot)
+                KeySlot.entries.forEach { k.generate(it) }
+            }
+        }
+        switchIdentity(slot)
+        val s = session()
+        gateway.memberChanged(claimed.userGuid)
+        // N may have registered once this is posted, whatever comes back: kept as unknown, never registered again, tried
+        // by the lost-ok unlock. A definite refusal below takes it back.
+        val before = local.reuse ?: r
+        val repeat = before.registerTried == code.recoveryId
+        markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, registerTried = code.recoveryId) }
+        val since = record.recordGeneration
+        val res = try {
+            s.alt.recoveryRegister(
+                code.vaultId,
+                build = { e -> buildReuseRegister(s, code, e, since) },
+                open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+            )
+        } catch (e: VaultFailure) {
+            if (e.code != CODE_NOT_OFFERED) throw e
+            return RegisterAnswer.Refused(CODE_NOT_OFFERED)
+        } catch (e: MemberApiException) {
+            when (e.code) {
+                // K became a key in use between the claim and the register: no claim key; nothing was recorded.
+                MemberApiException.UNAUTHORIZED -> {
+                    // N's registration is dropped with its identity and relay key: it no longer counts as one of the two.
+                    s.device.dropRecoveryRegistration()
+                    backToEarlier(before)
+                    if (!before.newRegistered) dropNewIdentity()
+                    return RegisterAnswer.Unauthorized
+                }
+                MemberApiException.RECOVERY_UNAVAILABLE -> {
+                    s.device.dropRecoveryRegistration()
+                    backToEarlier(before)
+                    return RegisterAnswer.Refused(CODE_NO_BACKUP)
+                }
+                MemberApiException.RECOVERY_NOT_AVAILABLE ->
+                    if (Rules.maybeRegistered(repeat, e.code)) return maybeRegistered(s, code) else null
+                else -> {
+                    // A first attempt that did not reach the vault leaves N unregistered: the same N, K and code may try again.
+                    if (Rules.registerFailedBeforeVault(repeat, e.status, e.code)) {
+                        s.device.dropRecoveryRegistration()
+                        backToEarlier(before)
+                    }
+                    throw e
+                }
+            }
+        } catch (e: IOException) {
+            if (Rules.registerFailedBeforeVault(repeat, null, null)) {
+                s.device.dropRecoveryRegistration()
+                backToEarlier(before)
+            }
+            throw e
+        }
+        return when {
+            res == null -> {
+                s.device.dropRecoveryRegistration()
+                backToEarlier(before)
+                RegisterAnswer.Refused(CODE_NOT_AVAILABLE)
+            }
+            res.ok -> {
+                s.device.confirmRecoveryRegistration()
+                markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
+                phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+                RegisterAnswer.Registered
+            }
+            // A readable `used` after an earlier attempt for the same code: maybe registered (the first copy went through).
+            Rules.maybeRegistered(repeat, res.code) -> maybeRegistered(s, code)
+            else -> {
+                s.device.dropRecoveryRegistration()
+                backToEarlier(before)
+                RegisterAnswer.Refused(res.code ?: CODE_RETRY)
+            }
+        }
+    }
+
+    /**
+     * A repeat register for the same code was refused, but the first copy may have been recorded: the new registration is kept
+     * (the prior one is not restored) and status signed with K decides, `registered` there meaning registered for this recovery.
+     */
+    private suspend fun maybeRegistered(s: Session, code: RecoveryCode): RegisterAnswer {
+        if ((readStatusWithK(s) as? Rules.Read.Listed)?.registered != true) return RegisterAnswer.Refused(CODE_RETRY)
+        s.device.confirmRecoveryRegistration()
+        markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
+        phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+        return RegisterAnswer.Registered
+    }
+
+    /** N's keys and state are removed (after a `401` at its register) and the record forgets its slot: a later N is made anew. */
+    private suspend fun dropNewIdentity() {
+        val r = local.reuse
+        val n = r?.newSlot
+        if (r == null || n == null || n == slots.active) return
+        io { slots.clear(n) }
+        persistReuse(r.copy(newSlot = null, newRegistered = false, newRecoveryId = null))
+    }
+
+    /** A refused register leaves the new identity unregistered: the earlier identity is the one in use again. */
+    private suspend fun backToEarlier(before: ReuseRecord? = null) {
+        val r = local.reuse ?: return
+        // N keeps what it had accepted before this attempt (the `recovery_id` it LAST registered for); a first N has none.
+        persistReuse(r.copy(newRegistered = before?.newRegistered == true, newRecoveryId = before?.newRecoveryId))
+        switchIdentity(Rules.slotAfterRefusedRegister(r.earlierSlot))
+    }
+
+    /** As [buildRegister], but the phone key and its record are the earlier open's, kept: nothing is made or replaced. */
+    private suspend fun buildReuseRegister(
+        s: Session,
+        code: RecoveryCode,
+        e: com.vettid.core.attestation.VerifiedEnclave,
+        since: Int,
+    ): com.vettid.core.altchan.SealedRequest {
+        if (choosePath(e.descriptor.traits, makesPhoneKey = false, since) != ReleasePath.Path.R ||
+            !ReleasePath.recoveryOffered(e.descriptor.capabilities)
+        ) {
+            throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_NOT_OFFERED)
+        }
+        return s.device.prepareRecoveryRegister(local.userGuid, code, e, env.attester())
+    }
+
+    /** The lost-ok unlock with [identity] (it becomes the identity in use): `ok` only with the vault's bundle. */
+    @Suppress("ReturnCount")
+    private suspend fun lostOkUnlock(identity: Identity, reuse: ReuseRecord, pin: String): LostOkAnswer {
+        val slot = slotOf(reuse, identity) ?: return LostOkAnswer.Refused(CODE_NO_RECOVERY)
+        switchIdentity(slot)
+        val s = session()
+        val d = s.device
+        if (!local.phone.inUse || !d.recovering) return LostOkAnswer.Refused(CODE_NO_RECOVERY)
+        if (d.recoveryOpenedNotFinished) return LostOkAnswer.Ok
+        val u = unlockWithSecret(s, pin, UnlockOptions(), null, null)
+        return when {
+            !u.ok -> if (u.result.code == CODE_TRANSFER_INCOMPLETE) {
+                LostOkAnswer.TransferIncomplete
+            } else {
+                LostOkAnswer.Refused(u.result.code ?: CODE_RETRY)
+            }
+            d.recoveryOpenedNotFinished -> LostOkAnswer.Ok
+            else -> LostOkAnswer.Refused(CODE_NO_BUNDLE)
+        }
+    }
+
+    /** [resumeLostOk] while a [ReuseRecord] stands: the newest identity first, then the earlier one ([LostOk]). */
+    private suspend fun reuseLostOk(pin: String, reuse: ReuseRecord): RecoveryOpenOutcome {
+        val start = slots.active
+        val used = local.recoveryAttemptsUsed
+        val result = LostOk(
+            object : LostOk.Ports {
+                override suspend fun unlock(identity: Identity) = lostOkUnlock(identity, reuse, pin)
+            },
+        ).run(reuse.newRegistered)
+        return when (result) {
+            is LostOk.Result.Ok -> {
+                markReuse { it.copy(refusedSinceMs = null, lostOkDue = false) }
+                // The new identity's pairing has the fall back to the earlier one; the cleanup is in finishReuse.
+                finishReuse(pin, used, resuming = false).also { completeOpens(it) }.copy(attemptUsed = false)
+            }
+            is LostOk.Result.TransferIncomplete -> {
+                // The state is still under DEK_0: only an open repeats the recovery, while the recovery shows `registered`.
+                switchIdentity(Rules.slotForOpenAgain(reuse.newRegistered, reuse.newSlot, reuse.earlierSlot))
+                val registered = (readStatusWithK(session()) as? Rules.Read.Listed)?.registered == true
+                markReuse {
+                    it.copy(lostOkDue = false, startNew = !registered, refusedSinceMs = null)
+                }
+                RecoveryOpenOutcome(if (registered) CODE_OPEN_AGAIN else CODE_START_NEW, used, opened = true, attemptUsed = false)
+            }
+            is LostOk.Result.NoneOk -> {
+                switchIdentity(start)
+                val now = System.currentTimeMillis()
+                // A wrong PIN or a wait is the vault answering this phone; only other refusals count toward the day.
+                val refusal = Rules.countsAsRefusal(result.code)
+                val since = if (refusal) reuse.refusedSinceMs ?: now else reuse.refusedSinceMs
+                if (since != reuse.refusedSinceMs) markReuse { it.copy(refusedSinceMs = since) }
+                val scale = timeScaleFlow.value.scale
+                RecoveryOpenOutcome(
+                    result.code, used, opened = true, attemptUsed = false,
+                    contactVettid = Rules.showContact(reuse.keyInUse, refusal, since, now, scale),
+                )
+            }
+        }
+    }
+
+    /**
+     * After the new identity's open answered `ok` ([Pairing]): `hs.init` with `ctx` = the new `recovery_id`; with no `hs.resp`
+     * within the pairing timeout, the lost-ok unlock with the earlier identity and `hs.init` with the earlier `recovery_id`.
+     * The earlier identity and its records go only after the handshake completed.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun finishReuse(pin: String, used: Int?, resuming: Boolean): RecoveryOpenOutcome {
+        val reuse = local.reuse
+        // The earlier identity itself opened (or the new one never existed): one identity, paired with its own recovery_id.
+        if (reuse == null || !Rules.pairsWithFallback(reuse.newSlot, slots.active)) {
+            val out = finishOpened(session(), pin, used, resuming)
+            if (out.ok && reuse != null) reuseCleanup(Identity.EARLIER, openOk = true, pairingComplete = true)
+            return out
+        }
+        val result = Pairing(
+            object : Pairing.Ports {
+                @Suppress("ReturnCount", "SwallowedException") // no hs.resp is the answer that leads to the earlier identity
+                override suspend fun pair(identity: Identity): PairAnswer {
+                    switchIdentity(slotOf(reuse, identity) ?: return PairAnswer.NO_RESPONSE)
+                    val d = session().device
+                    if (d.deviceId != null) return PairAnswer.PAIRED
+                    return try {
+                        d.completeRecoveryOpen(Duration.ofSeconds(OPENED_HANDSHAKE_WAIT_S))
+                        PairAnswer.PAIRED
+                    } catch (e: TimeoutCancellationException) {
+                        android.util.Log.i("VaultManager", "no hs.resp for the new identity: trying the earlier one")
+                        PairAnswer.NO_RESPONSE
+                    }
+                }
+
+                override suspend fun unlockEarlier(): LostOkAnswer = lostOkUnlock(Identity.EARLIER, reuse, pin)
+            },
+        ).run()
+        return when (result) {
+            is Pairing.Result.Paired -> {
+                val s = session()
+                val refused = fetchRecovered(s, pin, unlockFirst = resuming)
+                if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
+                s.device.finishRecoveryOpen()
+                reuseCleanup(result.identity, openOk = true, pairingComplete = true)
+                RecoveryOpenOutcome("ok", used)
+            }
+            is Pairing.Result.Failed -> {
+                // Everything is kept; the identity whose open answered `ok` is the one in use again.
+                reuse.newSlot?.let { switchIdentity(it) }
+                RecoveryOpenOutcome(result.code, used, opened = true)
+            }
+        }
+    }
+
+    /** The paired identity stays; the other identity's keys and state go, and the reuse record ([Rules.mayDeleteEarlier]). */
+    @Suppress("ReturnCount")
+    private suspend fun reuseCleanup(paired: Identity, openOk: Boolean, pairingComplete: Boolean) {
+        val r = local.reuse ?: return
+        if (!Rules.mayDeleteEarlier(openOk, pairingComplete)) return
+        val keep = slotOf(r, paired) ?: return
+        val drop = slotOf(r, if (paired == Identity.NEW) Identity.EARLIER else Identity.NEW)
+        switchIdentity(keep)
+        if (drop != null && drop != keep) io { slots.clear(drop) }
+        val rec = record.recordGeneration
+        io { updateLocal(rec) { it.copy(reuse = null, sentOpens = emptyList(), recoveryOpenUnanswered = false) } }
     }
 
     override suspend fun recoveryOpened(): Boolean = guard { local.phone.inUse && session().device.recoveryOpenedNotFinished }
@@ -3147,6 +3699,8 @@ class VaultManager(
     override suspend fun abandonRecovery() {
         val d = guard { session().device }
         if (!d.recovering) return
+        // (0.1.78) K is never forgotten while an open's answer is unknown (also on `410 recovery_ended`).
+        if (!Rules.mayForget(undecidedNow())) throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
         // Release R (§11.14.6): after `ok` the vault's only unlock key is this phone's; it is never deleted here.
         if (local.phone.inUse && d.recoveryOpenedNotFinished) throw VaultFailure(FailureKind.OTHER, MoveRepository.CODE_RECOVERY_OPENED)
         dropSession(forget = true)
@@ -3744,7 +4298,6 @@ class VaultManager(
     }
 
     companion object {
-        private const val DEVICE_FILE = "vault-device.bin"
         private const val LOCK_FILE = "lock-record"
         private const val SOCIAL_FILE = "social.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
@@ -3813,6 +4366,21 @@ class VaultManager(
 
         /** (0.34.0) The resume of a lost `ok`: the unlock opened the vault but carried no `vault_bundle` for this phone. */
         const val CODE_NO_BUNDLE = "no_bundle"
+
+        /** (0.1.78) Refused: an open's answer is unknown; K is not forgotten and the phone does not start over. */
+        const val CODE_UNDECIDED = "undecided"
+        private const val CODE_REUSE_NOT_SAVED = "reuse_not_saved"
+        private const val CODE_HISTORY_NOT_SAVED = "history_not_saved"
+        private const val CODE_RETRY = "retry"
+
+        /** (0.1.80) A recovery code or claim naming another vault than the earlier open's. */
+        const val CODE_OTHER_VAULT = "other_vault"
+        private const val CODE_TRANSFER_INCOMPLETE = "transfer_incomplete"
+        private const val RECOVERY_REGISTERED = "registered"
+
+        /** (0.1.78) The lost-ok unlock's outcomes for [RecoveryOpenOutcome.code]: open again, or a new recovery with K. */
+        const val CODE_OPEN_AGAIN = "open_again"
+        const val CODE_START_NEW = "start_new"
 
         /** (0.34.0) A release with `recovery_r` and without `recovery_offered` (§11.10.9). */
         const val CODE_NOT_OFFERED = "not_offered"

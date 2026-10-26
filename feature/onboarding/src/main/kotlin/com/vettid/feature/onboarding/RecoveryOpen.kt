@@ -116,6 +116,12 @@ data class RecoveryOpenUiState(
      * recovery's own screen hands over to the end of setup ([RecoveryOpenPane]'s `onOpened`).
      */
     val opened: Boolean = false,
+    /** (ANDROID-PLAN 0.1.78) An open's answer is unknown: K is never forgotten, so "Start over" is not offered. */
+    val undecided: Boolean = false,
+    /** (0.1.78) The lost-ok unlock found the recovery still registered: the PIN and the password open it again. */
+    val openAgain: Boolean = false,
+    /** (0.1.80) A new recovery code may be used with this phone (it reuses the second identity). */
+    val newCodeAllowed: Boolean = false,
 ) {
     val canContinue: Boolean get() = pinValid && password.isNotEmpty()
 
@@ -149,6 +155,9 @@ data class RecoveryOpenUiState(
     }
 }
 
+private const val CODE_OPEN_AGAIN = "open_again"
+private const val CODE_START_NEW = "start_new"
+
 enum class OpenWarning { SECOND, FEW_LEFT }
 
 /**
@@ -173,7 +182,13 @@ class RecoveryOpenViewModel @Inject constructor(
             } catch (_: VaultFailure) {
                 false
             }
-            if (opened) state.update { it.copy(step = OpenStep.FINISH) }
+            if (opened) {
+                state.update { it.copy(step = OpenStep.FINISH) }
+            } else if (move.lostOkDue()) {
+                // A `200` on status, or `409 key_in_use` at a claim: this phone may be the vault's app (0.1.78).
+                finishLostOk()
+            }
+            state.update { it.copy(undecided = move.recoveryUndecided, newCodeAllowed = move.newCodeAllowed()) }
         }
     }
 
@@ -206,11 +221,13 @@ class RecoveryOpenViewModel @Inject constructor(
                 state.update {
                     it.copy(
                         step = if (opened) OpenStep.FINISH else OpenStep.ANSWERED, failure = e.kind, failureCode = e.code, outcome = null,
+                        undecided = runCatching { move.recoveryUndecided }.getOrDefault(it.undecided),
                     )
                 }
                 return@launch
             }
             answered(out)
+            state.update { it.copy(undecided = move.recoveryUndecided, newCodeAllowed = move.newCodeAllowed()) }
         }
     }
 
@@ -218,6 +235,16 @@ class RecoveryOpenViewModel @Inject constructor(
     private fun answered(out: RecoveryOpenOutcome) {
         when {
             out.ok -> state.update { RecoveryOpenUiState(step = OpenStep.DONE, outcome = out, used = out.used ?: it.used) }
+            // (0.1.78) The recovery still shows `registered`: the entries again, the open repeats it (no attempt is spent for it).
+            out.code == CODE_OPEN_AGAIN -> state.update {
+                it.copy(
+                    step = OpenStep.ENTER, outcome = null, failure = null, failureCode = null, lostOk = false, openAgain = true, pin = "",
+                )
+            }
+            // (0.1.78) The state is still under DEK_0 and the recovery has ended: a new recovery with K (approved text).
+            out.code == CODE_START_NEW -> state.update {
+                it.copy(step = OpenStep.ANSWERED, outcome = out, failure = null, pin = "", lostOk = false)
+            }
             // This phone's own unlock while finishing an `ok` recovery (a wrong PIN, a wait): nothing of the recovery used.
             out.opened -> state.update {
                 // Resuming a lost `ok`, the vault's `device_secret`: this phone is not in its unlock keys, the recovery
@@ -322,6 +349,11 @@ data class OpenAnswerText(
 fun openAnswerText(o: RecoveryOpenOutcome, rightButIncomplete: Boolean): OpenAnswerText {
     val left = o.left ?: RecoveryOpenOutcome.ATTEMPTS
     return when {
+        // (0.1.78) Approved texts: the lost-ok unlock refused for a day, and a new recovery with this phone.
+        o.contactVettid -> OpenAnswerText(R.string.onboarding_open_took_phone)
+        // DRAFT (ANDROID-PLAN 0.1.80): both identities stand and the vault does not take this phone.
+        o.contactCouldNotRecover -> OpenAnswerText(R.string.recover_could_not_recover)
+        o.code == CODE_START_NEW -> OpenAnswerText(R.string.recover_could_not_tell)
         rightButIncomplete && o.retryAt != null ->
             OpenAnswerText(R.string.onboarding_open_right_incomplete, listOf(left), withRetryAt = true)
         o.opened -> OpenAnswerText(openedText(o.code))
@@ -404,7 +436,9 @@ private fun openedText(code: String): Int = when (code) {
 }
 
 /** Answers after which this recovery cannot go on: a try again cannot help. */
-private val ENDED = setOf("exhausted", "closed", "not_armed", "stored_mismatch", "no_recovery", "expired", "attestation", "bad_request")
+private val ENDED = setOf(
+    "start_new", "exhausted", "closed", "not_armed", "stored_mismatch", "no_recovery", "expired", "attestation", "bad_request",
+)
 
 /** Answers that end this recovery but leave a new one possible: "Start a new recovery". */
 private val NEW_RECOVERY = setOf("no_recovery", "expired")
@@ -442,19 +476,23 @@ fun RecoveryOpenPane(
      * `finish`), so that the screen never stays when the app has not opened by itself.
      */
     onOpened: () -> Unit = {},
+    /** (0.1.78) "Use a new recovery code": a new recovery, claimed with the same K. */
+    onNewCode: (() -> Unit)? = null,
 ) {
     SecureWindow()
+    // K is never forgotten while an open's answer is unknown (0.1.78): no start over then.
+    val startOver = onStartOver.takeUnless { state.undecided }
     LaunchedEffect(state.opened) { if (state.opened) onOpened() }
     Column(
         modifier.fillMaxWidth().padding(Spacing.gutter).testTag("recovery_open"),
         verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
         when (state.step) {
-            OpenStep.ENTER -> OpenEntry(state, vm, onStartOver)
+            OpenStep.ENTER -> OpenEntry(state, vm, startOver)
             OpenStep.CHECK -> OpenCheck(state, vm)
             OpenStep.SENDING -> CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-            OpenStep.ANSWERED -> OpenAnswer(state, vm, onStartOver)
-            OpenStep.FINISH -> OpenFinish(state, vm)
+            OpenStep.ANSWERED -> OpenAnswer(state, vm, startOver, onNewCode)
+            OpenStep.FINISH -> OpenFinish(state, vm, onNewCode)
             OpenStep.DONE -> OpenDone(state, vm)
         }
     }
@@ -462,7 +500,7 @@ fun RecoveryOpenPane(
 
 /** The vault answered `ok` earlier: the PIN alone finishes opening it. No new open, no start over. */
 @Composable
-private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
+private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onNewCode: (() -> Unit)?) {
     Text(
         stringResource(if (state.lostOk) R.string.onboarding_open_lost_title else R.string.onboarding_open_finish_title),
         style = MaterialTheme.typography.titleLarge,
@@ -485,6 +523,13 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
     val failure = state.failure
     if (o != null && o.opened) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(openAnswerText(o, false).res))
+        if (o.contactVettid || o.contactCouldNotRecover) ContactSupport()
+        // The lost-ok unlock found nothing: a new recovery code can still use this phone (the second identity is reused).
+        if (state.newCodeAllowed && onNewCode != null) {
+            OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_lost_ok")) {
+                Text(stringResource(R.string.recover_undecided_new_code))
+            }
+        }
     } else if (failure != null) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), failureText(failure.messageRes()))
     }
@@ -498,6 +543,29 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
             Text(stringResource(R.string.onboarding_open_back))
         }
     }
+}
+
+/** Recovery is ruled out for now: the contact line, and (not terminal) a new code that reuses the second identity. */
+@Composable
+private fun RuledOut(newCodeAllowed: Boolean, onNewCode: (() -> Unit)?) {
+    ContactSupport()
+    if (newCodeAllowed && onNewCode != null) {
+        OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_ruled_out")) {
+            Text(stringResource(R.string.recover_undecided_new_code))
+        }
+    }
+}
+
+/** "Contact VettID": the support address, as a mail button (the address is shown when no mail app takes it). */
+@Composable
+private fun ContactSupport() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var noMail by remember { androidx.compose.runtime.mutableStateOf(false) }
+    // The button label is a DRAFT (pending the owner's wording).
+    OutlinedButton(onClick = { noMail = !SupportMail.open(context) }, modifier = Modifier.testTag("open_contact_support")) {
+        Text(stringResource(R.string.onboarding_open_contact_support, SupportMail.ADDRESS))
+    }
+    if (noMail) Text(SupportMail.ADDRESS, style = MaterialTheme.typography.bodyMedium)
 }
 
 /** The vault no longer has this phone: "Erase VettID from this phone", after a confirmation. */
@@ -542,6 +610,13 @@ private fun OpenDone(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
 @Composable
 private fun OpenEntry(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onStartOver: (() -> Unit)?) {
     Text(stringResource(R.string.onboarding_open_title), style = MaterialTheme.typography.titleLarge)
+    if (state.openAgain) {
+        Text(
+            stringResource(R.string.onboarding_open_again),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.testTag("open_again_note"),
+        )
+    }
     OutlinedTextField(
         value = state.pin,
         onValueChange = vm::setPin,
@@ -618,8 +693,8 @@ private fun OpenCheck(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
 }
 
 @Composable
-@Suppress("SpreadOperator") // a string's arguments
-private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onStartOver: (() -> Unit)?) {
+@Suppress("SpreadOperator", "CyclomaticComplexMethod") // a string's arguments; one branch per kind of answer
+private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, onStartOver: (() -> Unit)?, onNewCode: (() -> Unit)?) {
     val o = state.outcome
     if (o == null) {
         OpenNoAnswer(state, vm, onStartOver)
@@ -651,6 +726,12 @@ private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, on
     if (o.code == "no_recovery" && o.afterUnanswered) {
         Button(onClick = vm::finishLostOk, modifier = Modifier.testTag("open_lost_ok")) {
             Text(stringResource(R.string.onboarding_open_lost_title))
+        }
+    }
+    if (o.contactCouldNotRecover) RuledOut(state.newCodeAllowed, onNewCode)
+    if (o.code == CODE_START_NEW && onNewCode != null) {
+        Button(onClick = onNewCode, modifier = Modifier.testTag("open_new_code")) {
+            Text(stringResource(R.string.recover_undecided_new_code))
         }
     }
     OpenAnswerActions(o.code, waiting = retryAt != null && now < retryAt.toEpochMilli(), vm, onStartOver)

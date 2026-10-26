@@ -6,6 +6,7 @@ import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.RecoveryCodes
 import com.vettid.core.altchan.TypedRecoveryCode
 import com.vettid.core.data.vault.AccountRepository
+import com.vettid.core.data.vault.CouldNotTell
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.PreflightInfo
@@ -79,6 +80,9 @@ enum class CodeRefusal {
 
     /** A recovery QR of another environment's portal (its `api`, §11.11.2, 0.15.0). */
     OTHER_ENVIRONMENT,
+
+    /** (ANDROID-PLAN 0.1.80) A recovery code for another vault than the one of this phone's earlier open; nothing was registered. */
+    OTHER_VAULT,
 
     /** A recovery QR without `api` (an account site from before 0.15.0): apps of 0.15.0 require it. */
     NO_API,
@@ -156,6 +160,13 @@ data class RecoverUiState(
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorShown: String? = null,
     val errorCode: String? = null,
+    /**
+     * (ANDROID-PLAN 0.1.78) An open's answer is unknown: K is never forgotten and "Start over" is not offered
+     * ([MoveRepository.recoveryUndecided]).
+     */
+    val undecided: Boolean = false,
+    /** (0.1.78) What the look at status with K found on [RecoverStep.ENDED]; null while it runs or when none applies. */
+    val couldNotTell: CouldNotTell? = null,
 ) {
     /** The PIN may be entered and sent now (§11.10.6: never to an older release; the enclave's backoff). */
     val pinAllowed: Boolean
@@ -205,6 +216,12 @@ interface RecoverActions {
 
     /** The ended step: back to the PIN for another try (what ended it there is not proof). */
     fun tryPinAgain()
+
+    /** (0.1.78) The ended step after an open whose answer was lost: look at status with K again (not before 5 minutes). */
+    fun checkAgain()
+
+    /** (0.1.78) The member started a new recovery on the account site: its code is scanned or typed and claimed with the same K. */
+    fun useNewCode()
     fun finish()
 }
 
@@ -363,6 +380,11 @@ class RecoverViewModel @Inject constructor(
                         toPin()
                     }
                     is RecoveryRegistration.Refused -> refused(from, r.recoveryId ?: countKey, r.code)
+                    // (0.1.78) `409 key_in_use`, or the earlier open's readable `ok`: this phone is the vault's; the PIN finishes it.
+                    RecoveryRegistration.KeyInUse, RecoveryRegistration.EarlierOpened -> {
+                        state.update { it.copy(busy = false, typed = "", typedProblem = null) }
+                        toPin()
+                    }
                 }
             } catch (e: VaultFailure) {
                 state.update { it.copy(step = from, busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode) }
@@ -394,6 +416,7 @@ class RecoverViewModel @Inject constructor(
             CODE_NONE, CODE_USED -> CodeRefusal.GONE
             CODE_NOT_AVAILABLE -> CodeRefusal.NOT_AVAILABLE
             CODE_NOT_OFFERED -> CodeRefusal.NOT_OFFERED
+            CODE_OTHER_VAULT -> CodeRefusal.OTHER_VAULT
             CODE_NO_BACKUP -> {
                 state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, refusal = null, typed = "", typedProblem = null) }
                 noBackup()
@@ -419,7 +442,12 @@ class RecoverViewModel @Inject constructor(
     // --- the PIN (§11.11.5 step 1) ---
 
     private fun toPin() {
-        state.update { it.copy(step = RecoverStep.PIN, preflight = null, preflightError = null, phoneSecret = vault.usesPhoneSecret) }
+        state.update {
+            it.copy(
+                step = RecoverStep.PIN, preflight = null, preflightError = null, phoneSecret = vault.usesPhoneSecret,
+                undecided = move.recoveryUndecided,
+            )
+        }
         retryPreflight()
     }
 
@@ -444,8 +472,46 @@ class RecoverViewModel @Inject constructor(
     private fun ended() {
         ticker?.cancel()
         state.update {
-            it.copy(step = RecoverStep.ENDED, busy = false, pin = "", pinWrong = false, waitSeconds = 0, error = null, errorCode = null)
+            it.copy(
+                step = RecoverStep.ENDED, busy = false, pin = "", pinWrong = false, waitSeconds = 0, error = null, errorCode = null,
+                undecided = move.recoveryUndecided, couldNotTell = null,
+            )
         }
+        lookAtStatus()
+    }
+
+    /**
+     * (0.1.78) After an open whose answer was never readable: status with K (twice, 5 minutes apart). `200` leads to the
+     * PIN (the lost-ok unlock, or an open again); two ended answers offer a new recovery. Nothing is deleted by any answer.
+     */
+    private fun lookAtStatus() {
+        viewModelScope.launch {
+            val c = try {
+                move.couldNotTell()
+            } catch (_: VaultFailure) {
+                CouldNotTell(CouldNotTell.Kind.UNKNOWN)
+            }
+            when (c.kind) {
+                CouldNotTell.Kind.LOST_OK, CouldNotTell.Kind.OPEN_AGAIN -> toPin()
+                else -> state.update { it.copy(couldNotTell = c, undecided = move.recoveryUndecided) }
+            }
+        }
+    }
+
+    override fun checkAgain() {
+        val s = state.value
+        if (s.step != RecoverStep.ENDED || s.busy) return
+        state.update { it.copy(couldNotTell = null) }
+        lookAtStatus()
+    }
+
+    override fun useNewCode() {
+        val s = state.value
+        val fromEnded = s.step == RecoverStep.ENDED && s.couldNotTell?.kind == CouldNotTell.Kind.START_NEW
+        // Also from the lost-ok step once the rule allowed a new code that reuses the second identity (0.1.80).
+        val fromPin = s.step == RecoverStep.PIN && move.newCodeAllowed()
+        if (!fromEnded && !fromPin) return
+        state.update { it.copy(step = RecoverStep.SCAN, refusal = null, error = null, typedProblem = null) }
     }
 
     private fun UnlockAttempt.Failed.recoveryEnded(): Boolean =
@@ -562,7 +628,8 @@ class RecoverViewModel @Inject constructor(
 
     override fun askStartOver() {
         val s = state.value
-        if (s.busy || s.step !in LEAVABLE) return
+        val undecided = s.undecided || move.recoveryUndecided
+        if (s.busy || s.step !in LEAVABLE || undecided) return
         state.update { it.copy(confirmStartOver = true) }
     }
 
@@ -611,6 +678,7 @@ class RecoverViewModel @Inject constructor(
         /** (0.34.0) The release does not offer recovery (§11.10.9, §11.14.13). */
         const val CODE_NOT_OFFERED = "not_offered"
         const val CODE_UNKNOWN_DEVICE = "unknown_device"
+        const val CODE_OTHER_VAULT = "other_vault"
         const val CODE_REQUIRED = "credential_required"
         const val CODE_NO_BACKUP = "no_backup"
         private const val SIGNER_REFUSED = "signer_refused"

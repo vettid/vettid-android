@@ -304,4 +304,74 @@ class RecoveryOpenViewModelTest {
         vault.recoveryAttemptsUsed = 8
         assertEquals(OpenWarning.FEW_LEFT, RecoveryOpenViewModel(vault, vault).uiState.value.warning)
     }
+
+    // --- ANDROID-PLAN 0.1.78 "A phone that could not tell" ---
+
+    @Test
+    fun aDueLostOkUnlockOpensTheLostOkStepAtOnce() = runTest {
+        vault.lostOkDueValue = true // a 200 on status, or 409 key_in_use at a claim
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals(OpenStep.FINISH, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.lostOk)
+    }
+
+    @Test
+    fun theLostOkUnlockStillRecoveringStaysOnTheStepAndNothingIsForgotten() = runTest {
+        vault.lostOkDueValue = true
+        vault.undecidedValue = true
+        vault.lostOkOutcomes.add(RecoveryOpenOutcome("device_secret", 1, opened = true, attemptUsed = false, contactVettid = true))
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("975310")
+        vm.send()
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(OpenStep.FINISH, s.step)
+        assertTrue(s.undecided) // no start over
+        // The approved text, not the table's.
+        assertEquals(R.string.onboarding_open_took_phone, openAnswerText(s.outcome!!, false).res)
+        assertTrue(vault.calls.none { it == "abandonRecovery" })
+    }
+
+    @Test
+    fun aLostOkUnlockThatNeedsAnOpenGoesBackToTheEntriesWhenTheRecoveryIsStillRegistered() = runTest {
+        vault.lostOkDueValue = true
+        vault.lostOkOutcomes.add(RecoveryOpenOutcome("open_again", 1, opened = true, attemptUsed = false))
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("975310")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(OpenStep.ENTER, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.openAgain)
+    }
+
+    @Test
+    fun aLostOkUnlockThatNeedsANewRecoveryShowsTheApprovedText() = runTest {
+        vault.lostOkDueValue = true
+        vault.lostOkOutcomes.add(RecoveryOpenOutcome("start_new", 1, opened = true, attemptUsed = false))
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("975310")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(OpenStep.ANSWERED, vm.uiState.value.step)
+        assertEquals(R.string.recover_could_not_tell, openAnswerText(vm.uiState.value.outcome!!, false).res)
+        assertFalse(openCanTryAgain("start_new"))
+    }
+
+    @Test
+    fun theLostOkStepOffersANewCodeOnlyWhenTheRuleAllowedIt() = runTest {
+        vault.lostOkDueValue = true
+        vault.undecidedValue = true
+        vault.newCodeAllowedValue = true
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.newCodeAllowed)
+        vault.newCodeAllowedValue = false
+        val other = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        assertFalse(other.uiState.value.newCodeAllowed)
+    }
 }
