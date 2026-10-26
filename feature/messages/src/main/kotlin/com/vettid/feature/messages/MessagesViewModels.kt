@@ -176,16 +176,15 @@ class ConversationViewModel @Inject constructor(
             connections.connections,
             messages.olderAvailable(connectionId),
             attachments.available,
-            calls.availability,
-        ) { s, ms, cs, older, photos, call ->
+        ) { s, ms, cs, older, photos ->
             s.copy(
                 messages = ms,
                 connection = cs.firstOrNull { it.id == connectionId } ?: s.connection,
                 olderAvailable = older,
                 photosAvailable = photos,
-                call = call,
             )
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
+        }.combine(calls.availability) { s, call -> s.copy(call = call) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
     init {
         viewModelScope.launch {
