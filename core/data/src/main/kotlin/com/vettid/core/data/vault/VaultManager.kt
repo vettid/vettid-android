@@ -30,6 +30,8 @@ import com.vettid.core.data.items.SharingManager
 import com.vettid.core.data.items.VaultSharingOps
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.devices.DevicesManager
+import com.vettid.core.data.devices.PairingManager
+import com.vettid.core.data.devices.VaultPairingOps
 import com.vettid.core.data.devices.VaultDevicesOps
 import com.vettid.core.data.feed.FeedManager
 import com.vettid.core.data.feed.VaultFeedOps
@@ -895,6 +897,20 @@ class VaultManager(
         ops = { VaultDevicesOps(openApi()) },
         self = { session?.device?.deviceId },
         onDeviceGone = { social.dropDeviceRequests(it) },
+        // The pairing in progress goes wherever the list does (lock, hold, wipe, deletion).
+        onClear = { pairing.clear() },
+    )
+
+    /** Pairing an agent (ANDROID-PLAN 0.1.53 AA2): the code, the comparison, the approval. Memory only, cleared with [devices]. */
+    val pairing: PairingManager = PairingManager(
+        scope,
+        ops = { VaultPairingOps(openApi()) },
+        knownDeviceIds = { devices.devices.value.takeIf { devices.load.value == ListLoad.LOADED }?.map { it.id }?.toSet() },
+        readDevices = {
+            devices.refresh()
+            devices.devices.value
+        },
+        onPaired = { devices.refreshQuietly() },
     )
 
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
@@ -1375,6 +1391,7 @@ class VaultManager(
                     items.onEvent(m)
                     sharing.onEvent(m)
                     devices.onEvent(m)
+                    pairing.onEvent(m)
                     social.onEvent(m)
                     attachments.onEvent(m.type, m.body)
                     // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.

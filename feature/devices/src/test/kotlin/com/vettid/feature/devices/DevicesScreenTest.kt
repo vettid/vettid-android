@@ -57,6 +57,20 @@ class DevicesScreenTest {
     }
 
     @Test
+    fun thePairButtonIsThereWithOnlyThisPhoneAndWithAgents() {
+        var pairs = 0
+        rule.setContent { DevicesScreen(state(phone), chrome, now = now, onPair = { pairs++ }) }
+        rule.onNodeWithContentDescription("Pair an agent").performClick()
+        assertEquals(1, pairs)
+    }
+
+    @Test
+    fun theListShowsThePairButtonBesideAgents() {
+        list(state(phone, agent))
+        rule.onNodeWithTag("pair_agent").assertIsDisplayed()
+    }
+
+    @Test
     fun aSessionPastItsEndIsNoAccess() {
         list(state(phone, agent.copy(sessionExpiresAt = now.minusSeconds(1))))
         rule.onNodeWithText("No access").assertIsDisplayed()

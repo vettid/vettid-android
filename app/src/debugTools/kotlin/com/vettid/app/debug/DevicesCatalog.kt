@@ -10,7 +10,14 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.feature.devices.DeviceConfirm
 import com.vettid.feature.devices.DeviceFailure
+import com.vettid.core.data.devices.PairingCode
+import com.vettid.core.data.devices.PairingStage
+import com.vettid.core.data.devices.PairingState
+import com.vettid.core.data.devices.PendingPairing
 import com.vettid.feature.devices.DevicePageActions
+import com.vettid.feature.devices.PairActions
+import com.vettid.feature.devices.PairScreen
+import com.vettid.feature.devices.PairUiState
 import com.vettid.feature.devices.DevicePageScreen
 import com.vettid.feature.devices.DeviceUiState
 import com.vettid.feature.devices.DevicesScreen
@@ -43,6 +50,13 @@ internal object DevicesCatalog {
     @Composable
     private fun Page(s: DeviceUiState) = DevicePageScreen(s, DevicePageActions())
 
+    private val code = PairingCode("p1", "eyJ2IjoyLCJ0IjoiYSIsInIiOiJodHRwczovL3JlbGF5LnZldHRpZC5vcmcifQ", now.plus(581, ChronoUnit.SECONDS))
+    private val pending = PendingPairing("p1", "Claude on work laptop", "123456", now.plus(10, ChronoUnit.MINUTES))
+
+    @Composable
+    private fun Pair(stage: PairingStage, sheet: Boolean = false, held: Boolean = false, error: FailureKind? = null) =
+        PairScreen(PairUiState(PairingState(stage, error = error), held = held, sheet = sheet), PairActions())
+
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "devices" to { Screen(list(phone, agent, paused, desktop, unknown)) },
         "devices.empty" to { Screen(list(phone)) },
@@ -58,5 +72,15 @@ internal object DevicesCatalog {
         "devices.remove_desktop_confirm" to { Page(DeviceUiState(device = desktop, loaded = true, confirm = DeviceConfirm.REMOVE)) },
         "devices.end_failed" to { Page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.END_ACCESS, error = FailureKind.NETWORK)) },
         "devices.remove_failed" to { Page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.REMOVE, error = FailureKind.NETWORK)) },
+        "devices.pair_code" to { Pair(PairingStage.Code(code)) },
+        "devices.pair_expired" to { Pair(PairingStage.CodeExpired("p1", now)) },
+        "devices.pair_failed" to { Pair(PairingStage.Idle, error = FailureKind.NETWORK) },
+        "devices.pair_compare" to { Pair(PairingStage.Compare(pending)) },
+        "devices.pair_compare_sheet" to { Pair(PairingStage.Compare(pending), sheet = true) },
+        "devices.pair_cannot_compare" to { Pair(PairingStage.Compare(PendingPairing("p1", "Claude", null, pending.ends))) },
+        "devices.pair_rejected" to { Pair(PairingStage.Rejected(told = true)) },
+        "devices.pair_paired" to { Pair(PairingStage.Paired("Claude on work laptop", "a1")) },
+        "devices.pair_ended" to { Pair(PairingStage.Ended) },
+        "devices.pair_lost" to { Pair(PairingStage.Idle, held = true) },
     )
 }

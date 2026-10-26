@@ -235,6 +235,8 @@ class DevicesManager(
     private val ops: suspend () -> DevicesOps,
     private val self: () -> String? = { null },
     private val onDeviceGone: suspend (String) -> Unit = {},
+    /** Also forgotten with the list (the pairing held for it, AA2): every lock, hold, wipe and deletion clears both. */
+    private val onClear: () -> Unit = {},
 ) : DevicesRepository {
     private val lock = Any()
     private val list = MutableStateFlow<List<DeviceInfo>>(emptyList())
@@ -261,6 +263,7 @@ class DevicesManager(
             removedFlow.value = null
         }
         loadState.value = ListLoad.NOT_LOADED
+        onClear()
     }
 
     /** `sync.event` of kinds that change the list (§10.1). */

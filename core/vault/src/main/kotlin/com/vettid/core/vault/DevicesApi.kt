@@ -26,3 +26,31 @@ suspend fun VaultApi.deviceUnlink(deviceId: String) {
  */
 suspend fun VaultApi.leashGrantList(agentId: String? = null): JsonObject =
     device.op("leash.grant.list", buildJsonObject { agentId?.let { put("agent_id", it) } })
+
+/*
+ * Pairing an agent (ANDROID-PLAN 0.1.53 AA2; VAULT-MESSAGING §6.7, §10.3). Only an agent is ever paired from the app
+ * (decision 9: no "Pair a desktop"), so the role is not a parameter.
+ */
+
+/** `device.pair.create{role: "agent"}` (§10.3): `{pairing_id, link, exp}`; the link is a bare pairing payload (§6.4). */
+suspend fun VaultApi.devicePairCreateAgent(): JsonObject =
+    device.op("device.pair.create", buildJsonObject { put("role", "agent") })
+
+/**
+ * `device.pair.approve{pairing_id, session_seconds?}` (§10.3): `{}`. Never carries `grants` (decision 2: an agent's
+ * reading permissions are share rules, which the approval refuses), so it needs no unlock window.
+ */
+suspend fun VaultApi.devicePairApprove(pairingId: String, sessionSeconds: Int?) {
+    device.op(
+        "device.pair.approve",
+        buildJsonObject {
+            put("pairing_id", pairingId)
+            sessionSeconds?.let { put("session_seconds", it) }
+        },
+    )
+}
+
+/** `device.pair.reject{pairing_id}` (§10.3): `{}`; the vault tells the new device once it has scanned (§6.7). */
+suspend fun VaultApi.devicePairReject(pairingId: String) {
+    device.op("device.pair.reject", buildJsonObject { put("pairing_id", pairingId) })
+}
