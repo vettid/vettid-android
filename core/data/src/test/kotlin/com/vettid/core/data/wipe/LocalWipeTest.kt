@@ -167,10 +167,11 @@ class LocalWipeTest {
         }
         LocalWipe(t).erase()
         assertEquals(LocalWipe.KNOWN_ALIASES, deleted)
+        // (ANDROID-PLAN §4 step 5) The device attestation keys of the builds before slots and of every identity slot.
+        val attestation = listOf("vettid.device_attestation.v1") +
+            (0..1).flatMap { s -> (0 until 16).map { "vettid.device_attestation.v1.slot$s.$it" } }
         assertEquals(
-            listOf(
-                "vettid.device_attestation.v1", "vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.app_api.v1", "vettid.local_files.v1",
-            ),
+            attestation + listOf("vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.app_api.v1", "vettid.local_files.v1"),
             LocalWipe.KNOWN_ALIASES,
         )
     }

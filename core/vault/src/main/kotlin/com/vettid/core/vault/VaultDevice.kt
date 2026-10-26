@@ -1010,14 +1010,15 @@ class VaultDevice private constructor(
 
     /**
      * After an `ok` open: `hs.init` with purpose `app` and `ctx` = `recovery_id` (accepted without approval, as the
-     * first app's), deposited with the token from the result.
+     * first app's), deposited with the token from the result. [ctx]: the `recovery_id` of the registration whose attested
+     * key answered the `ok` (VAULT-MESSAGING §11.14.6 "Pairing"), when the app knows it; else the one registered last.
      */
-    suspend fun completeRecoveryOpen(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
+    suspend fun completeRecoveryOpen(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S), ctx: String? = null) {
         lock.withLock {
             val v = requireVault()
             val rec = st.recovery ?: throw VaultStateException("no recovery registered")
             if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
-            startInit(Purpose.APP, rec.recoveryId, v.token, null)
+            startInit(Purpose.APP, ctx ?: rec.recoveryId, v.token, null)
             save()
         }
         // The recovery stays registered until the credential is here too (finishRecoveryOpen).

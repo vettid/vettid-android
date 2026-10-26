@@ -101,8 +101,8 @@ class LocalWipe(private val targets: WipeTargets, private val hooks: List<suspen
     @Suppress("TooGenericExceptionCaught")
     fun erase(): Boolean {
         runCatching { targets.cancelNotifications() }
-        // The known aliases first (device attestation, the seed wrap key of the device and relay keys,
-        // the local files key, the biometric app-data key), then anything else in the app's Keystore.
+        // The known aliases first (device attestation, every identity slot's too, the seed wrap key of the device and
+        // relay keys, the local files key, the biometric app-data key), then anything else in the app's Keystore.
         val aliases = (KNOWN_ALIASES + runCatching { targets.keyAliases() }.getOrDefault(emptyList())).distinct()
         for (a in aliases) {
             try {
@@ -175,8 +175,7 @@ class LocalWipe(private val targets: WipeTargets, private val hooks: List<suspen
         private val MARKER_CONTENT = "1".toByteArray()
 
         /** Every Keystore alias the app creates. */
-        val KNOWN_ALIASES: List<String> = listOf(
-            AndroidKeys.ALIAS_DEVICE_ATTESTATION,
+        val KNOWN_ALIASES: List<String> = AndroidKeys.DEVICE_ATTESTATION_ALIASES + listOf(
             AndroidKeys.ALIAS_SEED_WRAP,
             AndroidKeys.ALIAS_APP_DATA,
             AndroidKeys.ALIAS_APP_API,
