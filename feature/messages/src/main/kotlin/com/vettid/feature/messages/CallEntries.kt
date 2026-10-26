@@ -41,10 +41,17 @@ object CallEntries {
         CallOutcome.ANSWERED_ELSEWHERE, CallOutcome.ONGOING -> null
     }
 
-    /** Messages and calls in one list, oldest first; calls without an entry left out. */
-    fun rows(messages: List<MessageInfo>, calls: List<CallHistoryEntry>): List<ConversationRow> =
-        (messages.map { ConversationRow.Message(it) } + calls.filter { text(it.outcome) != null }.map { ConversationRow.Call(it) })
-            .sortedBy { it.at }
+    /**
+     * Messages and calls in one list, oldest first; calls without an entry left out. [notBefore]: when older
+     * messages remain in the vault the list starts at its oldest loaded message, so a call before it is left out
+     * (it would hang above the messages with nothing around it); it comes back with the older page.
+     */
+    fun rows(messages: List<MessageInfo>, calls: List<CallHistoryEntry>, notBefore: Instant? = null): List<ConversationRow> =
+        (
+            messages.map { ConversationRow.Message(it) } +
+                calls.filter { text(it.outcome) != null && (notBefore == null || !it.startedAt.isBefore(notBefore)) }
+                    .map { ConversationRow.Call(it) }
+            ).sortedBy { it.at }
 
     /** A duration as its two largest parts: (hours, minutes), (minutes, seconds) or (seconds) alone. */
     data class Parts(val hours: Long, val minutes: Long, val seconds: Long)

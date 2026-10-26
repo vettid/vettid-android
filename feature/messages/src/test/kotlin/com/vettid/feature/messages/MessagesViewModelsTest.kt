@@ -283,6 +283,22 @@ class MessagesViewModelsTest {
         calls.availability.value = CallAvailability.READY
         advanceUntilIdle()
         assertEquals(listOf("k1", "k3", "k4"), vm.uiState.value.calls.map { it.callId })
+
+        // Review of #128: a vault not known to be open keeps none of its history in memory.
+        calls.availability.value = CallAvailability.UNKNOWN
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.calls.isEmpty())
+    }
+
+    /** Review of #128: with older messages still in the vault, a call before the oldest loaded message is left out. */
+    @Test
+    fun aCallBeforeTheOldestLoadedMessageIsLeftOutWhileOlderOnesRemain() {
+        val msg = com.vettid.core.testing.FakeSocial.message("c2", "m1", "hi", outgoing = true, minute = 30)
+        val before = CallHistoryEntry("k0", "c2", true, CallOutcome.TALKED, msg.sentAt.minusSeconds(3600), Duration.ofSeconds(5))
+        val after = CallHistoryEntry("k1", "c2", true, CallOutcome.MISSED, msg.sentAt.plusSeconds(60))
+        assertEquals(2, CallEntries.rows(listOf(msg), listOf(before, after)).count { it is ConversationRow.Call })
+        val rows = CallEntries.rows(listOf(msg), listOf(before, after), notBefore = msg.sentAt)
+        assertEquals(listOf("k1"), rows.filterIsInstance<ConversationRow.Call>().map { it.call.callId })
     }
 
     /** Review P4 of #128: read at the moment a call ends, the vault's history may not have that ending yet. */

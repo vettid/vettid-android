@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.media.ToneGenerator
+import com.vettid.core.notify.Channels
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -136,7 +137,7 @@ class AndroidCallAudio(context: Context) : CallAudio {
     }
 }
 
-/** [CallTones] with the platform's tone generator and the phone's own ringtone. */
+/** [CallTones] with the platform's tone generator and VettID's own ringtone (the Calls channel's sound, owner decision 2026-10-26). */
 class AndroidCallTones(context: Context) : CallTones {
     private val app = context.applicationContext
     private var tone: ToneGenerator? = null
@@ -161,7 +162,7 @@ class AndroidCallTones(context: Context) : CallTones {
             ringtone?.stop()
             ringtone = null
             if (on) {
-                ringtone = RingtoneManager.getRingtone(app, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.apply {
+                ringtone = RingtoneManager.getRingtone(app, Channels.soundUri(app, com.vettid.core.notify.R.raw.vettid_ringtone))?.apply {
                     audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build()
                     isLooping = true
                     play()

@@ -389,10 +389,15 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
     }
 }
 
+@Suppress("CyclomaticComplexMethod") // messages, calls and photo bubbles of one list
 @Composable
 private fun MessageList(state: ConversationUiState, name: String, listState: LazyListState, actions: ConversationActions) {
     val onLongPress = actions.onLongPress
-    val rows = CallEntries.rows(state.messages, state.calls)
+    val rows = CallEntries.rows(
+        state.messages,
+        state.calls,
+        if (state.olderAvailable) state.messages.firstOrNull()?.sentAt else null,
+    )
     val byDay = rows.groupBy { Times.day(it.at) }
     val older by rememberUpdatedState(state.olderAvailable)
     val onLoadOlder by rememberUpdatedState(actions.onLoadOlder)

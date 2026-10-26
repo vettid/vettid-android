@@ -149,13 +149,14 @@ data class ConversationUiState(
     val callEnabled: Boolean get() = call != CallAvailability.IN_CALL
 }
 
+/** After a call ended its history is read once more, this much later (the vault takes the hang-up in a moment). */
+private const val HISTORY_AGAIN_MS = 2_000L
+
 /**
  * A conversation (ANDROID-PLAN §4): the messages with one connection, oldest
  * first; incoming messages are marked read while it is open (the vault sends
  * read receipts, §10.5); send, and delete a message on this vault only.
  */
-/** After a call ended its history is read once more, this much later (the vault takes the hang-up in a moment). */
-private const val HISTORY_AGAIN_MS = 2_000L
 
 @HiltViewModel
 @Suppress("TooManyFunctions") // the conversation's and its photos' actions
@@ -200,6 +201,10 @@ class ConversationViewModel @Inject constructor(
                     delay(HISTORY_AGAIN_MS)
                     val later = calls.history(connectionId)
                     local.update { it.copy(calls = later) }
+                } else if (a != CallAvailability.IN_CALL) {
+                    // Not known to be open with calls (locked, asked again, not in the build or vault): nothing of the
+                    // vault's history is kept in memory (the rule of #164/#167). During a call the list stays.
+                    local.update { it.copy(calls = emptyList()) }
                 }
             }
         }

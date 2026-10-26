@@ -52,6 +52,9 @@ object CallsModule {
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
         override val unlocked: Flow<Boolean> = m.phase.map { it == AppPhase.Unlocked }.distinctUntilChanged()
 
+        /** The root UI shows the release update over every phase while its progress is non-null (VettIdApp). */
+        override val updateShowing: Boolean get() = m.releaseUpdate.progress.value != null
+
         /**
          * The events of the vault device in use, from the moment its session exists (before the vault is open): the
          * call that was waiting in the mailbox at an unlock is collected right then, and the device's events are not

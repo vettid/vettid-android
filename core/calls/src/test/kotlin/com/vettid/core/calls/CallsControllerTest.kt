@@ -89,6 +89,7 @@ class CallsControllerTest {
 
     private class Vault : CallVault {
         override val unlocked = MutableStateFlow(false)
+        override var updateShowing = false
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
         override val recheck = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
@@ -398,6 +399,21 @@ class CallsControllerTest {
         vault.gateway.channel.send(offer())
         advanceTimeBy(10_001)
         assertEquals(CallState.Idle, c.state.value)
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /** Review of #128: while the release-update screen covers the app there is no screen to answer on: no ring. */
+    @Test
+    fun anOfferDoesNotRingWhileTheReleaseUpdateScreenShows() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        vault.updateShowing = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T64", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(!audio.ringtone)
         assertEquals(1, c.diagnostics.value.refused)
     }
 

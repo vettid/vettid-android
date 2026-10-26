@@ -7,6 +7,7 @@ import com.vettid.core.data.calls.CallOutcome
 import com.vettid.core.vault.CallReason
 import com.vettid.core.vault.CallRecord
 import com.vettid.core.vault.VaultOpException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -32,6 +33,9 @@ import java.time.Instant
 interface CallVault {
     /** True while the vault is open on this phone. */
     val unlocked: Flow<Boolean>
+
+    /** True while the release-update screen covers the app: no screen could answer a call, so none rings. */
+    val updateShowing: Boolean get() = false
 
     val gateway: CallGateway
 
@@ -152,7 +156,7 @@ class CallsController(
         engines.suites,
         vault::refreshConnections,
         // An offer waits a moment for an unlock that is completing; none comes: it does not ring.
-        mayRing = { open || withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { vault.unlocked.first { it } } != null },
+        mayRing = { !vault.updateShowing && (open || withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { vault.unlocked.first { it } } != null) },
     )
     private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig })
 
@@ -355,7 +359,17 @@ class CallsController(
     }
 
     override suspend fun history(connectionId: String): List<CallHistoryEntry> {
-        val records = if (supported == true) runCatching { vault.gateway.list(HISTORY_LIMIT) }.getOrNull() else null
+        val records = if (supported == true) {
+            try {
+                vault.gateway.list(HISTORY_LIMIT)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                null
+            }
+        } else {
+            null
+        }
         val t = now()
         return records.orEmpty().filter { it.connectionId == connectionId }.mapNotNull { entry(it, t) }
     }
