@@ -446,6 +446,8 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant?,
         override val connectionName: String? = null,
+        /** The requesting device (`device_id` of both events, §6.8); null when an event did not say. */
+        val deviceId: String? = null,
     ) : Approval {
         override val key: String get() = "device:$type:$id"
     }

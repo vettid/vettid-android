@@ -129,7 +129,15 @@ class HistoryViewModel @Inject constructor(
     private val items: ItemsRepository,
     private val ownerCheck: OwnerCheckRepository,
 ) : ViewModel() {
-    private val state = MutableStateFlow(HistoryUiState(filter = AuditFilter(connectionId = saved.get<String>("connectionId"))))
+    private val state = MutableStateFlow(
+        HistoryUiState(
+            filter = AuditFilter(
+                connectionId = saved.get<String>("connectionId"),
+                // From a device's page (DeviceHistoryRoute): what the vault's search can take, in the field.
+                query = saved.get<String>("query")?.let { AuditFilter.searchText(it) }.orEmpty(),
+            ),
+        ),
+    )
     val uiState: StateFlow<HistoryUiState> = state.asStateFlow()
 
     private var known: Map<String, ConnectionInfo> = emptyMap()

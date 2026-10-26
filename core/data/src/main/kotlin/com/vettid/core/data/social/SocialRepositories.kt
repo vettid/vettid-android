@@ -164,4 +164,10 @@ interface ApprovalsRepository {
 
     /** Declines a desktop's or agent's request (§6.8). */
     suspend fun declineDeviceRequest(key: String)
+
+    /**
+     * A device's access ended or the device was removed here (ANDROID-PLAN 0.1.53 AA1): its waiting requests are gone
+     * (the vault declined them, §6.8), so its entries leave the list at once.
+     */
+    suspend fun dropDeviceRequests(deviceId: String) {}
 }

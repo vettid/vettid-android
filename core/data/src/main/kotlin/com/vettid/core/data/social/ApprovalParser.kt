@@ -75,10 +75,14 @@ object ApprovalParser {
             }
         }
         "approval.pending" -> body.s("approval_id")?.let {
-            Approval.DeviceRequest(type, it, body.s("name"), body.s("role"), body.s("type"), at, instant(body.s("exp")))
+            Approval.DeviceRequest(
+                type, it, body.s("name"), body.s("role"), body.s("type"), at, instant(body.s("exp")), deviceId = body.s("device_id"),
+            )
         }
         "device.session.pending" -> body.s("request_id")?.let {
-            Approval.DeviceRequest(type, it, body.s("name"), body.s("role"), null, at, instant(body.s("exp")))
+            Approval.DeviceRequest(
+                type, it, body.s("name"), body.s("role"), null, at, instant(body.s("exp")), deviceId = body.s("device_id"),
+            )
         }
         else -> null
     }
