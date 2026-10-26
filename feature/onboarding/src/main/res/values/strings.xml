@@ -470,6 +470,9 @@
     <string name="recover_could_not_recover">This phone could not recover your vault. Nothing on this phone is deleted. Contact VettID at support@vettid.org.</string>
     <string name="recover_other_vault">This recovery code is for a different vault than the one this phone is recovering. Nothing was registered, and nothing on this phone is deleted.</string>
     <string name="onboarding_open_contact_support">Email %1$s</string>
+    <!-- Approved by the owner 2026-10-26 (ANDROID-PLAN §4 step 5): every attestation key of this identity is still
+         listed, so no register is sent. -->
+    <string name="recover_too_many_attempts">This phone has too many unfinished attempts. Contact VettID at support@vettid.org.</string>
     <string name="recover_undecided_checking">Checking whether your last attempt recovered the vault. Nothing on this phone is deleted.</string>
     <string name="recover_undecided_wait">We are still checking whether your last attempt recovered the vault. This phone looks again in a few minutes. Nothing on this phone is deleted.</string>
     <string name="recover_undecided_unknown">We could not check just now whether your last attempt recovered the vault. Nothing on this phone is deleted. Try again later.</string>

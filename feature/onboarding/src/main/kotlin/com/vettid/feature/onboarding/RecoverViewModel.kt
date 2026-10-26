@@ -95,6 +95,12 @@ enum class CodeRefusal {
      * sent ("This vault's release does not offer recovery").
      */
     NOT_OFFERED,
+
+    /**
+     * (ANDROID-PLAN §4 step 5) Every device attestation key this identity may hold is still listed (each register POST makes
+     * one, kept until it is settled): no key is made and nothing is sent.
+     */
+    TOO_MANY_ATTEMPTS,
 }
 
 /**
@@ -417,6 +423,7 @@ class RecoverViewModel @Inject constructor(
             CODE_NOT_AVAILABLE -> CodeRefusal.NOT_AVAILABLE
             CODE_NOT_OFFERED -> CodeRefusal.NOT_OFFERED
             CODE_OTHER_VAULT -> CodeRefusal.OTHER_VAULT
+            CODE_KEYS_FULL -> CodeRefusal.TOO_MANY_ATTEMPTS
             CODE_NO_BACKUP -> {
                 state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, refusal = null, typed = "", typedProblem = null) }
                 noBackup()
@@ -679,6 +686,9 @@ class RecoverViewModel @Inject constructor(
         const val CODE_NOT_OFFERED = "not_offered"
         const val CODE_UNKNOWN_DEVICE = "unknown_device"
         const val CODE_OTHER_VAULT = "other_vault"
+
+        /** VaultManager's `AttestationKeys.CODE_KEYS_FULL`. */
+        const val CODE_KEYS_FULL = "attestation_keys_full"
         const val CODE_REQUIRED = "credential_required"
         const val CODE_NO_BACKUP = "no_backup"
         private const val SIGNER_REFUSED = "signer_refused"

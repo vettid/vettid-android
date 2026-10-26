@@ -151,9 +151,9 @@ internal object Rules {
     sealed interface Read {
         /**
          * `200`: K is the vault's `app_key` or its `app_key_next`; not proof of adoption. [registered]: the recovery still shows
-         * `registered`.
+         * `registered`. [unregistered]: an active recovery that is not registered (`pending` or `available`).
          */
-        data class Listed(val registered: Boolean) : Read
+        data class Listed(val registered: Boolean, val unregistered: Boolean = false) : Read
 
         /** `401`, or `410 recovery_ended`. */
         data object Ended : Read

@@ -4,10 +4,12 @@ import android.content.Context
 import com.vettid.core.altchan.AltTrust
 import com.vettid.core.altchan.Attester
 import com.vettid.core.altchan.KeystoreAppKeySigner
+import com.vettid.core.altchan.KeystoreAttester
 import com.vettid.core.data.Endpoints
 import com.vettid.core.data.account.AppKeyMemberGateway
 import com.vettid.core.data.account.MemberGateway
 import com.vettid.core.keystore.AppApiKey
+import com.vettid.core.keystore.DeviceAttestationKey
 import okhttp3.OkHttpClient
 
 /**
@@ -30,8 +32,11 @@ interface AppEnvironment {
     /** The pinned Nitro root and manifest keys. */
     suspend fun trust(http: OkHttpClient): AltTrust
 
-    /** The device attestation key (§11.7). */
-    fun attester(): Attester
+    /**
+     * The device attestation key under [alias] (§11.7): the Android Keystore key in StrongBox or the TEE. Which alias is
+     * the identity slots' ([com.vettid.core.data.vault.AttestationKeys]).
+     */
+    fun attester(alias: String): Attester = KeystoreAttester(DeviceAttestationKey(alias))
 
     /**
      * The member API, every request signed by the app key (VAULT-MESSAGING §11.12.2) for the vault [vaultId]

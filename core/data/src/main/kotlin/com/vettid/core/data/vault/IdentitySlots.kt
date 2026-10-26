@@ -16,15 +16,30 @@ import java.io.File
  * Which slot the app is using is one number, [active], written with `commit()`: switching identity is one atomic write, and
  * a crash at any point leaves both slots whole. Nothing is copied or moved between slots, so an identity is never lost to a
  * half-finished swap. [clear] removes a slot only when the caller says the vault answered `ok` and the pairing completed.
+ *
+ * Each slot also has its own device attestation keys ([attestation]); they go with the slot. The single key of the builds
+ * before slots is listed by every slot that holds an identity before the slot in use first changes ([AttestationKeys.migrate]).
  */
-internal class IdentitySlots(private val app: Context, private val dir: File) {
+internal class IdentitySlots(
+    private val app: Context,
+    private val dir: File,
+    attestationKeys: AttestationKeys? = null,
+    /** The `recovery_id` a slot's device state names while it is recovering (the migration's tag), else null. */
+    recoveryIdOf: (Int) -> String? = { null },
+) {
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** The device attestation keys of every slot. */
+    val attestation: AttestationKeys = attestationKeys
+        ?: AttestationKeys(PrefsAttestationStore(app), KeystoreAliases, { active }, { exists(it) }, recoveryIdOf)
 
     /** The slot in use. A value that is not a slot reads as 0. */
     var active: Int
         get() = prefs.getInt(ACTIVE, 0).takeIf { it in SLOTS } ?: 0
         set(v) {
             require(v in SLOTS)
+            // The key of a build before slots belongs to the identity in use until now.
+            attestation.migrate()
             check(prefs.edit().putInt(ACTIVE, v).commit()) { "identity slot not written" }
         }
 
@@ -37,16 +52,18 @@ internal class IdentitySlots(private val app: Context, private val dir: File) {
     /** Whether [slot] holds keys. */
     fun exists(slot: Int): Boolean = KeySlot.entries.all { keys(slot).has(it) }
 
-    /** Removes [slot]'s keys and state file. Never the active one (the caller switches first). */
+    /** Removes [slot]'s keys (its attestation keys too) and state file. Never the active one (the caller switches first). */
     fun clear(slot: Int) {
         check(slot != active) { "the active identity is not cleared" }
+        attestation.clear(slot)
         keys(slot).clear()
         file(slot).delete()
     }
 
-    /** Every slot but 0 is removed and 0 is active again (a full forget). */
+    /** Every slot but 0 is removed and 0 is active again (a full forget): every slot's attestation keys go too. */
     fun resetToSingle() {
         if (active != 0) active = 0
+        SLOTS.forEach { attestation.clear(it) }
         keys(1).clear()
         file(1).delete()
     }
