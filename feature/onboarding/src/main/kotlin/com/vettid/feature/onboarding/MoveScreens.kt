@@ -37,8 +37,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.CouldNotTell
 import com.vettid.core.data.vault.FailureKind
@@ -214,9 +212,8 @@ fun RecoverContent(
         RecoverStep.PIN -> if (state.phoneSecret) {
             val open: RecoveryOpenViewModel = recoveryOpen ?: hiltViewModel()
             val openState by open.uiState.collectAsStateWithLifecycle()
-            // Back at the PIN (after a new code registered or was refused) or in the foreground again: read the rule again.
+            // Back at the PIN (after a new code registered or was refused): read the rule again.
             LaunchedEffect(open) { open.refresh() }
-            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { open.refresh() }
             // The `ok` text is the recovered phone's last setup screen: once the vault opened, setup is finished.
             RecoveryOpenPane(
                 openState, open, onStartOver = actions::askStartOver, onOpened = actions::finish, onNewCode = actions::useNewCode,

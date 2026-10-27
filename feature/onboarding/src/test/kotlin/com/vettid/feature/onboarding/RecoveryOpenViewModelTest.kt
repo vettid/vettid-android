@@ -409,4 +409,32 @@ class RecoveryOpenViewModelTest {
         assertTrue(vm.uiState.value.lostOk)
         assertFalse(vm.uiState.value.newCodeAllowed)
     }
+
+    @Test
+    fun aLostOkTheMemberChoseSurvivesARefresh() = runTest {
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.finishLostOk()
+        vm.setPin("975310")
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(OpenStep.FINISH, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.lostOk)
+        assertEquals("975310", vm.uiState.value.pin)
+    }
+
+    @Test
+    fun aRefreshRacingASendLeavesTheSendAlone() = runTest {
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("975310")
+        vm.setPassword("correct horse battery")
+        vm.review()
+        vault.lostOkDueValue = true
+        vm.refresh()
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(OpenStep.DONE, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.lostOk)
+    }
 }
