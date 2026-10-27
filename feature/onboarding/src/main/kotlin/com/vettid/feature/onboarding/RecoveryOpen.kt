@@ -174,19 +174,39 @@ class RecoveryOpenViewModel @Inject constructor(
     val uiState: StateFlow<RecoveryOpenUiState> = state.asStateFlow()
 
     init {
-        // A recovery the vault already answered `ok` (before a restart, or whose handshake failed): finished, never
-        // opened again.
+        refresh()
+    }
+
+    /**
+     * Reads where the recovery stands again (the start, a return to this pane after a new code, a return to the foreground):
+     * a recovery the vault already answered `ok` (before a restart, or whose handshake failed) is finished, never opened again;
+     * a lost `ok` is finished with the PIN; otherwise a lost-ok pane left from an earlier recovery goes back to the entries
+     * (the new code registered). The rule's `newCodeAllowed` is read fresh, so the button never outlives it.
+     */
+    fun refresh() {
         viewModelScope.launch {
+            if (state.value.step == OpenStep.SENDING) return@launch
             val opened = try {
                 move.recoveryOpened()
             } catch (_: VaultFailure) {
                 false
             }
             if (opened) {
-                state.update { it.copy(step = OpenStep.FINISH) }
+                state.update { if (it.step == OpenStep.ENTER || it.step == OpenStep.CHECK) it.copy(step = OpenStep.FINISH) else it }
             } else if (move.lostOkDue()) {
                 // A `200` on status, or `409 key_in_use` at a claim: this phone may be the vault's app (0.1.78).
-                finishLostOk()
+                if (!state.value.let { it.step == OpenStep.FINISH && it.lostOk }) finishLostOk()
+            } else {
+                state.update {
+                    if (it.step == OpenStep.FINISH && it.lostOk) {
+                        it.copy(
+                            step = OpenStep.ENTER, lostOk = false, outcome = null, failure = null, failureCode = null,
+                            pin = "", password = "",
+                        )
+                    } else {
+                        it
+                    }
+                }
             }
             state.update { it.copy(undecided = move.recoveryUndecided, newCodeAllowed = move.newCodeAllowed()) }
         }
