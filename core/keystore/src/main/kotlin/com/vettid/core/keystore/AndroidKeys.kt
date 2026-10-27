@@ -215,9 +215,13 @@ class AttestedKey(val chain: List<X509Certificate>, val level: KeyLevel, val str
  * and refused ([KeystoreException]), as the phone key is.
  */
 object SeedWrapKey {
+    private val refused = mutableSetOf<String>()
+
     @Synchronized
     fun getOrCreate(alias: String = AndroidKeys.ALIAS_SEED_WRAP): SecretKey {
         (AndroidKeys.keyStore().getKey(alias, null) as? SecretKey)?.let { return it }
+        // Refused once in this process: not generated (and deleted) again on every call.
+        if (alias in refused) throw KeystoreException("key not in secure hardware")
         val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
             .setKeySize(256)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -230,6 +234,7 @@ object SeedWrapKey {
         val level = AndroidKeys.secretKeyLevel(key)
         if (!PhoneKey.holdsPhoneKey(level)) {
             AndroidKeys.delete(alias)
+            refused += alias
             throw KeystoreException("key not in secure hardware ($level)")
         }
         return key

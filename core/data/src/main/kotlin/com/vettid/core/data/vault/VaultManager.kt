@@ -955,7 +955,8 @@ class VaultManager(
             load = { runCatching { f.load() }.getOrNull() },
             persist = { f.save(it) },
             // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
-            onPassed = { social.refreshAllQuietly() },
+            // Approvals and requests are read again by the owner-check collector below (a pass here or elsewhere).
+            onPassed = {},
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },
@@ -970,6 +971,8 @@ class VaultManager(
         scope.launch { runCatching { canary.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
         scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
+        // A leftover of the removed social.bin (its write went through a temporary file).
+        scope.launch { io { runCatching { File(app.noBackupFilesDir, SOCIAL_FILE + ".tmp").delete() } } }
         // An older build kept the account snapshot and the name request in the record until a wipe: written again without.
         scope.launch { io { runCatching { if (legacyOwnAccount && record.rewrite()) legacyOwnAccount = false } } }
         scope.launch {

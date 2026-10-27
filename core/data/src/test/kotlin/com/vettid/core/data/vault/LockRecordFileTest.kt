@@ -176,4 +176,20 @@ class LockRecordFileTest {
             LockRecordFile(file(), broken, legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7))
         }
     }
+
+    /** A RuntimeException from the Keystore (a ProviderException, say) is a pending lock at load and an IOException at save. */
+    @Test
+    fun aRuntimeFailureOfTheKeystoreIsAPendingLockNotACrash() {
+        val ok = FakeSealer()
+        LockRecordFile(file(), ok, legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7))
+        val boom = object : LockRecordFile.Sealer {
+            override fun seal(plain: ByteArray): ByteArray = throw java.security.ProviderException("no alias")
+
+            override fun open(blob: ByteArray): ByteArray = throw java.security.ProviderException("no alias")
+        }
+        assertEquals(LockRecord(pendingSinceMs = 5), LockRecordFile(file(), boom, legacy = { LockRecord() }, now = { 5 }).load())
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+            LockRecordFile(file(), boom, legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7))
+        }
+    }
 }

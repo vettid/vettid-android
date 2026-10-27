@@ -65,6 +65,8 @@ internal class LockRecordFile(
             null
         } catch (_: KeystoreException) {
             null
+        } catch (@Suppress("TooGenericExceptionCaught") _: RuntimeException) {
+            null // the Keystore failing in another way (a ProviderException, say): a lock is pending, never a crash at start
         } ?: LockRecord(pendingSinceMs = now())
     }
 
@@ -80,6 +82,8 @@ internal class LockRecordFile(
     } catch (e: KeystoreException) {
         throw IOException("lock record not sealed", e)
     } catch (e: java.security.GeneralSecurityException) {
+        throw IOException("lock record not sealed", e)
+    } catch (@Suppress("TooGenericExceptionCaught") e: RuntimeException) {
         throw IOException("lock record not sealed", e)
     }
 
