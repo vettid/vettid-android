@@ -524,14 +524,16 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, on
     if (o != null && o.opened) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(openAnswerText(o, false).res))
         if (o.contactVettid || o.contactCouldNotRecover) ContactSupport()
-        // The lost-ok unlock found nothing: a new recovery code can still use this phone (the second identity is reused).
-        if (state.newCodeAllowed && onNewCode != null) {
-            OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_lost_ok")) {
-                Text(stringResource(R.string.recover_undecided_new_code))
-            }
-        }
     } else if (failure != null) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), failureText(failure.messageRes()))
+    }
+    // (2026-10-27) Beside the PIN whenever the rule allows a new code (both recoveries ended), with no PIN attempt first: the
+    // member usually has a new code in hand, and the lost-ok unlock stays free on this screen. A new code reuses the second
+    // identity; if the vault did take the phone, claiming it answers `409 key_in_use` and the app returns here for the PIN.
+    if (state.newCodeAllowed && onNewCode != null) {
+        OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_lost_ok")) {
+            Text(stringResource(R.string.recover_undecided_new_code))
+        }
     }
     Button(onClick = vm::send, enabled = state.pinValid, modifier = Modifier.testTag("open_finish")) {
         Text(stringResource(R.string.onboarding_open_finish_go))
