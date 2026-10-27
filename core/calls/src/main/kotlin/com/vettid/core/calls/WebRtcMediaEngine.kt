@@ -66,6 +66,36 @@ internal object WebRtcRuntime {
 }
 
 /**
+ * The one peer connection factory and audio device module of the process, made on first use and kept.
+ *
+ * Why not one per call: the stack's Android network monitor starts with a factory and learns the phone's networks
+ * asynchronously. A factory made for the call could be asked to gather before it knew any address, and the call ended
+ * `NO_ADDRESS` on a working Wi-Fi (2 of 5 calls on the test phone). A kept factory has long since learned them.
+ *
+ * What is shared is only the stack's plumbing. Everything that differs between a plain build and a test build is
+ * per engine ([MediaFaults] and the checks in [WebRtcMediaEngine.factory]), and the one process-wide option, the DTLS
+ * trial, is fixed by [WebRtcRuntime.start] before the first factory exists (the first engine of a process decides it,
+ * as before). So there is no second factory to keep: a plain build can never be handed a fault-capable one, because
+ * a factory has no fault in it.
+ *
+ * The audio device module is shared too (the builder takes one module per factory). It opens the microphone and the
+ * speaker only while a track is live, which a closing call ends; neither the module nor the factory is disposed
+ * (they live as long as the process). [WebRtcMediaEngine.close] disposes everything else of a call.
+ */
+internal object SharedStack {
+    class Stack(val factory: PeerConnectionFactory, val audioDevice: JavaAudioDeviceModule)
+
+    private var stack: Stack? = null
+
+    @Synchronized
+    fun get(app: Context): Stack = stack ?: run {
+        val audioDevice = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
+        val factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDevice).createPeerConnectionFactory()
+        Stack(factory, audioDevice).also { stack = it }
+    }
+}
+
+/**
  * [MediaEngine] on libwebrtc with LiveKit's frame cryptor: one audio-only (Opus) peer connection whose sender and
  * receiver each carry a frame cryptor, enabled before any SDP is applied, keyed per direction
  * (docs/calls/CALL-MEDIA.md §4, §7).
@@ -83,6 +113,8 @@ class WebRtcMediaEngine private constructor(
     private val audioDevice: JavaAudioDeviceModule,
     private val pqcTrial: Boolean,
     private val faults: MediaFaults,
+    /** True for the process-wide stack ([SharedStack]): shared by every call, so a call never disposes it. */
+    private val sharedStack: Boolean = false,
 ) : MediaEngine {
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "vettid-call-media") }
     private val closed = AtomicBoolean(false)
@@ -257,8 +289,8 @@ class WebRtcMediaEngine private constructor(
                 { track?.dispose() },
                 { source?.dispose() },
                 { provider?.dispose() },
-                { factory.dispose() },
-                { audioDevice.release() },
+                { if (!sharedStack) factory.dispose() },
+                { if (!sharedStack) audioDevice.release() },
             )
             for (step in steps) runCatching(step)
             channel.close()
@@ -506,7 +538,10 @@ class WebRtcMediaEngine private constructor(
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+            // Not GATHER_ONCE: a round that completes before the phone's network has reported its addresses would
+            // be the only round and the call would have none. Continual gathering gathers again when a network
+            // appears or changes (which is also what a call that moves from Wi-Fi to mobile data needs).
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
             // ICE over TCP between two phones is of no use; relayed candidates (TURN over TCP or TLS) are not affected.
             tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
             turnPortPrunePolicy = PeerConnection.PortPrunePolicy.PRUNE_BASED_ON_PRIORITY
@@ -531,9 +566,8 @@ class WebRtcMediaEngine private constructor(
                 check(testBuild || plain) { "a test configuration in a build that is not a test build" }
                 val app = context.applicationContext
                 val pqc = WebRtcRuntime.start(app, config)
-                val audioDevice = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
-                val factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDevice).createPeerConnectionFactory()
-                return WebRtcMediaEngine(factory, audioDevice, pqc, config.faults)
+                val stack = SharedStack.get(app)
+                return WebRtcMediaEngine(stack.factory, stack.audioDevice, pqc, config.faults, sharedStack = true)
             }
         }
     }

@@ -28,7 +28,7 @@ class RtcConfigurationTest {
         assertEquals(PeerConnection.SdpSemantics.UNIFIED_PLAN, c.sdpSemantics)
         assertEquals(PeerConnection.BundlePolicy.MAXBUNDLE, c.bundlePolicy)
         assertEquals(PeerConnection.RtcpMuxPolicy.REQUIRE, c.rtcpMuxPolicy)
-        assertEquals(PeerConnection.ContinualGatheringPolicy.GATHER_ONCE, c.continualGatheringPolicy)
+        assertEquals(PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY, c.continualGatheringPolicy)
         assertEquals(PeerConnection.TcpCandidatePolicy.DISABLED, c.tcpCandidatePolicy)
         assertEquals(2, c.iceServers.size)
         assertEquals("user", c.iceServers[1].username)
