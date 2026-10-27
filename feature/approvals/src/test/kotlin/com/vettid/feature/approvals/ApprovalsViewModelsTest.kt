@@ -16,6 +16,7 @@ import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -210,6 +211,85 @@ class ApprovalsViewModelsTest {
         social.approvals.value = emptyList()
         advanceUntilIdle()
         assertTrue(vm.uiState.value.gone)
+    }
+
+    /** Owner test 2026-10-27: an authentication request past its "Expires" stayed actionable while its screen was open. */
+    @Test
+    fun anExpiredRequestReadsAsGoneAndIsNotListed() = runTest {
+        val expired = Approval.Authentication("a2", "c1", null, now, Instant.now().minusSeconds(5), "Sam")
+        social.approvals.value = listOf(expired, request)
+        val list = ApprovalsViewModel(social, social, FakeVault())
+        val vm = detail(expired)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.gone)
+        assertEquals(listOf(request), list.uiState.value.approvals)
+    }
+
+    /** The open screen stops offering the request at its expiry, without a vault event (the clock sleeps until then). */
+    @Test
+    fun aRequestExpiresWhileItsScreenIsOpen() = runTest {
+        val soon = Approval.Authentication("a3", "c1", null, now, Instant.now().plusSeconds(3_600), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = detail(soon)
+        // Not yet: the sleep is still running.
+        assertFalse(vm.uiState.value.gone)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.gone)
+    }
+
+    /** A sleep stops in deep sleep: the screen coming back to the front reads the time again. */
+    @Test
+    fun aResumedScreenReadsTheTimeAgain() = runTest {
+        val soon = Approval.Authentication("a4", "c1", null, now, Instant.now().plusMillis(300), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = detail(soon)
+        runCurrent()
+        assertFalse(vm.uiState.value.gone)
+        Thread.sleep(400)
+        vm.tick()
+        runCurrent()
+        assertTrue(vm.uiState.value.gone)
+    }
+
+    /** The list reads the time again when it comes back to the front, so an expired row does not stay after deep sleep. */
+    @Test
+    fun aResumedListDropsWhatExpiredInTheMeantime() = runTest {
+        val soon = Approval.Authentication("a8", "c1", null, now, Instant.now().plusMillis(300), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
+        runCurrent()
+        assertEquals(1, vm.uiState.value.approvals.size)
+        Thread.sleep(400)
+        vm.tick()
+        runCurrent()
+        assertTrue(vm.uiState.value.approvals.isEmpty())
+    }
+
+    /** Even before the clock has noticed, a decision on an expired request sends nothing. */
+    @Test
+    fun aDecisionOnAnExpiredRequestIsNotSent() = runTest {
+        val soon = Approval.Authentication("a5", "c1", null, now, Instant.now().plusMillis(300), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = detail(soon)
+        runCurrent()
+        Thread.sleep(400)
+        vm.setPassword("pw")
+        vm.approve()
+        vm.deny()
+        advanceUntilIdle()
+        assertTrue("approveAuthentication" !in social.calls && "denyAuthentication" !in social.calls)
+        assertTrue(vm.uiState.value.gone)
+    }
+
+    /** The list's clock goes on to the later expiries after the first. */
+    @Test
+    fun theListDropsEachRequestAtItsOwnExpiry() = runTest {
+        val a = Approval.Authentication("a6", "c1", null, now, Instant.now().plusSeconds(60), "Sam")
+        val b = Approval.Authentication("a7", "c1", null, now, Instant.now().plusSeconds(120), "Sam")
+        social.approvals.value = listOf(a, b)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.approvals.isEmpty())
     }
 
     /** §10.12: ticked items are shared, unticked ones declined, in one decision. */

@@ -137,41 +137,79 @@ class AndroidCallAudio(context: Context) : CallAudio {
     }
 }
 
+/**
+ * One sound that is either playing or not. [CallsController] reports the tones' wanted state at every change of the
+ * call's state, so most calls say "on" while it already is (or "off" while it is not): those do nothing. Restarting a
+ * tone that plays would cut and restart it; releasing one that was just started raced the platform's tone thread
+ * (`ToneGenerator: --- Stop timed out`, owner phone test 2026-10-27). [begin] returns what plays (null: it could not
+ * start, and the next "on" tries again); [end] stops it.
+ */
+internal class ToneSlot<T : Any>(private val begin: () -> T?, private val end: (T) -> Unit) {
+    private var playing: T? = null
+
+    @Synchronized
+    fun set(on: Boolean) {
+        if (on == (playing != null)) return
+        if (on) {
+            playing = begin()
+        } else {
+            playing?.let(end)
+            playing = null
+        }
+    }
+}
+
 /** [CallTones] with the platform's tone generator and VettID's own ringtone (the Calls channel's sound, owner decision 2026-10-26). */
 class AndroidCallTones(context: Context) : CallTones {
     private val app = context.applicationContext
-    private var tone: ToneGenerator? = null
-    private var ringtone: Ringtone? = null
 
-    @Synchronized
-    override fun ringBack(on: Boolean) {
-        runCatching {
-            tone?.release()
-            tone = null
-            if (on) {
+    // Stopped first, then released, and the release off the caller's (the main) thread: it waits for the generator's
+    // own thread, which logged "don't call waitForExit() from this Thread object's thread" when it ran there.
+    private val ringBackSlot = ToneSlot<ToneGenerator>(
+        begin = {
+            runCatching {
                 val generator = ToneGenerator(AudioManager.STREAM_VOICE_CALL, RING_BACK_VOLUME)
-                generator.startTone(ToneGenerator.TONE_SUP_RINGTONE)
-                tone = generator
+                // A tone that did not start is not "playing": released at once, and the next "on" tries again.
+                val started = runCatching { generator.startTone(ToneGenerator.TONE_SUP_RINGTONE) }.getOrDefault(false)
+                if (started) {
+                    generator
+                } else {
+                    runCatching { generator.release() }
+                    null
+                }
+            }.getOrNull()
+        },
+        end = { generator ->
+            releaser.execute {
+                runCatching { generator.stopTone() }
+                runCatching { generator.release() }
             }
-        }
-    }
+        },
+    )
 
-    @Synchronized
-    override fun ringtone(on: Boolean) {
-        runCatching {
-            ringtone?.stop()
-            ringtone = null
-            if (on) {
-                ringtone = RingtoneManager.getRingtone(app, Channels.soundUri(app, com.vettid.core.notify.R.raw.vettid_ringtone))?.apply {
+    private val ringtoneSlot = ToneSlot<Ringtone>(
+        begin = {
+            runCatching {
+                RingtoneManager.getRingtone(app, Channels.soundUri(app, com.vettid.core.notify.R.raw.vettid_ringtone))?.apply {
                     audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build()
                     isLooping = true
                     play()
                 }
-            }
-        }
-    }
+            }.getOrNull()
+        },
+        end = { runCatching { it.stop() } },
+    )
+
+    override fun ringBack(on: Boolean) = ringBackSlot.set(on)
+
+    override fun ringtone(on: Boolean) = ringtoneSlot.set(on)
 
     private companion object {
         const val RING_BACK_VOLUME = 60
+
+        /** One thread, so that a stop and the release of the next tone keep their order. */
+        val releaser: Executor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "call-tone-release").apply { isDaemon = true }
+        }
     }
 }
