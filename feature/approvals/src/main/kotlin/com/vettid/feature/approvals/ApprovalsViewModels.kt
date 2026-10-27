@@ -23,9 +23,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
 import javax.inject.Inject
 
 /** Immutable UI state of the Approvals screen. */
@@ -56,9 +58,19 @@ class ApprovalsViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(ApprovalsUiState())
 
+    /** Ticks at the earliest expiry still to come among the listed requests. */
+    private val clock = expiryClock(
+        repo.approvals.map { l -> l.mapNotNull { it.exp }.filter { it.isAfter(Instant.now()) }.minOrNull() },
+    )
+
     val uiState: StateFlow<ApprovalsUiState> =
-        combine(local, repo.approvals, repo.peerDeclines, connections.connections) { s, list, declines, cs ->
-            s.copy(approvals = list, peerDeclines = declines, paused = cs.filter { it.asks?.paused == true })
+        combine(local, repo.approvals, repo.peerDeclines, connections.connections, clock) { s, list, declines, cs, now ->
+            // An expired request is not offered (the list drops it itself only at the next vault event).
+            s.copy(
+                approvals = list.filterNot { it.expiredAt(now) },
+                peerDeclines = declines,
+                paused = cs.filter { it.asks?.paused == true },
+            )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
 
     init {
@@ -221,9 +233,15 @@ class ApprovalDetailViewModel @Inject constructor(
         }
     }
 
-    val uiState: StateFlow<ApprovalDetailUiState> = combine(local, repo.approvals) { s, list ->
+    /** Ticks at this request's expiry, so an open screen stops offering it the moment it expires. */
+    private val clock = expiryClock(repo.approvals.map { l -> l.firstOrNull { it.key == key }?.exp })
+
+    val uiState: StateFlow<ApprovalDetailUiState> = combine(local, repo.approvals, clock) { s, list, now ->
         val a = list.firstOrNull { it.key == key }
-        s.copy(approval = a ?: s.approval, gone = a == null && s.approval != null && !s.done && !s.busy && s.criticalResult == null)
+        val shown = a ?: s.approval
+        // Gone from the list, or expired while open: both read as "Already decided … or it expired" (no actions).
+        val over = (a == null || a.expiredAt(now)) && shown != null
+        s.copy(approval = shown, gone = over && !s.done && !s.busy && s.criticalResult == null)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 
     fun setPassword(v: String) = local.update { it.copy(password = v, error = null) }

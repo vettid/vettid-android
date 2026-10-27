@@ -35,12 +35,14 @@ import androidx.navigation.toRoute
 import com.vettid.core.ui.components.DrawerItem
 import com.vettid.core.ui.components.NotificationBell
 import com.vettid.feature.approvals.ApprovalDetailRoute
+import com.vettid.feature.approvals.ApprovalsRoute
 import com.vettid.feature.connections.ConnectionsRoute
 import com.vettid.feature.history.HistoryRoute
 import com.vettid.feature.notifications.NotificationsHost
 import com.vettid.feature.notifications.NotificationsRoute
 import com.vettid.feature.notifications.notificationsDestination
 import com.vettid.feature.settings.SettingsRoute
+import com.vettid.feature.settings.TransferOutRoute
 import com.vettid.feature.settings.VaultStatusRoute
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.rememberProfilePhoto
@@ -119,6 +121,8 @@ import androidx.core.content.ContextCompat
 @Composable
 fun AppShell(
     launchRoute: Any?,
+    /** The "Your vault is on this phone now" dialog ([MoveNotices]) is open over the shell. */
+    movePaneOpen: Boolean,
     accountName: String,
     account: AccountInfo?,
     portalUrl: String,
@@ -289,7 +293,10 @@ fun AppShell(
                     )
                 }
                 // Release R: the offer to rotate the vault's keys after a transfer, a PIN change or a password change.
-                val rotateShown = rotateOffered && current?.hierarchy?.any { it.hasRoute(CredentialRotateRoute::class) } != true
+                // Never over a full-screen flow: the rotation itself, the transfer ("VettID has moved"), the move's arrival
+                // dialog and the daily owner check (owner test 2026-10-27).
+                val rotateShown = rotateOffered && !movePaneOpen && checkMode == null &&
+                    current?.hierarchy?.any { it.hasRoute(CredentialRotateRoute::class) || it.hasRoute(TransferOutRoute::class) } != true
                 if (rotateShown) {
                     RotateOfferBanner(
                         // The offer stays until a rotation succeeds (or it is put away); it is hidden on the rotation screen.
@@ -337,7 +344,7 @@ fun AppShell(
                                 onAskFor = { id -> navController.navigate(SharedWithYouRoute(id, ask = true)) { launchSingleTop = true } },
                             ),
                         )
-                        approvalsDestination(chrome, navigate = navigate, onBack = back)
+                        approvalsDestination(chrome, navigate = navigate, onBack = { navController.leaveApprovalDetail() })
                         itemsDestination(
                             chrome,
                             ItemsHost(
@@ -543,6 +550,16 @@ private fun feedRoute(t: FeedTarget): Any? = when (t) {
     FeedTarget.Alarm -> CredentialAlarmRoute
     FeedTarget.Credential -> CredentialRoute
     else -> null
+}
+
+/**
+ * Leaves an approval's screen after a decision, an expiry or Back. Normally that is the screen the member came from. A
+ * request opened from a notification must never leave an empty NavHost behind (owner test 2026-10-27: Deny on a
+ * sign-in request left a blank screen, and Back then left the app): when nothing is under it, the Approvals list is
+ * where the member lands.
+ */
+internal fun NavHostController.leaveApprovalDetail() {
+    if (previousBackStackEntry == null) navigateTopLevel(ApprovalsRoute) else popBackStack()
 }
 
 /** Drawer navigation: one copy of each top-level screen, state saved per destination. */

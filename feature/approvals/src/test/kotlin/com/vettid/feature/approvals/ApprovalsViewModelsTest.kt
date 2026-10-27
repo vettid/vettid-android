@@ -212,6 +212,30 @@ class ApprovalsViewModelsTest {
         assertTrue(vm.uiState.value.gone)
     }
 
+    /** Owner test 2026-10-27: an authentication request past its "Expires" stayed actionable while its screen was open. */
+    @Test
+    fun anExpiredRequestReadsAsGoneAndIsNotListed() = runTest {
+        val expired = Approval.Authentication("a2", "c1", null, now, Instant.now().minusSeconds(5), "Sam")
+        social.approvals.value = listOf(expired, request)
+        val list = ApprovalsViewModel(social, social, FakeVault())
+        val vm = detail(expired)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.gone)
+        assertEquals(listOf(request), list.uiState.value.approvals)
+    }
+
+    /** The open screen stops offering the request at its expiry, without a vault event (the clock sleeps until then). */
+    @Test
+    fun aRequestExpiresWhileItsScreenIsOpen() = runTest {
+        val soon = Approval.Authentication("a3", "c1", null, now, Instant.now().plusSeconds(3_600), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = detail(soon)
+        // Not yet: the sleep is still running.
+        assertFalse(vm.uiState.value.gone)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.gone)
+    }
+
     /** §10.12: ticked items are shared, unticked ones declined, in one decision. */
     @Test
     fun aShareDecisionIncludesTheTickedItemsAndDeclinesTheRest() = runTest {

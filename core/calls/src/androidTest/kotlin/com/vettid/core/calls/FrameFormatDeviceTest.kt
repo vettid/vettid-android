@@ -264,11 +264,13 @@ class FrameFormatDeviceTest {
             val keyed = runCatching { a.setKeys(keySuiteA, kCaller.copyOf(), kCallee.copyOf()) }
             assertEquals("the caller's keys are taken only for the suite its cryptors were made for", callerKeyed, keyed.isSuccess)
             a.acceptAnswer(answer)
-            withTimeoutOrNull(EVENT_WAIT_MS) {
-                while (c.eventsA.none { it is MediaEvent.GatheringDone } || c.eventsB.none { it is MediaEvent.GatheringDone }) delay(POLL_MS)
-            }
-            val forB = c.eventsA.filterIsInstance<MediaEvent.LocalCandidate>().firstNotNullOfOrNull { relay.caller(it.candidate) }
-            val forA = c.eventsB.filterIsInstance<MediaEvent.LocalCandidate>().firstNotNullOfOrNull { relay.callee(it.candidate) }
+            // The engine gathers continually (GATHER_CONTINUALLY) and no longer reports GatheringDone: what the test needs
+            // is the first address each side can use through the relay, so it waits for exactly that.
+            fun forB() = c.eventsA.filterIsInstance<MediaEvent.LocalCandidate>().firstNotNullOfOrNull { relay.caller(it.candidate) }
+            fun forA() = c.eventsB.filterIsInstance<MediaEvent.LocalCandidate>().firstNotNullOfOrNull { relay.callee(it.candidate) }
+            withTimeoutOrNull(EVENT_WAIT_MS) { while (forB() == null || forA() == null) delay(POLL_MS) }
+            val forB = forB()
+            val forA = forA()
             assertNotNull("an IPv4 UDP host address on the caller (Wi-Fi on?)", forB)
             assertNotNull("an IPv4 UDP host address on the callee", forA)
             b.addRemoteCandidates(listOf(forB!!))
