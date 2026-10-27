@@ -90,7 +90,12 @@ fun CallOverlay(modifier: Modifier = Modifier, content: @Composable () -> Unit) 
     val state by vm.uiState.collectAsStateWithLifecycle()
     Box(modifier.fillMaxSize()) {
         content()
-        if (state.call !is CallState.Idle) {
+        val ended = state.call as? CallState.Ended
+        if (ended != null && !CallTexts.staysOpen(ended.reason)) {
+            // An ending that only reports goes straight back: the conversation's call line says how it ended (owner
+            // decision 2026-10-27). One that says what to do, or that something was wrong, keeps the screen.
+            LaunchedEffect(ended) { vm.dismiss() }
+        } else if (state.call !is CallState.Idle) {
             // Back does not leave a call behind: it does nothing while one is live, and closes an ended one.
             BackHandler { if (state.call is CallState.Ended) vm.dismiss() }
             CallScreen(
@@ -252,7 +257,6 @@ private fun elapsed(since: Instant?, now: () -> Instant): String {
 
 @Composable
 private fun ColumnScope.EndedCall(call: CallState.Ended, name: String, onDismiss: () -> Unit) {
-    val stays = CallTexts.staysOpen(call.reason)
     Text(
         stringResource(CallTexts.ended(call.reason), name),
         style = MaterialTheme.typography.titleMedium,
@@ -262,13 +266,6 @@ private fun ColumnScope.EndedCall(call: CallState.Ended, name: String, onDismiss
     )
     Spacer(Modifier.weight(1f))
     PrimaryButton(stringResource(R.string.calls_close), onDismiss, Modifier.testTag("call_close"))
-    // An ending that only reports closes by itself; one that says what to do, or that something was wrong, waits.
-    if (!stays) {
-        LaunchedEffect(call) {
-            delay(ENDED_SHOWN_MS)
-            onDismiss()
-        }
-    }
 }
 
 @Composable
@@ -316,4 +313,3 @@ private fun Toggle(
 private const val AVATAR_DP = 96
 private const val ACTION_DP = 64
 private const val TICK_MS = 1_000L
-private const val ENDED_SHOWN_MS = 3_500L

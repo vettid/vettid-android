@@ -68,9 +68,12 @@ internal object WebRtcRuntime {
 /**
  * The one peer connection factory and audio device module of the process, made on first use and kept.
  *
- * Why not one per call: the stack's Android network monitor starts with a factory and learns the phone's networks
- * asynchronously. A factory made for the call could be asked to gather before it knew any address, and the call ended
- * `NO_ADDRESS` on a working Wi-Fi (2 of 5 calls on the test phone). A kept factory has long since learned them.
+ * Why not one per call: no factory churn per call, and no two audio modules competing for the microphone while an
+ * old call closes and a new one starts. This is NOT what fixes the calls that ended `NO_ADDRESS` on a working Wi-Fi
+ * (2 of 5 on the test phone): the stack's network monitor starts and stops with each gathering, not with the factory,
+ * so a kept factory can still be asked to gather before the phone's addresses are reported. That is fixed by
+ * gathering continually ([WebRtcMediaEngine.configuration]) and by letting only the GATHER timer end a call without an address
+ * ([CallMachine]); keep both, whatever happens to this object.
  *
  * What is shared is only the stack's plumbing. Everything that differs between a plain build and a test build is
  * per engine ([MediaFaults] and the checks in [WebRtcMediaEngine.factory]), and the one process-wide option, the DTLS
