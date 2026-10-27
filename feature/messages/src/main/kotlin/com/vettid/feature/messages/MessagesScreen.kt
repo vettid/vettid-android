@@ -314,9 +314,10 @@ data class ConversationActions(
 fun ConversationScreen(state: ConversationUiState, actions: ConversationActions, modifier: Modifier = Modifier) {
     val name = state.connection?.displayName?.ifBlank { null } ?: stringResource(R.string.messages_name_not_shared)
     val listState = rememberLazyListState()
-    // To the newest message when one is added at the end, not when an older page is added at the top (§10.5.2):
-    // the list keeps its place then, by the items' keys.
-    LaunchedEffect(state.messages.lastOrNull()?.messageId) {
+    // To the newest entry when one is added at the end, a message or a call (calls are their own list, and may load
+    // after the messages), not when an older page is added at the top (§10.5.2): the list keeps its place then, by
+    // the items' keys.
+    LaunchedEffect(state.messages.lastOrNull()?.messageId, state.calls.maxByOrNull { it.startedAt }?.callId) {
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last > 0) listState.animateScrollToItem(last)
     }
