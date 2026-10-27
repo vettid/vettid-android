@@ -17,10 +17,10 @@ class RecoveryOpenFinishNewCodeTest {
     @get:Rule
     val rule = createComposeRule()
 
-    private fun pane(allowed: Boolean, onNewCode: (() -> Unit)?) {
+    private fun pane(allowed: Boolean, onNewCode: (() -> Unit)?, lostOk: Boolean = true) {
         val vault = FakeVault()
         val vm = RecoveryOpenViewModel(vault, vault)
-        val state = RecoveryOpenUiState(step = OpenStep.FINISH, lostOk = true, newCodeAllowed = allowed)
+        val state = RecoveryOpenUiState(step = OpenStep.FINISH, lostOk = lostOk, newCodeAllowed = allowed)
         rule.setContent { RecoveryOpenPane(state, vm, onNewCode = onNewCode) }
     }
 
@@ -43,6 +43,13 @@ class RecoveryOpenFinishNewCodeTest {
     @Test
     fun theButtonIsHiddenWithoutAHandler() {
         pane(allowed = true, onNewCode = null)
+        rule.onNodeWithTag("open_new_code_after_lost_ok").assertDoesNotExist()
+    }
+
+    @Test
+    fun theButtonIsHiddenOnAConfirmedOkFinishEvenWhenTheRuleAllowsANewCode() {
+        pane(allowed = true, onNewCode = {}, lostOk = false)
+        rule.onNodeWithTag("open_finish_pin").assertIsDisplayed()
         rule.onNodeWithTag("open_new_code_after_lost_ok").assertDoesNotExist()
     }
 }
