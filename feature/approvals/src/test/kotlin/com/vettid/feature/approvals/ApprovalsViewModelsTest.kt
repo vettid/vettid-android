@@ -251,6 +251,20 @@ class ApprovalsViewModelsTest {
         assertTrue(vm.uiState.value.gone)
     }
 
+    /** The list reads the time again when it comes back to the front, so an expired row does not stay after deep sleep. */
+    @Test
+    fun aResumedListDropsWhatExpiredInTheMeantime() = runTest {
+        val soon = Approval.Authentication("a8", "c1", null, now, Instant.now().plusMillis(300), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
+        runCurrent()
+        assertEquals(1, vm.uiState.value.approvals.size)
+        Thread.sleep(400)
+        vm.tick()
+        runCurrent()
+        assertTrue(vm.uiState.value.approvals.isEmpty())
+    }
+
     /** Even before the clock has noticed, a decision on an expired request sends nothing. */
     @Test
     fun aDecisionOnAnExpiredRequestIsNotSent() = runTest {

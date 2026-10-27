@@ -59,8 +59,9 @@ class ApprovalsViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(ApprovalsUiState())
 
-    /** Ticks at the earliest expiry still to come among the listed requests. */
     private val resumed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** Ticks at each expiry still to come among the listed requests. */
     private val clock = expiryClock(
         repo.approvals.map { l -> l.mapNotNull { it.exp }.filter { it.isAfter(Instant.now()) } },
         resumed,
@@ -241,8 +242,9 @@ class ApprovalDetailViewModel @Inject constructor(
         }
     }
 
-    /** Ticks at this request's expiry, so an open screen stops offering it the moment it expires. */
     private val resumed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** Ticks at this request's expiry, so an open screen stops offering it the moment it expires. */
     private val clock = expiryClock(repo.approvals.map { l -> listOfNotNull(l.firstOrNull { it.key == key }?.exp) }, resumed)
 
     /** The screen came back to the front: the time is read again (a sleep stops in deep sleep). */

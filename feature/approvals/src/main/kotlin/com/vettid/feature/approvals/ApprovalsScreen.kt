@@ -90,6 +90,11 @@ fun NavGraphBuilder.approvalsDestination(
     composable<ApprovalsRoute> {
         val vm: ApprovalsViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        // A sleep does not run in deep sleep: read the time again whenever the list is back in front.
+        LifecycleResumeEffect(vm) {
+            vm.tick()
+            onPauseOrDispose {}
+        }
         ApprovalsScreen(
             state,
             chrome,
