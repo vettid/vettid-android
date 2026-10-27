@@ -1,9 +1,10 @@
 # Calls: media suites, keys and the frame format
 
-Status: **proposal for the specification** (CALLS-PLAN 0.1.1 phase C1, decisions D2 and D11). It is what this app
+Status: **the app's implementation note; §2–§7 were lifted into VAULT-MESSAGING 0.28.0 §10.10, which is the
+normative text** (0.29.x on vettid.org's master; where the two differ, the specification is right and this file
+is out of date). Written as a proposal in CALLS-PLAN 0.1.1 phase C1 (decisions D2 and D11). It is what this app
 implements (`:core:crypto` `call/CallMedia.kt`, `call/CallFrames.kt`, `:core:vault` `CallApi.kt`) and what an iOS or
-desktop client has to match frame for frame. It is meant to be lifted into VAULT-MESSAGING §10.10 and
-CALLING-SERVICE §7; §9 lists the edits. It replaces the C0 spike's `C0-FRAME-FORMAT.md` (draft PR #123), whose
+desktop client has to match frame for frame. It replaces the C0 spike's `C0-FRAME-FORMAT.md` (draft PR #123), whose
 findings about the media stack are kept in §5–§8.
 
 Marks: **[S]** read from the media stack's source, **[I]** inferred, **[D]** confirmed on two phones in the C0 test
@@ -102,7 +103,9 @@ matter: only suite 1 is offered. What else it costs at S10: a tampered negotiati
 to decrypt, not at signalling time, and the devices cannot tell tampering from a fault.
 
 **Required before any device offers a second suite** (not built in C1): no microphone audio under keys the other
-device has not confirmed. Either of:
+device has not confirmed. The two ways below were written as alternatives; **that choice is superseded: phase C2
+does both** (the signed members and the key confirmation; VAULT-MESSAGING 0.28.0 §10.10, CALLING-SERVICE 0.2.0).
+As proposed here:
 
 1. *Key confirmation in the answer.* The SDP answer carries `a=vettid-media-confirm:<base64>` =
    HMAC-SHA-256 under a key derived from `k_call` (its own HKDF label) over `chosen || 0x00 || offered-as-seen ||
@@ -270,7 +273,9 @@ out      = header || sealed || iv || 0x0C || key_index                          
    would lie in both, consistently. That residual is the one §10.10 already states (a member's own vault is
    trusted for that member's calls). It would become a real check only if the app pinned the key itself, when the
    connection is made or when the member compares the verification code, and refused or warned when the vault
-   later showed another. The app does not do that today (open question for the owner).
+   later showed another. The app does not do that, by the owner's decision of 2026-10-12 (CALLS-PLAN §13.5 D23,
+   option (c): never): a member's own vault is trusted, for calls and messages alike (VAULT-MESSAGING §2.1), so
+   there is no app-side pin and no changed-key warning.
 7. **The suite is fixed before the phone rings**: the callee chooses when it checks the offer, and does not ring
    for an offer with no suite it can do (§2.1).
 8. **Ring time is the vault's.** A callee rings for `exp` minus the event's `ts` (both the vault's clock). An offer
@@ -308,7 +313,10 @@ iv     11223344000003c0000003c0
 sealed 780a14a5d44d9ba28ccf9ad78a82e7855c69d9584297c8aef4c5bf19d8a503b6d6aae36a11223344000003c0000003c00c00
 ```
 
-## 9. Edits this needs in vettid.org's documents
+## 9. Edits this needed in vettid.org's documents
+
+**Done for §2–§7:** they were lifted into VAULT-MESSAGING 0.28.0 §10.10 (normative). The list below is kept as
+the record of what was asked for.
 
 - **VAULT-MESSAGING §10.10**: a subsection "Media suites and keys" with §2–§4 (the registry, the two SDP
   attributes, one Opus audio section, the refusal rules and what each side sends, what protects the negotiation at

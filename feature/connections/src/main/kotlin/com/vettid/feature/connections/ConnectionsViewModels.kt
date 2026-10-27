@@ -3,6 +3,9 @@ package com.vettid.feature.connections
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.calls.CallAccess
+import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.NoCallAccess
 import com.vettid.core.data.items.GrantAsk
 import com.vettid.core.data.items.GrantView
 import com.vettid.core.data.items.RuleDraft
@@ -520,6 +523,8 @@ data class ConnectionDetailUiState(
     val errorCode: String? = null,
     /** Both directions of sharing with this connection (VAULT-ITEMS §6, VAULT-MESSAGING §10.12). */
     val sharing: DetailSharing = DetailSharing(),
+    /** This build and this vault have calls and none is going on: the pill has "Call". */
+    val canCall: Boolean = false,
     /** A share rule the member asked to delete, waiting for the confirmation. */
     val deleteRule: ShareRule? = null,
 )
@@ -564,18 +569,26 @@ enum class DetailNotice { AUTH_REQUESTED }
  * with it, what it shares with the member: §10.12), member authentication (§10.4), favourite and remove. No safety
  * code, alias, note or block here (owner decision 2026-10-08).
  */
+@Suppress("TooManyFunctions") // one function per action of the screen
 @HiltViewModel
 class ConnectionDetailViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val repo: ConnectionsRepository,
     private val sharing: SharingRepository,
+    private val calls: CallAccess = NoCallAccess,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
 
-    val uiState: StateFlow<ConnectionDetailUiState> = combine(local, repo.connections, repo.authentication) { s, cs, auth ->
-        s.copy(connection = cs.firstOrNull { it.id == id } ?: s.connection, auth = auth[id])
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
+    val uiState: StateFlow<ConnectionDetailUiState> =
+        combine(local, repo.connections, repo.authentication, calls.availability) { s, cs, auth, call ->
+            s.copy(connection = cs.firstOrNull { it.id == id } ?: s.connection, auth = auth[id], canCall = call == CallAvailability.READY)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
+
+    /** The pill's "Call": the call screen follows from the call's state. */
+    fun call() {
+        if (uiState.value.canCall && uiState.value.connection?.state == ConnectionState.ACTIVE) calls.call(id)
+    }
 
     init {
         viewModelScope.launch {

@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
+import com.vettid.app.calls.CallsHost
 import com.vettid.app.BuildConfig
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -151,8 +152,10 @@ fun VettIdApp(
     val finishingMove by viewModel.finishingMove.collectAsStateWithLifecycle()
     RootDestinationEffect(nav, target, locked, hold = holdsRoot(phase, finishingMove))
 
-    // Debug builds expose test tags as resource ids, so that adb (uiautomator) can drive two phones at once.
-    val root = if (BuildConfig.DEBUG) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
+    // Debug builds, and the staging build made for the two-phone call tests, expose test tags as resource ids, so
+    // that adb (uiautomator) can drive two phones at once.
+    val tagged = BuildConfig.DEBUG || BuildConfig.CALLS_TEST
+    val root = if (tagged) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
     Box(root) {
         AppLockGate(
             locked = locked,
@@ -214,20 +217,24 @@ fun VettIdApp(
                         }
                         composable<MainDest> {
                             // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).
-                            TagColorsHost {
-                                // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise the
-                                // top bar and the avatar sheet show only the initial tile, never the masked hint.
-                                val shown = account.shownInShell()
-                                AppShell(
-                                    launchRoute = launchRoute,
-                                    accountName = shown?.fullName ?: shown?.displayEmail
-                                        ?: stringResource(R.string.account_placeholder_name),
-                                    account = shown,
-                                    portalUrl = portal,
-                                    alarm = alarm,
-                                    onLockVault = viewModel::lockVault,
-                                    onEnableAppLock = onEnableAppLock,
-                                )
+                            // A call covers the open app's screens and nothing else: it is composed here, inside
+                            // the app lock and the unlocked destination (a build without calls: only the content).
+                            CallsHost {
+                                TagColorsHost {
+                                    // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise the
+                                    // top bar and the avatar sheet show only the initial tile, never the masked hint.
+                                    val shown = account.shownInShell()
+                                    AppShell(
+                                        launchRoute = launchRoute,
+                                        accountName = shown?.fullName ?: shown?.displayEmail
+                                            ?: stringResource(R.string.account_placeholder_name),
+                                        account = shown,
+                                        portalUrl = portal,
+                                        alarm = alarm,
+                                        onLockVault = viewModel::lockVault,
+                                        onEnableAppLock = onEnableAppLock,
+                                    )
+                                }
                             }
                         }
                     }

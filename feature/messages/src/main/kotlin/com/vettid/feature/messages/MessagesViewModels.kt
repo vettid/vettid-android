@@ -3,6 +3,10 @@ package com.vettid.feature.messages
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.calls.CallAccess
+import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.CallHistoryEntry
+import com.vettid.core.data.calls.NoCallAccess
 import android.graphics.Bitmap
 import com.vettid.core.data.social.AttachmentManager
 import com.vettid.core.data.social.AttachmentsRepository
@@ -20,11 +24,13 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -111,6 +117,12 @@ data class ConversationUiState(
     /** The message the member long-pressed: delete is confirmed first. */
     val deleting: MessageInfo? = null,
     val error: FailureKind? = null,
+    /** Whether this build and this vault have calls ([CallAccess]); the call button follows it. */
+    val call: CallAvailability = CallAvailability.NOT_IN_BUILD,
+    /** The calls with this connection, as the vault's history has them. */
+    val calls: List<CallHistoryEntry> = emptyList(),
+    /** The member tapped Call where the vault has no calls: say so. */
+    val callsNotAvailable: Boolean = false,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
     /** Older messages remain in the vault (VAULT-MESSAGING 0.32.0 §10.5.2): scrolling to the top loads them. */
@@ -128,13 +140,24 @@ data class ConversationUiState(
 ) {
     val canSend: Boolean get() = connection?.state == ConnectionState.ACTIVE && draft.isNotBlank() && !sending && !tooLong
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
+
+    /** A call button is shown: the connection is active and this build has calls that the vault was asked about. */
+    val callShown: Boolean
+        get() = active && (call == CallAvailability.READY || call == CallAvailability.IN_CALL || call == CallAvailability.NOT_IN_VAULT)
+
+    /** Disabled while a call is going on. */
+    val callEnabled: Boolean get() = call != CallAvailability.IN_CALL
 }
+
+/** After a call ended its history is read once more, this much later (the vault takes the hang-up in a moment). */
+private const val HISTORY_AGAIN_MS = 2_000L
 
 /**
  * A conversation (ANDROID-PLAN §4): the messages with one connection, oldest
  * first; incoming messages are marked read while it is open (the vault sends
  * read receipts, §10.5); send, and delete a message on this vault only.
  */
+
 @HiltViewModel
 @Suppress("TooManyFunctions") // the conversation's and its photos' actions
 class ConversationViewModel @Inject constructor(
@@ -142,6 +165,7 @@ class ConversationViewModel @Inject constructor(
     private val messages: MessagesRepository,
     private val connections: ConnectionsRepository,
     private val attachments: AttachmentsRepository,
+    private val calls: CallAccess = NoCallAccess,
 ) : ViewModel() {
     private val connectionId: String = checkNotNull(savedState[ConversationRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConversationUiState(connectionId))
@@ -160,9 +184,30 @@ class ConversationViewModel @Inject constructor(
                 olderAvailable = older,
                 photosAvailable = photos,
             )
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
+        }.combine(calls.availability) { s, call -> s.copy(call = call) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
     init {
+        viewModelScope.launch {
+            // The calls of this conversation: read when the vault is known to have calls, and again after each call
+            // (the availability goes from "in a call" back to "ready").
+            calls.availability.collectLatest { a ->
+                if (a == CallAvailability.READY) {
+                    val entries = calls.history(connectionId)
+                    local.update { it.copy(calls = entries) }
+                    // Read at the moment a call ends, the vault may not have taken its `call.end` yet: the call
+                    // would stay "in a call" in the list. Once more, a moment later (collectLatest: not if the
+                    // availability changed meanwhile).
+                    delay(HISTORY_AGAIN_MS)
+                    val later = calls.history(connectionId)
+                    local.update { it.copy(calls = later) }
+                } else if (a != CallAvailability.IN_CALL) {
+                    // Not known to be open with calls (locked, asked again, not in the build or vault): nothing of the
+                    // vault's history is kept in memory (the rule of #164/#167). During a call the list stays.
+                    local.update { it.copy(calls = emptyList()) }
+                }
+            }
+        }
         viewModelScope.launch {
             try {
                 if (connections.connections.value.none { it.id == connectionId }) {
@@ -250,6 +295,18 @@ class ConversationViewModel @Inject constructor(
     }
 
     fun dismissError() = local.update { it.copy(error = null) }
+
+    /** The call button. The call screen follows from the call's state; here only the tap. */
+    fun call() {
+        val s = uiState.value
+        when {
+            !s.callShown || !s.callEnabled -> Unit
+            s.call == CallAvailability.NOT_IN_VAULT -> local.update { it.copy(callsNotAvailable = true) }
+            else -> calls.call(connectionId)
+        }
+    }
+
+    fun dismissCallNotice() = local.update { it.copy(callsNotAvailable = false) }
 
     // --- photos (ANDROID-PLAN 0.1.39) ---
 

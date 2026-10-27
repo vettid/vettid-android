@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Texts approved by the owner 2026-10-12 (vettid.org local/call-texts-draft.md). %1$s is the connection's name. -->
+    <string name="calls_end_hung_up">Call ended</string>
+    <string name="calls_end_peer_hung_up">%1$s ended the call</string>
+    <string name="calls_end_declined">%1$s declined</string>
+    <string name="calls_end_declined_here">Call declined</string>
+    <string name="calls_end_busy">%1$s is on another call</string>
+    <string name="calls_end_no_answer">No answer</string>
+    <string name="calls_end_missed">Missed call from %1$s</string>
+    <string name="calls_end_answered_elsewhere">Answered on another device</string>
+    <string name="calls_end_unavailable">This call is no longer available</string>
+    <string name="calls_end_own_vault_busy">You are already on a call</string>
+    <string name="calls_end_owner_check_required">Confirm it\'s you before calling. Your daily check is due.</string>
+    <string name="calls_end_not_supported">Calls are not available for your vault yet</string>
+    <string name="calls_end_no_address">VettID cannot reach the network for calls. Check that this phone is online and that VettID is allowed to use the network.</string>
+    <string name="calls_end_could_not_connect">Could not connect. For now, both phones need to be on the same network.</string>
+    <string name="calls_end_connection_lost">Connection lost</string>
+    <string name="calls_end_not_encrypted">This call could not be encrypted, so it was ended. Nothing was played without encryption.</string>
+    <string name="calls_end_locked">Call ended because your vault was locked</string>
+    <string name="calls_end_failed">The call failed. Try again.</string>
+
+    <string name="calls_encryption">End-to-end encrypted. Only you and %1$s can hear this call.</string>
+
+    <string name="calls_state_calling">Calling…</string>
+    <string name="calls_state_ringing">Ringing…</string>
+    <string name="calls_state_connecting">Connecting…</string>
+    <string name="calls_incoming">%1$s is calling</string>
+    <string name="calls_answer">Answer</string>
+    <string name="calls_decline">Decline</string>
+    <string name="calls_mute">Mute</string>
+    <string name="calls_speaker">Speaker</string>
+    <string name="calls_hang_up">Hang up</string>
+
+    <string name="calls_microphone_body">VettID needs the microphone so %1$s can hear you. It is used only during calls.</string>
+    <string name="calls_microphone_allow">Allow</string>
+
+    <!-- Not in the approved texts (listed in the pull request): -->
+    <!-- A connection whose name has not arrived, where the texts above want a name. -->
+    <string name="calls_name_unknown">Your connection</string>
+    <!-- The path is interrupted during a call; the media stack is trying to get it back. -->
+    <string name="calls_state_reconnecting">Reconnecting…</string>
+    <!-- Closes the screen of a call that has ended. -->
+    <string name="calls_close">Close</string>
+    <string name="calls_microphone_title">Allow the microphone</string>
+    <string name="calls_microphone_not_now">Not now</string>
+    <!-- Android refuses the microphone without asking (drafts for the owner, 2026-10-12). -->
+    <string name="calls_microphone_blocked_title">The microphone is turned off for VettID</string>
+    <string name="calls_microphone_blocked_body">Android no longer asks. To make and answer calls, allow the microphone for VettID in the phone\'s settings.</string>
+    <string name="calls_microphone_settings">Open settings</string>
+    <!-- Spoken for the two toggles when they are on. -->
+    <string name="calls_muted_on">Muted</string>
+    <string name="calls_speaker_on">Speaker on</string>
+    <!-- The duration of a call on the in-call screen, read aloud. -->
+    <string name="calls_cd_duration">Call time %1$s</string>
+</resources>

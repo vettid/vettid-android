@@ -52,6 +52,9 @@ object CallsModule {
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
         override val unlocked: Flow<Boolean> = m.phase.map { it == AppPhase.Unlocked }.distinctUntilChanged()
 
+        /** The root UI shows the release update over every phase while its progress is non-null (VettIdApp). */
+        override val updateShowing: Boolean get() = m.releaseUpdate.progress.value != null
+
         /**
          * The events of the vault device in use, from the moment its session exists (before the vault is open): the
          * call that was waiting in the mailbox at an unlock is collected right then, and the device's events are not
@@ -80,8 +83,12 @@ object CallsModule {
 
         override suspend fun fingerprint(connectionId: String): String? = connection(connectionId)?.keyFingerprint
 
-        override fun displayName(connectionId: String): String? =
-            if (showNames.value) connection(connectionId)?.let { it.accountName ?: it.name.ifEmpty { null } } else null
+        override fun name(connectionId: String): String? = connection(connectionId)?.let { it.accountName ?: it.name.ifEmpty { null } }
+
+        override fun notificationName(connectionId: String): String? = if (showNames.value) name(connectionId) else null
+
+        /** This app's signer as its own entry in the vault's device list says (the "Installed from" line). */
+        override suspend fun signerClass(): String? = runCatching { m.overview().signer?.signerClass?.wire }.getOrNull()
     }
 
     @Provides
@@ -93,7 +100,7 @@ object CallsModule {
         @AppScope scope: CoroutineScope,
     ): CallsController = CallsController(
         vault = ManagerVault(manager, prefs, scope),
-        engines = WebRtcMediaEngine.factory(context),
+        engines = WebRtcMediaEngine.factory(context, testBuild = BuildConfig.CALLS_TEST),
         scope = scope,
         audio = AndroidCallAudio(context),
         tones = AndroidCallTones(context),

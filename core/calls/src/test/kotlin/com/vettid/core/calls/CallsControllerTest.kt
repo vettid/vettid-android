@@ -47,6 +47,7 @@ class CallsControllerTest {
         override val events: Flow<CallEvent> = channel.receiveAsFlow()
         val sent = mutableListOf<String>()
         var list: () -> List<CallRecord> = { emptyList() }
+        var listGate: suspend () -> Unit = {}
 
         override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall {
             sent += "start($connectionId)"
@@ -81,16 +82,21 @@ class CallsControllerTest {
 
         override suspend fun list(limit: Int): List<CallRecord> {
             sent += "list($limit)"
+            listGate()
             return list()
         }
     }
 
     private class Vault : CallVault {
         override val unlocked = MutableStateFlow(false)
+        override var updateShowing = false
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
         override val recheck = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
         var refreshed = 0
+        var signer: String? = "vettid"
+
+        override suspend fun signerClass(): String? = signer
 
         override suspend fun refreshConnections() {
             refreshed++
@@ -98,7 +104,11 @@ class CallsControllerTest {
 
         override suspend fun fingerprint(connectionId: String): String? = "aaaa bbbb"
 
-        override fun displayName(connectionId: String): String? = "Ada Lovelace"
+        var showNames = true
+
+        override fun name(connectionId: String): String? = "Ada Lovelace"
+
+        override fun notificationName(connectionId: String): String? = if (showNames) name(connectionId) else null
     }
 
     private class Audio : CallAudio, CallTones {
@@ -246,6 +256,10 @@ class CallsControllerTest {
         assertTrue(services > 0)
         assertEquals(CallAvailability.IN_CALL, c.availability.value)
         assertEquals("Ada Lovelace", c.displayName("conn-1"))
+        // "Show in notifications: nothing": the notification has no name; the call screen still does.
+        vault.showNames = false
+        assertNull(c.displayName("conn-1"))
+        assertEquals("Ada Lovelace", c.screenName("conn-1"))
         vault.gateway.channel.send(CallEvent.Ringing(CALL_ID))
         runCurrent()
         assertTrue(audio.ringBack)
@@ -259,9 +273,29 @@ class CallsControllerTest {
         // Locking the vault ends the call.
         vault.unlocked.value = false
         runCurrent()
-        assertEquals(CallEnd.LOCKED, (c.state.value as CallState.Ended).reason)
+        // Review P1 of #128: and nothing of it is kept for the next unlock (no ended line from before the lock).
+        assertEquals(CallState.Idle, c.state.value)
         assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
         assertTrue(!audio.on && !audio.ringBack)
+    }
+
+    /** Review P1 of #128: a call that had ended, its line still on the screen, when the vault locks. */
+    @Test
+    fun anEndedCallIsNotShownAgainAfterTheNextUnlock() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        c.hangUp()
+        runCurrent()
+        assertTrue(c.state.value is CallState.Ended)
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
     }
 
     @Test
@@ -288,20 +322,125 @@ class CallsControllerTest {
 
     @Test
     fun thePostQuantumTrialCanBeAskedForInADebugBuildOnly() = runTest {
-        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(dtlsPqcTrial = true), testBuild = false) }
-        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(faults = MediaFaults(sendUnencrypted = true))) }
-        val plain = controller(MediaConfig(), testBuild = false)
-        assertThrows(IllegalStateException::class.java) { plain.setMediaConfig(MediaConfig(faults = MediaFaults(keepRemoteSsrc = true))) }
-        assertThrows(IllegalStateException::class.java) { plain.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
-        assertEquals(MediaConfig(), plain.mediaConfig)
-        val test = controller(MediaConfig(dtlsPqcTrial = true), testBuild = true)
-        test.setMediaConfig(MediaConfig(faults = MediaFaults(wrongSendKey = true)))
-        // The next call's engine gets it.
+        val faulty = MediaConfig(faults = MediaFaults(wrongSendKey = true))
+        // Never what the app starts with, in any build.
+        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(dtlsPqcTrial = true), testBuild = true) }
+        assertThrows(IllegalStateException::class.java) { controller(faulty, testBuild = true) }
+
+        // A test build whose vault says "development": refused until the vault has said so, allowed after.
+        vault.signer = "development"
+        val test = controller(testBuild = true)
+        runCurrent()
+        assertTrue(!test.testsAllowed.value)
+        assertThrows(IllegalStateException::class.java) { test.setMediaConfig(faulty) }
         vault.unlocked.value = true
         runCurrent()
+        assertTrue(test.testsAllowed.value)
+        test.setMediaConfig(faulty)
         test.call("conn-1")
         runCurrent()
-        assertEquals(MediaConfig(faults = MediaFaults(wrongSendKey = true)), engines.config)
+        assertEquals("the next call's engine gets it", faulty, engines.config)
+        // A lock: not known any more, so nothing of it applies until the vault has said so again.
+        vault.unlocked.value = false
+        runCurrent()
+        assertTrue(!test.testsAllowed.value)
+        assertEquals(MediaConfig(), test.mediaConfig)
+        assertThrows(IllegalStateException::class.java) { test.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
+        test.setMediaConfig(MediaConfig()) // the plain configuration can always be set
+    }
+
+    @Test
+    fun aTestBuildSignedWithAnyOtherKeyAndAnyBuildThatIsNotATestBuildRefuseTheFaults() = runTest {
+        val faulty = MediaConfig(faults = MediaFaults(keepRemoteSsrc = true))
+        for (signer in listOf("vettid", "google_play", null, "something new")) {
+            val v = Vault().apply { this.signer = signer }
+            val c = CallsController(v, engines, backgroundScope, audio, audio, { true }, { }, testBuild = true)
+            v.unlocked.value = true
+            runCurrent()
+            assertTrue("$signer", !c.testsAllowed.value)
+            assertThrows(IllegalStateException::class.java) { c.setMediaConfig(faulty) }
+            assertEquals(MediaConfig(), c.mediaConfig)
+        }
+        // Not a test build: whatever the vault says.
+        val v = Vault().apply { signer = "development" }
+        val c = CallsController(v, engines, backgroundScope, audio, audio, { true }, { }, testBuild = false)
+        v.unlocked.value = true
+        runCurrent()
+        assertTrue(!c.testsAllowed.value)
+        assertThrows(IllegalStateException::class.java) { c.setMediaConfig(faulty) }
+        assertThrows(IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
+    }
+
+    /**
+     * Review D3: the vault's events are listened to from before the unlock is complete, so an offer can arrive in
+     * the moments before the app shows the open vault. It rings once it does, never over the unlock screen; and
+     * not at all if no unlock comes.
+     */
+    @Test
+    fun anOfferRingsOnlyOnceTheVaultIsOpenOnThisPhone() = runTest {
+        val c = controller()
+        runCurrent()
+        vault.gateway.incoming = true
+        fun offer() = CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T63", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray())))
+        vault.gateway.channel.send(offer())
+        advanceTimeBy(3_000)
+        assertEquals("not yet: the unlock screen is still in front", CallState.Idle, c.state.value)
+        assertTrue(!audio.ringtone)
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
+        c.decline()
+        runCurrent()
+        c.dismiss()
+        vault.unlocked.value = false
+        runCurrent()
+
+        // No unlock within the wait: dropped and counted, and the events behind it are not held for ever.
+        vault.gateway.channel.send(offer())
+        advanceTimeBy(10_001)
+        assertEquals(CallState.Idle, c.state.value)
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /** Review of #128: while the release-update screen covers the app there is no screen to answer on: no ring. */
+    @Test
+    fun anOfferDoesNotRingWhileTheReleaseUpdateScreenShows() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        vault.updateShowing = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T64", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(!audio.ringtone)
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /** Review D3: a probe that `recheck` starts does not run beside the one the unlock started. */
+    @Test
+    fun oneProbeAtATime() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        var running = 0
+        var most = 0
+        vault.gateway.listGate = {
+            running++
+            most = maxOf(most, running)
+            gate.receive()
+            running--
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.recheck.emit(Unit)
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(1, most)
+        gate.send(Unit)
+        runCurrent()
+        assertEquals(CallAvailability.READY, c.availability.value)
+        // The rechecks that waited find the answer there and do not ask again.
+        assertEquals(1, vault.gateway.sent.count { it.startsWith("list") })
     }
 
     /** Review N5: removing the gate on Answer used to fail no test. */

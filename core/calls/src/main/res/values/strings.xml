@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- The notification of a call in progress (the call service). The screens' texts come with :feature:calls. -->
-    <string name="calls_notification_ongoing">Call in progress</string>
-    <string name="calls_notification_public">VettID call</string>
-    <string name="calls_notification_unnamed">VettID call</string>
-    <string name="calls_hang_up">Hang up</string>
+    <string name="core_calls_notification_ongoing">Call in progress</string>
+    <string name="core_calls_notification_public">VettID call</string>
+    <string name="core_calls_notification_unnamed">VettID call</string>
 </resources>

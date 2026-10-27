@@ -3,6 +3,8 @@ import com.android.build.api.variant.BuildConfigField
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.result.ResolvedComponentResult
 import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.Properties
 import java.util.zip.ZipFile
@@ -132,8 +134,13 @@ android {
         // always may. The staging vaults accept only the staging package under a pinned signer, so the phone tests
         // run on a staging build: `-PvettidCallsTest=true` makes one that may (signed with the automation key by
         // the tester, never the build members get). Never a release build.
-        val callsTest = name != "release" && (isDebuggable || (name == "staging" && providers.gradleProperty("vettidCallsTest").orNull == "true"))
+        val stagingCallsTest = name == "staging" && providers.gradleProperty("vettidCallsTest").orNull == "true"
+        val callsTest = name != "release" && (isDebuggable || stagingCallsTest)
         buildConfigField("boolean", "CALLS_TEST", callsTest.toString())
+        // The same, where it can be seen and checked in a built APK (a BuildConfig constant is inlined away): the
+        // manifest's `com.vettid.app.CALLS_TEST` meta-data and, for the staging test build, the version name.
+        manifestPlaceholders["vettidCallsTest"] = callsTest.toString()
+        if (stagingCallsTest) versionNameSuffix = "-staging-callstest"
         // Firebase's receiver and the messaging services exist in the manifest of every `full` build; they are
         // enabled only where the options are (src/full/AndroidManifest.xml, the only manifest that reads this; set
         // on the build type so that the unit-test manifests of a variant get it too).
@@ -606,6 +613,123 @@ abstract class CallsApkCheck : DefaultTask() {
 }
 
 /**
+ * The build made for the two-phone call tests (`-PvettidCallsTest=true`; :core:calls `MediaFaults`) can break the
+ * rules of calls on purpose. It must never be mistaken for, or built as, the staging app members get:
+ * - the manifest's `com.vettid.app.CALLS_TEST` meta-data and the dex marker (the test screen's title) agree: both
+ *   in a test build, neither in any other;
+ * - a test build passes only with `-PvettidCallsTestChecked=true`, so that the ordinary `checkStagingApk` (CI, a
+ *   release of the staging app) fails on one;
+ * - a signed test build is signed with the automation key and no other ([TEST_SIGNERS]: the signer the staging
+ *   vaults pin as class `development`): never with a key whose builds members get. The signing certificate is read
+ *   from the APK's signing block (public; no keystore and no password is touched). Unsigned (CI) is fine.
+ * A release APK never has the marker (it is among `checkReleaseApk`'s forbidden strings).
+ */
+abstract class CallsTestCheck : DefaultTask() {
+    @get:InputFiles
+    abstract val apkDir: DirectoryProperty
+
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @get:Input
+    abstract val acknowledged: Property<Boolean>
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+        val meta = doc.getElementsByTagName("meta-data").let { l -> (0 until l.length).map { l.item(it) as org.w3c.dom.Element } }
+            .firstOrNull { it.getAttributeNS(ns, "name") == META }?.getAttributeNS(ns, "value")
+        val apks = apkDir.get().asFile.listFiles { f -> f.name.endsWith(".apk") }.orEmpty()
+        require(apks.isNotEmpty()) { "no APK in ${apkDir.get().asFile}" }
+        for (apk in apks) {
+            val dex = ZipFile(apk).use { z ->
+                z.entries().asSequence().filter { it.name.endsWith(".dex") }
+                    .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
+            }
+            val marked = dex.contains(MARKER)
+            check(marked == (meta == "true")) { "${apk.name}: the manifest says CALLS_TEST=$meta but the test screen is ${if (marked) "in" else "not in"} the dex" }
+            if (!marked) {
+                logger.lifecycle("${apk.name}: not a call-test build")
+                continue
+            }
+            check(acknowledged.get()) {
+                "${apk.name} is a CALL-TEST build (it can break the rules of calls on purpose). Not the staging app: " +
+                    "pass -PvettidCallsTestChecked=true if this is the build for the two-phone tests."
+            }
+            val signers = signerDigests(apk)
+            check(TEST_SIGNERS.containsAll(signers)) {
+                "${apk.name}: a call-test build signed with $signers. Only the automation key ($TEST_SIGNERS) may sign one: " +
+                    "pass -PvettidStagingSigning=<the automation key's properties file>."
+            }
+            logger.lifecycle("${apk.name}: CALL-TEST build, signers ${signers.ifEmpty { setOf("none (unsigned)") }}")
+        }
+    }
+
+    companion object {
+        const val META = "com.vettid.app.CALLS_TEST"
+        const val MARKER = "VettID call tests (test build)"
+
+        /**
+         * SHA-256 of the signing certificates a call-test build may carry: the staging channel's `development`
+         * signer (vettid-vault `enclave/releasecfg/staging.json` at release/staging/10). Public values. The
+         * channel's `vettid` signer (`bd83a075…b2c4` there) and every other key are refused.
+         */
+        val TEST_SIGNERS = setOf("2fed27b72746797a931fd414ff3dac4cd969fa0c2ff36209ae05365f580014f2")
+        private const val EOCD = 0x06054b50
+        private const val SIG_MAGIC = "APK Sig Block 42"
+        private val SCHEMES = setOf(0x7109871a, 0xf05368c0.toInt(), 0x1b93ad61)
+
+        /**
+         * The SHA-256 digests of the signing certificates in [apk]'s APK Signing Block (schemes 2, 3 and 3.1): for
+         * each signer, the certificates of its signed data. Empty for an unsigned APK.
+         */
+        fun signerDigests(apk: File): Set<String> {
+            val bytes = apk.readBytes()
+            val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val eocd = (bytes.size - 22 downTo maxOf(0, bytes.size - 22 - 65535)).firstOrNull { b.getInt(it) == EOCD } ?: return emptySet()
+            val cd = b.getInt(eocd + 16)
+            if (cd < 32 || String(bytes, cd - 16, 16, Charsets.US_ASCII) != SIG_MAGIC) return emptySet()
+            val size = b.getLong(cd - 24).toInt()
+            val out = mutableSetOf<String>()
+            var p = cd - size
+            val end = cd - 24
+            while (p + 12 <= end) {
+                val len = b.getLong(p).toInt()
+                val id = b.getInt(p + 8)
+                if (id in SCHEMES) out += certificates(b.duplicate().order(ByteOrder.LITTLE_ENDIAN), p + 12, bytes)
+                p += 8 + len
+            }
+            return out
+        }
+
+        /** scheme block: signers(len) { signer(len) { signedData(len) { digests(len) certificates(len) { cert(len) … } … } … } … } */
+        private fun certificates(b: ByteBuffer, start: Int, bytes: ByteArray): Set<String> {
+            val out = mutableSetOf<String>()
+            val signersEnd = start + 4 + b.getInt(start)
+            var signer = start + 4
+            while (signer + 4 <= signersEnd) {
+                val signerLen = b.getInt(signer)
+                val signed = signer + 4
+                val digestsLen = b.getInt(signed + 4)
+                var cert = signed + 4 + 4 + digestsLen
+                val certsEnd = cert + 4 + b.getInt(cert)
+                cert += 4
+                while (cert + 4 <= certsEnd) {
+                    val n = b.getInt(cert)
+                    val d = MessageDigest.getInstance("SHA-256").digest(bytes.copyOfRange(cert + 4, cert + 4 + n))
+                    out += d.joinToString("") { "%02x".format(it) }
+                    cert += 4 + n
+                }
+                signer += 4 + signerLen
+            }
+            return out
+        }
+    }
+}
+
+/**
  * Calls in a release build: off. `-PvettidCallsInRelease=true` links them in, for the one CI step that keeps the
  * F-Droid distribution building with them (`:app:assembleFossRelease :app:checkFossReleaseApk`: no Google code, the
  * media stack as pinned). Never for a build that is published before calls are promoted: such a build has the
@@ -697,6 +821,13 @@ androidComponents {
                 expected.set(staging || callsInRelease)
             }
         }
+        if (staging) {
+            tasks.register<CallsTestCheck>("check${name}CallsTest") {
+                apkDir.set(v.artifacts.get(SingleArtifact.APK))
+                manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+                acknowledged.set(providers.gradleProperty("vettidCallsTestChecked").orNull == "true")
+            }
+        }
         when (v.buildType) {
             "release" -> {
                 val contents = tasks.register<ApkContentCheck>(if (foss) "checkFossReleaseApkContents" else "checkReleaseApk") {
@@ -705,7 +836,7 @@ androidComponents {
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(
                         stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")) +
-                            if (callsInRelease) emptyList() else callsMarkers,
+                            (if (callsInRelease) emptyList() else callsMarkers) + CallsTestCheck.MARKER + "calltest_",
                     )
                     required.set(productionPins)
                 }
@@ -719,7 +850,7 @@ androidComponents {
                 }
             }
             "staging" -> tasks.register<ApkContentCheck>("checkStagingApk") {
-                dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls")
+                dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls", "check${name}CallsTest")
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
                 required.set(stagingPins)
@@ -757,8 +888,14 @@ dependencies {
     implementation(projects.core.data)
     implementation(projects.core.notify)
     // Calls (CALLS-PLAN 0.1.1 phase C1): not in production builds until they are promoted (CallsApkCheck above).
-    for (type in listOf("debug", "devStack", "staging")) "${type}Implementation"(projects.core.calls)
-    if (callsInRelease) "releaseImplementation"(projects.core.calls)
+    for (type in listOf("debug", "devStack", "staging")) {
+        "${type}Implementation"(projects.core.calls)
+        "${type}Implementation"(projects.feature.calls)
+    }
+    if (callsInRelease) {
+        "releaseImplementation"(projects.core.calls)
+        "releaseImplementation"(projects.feature.calls)
+    }
     // Google push: the `full` distribution only. Looked up by path, not by accessor: an F-Droid build removes the
     // module's directory, and settings.gradle.kts then does not include it (the `foss` distribution never needs it).
     findProject(":core:push-fcm")?.let { "fullImplementation"(it) }

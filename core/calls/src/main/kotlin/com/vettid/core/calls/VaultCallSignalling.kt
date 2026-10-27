@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * [CallSignalling] on the vault. **This is where a call's checks are asked for**: [CallMachine] trusts what comes
@@ -49,6 +50,13 @@ internal class VaultCallSignalling(
      * for once more after this.
      */
     private val refreshConnections: suspend () -> Unit = {},
+    /**
+     * Whether an offer may ring now: the vault is open on this phone (asked for every offer; it may wait a moment
+     * for an unlock that is just completing, and says false if none comes). The vault's events are listened to
+     * from before the unlock is complete, so an offer can arrive in the moments before the app shows the open
+     * vault: it rings only once it does, never over the unlock screen.
+     */
+    private val mayRing: suspend () -> Boolean = { true },
 ) : CallSignalling {
     private val lock = Any()
     private val placed = LinkedHashMap<String, OutgoingCall>()
@@ -85,10 +93,14 @@ internal class VaultCallSignalling(
         late.receiveAsFlow(),
     )
 
-    /** The connection's identity, looked for a second time after the list has been read again (see [refreshConnections]). */
+    /**
+     * The connection's identity, looked for a second time after the list has been read again (see
+     * [refreshConnections]). The reading is given [REFRESH_MS] and no more: the events are handled in order, and a
+     * slow vault must not hold the next ones (a hang-up, the candidates) behind one unknown connection.
+     */
     private suspend fun identity(connectionId: String): String {
         pinned(connectionId)?.let { return it }
-        refreshConnections()
+        withTimeoutOrNull(REFRESH_MS) { refreshConnections() }
         return pinned(connectionId) ?: throw CallMessageException("no such connection")
     }
 
@@ -101,7 +113,8 @@ internal class VaultCallSignalling(
     /** Rule 1. */
     private suspend fun offer(e: CallEvent.Offer): SignalEvent.Offer? {
         val call = try {
-            val connectionId = e.connectionId ?: throw CallMessageException("no connection named")
+            // No connection named, or the vault not open on this phone: no ring.
+            val connectionId = e.connectionId?.takeIf { mayRing() } ?: throw CallMessageException("not an offer to ring for")
             gateway.incoming(e.message, identity(connectionId), suites)
         } catch (x: CancellationException) {
             throw x
@@ -202,5 +215,8 @@ internal class VaultCallSignalling(
     private companion object {
         /** One call at a time: anything beyond a few is left over from calls that ended without a word. */
         const val MAX_KEPT = 4
+
+        /** What reading the connections again may take inside the ordered flow of events. */
+        const val REFRESH_MS = 3_000L
     }
 }

@@ -392,10 +392,12 @@ class CallMachineTest {
         assertTrue(engines.last.closed)
         m.dismiss()
 
-        // Gathering that ends with nothing says so at once.
+        // Gathering that ends with nothing is not the end: the timer decides.
         placed(m)
         engines.last.emit(MediaEvent.GatheringDone(0))
-        runCurrent()
+        advanceTimeBy(7_999)
+        assertEquals(CallPhase.CALLING, m.live().phase)
+        advanceTimeBy(2)
         assertEquals(CallEnd.NO_ADDRESS, m.ended().reason)
         m.dismiss()
 
@@ -408,6 +410,20 @@ class CallMachineTest {
         advanceTimeBy(8_001)
         assertEquals(CallEnd.NO_ADDRESS, m.ended().reason)
         assertEquals("end($CALL_ID, failed)", signalling.sent.last())
+    }
+
+    @Test
+    fun aCandidateAfterEmptyGatheringKeepsTheCallGoing() = runTest {
+        // The stack finished a round before the network had reported its addresses; a candidate follows.
+        val m = machine()
+        placed(m)
+        engines.last.emit(MediaEvent.GatheringDone(0))
+        runCurrent()
+        assertEquals(CallPhase.CALLING, m.live().phase)
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        runCurrent()
+        advanceTimeBy(9_000)
+        assertEquals(CallPhase.CALLING, m.live().phase)
     }
 
     @Test

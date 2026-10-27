@@ -21,6 +21,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.automirrored.outlined.CallMade
+import androidx.compose.material.icons.automirrored.outlined.CallReceived
+import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
@@ -76,6 +79,7 @@ import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.rememberTopBarSearch
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
+import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
@@ -141,6 +145,8 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
                 onConfirmDelete = vm::confirmDelete,
                 onDismissError = vm::dismissError,
                 onDetails = { host.onOpenConnection(state.connectionId) },
+                onCall = vm::call,
+                onDismissCallNotice = vm::dismissCallNotice,
                 onLoadOlder = vm::loadOlder,
                 photos = PhotoActions(
                     onTakePhoto = vm::startCapture,
@@ -294,6 +300,9 @@ data class ConversationActions(
     val onConfirmDelete: () -> Unit = {},
     val onDismissError: () -> Unit = {},
     val onDetails: () -> Unit = {},
+    /** The call button (builds and vaults with calls). */
+    val onCall: () -> Unit = {},
+    val onDismissCallNotice: () -> Unit = {},
     /** The list reached its top while older messages remain (§10.5.2). */
     val onLoadOlder: () -> Unit = {},
     /** Photo attachments (ANDROID-PLAN 0.1.39). */
@@ -305,9 +314,10 @@ data class ConversationActions(
 fun ConversationScreen(state: ConversationUiState, actions: ConversationActions, modifier: Modifier = Modifier) {
     val name = state.connection?.displayName?.ifBlank { null } ?: stringResource(R.string.messages_name_not_shared)
     val listState = rememberLazyListState()
-    // To the newest message when one is added at the end, not when an older page is added at the top (§10.5.2):
-    // the list keeps its place then, by the items' keys.
-    LaunchedEffect(state.messages.lastOrNull()?.messageId) {
+    // To the newest entry when one is added at the end, a message or a call (calls are their own list, and may load
+    // after the messages), not when an older page is added at the top (§10.5.2): the list keeps its place then, by
+    // the items' keys.
+    LaunchedEffect(state.messages.lastOrNull()?.messageId, state.calls.maxByOrNull { it.startedAt }?.callId) {
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last > 0) listState.animateScrollToItem(last)
     }
@@ -315,6 +325,11 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
         onBackClick = actions.onBack,
         modifier = modifier.imePadding(),
         actions = {
+            if (state.callShown) {
+                IconButton(onClick = actions.onCall, enabled = state.callEnabled, modifier = Modifier.testTag("conversation_call")) {
+                    Icon(Icons.Outlined.Call, contentDescription = stringResource(R.string.messages_call))
+                }
+            }
             IconButton(onClick = actions.onDetails) {
                 Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.messages_cd_details, name))
             }
@@ -333,13 +348,22 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading && state.messages.isEmpty() -> Loading()
-                    state.messages.isEmpty() -> EmptyState(
+                    state.messages.isEmpty() && state.calls.isEmpty() -> EmptyState(
                         icon = Icons.Outlined.ChatBubbleOutline,
                         title = stringResource(R.string.messages_conversation_empty_title),
                         body = stringResource(R.string.messages_conversation_empty_body, name),
                     )
                     else -> MessageList(state, name, listState, actions)
                 }
+            }
+            if (state.callsNotAvailable) {
+                NoticeCard(
+                    kind = NoticeKind.INFO,
+                    title = stringResource(R.string.messages_call),
+                    body = stringResource(R.string.messages_call_not_in_vault),
+                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_call_notice"),
+                    actions = { TextButton(onClick = actions.onDismissCallNotice) { Text(stringResource(R.string.messages_ok)) } },
+                )
             }
             val error = state.error
             if (error != null) {
@@ -366,10 +390,16 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
     }
 }
 
+@Suppress("CyclomaticComplexMethod") // messages, calls and photo bubbles of one list
 @Composable
 private fun MessageList(state: ConversationUiState, name: String, listState: LazyListState, actions: ConversationActions) {
     val onLongPress = actions.onLongPress
-    val byDay = state.messages.groupBy { Times.day(it.sentAt) }
+    val rows = CallEntries.rows(
+        state.messages,
+        state.calls,
+        if (state.olderAvailable) state.messages.firstOrNull()?.sentAt else null,
+    )
+    val byDay = rows.groupBy { Times.day(it.at) }
     val older by rememberUpdatedState(state.olderAvailable)
     val onLoadOlder by rememberUpdatedState(actions.onLoadOlder)
     LaunchedEffect(listState) {
@@ -388,7 +418,12 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
         }
         byDay.forEach { (day, list) ->
             item(key = "day-$day") { DayDivider(Times.dayLabel(day)) }
-            items(list, key = { it.messageId }) { m ->
+            items(list, key = { it.key }) { row ->
+                if (row is ConversationRow.Call) {
+                    CallEntry(row.call)
+                    return@items
+                }
+                val m = (row as ConversationRow.Message).message
                 if (m.attachment != null) {
                     PhotoBubble(m, name, actions.photos, onLongPress)
                     return@items
@@ -414,6 +449,38 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
                 )
             }
         }
+    }
+}
+
+/** A call in the conversation: what became of it, and when (the vault's history; no content). */
+@Composable
+private fun CallEntry(call: CallHistoryEntry) {
+    val text = CallEntries.text(call.outcome) ?: return
+    val duration = call.duration?.let { d ->
+        val p = CallEntries.parts(d)
+        when {
+            p.hours > 0 -> stringResource(CallEntries.durationFormat(p), p.hours, p.minutes)
+            p.minutes > 0 -> stringResource(CallEntries.durationFormat(p), p.minutes, p.seconds)
+            else -> stringResource(CallEntries.durationFormat(p), p.seconds)
+        }
+    }.orEmpty()
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_call_entry"),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (call.outgoing) Icons.AutoMirrored.Outlined.CallMade else Icons.AutoMirrored.Outlined.CallReceived,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.size(Spacing.xs))
+        Text(
+            "${stringResource(text, duration)} · ${Times.time(call.startedAt)}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

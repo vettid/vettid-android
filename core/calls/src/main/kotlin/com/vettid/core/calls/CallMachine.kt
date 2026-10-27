@@ -458,7 +458,10 @@ internal class CallMachine(
                 s.pendingLocal.addLast(e.candidate)
                 scheduleFlush(s, timings.iceBatch)
             }
-            is MediaEvent.GatheringDone -> if (e.found == 0 && s.gathered == 0) finish(s, CallEnd.NO_ADDRESS, CallReason.FAILED)
+            // Not an end: the stack can finish a round before the phone's network has reported its addresses, and the
+            // engine keeps watching the networks (GATHER_CONTINUALLY), so a candidate may still come. The GATHER timer
+            // alone decides NO_ADDRESS.
+            is MediaEvent.GatheringDone -> Unit
             is MediaEvent.Connection -> onConnection(s, e.state)
             is MediaEvent.Cryptor -> if (cryptorFailed(s, e)) finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
             is MediaEvent.Failed -> finish(s, CallEnd.FAILED, CallReason.FAILED)

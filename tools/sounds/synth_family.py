@@ -35,6 +35,9 @@ def glass(freq, dur, amp=1.0, attack=0.010, decay=0.45, firm=0.0):
     x = t(dur)
     att = attack * (1 - 0.6 * firm)
     env = np.minimum(1.0, x / att) * np.exp(-x / decay)
+    # end at silence: a note cut off while it still sounds clicks (raised-cosine release over the last 80 ms)
+    rel = min(len(x), int(SR * 0.08))
+    env[-rel:] *= 0.5 * (1 + np.cos(np.linspace(0, np.pi, rel)))
     out = (np.sin(2 * np.pi * freq * x)
            + (0.28 + 0.25 * firm) * np.exp(-x / (decay * 0.6)) * np.sin(2 * np.pi * freq * 2 * x)
            + (0.10 + 0.12 * firm) * np.exp(-x / (decay * 0.4)) * np.sin(2 * np.pi * freq * 3 * x)
@@ -68,15 +71,22 @@ def sheen(sig, mix=0.12):
 def place(canvas, sound, start):
     i = int(start * SR)
     end = min(len(canvas), i + len(sound))
-    canvas[i:end] += sound[: end - i]
+    part = sound[: end - i].copy()
+    if len(part) < len(sound):  # cut by the canvas: release it there instead (a cut that still sounds clicks)
+        rel = min(len(part), int(SR * 0.08))
+        part[-rel:] *= 0.5 * (1 + np.cos(np.linspace(0, np.pi, rel)))
+    canvas[i:end] += part
     return canvas
 
 
-def finish(sig, fade_ms=80, peak_db=-1.0):
+def finish(sig, fade_ms=80, peak_db=-1.0, fade_in_ms=0):
     sig = sig.astype(np.float64)
     n = int(SR * fade_ms / 1000)
     if n:
         sig[-n:] *= np.linspace(1, 0, n)
+    n = int(SR * fade_in_ms / 1000)
+    if n:
+        sig[:n] *= np.linspace(0, 1, n)
     sig /= np.max(np.abs(sig)) + 1e-9
     sig *= 10 ** (peak_db / 20)
     return (sig * 32767).astype(np.int16)
@@ -133,6 +143,7 @@ out["vettid_ringtone"] = (c, -3.0)
 out_dir = sys.argv[1]
 os.makedirs(out_dir, exist_ok=True)
 for name, (sig, peak) in out.items():
-    fade = 0 if name == "vettid_ringtone" else 80
-    wavfile.write(os.path.join(out_dir, f"{name}.wav"), SR, finish(sig, fade_ms=fade, peak_db=peak))
+    # the ringtone loops: both ends meet at silence, briefly, so the loop point does not click
+    fade, fade_in = (40, 5) if name == "vettid_ringtone" else (80, 0)
+    wavfile.write(os.path.join(out_dir, f"{name}.wav"), SR, finish(sig, fade_ms=fade, peak_db=peak, fade_in_ms=fade_in))
     print(name, f"{len(sig)/SR:.2f}s  peak {peak} dBFS")
