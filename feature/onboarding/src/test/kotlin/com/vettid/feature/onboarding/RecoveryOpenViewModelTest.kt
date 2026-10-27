@@ -374,4 +374,67 @@ class RecoveryOpenViewModelTest {
         advanceUntilIdle()
         assertFalse(other.uiState.value.newCodeAllowed)
     }
+
+    @Test
+    fun aNewCodeThatRegisteredTakesTheLostOkPaneBackToTheEntries() = runTest {
+        vault.lostOkDueValue = true
+        vault.undecidedValue = true
+        vault.newCodeAllowedValue = true
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals(OpenStep.FINISH, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.newCodeAllowed)
+        // The new code registered: the rule no longer owes a lost-ok unlock, and the pane is read again on return.
+        vault.lostOkDueValue = false
+        vault.newCodeAllowedValue = false
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(OpenStep.ENTER, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.lostOk)
+        assertFalse(vm.uiState.value.newCodeAllowed)
+    }
+
+    @Test
+    fun aNewCodeRefusedWithKeyInUseKeepsTheLostOkPaneWithoutTheButton() = runTest {
+        vault.lostOkDueValue = true
+        vault.undecidedValue = true
+        vault.newCodeAllowedValue = true
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        // `409 key_in_use`: the vault took this phone; the rule no longer allows a new code.
+        vault.newCodeAllowedValue = false
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(OpenStep.FINISH, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.lostOk)
+        assertFalse(vm.uiState.value.newCodeAllowed)
+    }
+
+    @Test
+    fun aLostOkTheMemberChoseSurvivesARefresh() = runTest {
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.finishLostOk()
+        vm.setPin("975310")
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(OpenStep.FINISH, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.lostOk)
+        assertEquals("975310", vm.uiState.value.pin)
+    }
+
+    @Test
+    fun aRefreshRacingASendLeavesTheSendAlone() = runTest {
+        val vm = RecoveryOpenViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("975310")
+        vm.setPassword("correct horse battery")
+        vm.review()
+        vault.lostOkDueValue = true
+        vm.refresh()
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(OpenStep.DONE, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.lostOk)
+    }
 }
