@@ -19,6 +19,7 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -59,9 +60,16 @@ class ApprovalsViewModel @Inject constructor(
     private val local = MutableStateFlow(ApprovalsUiState())
 
     /** Ticks at the earliest expiry still to come among the listed requests. */
+    private val resumed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     private val clock = expiryClock(
-        repo.approvals.map { l -> l.mapNotNull { it.exp }.filter { it.isAfter(Instant.now()) }.minOrNull() },
+        repo.approvals.map { l -> l.mapNotNull { it.exp }.filter { it.isAfter(Instant.now()) } },
+        resumed,
     )
+
+    /** The screen came back to the front: the time is read again (a sleep stops in deep sleep). */
+    fun tick() {
+        resumed.tryEmit(Unit)
+    }
 
     val uiState: StateFlow<ApprovalsUiState> =
         combine(local, repo.approvals, repo.peerDeclines, connections.connections, clock) { s, list, declines, cs, now ->
@@ -234,7 +242,16 @@ class ApprovalDetailViewModel @Inject constructor(
     }
 
     /** Ticks at this request's expiry, so an open screen stops offering it the moment it expires. */
-    private val clock = expiryClock(repo.approvals.map { l -> l.firstOrNull { it.key == key }?.exp })
+    private val resumed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val clock = expiryClock(repo.approvals.map { l -> listOfNotNull(l.firstOrNull { it.key == key }?.exp) }, resumed)
+
+    /** The screen came back to the front: the time is read again (a sleep stops in deep sleep). */
+    fun tick() {
+        resumed.tryEmit(Unit)
+    }
+
+    /** A decision on a request that has expired by the clock: nothing is sent, the screen reads as expired. */
+    private fun expiredNow(a: Approval): Boolean = a.expiredAt(Instant.now()).also { if (it) tick() }
 
     val uiState: StateFlow<ApprovalDetailUiState> = combine(local, repo.approvals, clock) { s, list, now ->
         val a = list.firstOrNull { it.key == key }
@@ -279,7 +296,7 @@ class ApprovalDetailViewModel @Inject constructor(
     fun approve(shown: List<String>? = null) {
         val s = local.value.copy(approval = uiState.value.approval ?: local.value.approval)
         val a = s.approval ?: return
-        if (!s.canApprove) return
+        if (!s.canApprove || expiredNow(a)) return
         val pw = s.password
         decide {
             when (a) {
@@ -311,6 +328,7 @@ class ApprovalDetailViewModel @Inject constructor(
     /** [shown]: as for [approve]; only the share items the screen showed are declined. */
     fun deny(shown: List<String>? = null) {
         val a = uiState.value.approval ?: return
+        if (expiredNow(a)) return
         decide {
             when (a) {
                 is Approval.ConnectionRequest -> repo.declineConnection(a.pendingId)
@@ -327,6 +345,7 @@ class ApprovalDetailViewModel @Inject constructor(
     fun block() {
         val a = uiState.value.approval as? Approval.ConnectionRequest ?: return
         local.update { it.copy(confirmBlock = false) }
+        if (expiredNow(a)) return
         decide { repo.blockConnectionRequest(a.pendingId) }
     }
 

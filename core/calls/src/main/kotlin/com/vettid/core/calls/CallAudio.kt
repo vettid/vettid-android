@@ -168,7 +168,15 @@ class AndroidCallTones(context: Context) : CallTones {
     private val ringBackSlot = ToneSlot<ToneGenerator>(
         begin = {
             runCatching {
-                ToneGenerator(AudioManager.STREAM_VOICE_CALL, RING_BACK_VOLUME).also { it.startTone(ToneGenerator.TONE_SUP_RINGTONE) }
+                val generator = ToneGenerator(AudioManager.STREAM_VOICE_CALL, RING_BACK_VOLUME)
+                // A tone that did not start is not "playing": released at once, and the next "on" tries again.
+                val started = runCatching { generator.startTone(ToneGenerator.TONE_SUP_RINGTONE) }.getOrDefault(false)
+                if (started) {
+                    generator
+                } else {
+                    runCatching { generator.release() }
+                    null
+                }
             }.getOrNull()
         },
         end = { generator ->

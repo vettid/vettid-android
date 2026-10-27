@@ -344,7 +344,7 @@ fun AppShell(
                                 onAskFor = { id -> navController.navigate(SharedWithYouRoute(id, ask = true)) { launchSingleTop = true } },
                             ),
                         )
-                        approvalsDestination(chrome, navigate = navigate, onBack = { navController.leaveApprovalDetail() })
+                        approvalsDestination(chrome, navigate = navigate, onBack = back, onLeaveDetail = navController::leaveApprovalDetail)
                         itemsDestination(
                             chrome,
                             ItemsHost(
@@ -553,13 +553,23 @@ private fun feedRoute(t: FeedTarget): Any? = when (t) {
 }
 
 /**
- * Leaves an approval's screen after a decision, an expiry or Back. Normally that is the screen the member came from. A
- * request opened from a notification must never leave an empty NavHost behind (owner test 2026-10-27: Deny on a
- * sign-in request left a blank screen, and Back then left the app): when nothing is under it, the Approvals list is
- * where the member lands.
+ * Leaves the approval screen of the back stack entry [entryId] after a decision, an expiry or Back. Once per entry: a
+ * second call (the top-bar arrow tapped while the popped screen still animates out, or the effect that closes a decided
+ * screen) finds another entry in front and does nothing, instead of popping the screen below it (an empty NavHost is the
+ * blank screen the owner saw after Deny, 2026-10-27). Normally it returns to the screen the member came from; with
+ * nothing under the approval it is replaced by the Approvals list.
  */
-internal fun NavHostController.leaveApprovalDetail() {
-    if (previousBackStackEntry == null) navigateTopLevel(ApprovalsRoute) else popBackStack()
+internal fun NavHostController.leaveApprovalDetail(entryId: String) {
+    val entry = currentBackStackEntry ?: return
+    if (entry.id != entryId) return
+    if (previousBackStackEntry == null) {
+        navigate(ApprovalsRoute) {
+            popUpTo(entry.destination.id) { inclusive = true }
+            launchSingleTop = true
+        }
+    } else {
+        popBackStack()
+    }
 }
 
 /** Drawer navigation: one copy of each top-level screen, state saved per destination. */

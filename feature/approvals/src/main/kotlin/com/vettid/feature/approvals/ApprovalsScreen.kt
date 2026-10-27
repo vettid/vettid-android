@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -79,7 +80,13 @@ data class ApprovalDetailRoute(val key: String) {
 }
 
 /** Registers the Approvals destinations. */
-fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) -> Unit, onBack: () -> Unit) {
+fun NavGraphBuilder.approvalsDestination(
+    chrome: ShellChrome,
+    navigate: (Any) -> Unit,
+    onBack: () -> Unit,
+    /** Leaves the approval screen of the back stack entry with this id (only if it is still the one in front). */
+    onLeaveDetail: (entryId: String) -> Unit = { onBack() },
+) {
     composable<ApprovalsRoute> {
         val vm: ApprovalsViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
@@ -92,15 +99,20 @@ fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) ->
             paused = PausedActions(onResume = vm::resumeAsks, onAskRemove = vm::askRemove, onRemove = vm::remove),
         )
     }
-    composable<ApprovalDetailRoute> {
+    composable<ApprovalDetailRoute> { entry ->
         val vm: ApprovalDetailViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        // A sleep does not run in deep sleep: read the time again whenever the screen is back in front.
+        LifecycleResumeEffect(vm) {
+            vm.tick()
+            onPauseOrDispose {}
+        }
         // The share items this composition shows: a tap decides these, not a question a later batch changed (§10.12).
         val shown = (state.approval as? Approval.ShareDecision)?.items?.map { it.itemId }
         ApprovalDetailScreen(
             state,
             DecisionActions(
-                onBack = onBack,
+                onBack = { onLeaveDetail(entry.id) },
                 onPassword = vm::setPassword,
                 onApprove = { vm.approve(shown) },
                 onDeny = { vm.deny(shown) },

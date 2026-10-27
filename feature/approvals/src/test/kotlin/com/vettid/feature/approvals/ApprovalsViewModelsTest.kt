@@ -16,6 +16,7 @@ import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -234,6 +235,47 @@ class ApprovalsViewModelsTest {
         assertFalse(vm.uiState.value.gone)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.gone)
+    }
+
+    /** A sleep stops in deep sleep: the screen coming back to the front reads the time again. */
+    @Test
+    fun aResumedScreenReadsTheTimeAgain() = runTest {
+        val soon = Approval.Authentication("a4", "c1", null, now, Instant.now().plusMillis(300), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = detail(soon)
+        runCurrent()
+        assertFalse(vm.uiState.value.gone)
+        Thread.sleep(400)
+        vm.tick()
+        runCurrent()
+        assertTrue(vm.uiState.value.gone)
+    }
+
+    /** Even before the clock has noticed, a decision on an expired request sends nothing. */
+    @Test
+    fun aDecisionOnAnExpiredRequestIsNotSent() = runTest {
+        val soon = Approval.Authentication("a5", "c1", null, now, Instant.now().plusMillis(300), "Sam")
+        social.approvals.value = listOf(soon)
+        val vm = detail(soon)
+        runCurrent()
+        Thread.sleep(400)
+        vm.setPassword("pw")
+        vm.approve()
+        vm.deny()
+        advanceUntilIdle()
+        assertTrue("approveAuthentication" !in social.calls && "denyAuthentication" !in social.calls)
+        assertTrue(vm.uiState.value.gone)
+    }
+
+    /** The list's clock goes on to the later expiries after the first. */
+    @Test
+    fun theListDropsEachRequestAtItsOwnExpiry() = runTest {
+        val a = Approval.Authentication("a6", "c1", null, now, Instant.now().plusSeconds(60), "Sam")
+        val b = Approval.Authentication("a7", "c1", null, now, Instant.now().plusSeconds(120), "Sam")
+        social.approvals.value = listOf(a, b)
+        val vm = ApprovalsViewModel(social, social, FakeVault())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.approvals.isEmpty())
     }
 
     /** §10.12: ticked items are shared, unticked ones declined, in one decision. */

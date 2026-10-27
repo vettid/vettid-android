@@ -14,7 +14,6 @@ import com.vettid.feature.approvals.ApprovalDetailRoute
 import com.vettid.feature.approvals.ApprovalsRoute
 import kotlinx.serialization.Serializable
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,33 +56,57 @@ class ApprovalLeaveTest {
         rule.waitForIdle()
     }
 
-    private fun here() = nav.currentBackStackEntry?.destination?.route.orEmpty()
+    private fun stack() = nav.currentBackStack.value.mapNotNull { it.destination.route?.substringAfterLast('.') }
+        .filter { !it.startsWith("ComposeNavGraph") && it.isNotEmpty() }.map { it.substringBefore('/').substringBefore('?') }
+
+    private fun leave(id: String) = act { nav.leaveApprovalDetail(id) }
 
     @Test
     fun aRequestOpenedFromAScreenGoesBackToIt() {
         show()
         act { nav.navigate(ApprovalDetailRoute("auth:a1")) }
-        assertTrue(here().contains("ApprovalDetailRoute"))
-        act { nav.leaveApprovalDetail() }
-        assertTrue(here().contains("LeaveStartRoute"))
+        leave(nav.currentBackStackEntry!!.id)
+        assertEquals(listOf("LeaveStartRoute"), stack())
     }
 
     @Test
-    fun aDetailWithNothingUnderItLandsOnTheApprovalsList() {
+    fun aDetailWithNothingUnderItIsReplacedByTheApprovalsList() {
         show()
         act { nav.navigate(ApprovalDetailRoute("auth:a1")) { popUpTo<LeaveStartRoute> { inclusive = true } } }
         assertEquals(null, nav.previousBackStackEntry)
-        act { nav.leaveApprovalDetail() }
-        assertTrue(here().contains("ApprovalsRoute"))
+        leave(nav.currentBackStackEntry!!.id)
+        assertEquals(listOf("ApprovalsRoute"), stack())
+    }
+
+    /** Two leaves on one entry (the arrow tapped while the popped screen animates out) pop once. */
+    @Test
+    fun aSecondLeaveOnTheSameEntryDoesNothing() {
+        show()
+        act { nav.navigate(ApprovalDetailRoute("auth:a1")) }
+        val id = nav.currentBackStackEntry!!.id
+        leave(id)
+        leave(id)
+        assertEquals(listOf("LeaveStartRoute"), stack())
     }
 
     @Test
-    fun aSecondLeaveNeverEmptiesTheStack() {
+    fun aSecondLeaveOnTheSameEntryDoesNothingOverTheApprovalsList() {
         show()
+        act { nav.navigate(ApprovalsRoute) }
         act { nav.navigate(ApprovalDetailRoute("auth:a1")) }
-        act { nav.leaveApprovalDetail() }
-        act { nav.leaveApprovalDetail() }
-        assertTrue(nav.currentBackStackEntry != null)
-        assertTrue(here().contains("ApprovalsRoute"))
+        val id = nav.currentBackStackEntry!!.id
+        leave(id)
+        leave(id)
+        assertEquals(listOf("LeaveStartRoute", "ApprovalsRoute"), stack())
+    }
+
+    @Test
+    fun aSecondLeaveOnAReplacedEntryDoesNothing() {
+        show()
+        act { nav.navigate(ApprovalDetailRoute("auth:a1")) { popUpTo<LeaveStartRoute> { inclusive = true } } }
+        val id = nav.currentBackStackEntry!!.id
+        leave(id)
+        leave(id)
+        assertEquals(listOf("ApprovalsRoute"), stack())
     }
 }
