@@ -46,6 +46,7 @@ import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -104,6 +105,8 @@ data class RecoveryOpenUiState(
      * PIN unlocks with this phone's secret, and a result with the vault's bundle finishes the recovery.
      */
     val lostOk: Boolean = false,
+    /** [lostOk] was entered because the rule owes the unlock (not chosen by the member): it ends when the rule no longer owes it. */
+    val lostOkFromRule: Boolean = false,
     /** Attempts used, as last known (null before the counter ever answered for this recovery, also after a restart). */
     val used: Int? = null,
     /**
@@ -174,21 +177,44 @@ class RecoveryOpenViewModel @Inject constructor(
     val uiState: StateFlow<RecoveryOpenUiState> = state.asStateFlow()
 
     init {
-        // A recovery the vault already answered `ok` (before a restart, or whose handshake failed): finished, never
-        // opened again.
-        viewModelScope.launch {
+        refresh()
+    }
+
+    private var refreshing: Job? = null
+
+    /**
+     * Reads where the recovery stands again (the start, a return to this pane from the code steps): a recovery the vault already
+     * answered `ok` (before a restart, or whose handshake failed) is finished, never opened again; a lost `ok` the rule owes is
+     * finished with the PIN; a lost-ok pane the rule opened (not one the member chose) goes back to the entries once nothing is
+     * owed any more (the new code registered). The rule's `newCodeAllowed` is read fresh, so the button never outlives it.
+     * All reads come first and one atomic update follows, only from ENTER, CHECK or FINISH, never over a send under way.
+     */
+    fun refresh() {
+        refreshing?.cancel()
+        refreshing = viewModelScope.launch {
             val opened = try {
                 move.recoveryOpened()
             } catch (_: VaultFailure) {
                 false
             }
-            if (opened) {
-                state.update { it.copy(step = OpenStep.FINISH) }
-            } else if (move.lostOkDue()) {
-                // A `200` on status, or `409 key_in_use` at a claim: this phone may be the vault's app (0.1.78).
-                finishLostOk()
+            val due = !opened && move.lostOkDue()
+            val undecided = move.recoveryUndecided
+            val allowed = move.newCodeAllowed()
+            state.update { s ->
+                if (s.step != OpenStep.ENTER && s.step != OpenStep.CHECK && s.step != OpenStep.FINISH) return@update s
+                val fresh = s.step != OpenStep.FINISH
+                val next = when {
+                    opened -> if (fresh) s.copy(step = OpenStep.FINISH) else s
+                    // A `200` on status, or `409 key_in_use` at a claim: this phone may be the vault's app (0.1.78).
+                    due -> if (fresh) s.lostOkFinish(fromRule = true) else s.copy(lostOkFromRule = s.lostOkFromRule || s.lostOk)
+                    s.lostOk && s.lostOkFromRule -> s.copy(
+                        step = OpenStep.ENTER, lostOk = false, lostOkFromRule = false, outcome = null, failure = null, failureCode = null,
+                        pin = "", password = "",
+                    )
+                    else -> s
+                }
+                next.copy(undecided = undecided, newCodeAllowed = allowed)
             }
-            state.update { it.copy(undecided = move.recoveryUndecided, newCodeAllowed = move.newCodeAllowed()) }
         }
     }
 
@@ -207,6 +233,7 @@ class RecoveryOpenViewModel @Inject constructor(
     fun change() = state.update { it.copy(step = OpenStep.ENTER) }
 
     fun send() {
+        refreshing?.cancel()
         val s = state.value
         val finishing = s.step == OpenStep.FINISH
         val ready = if (finishing) s.pinValid else s.step == OpenStep.CHECK && s.canContinue
@@ -272,9 +299,12 @@ class RecoveryOpenViewModel @Inject constructor(
      * (0.34.0) The open's answer was lost or unreadable, or the recovery ended after such an open: the PIN may finish a
      * recovery that completed on the way (an unlock with this phone's secret; no attempt is used).
      */
-    fun finishLostOk() = state.update {
-        it.copy(step = OpenStep.FINISH, lostOk = true, outcome = null, failure = null, failureCode = null, password = "")
-    }
+    /** The member chose the free lost-ok unlock: it stays until the member leaves it, whatever the rule reads later. */
+    fun finishLostOk() = state.update { it.lostOkFinish(fromRule = false) }
+
+    private fun RecoveryOpenUiState.lostOkFinish(fromRule: Boolean) = copy(
+        step = OpenStep.FINISH, lostOk = true, lostOkFromRule = fromRule, outcome = null, failure = null, failureCode = null, password = "",
+    )
 
     fun askErase() = state.update { if (it.canErase) it.copy(confirmErase = true) else it }
 
@@ -524,14 +554,17 @@ private fun OpenFinish(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, on
     if (o != null && o.opened) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), stringResource(openAnswerText(o, false).res))
         if (o.contactVettid || o.contactCouldNotRecover) ContactSupport()
-        // The lost-ok unlock found nothing: a new recovery code can still use this phone (the second identity is reused).
-        if (state.newCodeAllowed && onNewCode != null) {
-            OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_lost_ok")) {
-                Text(stringResource(R.string.recover_undecided_new_code))
-            }
-        }
     } else if (failure != null) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_open_answer_title), failureText(failure.messageRes()))
+    }
+    // (2026-10-27) Only on the lost-ok pane (not a confirmed-ok finish), beside the PIN whenever the rule allows a new code
+    // (both recoveries ended), with no PIN attempt first: the
+    // member usually has a new code in hand, and the lost-ok unlock stays free on this screen. A new code reuses the second
+    // identity; if the vault did take the phone, claiming it answers `409 key_in_use` and the app returns here for the PIN.
+    if (state.lostOk && state.newCodeAllowed && onNewCode != null) {
+        OutlinedButton(onClick = onNewCode, modifier = Modifier.testTag("open_new_code_after_lost_ok")) {
+            Text(stringResource(R.string.recover_undecided_new_code))
+        }
     }
     Button(onClick = vm::send, enabled = state.pinValid, modifier = Modifier.testTag("open_finish")) {
         Text(stringResource(R.string.onboarding_open_finish_go))
