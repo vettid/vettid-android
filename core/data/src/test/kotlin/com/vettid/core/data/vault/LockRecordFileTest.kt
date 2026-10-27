@@ -124,4 +124,56 @@ class LockRecordFileTest {
             assertEquals(text, LockRecord(pendingSinceMs = 11), LockRecordFile(file(), legacy = { LockRecord() }, now = { 11 }).load())
         }
     }
+
+    // --- sealed under the Keystore file key (2026-10-27 audit) ---
+
+    /** A stand-in for the Keystore seal: the format byte, then the bytes reversed (not plain text, not the plain form). */
+    private class FakeSealer(var failToOpen: Boolean = false) : LockRecordFile.Sealer {
+        override fun seal(plain: ByteArray) = byteArrayOf(0x01) + plain.reversedArray()
+
+        override fun open(blob: ByteArray): ByteArray {
+            if (failToOpen) throw com.vettid.core.keystore.KeystoreException("cannot decrypt")
+            return blob.copyOfRange(1, blob.size).reversedArray()
+        }
+    }
+
+    @Test
+    fun aSealedRecordIsNotPlainTextOnDiskAndReadsBack() {
+        val f = LockRecordFile(file(), FakeSealer(), legacy = { LockRecord() })
+        f.save(LockRecord(pendingSinceMs = 7, relayLockUntilMs = 9))
+        assertFalse("not the plain text", file().readText().contains("7 9"))
+        assertEquals(0x01.toByte(), file().readBytes()[0])
+        assertEquals(LockRecord(7, 9), LockRecordFile(file(), FakeSealer(), legacy = { LockRecord() }).load())
+    }
+
+    @Test
+    fun aPlainRecordOfAnEarlierBuildIsReadOnceAndSealedAgain() {
+        file().writeText("1 7 9\n")
+        val f = LockRecordFile(file(), FakeSealer(), legacy = { LockRecord() })
+        assertEquals(LockRecord(7, 9), f.load())
+        assertEquals("sealed by the read", 0x01.toByte(), file().readBytes()[0])
+        assertEquals(LockRecord(7, 9), LockRecordFile(file(), FakeSealer(), legacy = { LockRecord() }).load())
+    }
+
+    /** The Keystore cannot open it: a lock is pending, as for a record not understood (fail secure). */
+    @Test
+    fun aSealedRecordTheKeystoreCannotOpenSaysALockIsPending() {
+        LockRecordFile(file(), FakeSealer(), legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7))
+        assertEquals(
+            LockRecord(pendingSinceMs = 21),
+            LockRecordFile(file(), FakeSealer(failToOpen = true), legacy = { LockRecord() }, now = { 21 }).load(),
+        )
+    }
+
+    @Test
+    fun aSealerThatCannotSealRefusesTheSaveWithAnIoError() {
+        val broken = object : LockRecordFile.Sealer {
+            override fun seal(plain: ByteArray): ByteArray = throw com.vettid.core.keystore.KeystoreException("no key")
+
+            override fun open(blob: ByteArray) = blob
+        }
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+            LockRecordFile(file(), broken, legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7))
+        }
+    }
 }

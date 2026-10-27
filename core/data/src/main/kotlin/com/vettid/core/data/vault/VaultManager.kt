@@ -177,6 +177,7 @@ class VaultManager(
      */
     private val lockFile = LockRecordFile(
         File(app.noBackupFilesDir, LOCK_FILE),
+        sealer = lockSealer(File(app.noBackupFilesDir, LOCK_FILE)),
         legacy = { LockRecord(local.lockAskedAtMs, local.relayLockUntilMs) },
         migrated = { local.lockFileInUse },
         onFirstSave = { record.markLockFileInUse() },
@@ -860,7 +861,7 @@ class VaultManager(
         scope,
         api = { openApi() },
         credential = this,
-        store = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
+        obsoleteStore = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
         itemNames = {
             items.items.value.associate { i ->
                 i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)
@@ -1025,9 +1026,13 @@ class VaultManager(
                 if (now && !wasHeld) {
                     steps.step { feed.clear() }
                     steps.step { devices.clear() }
+                    steps.step { social.forgetPending() } // pending approvals and requests: memory only, not while held
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
-                if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { feed.open() }
+                if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
+                    steps.step { feed.open() }
+                    steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
+                }
                 // Nor the member's own names, full email or photo; read again after the passed check.
                 steps.step {
                     when (OwnProfileStep.onCheck(wasHeld = wasHeld, held = now, phase = phaseFlow.value)) {
@@ -4501,6 +4506,16 @@ class VaultManager(
     }
 
     companion object {
+        /** The lock record's seal: the app's Keystore file key, purpose `lock-record`. */
+        private fun lockSealer(file: File): LockRecordFile.Sealer {
+            val store = KeystoreFileStore(file, "lock-record")
+            return object : LockRecordFile.Sealer {
+                override fun seal(plain: ByteArray) = store.seal(plain)
+
+                override fun open(blob: ByteArray) = store.open(blob)
+            }
+        }
+
         private const val LOCK_FILE = "lock-record"
         private const val SOCIAL_FILE = "social.bin"
         private const val CANARY_FILE = "canary-manifest.bin"

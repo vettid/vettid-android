@@ -1,8 +1,6 @@
 package com.vettid.core.data.lock
 
 import android.security.keystore.KeyPermanentlyInvalidatedException
-import com.vettid.core.crypto.Bytes
-import com.vettid.core.crypto.Randomness
 import android.hardware.biometrics.BiometricManager.Authenticators
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.prefs.AppLockTimeout
@@ -29,7 +27,7 @@ enum class AppLockState {
     /** On, and the member has not authenticated since the app started or timed out. */
     LOCKED,
 
-    /** On, and authenticated: the app-data key is in memory. */
+    /** On, and the member authenticated since the app started or timed out. */
     UNLOCKED,
 }
 
@@ -49,9 +47,8 @@ interface AppLockKeys {
 
     fun exists(): Boolean
 
+    /** A cipher whose use proves a fresh authentication (BiometricPrompt CryptoObject; the key needs one per use). */
     fun encryptCipher(): Cipher
-
-    fun decryptCipher(iv: ByteArray): Cipher
 
     fun delete()
 }
@@ -69,28 +66,18 @@ class KeystoreAppLockKeys(private val key: AppDataKey = AppDataKey()) : AppLockK
 
     override fun encryptCipher(): Cipher = key.encryptCipher()
 
-    override fun decryptCipher(iv: ByteArray): Cipher = key.decryptCipher(iv)
-
     override fun delete() = key.delete()
 }
 
-/** Where the wrapped app-data key is kept (a file in no-backup storage). */
+/**
+ * Where builds before 2026-10-27 kept a random "app-data key" wrapped under the lock's Keystore key (a file in no-backup
+ * storage). Nothing used that key (A6 audit, 2026-10-27), so it is gone; [AppLock.start] only deletes the stored file.
+ */
 interface WrappedKeyFile {
-    fun read(): ByteArray?
-
-    fun write(b: ByteArray)
-
     fun delete()
 }
 
 class FileWrappedKeyFile(private val file: File) : WrappedKeyFile {
-    override fun read(): ByteArray? = if (file.exists()) file.readBytes() else null
-
-    override fun write(b: ByteArray) {
-        file.parentFile?.mkdirs()
-        file.writeBytes(b)
-    }
-
     override fun delete() {
         file.delete()
     }
@@ -100,11 +87,10 @@ class FileWrappedKeyFile(private val file: File) : WrappedKeyFile {
  * The app lock (ANDROID-PLAN D6; 0.1.19: "App lock" with a [method]). When on, opening the app, and
  * returning to it after [AppLockTimeout], asks through BiometricPrompt for a class 3 biometric or the
  * device credential ([AppLockMethod.BIOMETRICS]) or the device credential only ([AppLockMethod.SCREEN_LOCK]),
- * whose CryptoObject unwraps the
- * app-data key: a random 32-byte key that the app's local caches are
- * encrypted under (Room caches arrive with A4/A5). A convenience layer only:
- * it never replaces the vault PIN or the credential password, and nothing of
- * the vault depends on it.
+ * whose CryptoObject must then encrypt a short fixed proof: the Keystore key is usable only right after
+ * an authentication, so a cipher that works is the proof. A UI gate only: it protects no data (there is no
+ * app-data key; the one earlier builds wrapped was never used), never replaces the vault PIN or the credential
+ * password, and nothing of the vault depends on it.
  *
  * The activity hands the ciphers from [cipherToEnable] / [cipherToUnlock] to
  * BiometricPrompt and the authenticated cipher back to [completeEnable] /
@@ -117,7 +103,7 @@ class FileWrappedKeyFile(private val file: File) : WrappedKeyFile {
 class AppLock(
     private val prefs: PreferencesRepository,
     private val keys: AppLockKeys,
-    private val wrapped: WrappedKeyFile,
+    private val obsoleteWrappedKey: WrappedKeyFile,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val stateFlow = MutableStateFlow(AppLockState.PENDING)
@@ -136,7 +122,6 @@ class AppLock(
     /** The method of the key [cipherToEnable] made, saved by [completeEnable]. */
     private var enabling: AppLockMethod? = null
 
-    private var dataKey: ByteArray? = null
     private var backgroundAt: Long? = null
     private var timeout: AppLockTimeout = AppLockTimeout.DEFAULT
 
@@ -153,14 +138,11 @@ class AppLock(
         timeout = p.appLockTimeout
         methodFlow.value = p.appLockMethod ?: AppLockMethod.BIOMETRICS
         prompts.newLock()
-        // A wrapped key that cannot be read is a lock that cannot open: off, with the notice, never "pending" for
-        // good (the start screen would stay; A6 audit P4). The lock is a convenience and locks nobody out.
-        val usable = try {
-            p.appLockEnabled && keys.exists() && wrapped.read() != null
-        } catch (_: IOException) {
-            invalidatedFlow.value = true
-            false
-        }
+        // The wrapped app-data key of earlier builds was never used: deleted at the next start (2026-10-27).
+        runCatching { obsoleteWrappedKey.delete() }
+        // A key that is gone is a lock that cannot open: off, never "pending" for good (the start screen would
+        // stay; A6 audit P4). The lock is a convenience and locks nobody out.
+        val usable = p.appLockEnabled && keys.exists()
         stateFlow.value = if (usable) AppLockState.LOCKED else AppLockState.DISABLED
         // Bookkeeping last: a preference that cannot be written must not keep the lock pending.
         try {
@@ -206,42 +188,36 @@ class AppLock(
     /** What BiometricPrompt allows for the current method. */
     fun authenticators(): Int = methodFlow.value.authenticators()
 
-    /** Wraps a new app-data key with the authenticated [cipher] and turns the lock on. */
+    /** Checks the authenticated [cipher] works (the proof of the authentication) and turns the lock on. */
     suspend fun completeEnable(cipher: Cipher) {
-        val k = Randomness.bytes(KEY_SIZE)
-        val ct = try {
-            cipher.doFinal(k)
+        try {
+            cipher.doFinal(PROOF)
         } catch (e: GeneralSecurityException) {
-            Bytes.wipe(k)
-            throw KeystoreException("app lock: cannot wrap", e)
+            throw KeystoreException("app lock: not authenticated", e)
         }
-        wrapped.write(Bytes.concat(byteArrayOf(FORMAT), cipher.iv, ct))
         prefs.setAppLockEnabled(true)
         val m = enabling ?: methodFlow.value
         enabling = null
         prefs.setAppLockMethod(m)
         methodFlow.value = m
-        dataKey?.let { Bytes.wipe(it) }
-        dataKey = k
         invalidatedFlow.value = false
         stateFlow.value = AppLockState.UNLOCKED
     }
 
     /**
-     * The decrypt cipher to authenticate, or null when the lock cannot be used
-     * any more (key invalidated by a new biometric, or its file missing): the
+     * The cipher to authenticate, or null when the lock cannot be used
+     * any more (key invalidated by a new biometric, or gone): the
      * lock is then turned off.
      */
     suspend fun cipherToUnlock(): Cipher? {
-        val blob = wrapped.read()
         // The "new fingerprint or face" notice is the biometric method's only.
         val notice = methodFlow.value == AppLockMethod.BIOMETRICS
-        if (blob == null || blob.size < 1 + IV + TAG || blob[0] != FORMAT) {
+        if (!keys.exists()) {
             disable(invalidated = notice)
             return null
         }
         return try {
-            keys.decryptCipher(blob.copyOfRange(1, 1 + IV))
+            keys.encryptCipher()
         } catch (_: KeyPermanentlyInvalidatedException) {
             disable(invalidated = notice)
             null
@@ -251,26 +227,22 @@ class AppLock(
         }
     }
 
-    /** Unwraps the app-data key with the authenticated [cipher]. Returns false if it does not open. */
+    /** Checks the authenticated [cipher] works. Returns false if it does not (the authentication did not happen). */
     fun completeUnlock(cipher: Cipher): Boolean {
-        val blob = wrapped.read() ?: return false
         return try {
-            val k = cipher.doFinal(blob, 1 + IV, blob.size - 1 - IV)
-            dataKey?.let { Bytes.wipe(it) }
-            dataKey = k
+            cipher.doFinal(PROOF)
             stateFlow.value = AppLockState.UNLOCKED
             true
         } catch (_: GeneralSecurityException) {
             false
+        } catch (_: IllegalStateException) {
+            false // a cipher that was never initialised
         }
     }
 
-    /** Turns the lock off: deletes the key and the wrapped data key. */
+    /** Turns the lock off: deletes the key. */
     suspend fun disable(invalidated: Boolean = false) {
         keys.delete()
-        wrapped.delete()
-        dataKey?.let { Bytes.wipe(it) }
-        dataKey = null
         prefs.setAppLockEnabled(false)
         invalidatedFlow.value = invalidated
         stateFlow.value = AppLockState.DISABLED
@@ -290,11 +262,9 @@ class AppLock(
         invalidatedFlow.value = false
     }
 
-    /** Locks now (the key leaves memory). */
+    /** Locks now. */
     fun lockNow() {
         if (stateFlow.value != AppLockState.UNLOCKED) return
-        dataKey?.let { Bytes.wipe(it) }
-        dataKey = null
         prompts.newLock()
         stateFlow.value = AppLockState.LOCKED
     }
@@ -316,14 +286,9 @@ class AppLock(
         if (stateFlow.value == AppLockState.UNLOCKED && now() - at >= timeout.seconds * MS) lockNow()
     }
 
-    /** The app-data key while unlocked (a copy; the caller wipes it), else null. */
-    fun appDataKey(): ByteArray? = dataKey?.copyOf()
-
     private companion object {
-        const val KEY_SIZE = 32
-        const val FORMAT: Byte = 0x01
-        const val IV = 12
-        const val TAG = 16
+        /** What the authenticated cipher encrypts: not a secret, only a use of the key that needs the authentication. */
+        val PROOF = "vettid/app-lock/1".toByteArray()
         const val MS = 1000L
     }
 }

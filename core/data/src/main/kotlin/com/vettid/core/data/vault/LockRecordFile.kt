@@ -1,6 +1,8 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.altchan.UnlockIds
+import com.vettid.core.data.KeystoreFileStore
+import com.vettid.core.keystore.KeystoreException
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -11,9 +13,12 @@ import java.nio.file.StandardOpenOption
  * The lock's record ([LockRecord], [LockKeeper]) in a file of its own, beside the account record and not in it, written
  * whole and synced before [save] returns. A lock the member asked for is kept across a process death in every state of
  * the account record: one that cannot be read (its Keystore key), one shut after a wipe that did not finish, one being
- * written. Plain text: two times (when a lock was asked for, and until when an unanswered relay lock may still be acted
+ * written. Two times (when a lock was asked for, and until when an unanswered relay lock may still be acted
  * on) and, from release L, the `unlock_id` a pending lock is bound to (a name, not a secret) and whether this phone is
- * held locked after a lock that ended because the vault was opened again; readable without the Keystore. A record with
+ * held locked after a lock that ended because the vault was opened again. Sealed with the app's Keystore file key like
+ * the other state files ([Sealer]; owner decision 2026-10-27, audit): a file in the earlier plain-text form is read once
+ * and written again sealed. A record the Keystore cannot open is treated like a record not understood: a lock is
+ * pending (the unlock id it was bound to is then lost, and the lock is the unbound form, which is fail secure). A record with
  * neither is written in the first version's form, which an older app reads; a record of a form this app does not know
  * says a lock is pending (an older app reading the second form starts locked, which is fail secure).
  *
@@ -25,6 +30,7 @@ import java.nio.file.StandardOpenOption
  */
 internal class LockRecordFile(
     private val file: File,
+    private val sealer: Sealer? = null,
     private val legacy: () -> LockRecord,
     private val migrated: () -> Boolean = { false },
     private val onFirstSave: () -> Unit = {},
@@ -33,27 +39,60 @@ internal class LockRecordFile(
 ) : LockRecordStore {
     private val lock = Any()
 
+    /** Seals and opens the file's bytes (the Keystore in the app; none in JVM tests). */
+    internal interface Sealer {
+        fun seal(plain: ByteArray): ByteArray
+
+        /** Throws [KeystoreException] for a blob it cannot open. */
+        fun open(blob: ByteArray): ByteArray
+
+        /** Whether [blob] is in the sealed form (else the earlier plain text). */
+        fun isSealed(blob: ByteArray): Boolean = blob.isNotEmpty() && blob[0] == KeystoreFileStore.FORMAT
+    }
+
     override fun load(): LockRecord = synchronized(lock) {
         if (!file.exists()) return if (migrated() || recordUnreadable()) LockRecord(pendingSinceMs = now()) else legacy()
         try {
-            parse(file.readText())
+            val bytes = file.readBytes()
+            val s = sealer
+            when {
+                s == null -> parse(String(bytes))
+                s.isSealed(bytes) -> parse(String(s.open(bytes)))
+                // The earlier plain-text form: sealed now (best effort; the next save does it otherwise).
+                else -> parse(String(bytes))?.also { r -> runCatching { write(line(r).toByteArray()) } }
+            }
         } catch (_: IOException) {
+            null
+        } catch (_: KeystoreException) {
             null
         } ?: LockRecord(pendingSinceMs = now())
     }
 
     override fun save(record: LockRecord) {
         synchronized(lock) {
-            file.parentFile?.mkdirs()
-            val tmp = File(file.parentFile, file.name + ".tmp")
-            FileOutputStream(tmp).use {
-                it.write(line(record).toByteArray())
-                it.fd.sync()
-            }
-            if (!tmp.renameTo(file)) throw IOException("lock record not saved")
-            syncDir()
+            write(line(record).toByteArray())
             if (!migrated()) onFirstSave()
         }
+    }
+
+    private fun sealed(plain: ByteArray): ByteArray = try {
+        sealer?.seal(plain) ?: plain
+    } catch (e: KeystoreException) {
+        throw IOException("lock record not sealed", e)
+    } catch (e: java.security.GeneralSecurityException) {
+        throw IOException("lock record not sealed", e)
+    }
+
+    private fun write(plain: ByteArray) {
+        val bytes = sealed(plain)
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        FileOutputStream(tmp).use {
+            it.write(bytes)
+            it.fd.sync()
+        }
+        if (!tmp.renameTo(file)) throw IOException("lock record not saved")
+        syncDir()
     }
 
     /** The rename itself made durable: the directory's entry, synced (best effort where the file system refuses it). */

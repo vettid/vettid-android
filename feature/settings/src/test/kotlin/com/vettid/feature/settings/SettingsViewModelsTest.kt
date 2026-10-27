@@ -37,12 +37,9 @@ class SettingsViewModelsTest {
         override fun create(method: com.vettid.core.data.prefs.AppLockMethod) = Unit
         override fun exists() = false
         override fun encryptCipher(): Cipher = error("unused")
-        override fun decryptCipher(iv: ByteArray): Cipher = error("unused")
         override fun delete() = Unit
     }
     private val noFile = object : WrappedKeyFile {
-        override fun read(): ByteArray? = null
-        override fun write(b: ByteArray) = Unit
         override fun delete() = Unit
     }
 

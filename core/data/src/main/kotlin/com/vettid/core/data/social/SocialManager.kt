@@ -4,7 +4,6 @@ import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
-import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.vault.DeviceStateStore
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.connectionAsksMute
@@ -42,8 +41,10 @@ import java.time.Instant
  * (which keeps the history) on unlock and on its events: connections,
  * connection requests (`connection.request.list`, VAULT-MESSAGING 0.10.2),
  * grant and critical-item requests. Approvals that only arrive as events
- * (share decisions, member authentication, desktop and agent requests) and the
- * safety codes of open requests are kept in [store], a Keystore-encrypted file.
+ * (share decisions, member authentication, desktop and agent requests), the names
+ * requests showed and the peers' declines are kept in memory only (owner decision
+ * 2026-10-27) and dropped with the open vault; the safety codes of open requests come
+ * from the request list (`sas`), so nothing about them is stored.
  *
  * [onEvent] gets every event of the vault ([com.vettid.core.data.vault.VaultManager]
  * forwards them); nothing here touches transport or crypto beyond the typed API.
@@ -53,7 +54,12 @@ class SocialManager(
     private val scope: CoroutineScope,
     private val api: suspend () -> VaultApi,
     private val credential: CredentialRepository,
-    private val store: DeviceStateStore,
+    /**
+     * The file this class kept events, request names and declines in before 2026-10-27 (`social.bin`): nothing is
+     * written to it any more (owner decision: memory only, like every other vault content); it is deleted at
+     * construction, i.e. at the next start.
+     */
+    private val obsoleteStore: DeviceStateStore? = null,
     private val clock: Clock = Clock.systemUTC(),
     /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
     private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
@@ -63,8 +69,13 @@ class SocialManager(
      */
     private val feedRead: (kinds: Set<String>, ref: String?, connectionId: String?) -> Unit = { _, _, _ -> },
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
-    private val mutex = Mutex()
-    private var local: Local = load()
+    /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
+    private val localLock = Any()
+
+    init {
+        runCatching { obsoleteStore?.clear() }
+    }
+    private var local: Local = Local()
 
     private val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
     private val authFlow = MutableStateFlow<Map<String, AuthenticationState>>(emptyMap())
@@ -77,7 +88,7 @@ class SocialManager(
     private val listedFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
-    private val declinesFlow = MutableStateFlow(local.declines.map { it.model() })
+    private val declinesFlow = MutableStateFlow<List<PeerDecline>>(emptyList())
 
     /** Peer declines noted in this run, so the `failed` that accompanies one never shows it again (0.10.5). */
     private val notedDeclines = mutableSetOf<String>()
@@ -102,69 +113,45 @@ class SocialManager(
 
     private fun now(): Instant = Instant.now(clock)
 
-    // --- local state (encrypted file) ---
+    // --- local state (memory only; dropped with the open vault) ---
 
-    @Serializable
     private data class StoredEvent(val type: String, val body: String, val at: Long)
 
-    @Serializable
-    private data class StoredSas(val sas: String, val at: Long)
-
     /** The name a request showed (0.10.5: kept until a peer's decline can name it). */
-    @Serializable
     private data class StoredName(val name: String, val at: Long)
 
-    @Serializable
     private data class StoredDecline(val id: String, val name: String? = null, val outgoing: Boolean, val at: Long) {
         fun model() = PeerDecline(id, name, outgoing, Instant.ofEpochMilli(at))
     }
 
     /**
-     * [requestSas]: the codes of open requests by request id (`pending_id` or the outgoing
-     * `connection_id`), until `connection.event{added}` names the request it came from (0.10.2);
-     * a connection keeps no code: it protects the moment of connecting only (2026-10-08).
+     * Request codes are not kept here: the vault's request list supplies them again (`sas`), and a connection
+     * keeps no code (it protects the moment of connecting only, 2026-10-08).
      * [requestNames]: the names open requests showed, by request id; [declines]: the other
      * member's declines not yet dismissed (0.10.5).
      */
-    @Serializable
     private data class Local(
         val events: List<StoredEvent> = emptyList(),
-        val requestSas: Map<String, StoredSas> = emptyMap(),
         val requestNames: Map<String, StoredName> = emptyMap(),
         val declines: List<StoredDecline> = emptyList(),
     )
 
-    private fun load(): Local = try {
-        // Connection requests come from the vault's list since 0.10.2; drop ones stored from events by A4.
-        store.load()?.let { json.decodeFromString(Local.serializer(), String(it, Charsets.UTF_8)) }
-            ?.let { l -> l.copy(events = l.events.filterNot { it.type == "connection.request.pending" }) } ?: Local()
-    } catch (_: KeystoreException) {
-        Local()
-    } catch (_: SerializationException) {
-        Local()
-    } catch (_: IllegalArgumentException) {
-        Local()
-    }
-
-    private suspend fun edit(f: (Local) -> Local) = mutex.withLock {
+    private fun edit(f: (Local) -> Local) = synchronized(localLock) {
         val next = f(local)
-        if (next == local) return@withLock
+        if (next == local) return@synchronized
         local = next
         storedFlow.value = next.events
         declinesFlow.value = next.declines.map { it.model() }
-        try {
-            store.save(json.encodeToString(Local.serializer(), next).toByteArray(Charsets.UTF_8))
-        } catch (_: KeystoreException) {
-            // kept in memory; the next save retries
-        }
     }
 
     /**
      * The vault is no longer open on this phone (locked, or a lock was asked for): the connections, messages and
-     * requests read from it are dropped from memory. What the app keeps on the phone by design (the approvals it
-     * was sent, encrypted at rest) stays; an unlock reads the lists again.
+     * requests read from it are dropped from memory, and so are the approvals the vault sent as events, the names
+     * requests showed and the peers' declines (owner decision 2026-10-27: none of it is kept on the phone or across a
+     * lock). An unlock reads the lists again.
      */
     fun forgetOpenVault() {
+        dropLocal()
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
@@ -173,11 +160,22 @@ class SocialManager(
         requestsFlow.value = emptyList()
     }
 
+    /**
+     * The vault is held or its check is due (§3.6.3) while the app is still open: the approvals and connection requests
+     * (events, lists, names, declines) are dropped like the feed's. The connections and messages stay as they were
+     * before this change; [refreshAllQuietly] reads the lists again after the check is passed.
+     */
+    fun forgetPending() {
+        dropLocal()
+        listedFlow.value = emptyList()
+        requestsFlow.value = emptyList()
+        endsFlow.value = emptyMap()
+    }
+
     /** Forgets everything (sign-out with a new vault, or a deleted vault). */
     fun clear() {
-        local = Local()
-        storedFlow.value = emptyList()
-        store.clear()
+        dropLocal()
+        obsoleteStore?.clear()
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
@@ -185,9 +183,15 @@ class SocialManager(
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
+        ttls = null
+    }
+
+    /** The events, request names and declines held in memory: gone. */
+    private fun dropLocal() = synchronized(localLock) {
+        local = Local()
+        storedFlow.value = emptyList()
         declinesFlow.value = emptyList()
         notedDeclines.clear()
-        ttls = null
     }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */
@@ -209,8 +213,8 @@ class SocialManager(
             "message.new" -> runCatching { VaultJson.decode(com.vettid.core.vault.Message.serializer(), b) }
                 .getOrNull()?.let { upsert(ApprovalParser.message(it)) }
             in ApprovalParser.TYPES -> store(m.type, b)
-            "connection.request.pending" -> ApprovalParser.incoming(b, now())?.let { onRequest(it, it.pendingId, it.sas) }
-            "connection.request.outgoing" -> ApprovalParser.outgoing(b, now())?.let { onRequest(it, it.connectionId, it.sas) }
+            "connection.request.pending" -> ApprovalParser.incoming(b, now())?.let { onRequest(it, it.pendingId) }
+            "connection.request.outgoing" -> ApprovalParser.outgoing(b, now())?.let { onRequest(it, it.connectionId) }
             "connection.event" -> onConnectionEvent(b)
             "connection.authenticate.result" -> {
                 val conn = VaultJson.str(b, "connection_id") ?: return
@@ -282,7 +286,7 @@ class SocialManager(
     }
 
     /** A request event (`connection.request.pending` / `.outgoing`): shown at once, its code remembered. */
-    private suspend fun onRequest(a: Approval, id: String, sas: String?) {
+    private fun onRequest(a: Approval, id: String) {
         requestsFlow.update { l ->
             val old = l.firstOrNull { requestId(it) == id }
             val next = when {
@@ -296,7 +300,6 @@ class SocialManager(
             l.filterNot { requestId(it) == id } + next
         }
         endsFlow.update { it - id }
-        if (sas != null) rememberSas(id, sas)
         nameOf(a)?.let { rememberNames(listOf(id to it)) }
     }
 
@@ -307,7 +310,7 @@ class SocialManager(
     }
 
     /** Keeps the names requests showed (0.10.5), dropping ones older than any request can live. */
-    private suspend fun rememberNames(names: List<Pair<String, String>>) {
+    private fun rememberNames(names: List<Pair<String, String>>) {
         val fresh = names.filter { (id, n) -> local.requestNames[id]?.name != n }
         if (fresh.isEmpty()) return
         val t = now().toEpochMilli()
@@ -315,11 +318,6 @@ class SocialManager(
         edit { l ->
             l.copy(requestNames = l.requestNames.filterValues { it.at >= cutoff } + fresh.associate { (id, n) -> id to StoredName(n, t) })
         }
-    }
-
-    private suspend fun rememberSas(id: String, sas: String) {
-        if (local.requestSas[id]?.sas == sas) return
-        edit { l -> l.copy(requestSas = l.requestSas + (id to StoredSas(sas, now().toEpochMilli()))) }
     }
 
     private fun patchRequest(id: String, f: (Approval) -> Approval) =
@@ -331,7 +329,7 @@ class SocialManager(
         if (end != null) endsFlow.update { if (it[id] == RequestEnd.PEER_DECLINED) it else it + (id to end) }
         // A bare `failed` keeps the name: an older ordering may still bring the peer's decline (0.10.5).
         val keepName = end == RequestEnd.FAILED
-        edit { l -> l.copy(requestSas = l.requestSas - id, requestNames = if (keepName) l.requestNames else l.requestNames - id) }
+        edit { l -> l.copy(requestNames = if (keepName) l.requestNames else l.requestNames - id) }
     }
 
     /**
@@ -348,7 +346,6 @@ class SocialManager(
         val at = now().toEpochMilli()
         edit { l ->
             l.copy(
-                requestSas = l.requestSas - id,
                 requestNames = l.requestNames - id,
                 declines = if (first) l.declines + StoredDecline(id, name, outgoing, at) else l.declines,
             )
@@ -374,17 +371,6 @@ class SocialManager(
             entries("outgoing").mapNotNull { ApprovalParser.outgoing(it, t) }
         requestsFlow.value = parsed
         rememberNames(parsed.mapNotNull { a -> requestId(a)?.let { id -> nameOf(a)?.let { id to it } } })
-        val codes = parsed.mapNotNull { a ->
-            when (a) {
-                is Approval.ConnectionRequest -> a.pendingId to a.sas
-                is Approval.OutgoingRequest -> a.sas?.let { a.connectionId to it }
-                else -> null
-            }
-        }
-        val missing = codes.filter { (id, sas) -> local.requestSas[id]?.sas != sas }
-        if (missing.isNotEmpty()) {
-            edit { l -> l.copy(requestSas = l.requestSas + missing.associate { (id, sas) -> id to StoredSas(sas, t.toEpochMilli()) }) }
-        }
     }
 
     private suspend fun onConnectionEvent(b: JsonObject) {
@@ -410,7 +396,7 @@ class SocialManager(
     /** A new connection: the request it came from ([req], §10.4 `pending_id`) and its code are done with. */
     private suspend fun onAdded(conn: String, req: String) {
         requestsFlow.update { l -> l.filterNot { requestId(it) == req } }
-        edit { l -> l.copy(requestSas = l.requestSas - req, requestNames = l.requestNames - req) }
+        edit { l -> l.copy(requestNames = l.requestNames - req) }
         runCatching { load(conn) }
     }
 

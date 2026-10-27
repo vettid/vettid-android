@@ -1,6 +1,5 @@
 package com.vettid.feature.items
 
-import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,7 +66,7 @@ import com.vettid.core.ui.components.FloatingPillActionBar
 import com.vettid.core.ui.components.LargeTitle
 import com.vettid.core.ui.components.LocalUserPresence
 import com.vettid.core.ui.components.NoticeCard
-import com.vettid.core.ui.components.textClip
+import com.vettid.core.ui.components.SecureClipboard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PillAction
 import com.vettid.core.ui.components.TagChip
@@ -487,7 +486,7 @@ internal fun SensitivityChoice(s: Sensitivity, selected: Boolean, enabled: Boole
     }
 }
 
-/** What the item screens put on the clipboard. */
+/** What the item screens put on the clipboard (copied secrets: [SecureClipboard], 60 s, cleared at lock). */
 internal object ItemClips {
     /**
      * Whether a copied value carries Android's sensitive flag (A6 audit S4): by the item's protection (every value of
@@ -495,10 +494,9 @@ internal object ItemClips {
      */
     fun sensitive(kind: String, protection: Sensitivity): Boolean = protection != Sensitivity.DATA || FieldKinds.masked(kind)
 
-    fun copy(context: Context, label: String, text: String, sensitive: Boolean) {
-        val cm = context.getSystemService(ClipboardManager::class.java) ?: return
-        cm.setPrimaryClip(textClip(label, text, sensitive))
-    }
+    /** A sensitive value is cleared after 60 s and when the vault closes, if still ours ([SecureClipboard]). */
+    fun copy(context: Context, label: String, text: String, sensitive: Boolean) =
+        SecureClipboard.copy(context, label, text, sensitive)
 }
 
 private const val OTP_TICK_MS = 1_000L

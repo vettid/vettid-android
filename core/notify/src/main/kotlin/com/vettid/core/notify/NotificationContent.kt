@@ -29,6 +29,12 @@ interface Poster {
     fun post(n: LocalNotification)
 
     fun cancel(tag: String)
+
+    /**
+     * Cancels the item notifications this app posted that are still showing, whoever posted them (a process that died
+     * with the vault open leaves them behind), except those tagged [keep] (the vault's own state notices).
+     */
+    fun cancelLeftovers(keep: Set<String>) = Unit
 }
 
 /**

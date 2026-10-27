@@ -42,4 +42,12 @@ class KeystoreFileStoreTest {
         s.clear()
         assertNull(s.load())
     }
+
+    /** 2026-10-27 audit: the seed-wrap and local-files keys are made only where the Keystore holds them in hardware. */
+    @Test
+    fun theFilesKeyIsInHardware() {
+        SeedWrapKey.getOrCreate(alias)
+        val level = SeedWrapKey.level(alias)
+        org.junit.Assert.assertTrue("level $level", level == com.vettid.core.keystore.KeyLevel.TEE || level == com.vettid.core.keystore.KeyLevel.STRONG_BOX)
+    }
 }

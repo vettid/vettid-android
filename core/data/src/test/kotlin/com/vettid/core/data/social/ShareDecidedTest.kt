@@ -48,7 +48,7 @@ class ShareDecidedTest {
         backgroundScope,
         api = { throw VaultFailure(FailureKind.OTHER) },
         credential = credential,
-        store = InMemoryDeviceStateStore(),
+        obsoleteStore = InMemoryDeviceStateStore(),
         clock = Clock.fixed(now, ZoneOffset.UTC),
         feedRead = { _, ref, _ -> feedReads += ref },
     )

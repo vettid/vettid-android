@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.widget.Toast
+import com.vettid.core.ui.components.SecureClipboard
 import com.vettid.feature.devices.PairingClipboard
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -219,7 +220,11 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         // Only with the focus can the clipboard be read: a pairing code that ended or expired meanwhile is cleared now.
-        if (hasFocus) PairingClipboard.onFocus(this)
+        if (hasFocus) {
+            PairingClipboard.onFocus(this)
+            // A copied secret that came due or outlived the open vault meanwhile (SecureClipboard).
+            SecureClipboard.onFocus(this)
+        }
     }
 
     override fun onDestroy() {

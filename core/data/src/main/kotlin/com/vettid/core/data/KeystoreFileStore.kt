@@ -28,6 +28,11 @@ class KeystoreFileStore(
     override fun load(): ByteArray? {
         if (!file.exists()) return null
         val blob = file.readBytes()
+        return open(blob)
+    }
+
+    /** The plain bytes of [blob] (this store's format and purpose); [KeystoreException] if it is not that or cannot be decrypted. */
+    fun open(blob: ByteArray): ByteArray {
         if (blob.size < 1 + IV + TAG || blob[0] != FORMAT) throw KeystoreException("malformed ${file.name}")
         return try {
             val c = Cipher.getInstance(TRANSFORMATION)
@@ -39,12 +44,17 @@ class KeystoreFileStore(
         }
     }
 
-    @Synchronized
-    override fun save(state: ByteArray) {
+    /** [state] in this store's format and purpose, as [save] writes it. */
+    fun seal(state: ByteArray): ByteArray {
         val c = Cipher.getInstance(TRANSFORMATION)
         c.init(Cipher.ENCRYPT_MODE, key())
         c.updateAAD(aad())
-        val blob = Bytes.concat(byteArrayOf(FORMAT), c.iv, c.doFinal(state))
+        return Bytes.concat(byteArrayOf(FORMAT), c.iv, c.doFinal(state))
+    }
+
+    @Synchronized
+    override fun save(state: ByteArray) {
+        val blob = seal(state)
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, file.name + ".tmp")
         FileOutputStream(tmp).use {
@@ -65,7 +75,9 @@ class KeystoreFileStore(
         /** The Keystore key of the app's encrypted files. */
         const val ALIAS = "vettid.local_files.v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
-        private const val FORMAT: Byte = 0x01
+
+        /** The first byte of every sealed blob (a plain text file never starts with it). */
+        const val FORMAT: Byte = 0x01
         private const val IV = 12
         private const val TAG = 16
         private const val TAG_BITS = 128

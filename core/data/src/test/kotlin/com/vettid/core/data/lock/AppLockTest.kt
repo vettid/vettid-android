@@ -14,7 +14,6 @@ import org.junit.Test
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 /** A software stand-in for the biometric-gated Keystore key. */
 private class SoftKeys : AppLockKeys {
@@ -30,22 +29,14 @@ private class SoftKeys : AppLockKeys {
 
     override fun encryptCipher(): Cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
 
-    override fun decryptCipher(iv: ByteArray): Cipher =
-        Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) }
-
     override fun delete() {
         key = null
     }
 }
 
+/** The earlier builds' wrapped app-data key file: only its deletion is left. */
 private class MemFile : WrappedKeyFile {
-    var b: ByteArray? = null
-
-    override fun read() = b?.copyOf()
-
-    override fun write(b: ByteArray) {
-        this.b = b.copyOf()
-    }
+    var b: ByteArray? = byteArrayOf(1, 2, 3)
 
     override fun delete() {
         b = null
@@ -64,7 +55,6 @@ class AppLockTest {
         val l = lock()
         l.start()
         assertEquals(AppLockState.DISABLED, l.state.value)
-        assertNull(l.appDataKey())
     }
 
     @Test
@@ -73,35 +63,42 @@ class AppLockTest {
         l.start()
         l.completeEnable(l.cipherToEnable())
         assertEquals(AppLockState.UNLOCKED, l.state.value)
-        val k = l.appDataKey()!!
         assertTrue(prefs.current.value.appLockEnabled)
 
         val again = lock()
         again.start()
         assertEquals(AppLockState.LOCKED, again.state.value)
-        assertNull(again.appDataKey())
         assertTrue(again.completeUnlock(again.cipherToUnlock()!!))
         assertEquals(AppLockState.UNLOCKED, again.state.value)
-        assertTrue(k.contentEquals(again.appDataKey()))
     }
 
-    /**
-     * A6 audit P4: whatever fails at start, the lock leaves "pending" (the root shows "Opening VettID" over everything
-     * while it is pending). A wrapped key that cannot be read is a lock that cannot open: off, with the notice.
-     */
+    /** A cipher that did not come from an authentication does not unlock (here: a cipher that cannot encrypt). */
     @Test
-    fun aKeyFileThatCannotBeReadTurnsTheLockOffInsteadOfLeavingItPending() = runTest {
+    fun aCipherThatDoesNotWorkDoesNotUnlock() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.lockNow()
+        val broken = Cipher.getInstance("AES/GCM/NoPadding") // never initialised
+        assertFalse(l.completeUnlock(broken))
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    /** 2026-10-27 audit: the random data key nothing used is gone; the stored wrapped key is deleted at the next start. */
+    @Test
+    fun theWrappedKeyEarlierBuildsStoredIsDeletedAtStart() = runTest {
+        assertNotNull(file.b)
+        lock().start()
+        assertNull(file.b)
+    }
+
+    /** A6 audit P4: an enabled lock whose key is gone leaves "pending": off. */
+    @Test
+    fun anEnabledLockWithoutItsKeyTurnsOffAtStart() = runTest {
         prefs.setAppLockEnabled(true)
-        keys.create(AppLockMethod.BIOMETRICS)
-        val unreadable = object : WrappedKeyFile {
-            override fun read(): ByteArray? = throw java.io.IOException("EIO")
-            override fun write(b: ByteArray) = Unit
-            override fun delete() = Unit
-        }
-        val l = AppLock(prefs, keys, unreadable) { clock }
+        val l = lock()
         l.start()
         assertEquals(AppLockState.DISABLED, l.state.value)
-        assertTrue("the member is told that the lock turned itself off", l.invalidated.value)
         assertFalse(prefs.current.value.appLockEnabled)
     }
 
@@ -169,7 +166,7 @@ class AppLockTest {
         l.start()
         l.completeEnable(l.cipherToEnable())
         l.lockNow()
-        file.b = null // the wrapped key is gone (or the key was invalidated)
+        keys.delete() // the key is gone (or was invalidated)
         assertNull(l.cipherToUnlock())
         assertEquals(AppLockState.DISABLED, l.state.value)
         assertTrue(l.invalidated.value)
@@ -184,7 +181,6 @@ class AppLockTest {
         l.disable()
         assertEquals(AppLockState.DISABLED, l.state.value)
         assertFalse(keys.exists())
-        assertNull(file.b)
         assertNotNull(prefs.current.value)
         // The chosen method stays for the next time the lock is turned on.
         assertEquals(AppPreferences(appLockMethod = AppLockMethod.BIOMETRICS), prefs.current.value)
@@ -223,7 +219,7 @@ class AppLockTest {
 
     @Test
     fun aLockTurnedOnBeforeTheChoiceExistedIsBiometrics() = runTest {
-        // As an older build left it: on, a key and its wrapped data key, no method stored.
+        // As an older build left it: on, a key, no method stored.
         val old = lock()
         old.start()
         old.completeEnable(old.cipherToEnable())
@@ -264,7 +260,7 @@ class AppLockTest {
         val l = lock()
         l.start()
         l.completeEnable(l.cipherToEnable(AppLockMethod.SCREEN_LOCK))
-        file.b = null // the key no longer opens (the screen lock was removed)
+        keys.delete() // the key no longer opens (the screen lock was removed)
         assertNull(l.cipherToUnlock())
         assertEquals(AppLockState.DISABLED, l.state.value)
         assertFalse(l.invalidated.value)

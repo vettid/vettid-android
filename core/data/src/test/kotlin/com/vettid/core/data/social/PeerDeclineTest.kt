@@ -44,7 +44,7 @@ class PeerDeclineTest {
         scope,
         api = { throw VaultFailure(FailureKind.OTHER) }, // no vault: list refreshes fail quietly
         credential = credential,
-        store = store,
+        obsoleteStore = store,
         clock = Clock.fixed(now, ZoneOffset.UTC),
     )
 
@@ -88,7 +88,7 @@ class PeerDeclineTest {
     }
 
     @Test
-    fun theInviterIsToldWithTheRequestsNameUntilDismissedAndItSurvivesARestart() = runTest {
+    fun theInviterIsToldWithTheRequestsNameUntilDismissedOrTheVaultCloses() = runTest {
         val m = setup()
         m.incoming("p1", "Alex Kim")
         runCurrent()
@@ -97,12 +97,19 @@ class PeerDeclineTest {
         assertTrue(m.approvals.value.isEmpty())
         assertEquals(listOf(PeerDecline("p1", "Alex Kim", false, now)), m.peerDeclines.value)
 
-        // Kept (encrypted file) until the member dismisses it.
-        val again = manager(backgroundScope)
-        assertEquals(listOf(PeerDecline("p1", "Alex Kim", false, now)), again.peerDeclines.value)
-        again.dismissPeerDecline("p1")
-        assertTrue(again.peerDeclines.value.isEmpty())
+        // Memory only (owner decision 2026-10-27): nothing was written, a new process knows nothing of it.
+        assertNull(store.load())
         assertTrue(manager(backgroundScope).peerDeclines.value.isEmpty())
+
+        // Kept until the member dismisses it, or the vault is no longer open.
+        m.dismissPeerDecline("p1")
+        assertTrue(m.peerDeclines.value.isEmpty())
+        m.incoming("p2", "Sam Lee")
+        m.sync("pending_id", "p2", "peer_declined")
+        runCurrent()
+        assertEquals(1, m.peerDeclines.value.size)
+        m.forgetOpenVault()
+        assertTrue(m.peerDeclines.value.isEmpty())
     }
 
     @Test

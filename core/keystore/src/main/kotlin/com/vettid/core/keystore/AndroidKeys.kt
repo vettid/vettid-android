@@ -210,7 +210,9 @@ class AttestedKey(val chain: List<X509Certificate>, val level: KeyLevel, val str
  * in the TEE (StrongBox adds latency for no gain here: the seeds are unwrapped
  * once per process). No user authentication and no unlocked-device binding:
  * the relay key must be usable by the background collector while the phone is
- * locked (ANDROID-PLAN §7).
+ * locked (ANDROID-PLAN §7). This key also seals the app's local files (`KeystoreFileStore.ALIAS`). It is checked once,
+ * when it is made: one the Keystore does not report in the trusted execution environment or StrongBox is deleted
+ * and refused ([KeystoreException]), as the phone key is.
  */
 object SeedWrapKey {
     @Synchronized
@@ -222,7 +224,15 @@ object SeedWrapKey {
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setRandomizedEncryptionRequired(true)
             .build()
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, AndroidKeys.PROVIDER).apply { init(spec) }.generateKey()
+        val key = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, AndroidKeys.PROVIDER).apply { init(spec) }.generateKey()
+        // Like the phone key (VAULT-MESSAGING 0.33.0 §11.14.1): a key the Keystore holds in software, or reports
+        // nowhere, is not made. A phone like that cannot enroll in the first place (attestation, phone key).
+        val level = AndroidKeys.secretKeyLevel(key)
+        if (!PhoneKey.holdsPhoneKey(level)) {
+            AndroidKeys.delete(alias)
+            throw KeystoreException("key not in secure hardware ($level)")
+        }
+        return key
     }
 
     fun wrapper(alias: String = AndroidKeys.ALIAS_SEED_WRAP): SeedWrapper = SeedWrapper { getOrCreate(alias) }
