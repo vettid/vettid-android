@@ -15,6 +15,9 @@ Activity and the connection service's notification stay silent.
 - `*.wav`: the masters, 44.1 kHz 16-bit mono PCM, the source of truth. Re-export from them; never edit an export.
 - `synth_family.py`: generates the masters deterministically: `python3 synth_family.py <out_dir>` (needs numpy and
   scipy). Its output was verified byte-identical to these masters with numpy 2.5.4 and scipy 1.18.1.
+- Every note ends at silence (an 80 ms release, also where a sound's length cuts a note), and the ringtone's two
+  ends meet at silence (5 ms in, 40 ms out): a note or a loop cut while it still sounds clicks (found in the
+  two-phone calls test, 2026-10-27).
 - The app's exports are `core/notify/src/main/res/raw/vettid_*.ogg` (Vorbis, ~96 kbit/s). After a change to a master:
 
       ffmpeg -i vettid_general.wav -c:a libvorbis -b:a 96k vettid_general.ogg
