@@ -110,4 +110,85 @@ class SocialMemoryOnlyTest {
         runCurrent()
         assertNull(m.peerDeclines.value.single().name)
     }
+
+    // --- the narrow exception: the three event-only asks, encrypted, until their exp (owner decision 2026-10-27) ---
+
+    private fun managerAt(scope: CoroutineScope, pending: InMemoryDeviceStateStore, at: Instant) = SocialManager(
+        scope,
+        api = { throw VaultFailure(FailureKind.OTHER) },
+        credential = credential,
+        pendingStore = pending,
+        clock = Clock.fixed(at, ZoneOffset.UTC),
+    )
+
+    private fun session(id: String, exp: String) =
+        event("device.session.pending", """{"request_id":"$id","device_id":"A","role":"agent","name":"Bot","seconds":3600,"exp":"$exp"}""")
+
+    @Test
+    fun theThreeEventOnlyAsksSurviveAProcessRestartUntilTheirExp() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.onEvent(session("s1", "2026-10-27T12:10:00.000Z"))
+        m.onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r1","exp":"2026-10-27T12:10:00.000Z"}"""))
+        m.onEvent(event("approval.pending", """{"approval_id":"h1","device_id":"A","role":"agent","name":"Bot","type":"agent.request","body":{},"exp":"2026-10-27T12:10:00.000Z"}"""))
+        runCurrent()
+        assertTrue(file.load() != null)
+
+        val again = managerAt(backgroundScope, file, now.plusSeconds(60))
+        runCurrent()
+        assertTrue("nothing before the vault is open", again.approvals.value.isEmpty())
+        again.restorePending()
+        runCurrent()
+        assertTrue(again.approvals.value.any { it.key.contains("s1") })
+        assertTrue(String(file.load()!!).contains("s1"))
+    }
+
+    @Test
+    fun anAskPastItsExpIsNeverShownAndLeavesTheFile() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s2", "2026-10-27T12:10:00.000Z"))
+        runCurrent()
+        val later = managerAt(backgroundScope, file, now.plusSeconds(601))
+        later.restorePending()
+        runCurrent()
+        assertTrue(later.approvals.value.isEmpty())
+        assertNull("deleted when it would be empty", file.load())
+    }
+
+    @Test
+    fun lockHoldAndWipeClearTheFileEvenBeforeItWasRead() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s3", "2026-10-27T12:10:00.000Z"))
+        runCurrent()
+        // A new process that is locked at once never reads it.
+        managerAt(backgroundScope, file, now).forgetOpenVault()
+        assertNull(file.load())
+
+        for (clear in listOf<(SocialManager) -> Unit>({ it.forgetOpenVault() }, { it.forgetPending() }, { it.clear() })) {
+            val m = managerAt(backgroundScope, file, now)
+            m.restorePending()
+            m.onEvent(session("s4", "2026-10-27T12:10:00.000Z"))
+            runCurrent()
+            assertTrue(file.load() != null)
+            clear(m)
+            assertNull(file.load())
+        }
+    }
+
+    @Test
+    fun onlyThoseThreeTypesAreEverWrittenAndAtMost32() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.onEvent(event("grant.pending", """{"request_id":"g1","exp":"2026-10-27T12:10:00.000Z"}"""))
+        m.onEvent(event("connection.request.pending", """{"pending_id":"p1","invite_id":"i1","sas":"042817","profile":{"first_name":"Alex","last_name":"Kim"},"remote":true}"""))
+        runCurrent()
+        assertNull("no other type is persisted", file.load())
+        repeat(40) { m.onEvent(session("n$it", "2026-10-27T12:10:00.000Z")) }
+        runCurrent()
+        val text = String(file.load()!!)
+        assertEquals(32, Regex("device.session.pending").findAll(text).count())
+        assertTrue(!text.contains("g1") && !text.contains("p1"))
+    }
 }

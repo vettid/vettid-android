@@ -60,6 +60,14 @@ class SocialManager(
      * construction, i.e. at the next start.
      */
     private val obsoleteStore: DeviceStateStore? = null,
+    /**
+     * NARROW EXCEPTION to "memory only" (owner decision 2026-10-27), until the vault offers a list of these at unlock
+     * (follow-up): the three event-only asks ([PERSISTED_TYPES]: no vault list brings them back) are kept here,
+     * encrypted (Keystore file, no-backup storage), only until each one's own `exp`, at most [PERSISTED_MAX], so they
+     * survive a process death. Read back by [restorePending] when the vault is open; the file is deleted when it
+     * would be empty and at lock, hold and wipe. Nothing else is ever written.
+     */
+    private val pendingStore: DeviceStateStore? = null,
     private val clock: Clock = Clock.systemUTC(),
     /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
     private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
@@ -74,6 +82,7 @@ class SocialManager(
 
     init {
         runCatching { obsoleteStore?.clear() }
+        // Not the pending-asks file: it is read back when the vault is open (restorePending) and cleared by a lock.
     }
     private var local: Local = Local()
 
@@ -115,6 +124,7 @@ class SocialManager(
 
     // --- local state (memory only; dropped with the open vault) ---
 
+    @Serializable
     private data class StoredEvent(val type: String, val body: String, val at: Long)
 
     /** The name a request showed (0.10.5: kept until a peer's decline can name it). */
@@ -142,6 +152,63 @@ class SocialManager(
         local = next
         storedFlow.value = next.events
         declinesFlow.value = next.declines.map { it.model() }
+        persistPending(next)
+    }
+
+    @Serializable
+    private class PendingFile(val events: List<StoredEvent>)
+
+    private var persisted: List<StoredEvent> = emptyList()
+
+    /** The file was read back ([restorePending]) or deleted (a lock): before that, an edit must not overwrite it. */
+    private var pendingSettled = false
+
+    /** Writes the unexpired event-only asks of [l] (and only those), newest [PERSISTED_MAX]; deletes the file when none. */
+    @Suppress("ReturnCount") // guard clauses
+    private fun persistPending(l: Local) {
+        val store = pendingStore ?: return
+        if (!pendingSettled) return
+        val t = now()
+        val keep = l.events.filter { e ->
+            e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true
+        }.sortedBy { it.at }.takeLast(PERSISTED_MAX)
+        if (keep == persisted) return
+        try {
+            if (keep.isEmpty()) {
+                store.clear()
+            } else {
+                store.save(VaultJson.json.encodeToString(PendingFile.serializer(), PendingFile(keep)).toByteArray(Charsets.UTF_8))
+            }
+            persisted = keep
+        } catch (_: com.vettid.core.keystore.KeystoreException) {
+            // kept in memory; the next change tries again
+        }
+    }
+
+    /**
+     * The vault is open: the event-only asks kept across a process death come back, those whose `exp` has not passed
+     * (one that has is never shown, and is dropped from the file). Called before the lists are read.
+     */
+    fun restorePending() {
+        val store = pendingStore ?: return
+        val back = try {
+            store.load()?.let { VaultJson.json.decodeFromString(PendingFile.serializer(), String(it, Charsets.UTF_8)).events }
+        } catch (_: com.vettid.core.keystore.KeystoreException) {
+            null
+        } catch (_: SerializationException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }.orEmpty()
+        val t = now()
+        val live = back.filter { e -> e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true }
+        persisted = back // so that the write below drops what expired
+        pendingSettled = true
+        edit { l ->
+            val have = l.events.mapNotNull { keyOf(it) }.toSet()
+            l.copy(events = l.events + live.filter { keyOf(it) !in have })
+        }
+        if (live.size != back.size || back.isEmpty()) persistPending(local)
     }
 
     /**
@@ -192,7 +259,10 @@ class SocialManager(
         storedFlow.value = emptyList()
         declinesFlow.value = emptyList()
         notedDeclines.clear()
-    }
+        // Deletes the file whatever this process has read of it.
+        pendingSettled = true
+        persisted = listOf(StoredEvent("", "", 0))
+        persistPending(local)    }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */
     fun refreshAllQuietly() {
@@ -1257,6 +1327,12 @@ class SocialManager(
             .sortedByDescending { it.last?.sentAt ?: it.connection.createdAt ?: Instant.EPOCH }
 
     companion object {
+        /** The only approvals that are ever written to disk (no vault list brings them back): see [pendingStore]. */
+        val PERSISTED_TYPES = setOf("connection.authenticate.pending", "approval.pending", "device.session.pending")
+
+        /** At most this many are kept on disk; the oldest are dropped first. */
+        const val PERSISTED_MAX = 32
+
         /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
         private const val PAGE = 100
 

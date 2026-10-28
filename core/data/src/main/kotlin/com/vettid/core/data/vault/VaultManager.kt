@@ -862,6 +862,7 @@ class VaultManager(
         api = { openApi() },
         credential = this,
         obsoleteStore = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
+        pendingStore = KeystoreFileStore(File(app.noBackupFilesDir, PENDING_ASKS_FILE), "pending-asks"),
         itemNames = {
             items.items.value.associate { i ->
                 i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)
@@ -1005,6 +1006,7 @@ class VaultManager(
                     lockedHere = false
                     lockedElsewhereFlow.value = false
                     resumeRelay() // after an unlock the notification service's connection comes back
+                    social.restorePending() // event-only asks kept until their exp across a process death
                     social.refreshAllQuietly()
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
                     items.refreshQuietly()
@@ -4521,6 +4523,7 @@ class VaultManager(
 
         private const val LOCK_FILE = "lock-record"
         private const val SOCIAL_FILE = "social.bin"
+        private const val PENDING_ASKS_FILE = "pending-asks.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val HTTP_OK = 200
