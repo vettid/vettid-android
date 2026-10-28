@@ -203,6 +203,9 @@ interface OwnerCheckRepository {
     /** (ANDROID-PLAN 0.1.93) The app is in front or not; the PIN kept for the retry is forgotten when it is not. */
     fun setForeground(inFront: Boolean) {}
 
+    /** Counts the times the app went to the background: a PIN kept across an out-and-back during a request is dropped. */
+    val foregroundGeneration: Int get() = 0
+
     /** Whether the app is in front (the process, not a screen: in-app navigation and rotation do not change it). */
     val inFront: StateFlow<Boolean> get() = ALWAYS_IN_FRONT
 
