@@ -207,7 +207,7 @@ class OwnerCheckManager(
      * kept in memory for it ([takeUnlockPin]), and not at all if the app is not in front, or left the front since
      * [generation] ([foregroundGeneration] read before the unlock request) and came back before this answer.
      */
-    suspend fun afterUnlock(pin: String, password: String, generation: Int = foregroundGeneration) {
+    suspend fun afterUnlock(pin: String, password: String, generation: Int) {
         unlockPin = null
         locked.value = false
         endIdleLocked()
@@ -221,6 +221,8 @@ class OwnerCheckManager(
         unlockOutcome.value = r
         val retry = (r is OwnerCheckOutcome.BadPassword && (r.checksLeft ?: 0) > 0) || r is OwnerCheckOutcome.Backoff
         unlockPin = pin.takeIf { retry && foregroundFlow.value && generation == foregroundGeneration }
+        // Closes the race with setForeground(false) on the main thread between the test above and the assignment.
+        if (!foregroundFlow.value || generation != foregroundGeneration) unlockPin = null
     }
 
     /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */

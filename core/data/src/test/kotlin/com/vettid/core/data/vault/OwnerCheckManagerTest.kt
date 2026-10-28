@@ -10,10 +10,12 @@ import com.vettid.core.vault.Settings
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -35,6 +37,10 @@ class OwnerCheckManagerTest {
     private class Ops : OwnerCheckOps {
         var status: OwnerCheckStatus? = null
         var checkError: String? = null
+
+        /** Once a check was sent, the status reads fail (the count is then the estimate, deterministically). */
+        var statusDownAfterCheck = false
+        private var statusDown = false
         var checkErrorBody: JsonObject? = null
         /** (Release R) The answer's `recovery.present_recorded`, and the status's `recovery.present_recorded_at`. */
         var presentRecorded: Boolean? = null
@@ -48,6 +54,7 @@ class OwnerCheckManagerTest {
 
         override suspend fun check(pin: String, password: String, hold: Boolean?, holdOffUntil: String?): OwnerCheckPassed {
             checks += listOf(pin, password, hold, holdOffUntil)
+            if (statusDownAfterCheck) statusDown = true
             checkError?.let { throw VaultOpException("vault.owner-check", it, body = checkErrorBody) }
             return OwnerCheckPassed(
                 answerDeadline, 86_400, hold = hold ?: true, holdOffUntil = holdOffUntil,
@@ -55,8 +62,10 @@ class OwnerCheckManagerTest {
             )
         }
 
-        override suspend fun statusAndRecovery() =
-            status to com.vettid.core.vault.RecoveryStatus("armed", presentRecordedAt = presentRecordedAt, counter = counter)
+        override suspend fun statusAndRecovery(): Pair<OwnerCheckStatus?, com.vettid.core.vault.RecoveryStatus> {
+            if (statusDown) throw VaultOpException("vault.status", "unreachable")
+            return status to com.vettid.core.vault.RecoveryStatus("armed", presentRecordedAt = presentRecordedAt, counter = counter)
+        }
 
         /** (0.43.0) The status's `time_scale`; null: absent. */
         var timeScale: Long? = null
@@ -261,21 +270,23 @@ class OwnerCheckManagerTest {
             checkErrorBody = JsonObject(mapOf("reason" to JsonPrimitive("no_holder")))
         }
         val m = manager(ops)
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertEquals(false, CredentialRequired.state.value?.resends)
         CredentialRequired.clear()
     }
 
     @Test
     fun failedChecksSayWhichEntryAndHowManyAreLeft() = runTest {
-        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 0) }
+        // The status read fails after each check, so the counts are the app's own (failures + 1), not a race with the read.
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 0)
+            statusDownAfterCheck = true
+        }
         val m = manager(ops)
         m.refreshOwnerCheck()
         ops.checkError = "bad_pin"
-        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1)
         assertEquals(OwnerCheckOutcome.BadPin(9), m.check("111111", "pw"))
         ops.checkError = "bad_password"
-        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 2)
         assertEquals(OwnerCheckOutcome.BadPassword(8), m.check("975310", "nope"))
         ops.checkError = "backoff"
         ops.checkErrorBody = JsonObject(mapOf("retry_after" to JsonPrimitive(300)))
@@ -300,7 +311,7 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckState.DUE, m.ownerCheck.value!!.state)
 
         // Locked past the deadline: one screen for both, the check right after the unlock (§3.6.5).
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertEquals(OwnerCheckOutcome.Passed, m.unlockCheckOutcome.value)
         assertEquals(listOf<Any?>("975310", "pw", null, null), ops.checks.single())
         m.consumeUnlockCheckOutcome()
@@ -308,7 +319,7 @@ class OwnerCheckManagerTest {
 
         // Not past the deadline: no check.
         ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertEquals(1, ops.checks.size)
     }
 
@@ -318,28 +329,28 @@ class OwnerCheckManagerTest {
         val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
         val m = manager(ops)
         ops.checkError = "bad_password"
-        m.afterUnlock("975310", "nope")
+        m.afterUnlock("975310", "nope", m.foregroundGeneration)
         assertTrue(m.unlockCheckOutcome.value is OwnerCheckOutcome.BadPassword)
         assertEquals("975310", m.takeUnlockPin())
         assertNull(m.takeUnlockPin())
         ops.checkError = "backoff"
         ops.checkErrorBody = JsonObject(mapOf("retry_after" to JsonPrimitive(300)))
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertEquals("975310", m.takeUnlockPin())
         // Not in front: never kept. A pass: nothing to keep.
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         m.setForeground(false)
         assertNull(m.takeUnlockPin())
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertNull(m.takeUnlockPin())
         m.setForeground(true)
         ops.checkError = null
         ops.checkErrorBody = null
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertNull(m.takeUnlockPin())
         // Nothing due: no check, nothing kept.
         ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
-        m.afterUnlock("975310", "pw")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertNull(m.takeUnlockPin())
     }
 
@@ -349,22 +360,22 @@ class OwnerCheckManagerTest {
         val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
         val m = manager(ops)
         ops.checkError = "bad_password"
-        m.afterUnlock("975310", "nope")
+        m.afterUnlock("975310", "nope", m.foregroundGeneration)
         m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
         assertNull(m.takeUnlockPin())
-        m.afterUnlock("975310", "nope")
+        m.afterUnlock("975310", "nope", m.foregroundGeneration)
         m.onLockedHere()
         assertNull(m.takeUnlockPin())
-        m.afterUnlock("975310", "nope")
+        m.afterUnlock("975310", "nope", m.foregroundGeneration)
         m.clear()
         assertNull(m.takeUnlockPin())
-        m.afterUnlock("975310", "nope")
+        m.afterUnlock("975310", "nope", m.foregroundGeneration)
         m.check("975310", "pw")
         assertNull(m.takeUnlockPin())
         // The process in the background: not kept, and the front is told.
         m.setForeground(false)
         assertEquals(false, m.inFront.value)
-        m.afterUnlock("975310", "nope")
+        m.afterUnlock("975310", "nope", m.foregroundGeneration)
         assertNull(m.takeUnlockPin())
     }
 
@@ -383,18 +394,32 @@ class OwnerCheckManagerTest {
         assertEquals("975310", m.takeUnlockPin())
     }
 
-    /**
-     * The lock is marked from a fresh status only, not from the estimate (here the status read does not answer in time, as in
-     * this harness the IO dispatcher is outside the test's virtual time).
-     */
+    /** The lock is marked from the estimate never: the status read fails, the count is failures + 1. */
     @Test
     fun anEstimatedCountNeverMarksTheLock() = runTest {
-        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 9) }
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 9)
+            statusDownAfterCheck = true
+        }
         val m = manager(ops)
         m.refreshOwnerCheck()
         ops.checkError = "bad_password"
         assertEquals(OwnerCheckOutcome.BadPassword(0), m.check("975310", "nope"))
         assertEquals(false, m.lockedByOwnerCheck.value)
+    }
+
+    /** The tenth failure marks the lock from a fresh `vault.status`, without waiting for `vault.locking`. */
+    @Test
+    fun aFreshCountOfZeroMarksTheLock() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 9) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        ops.checkError = "bad_password"
+        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 10)
+        // Real time: the status read runs on the IO dispatcher and wins against the 5 s timeout.
+        val r = withContext(Dispatchers.Default) { m.check("975310", "nope") }
+        assertEquals(OwnerCheckOutcome.BadPassword(0), r)
+        assertTrue(m.lockedByOwnerCheck.value)
     }
 
     /** The notices are the feed's unread `owner_check.*` items (one source: the feed, ANDROID-PLAN 0.1.23, 6). */
