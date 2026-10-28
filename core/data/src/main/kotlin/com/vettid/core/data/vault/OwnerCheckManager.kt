@@ -244,6 +244,7 @@ class OwnerCheckManager(
     }
 
     /** [runCatching] that lets a cancellation through (a cancelled read ends, it is not an answer). */
+    @Suppress("TooGenericExceptionCaught") // a read that fails for any reason is simply no answer
     private inline fun <T> attempt(block: () -> T): Result<T> = try {
         Result.success(block())
     } catch (e: kotlinx.coroutines.CancellationException) {
