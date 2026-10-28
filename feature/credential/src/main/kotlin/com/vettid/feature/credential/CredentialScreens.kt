@@ -350,7 +350,6 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                         SettingsDivider()
                         SettingsRow(
                             stringResource(R.string.credential_rotate), actions.rotate, icon = Icons.Outlined.Sync,
-                            supporting = stringResource(R.string.credential_rotate_supporting),
                         )
                         SettingsDivider()
                         SettingsSwitchRow(
