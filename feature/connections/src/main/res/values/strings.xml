@@ -149,7 +149,7 @@
     <string name="connections_detail_since">Connected</string>
     <string name="connections_detail_last_active">Last active</string>
     <string name="connections_detail_key">Vault key fingerprint</string>
-    <string name="connections_detail_key_note">Identifies their vault, the one you compared the safety code with, not a person. It changes only when their vault rotates its key.</string>
+    <string name="connections_detail_key_note">Identifies their vault, the one you compared the safety code with, not a person. It changes only when their vault replaces its keys.</string>
     <string name="connections_block">Block</string>
     <string name="connections_remove">Remove</string>
     <string name="connections_remove_title">Remove %1$s?</string>
