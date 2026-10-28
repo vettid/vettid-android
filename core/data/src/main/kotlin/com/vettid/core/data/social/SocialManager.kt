@@ -163,15 +163,27 @@ class SocialManager(
     /** The file was read back ([restorePending]) or deleted (a lock): before that, an edit must not overwrite it. */
     private var pendingSettled = false
 
+    /**
+     * [e] reduced to the fields the approval screens, the indicator and the decision calls use ([PERSISTED_FIELDS]); the
+     * rest of the event body (an `approval.pending` carries the held request's whole body) is never written. Plain
+     * values only.
+     */
+    private fun slim(e: StoredEvent): StoredEvent {
+        val body = parseBody(e.body) ?: return e.copy(body = "{}")
+        val allowed = PERSISTED_FIELDS[e.type].orEmpty()
+        val kept = body.filter { (k, v) -> k in allowed && v is JsonPrimitive }
+        return e.copy(body = enc(JsonObject(kept)))
+    }
+
     /** Writes the unexpired event-only asks of [l] (and only those), newest [PERSISTED_MAX]; deletes the file when none. */
-    @Suppress("ReturnCount") // guard clauses
+    @Suppress("ReturnCount", "TooGenericExceptionCaught") // guard clauses; a failed write stays in memory
     private fun persistPending(l: Local) {
         val store = pendingStore ?: return
         if (!pendingSettled) return
         val t = now()
         val keep = l.events.filter { e ->
             e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true
-        }.sortedBy { it.at }.takeLast(PERSISTED_MAX)
+        }.sortedBy { it.at }.takeLast(PERSISTED_MAX).map(::slim)
         if (keep == persisted) return
         try {
             if (keep.isEmpty()) {
@@ -180,8 +192,8 @@ class SocialManager(
                 store.save(VaultJson.json.encodeToString(PendingFile.serializer(), PendingFile(keep)).toByteArray(Charsets.UTF_8))
             }
             persisted = keep
-        } catch (_: com.vettid.core.keystore.KeystoreException) {
-            // kept in memory; the next change tries again
+        } catch (_: Exception) {
+            // kept in memory; the next change tries again (a Keystore, disk or provider failure)
         }
     }
 
@@ -189,26 +201,27 @@ class SocialManager(
      * The vault is open: the event-only asks kept across a process death come back, those whose `exp` has not passed
      * (one that has is never shown, and is dropped from the file). Called before the lists are read.
      */
+    @Suppress("TooGenericExceptionCaught") // a failure of the file (Keystore, disk) must never end an unlock's steps
     fun restorePending() {
         val store = pendingStore ?: return
-        val back = try {
-            store.load()?.let { VaultJson.json.decodeFromString(PendingFile.serializer(), String(it, Charsets.UTF_8)).events }
-        } catch (_: com.vettid.core.keystore.KeystoreException) {
-            null
-        } catch (_: SerializationException) {
-            null
-        } catch (_: IllegalArgumentException) {
-            null
-        }.orEmpty()
-        val t = now()
-        val live = back.filter { e -> e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true }
-        persisted = back // so that the write below drops what expired
-        pendingSettled = true
-        edit { l ->
-            val have = l.events.mapNotNull { keyOf(it) }.toSet()
-            l.copy(events = l.events + live.filter { keyOf(it) !in have })
+        // All under the lock a hold's forgetPending takes: a hold in between cannot have its clear undone.
+        synchronized(localLock) {
+            val back = try {
+                store.load()?.let { VaultJson.json.decodeFromString(PendingFile.serializer(), String(it, Charsets.UTF_8)).events }
+            } catch (_: Exception) {
+                null
+            }.orEmpty()
+            val t = now()
+            val live = back.filter { e -> e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true }
+            persisted = back // so that the write below drops what expired
+            pendingSettled = true
+            edit { l ->
+                val have = l.events.mapNotNull { keyOf(it) }.toSet()
+                l.copy(events = l.events + live.filter { keyOf(it) !in have })
+            }
+            // Events that came before this read were memory only until now: written too (nothing changed: no write).
+            persistPending(local)
         }
-        if (live.size != back.size || back.isEmpty()) persistPending(local)
     }
 
     /**
@@ -1329,6 +1342,16 @@ class SocialManager(
     companion object {
         /** The only approvals that are ever written to disk (no vault list brings them back): see [pendingStore]. */
         val PERSISTED_TYPES = setOf("connection.authenticate.pending", "approval.pending", "device.session.pending")
+
+        /**
+         * The only fields of each type that are written (what [ApprovalParser] reads for the screens and the decision
+         * calls, plus `purpose`); never the event's other members, above all not an `approval.pending`'s `body`.
+         */
+        val PERSISTED_FIELDS: Map<String, Set<String>> = mapOf(
+            "connection.authenticate.pending" to setOf("request_id", "connection_id", "context", "purpose", "exp"),
+            "approval.pending" to setOf("approval_id", "device_id", "role", "name", "type", "exp"),
+            "device.session.pending" to setOf("request_id", "device_id", "role", "name", "seconds", "exp"),
+        )
 
         /** At most this many are kept on disk; the oldest are dropped first. */
         const val PERSISTED_MAX = 32

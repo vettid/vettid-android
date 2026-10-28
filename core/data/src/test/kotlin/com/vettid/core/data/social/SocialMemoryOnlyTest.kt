@@ -113,7 +113,7 @@ class SocialMemoryOnlyTest {
 
     // --- the narrow exception: the three event-only asks, encrypted, until their exp (owner decision 2026-10-27) ---
 
-    private fun managerAt(scope: CoroutineScope, pending: InMemoryDeviceStateStore, at: Instant) = SocialManager(
+    private fun managerAt(scope: CoroutineScope, pending: com.vettid.core.vault.DeviceStateStore, at: Instant) = SocialManager(
         scope,
         api = { throw VaultFailure(FailureKind.OTHER) },
         credential = credential,
@@ -190,5 +190,79 @@ class SocialMemoryOnlyTest {
         val text = String(file.load()!!)
         assertEquals(32, Regex("device.session.pending").findAll(text).count())
         assertTrue(!text.contains("g1") && !text.contains("p1"))
+    }
+
+    private class Throwing(val inner: InMemoryDeviceStateStore = InMemoryDeviceStateStore()) : com.vettid.core.vault.DeviceStateStore {
+        var fail = false
+
+        override fun load(): ByteArray? = if (fail) throw java.security.InvalidKeyException("key") else inner.load()
+
+        override fun save(state: ByteArray) = if (fail) throw java.io.IOException("disk full") else inner.save(state)
+
+        override fun clear() = if (fail) throw java.security.ProviderException("provider") else inner.clear()
+    }
+
+    @Test
+    fun aFailingFileNeverEscapesAndTheAskStaysInMemory() = runTest {
+        val file = Throwing().also { it.fail = true }
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.onEvent(session("s5", "2026-10-27T12:10:00.000Z"))
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s5") })
+        m.forgetPending() // clearing fails too: still no exception
+        runCurrent()
+        assertTrue(m.approvals.value.isEmpty())
+    }
+
+    /** Events that came before the read are written at its end, even when the file already held all of them. */
+    @Test
+    fun askedBeforeTheReadAreWrittenAtItsEnd() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s6", "2026-10-27T12:10:00.000Z"))
+        val m = managerAt(backgroundScope, file, now)
+        m.onEvent(session("s6", "2026-10-27T12:10:00.000Z")) // already in the file
+        m.onEvent(session("s7", "2026-10-27T12:10:00.000Z")) // fresh, memory only until settled
+        runCurrent()
+        m.restorePending()
+        val text = String(file.load()!!)
+        assertTrue(text.contains("s6") && text.contains("s7"))
+    }
+
+    /** A hold between the read and the restore's edit cannot be undone: the read is under the same lock. */
+    @Test
+    fun aHoldAfterTheRestoreLeavesNothingBehind() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s8", "2026-10-27T12:10:00.000Z"))
+        val m = managerAt(backgroundScope, file, now)
+        val t = Thread { repeat(50) { m.forgetPending() } }
+        t.start()
+        m.restorePending()
+        t.join()
+        m.forgetPending()
+        assertTrue(m.approvals.value.isEmpty())
+        assertNull(file.load())
+    }
+
+    /** Owner 2026-10-28: only the fields the screens and decisions need are written, never the held request's body. */
+    @Test
+    fun onlyTheAllowListedFieldsAreWrittenAndSurviveARoundTrip() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.onEvent(event("approval.pending", """{"approval_id":"h9","device_id":"A","role":"agent","name":"Bot","type":"agent.request","body":{"cmd":"rm -rf SECRETPAYLOAD"},"flags":["shell"],"extra":"EXTRAFIELD","exp":"2026-10-27T12:10:00.000Z"}"""))
+        m.onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r9","context":"login","purpose":"sign in","secret":"EXTRAFIELD","exp":"2026-10-27T12:10:00.000Z"}"""))
+        runCurrent()
+        val text = String(file.load()!!)
+        assertTrue(text.contains("h9") && text.contains("agent.request") && text.contains("sign in"))
+        assertTrue(!text.contains("SECRETPAYLOAD") && !text.contains("EXTRAFIELD") && !text.contains("flags"))
+        val again = managerAt(backgroundScope, file, now.plusSeconds(1))
+        again.restorePending()
+        runCurrent()
+        val d = again.approvals.value.filterIsInstance<Approval.DeviceRequest>().single()
+        assertEquals("Bot", d.deviceName)
+        assertEquals("agent.request", d.requestType)
+        assertEquals("A", d.deviceId)
+        assertEquals(2, again.approvals.value.size)
     }
 }
