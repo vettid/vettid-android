@@ -701,7 +701,7 @@ fun AlarmContent(state: AlarmUiState, actions: AlarmActions) {
         AlarmStep.ROTATE -> FormScaffold(
             title = stringResource(R.string.credential_alarm_rotate_title),
             body = stringResource(R.string.credential_alarm_rotate_body),
-            primaryLabel = stringResource(R.string.credential_rotate_submit),
+            primaryLabel = stringResource(R.string.credential_alarm_rotate_submit),
             onPrimary = actions.rotate,
             primaryEnabled = state.password.isNotEmpty(),
             busy = state.busy,
