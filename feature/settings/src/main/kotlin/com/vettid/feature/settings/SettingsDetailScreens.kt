@@ -334,7 +334,12 @@ fun ChangePinContent(
     onBack: () -> Unit,
     onPassword: (String) -> Unit = {},
     onLockAndUnlock: () -> Unit = {},
+    /** "Replace keys" of the one-time prompt after the change (ANDROID-PLAN 0.1.88). */
+    onReplaceKeys: () -> Unit = {},
+    /** "Not now" or back on that prompt. */
+    onNotNow: () -> Unit = {},
 ) {
+    if (state.done && state.askReplaceKeys) com.vettid.core.ui.components.ReplaceKeysPrompt(onReplace = onReplaceKeys, onNotNow = onNotNow)
     FormScaffold(
         title = stringResource(if (state.done) R.string.settings_pin_done else R.string.settings_pin_title),
         body = when {

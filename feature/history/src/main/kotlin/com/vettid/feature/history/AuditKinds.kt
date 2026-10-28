@@ -181,6 +181,9 @@ object AuditKinds {
         "recovery.presence_unrecorded" -> listOf(
             Detail.Scaled(R.string.history_detail_presence_unrecorded, R.string.history_detail_presence_unrecorded_scaled, QUIET_SECONDS),
         )
+        // VAULT-MESSAGING 0.68.0 §11.14.10: a rotation made for a transfer carries the `transfer_id` as its ref.
+        "identity.rotated" ->
+            if (ref.isNullOrBlank() || ref == "recovery") emptyList() else listOf(Detail.Line(R.string.history_detail_rotated_transfer))
         "identity.rotation_failed" -> listOf(Detail.Line(R.string.history_detail_rotation_failed))
         "identity.rotate_conflict" -> listOf(Detail.Line(R.string.history_detail_rotate_conflict))
         "push.registered" -> when (ref) {

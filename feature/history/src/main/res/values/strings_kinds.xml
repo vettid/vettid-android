@@ -230,7 +230,8 @@
     <string name="history_detail_recovery_closed_unconfirmed">The service could not confirm this step.</string>
     <string name="history_detail_presence_unrecorded">If this lasts three days, your vault is no longer protected against a recovery started by someone else.</string>
     <string name="history_detail_presence_unrecorded_scaled">If this lasts %1$s, your vault is no longer protected against a recovery started by someone else.</string>
-    <string name="history_detail_rotation_failed">Your connections still know your old keys. VettID will offer the update again.</string>
+    <string name="history_detail_rotated_transfer">Replaced when you moved your vault to a new phone.</string>
+    <string name="history_detail_rotation_failed">Your connections still know your old keys. Your vault will try again the next time you unlock it.</string>
     <string name="history_detail_rotate_conflict">This connection\'s vault announced two different new keys. That can mean someone holds an old copy of their vault. Nothing is sent or received until you check.</string>
     <string name="history_detail_push_google">Through Google.</string>
     <string name="history_detail_push_apple">Through Apple.</string>

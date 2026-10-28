@@ -449,11 +449,6 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastRenew = pin to password
     }
 
-    override val rotateOffered = MutableStateFlow(false)
-
-    override fun dismissRotateOffer() {
-        rotateOffered.value = false
-    }
 
     override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
         lastPassword = password

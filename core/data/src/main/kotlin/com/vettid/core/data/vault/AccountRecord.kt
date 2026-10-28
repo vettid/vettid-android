@@ -111,8 +111,6 @@ internal data class LocalAccount(
      * the scale, or at scale 1).
      */
     val recoveryUnknownForMs: Long? = null,
-    /** (Release R) The offer to rotate the vault's keys is open, until a rotation succeeds or it is put away. */
-    val rotateOffered: Boolean = false,
     /**
      * (0.34.0, §11.10.6, §11.10.9) This phone has seen `recovery_r` for its vault (a verified descriptor, a transfer
      * bundle, or a request of release R's shape that succeeded): it never takes an earlier path for it again.
@@ -195,10 +193,6 @@ internal class AccountRecord(
     eraseFailed: Boolean = false,
 ) {
     private val store = RecordStore(initial, readable, empty = { LocalAccount() }, persist = persist, failed = eraseFailed)
-    private val rotateOfferFlow = MutableStateFlow(initial.rotateOffered)
-
-    /** (Release R) The offer to rotate the vault's keys after a transfer, a PIN change or a password change. */
-    val rotateOffer: StateFlow<Boolean> = rotateOfferFlow.asStateFlow()
 
     val value: LocalAccount get() = store.value
 
@@ -252,9 +246,8 @@ internal class AccountRecord(
     fun update(since: Int, generation: Int, f: (LocalAccount) -> LocalAccount?): Boolean =
         store.update(since, generation) { cur -> f(cur)?.withLockOf(cur) }
 
-    /** A record of its own ([a]: none, or a new setup's): no offer from before it, and the writes still on their way are dropped. */
+    /** A record of its own ([a]: none, or a new setup's): the writes still on their way are dropped. */
     fun reset(a: LocalAccount): Boolean = store.reset { cur ->
-        rotateOfferFlow.value = a.rotateOffered
         // Nothing of the lock's legacy fields goes into the new record; whether the lock's file is in use stays.
         a.copy(lockAskedAtMs = null, relayLockUntilMs = null, lockFileInUse = cur.lockFileInUse)
     }.also { pinMoved() }
@@ -269,22 +262,6 @@ internal class AccountRecord(
 
     /** The record read again from the phone ([readable]: it could be). */
     fun reload(a: LocalAccount, readable: Boolean) = store.reload(a, readable)
-
-    /** The rotate offer [on] or put away, for the record of [since]; shown only when it is kept. */
-    fun setRotateOffer(on: Boolean, since: Int): Boolean = store.update(since) { cur ->
-        rotateOfferFlow.value = on // under the lock: a wipe's or a reset's clearing of it comes before or after, whole
-        if (cur.rotateOffered == on) null else cur.copy(rotateOffered = on)
-    }
-
-    /**
-     * The offer after "Finish the move" opened the vault: only while [generation] is still [gen] (no lock, no reset and
-     * no wipe since the move's own lock), checked and written as one step. [RecordStore.UNBOUND] for the record: the
-     * generation already moves with every reset and wipe.
-     */
-    fun offerAfterMove(gen: Int): Boolean = store.update(RecordStore.UNBOUND, generation = gen) { cur ->
-        rotateOfferFlow.value = true
-        if (cur.rotateOffered) null else cur.copy(rotateOffered = true)
-    }
 
     /**
      * A `vault.status` read reached the vault service at [nowMs] ([LocalAccount.lastContactAtMs]), for the record of
@@ -384,7 +361,6 @@ internal class AccountRecord(
         } catch (_: java.io.IOException) {
             false
         }
-        if (ok) setRotateOffer(true, recordGeneration)
         return movedIf(ok)
     }
 
@@ -475,8 +451,8 @@ internal class AccountRecord(
 
     fun beginWipe() = store.beginWipe().also { pinMoved() }
 
-    /** The end of the wipe ([RecordStore.endWipe]): no offer, whether or not it completed. */
-    fun endWipe(complete: Boolean) = store.endWipe(complete) { rotateOfferFlow.value = false }.also { pinMoved() }
+    /** The end of the wipe ([RecordStore.endWipe]). */
+    fun endWipe(complete: Boolean) = store.endWipe(complete).also { pinMoved() }
 
     private fun LocalAccount.withLockOf(cur: LocalAccount) =
         copy(lockAskedAtMs = cur.lockAskedAtMs, relayLockUntilMs = cur.relayLockUntilMs, lockFileInUse = cur.lockFileInUse)

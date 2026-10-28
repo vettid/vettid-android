@@ -63,6 +63,7 @@ import com.vettid.core.data.R as DataR
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.FullScreenProgress
+import com.vettid.core.ui.components.ReplaceKeysPrompt
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecondaryButton
@@ -142,7 +143,14 @@ fun NavGraphBuilder.credentialDestination(
     composable<CredentialPasswordRoute> {
         val vm: ChangePasswordViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        ChangePasswordContent(state, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::submit, onBack, vm::setPin)
+        ChangePasswordContent(
+            state, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::submit, onBack, vm::setPin,
+            onReplaceKeys = {
+                vm.putAwayReplaceKeys()
+                navigate(CredentialRotateRoute)
+            },
+            onNotNow = vm::putAwayReplaceKeys,
+        )
     }
     composable<CredentialRotateRoute> {
         val vm: RotateViewModel = hiltViewModel()
@@ -524,6 +532,7 @@ private fun ErrorCard(error: FailureKind?, code: String? = null) {
 }
 
 /** The password change (stateless). */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun ChangePasswordContent(
     state: ChangePasswordUiState,
@@ -533,7 +542,12 @@ fun ChangePasswordContent(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
     onPin: (String) -> Unit = {},
+    /** "Replace keys" of the one-time prompt after the change (ANDROID-PLAN 0.1.88). */
+    onReplaceKeys: () -> Unit = {},
+    /** "Not now" or back on that prompt. */
+    onNotNow: () -> Unit = {},
 ) {
+    if (state.done && state.askReplaceKeys) ReplaceKeysPrompt(onReplace = onReplaceKeys, onNotNow = onNotNow)
     FormScaffold(
         title = stringResource(if (state.done) R.string.credential_change_done else R.string.credential_change_title),
         body = if (state.done) null else stringResource(R.string.credential_change_body),

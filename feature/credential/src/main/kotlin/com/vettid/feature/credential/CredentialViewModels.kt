@@ -151,6 +151,11 @@ data class ChangePasswordUiState(
     val errorCode: String? = null,
     val done: Boolean = false,
     /**
+     * (ANDROID-PLAN 0.1.88) The one-time prompt "Also replace your vault's keys?" is open over the success screen: set only
+     * where this screen saw the change apply, gone with "Not now", a back press or "Replace keys". Never stored.
+     */
+    val askReplaceKeys: Boolean = false,
+    /**
      * (VAULT-MESSAGING 0.44.0 §11.14.9) The change got no answer and VettID is deciding it ([ChangeCheck.Checking],
      * [ChangeCheck.Unreachable]), or decided that it did not apply ([ChangeCheck.NotApplied]). The entries are kept.
      */
@@ -244,6 +249,9 @@ class ChangePasswordViewModel @Inject constructor(
      */
     private var following = false
 
+    /** (ANDROID-PLAN 0.1.88) This screen sent the change it follows (set by [submit]). */
+    private var sentHere = false
+
     private fun onCheck(c: ChangeCheck) {
         if (c.open) following = true
         // Not this screen's change, or its own answer is still on its way (handled where it returns).
@@ -252,7 +260,10 @@ class ChangePasswordViewModel @Inject constructor(
             // (ANDROID-PLAN 0.1.55) Moved: another phone became the holder; said here as the one-time notice.
             is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
                 state.update { it.copy(busy = false, error = null, check = c) }
-            is ChangeCheck.Applied -> state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
+            // The prompt only for a change this screen sent: one it found being decided when it opened is a later start.
+            is ChangeCheck.Applied -> state.update {
+                ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true, askReplaceKeys = sentHere)
+            }
             is ChangeCheck.Refused -> state.update {
                 it.copy(busy = false, check = null, error = c.failure, errorCode = c.shownCode).afterRefusal(c.failure)
             }
@@ -264,6 +275,9 @@ class ChangePasswordViewModel @Inject constructor(
     }
 
     fun setPin(v: String) = state.update { it.withPin(v) }
+
+    /** "Not now", a back press or "Replace keys" (the screen opens the rotation): the prompt is put away, nothing is stored. */
+    fun putAwayReplaceKeys() = state.update { it.copy(askReplaceKeys = false) }
 
     fun setCurrent(v: String) = state.update { it.copy(current = v, error = null) }
 
@@ -291,10 +305,13 @@ class ChangePasswordViewModel @Inject constructor(
             else -> {
                 state.update { it.copy(busy = true, error = null, check = null) }
                 following = true
+                sentHere = true
                 viewModelScope.launch {
                     try {
                         repo.changePassword(s.current, s.password, s.pin.takeIf { s.askPin })
-                        state.update { ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true) }
+                        state.update {
+                            ChangePasswordUiState(askPin = it.askPin, newRules = it.newRules, done = true, askReplaceKeys = true)
+                        }
                         following = false
                         vault.acknowledgeChangeCheck() // said here: not again by the shell
                     } catch (e: VaultFailure) {
