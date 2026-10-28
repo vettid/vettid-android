@@ -13,7 +13,7 @@
     <string name="data_failure_bad_password">That credential password is not correct.</string>
     <string name="data_failure_backoff">Too many wrong attempts. Wait before trying again.</string>
     <string name="data_failure_frozen">Your credential is frozen after a clone alert. Answer the alert first.</string>
-    <string name="data_failure_rotation_required">Your credential must be rotated before it can be used again.</string>
+    <string name="data_failure_rotation_required">Your vault\'s keys must be replaced before your credential can be used again.</string>
     <string name="data_failure_not_supported">Your vault\'s software release does not support this yet.</string>
     <string name="data_failure_no_response">Your vault did not answer in time. Try again.</string>
     <string name="data_failure_enroll_waiting">Your vault was created but has not answered this phone yet. Nothing was lost. Try again in a minute: VettID picks up where it stopped.</string>
