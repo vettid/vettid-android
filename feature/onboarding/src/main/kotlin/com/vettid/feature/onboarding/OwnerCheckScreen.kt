@@ -113,13 +113,14 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         body = body,
         primaryLabel = stringResource(
             when {
+                state.watch == LockWatch.SILENT -> R.string.ownercheck_check_again
                 state.pinKept -> R.string.unlock_check_in
                 state.mode == OwnerCheckMode.HOLD_OFF -> R.string.ownercheck_submit_hold_off
                 else -> R.string.ownercheck_submit
             },
         ),
-        onPrimary = actions::submit,
-        primaryEnabled = state.submitAllowed,
+        onPrimary = if (state.watch == LockWatch.SILENT) actions::checkAgain else actions::submit,
+        primaryEnabled = state.submitAllowed || (state.watch == LockWatch.SILENT && !state.locking),
         busy = state.busy || state.locking,
         secondaryLabel = stringResource(if (state.mode == OwnerCheckMode.GATED) R.string.ownercheck_lock else R.string.ownercheck_cancel),
         onSecondary = if (state.mode == OwnerCheckMode.GATED) actions::lockVault else onCancel,
@@ -140,12 +141,27 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
             // (ANDROID-PLAN 0.1.93) After an unlock whose check failed: directly under the counts, the approved lines.
             // The tenth failure locked the vault: the existing lock text, no retry.
-            if (state.locked) {
+            // (ANDROID-PLAN 0.1.95) A lock found without a known cause shows the locked screen, not this text.
+            if (state.locked && !state.lockCauseUnknown) {
                 NoticeCard(
                     NoticeKind.URGENT,
                     stringResource(R.string.unlock_owner_check_locked_title),
                     stringResource(R.string.unlock_owner_check_locked_body),
                     modifier = Modifier.testTag("owner_check_locked"),
+                )
+            }
+            // (ANDROID-PLAN 0.1.95) Probably locked: the approved lines; the fields are not offered.
+            if (state.watch != LockWatch.NONE && !state.locked) {
+                Text(
+                    stringResource(
+                        if (state.watch == LockWatch.CHECKING) {
+                            R.string.ownercheck_probably_locked_checking
+                        } else {
+                            R.string.ownercheck_probably_locked_silent
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_probably_locked"),
                 )
             }
             state.unlockedWrong?.takeIf { !state.locked }?.let {
@@ -184,9 +200,10 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 is OwnerCheckMessage.BadPin -> m.checksLeft
                 is OwnerCheckMessage.BadPassword -> m.checksLeft
                 else -> v?.takeIf { it.failures > 0 }?.checksLeft
-            }.takeIf { state.unlockedWrong == null && !state.locked }
+            }.takeIf { state.unlockedWrong == null && !state.locked && state.watch == LockWatch.NONE }
             // Locked: the lock text only, no fields (§3.6.5: not a retry).
-            if (!state.pinKept && !state.locked) SecretField(
+            val fields = !state.locked && state.watch == LockWatch.NONE
+            if (!state.pinKept && fields) SecretField(
                 value = state.pin,
                 onValueChange = actions::setPin,
                 label = stringResource(R.string.ownercheck_pin_label),
@@ -196,7 +213,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("owner_check_pin"),
             )
-            if (!state.locked) SecretField(
+            if (fields) SecretField(
                 value = state.password,
                 onValueChange = actions::setPassword,
                 label = stringResource(R.string.ownercheck_password_label),
@@ -218,6 +235,11 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                     stringResource(R.string.ownercheck_backoff_wait, formatWait(state.waitSeconds)),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("owner_check_wait"),
+                )
+                m is OwnerCheckMessage.MaybeCounted -> Text(
+                    pluralStringResource(R.plurals.unlock_check_maybe_counted, m.atLeast, m.atLeast),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_maybe_counted"),
                 )
                 m is OwnerCheckMessage.Backoff ->
                     Text(stringResource(R.string.ownercheck_backoff), style = MaterialTheme.typography.bodyMedium)

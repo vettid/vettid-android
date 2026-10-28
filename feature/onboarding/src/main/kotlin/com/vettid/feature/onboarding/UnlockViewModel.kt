@@ -330,10 +330,16 @@ class UnlockViewModel @Inject constructor(
                 .collect { (u, n) -> state.update { it.copy(previousPinStep = u, newPinStep = n) } }
         }
         viewModelScope.launch {
-            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.idleLocked) { v, locked, _ ->
-                Triple(v?.gated(Instant.now()) == true, locked, ownerCheck.idleLockedNow(Instant.now()))
-            }.collect { (due, locked, idle) ->
-                state.update { it.copy(checkDue = due || locked || idle != null, lockedByOwnerCheck = locked, idleLocked = idle) }
+            combine(
+                ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.idleLocked, ownerCheck.lockCauseUnknown,
+            ) { v, locked, _, unknown ->
+                Triple(v?.gated(Instant.now()) == true, locked to unknown, ownerCheck.idleLockedNow(Instant.now()))
+            }.collect { (due, lock, idle) ->
+                val (locked, unknown) = lock
+                // (ANDROID-PLAN 0.1.95) A lock found by a read, cause unknown: locked, but not "ten wrong checks".
+                state.update {
+                    it.copy(checkDue = due || locked || idle != null, lockedByOwnerCheck = locked && !unknown, idleLocked = idle)
+                }
             }
         }
     }
