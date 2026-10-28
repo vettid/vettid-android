@@ -156,7 +156,8 @@ class OwnerCheckViewModel @Inject constructor(
     fun start(mode: OwnerCheckMode) {
         // A rotation recreates the screen, not this view model: the same mode already open keeps what it shows (the PIN kept in
         // memory, the failure line with the tries left), which a second start would take from the repository a second time.
-        if (startedMode == mode) return
+        // A fresh outcome always wins over what is retained (a gate that cleared meanwhile, with no cancel).
+        if (startedMode == mode && repo.unlockCheckOutcome.value == null) return
         startedMode = mode
         ticker?.cancel()
         val after = repo.unlockCheckOutcome.value

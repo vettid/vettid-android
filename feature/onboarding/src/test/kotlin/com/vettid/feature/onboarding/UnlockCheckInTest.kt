@@ -208,4 +208,22 @@ class UnlockCheckInTest {
         assertFalse(held.uiState.value.pinKept)
         assertNull(held.uiState.value.unlockedWrong)
     }
+
+    /** A new unlock outcome wins over the retained state of a screen that was never cancelled. */
+    @Test
+    fun aFreshOutcomeWinsOverRetainedState() = runTest {
+        val vm = dueUnlock()
+        vault.checkResults.add(OwnerCheckOutcome.BadPassword(9))
+        vm.checkIn("40281795", "nope")
+        advanceUntilIdle()
+        val held = heldScreen()
+        assertEquals(9, held.uiState.value.unlockedWrong)
+        // Another unlock, its check failing again; the screen was not cancelled in between.
+        vault.checkResults.add(OwnerCheckOutcome.BadPassword(8))
+        vm.checkIn("51392846", "nope")
+        advanceUntilIdle()
+        held.start(OwnerCheckMode.GATED)
+        assertEquals(8, held.uiState.value.unlockedWrong)
+        assertEquals("51392846", held.uiState.value.pin)
+    }
 }
