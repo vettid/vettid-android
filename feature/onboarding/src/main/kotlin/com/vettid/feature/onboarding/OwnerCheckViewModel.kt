@@ -88,8 +88,10 @@ data class OwnerCheckUiState(
     val unlockedWrong: Int? = null,
     /** The check after the unlock ran into a backoff ([pinKept]): the vault is open, the password is asked for. */
     val unlockedOpen: Boolean = false,
+    /** The vault locked after ten wrong checks (§3.6.4): the lock text, and no check is sent. */
+    val locked: Boolean = false,
 ) {
-    val submitAllowed: Boolean get() = !busy && !locking && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
+    val submitAllowed: Boolean get() = !busy && !locking && !locked && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
 
     override fun toString(): String = "OwnerCheckUiState(mode=$mode, busy=$busy, message=$message, wait=$waitSeconds, passed=$passed)"
 
@@ -108,11 +110,6 @@ interface OwnerCheckActions {
     fun submit()
     fun lockVault()
 
-    /** (ANDROID-PLAN 0.1.93) The app left the foreground: the PIN kept for the password-only retry is forgotten. */
-    fun appLeft() {}
-
-    /** (ANDROID-PLAN 0.1.93) The app is in front again. */
-    fun appEntered() {}
 
     /** After a check that passed with the presence notice: the member read it; the screen closes. */
     fun acknowledgePresence() {}
@@ -136,6 +133,18 @@ class OwnerCheckViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
+        // ANDROID-PLAN 0.1.93: the PIN kept for the password-only retry is forgotten when the app leaves the foreground (the
+        // process, not this screen: navigation and rotation keep it); then the same screen asks for both.
+        viewModelScope.launch {
+            repo.inFront.collect { front ->
+                if (!front) state.update { if (it.pinKept) it.copy(pin = "", password = "", pinKept = false, unlockedOpen = false) else it }
+            }
+        }
+        viewModelScope.launch {
+            repo.lockedByOwnerCheck.collect { l ->
+                state.update { if (l) it.copy(locked = true, pin = "", password = "", pinKept = false) else it.copy(locked = false) }
+            }
+        }
         viewModelScope.launch { repo.presenceUnrecorded.collect { p -> state.update { it.copy(presenceUnrecorded = p) } } }
         viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(timeScale = t) } } }
     }
@@ -166,13 +175,6 @@ class OwnerCheckViewModel @Inject constructor(
             OwnerCheckUiState(mode = it.mode, view = it.view, presenceUnrecorded = it.presenceUnrecorded, timeScale = it.timeScale)
         }
     }
-
-    override fun appLeft() {
-        repo.setForeground(false)
-        state.update { if (it.pinKept) it.copy(pin = "", password = "", pinKept = false, unlockedOpen = false) else it }
-    }
-
-    override fun appEntered() = repo.setForeground(true)
 
     override fun acknowledgePresence() = state.update { if (it.passedUnrecorded) it.copy(passed = true) else it }
 

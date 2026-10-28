@@ -135,13 +135,14 @@ class UnlockCheckInTest {
         vm.checkIn("40281795", "nope")
         advanceUntilIdle()
         val held = heldScreen()
-        held.appLeft()
+        vault.setForeground(false) // the process went to the background
+        advanceUntilIdle()
         val s = held.uiState.value
         assertFalse(s.pinKept)
         assertEquals("", s.pin)
         held.setPassword("pw")
         assertFalse(held.uiState.value.submitAllowed) // the PIN again
-        held.appEntered()
+        vault.setForeground(true)
     }
 
     /** ON_STOP while the unlock and its check run: no PIN is kept, and the spent try shows as the ordinary failure. */
@@ -150,13 +151,13 @@ class UnlockCheckInTest {
         val vm = dueUnlock()
         vault.checkResults.add(OwnerCheckOutcome.BadPassword(7))
         vm.checkIn("40281795", "nope")
-        vm.appLeft()
+        vault.setForeground(false)
         advanceUntilIdle()
         val s = heldScreen().uiState.value
         assertFalse(s.pinKept)
         assertEquals(OwnerCheckMessage.BadPassword(7), s.message)
         assertNull(s.unlockedWrong)
-        vm.appEntered()
+        vault.setForeground(true)
     }
 
     /** The tenth failure locks the vault: no retry, the lock flag is set without the `vault.locking` notice. */
@@ -167,7 +168,14 @@ class UnlockCheckInTest {
         vm.checkIn("40281795", "nope")
         advanceUntilIdle()
         assertTrue(vm.uiState.value.lockedByOwnerCheck)
-        assertFalse(heldScreen().uiState.value.pinKept)
+        val held = heldScreen()
+        advanceUntilIdle()
+        // The held screen shows the lock text and offers no check.
+        assertFalse(held.uiState.value.pinKept)
+        assertTrue(held.uiState.value.locked)
+        held.setPin("975310")
+        held.setPassword("pw")
+        assertFalse(held.uiState.value.submitAllowed)
     }
 
     /** A refused update with a check that failed on the password still keeps the PIN for the held screen. */

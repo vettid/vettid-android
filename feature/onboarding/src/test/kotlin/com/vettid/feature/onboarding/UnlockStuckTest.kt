@@ -29,9 +29,9 @@ class UnlockStuckTest {
 
     private val asked = mutableListOf<String>()
 
-    /** Records which action the screen asked for (not the foreground callbacks). */
+    /** Records which action the screen asked for. */
     private val actions = Proxy.newProxyInstance(UnlockActions::class.java.classLoader, arrayOf(UnlockActions::class.java)) { _, m, _ ->
-        if (m.name != "appEntered" && m.name != "appLeft") asked += m.name
+        asked += m.name
         null
     } as UnlockActions
 

@@ -130,6 +130,7 @@ class OwnerCheckManager(
 
     /** Events the manager follows: `vault.held`, `sync.event{owner_check}`, `vault.locking` (the notices come from [onFeed]). */
     fun onEvent(m: VaultMessage) {
+        if (m.type == "vault.locking") unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
         when (m.type) {
             "vault.held" -> onHeld(m)
             "sync.event" -> when (VaultJson.str(m.body, "kind")) {
@@ -206,6 +207,7 @@ class OwnerCheckManager(
      * kept in memory for it ([takeUnlockPin]), and not at all if the app is not in front.
      */
     suspend fun afterUnlock(pin: String, password: String) {
+        unlockPin = null
         locked.value = false
         endIdleLocked()
         val v = try {
@@ -217,22 +219,22 @@ class OwnerCheckManager(
         val r = check(pin, password, null)
         unlockOutcome.value = r
         val retry = (r is OwnerCheckOutcome.BadPassword && (r.checksLeft ?: 0) > 0) || r is OwnerCheckOutcome.Backoff
-        unlockPin = pin.takeIf { retry && foreground }
+        unlockPin = pin.takeIf { retry && foregroundFlow.value }
     }
 
     /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */
     @Volatile
     private var unlockPin: String? = null
 
-    @Volatile
-    private var foreground = true
-
     override fun takeUnlockPin(): String? = unlockPin.also { unlockPin = null }
 
     override fun setForeground(inFront: Boolean) {
-        foreground = inFront
+        foregroundFlow.value = inFront
         if (!inFront) unlockPin = null
     }
+
+    private val foregroundFlow = MutableStateFlow(true)
+    override val inFront: StateFlow<Boolean> = foregroundFlow.asStateFlow()
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") Right after an unlock that cancelled a recovery: the owner check at once,
@@ -285,6 +287,7 @@ class OwnerCheckManager(
     }
 
     override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
+        unlockPin = null
         val until = holdOff?.until?.let { clampHoldOff(it) }
         val outcome = try {
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
@@ -371,6 +374,7 @@ class OwnerCheckManager(
         ?: view.value?.idleLockAt?.takeIf { !lockedHere && !now.isBefore(it) }?.let { IdleLocked(idleAfterKnown) }
 
     override fun onLockedHere() {
+        unlockPin = null
         lockedHere = true
         view.value?.let { set(it) }
     }
@@ -471,6 +475,7 @@ class OwnerCheckManager(
 
     /** Forgets everything (a wipe, a deleted vault). */
     fun clear() {
+        unlockPin = null
         view.value = null
         locked.value = false
         unlockOutcome.value = null

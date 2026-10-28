@@ -203,6 +203,9 @@ interface OwnerCheckRepository {
     /** (ANDROID-PLAN 0.1.93) The app is in front or not; the PIN kept for the retry is forgotten when it is not. */
     fun setForeground(inFront: Boolean) {}
 
+    /** Whether the app is in front (the process, not a screen: in-app navigation and rotation do not change it). */
+    val inFront: StateFlow<Boolean> get() = ALWAYS_IN_FRONT
+
     /** Unread `owner_check.*` feed items. */
     val notices: StateFlow<List<OwnerCheckNotice>>
 
@@ -243,6 +246,7 @@ interface OwnerCheckRepository {
 }
 
 private val NOT_SET: StateFlow<Boolean> = kotlinx.coroutines.flow.MutableStateFlow(false)
+private val ALWAYS_IN_FRONT: StateFlow<Boolean> = kotlinx.coroutines.flow.MutableStateFlow(true)
 private val NO_IDLE_LOCK: StateFlow<IdleLocked?> = kotlinx.coroutines.flow.MutableStateFlow(null)
 private val NO_IDLE_SETTING: StateFlow<IdleLockSetting?> = kotlinx.coroutines.flow.MutableStateFlow(null)
 

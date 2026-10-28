@@ -32,8 +32,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckState
@@ -69,9 +67,6 @@ fun OwnerCheckRoute(
     viewModel: OwnerCheckViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(mode) { viewModel.start(mode) }
-    // ANDROID-PLAN 0.1.93: the PIN kept for the password-only retry is forgotten when the app leaves the foreground.
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.appEntered() }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.appLeft() }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(state.passed) {
         if (state.passed) {
@@ -136,7 +131,16 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
             // (ANDROID-PLAN 0.1.93) After an unlock whose check failed: directly under the counts, the approved lines.
-            state.unlockedWrong?.let {
+            // The tenth failure locked the vault: the existing lock text, no retry.
+            if (state.locked) {
+                NoticeCard(
+                    NoticeKind.URGENT,
+                    stringResource(R.string.unlock_owner_check_locked_title),
+                    stringResource(R.string.unlock_owner_check_locked_body),
+                    modifier = Modifier.testTag("owner_check_locked"),
+                )
+            }
+            state.unlockedWrong?.takeIf { !state.locked }?.let {
                 Text(
                     pluralStringResource(R.plurals.unlock_check_password_wrong, it, it),
                     style = MaterialTheme.typography.bodyMedium,
@@ -172,7 +176,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 is OwnerCheckMessage.BadPin -> m.checksLeft
                 is OwnerCheckMessage.BadPassword -> m.checksLeft
                 else -> v?.takeIf { it.failures > 0 }?.checksLeft
-            }.takeIf { state.unlockedWrong == null }
+            }.takeIf { state.unlockedWrong == null && !state.locked }
             if (!state.pinKept) SecretField(
                 value = state.pin,
                 onValueChange = actions::setPin,

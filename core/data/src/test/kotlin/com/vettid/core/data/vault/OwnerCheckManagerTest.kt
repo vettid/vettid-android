@@ -343,6 +343,31 @@ class OwnerCheckManagerTest {
         assertNull(m.takeUnlockPin())
     }
 
+    /** The kept PIN does not outlive a lock of any reason, a wipe, another unlock or a check. */
+    @Test
+    fun theKeptPinEndsWithALockAWipeOrAnotherCheck() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
+        val m = manager(ops)
+        ops.checkError = "bad_password"
+        m.afterUnlock("975310", "nope")
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "nope")
+        m.onLockedHere()
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "nope")
+        m.clear()
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "nope")
+        m.check("975310", "pw")
+        assertNull(m.takeUnlockPin())
+        // The process in the background: not kept, and the front is told.
+        m.setForeground(false)
+        assertEquals(false, m.inFront.value)
+        m.afterUnlock("975310", "nope")
+        assertNull(m.takeUnlockPin())
+    }
+
     /** The tenth failed check locks the vault without waiting for `vault.locking` (ANDROID-PLAN 0.1.93). */
     @Test
     fun theTenthFailureMarksTheLockWithoutTheNotice() = runTest {

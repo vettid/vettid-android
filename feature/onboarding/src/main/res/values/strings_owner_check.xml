@@ -60,7 +60,7 @@
         <item quantity="one">Your vault is unlocked, but the credential password was wrong, so your daily check didn\'t pass. %1$d try left before your vault locks again.</item>
         <item quantity="other">Your vault is unlocked, but the credential password was wrong, so your daily check didn\'t pass. %1$d tries left before your vault locks again.</item>
     </plurals>
-    <!-- A backoff used no try: the vault is open and the check waits (text not yet approved; the countdown is ownercheck_backoff_wait). -->
+    <!-- A backoff used no try: the vault is open and the check waits (text approved by the owner 2026-10-28; the countdown is ownercheck_backoff_wait). -->
     <string name="unlock_check_open_waiting">Your vault is unlocked. Enter your credential password to check in.</string>
     <string name="unlock_password_label">Credential password</string>
     <string name="unlock_owner_check_locked_title">Locked after ten wrong checks</string>

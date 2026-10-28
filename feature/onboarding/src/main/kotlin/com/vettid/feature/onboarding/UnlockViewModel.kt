@@ -238,12 +238,6 @@ interface UnlockActions {
     /** The credential password, asked for with the PIN when the owner check is due (§3.6.5). */
     fun setPassword(v: String)
     fun submit()
-
-    /** (ANDROID-PLAN 0.1.93) The app left the foreground: the PIN kept for a password-only retry is forgotten. */
-    fun appLeft() = Unit
-
-    /** (ANDROID-PLAN 0.1.93) The app is in front again. */
-    fun appEntered() = Unit
     fun cancelRecoveryAndUnlock()
 
     /** Shows or hides the recovery and transfer help under the `signer_refused` notice. */
@@ -297,7 +291,7 @@ interface UnlockActions {
 class UnlockViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val account: AccountRepository,
-    private val ownerCheck: OwnerCheckRepository,
+    ownerCheck: OwnerCheckRepository,
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), UnlockActions {
     private val state = MutableStateFlow(
@@ -378,10 +372,6 @@ class UnlockViewModel @Inject constructor(
     override fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), message = null) }
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
-
-    override fun appLeft() = ownerCheck.setForeground(false)
-
-    override fun appEntered() = ownerCheck.setForeground(true)
 
     override fun submit() = if (state.value.returnAsked) wayBack() else attempt(cancelRecovery = false)
 

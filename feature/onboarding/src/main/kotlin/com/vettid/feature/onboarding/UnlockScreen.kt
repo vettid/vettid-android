@@ -36,8 +36,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.vault.MoveUnconfirmed
@@ -91,9 +89,6 @@ fun UnlockContent(
     val contactSupport = onContactSupport ?: { SupportMail.open(context) }
     val p = state.preflight
     val blocked = state.preflightError == FailureKind.RELEASE_ENDED || p?.rollback == true || state.stateRollback
-    // ANDROID-PLAN 0.1.93: the PIN kept for the held screen's password-only retry is never kept while the app is not in front.
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { actions.appEntered() }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { actions.appLeft() }
     FormScaffold(
         title = stringResource(R.string.unlock_title),
         body = state.email?.let { stringResource(R.string.unlock_body_account, it) } ?: stringResource(R.string.unlock_body),

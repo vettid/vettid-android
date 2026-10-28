@@ -37,6 +37,9 @@ class VettIdApplication : DistributionApplication() {
     lateinit var account: AccountRepository
 
     @Inject
+    lateinit var ownerCheck: com.vettid.core.data.vault.OwnerCheckRepository
+
+    @Inject
     lateinit var screenshots: ScreenshotAllowance
 
     @Inject
@@ -105,7 +108,7 @@ class VettIdApplication : DistributionApplication() {
         }
         // "Allow screenshots" ends when the vault is no longer open (A6 audit S1).
         scope.launch { account.phase.collect { if (it != AppPhase.Unlocked) screenshots.vaultClosed() } }
-        registerActivityLifecycleCallbacks(Foreground { onForeground() })
+        registerActivityLifecycleCallbacks(Foreground({ onForeground() }, ownerCheck::setForeground))
         // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
         releaseNotifier.start()
         // The notification modes (ANDROID-PLAN 0.1.23 D7): the channels, feed items as notifications, and the
@@ -143,17 +146,30 @@ class VettIdApplication : DistributionApplication() {
     }
 
     /** Calls [onForeground] when the first activity starts after none was started. */
-    private class Foreground(private val onForeground: () -> Unit) : ActivityLifecycleCallbacks {
+    private class Foreground(
+        private val onForeground: () -> Unit,
+        /** The process is in front or not, as ProcessLifecycleOwner says it: 700 ms after the last stop, so rotation is no exit. */
+        private val inFront: (Boolean) -> Unit,
+    ) : ActivityLifecycleCallbacks {
         private var started = 0
+        private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        private val leave = Runnable { if (started == 0) inFront(false) }
 
         override fun onActivityStarted(activity: Activity) {
             com.vettid.app.notify.AppForeground.visible = true
+            handler.removeCallbacks(leave)
+            inFront(true)
             if (started++ == 0) onForeground()
         }
 
         override fun onActivityStopped(activity: Activity) {
             if (started > 0) started--
             com.vettid.app.notify.AppForeground.visible = started > 0
+            if (started == 0) handler.postDelayed(leave, BACKGROUND_DELAY_MS)
+        }
+
+        private companion object {
+            const val BACKGROUND_DELAY_MS = 700L
         }
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
