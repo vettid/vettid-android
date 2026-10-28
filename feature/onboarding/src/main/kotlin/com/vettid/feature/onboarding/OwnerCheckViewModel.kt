@@ -228,8 +228,7 @@ class OwnerCheckViewModel @Inject constructor(
         unrecorded: Boolean,
         sameFront: Boolean,
     ): OwnerCheckUiState {
-        val retry = r is OwnerCheckOutcome.BadPassword || r is OwnerCheckOutcome.Backoff || r is OwnerCheckOutcome.Failed
-        val keep = pinKept && retry && sameFront
+        val keep = pinKept && sameFront && keepsPin(r)
         val left = (r as? OwnerCheckOutcome.BadPassword)?.checksLeft?.takeIf { keep && it > 0 }
         return copy(
             busy = false, pin = if (keep) pin else "", password = "", passed = passed && !unrecorded, passedUnrecorded = unrecorded,
@@ -237,6 +236,18 @@ class OwnerCheckViewModel @Inject constructor(
             message = if (left != null) null else messageOf(r),
             pinKept = keep, unlockedWrong = left, unlockedOpen = keep && r is OwnerCheckOutcome.Backoff,
         )
+    }
+
+    /**
+     * Whether the kept PIN may serve another password-only try after [r]. No tries left: the tenth failure locks the vault, and
+     * its `vault.locking` may come late or not at all, so the PIN goes now. A failure keeps it only when sending again can help
+     * (the vault or the way to it did not answer).
+     */
+    private fun keepsPin(r: OwnerCheckOutcome): Boolean = when (r) {
+        is OwnerCheckOutcome.BadPassword -> (r.checksLeft ?: 0) > 0
+        is OwnerCheckOutcome.Backoff -> true
+        is OwnerCheckOutcome.Failed -> r.kind in TRANSIENT
+        OwnerCheckOutcome.Passed, is OwnerCheckOutcome.BadPin -> false
     }
 
     override fun lockVault() {
@@ -273,5 +284,11 @@ class OwnerCheckViewModel @Inject constructor(
 
     private companion object {
         const val TICK_MS = 1000L
+
+        /** Failures after which the same check may be sent again with the kept PIN; any other drops it (fail secure). */
+        val TRANSIENT = setOf(
+            FailureKind.NETWORK, FailureKind.NO_RESPONSE, FailureKind.RATE_LIMITED, FailureKind.VAULT_UNAVAILABLE,
+            FailureKind.SERVICE_PAUSED,
+        )
     }
 }

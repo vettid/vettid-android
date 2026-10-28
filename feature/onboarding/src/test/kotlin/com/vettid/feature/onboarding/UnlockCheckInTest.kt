@@ -1,6 +1,7 @@
 package com.vettid.feature.onboarding
 
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckOutcome
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
@@ -262,5 +263,54 @@ class UnlockCheckInTest {
         assertFalse(s.pinKept)
         assertEquals("", s.pin)
         assertEquals(OwnerCheckMessage.BadPassword(8), s.message)
+    }
+
+    /** The held screen's retry answered with no tries left drops the kept PIN at once, without waiting for `vault.locking`. */
+    @Test
+    fun aRetryWithNoTriesLeftDropsTheKeptPinAtOnce() = retryDropsThePin(OwnerCheckOutcome.BadPassword(0))
+
+    /** The same with no count from the vault: no tries are assumed left. */
+    @Test
+    fun aRetryWithAnUnknownCountDropsTheKeptPin() = retryDropsThePin(OwnerCheckOutcome.BadPassword(null))
+
+    /** A failure that sending again cannot fix (here the vault refused the session) drops the kept PIN. */
+    @Test
+    fun aRetryRefusedDropsTheKeptPin() = retryDropsThePin(OwnerCheckOutcome.Failed(FailureKind.UNAUTHORIZED, "unauthorized"))
+
+    /** A failure on the way to the vault keeps the PIN, so the password-only retry can be sent again. */
+    @Test
+    fun aRetryWithNoAnswerKeepsThePin() = runTest {
+        val held = heldAfterWrongPassword()
+        vault.checkResults.add(OwnerCheckOutcome.Failed(FailureKind.NO_RESPONSE, null))
+        held.setPassword("again")
+        held.submit()
+        advanceUntilIdle()
+        val s = held.uiState.value
+        assertTrue(s.pinKept)
+        assertEquals("40281795", s.pin)
+        assertEquals("", s.password)
+    }
+
+    private suspend fun TestScope.heldAfterWrongPassword(): OwnerCheckViewModel {
+        val vm = dueUnlock()
+        vault.checkResults.add(OwnerCheckOutcome.BadPassword(1))
+        vm.checkIn("40281795", "nope")
+        advanceUntilIdle()
+        return heldScreen().also { assertTrue(it.uiState.value.pinKept) }
+    }
+
+    private fun retryDropsThePin(answer: OwnerCheckOutcome) = runTest {
+        val held = heldAfterWrongPassword()
+        vault.checkResults.add(answer)
+        held.setPassword("still no")
+        held.submit()
+        advanceUntilIdle()
+        val s = held.uiState.value
+        assertFalse(s.pinKept)
+        assertEquals("", s.pin)
+        assertEquals("", s.password)
+        assertFalse(vault.lockedByOwnerCheck.value)
+        held.setPassword("pw")
+        assertFalse(held.uiState.value.submitAllowed) // the PIN must be typed again
     }
 }
