@@ -201,11 +201,11 @@ class OwnerCheckManager(
 
     /**
      * The unlock of a vault that may be past its deadline (§3.6.5): reads `vault.status` and, if the vault is
-     * held or due, sends the check with the same entries; the answer waits in [unlockCheckOutcome]. Returns whether the
-     * app may open: not after a wrong password or a backoff (ANDROID-PLAN 0.1.93), which the unlock screen shows itself,
-     * with the vault open and the password asked for again ([VaultManager.checkHeldUnlock]).
+     * held or due, sends the check with the same entries; the answer waits in [unlockCheckOutcome]. After a wrong password
+     * or a backoff the held screen shows it and asks for the password only (ANDROID-PLAN 0.1.93): the accepted [pin] is
+     * kept in memory for it ([takeUnlockPin]), and not at all if the app is not in front.
      */
-    suspend fun afterUnlock(pin: String, password: String): Boolean {
+    suspend fun afterUnlock(pin: String, password: String) {
         locked.value = false
         endIdleLocked()
         val v = try {
@@ -213,15 +213,26 @@ class OwnerCheckManager(
         } catch (_: VaultFailure) {
             null
         }
-        if (v == null || !v.gated(now())) return true
+        if (v == null || !v.gated(now())) return
         val r = check(pin, password, null)
         unlockOutcome.value = r
-        return !holdsOpen(r)
+        val retry = (r is OwnerCheckOutcome.BadPassword && (r.checksLeft ?: 0) > 0) || r is OwnerCheckOutcome.Backoff
+        unlockPin = pin.takeIf { retry && foreground }
     }
 
-    /** Whether the open waits for another try: a wrong password with the tries left known (a try used), or a backoff. */
-    private fun holdsOpen(r: OwnerCheckOutcome) =
-        (r is OwnerCheckOutcome.BadPassword && r.checksLeft != null) || r is OwnerCheckOutcome.Backoff
+    /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */
+    @Volatile
+    private var unlockPin: String? = null
+
+    @Volatile
+    private var foreground = true
+
+    override fun takeUnlockPin(): String? = unlockPin.also { unlockPin = null }
+
+    override fun setForeground(inFront: Boolean) {
+        foreground = inFront
+        if (!inFront) unlockPin = null
+    }
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") Right after an unlock that cancelled a recovery: the owner check at once,

@@ -312,24 +312,35 @@ class OwnerCheckManagerTest {
         assertEquals(1, ops.checks.size)
     }
 
-    /** (ANDROID-PLAN 0.1.93) The app opens after a pass or when nothing is due; not after a wrong password or a backoff. */
+    /** (ANDROID-PLAN 0.1.93) A wrong password or a backoff after the unlock keeps the PIN for the held screen, once. */
     @Test
-    fun theUnlockHoldsTheOpenOnAWrongPasswordOrABackoff() = runTest {
+    fun theUnlockKeepsThePinForAPasswordOnlyRetry() = runTest {
         val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
         val m = manager(ops)
         ops.checkError = "bad_password"
-        assertEquals(false, m.afterUnlock("975310", "nope"))
+        m.afterUnlock("975310", "nope")
         assertTrue(m.unlockCheckOutcome.value is OwnerCheckOutcome.BadPassword)
+        assertEquals("975310", m.takeUnlockPin())
+        assertNull(m.takeUnlockPin())
         ops.checkError = "backoff"
         ops.checkErrorBody = JsonObject(mapOf("retry_after" to JsonPrimitive(300)))
-        assertEquals(false, m.afterUnlock("975310", "pw"))
-        assertEquals(OwnerCheckOutcome.Backoff(300), m.unlockCheckOutcome.value)
+        m.afterUnlock("975310", "pw")
+        assertEquals("975310", m.takeUnlockPin())
+        // Not in front: never kept. A pass: nothing to keep.
+        m.afterUnlock("975310", "pw")
+        m.setForeground(false)
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "pw")
+        assertNull(m.takeUnlockPin())
+        m.setForeground(true)
         ops.checkError = null
         ops.checkErrorBody = null
-        assertEquals(true, m.afterUnlock("975310", "pw"))
-        // Nothing due: no check, and the app opens.
+        m.afterUnlock("975310", "pw")
+        assertNull(m.takeUnlockPin())
+        // Nothing due: no check, nothing kept.
         ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
-        assertEquals(true, m.afterUnlock("975310", "pw"))
+        m.afterUnlock("975310", "pw")
+        assertNull(m.takeUnlockPin())
     }
 
     /** The tenth failed check locks the vault without waiting for `vault.locking` (ANDROID-PLAN 0.1.93). */

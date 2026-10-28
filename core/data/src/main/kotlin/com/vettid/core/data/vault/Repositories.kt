@@ -396,17 +396,6 @@ interface VaultRepository {
     ): UnlockAttempt =
         unlock(pin, approve, cancelRecovery)
 
-    /**
-     * (ANDROID-PLAN 0.1.93) After [unlockWithCheck] returned [UnlockAttempt.Success] with a check that failed on the
-     * password or ran into a backoff ([OwnerCheckRepository.unlockCheckOutcome]), the vault is open but the app waits:
-     * sends the check again with [pin] and [password]; a pass opens the app. Null: nothing waits any more (a lock, a
-     * wipe, another unlock), and the unlock screen asks for both again.
-     */
-    suspend fun checkHeldUnlock(pin: String, password: String): OwnerCheckOutcome? = null
-
-    /** An open waits for [checkHeldUnlock]; false again when a lock, a wipe or another unlock ended the wait. */
-    val checkHeld: StateFlow<Boolean> get() = MutableStateFlow(false)
-
     suspend fun lock()
 
     suspend fun overview(): VaultOverview

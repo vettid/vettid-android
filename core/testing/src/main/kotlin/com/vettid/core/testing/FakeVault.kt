@@ -458,37 +458,26 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
             val o = checkResults.removeFirstOrNull() ?: passed()
             unlockCheckOutcome.value = o
             lockIfTenth(o)
-            // As VaultManager: a wrong password or a backoff leaves the vault open and the app closed, waiting for another try.
-            if ((o is OwnerCheckOutcome.BadPassword && o.checksLeft != null) || o is OwnerCheckOutcome.Backoff) {
-                phase.value = AppPhase.Locked
-                checkHeld.value = true
-            }
+            val retry = (o is OwnerCheckOutcome.BadPassword && (o.checksLeft ?: 0) > 0) || o is OwnerCheckOutcome.Backoff
+            unlockPin = pin.takeIf { retry && foreground }
         }
         return r
     }
 
+    private var unlockPin: String? = null
+    private var foreground = true
+
     /** As the manager: the tenth failed check locks the vault, whether or not `vault.locking` has arrived. */
     private fun lockIfTenth(o: OwnerCheckOutcome) {
         val left = (o as? OwnerCheckOutcome.BadPassword)?.checksLeft ?: (o as? OwnerCheckOutcome.BadPin)?.checksLeft
-        if (left == 0) {
-            lockedByOwnerCheck.value = true
-        }
+        if (left == 0) lockedByOwnerCheck.value = true
     }
 
-    /** An unlock's check failed on the password (or backed off): [checkHeldUnlock] has something to retry. */
-    override val checkHeld = MutableStateFlow(false)
-    var lastHeldCheck: Pair<String, String>? = null
+    override fun takeUnlockPin(): String? = unlockPin.also { unlockPin = null }
 
-    override suspend fun checkHeldUnlock(pin: String, password: String): OwnerCheckOutcome? {
-        if (!checkHeld.value) return null
-        lastHeldCheck = pin to password
-        val o = checkResults.removeFirstOrNull() ?: passed()
-        lockIfTenth(o)
-        if (o == OwnerCheckOutcome.Passed) {
-            checkHeld.value = false
-            phase.value = AppPhase.Unlocked
-        }
-        return o
+    override fun setForeground(inFront: Boolean) {
+        foreground = inFront
+        if (!inFront) unlockPin = null
     }
 
     override val pendingDeletion = MutableStateFlow<DeletionView?>(null)

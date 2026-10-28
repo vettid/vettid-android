@@ -194,6 +194,15 @@ interface OwnerCheckRepository {
     /** The answer to the check sent right after an unlock past the deadline, for the check screen to show. */
     val unlockCheckOutcome: StateFlow<OwnerCheckOutcome?>
 
+    /**
+     * (ANDROID-PLAN 0.1.93) The PIN the unlock had accepted when its check failed on the password (or backed off), once: the
+     * held screen then asks for the password only. Null when the app was not in front meanwhile, or nothing is kept.
+     */
+    fun takeUnlockPin(): String? = null
+
+    /** (ANDROID-PLAN 0.1.93) The app is in front or not; the PIN kept for the retry is forgotten when it is not. */
+    fun setForeground(inFront: Boolean) {}
+
     /** Unread `owner_check.*` feed items. */
     val notices: StateFlow<List<OwnerCheckNotice>>
 
