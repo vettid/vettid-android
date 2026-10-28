@@ -7,6 +7,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.vault.MoveUnconfirmed
+import com.vettid.core.data.vault.OwnerCheckOutcome
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseNotes
@@ -39,6 +40,12 @@ sealed interface UnlockMessage {
      * after approving a transfer. "Contact VettID within a day of the failed move: it may be repairable."
      */
     data object MoveBackFailed : UnlockMessage
+
+    /**
+     * (ANDROID-PLAN 0.1.93) The PIN unlocked the vault, but the daily check did not pass: the credential password was wrong.
+     * [checksLeft]: tries before the vault locks again (10 − `failures`), when known.
+     */
+    data class CheckPasswordWrong(val checksLeft: Int?) : UnlockMessage
 }
 
 /** Failures that say nothing about this phone's keys (the network, the service): never "the move back failed". */
@@ -139,6 +146,14 @@ data class UnlockUiState(
      */
     val checkDue: Boolean = false,
     val password: String = "",
+    /**
+     * (ANDROID-PLAN 0.1.93) The vault is open and the daily check did not pass on the password (or ran into a backoff): the
+     * PIN field is gone, the accepted PIN is kept in memory only while this screen is in front, and only the password is
+     * asked for, with "Check in".
+     */
+    val checkRetry: Boolean = false,
+    /** A running backoff of the check (no try used), counted down; "Check in" waits for it. */
+    val checkWaitSeconds: Long = 0,
     /** The vault locked after ten failed checks (§3.6.4). */
     val lockedByOwnerCheck: Boolean = false,
     /**
@@ -215,7 +230,11 @@ data class UnlockUiState(
         }
 
     /** Whether the unlock may be sent: a PIN, and with a check due, the password too. */
-    val submitAllowed: Boolean get() = pinAllowed && pin.length >= MIN_PIN_LENGTH && (!checkDue || password.isNotEmpty())
+    val submitAllowed: Boolean
+        get() = if (checkRetry) checkInAllowed else pinAllowed && pin.length >= MIN_PIN_LENGTH && (!checkDue || password.isNotEmpty())
+
+    /** "Check in" may be pressed: a password, and no backoff of the check running. */
+    val checkInAllowed: Boolean get() = checkRetry && !busy && checkWaitSeconds == 0L && password.isNotEmpty()
 
     override fun toString(): String =
         "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, serviceWait=$serviceWaitSeconds, " +
@@ -238,6 +257,9 @@ interface UnlockActions {
     /** The credential password, asked for with the PIN when the owner check is due (§3.6.5). */
     fun setPassword(v: String)
     fun submit()
+
+    /** (ANDROID-PLAN 0.1.93) The app left the foreground: the PIN kept for "Check in" is forgotten; both are asked again. */
+    fun appLeft() = Unit
     fun cancelRecoveryAndUnlock()
 
     /** Shows or hides the recovery and transfer help under the `signer_refused` notice. */
@@ -291,7 +313,7 @@ interface UnlockActions {
 class UnlockViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val account: AccountRepository,
-    ownerCheck: OwnerCheckRepository,
+    private val ownerCheck: OwnerCheckRepository,
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), UnlockActions {
     private val state = MutableStateFlow(
@@ -301,6 +323,10 @@ class UnlockViewModel @Inject constructor(
     private var ticker: Job? = null
     private var serviceTicker: Job? = null
     private var notesJob: Job? = null
+    private var checkTicker: Job? = null
+
+    /** (ANDROID-PLAN 0.1.93) The accepted PIN, kept only while [UnlockUiState.checkRetry] shows; never in the UI state. */
+    private var heldPin: String? = null
 
     init {
         retryPreflight()
@@ -333,10 +359,19 @@ class UnlockViewModel @Inject constructor(
             combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.idleLocked) { v, locked, _ ->
                 Triple(v?.gated(Instant.now()) == true, locked, ownerCheck.idleLockedNow(Instant.now()))
             }.collect { (due, locked, idle) ->
-                state.update { it.copy(checkDue = due || locked || idle != null, lockedByOwnerCheck = locked, idleLocked = idle) }
+                // A lock by failed checks ends the password-only retry: the locked texts show, both are asked after the unlock.
+                if (locked) forgetHeldPin()
+                state.update {
+                    it.copy(
+                        checkDue = due || locked || idle != null, lockedByOwnerCheck = locked, idleLocked = idle,
+                        checkRetry = it.checkRetry && !locked,
+                    )
+                }
             }
         }
     }
+
+    override fun onCleared() = forgetHeldPin()
 
     override fun retryPreflight() {
         if (state.value.serviceWaitSeconds > 0) return
@@ -373,7 +408,22 @@ class UnlockViewModel @Inject constructor(
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
 
-    override fun submit() = if (state.value.returnAsked) wayBack() else attempt(cancelRecovery = false)
+    override fun submit() = when {
+        state.value.checkRetry -> checkAgain()
+        state.value.returnAsked -> wayBack()
+        else -> attempt(cancelRecovery = false)
+    }
+
+    override fun appLeft() {
+        if (heldPin == null && !state.value.checkRetry) return
+        forgetHeldPin()
+        state.update { it.copy(checkRetry = false, checkWaitSeconds = 0, password = "", message = null) }
+    }
+
+    private fun forgetHeldPin() {
+        heldPin = null
+        checkTicker?.cancel()
+    }
 
     override fun askReturn() = state.update { if (it.returnOffered && !it.busy && !it.erasing) it.copy(returnConfirm = true) else it }
 
@@ -461,7 +511,10 @@ class UnlockViewModel @Inject constructor(
             when (r) {
                 // §11.7.1: not a PIN failure: no "wrong PIN" text, no count, no backoff. The notice says what to do.
                 UnlockAttempt.SignerRefused -> state.update { it.copy(busy = false, pin = "", message = null) }
-                UnlockAttempt.Success -> state.update { it.copy(busy = false, pin = "", recoveryPending = false) }
+                UnlockAttempt.Success -> {
+                    state.update { it.copy(busy = false, pin = "", recoveryPending = false) }
+                    if (s.checkDue && !(cancelRecovery && s.phoneSecret)) holdForCheck(s.pin)
+                }
                 // §11.14.9 step 5: decided before any PIN was tested; the PIN typed is not reused for the new record (the
                 // screen asks for the new PIN from [VaultRepository.newPinAsked]).
                 UnlockAttempt.NewPinNeeded -> state.update { it.copy(busy = false, pin = "", message = null) }
@@ -483,6 +536,77 @@ class UnlockViewModel @Inject constructor(
                     // A paused service (503, never proof of anything, never a wipe): wait as it asked, no automatic retry.
                     if (r.kind == FailureKind.SERVICE_PAUSED) startServiceWait(r.retryAfterSeconds)
                 }
+            }
+        }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.93) After an unlock with the check: when the check did not pass on the password, or backed off, the
+     * app did not open. Stays here with the vault open: [pin] is kept for the password-only retry, and the failure is
+     * said now, not on a check screen later. The tenth failure locks the vault: the locked texts show, no retry.
+     */
+    private fun holdForCheck(pin: String) {
+        val o = ownerCheck.unlockCheckOutcome.value
+        if (o !is OwnerCheckOutcome.BadPassword && o !is OwnerCheckOutcome.Backoff) return
+        ownerCheck.consumeUnlockCheckOutcome()
+        if (o is OwnerCheckOutcome.BadPassword && (o.checksLeft ?: 1) <= 0 || ownerCheck.lockedByOwnerCheck.value) return
+        heldPin = pin
+        val wrong = (o as? OwnerCheckOutcome.BadPassword)?.let { UnlockMessage.CheckPasswordWrong(it.checksLeft) }
+        state.update { it.copy(checkRetry = true, message = wrong) }
+        if (o is OwnerCheckOutcome.Backoff) startCheckWait(o.retryAfterSeconds)
+    }
+
+    /** "Check in": the check again with the kept PIN and the password; a pass opens the app. */
+    private fun checkAgain() {
+        val s = state.value
+        val pin = heldPin
+        if (!s.checkInAllowed || pin == null) return
+        state.update { it.copy(busy = true, message = null) }
+        viewModelScope.launch {
+            val r = try {
+                vault.checkHeldUnlock(pin, s.password)
+            } catch (e: VaultFailure) {
+                OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
+            }
+            // §3.6.5: the password is not kept beyond the answer.
+            state.update { it.copy(busy = false, password = "") }
+            when {
+                // Nothing waits any more (a lock, another unlock): both are asked again, as for any check.
+                r == null -> leaveRetry()
+                r == OwnerCheckOutcome.Passed -> {
+                    forgetHeldPin()
+                    state.update { it.copy(checkRetry = false) }
+                }
+                r is OwnerCheckOutcome.BadPassword ->
+                    if ((r.checksLeft ?: 1) <= 0) {
+                        leaveRetry()
+                    } else {
+                        state.update { it.copy(message = UnlockMessage.CheckPasswordWrong(r.checksLeft)) }
+                    }
+                r is OwnerCheckOutcome.Backoff -> startCheckWait(r.retryAfterSeconds)
+                r is OwnerCheckOutcome.BadPin -> {
+                    leaveRetry()
+                    state.update { it.copy(message = UnlockMessage.BadPin) }
+                }
+                r is OwnerCheckOutcome.Failed -> state.update { it.copy(message = UnlockMessage.Failed(r.kind, r.code)) }
+            }
+        }
+    }
+
+    /** Back to the ordinary unlock screen: the PIN and the password are asked for again. */
+    private fun leaveRetry() {
+        forgetHeldPin()
+        state.update { it.copy(checkRetry = false, checkWaitSeconds = 0) }
+    }
+
+    private fun startCheckWait(seconds: Long) {
+        if (seconds <= 0) return
+        checkTicker?.cancel()
+        state.update { it.copy(checkWaitSeconds = seconds) }
+        checkTicker = viewModelScope.launch {
+            while (state.value.checkWaitSeconds > 0) {
+                delay(TICK_MS)
+                state.update { it.copy(checkWaitSeconds = (it.checkWaitSeconds - 1).coerceAtLeast(0)) }
             }
         }
     }

@@ -312,6 +312,26 @@ class OwnerCheckManagerTest {
         assertEquals(1, ops.checks.size)
     }
 
+    /** (ANDROID-PLAN 0.1.93) The app opens after a pass or when nothing is due; not after a wrong password or a backoff. */
+    @Test
+    fun theUnlockHoldsTheOpenOnAWrongPasswordOrABackoff() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
+        val m = manager(ops)
+        ops.checkError = "bad_password"
+        assertEquals(false, m.afterUnlock("975310", "nope"))
+        assertTrue(m.unlockCheckOutcome.value is OwnerCheckOutcome.BadPassword)
+        ops.checkError = "backoff"
+        ops.checkErrorBody = JsonObject(mapOf("retry_after" to JsonPrimitive(300)))
+        assertEquals(false, m.afterUnlock("975310", "pw"))
+        assertEquals(OwnerCheckOutcome.Backoff(300), m.unlockCheckOutcome.value)
+        ops.checkError = null
+        ops.checkErrorBody = null
+        assertEquals(true, m.afterUnlock("975310", "pw"))
+        // Nothing due: no check, and the app opens.
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
+        assertEquals(true, m.afterUnlock("975310", "pw"))
+    }
+
     /** The notices are the feed's unread `owner_check.*` items (one source: the feed, ANDROID-PLAN 0.1.23, 6). */
     @Test
     fun noticesAreTheOwnerCheckFeedItems() = runTest {

@@ -454,8 +454,31 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastPassword = password
         val r = unlock(pin, approve, cancelRecovery)
         calls += "unlockWithCheck"
-        if (r == UnlockAttempt.Success) unlockCheckOutcome.value = checkResults.removeFirstOrNull() ?: passed()
+        if (r == UnlockAttempt.Success) {
+            val o = checkResults.removeFirstOrNull() ?: passed()
+            unlockCheckOutcome.value = o
+            // As VaultManager: a wrong password or a backoff leaves the vault open and the app closed, waiting for another try.
+            if (o is OwnerCheckOutcome.BadPassword || o is OwnerCheckOutcome.Backoff) {
+                phase.value = AppPhase.Locked
+                openHeld = true
+            }
+        }
         return r
+    }
+
+    /** An unlock's check failed on the password (or backed off): [checkHeldUnlock] has something to retry. */
+    var openHeld = false
+    var lastHeldCheck: Pair<String, String>? = null
+
+    override suspend fun checkHeldUnlock(pin: String, password: String): OwnerCheckOutcome? {
+        if (!openHeld) return null
+        lastHeldCheck = pin to password
+        val o = checkResults.removeFirstOrNull() ?: passed()
+        if (o == OwnerCheckOutcome.Passed) {
+            openHeld = false
+            phase.value = AppPhase.Unlocked
+        }
+        return o
     }
 
     override val pendingDeletion = MutableStateFlow<DeletionView?>(null)

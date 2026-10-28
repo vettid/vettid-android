@@ -36,6 +36,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.vault.MoveUnconfirmed
@@ -89,12 +91,15 @@ fun UnlockContent(
     val contactSupport = onContactSupport ?: { SupportMail.open(context) }
     val p = state.preflight
     val blocked = state.preflightError == FailureKind.RELEASE_ENDED || p?.rollback == true || state.stateRollback
+    // ANDROID-PLAN 0.1.93: the PIN kept for "Check in" is forgotten when the app leaves the foreground.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { actions.appLeft() }
     FormScaffold(
         title = stringResource(R.string.unlock_title),
         body = state.email?.let { stringResource(R.string.unlock_body_account, it) } ?: stringResource(R.string.unlock_body),
         primaryLabel = when {
             // ANDROID-PLAN 0.1.54: "Return" was confirmed without a PIN; the PIN typed now goes to the way back.
             state.returnAsked -> stringResource(R.string.release_update_return, state.move?.fromNumber?.toInt() ?: 0)
+            state.checkRetry -> stringResource(R.string.unlock_check_in)
             state.preflightError != null && !blocked -> stringResource(R.string.unlock_retry)
             blocked || state.recoveryPending -> null
             else -> stringResource(R.string.unlock_submit)
@@ -262,7 +267,7 @@ fun UnlockContent(
                     } + stagingNoteSuffix(),
                     modifier = Modifier.testTag("unlock_idle_locked"),
                 )
-            } else if (state.checkDue) {
+            } else if (state.checkDue && !state.checkRetry) {
                 NoticeCard(
                     NoticeKind.INFO,
                     stringResource(R.string.unlock_owner_check_title),
@@ -329,7 +334,23 @@ fun UnlockContent(
             // Never a PIN field while the last check of the vault's software failed (the way back asks for its own PIN).
             val verified = p != null && state.preflightError == null
             val unlockPin = !blocked && !state.recoveryPending && verified
-            if (unlockPin || state.returnAsked) {
+            if (state.checkRetry) {
+                CheckRetry(state)
+                (state.message as? UnlockMessage.Failed)?.let { m ->
+                    NoticeCard(
+                        NoticeKind.URGENT, stringResource(R.string.unlock_title), failureText(m.kind.messageRes()),
+                        modifier = Modifier.testTag("unlock_failed"),
+                    )
+                }
+                SecretField(
+                    value = state.password,
+                    onValueChange = actions::setPassword,
+                    label = stringResource(R.string.unlock_password_label),
+                    enabled = !state.busy,
+                    onImeAction = actions::submit,
+                    modifier = Modifier.testTag("unlock_password"),
+                )
+            } else if (unlockPin || state.returnAsked) {
                 // VAULT-MESSAGING 0.44.0 §11.14.9 step 5: an unresolved PIN change asks for the previous PIN first, and for
                 // the new one only after the vault showed that it holds the change.
                 if (state.newPinStep) {
@@ -443,6 +464,43 @@ fun UnlockContent(
             onDismiss = actions::dismissErase,
             modifier = Modifier.testTag("erase_confirm"),
             destructive = true,
+        )
+    }
+}
+
+/**
+ * (ANDROID-PLAN 0.1.93) The vault is open and the daily check did not pass: the wrong password with the tries left, or a
+ * backoff (no try used) with its countdown. Only the password is asked for again.
+ */
+@Composable
+private fun CheckRetry(state: UnlockUiState) {
+    val m = state.message
+    if (m is UnlockMessage.CheckPasswordWrong) {
+        NoticeCard(
+            NoticeKind.WARNING,
+            stringResource(R.string.unlock_owner_check_title),
+            if (m.checksLeft != null) {
+                pluralStringResource(R.plurals.unlock_check_password_wrong, m.checksLeft, m.checksLeft)
+            } else {
+                stringResource(R.string.unlock_check_password_wrong_unknown)
+            },
+            modifier = Modifier.testTag("unlock_check_wrong"),
+            announce = LiveRegionMode.Assertive,
+        )
+    } else if (m == null) {
+        NoticeCard(
+            NoticeKind.INFO,
+            stringResource(R.string.unlock_owner_check_title),
+            stringResource(R.string.unlock_check_open_waiting),
+            modifier = Modifier.testTag("unlock_check_open"),
+        )
+    }
+    if (state.checkWaitSeconds > 0) {
+        Text(
+            stringResource(R.string.ownercheck_backoff_wait, formatWait(state.checkWaitSeconds)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("unlock_check_wait"),
         )
     }
 }

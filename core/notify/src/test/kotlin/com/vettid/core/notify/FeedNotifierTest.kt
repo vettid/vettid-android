@@ -271,7 +271,7 @@ class FeedNotifierTest {
         assertEquals(Channels.SECURITY, n.channel)
         assertEquals("Your vault locked itself", n.title)
         assertEquals(
-            "You hadn’t checked in for 7 days, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.",
+            "You hadn’t checked in for 7 days, so your vault locked. Unlock it with your PIN and your credential password to carry on. New messages wait for up to 14 days.",
             n.text,
         )
         assertEquals("VettID needs your attention", n.publicTitle)

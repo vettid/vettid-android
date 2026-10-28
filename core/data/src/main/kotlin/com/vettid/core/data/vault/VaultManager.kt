@@ -2021,6 +2021,7 @@ class VaultManager(
     override suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView?): UnlockAttempt =
         unlockOnce(pin, approve, cancelRecovery = true, holderApp = true, twoStepScreen = true) {
             ownerCheck.afterCancelledRecovery(pin, password)
+            true
         }
 
     /**
@@ -2037,8 +2038,8 @@ class VaultManager(
         twoStepScreen: Boolean = false,
         /** A PIN typed on a flow's own screen ("Finish the move"), taken at this [pinGeneration] ([unlockStep]). */
         pinTaken: Int? = null,
-        /** Relay requests before the app opens (the owner check); run in the [opening] window. */
-        beforeOpen: (suspend () -> Unit)? = null,
+        /** Relay requests before the app opens (the owner check); run in the [opening] window. False: the app does not open yet. */
+        beforeOpen: (suspend () -> Boolean)? = null,
     ): UnlockAttempt = unlockStep(
         pin,
         UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, cancelRecovery = cancelRecovery),
@@ -2069,7 +2070,7 @@ class VaultManager(
         holderApp: Boolean = false,
         release: String? = null,
         onStarting: ((Long) -> Unit)? = null,
-        beforeOpen: (suspend () -> Unit)? = null,
+        beforeOpen: (suspend () -> Boolean)? = null,
         /** The unlock screen, which asks for the previous PIN and then the new one (§11.14.9 step 5). */
         twoStepScreen: Boolean = false,
         /**
@@ -2197,19 +2198,48 @@ class VaultManager(
      * [before]'s requests are answered while this phone is still locked ([OpeningWindow]): the collection runs, and what
      * else the vault sends is held back until the app opens.
      */
-    private suspend fun openAfterUnlock(s: Session, gen: Int, before: (suspend () -> Unit)?) {
-        val openApp: suspend () -> Unit = {
-            val p = afterUnlocked(s)
-            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
-            if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
-        }
+    private suspend fun openAfterUnlock(s: Session, gen: Int, before: (suspend () -> Boolean)?) {
+        heldOpen = null
         if (before == null) {
-            openApp()
+            openApp(s, gen)
         } else {
             opening.run {
-                before()
-                openApp()
+                // False: the check did not pass on the password; the vault is open, this phone waits for another try.
+                if (before()) openApp(s, gen) else heldOpen = HeldOpen(s, gen)
             }
+        }
+    }
+
+    private suspend fun openApp(s: Session, gen: Int) {
+        val p = afterUnlocked(s)
+        // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
+        if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
+    }
+
+    /** An unlock that opened the vault whose check did not pass on the password: the open waits for [checkHeldUnlock]. */
+    private class HeldOpen(val s: Session, val gen: Int)
+
+    @Volatile
+    private var heldOpen: HeldOpen? = null
+
+    /**
+     * (ANDROID-PLAN 0.1.93) Another try of the check after an unlock whose check failed on the password: the vault is
+     * already open, so only the check goes, with [pin] kept on the screen; passing it opens the app. Null: no open is
+     * waiting (a lock, a wipe or another unlock since), and the unlock screen asks for both again.
+     */
+    override suspend fun checkHeldUnlock(pin: String, password: String): OwnerCheckOutcome? {
+        val h = heldOpen ?: return null
+        if (h.gen != generation) {
+            heldOpen = null
+            return null
+        }
+        return opening.run {
+            val r = ownerCheck.check(pin, password, null)
+            if (r == OwnerCheckOutcome.Passed) {
+                heldOpen = null
+                openApp(h.s, h.gen)
+            }
+            r
         }
     }
 

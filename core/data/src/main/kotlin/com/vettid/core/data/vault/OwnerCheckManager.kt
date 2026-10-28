@@ -201,9 +201,11 @@ class OwnerCheckManager(
 
     /**
      * The unlock of a vault that may be past its deadline (§3.6.5): reads `vault.status` and, if the vault is
-     * held or due, sends the check with the same entries; the answer waits in [unlockCheckOutcome].
+     * held or due, sends the check with the same entries; the answer waits in [unlockCheckOutcome]. Returns whether the
+     * app may open: not after a wrong password or a backoff (ANDROID-PLAN 0.1.93), which the unlock screen shows itself,
+     * with the vault open and the password asked for again ([VaultManager.checkHeldUnlock]).
      */
-    suspend fun afterUnlock(pin: String, password: String) {
+    suspend fun afterUnlock(pin: String, password: String): Boolean {
         locked.value = false
         endIdleLocked()
         val v = try {
@@ -211,8 +213,14 @@ class OwnerCheckManager(
         } catch (_: VaultFailure) {
             null
         }
-        if (v != null && v.gated(now())) unlockOutcome.value = check(pin, password, null)
+        if (v == null || !v.gated(now())) return true
+        val r = check(pin, password, null)
+        unlockOutcome.value = r
+        return !holdsOpen(r)
     }
+
+    /** Whether the open waits for another try of the check: a wrong password (a try used) or a backoff (none used). */
+    private fun holdsOpen(r: OwnerCheckOutcome) = r is OwnerCheckOutcome.BadPassword || r is OwnerCheckOutcome.Backoff
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") Right after an unlock that cancelled a recovery: the owner check at once,
