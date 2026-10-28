@@ -131,6 +131,9 @@ class OwnerCheckViewModel @Inject constructor(
     val uiState: StateFlow<OwnerCheckUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
+    /** The mode [start] opened and [cancel] has not closed. */
+    private var startedMode: OwnerCheckMode? = null
+
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
         // ANDROID-PLAN 0.1.93: the PIN kept for the password-only retry is forgotten when the app leaves the foreground (the
@@ -151,6 +154,10 @@ class OwnerCheckViewModel @Inject constructor(
 
     /** Opens the screen for [mode], with nothing entered; a check sent right after an unlock says how it went. */
     fun start(mode: OwnerCheckMode) {
+        // A rotation recreates the screen, not this view model: the same mode already open keeps what it shows (the PIN kept in
+        // memory, the failure line with the tries left), which a second start would take from the repository a second time.
+        if (startedMode == mode) return
+        startedMode = mode
         ticker?.cancel()
         val after = repo.unlockCheckOutcome.value
         repo.consumeUnlockCheckOutcome()
@@ -170,6 +177,7 @@ class OwnerCheckViewModel @Inject constructor(
 
     /** Leaves the screen without a check (not while gated): forgets what was entered. */
     fun cancel() {
+        startedMode = null
         ticker?.cancel()
         state.update {
             OwnerCheckUiState(mode = it.mode, view = it.view, presenceUnrecorded = it.presenceUnrecorded, timeScale = it.timeScale)

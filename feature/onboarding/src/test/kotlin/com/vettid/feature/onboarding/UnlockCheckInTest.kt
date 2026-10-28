@@ -188,4 +188,24 @@ class UnlockCheckInTest {
         advanceUntilIdle()
         assertEquals(7, heldScreen().uiState.value.unlockedWrong)
     }
+
+    /** A rotation starts the screen again on the same view model: the kept PIN and the tries-left line stay. */
+    @Test
+    fun aRotationKeepsThePinAndTheFailureLine() = runTest {
+        val vm = dueUnlock()
+        vault.checkResults.add(OwnerCheckOutcome.BadPassword(9))
+        vm.checkIn("40281795", "nope")
+        advanceUntilIdle()
+        val held = heldScreen()
+        held.start(OwnerCheckMode.GATED) // the recreated screen's LaunchedEffect
+        val s = held.uiState.value
+        assertTrue(s.pinKept)
+        assertEquals("40281795", s.pin)
+        assertEquals(9, s.unlockedWrong)
+        // Leaving for good starts the next one afresh.
+        held.cancel()
+        held.start(OwnerCheckMode.GATED)
+        assertFalse(held.uiState.value.pinKept)
+        assertNull(held.uiState.value.unlockedWrong)
+    }
 }

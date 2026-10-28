@@ -1,5 +1,8 @@
 package com.vettid.feature.onboarding
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -25,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
@@ -67,6 +72,9 @@ fun OwnerCheckRoute(
     viewModel: OwnerCheckViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(mode) { viewModel.start(mode) }
+    // The screen leaving for good (not a rotation) forgets what it shows, so that the next one starts afresh.
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) viewModel.cancel() } }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(state.passed) {
         if (state.passed) {
@@ -226,6 +234,12 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 }
 
 private const val WARN_LEFT = 3
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 /**
  * The presence notice's body: in real time (production, and every vault at scale 1) the approved words ("three days");
