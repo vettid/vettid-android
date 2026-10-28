@@ -267,15 +267,77 @@ class UnlockCheckInTest {
 
     /** The held screen's retry answered with no tries left drops the kept PIN at once, without waiting for `vault.locking`. */
     @Test
-    fun aRetryWithNoTriesLeftDropsTheKeptPinAtOnce() = retryDropsThePin(OwnerCheckOutcome.BadPassword(0))
+    fun aRetryWithNoTriesLeftDropsTheKeptPinAtOnce() =
+        retryDropsThePin(OwnerCheckOutcome.BadPassword(0), OwnerCheckMessage.BadPassword(0))
 
     /** The same with no count from the vault: no tries are assumed left. */
     @Test
-    fun aRetryWithAnUnknownCountDropsTheKeptPin() = retryDropsThePin(OwnerCheckOutcome.BadPassword(null))
+    fun aRetryWithAnUnknownCountDropsTheKeptPin() =
+        retryDropsThePin(OwnerCheckOutcome.BadPassword(null), OwnerCheckMessage.BadPassword(null))
 
     /** A failure that sending again cannot fix (here the vault refused the session) drops the kept PIN. */
     @Test
-    fun aRetryRefusedDropsTheKeptPin() = retryDropsThePin(OwnerCheckOutcome.Failed(FailureKind.UNAUTHORIZED, "unauthorized"))
+    fun aRetryRefusedDropsTheKeptPin() = retryDropsThePin(
+        OwnerCheckOutcome.Failed(FailureKind.UNAUTHORIZED, "unauthorized"),
+        OwnerCheckMessage.Failed(FailureKind.UNAUTHORIZED, "unauthorized", null),
+    )
+
+    /** A lost vault session (no session, forgotten, not paired: [FailureKind.OTHER]) drops the kept PIN. */
+    @Test
+    fun aRetryWithTheSessionGoneDropsTheKeptPin() = retryDropsThePin(
+        OwnerCheckOutcome.Failed(FailureKind.OTHER, null),
+        OwnerCheckMessage.Failed(FailureKind.OTHER, null, null),
+    )
+
+    /** A backoff on the retry used no check: the PIN stays, with the vault-is-open line and the wait. */
+    @Test
+    fun aBackoffOnARetryKeepsThePin() = runTest {
+        val held = heldAfterWrongPassword()
+        vault.checkResults.add(OwnerCheckOutcome.Backoff(30))
+        held.setPassword("again")
+        held.submit()
+        advanceTimeBy(100)
+        val s = held.uiState.value
+        assertTrue(s.pinKept)
+        assertEquals("40281795", s.pin)
+        assertTrue(s.unlockedOpen)
+        assertEquals(30, s.waitSeconds)
+    }
+
+    /** After the PIN was dropped, the next check sends the PIN the member typed, not the one kept before. */
+    @Test
+    fun afterADropTheNextCheckSendsTheTypedPin() = runTest {
+        val held = heldAfterWrongPassword()
+        vault.checkResults.add(OwnerCheckOutcome.Failed(FailureKind.OTHER, null))
+        held.setPassword("again")
+        held.submit()
+        advanceUntilIdle()
+        vault.checkResults.add(OwnerCheckOutcome.Passed)
+        held.setPin("55512345")
+        held.setPassword("pw")
+        held.submit()
+        advanceUntilIdle()
+        assertEquals("55512345", vault.lastPin)
+        assertTrue(held.uiState.value.passed)
+    }
+
+    /** A lock that fails leaves the ordinary check: the kept PIN, its line and the hidden PIN field all go. */
+    @Test
+    fun aFailedLockLeavesTheOrdinaryCheck() = runTest {
+        val held = heldAfterWrongPassword()
+        vault.fail["lock"] = FakeVault.failure(FailureKind.NETWORK)
+        held.lockVault()
+        advanceUntilIdle()
+        val s = held.uiState.value
+        assertFalse(s.locking)
+        assertFalse(s.pinKept)
+        assertEquals("", s.pin)
+        assertNull(s.unlockedWrong)
+        assertFalse(s.unlockedOpen)
+        held.setPin("40281795")
+        held.setPassword("pw")
+        assertTrue(held.uiState.value.submitAllowed)
+    }
 
     /** A failure on the way to the vault keeps the PIN, so the password-only retry can be sent again. */
     @Test
@@ -299,7 +361,7 @@ class UnlockCheckInTest {
         return heldScreen().also { assertTrue(it.uiState.value.pinKept) }
     }
 
-    private fun retryDropsThePin(answer: OwnerCheckOutcome) = runTest {
+    private fun retryDropsThePin(answer: OwnerCheckOutcome, shown: OwnerCheckMessage) = runTest {
         val held = heldAfterWrongPassword()
         vault.checkResults.add(answer)
         held.setPassword("still no")
@@ -309,6 +371,8 @@ class UnlockCheckInTest {
         assertFalse(s.pinKept)
         assertEquals("", s.pin)
         assertEquals("", s.password)
+        assertEquals(shown, s.message)
+        assertNull(s.unlockedWrong)
         assertFalse(vault.lockedByOwnerCheck.value)
         held.setPassword("pw")
         assertFalse(held.uiState.value.submitAllowed) // the PIN must be typed again

@@ -252,7 +252,10 @@ class OwnerCheckViewModel @Inject constructor(
 
     override fun lockVault() {
         if (state.value.locking) return
-        state.update { it.copy(locking = true, pin = "", password = "") }
+        // The kept PIN goes with the fields: a lock that fails leaves the ordinary check (both fields), not a hidden PIN field.
+        state.update {
+            it.copy(locking = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false)
+        }
         viewModelScope.launch {
             try {
                 vault.lock()
