@@ -2,6 +2,7 @@ package com.vettid.core.data.vault
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import java.time.Duration
 import java.time.Instant
@@ -125,17 +126,55 @@ data class IdleLockSetting(val seconds: Long, val inForceSeconds: Long = seconds
 sealed interface OwnerCheckOutcome {
     data object Passed : OwnerCheckOutcome
 
-    /** The PIN was wrong ([checksLeft] before the vault locks, when the vault said). */
-    data class BadPin(val checksLeft: Int?) : OwnerCheckOutcome
+    /**
+     * The PIN was wrong ([checksLeft] before the vault locks, when the vault said). [estimated]: (ANDROID-PLAN 0.1.95) the
+     * count is the app's estimate, the `vault.status` read after the failure having not come, not a count the vault gave.
+     */
+    data class BadPin(val checksLeft: Int?, val estimated: Boolean = false) : OwnerCheckOutcome
 
-    /** The PIN was right and the password wrong. */
-    data class BadPassword(val checksLeft: Int?) : OwnerCheckOutcome
+    /** The PIN was right and the password wrong. [estimated] as in [BadPin]. */
+    data class BadPassword(val checksLeft: Int?, val estimated: Boolean = false) : OwnerCheckOutcome
 
     /** A PIN or password backoff runs; [retryAfterSeconds] 0 when the vault did not say how long. */
     data class Backoff(val retryAfterSeconds: Long) : OwnerCheckOutcome
 
     /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names ([VaultFailure.shownCode]), or null. */
-    data class Failed(val kind: FailureKind, val code: String?, val shownCode: String? = null) : OwnerCheckOutcome
+    data class Failed(
+        val kind: FailureKind,
+        val code: String?,
+        val shownCode: String? = null,
+        /**
+         * (ANDROID-PLAN 0.1.95, VAULT-MESSAGING 0.73.0) Set only when the check went unanswered ([unanswered]): the app's
+         * estimate of the tries left, which already counts this check (it may have counted at the vault).
+         */
+        val estimatedLeft: Int? = null,
+    ) : OwnerCheckOutcome {
+        /** The check may have reached the vault and counted, though no answer came: the same kinds that keep the PIN. */
+        val unanswered: Boolean get() = kind in UNANSWERED
+
+        companion object {
+            /** Failures after which the same check may be sent again with the kept PIN; any other drops it (fail secure). */
+            val UNANSWERED = setOf(
+                FailureKind.NETWORK, FailureKind.NO_RESPONSE, FailureKind.RATE_LIMITED, FailureKind.VAULT_UNAVAILABLE,
+                FailureKind.SERVICE_PAUSED,
+            )
+        }
+    }
+}
+
+/**
+ * (ANDROID-PLAN 0.1.95, VAULT-MESSAGING 0.73.0) What one read of the vault's state found, with no check sent (no try used):
+ * `vault.status` through the relay, then the member API's `GET /api/vault/status`.
+ */
+enum class VaultProbe {
+    /** `vault.status` answered: the vault is open, and [OwnerCheckRepository.ownerCheck] has the count from the answer. */
+    OPEN,
+
+    /** The relay sent `vault.locking`, or the member API said `state: locked`; [OwnerCheckRepository.lockedByOwnerCheck] is set. */
+    LOCKED,
+
+    /** Neither answered, or the API said `unlocked` (which is not an answer from the vault). */
+    NO_ANSWER,
 }
 
 /** An `owner_check.*` activity-feed item (§3.6.4, §3.6.7) the app shows once the vault is open. */
@@ -208,6 +247,21 @@ interface OwnerCheckRepository {
 
     /** Whether the app is in front (the process, not a screen: in-app navigation and rotation do not change it). */
     val inFront: StateFlow<Boolean> get() = ALWAYS_IN_FRONT
+
+    /**
+     * (ANDROID-PLAN 0.1.95) [lockedByOwnerCheck] was set by a read that found the vault locked without knowing why (a check
+     * with no answer while tries were estimated to be left): the locked screen, not the "ten wrong checks" text.
+     */
+    val lockCauseUnknown: StateFlow<Boolean> get() = NOT_SET
+
+    /** (ANDROID-PLAN 0.1.95) Emits each time the relay connection came back (a reconnect starts a read while "probably locked"). */
+    val relayReconnects: Flow<Unit> get() = emptyFlow()
+
+    /**
+     * (ANDROID-PLAN 0.1.95, VAULT-MESSAGING 0.73.0) Reads the vault's state without sending a check. [lockCauseKnown]: an
+     * estimate of 0 names the cause (ten wrong checks); otherwise a lock found is of unknown cause ([lockCauseUnknown]).
+     */
+    suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe = VaultProbe.NO_ANSWER
 
     /** Unread `owner_check.*` feed items. */
     val notices: StateFlow<List<OwnerCheckNotice>>

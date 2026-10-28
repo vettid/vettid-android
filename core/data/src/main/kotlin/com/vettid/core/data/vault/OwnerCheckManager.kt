@@ -11,8 +11,12 @@ import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -75,10 +79,16 @@ class OwnerCheckManager(
     private val onTimeScale: suspend (Long?, mark: Int) -> Unit = { _, _ -> },
     private val now: () -> Instant = Instant::now,
     private val mark: () -> Int = { 0 },
+    /** (ANDROID-PLAN 0.1.95) The member API's `GET /api/vault/status` `state` (`locked`, `unlocked`, ...); null: no answer. */
+    private val memberState: suspend () -> String? = { null },
+    /** (ANDROID-PLAN 0.1.95) A read found the vault locked: the app moves to its locked screen, as for a `vault.locking`. */
+    private val onFoundLocked: () -> Unit = {},
 ) : OwnerCheckRepository {
     private val saved = restore()
     private val view = MutableStateFlow(saved?.toView())
     private val locked = MutableStateFlow(false)
+    private val causeUnknown = MutableStateFlow(false)
+    private val reconnects = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val unlockOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
     private val noticeFlow = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
     private val presenceFlow = MutableStateFlow(saved?.presenceUnrecorded == true)
@@ -115,6 +125,8 @@ class OwnerCheckManager(
 
     override val ownerCheck: StateFlow<OwnerCheckView?> = view.asStateFlow()
     override val lockedByOwnerCheck: StateFlow<Boolean> = locked.asStateFlow()
+    override val lockCauseUnknown: StateFlow<Boolean> = causeUnknown.asStateFlow()
+    override val relayReconnects: Flow<Unit> = reconnects.asSharedFlow()
     override val unlockCheckOutcome: StateFlow<OwnerCheckOutcome?> = unlockOutcome.asStateFlow()
     override val notices: StateFlow<List<OwnerCheckNotice>> = noticeFlow.asStateFlow()
     override val presenceUnrecorded: StateFlow<Boolean> = presenceFlow.asStateFlow()
@@ -139,6 +151,7 @@ class OwnerCheckManager(
                     // A passed check: the idle lock's time moved with the deadline (the vault says it again), and a
                     // longer idle-lock value set before it is in force now (§3.6.8).
                     checkPassedForIdleLock()
+                    estimate = OwnerCheckView.MAX_FAILURES
                     update { v ->
                         val deadline = instant(VaultJson.str(m.body, "deadline")) ?: v.deadline
                         v.copy(state = OwnerCheckState.OK, deadline = deadline, failures = 0, waiting = null, idleLockAt = null)
@@ -147,7 +160,7 @@ class OwnerCheckManager(
                 "settings.changed" -> scope.launch { runCatching { refreshOwnerCheck() } }
             }
             "vault.locking" -> when (VaultJson.str(m.body, "reason")) {
-                REASON_OWNER_CHECK -> locked.value = true
+                REASON_OWNER_CHECK -> markLocked(causeKnown = true)
                 // (Release L, §3.6.8) It locked itself: said on the unlock screen and in the notification, with how
                 // long past the deadline that was, as the vault last said.
                 REASON_IDLE -> {
@@ -156,6 +169,83 @@ class OwnerCheckManager(
                 }
             }
         }
+    }
+
+    /** The vault is known locked; [causeKnown]: by ten wrong checks (`vault.locking{owner_check}`, or an estimate of 0). */
+    private fun markLocked(causeKnown: Boolean) {
+        // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
+        causeUnknown.value = !causeKnown && (!locked.value || causeUnknown.value)
+        locked.value = true
+    }
+
+    /** Nothing says the vault is locked (an unlock, a passed check, a forgotten state). */
+    private fun markOpen() {
+        locked.value = false
+        causeUnknown.value = false
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.95, VAULT-MESSAGING 0.73.0) The tries left as the app counts them: the count of the last
+     * `vault.status` read, less one for each failed check answered since and for each check sent since that got no answer. With
+     * no count read since the unlock or since the app started it is 0 (fail secure: it never assumes tries it did not read).
+     */
+    @Volatile
+    private var estimate = 0
+
+    /** Counts the lock, wipe and unlock events a read must not outlive: a result is dropped if it changed during the read. */
+    private val epoch = java.util.concurrent.atomic.AtomicInteger()
+
+    init {
+        // (ANDROID-PLAN 0.1.95) The other operations that count as failed checks (§3.6.4) spend the same estimate.
+        CheckSink.counter = object : CheckSink.Counter {
+            override fun answered() {
+                spendEstimate()
+            }
+
+            override fun unanswered() {
+                spendEstimate() // it may have counted; the owner check's own type is not in the list (see [failed])
+            }
+        }
+    }
+
+    /** One try less in the estimate (never below 0); the new estimate. */
+    private fun spendEstimate(): Int {
+        estimate = (estimate - 1).coerceAtLeast(0)
+        return estimate
+    }
+
+    /** The relay connection came back (called by the vault manager). */
+    fun onRelayReconnected() {
+        reconnects.tryEmit(Unit)
+    }
+
+    override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe {
+        val started = epoch.get()
+        // An answer to vault.status, whatever it says of the check, means the vault is open (the relay is the vault's own voice).
+        val answered = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { attempt { readStatus() }.isSuccess } == true
+        // The member API's `unlocked` is not an answer (the host saw a lease, not the enclave); only `locked` is taken.
+        val api = if (answered) null else attempt { memberState() }.getOrNull()
+        return when {
+            // The member locked the vault, or it was wiped or unlocked, during the read: the result is stale and dropped.
+            epoch.get() != started -> VaultProbe.NO_ANSWER
+            answered -> VaultProbe.OPEN
+            api != STATE_LOCKED -> VaultProbe.NO_ANSWER
+            else -> {
+                markLocked(lockCauseKnown)
+                onFoundLocked()
+                VaultProbe.LOCKED
+            }
+        }
+    }
+
+    /** [runCatching] that lets a cancellation through (a cancelled read ends, it is not an answer). */
+    @Suppress("TooGenericExceptionCaught") // a read that fails for any reason is simply no answer
+    private inline fun <T> attempt(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
     private fun onHeld(m: VaultMessage) {
@@ -187,7 +277,12 @@ class OwnerCheckManager(
     }
 
     /** The vault opened (an unlock, or the app started with it unlocked): re-read the check (the notices come with the feed). */
-    fun onOpened() {
+    fun onOpened(afterUnlock: Boolean = true) {
+        if (afterUnlock) {
+            // An unlock or a start: a count is read next; until then none is known. A return to the foreground keeps the estimate.
+            estimate = 0
+            epoch.incrementAndGet()
+        }
         endIdleLocked()
         scope.launch { runCatching { refreshOwnerCheck() } }
     }
@@ -209,7 +304,9 @@ class OwnerCheckManager(
      */
     suspend fun afterUnlock(pin: String, password: String, generation: Int) {
         unlockPin = null
-        locked.value = false
+        markOpen()
+        estimate = 0
+        epoch.incrementAndGet()
         endIdleLocked()
         val v = try {
             readStatus()
@@ -251,7 +348,7 @@ class OwnerCheckManager(
      * that does not pass waits in [unlockCheckOutcome], and [checkAfterCancel] asks for the check screen.
      */
     suspend fun afterCancelledRecovery(pin: String, password: String) {
-        locked.value = false
+        markOpen()
         val r = check(pin, password, null)
         if (r != OwnerCheckOutcome.Passed) {
             unlockOutcome.value = r
@@ -273,6 +370,7 @@ class OwnerCheckManager(
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
         val st = st0 ?: return view.value
+        estimate = (OwnerCheckView.MAX_FAILURES - st.failures).coerceAtLeast(0)
         val prev = view.value
         val state = when (st.state) {
             "held" -> OwnerCheckState.HELD
@@ -300,12 +398,13 @@ class OwnerCheckManager(
         val until = holdOff?.until?.let { clampHoldOff(it) }
         val outcome = try {
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
-            locked.value = false
+            markOpen()
             heldTs = null
             presenceFromCheck(r)
             idleFlow.value = null
             lockedHere = false
             checkPassedForIdleLock()
+            estimate = OwnerCheckView.MAX_FAILURES // a passed check ends the run of failures
             set(
                 OwnerCheckView(
                     state = OwnerCheckState.OK,
@@ -325,28 +424,30 @@ class OwnerCheckManager(
     }
 
     private suspend fun failed(e: VaultFailure): OwnerCheckOutcome = when (e.code) {
-        CODE_BAD_PIN -> OwnerCheckOutcome.BadPin(checksLeftAfterFailure())
-        CODE_BAD_PASSWORD -> OwnerCheckOutcome.BadPassword(checksLeftAfterFailure())
+        CODE_BAD_PIN -> checksLeftAfterFailure().let { (n, est) -> OwnerCheckOutcome.BadPin(n, est) }
+        CODE_BAD_PASSWORD -> checksLeftAfterFailure().let { (n, est) -> OwnerCheckOutcome.BadPassword(n, est) }
         CODE_BACKOFF -> OwnerCheckOutcome.Backoff(retryAfter(e))
-        else -> OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
+        else -> OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode).let { f ->
+            // (ANDROID-PLAN 0.1.95) A check sent that got no answer may have counted at the vault.
+            if (f.unanswered) f.copy(estimatedLeft = spendEstimate()) else f
+        }
     }
 
-    /** A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). */
-    private suspend fun checksLeftAfterFailure(): Int? {
+    /**
+     * A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). The count and
+     * whether it is only the app's estimate ([estimate], ANDROID-PLAN 0.1.95): the read after the failure did not come.
+     */
+    private suspend fun checksLeftAfterFailure(): Pair<Int?, Boolean> {
         val before = view.value
         val after = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { runCatching { readStatus() }.getOrNull() }
         val fresh = after != null && after !== before
         // The tenth failure locks the vault (§3.6.4), whether or not `vault.locking` has arrived yet (ANDROID-PLAN 0.1.93):
         // marked only from a fresh `vault.status`, never from the estimate below.
-        if (fresh && after != null && after.checksLeft <= 0) locked.value = true
-        return when {
-            fresh -> after?.checksLeft
-            before != null -> {
-                set(before.copy(failures = before.failures + 1))
-                view.value?.checksLeft
-            }
-            else -> null
-        }
+        if (fresh && after != null && after.checksLeft <= 0) markLocked(causeKnown = true)
+        if (fresh) return after?.checksLeft to false
+        // Only a count the vault gave is kept in the view and on disk; the estimate lives in [estimate] alone.
+        spendEstimate()
+        return estimate to true
     }
 
     /** A backoff's wait: the error body's `retry_after` (VAULT-MESSAGING 0.17.0 §3.6.1, §10.1); 0 from older vaults. */
@@ -383,6 +484,7 @@ class OwnerCheckManager(
 
     override fun onLockedHere() {
         unlockPin = null
+        epoch.incrementAndGet() // a read that finishes after the member's own lock does not mark it
         lockedHere = true
         view.value?.let { set(it) }
     }
@@ -484,8 +586,10 @@ class OwnerCheckManager(
     /** Forgets everything (a wipe, a deleted vault). */
     fun clear() {
         unlockPin = null
+        epoch.incrementAndGet()
+        estimate = 0
         view.value = null
-        locked.value = false
+        markOpen()
         unlockOutcome.value = null
         noticeFlow.value = emptyList()
         heldTs = null
@@ -591,6 +695,7 @@ class OwnerCheckManager(
         private const val CODE_BAD_PIN = "bad_pin"
         private const val CODE_BAD_PASSWORD = "bad_password"
         private const val CODE_BACKOFF = "backoff"
+        private const val STATE_LOCKED = "locked"
         private const val STATUS_ACTIVE = "active"
         private const val PRIORITY_URGENT = "urgent"
         private const val STATUS_AFTER_FAILURE_MS = 5_000L

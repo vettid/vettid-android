@@ -19,6 +19,7 @@ import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
+import com.vettid.core.data.vault.VaultProbe
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.DeletionView
@@ -470,7 +471,8 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     /** As the manager: the tenth failed check locks the vault, whether or not `vault.locking` has arrived. */
     private fun lockIfTenth(o: OwnerCheckOutcome) {
-        val left = (o as? OwnerCheckOutcome.BadPassword)?.checksLeft ?: (o as? OwnerCheckOutcome.BadPin)?.checksLeft
+        val left = (o as? OwnerCheckOutcome.BadPassword)?.takeIf { !it.estimated }?.checksLeft
+            ?: (o as? OwnerCheckOutcome.BadPin)?.takeIf { !it.estimated }?.checksLeft
         if (left == 0) lockedByOwnerCheck.value = true
     }
 
@@ -716,6 +718,42 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override val notices = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
     override val presenceUnrecorded = MutableStateFlow(false)
     override val checkAfterCancel = MutableStateFlow(false)
+    override val lockCauseUnknown = MutableStateFlow(false)
+
+    /** (ANDROID-PLAN 0.1.95) A relay reconnect: [relayReconnects] emits. */
+    private val reconnects = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    override val relayReconnects: kotlinx.coroutines.flow.Flow<Unit> = reconnects
+
+    fun reconnectRelay() {
+        reconnects.tryEmit(Unit)
+    }
+
+    /** Scripted answers to [probeVault] (default: no answer); a [VaultProbe.LOCKED] sets the lock flags as the manager does. */
+    val probeResults = ArrayDeque<VaultProbe>()
+
+    /** How long one [probeVault] takes (virtual time), the most that ran at once, and a hook run as each starts. */
+    var probeTakes: Long = 0
+    var maxConcurrentProbes = 0
+    var onProbe: () -> Unit = {}
+    private var probing = 0
+
+    override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe {
+        call("probeVault")
+        onProbe()
+        probing++
+        maxConcurrentProbes = maxOf(maxConcurrentProbes, probing)
+        try {
+            if (probeTakes > 0) kotlinx.coroutines.delay(probeTakes)
+        } finally {
+            probing--
+        }
+        val r = probeResults.removeFirstOrNull() ?: VaultProbe.NO_ANSWER
+        if (r == VaultProbe.LOCKED) {
+            lockCauseUnknown.value = !lockCauseKnown
+            lockedByOwnerCheck.value = true
+        }
+        return r
+    }
 
     override fun consumeCheckAfterCancel() {
         checkAfterCancel.value = false

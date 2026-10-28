@@ -954,6 +954,9 @@ class VaultManager(
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },
             onTimeScale = { t, since -> noteStatusTimeScale(t, since) },
+            // (ANDROID-PLAN 0.1.95) "Probably locked, checking": the member API's word on the vault, and the lock it finds.
+            memberState = { lockSession()?.let { runCatching { guard { vaultStatus(it) } }.getOrNull()?.state } },
+            onFoundLocked = { lockedByNotice() },
         )
     }
 
@@ -1423,6 +1426,7 @@ class VaultManager(
                 surviveEvent("mailbox restart", ::logSurvived, { isActive }) {
                     android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
                     s.device.start(scope)
+                    ownerCheck.onRelayReconnected()
                     // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
                     if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
                     // §11.14.9: and an unresolved change is checked again.
@@ -1575,7 +1579,7 @@ class VaultManager(
         if (lockGuard.admits()) scope.launch { runCatching { d.flushOutbox() } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
-        if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
+        if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
         if (phaseFlow.value is AppPhase.Unlocked) {
             scope.launch { releaseUpdate.refreshOffer() }
             feed.catchUp()
@@ -4338,6 +4342,7 @@ class VaultManager(
         if (relayPaused || phaseFlow.value != AppPhase.Unlocked) return
         d.stop()
         d.start(scope)
+        ownerCheck.onRelayReconnected()
         if (local.unresolvedChange != null) changes.kick()
     }
 

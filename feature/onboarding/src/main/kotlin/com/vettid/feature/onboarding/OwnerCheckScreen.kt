@@ -49,6 +49,7 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.StagingTimeNote
@@ -108,22 +109,34 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         PresenceAfterCheck(title, actions)
         return
     }
+    val lockOffered = lockOffered(state.mode, state.watch)
+    val cancelBesideLock = cancelBesideLock(state.mode, state.watch)
     FormScaffold(
         title = title,
         body = body,
         primaryLabel = stringResource(
             when {
+                state.watch == LockWatch.SILENT -> R.string.ownercheck_check_again
                 state.pinKept -> R.string.unlock_check_in
                 state.mode == OwnerCheckMode.HOLD_OFF -> R.string.ownercheck_submit_hold_off
                 else -> R.string.ownercheck_submit
             },
         ),
-        onPrimary = actions::submit,
-        primaryEnabled = state.submitAllowed,
+        onPrimary = if (state.watch == LockWatch.SILENT) actions::checkAgain else actions::submit,
+        primaryEnabled = state.submitAllowed || (state.watch == LockWatch.SILENT && !state.locking),
         busy = state.busy || state.locking,
-        secondaryLabel = stringResource(if (state.mode == OwnerCheckMode.GATED) R.string.ownercheck_lock else R.string.ownercheck_cancel),
-        onSecondary = if (state.mode == OwnerCheckMode.GATED) actions::lockVault else onCancel,
+        // While the vault is probably locked "Lock vault" stays offered in every mode (VAULT-MESSAGING 0.73.0); it takes the
+        // place of Cancel there, which comes back when the reads end.
+        secondaryLabel = stringResource(if (lockOffered) R.string.ownercheck_lock else R.string.ownercheck_cancel),
+        onSecondary = if (lockOffered) actions::lockVault else onCancel,
         modifier = Modifier.testTag("owner_check"),
+        // Cancel stays beside Lock vault while the vault is probably locked (a voluntary check or the hold-off can be left).
+        onBack = if (cancelBesideLock) onCancel else null,
+        topActions = {
+            if (cancelBesideLock) {
+                TopBarTextAction(stringResource(R.string.ownercheck_cancel), onCancel, Modifier.testTag("owner_check_cancel"))
+            }
+        },
         header = {
             Spacer(Modifier.height(Spacing.l))
             Icon(
@@ -140,12 +153,35 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
             // (ANDROID-PLAN 0.1.93) After an unlock whose check failed: directly under the counts, the approved lines.
             // The tenth failure locked the vault: the existing lock text, no retry.
-            if (state.locked) {
+            // (ANDROID-PLAN 0.1.95) A lock found without a known cause shows the locked screen, not this text.
+            if (state.locked && !state.lockCauseUnknown) {
                 NoticeCard(
                     NoticeKind.URGENT,
                     stringResource(R.string.unlock_owner_check_locked_title),
                     stringResource(R.string.unlock_owner_check_locked_body),
                     modifier = Modifier.testTag("owner_check_locked"),
+                )
+            }
+            // A lock found by a read, cause unknown: the existing "locked" line, not the ten-checks text.
+            if (state.locked && state.lockCauseUnknown) {
+                Text(
+                    stringResource(R.string.unlock_lock_confirmed),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("owner_check_locked_unknown"),
+                )
+            }
+            // (ANDROID-PLAN 0.1.95) Probably locked: the approved lines; the fields are not offered.
+            if (state.watch != LockWatch.NONE && !state.locked) {
+                Text(
+                    stringResource(
+                        if (state.watch == LockWatch.CHECKING) {
+                            R.string.ownercheck_probably_locked_checking
+                        } else {
+                            R.string.ownercheck_probably_locked_silent
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_probably_locked"),
                 )
             }
             state.unlockedWrong?.takeIf { !state.locked }?.let {
@@ -184,9 +220,10 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 is OwnerCheckMessage.BadPin -> m.checksLeft
                 is OwnerCheckMessage.BadPassword -> m.checksLeft
                 else -> v?.takeIf { it.failures > 0 }?.checksLeft
-            }.takeIf { state.unlockedWrong == null && !state.locked }
+            }.takeIf { state.unlockedWrong == null && !state.locked && state.watch == LockWatch.NONE }
             // Locked: the lock text only, no fields (§3.6.5: not a retry).
-            if (!state.pinKept && !state.locked) SecretField(
+            val fields = !state.locked && state.watch == LockWatch.NONE
+            if (!state.pinKept && fields) SecretField(
                 value = state.pin,
                 onValueChange = actions::setPin,
                 label = stringResource(R.string.ownercheck_pin_label),
@@ -196,7 +233,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("owner_check_pin"),
             )
-            if (!state.locked) SecretField(
+            if (fields) SecretField(
                 value = state.password,
                 onValueChange = actions::setPassword,
                 label = stringResource(R.string.ownercheck_password_label),
@@ -219,6 +256,11 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("owner_check_wait"),
                 )
+                m is OwnerCheckMessage.MaybeCounted -> Text(
+                    pluralStringResource(R.plurals.unlock_check_maybe_counted, m.atLeast, m.atLeast),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_maybe_counted"),
+                )
                 m is OwnerCheckMessage.Backoff ->
                     Text(stringResource(R.string.ownercheck_backoff), style = MaterialTheme.typography.bodyMedium)
                 // (ANDROID-PLAN 0.1.57) "Not the holder" under "Your vault moved to a new phone"; an unmapped code named.
@@ -235,6 +277,12 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 }
 
 private const val WARN_LEFT = 3
+
+/** "Lock vault" is the secondary action when gated, and in every mode while the vault is probably locked (0.73.0). */
+fun lockOffered(mode: OwnerCheckMode, watch: LockWatch): Boolean = mode == OwnerCheckMode.GATED || watch != LockWatch.NONE
+
+/** A check that can be left (not gated) keeps its Cancel, in the top bar, beside "Lock vault" while the watch runs. */
+fun cancelBesideLock(mode: OwnerCheckMode, watch: LockWatch): Boolean = mode != OwnerCheckMode.GATED && watch != LockWatch.NONE
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

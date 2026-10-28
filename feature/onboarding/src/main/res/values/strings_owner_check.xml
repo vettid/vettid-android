@@ -62,6 +62,15 @@
     </plurals>
     <!-- A backoff used no try: the vault is open and the check waits (text approved by the owner 2026-10-28; the countdown is ownercheck_backoff_wait). -->
     <string name="unlock_check_open_waiting">Your vault is unlocked. Enter your credential password to check in.</string>
+    <!-- ANDROID-PLAN 0.1.95 / VAULT-MESSAGING 0.73.0: the estimate of tries left is 0, so the vault has probably locked and the app checks (texts approved by the owner 2026-10-28). -->
+    <string name="ownercheck_probably_locked_checking">Your daily check didn\'t pass, and your vault has probably locked itself. Checking with your vault…</string>
+    <string name="ownercheck_probably_locked_silent">Your vault isn\'t answering. It has probably locked itself after ten wrong daily checks in a row.</string>
+    <string name="ownercheck_check_again">Check again</string>
+    <!-- A check got no answer and may have counted; the number is the fewest tries that may remain (0.1.97, approved 2026-10-28). -->
+    <plurals name="unlock_check_maybe_counted">
+        <item quantity="one">Your vault didn\'t answer, so that check may have counted. At least %1$d try left before your vault locks.</item>
+        <item quantity="other">Your vault didn\'t answer, so that check may have counted. At least %1$d tries left before your vault locks.</item>
+    </plurals>
     <string name="unlock_password_label">Credential password</string>
     <string name="unlock_owner_check_locked_title">Locked after ten wrong checks</string>
     <string name="unlock_owner_check_locked_body">Your vault locked itself after ten wrong daily checks in a row. Unlock it with your PIN and your credential password.</string>

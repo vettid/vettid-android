@@ -178,8 +178,26 @@ class VaultOpException(val type: String, val code: String, message: String = "",
     val detail: String = message
 }
 
+/**
+ * (ANDROID-PLAN 0.1.95) Added as a suppressed exception to an [IOException] of a request's send, so that the caller can tell
+ * which operation it belonged to without the exception changing class ([opType]).
+ */
+class OpTypeTag(val type: String) : Exception("op $type")
+
+/** The operation type a failed send was tagged with ([OpTypeTag]), or that a [VaultStateException] names; null if unknown. */
+val Throwable.opType: String?
+    get() = (this as? VaultStateException)?.type ?: suppressed.filterIsInstance<OpTypeTag>().firstOrNull()?.type
+
+/** Runs the send of a request of [type]; an I/O failure leaves it tagged (same exception, same class). */
+private inline fun <T> tagged(type: String, block: () -> T): T = try {
+    block()
+} catch (e: IOException) {
+    e.addSuppressed(OpTypeTag(type))
+    throw e
+}
+
 /** The device is not (yet) paired with a vault, or the vault sent something it should not have. */
-class VaultStateException(message: String) : IOException("vault client: $message")
+class VaultStateException(message: String, val type: String? = null) : IOException("vault client: $message")
 
 /**
  * The owner rejected this device's pairing or transfer on their phone after its
@@ -1190,9 +1208,9 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendOnceLocked(id, type, body, exp) }
+            tagged(type) { lock.withLock { sendOnceLocked(id, type, body, exp) } }
             return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
-                ?: throw VaultStateException("$type: no response")
+                ?: throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
         }
@@ -1342,14 +1360,14 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendRequestLocked(id, type, body, null) }
+            tagged(type) { lock.withLock { sendRequestLocked(id, type, body, null) } }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, null) }
+                if (attempt < APP_RETRIES) tagged(type) { lock.withLock { sendRequestLocked(id, type, body, null) } }
             }
-            throw VaultStateException("$type: no response")
+            throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
         }
@@ -1891,14 +1909,14 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            lock.withLock { sendRequestLocked(id, type, body, exp) }
+            tagged(type) { lock.withLock { sendRequestLocked(id, type, body, exp) } }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, exp) }
+                if (attempt < APP_RETRIES) tagged(type) { lock.withLock { sendRequestLocked(id, type, body, exp) } }
             }
-            throw VaultStateException("$type: no response")
+            throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
         }
