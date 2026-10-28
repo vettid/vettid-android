@@ -337,8 +337,12 @@ class UnlockViewModel @Inject constructor(
             }.collect { (due, lock, idle) ->
                 val (locked, unknown) = lock
                 // (ANDROID-PLAN 0.1.95) A lock found by a read, cause unknown: locked, but not "ten wrong checks".
+                // The password is asked for only what is used: a lock of unknown cause is not a check that is due (ask only what is used).
                 state.update {
-                    it.copy(checkDue = due || locked || idle != null, lockedByOwnerCheck = locked && !unknown, idleLocked = idle)
+                    it.copy(
+                        checkDue = due || (locked && !unknown) || idle != null, lockedByOwnerCheck = locked && !unknown,
+                        idleLocked = idle,
+                    )
                 }
             }
         }

@@ -167,6 +167,13 @@ class OwnerCheckViewModel @Inject constructor(
     private var watchJob: Job? = null
     private val readLock = Mutex()
 
+    /** A read started by a reconnect or a foreground return, and the one re-read after an unanswered check from the unlock. */
+    private var triggerJob: Job? = null
+    private var followUpJob: Job? = null
+
+    /** A trigger read is queued or running: another trigger is skipped (at most one waits behind a scheduled read). */
+    private val triggerPending = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** The mode [start] opened and [cancel] has not closed. */
     private var startedMode: OwnerCheckMode? = null
 
@@ -215,6 +222,7 @@ class OwnerCheckViewModel @Inject constructor(
         if (startedMode == mode && repo.unlockCheckOutcome.value == null) return
         startedMode = mode
         ticker?.cancel()
+        stopReads()
         val after = repo.unlockCheckOutcome.value
         repo.consumeUnlockCheckOutcome()
         // (ANDROID-PLAN 0.1.93) A check that failed on the password right after the unlock: the PIN is kept, the password asked.
@@ -236,7 +244,7 @@ class OwnerCheckViewModel @Inject constructor(
     fun cancel() {
         startedMode = null
         ticker?.cancel()
-        watchJob?.cancel()
+        stopReads()
         state.update {
             OwnerCheckUiState(mode = it.mode, view = it.view, presenceUnrecorded = it.presenceUnrecorded, timeScale = it.timeScale)
         }
@@ -270,7 +278,13 @@ class OwnerCheckViewModel @Inject constructor(
                 OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
             }
             // (ANDROID-PLAN 0.1.95) A check with no answer, tries still estimated to be left: one re-read of the vault's state.
-            val probe = if (needsReread(r)) repo.probeVault(lockCauseKnown = false) else null
+            val probe = if (needsReread(r)) {
+                // §3.6.5: nothing entered is kept past the check's answer, so before the re-read, not after it.
+                state.update { it.copy(password = "", pin = if (it.pinKept && keepsPin(r)) it.pin else "") }
+                repo.probeVault(lockCauseKnown = false)
+            } else {
+                null
+            }
             // §3.6.5: neither entry is kept beyond the answer. §11.14.5: a check that passed without the presence recorded
             // keeps the screen, with the notice, until the member goes on.
             val passed = r == OwnerCheckOutcome.Passed
@@ -301,7 +315,7 @@ class OwnerCheckViewModel @Inject constructor(
         if (needsWatch(r)) {
             beginWatch()
         } else if (needsReread(r)) {
-            viewModelScope.launch {
+            followUpJob = viewModelScope.launch {
                 val probe = repo.probeVault(lockCauseKnown = false) // a lock found here has no known cause
                 state.update { it.copy(message = messageAfter(r, probe)) }
             }
@@ -312,7 +326,9 @@ class OwnerCheckViewModel @Inject constructor(
     private fun messageAfter(r: OwnerCheckOutcome, probe: VaultProbe?): OwnerCheckMessage? {
         val left = (r as? OwnerCheckOutcome.Failed)?.estimatedLeft
         return when {
-            probe == VaultProbe.OPEN || probe == VaultProbe.LOCKED -> null
+            probe == VaultProbe.LOCKED -> null
+            // The vault answered: the check did not go through, and the screen says so with the real count (never nothing).
+            probe == VaultProbe.OPEN -> messageOf(r)
             probe == VaultProbe.NO_ANSWER && left != null -> OwnerCheckMessage.MaybeCounted(left)
             else -> messageOf(r)
         }
@@ -334,7 +350,10 @@ class OwnerCheckViewModel @Inject constructor(
         if (state.value.watch == LockWatch.SILENT) runReads()
     }
 
-    /** The reads at once, then after about 5 s, 15 s, 1 min and 3 min (counted from the start), one at a time. */
+    /**
+     * The reads at once, then after about 5 s, 15 s, 1 min and 3 min, one at a time: [READ_GAPS_MS] are counted from the end
+     * of the read before, so a slow read moves the later ones.
+     */
     private fun runReads() {
         watchJob?.cancel()
         state.update { it.copy(watch = LockWatch.CHECKING) }
@@ -347,8 +366,24 @@ class OwnerCheckViewModel @Inject constructor(
         }
     }
 
+    /** A reconnect or a foreground return: one read now, or after the one running. Never more than one waits. */
     private fun readNowIfWatching() {
-        if (state.value.watch != LockWatch.NONE) viewModelScope.launch { readOnce() }
+        if (state.value.watch == LockWatch.NONE || !triggerPending.compareAndSet(false, true)) return
+        triggerJob = viewModelScope.launch {
+            try {
+                readOnce()
+            } finally {
+                triggerPending.set(false)
+            }
+        }
+    }
+
+    /** Ends every read in progress or waiting (a screen start or end, the member's lock). */
+    private fun stopReads() {
+        watchJob?.cancel()
+        triggerJob?.cancel()
+        followUpJob?.cancel()
+        triggerPending.set(false)
     }
 
     /**
@@ -403,12 +438,15 @@ class OwnerCheckViewModel @Inject constructor(
         state.update {
             it.copy(locking = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false)
         }
+        // The member's lock ends the reads: a result that came after it must not say the vault locked for another reason.
+        stopReads()
         viewModelScope.launch {
             try {
                 vault.lock()
             } catch (e: VaultFailure) {
                 // Not expected (an unconfirmed lock stays pending and is retried), but never silent.
                 state.update { it.copy(locking = false, message = OwnerCheckMessage.Failed(e.kind, e.code, e.shownCode)) }
+                if (state.value.watch != LockWatch.NONE) runReads() // still probably locked: the reads go on
             }
         }
     }
@@ -436,7 +474,10 @@ class OwnerCheckViewModel @Inject constructor(
     private companion object {
         const val TICK_MS = 1000L
 
-        /** The waits before each read while probably locked: at once, 5 s, 15 s, 1 min, 3 min from the start (VAULT-MESSAGING 0.73.0). */
+        /**
+         * The waits before each read while probably locked (VAULT-MESSAGING 0.73.0): at once, then about 5 s, 15 s, 1 min and
+         * 3 min after the start; each gap is counted from the end of the read before.
+         */
         val READ_GAPS_MS = listOf(0L, 5_000L, 10_000L, 45_000L, 120_000L)
     }
 }

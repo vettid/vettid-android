@@ -1579,7 +1579,7 @@ class VaultManager(
         if (lockGuard.admits()) scope.launch { runCatching { d.flushOutbox() } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
-        if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
+        if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
         if (phaseFlow.value is AppPhase.Unlocked) {
             scope.launch { releaseUpdate.refreshOffer() }
             feed.catchUp()

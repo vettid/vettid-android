@@ -173,7 +173,8 @@ class OwnerCheckManager(
 
     /** The vault is known locked; [causeKnown]: by ten wrong checks (`vault.locking{owner_check}`, or an estimate of 0). */
     private fun markLocked(causeKnown: Boolean) {
-        causeUnknown.value = !causeKnown
+        // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
+        causeUnknown.value = !causeKnown && (!locked.value || causeUnknown.value)
         locked.value = true
     }
 
@@ -191,6 +192,27 @@ class OwnerCheckManager(
     @Volatile
     private var estimate = 0
 
+    /** Counts the lock, wipe and unlock events a read must not outlive: a result is dropped if it changed during the read. */
+    private val epoch = java.util.concurrent.atomic.AtomicInteger()
+
+    /** An owner check of this manager is on its way: its own failure is counted by [failed], not by [CheckSink]. */
+    @Volatile
+    private var checking = false
+
+    init {
+        // (ANDROID-PLAN 0.1.95) The other operations that count as failed checks (§3.6.4) spend the same estimate.
+        CheckSink.counter = object : CheckSink.Counter {
+            override fun answered() {
+                spendEstimate()
+            }
+
+            override fun unanswered() {
+                // Which operation it was, and whether its PIN was tested, is not known here: fail secure, the estimate falls to 0.
+                if (!checking) estimate = 0
+            }
+        }
+    }
+
     /** One try less in the estimate (never below 0); the new estimate. */
     private fun spendEstimate(): Int {
         estimate = (estimate - 1).coerceAtLeast(0)
@@ -203,18 +225,31 @@ class OwnerCheckManager(
     }
 
     override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe {
+        val started = epoch.get()
         // An answer to vault.status, whatever it says of the check, means the vault is open (the relay is the vault's own voice).
-        val answered = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { runCatching { readStatus() }.isSuccess } == true
+        val answered = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { attempt { readStatus() }.isSuccess } == true
         // The member API's `unlocked` is not an answer (the host saw a lease, not the enclave); only `locked` is taken.
+        val api = if (answered) null else attempt { memberState() }.getOrNull()
         return when {
+            // The member locked the vault, or it was wiped or unlocked, during the read: the result is stale and dropped.
+            epoch.get() != started -> VaultProbe.NO_ANSWER
             answered -> VaultProbe.OPEN
-            runCatching { memberState() }.getOrNull() != STATE_LOCKED -> VaultProbe.NO_ANSWER
+            api != STATE_LOCKED -> VaultProbe.NO_ANSWER
             else -> {
                 markLocked(lockCauseKnown)
                 onFoundLocked()
                 VaultProbe.LOCKED
             }
         }
+    }
+
+    /** [runCatching] that lets a cancellation through (a cancelled read ends, it is not an answer). */
+    private inline fun <T> attempt(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
     private fun onHeld(m: VaultMessage) {
@@ -246,8 +281,12 @@ class OwnerCheckManager(
     }
 
     /** The vault opened (an unlock, or the app started with it unlocked): re-read the check (the notices come with the feed). */
-    fun onOpened() {
-        estimate = 0 // a count is read after the unlock; until then none is known
+    fun onOpened(afterUnlock: Boolean = true) {
+        if (afterUnlock) {
+            // An unlock or a start: a count is read next; until then none is known. A return to the foreground keeps the estimate.
+            estimate = 0
+            epoch.incrementAndGet()
+        }
         endIdleLocked()
         scope.launch { runCatching { refreshOwnerCheck() } }
     }
@@ -271,6 +310,7 @@ class OwnerCheckManager(
         unlockPin = null
         markOpen()
         estimate = 0
+        epoch.incrementAndGet()
         endIdleLocked()
         val v = try {
             readStatus()
@@ -360,6 +400,7 @@ class OwnerCheckManager(
     override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
         unlockPin = null
         val until = holdOff?.until?.let { clampHoldOff(it) }
+        checking = true
         val outcome = try {
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
             markOpen()
@@ -383,6 +424,8 @@ class OwnerCheckManager(
             OwnerCheckOutcome.Passed
         } catch (e: VaultFailure) {
             failed(e)
+        } finally {
+            checking = false
         }
         return outcome
     }
@@ -409,8 +452,8 @@ class OwnerCheckManager(
         // marked only from a fresh `vault.status`, never from the estimate below.
         if (fresh && after != null && after.checksLeft <= 0) markLocked(causeKnown = true)
         if (fresh) return after?.checksLeft to false
+        // Only a count the vault gave is kept in the view and on disk; the estimate lives in [estimate] alone.
         spendEstimate()
-        before?.let { set(it.copy(failures = OwnerCheckView.MAX_FAILURES - estimate)) }
         return estimate to true
     }
 
@@ -448,6 +491,7 @@ class OwnerCheckManager(
 
     override fun onLockedHere() {
         unlockPin = null
+        epoch.incrementAndGet() // a read that finishes after the member's own lock does not mark it
         lockedHere = true
         view.value?.let { set(it) }
     }
@@ -549,6 +593,8 @@ class OwnerCheckManager(
     /** Forgets everything (a wipe, a deleted vault). */
     fun clear() {
         unlockPin = null
+        epoch.incrementAndGet()
+        estimate = 0
         view.value = null
         markOpen()
         unlockOutcome.value = null

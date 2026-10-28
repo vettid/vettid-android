@@ -37,8 +37,8 @@ class ProbablyLockedTest {
     )
 
     /** The gated screen with the PIN and password typed and one check sent, answered with [answer]. */
-    private fun TestScope.sendCheck(answer: OwnerCheckOutcome): OwnerCheckViewModel {
-        vault.ownerCheck.value = held()
+    private fun TestScope.sendCheck(answer: OwnerCheckOutcome, failures: Int = 9): OwnerCheckViewModel {
+        vault.ownerCheck.value = held(failures)
         val vm = OwnerCheckViewModel(vault, vault)
         vm.start(OwnerCheckMode.GATED)
         runCurrent()
@@ -218,8 +218,87 @@ class ProbablyLockedTest {
     fun anUnansweredCheckAboveZeroThatGetsAStatusAnswerShowsTheUsualCount() = runTest {
         vault.probeResults.add(VaultProbe.OPEN)
         val vm = sendCheck(OwnerCheckOutcome.Failed(FailureKind.NETWORK, null, estimatedLeft = 4))
-        assertEquals(null, vm.screen().message)
+        // The vault answered: the failure stays on screen (the check did not go through), beside the real count.
+        assertTrue(vm.screen().message is OwnerCheckMessage.Failed)
         assertEquals(LockWatch.NONE, vm.screen().watch)
         assertFalse(vm.screen().locked)
+    }
+
+    /** The member's lock, leaving the screen and starting it afresh each end the reads in progress. */
+    @Test
+    fun cancelAndLockVaultStopTheReads() = runTest {
+        val vm = sendCheck(estimatedZero)
+        vm.cancel()
+        advanceTimeBy(200_000)
+        assertEquals(1, vault.calls.count { it == "probeVault" })
+        val second = sendCheck(estimatedZero)
+        val reads = vault.calls.count { it == "probeVault" }
+        second.lockVault()
+        advanceTimeBy(200_000)
+        assertEquals(reads, vault.calls.count { it == "probeVault" })
+        assertFalse(vault.lockedByOwnerCheck.value)
+    }
+
+    /** The unlock's own check went unanswered, or left the estimate at 0: the same follow-up as on the screen. */
+    @Test
+    fun theUnlockPathFollowsUpAnUnansweredCheck() = runTest {
+        vault.ownerCheck.value = held(failures = 5)
+        vault.unlockCheckOutcome.value = OwnerCheckOutcome.Failed(FailureKind.NETWORK, null, estimatedLeft = 4)
+        val vm = OwnerCheckViewModel(vault, vault)
+        vm.start(OwnerCheckMode.GATED)
+        runCurrent()
+        assertEquals(1, vault.calls.count { it == "probeVault" })
+        assertEquals(OwnerCheckMessage.MaybeCounted(4), vm.screen().message)
+    }
+
+    @Test
+    fun theUnlockPathWithTheEstimateAtZeroIsProbablyLocked() = runTest {
+        vault.ownerCheck.value = held()
+        vault.unlockCheckOutcome.value = OwnerCheckOutcome.BadPassword(0, estimated = true)
+        val vm = OwnerCheckViewModel(vault, vault)
+        vm.start(OwnerCheckMode.GATED)
+        runCurrent()
+        assertEquals(LockWatch.CHECKING, vm.screen().watch)
+        assertEquals("", vm.screen().pin)
+    }
+
+    /** With `failures == 0` the screen would show nothing: the failure stays, so the member sees the check did not go through. */
+    @Test
+    fun anOpenRereadKeepsTheFailureMessage() = runTest {
+        vault.probeResults.add(VaultProbe.OPEN)
+        val vm = sendCheck(OwnerCheckOutcome.Failed(FailureKind.NETWORK, null, estimatedLeft = 4), failures = 0)
+        assertTrue(vm.screen().message is OwnerCheckMessage.Failed)
+    }
+
+    /** Trigger reads do not pile up: while one runs, at most one more waits. */
+    @Test
+    fun triggerReadsAreBounded() = runTest {
+        vault.probeTakes = 1_000
+        val vm = sendCheck(estimatedZero)
+        repeat(6) { vault.reconnectRelay() }
+        runCurrent()
+        advanceTimeBy(1_500)
+        runCurrent()
+        // The read at once, and one trigger read behind it; five triggers were skipped.
+        assertEquals(2, vault.calls.count { it == "probeVault" })
+        assertEquals(1, vault.maxConcurrentProbes)
+        assertEquals(LockWatch.CHECKING, vm.screen().watch)
+    }
+
+    /** §3.6.5: nothing entered is kept past the check's answer, so the password is gone when the re-read starts. */
+    @Test
+    fun thePasswordIsClearedBeforeTheReread() = runTest {
+        vault.ownerCheck.value = held(failures = 5)
+        val vm = OwnerCheckViewModel(vault, vault)
+        vm.start(OwnerCheckMode.GATED)
+        runCurrent()
+        var seen: String? = null
+        vault.onProbe = { seen = vm.screen().password }
+        vault.checkResults.add(OwnerCheckOutcome.Failed(FailureKind.NO_RESPONSE, null, estimatedLeft = 4))
+        vm.setPin("40281795")
+        vm.setPassword("nope")
+        vm.submit()
+        runCurrent()
+        assertEquals("", seen)
     }
 }

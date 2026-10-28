@@ -108,6 +108,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         PresenceAfterCheck(title, actions)
         return
     }
+    val lockOffered = state.mode == OwnerCheckMode.GATED || state.watch != LockWatch.NONE
     FormScaffold(
         title = title,
         body = body,
@@ -122,8 +123,10 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         onPrimary = if (state.watch == LockWatch.SILENT) actions::checkAgain else actions::submit,
         primaryEnabled = state.submitAllowed || (state.watch == LockWatch.SILENT && !state.locking),
         busy = state.busy || state.locking,
-        secondaryLabel = stringResource(if (state.mode == OwnerCheckMode.GATED) R.string.ownercheck_lock else R.string.ownercheck_cancel),
-        onSecondary = if (state.mode == OwnerCheckMode.GATED) actions::lockVault else onCancel,
+        // While the vault is probably locked "Lock vault" stays offered in every mode (VAULT-MESSAGING 0.73.0); it takes the
+        // place of Cancel there, which comes back when the reads end.
+        secondaryLabel = stringResource(if (lockOffered) R.string.ownercheck_lock else R.string.ownercheck_cancel),
+        onSecondary = if (lockOffered) actions::lockVault else onCancel,
         modifier = Modifier.testTag("owner_check"),
         header = {
             Spacer(Modifier.height(Spacing.l))
@@ -148,6 +151,14 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                     stringResource(R.string.unlock_owner_check_locked_title),
                     stringResource(R.string.unlock_owner_check_locked_body),
                     modifier = Modifier.testTag("owner_check_locked"),
+                )
+            }
+            // A lock found by a read, cause unknown: the existing "locked" line, not the ten-checks text.
+            if (state.locked && state.lockCauseUnknown) {
+                Text(
+                    stringResource(R.string.unlock_lock_confirmed),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("owner_check_locked_unknown"),
                 )
             }
             // (ANDROID-PLAN 0.1.95) Probably locked: the approved lines; the fields are not offered.

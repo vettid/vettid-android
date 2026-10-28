@@ -29,7 +29,7 @@ import java.io.IOException
  */
 @Suppress("CyclomaticComplexMethod", "ThrowsCount")
 internal suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T = try {
-    withContext(Dispatchers.IO) { block() }
+    withContext(Dispatchers.IO) { counted(resend, block) }
 } catch (e: VaultFailure) {
     throw e
 } catch (e: TimeoutCancellationException) {
@@ -108,4 +108,44 @@ internal fun limitOf(e: VaultOpException): VaultLimit? {
     val name = (b["limit"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() } ?: return null
     fun n(k: String) = (b[k] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it >= 0 }
     return VaultLimit(name, n("max"), n("size"))
+}
+
+/**
+ * (ANDROID-PLAN 0.1.95, VAULT-MESSAGING 0.73.0, §3.6.4) Tells [CheckSink] about the answers of the operations that count as
+ * failed checks (a `bad_pin` or `bad_password` to one of [CheckSink.COUNTED]) and, failing secure, about any other operation
+ * that got no answer ([resend] false: not an idempotent read).
+ */
+@Suppress("TooGenericExceptionCaught")
+private suspend inline fun <T> counted(resend: Boolean, block: suspend () -> T): T = try {
+    block()
+} catch (e: VaultOpException) {
+    if (e.type in CheckSink.COUNTED && e.code in CheckSink.CODES) CheckSink.counter?.answered()
+    throw e
+} catch (e: CancellationException) {
+    throw e
+} catch (e: IOException) {
+    if (!resend) CheckSink.counter?.unanswered()
+    throw e
+}
+
+/** Where [vaultGuard] reports what bears on the owner check's estimate of tries left; the owner check manager listens. */
+internal object CheckSink {
+    interface Counter {
+        /** An operation that counts as a failed check was answered `bad_pin` or `bad_password`. */
+        fun answered()
+
+        /** An operation that is not an idempotent read got no answer. */
+        fun unanswered()
+    }
+
+    @Volatile
+    var counter: Counter? = null
+
+    val CODES = setOf("bad_pin", "bad_password")
+
+    /** The operations that verify the PIN as an owner check does (VAULT-MESSAGING §3.6.4), but not the check itself. */
+    val COUNTED = setOf(
+        "pin.change", "credential.password.change", "device.transfer.approve", "vault.delete", "wallet.caps.raise", "item.reveal",
+        "account.name.set", "vault.secret.renew", "credential.reset", "credential.create",
+    )
 }
