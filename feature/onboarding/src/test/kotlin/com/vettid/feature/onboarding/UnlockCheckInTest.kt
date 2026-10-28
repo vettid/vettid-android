@@ -372,6 +372,8 @@ class UnlockCheckInTest {
         assertNull(s.unlockedWrong)
         assertFalse(s.pinKept)
         assertEquals("", s.pin)
+        assertEquals(0L, s.waitSeconds)
+        assertNull(s.message)
     }
 
     private suspend fun TestScope.heldAfterWrongPassword(): OwnerCheckViewModel {

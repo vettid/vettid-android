@@ -145,10 +145,14 @@ class OwnerCheckViewModel @Inject constructor(
         }
         viewModelScope.launch {
             repo.lockedByOwnerCheck.collect { l ->
-                // Locked: only the lock text; the vault-is-open and tries lines would contradict it.
+                // Locked: only the lock text; the vault-is-open and tries lines, or a backoff's wait, would contradict it.
+                if (l) ticker?.cancel()
                 state.update {
                     if (l) {
-                        it.copy(locked = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false)
+                        it.copy(
+                            locked = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false,
+                            waitSeconds = 0L, message = it.message.takeUnless { m -> m is OwnerCheckMessage.Backoff },
+                        )
                     } else {
                         it.copy(locked = false)
                     }
