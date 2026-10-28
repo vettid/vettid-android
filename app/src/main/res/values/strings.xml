@@ -120,9 +120,6 @@
     <string name="release_notification_ending">Your vault\'s release ends on %1$s. Tap to update to release %2$d.</string>
     <!-- The one-time note of the notification modes (ANDROID-PLAN 0.1.23, §9 question 13). -->
     <string name="notify_note">VettID now notifies you in the background. Change this in Settings → Notifications.</string>
-    <!-- Release R (ANDROID-PLAN "Transfer"): the offer to rotate after a transfer, a PIN change or a password change. Draft. -->
-    <string name="rotate_offer">You can now rotate your vault\'s keys: every older copy of your credential stops working.</string>
-    <string name="rotate_offer_action">Rotate now</string>
     <!-- ANDROID-PLAN "Transfer" (release R), verbatim: the old phone after it removed its keys -->
     <!-- ANDROID-PLAN 0.1.54 "A vault being deleted" (approved by the owner, 2026-10-20). -->
     <string name="vault_deleted_notice">Your vault was deleted. To start again, get a setup code on the account site.</string>

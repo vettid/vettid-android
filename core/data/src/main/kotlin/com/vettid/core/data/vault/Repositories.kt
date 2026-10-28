@@ -359,14 +359,6 @@ interface VaultRepository {
     fun acknowledgeMoveNotDone() {}
 
     /**
-     * (Release R, ANDROID-PLAN "Transfer") After a transfer, a PIN change or a password change the app offers to rotate
-     * the vault's keys (`credential.rotate`), until a rotation or [dismissRotateOffer].
-     */
-    val rotateOffered: StateFlow<Boolean> get() = NO_MOVE_TO_FINISH
-
-    fun dismissRotateOffer() {}
-
-    /**
      * (Release R, §11.14.10) This old phone removed its keys at the end of a kept transfer (the new phone finished the
      * move, or 7 days passed): "Your vault has moved to your new phone. VettID has removed its keys from this phone."
      * Told once, in this process, until [acknowledgeMovedAway].

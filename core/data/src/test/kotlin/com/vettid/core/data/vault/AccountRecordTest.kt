@@ -27,41 +27,15 @@ class AccountRecordTest {
         }
     }
 
+    /** ANDROID-PLAN 0.1.88: the stored rotate offer is dropped; a record still carrying it is read and saved without. */
     @Test
-    fun anOfferAfterAMoveIsShownAndKept() {
-        val f = Fixture(old)
-        assertTrue(f.record.offerAfterMove(f.record.generation))
-        assertTrue(f.record.rotateOffer.value)
-        assertTrue(f.disk!!.rotateOffered)
-    }
-
-    @Test
-    fun anOfferAfterALockIsNotMade() {
-        val f = Fixture(old)
-        val gen = f.record.generation
-        // The member locked after the move's own lock: the generation moved.
-        f.record.bumpGeneration()
-        assertFalse(f.record.offerAfterMove(gen))
-        assertFalse(f.record.rotateOffer.value)
-        assertFalse(f.disk!!.rotateOffered)
-    }
-
-    @Test
-    fun theWipeTakesTheOfferAway() {
-        val f = Fixture(old)
-        f.record.offerAfterMove(f.record.generation)
-        f.wipe()
-        assertFalse(f.record.rotateOffer.value)
-        assertEquals(LocalAccount(), f.record.value)
-    }
-
-    @Test
-    fun aResetTakesTheOfferAway() {
-        val f = Fixture(old.copy(rotateOffered = true))
-        assertTrue(f.record.rotateOffer.value)
-        f.record.reset(LocalAccount(userGuid = "u-new"))
-        assertFalse(f.record.rotateOffer.value)
-        assertEquals(LocalAccount(userGuid = "u-new"), f.disk)
+    fun aStoredRotateOfferFromBeforeIsDropped() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val onDisk = json.encodeToString(LocalAccount.serializer(), old)
+            .replaceFirst("{", "{\"rotateOffered\":true,")
+        val read = json.decodeFromString(LocalAccount.serializer(), onDisk)
+        assertEquals(old, read)
+        assertFalse(json.encodeToString(LocalAccount.serializer(), read).contains("rotateOffered"))
     }
 
     @Test
@@ -170,7 +144,7 @@ class AccountRecordTest {
     }
 
     /**
-     * Applied: the candidate (the next epoch) becomes current and the marker goes, as one write, with the rotate offer;
+     * Applied: the candidate (the next epoch) becomes current and the marker goes, as one write;
      * only while the current record is still the one the change was sent from (an unlock may have confirmed it already).
      */
     @Test
@@ -180,7 +154,6 @@ class AccountRecordTest {
         assertTrue(f.record.confirmChange(pinChange))
         assertEquals(4L, f.disk!!.phoneEpoch)
         assertNull(f.disk!!.unresolvedChange)
-        assertTrue(f.record.rotateOffer.value)
         assertFalse("no marker: nothing more", f.record.confirmChange(pinChange))
         assertEquals(4L, f.disk!!.phoneEpoch)
         // The unlock already moved to the candidate: the check's confirmation does not move it again.

@@ -42,7 +42,6 @@ import com.vettid.feature.notifications.NotificationsHost
 import com.vettid.feature.notifications.NotificationsRoute
 import com.vettid.feature.notifications.notificationsDestination
 import com.vettid.feature.settings.SettingsRoute
-import com.vettid.feature.settings.TransferOutRoute
 import com.vettid.feature.settings.VaultStatusRoute
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.rememberProfilePhoto
@@ -52,8 +51,8 @@ import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.feature.credential.CredentialAlarmRoute
 import com.vettid.feature.credential.CredentialPasswordRoute
-import com.vettid.feature.credential.CredentialRoute
 import com.vettid.feature.credential.CredentialRotateRoute
+import com.vettid.feature.credential.CredentialRoute
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -121,8 +120,6 @@ import androidx.core.content.ContextCompat
 @Composable
 fun AppShell(
     launchRoute: Any?,
-    /** The "Your vault is on this phone now" dialog ([MoveNotices]) is open over the shell. */
-    movePaneOpen: Boolean,
     accountName: String,
     account: AccountInfo?,
     portalUrl: String,
@@ -217,8 +214,6 @@ fun AppShell(
 
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
     val checkMode = if (gate.gated && (armed || onList)) OwnerCheckMode.GATED else asked
-    val rotateVm: RotateOfferViewModel = hiltViewModel()
-    val rotateOffered by rotateVm.offered.collectAsStateWithLifecycle()
     // Release R: the owner check sent right after an unlock that cancelled a recovery did not pass; the check screen
     // shows its answer at once, so that the member's presence is recorded.
     val checkAfterCancel by gateVm.checkAfterCancel.collectAsStateWithLifecycle()
@@ -292,20 +287,7 @@ fun AppShell(
                         statusBarPadding = !alarmShown && !deletionShown && !gate.bannerShown() && !release.visible,
                     )
                 }
-                // Release R: the offer to rotate the vault's keys after a transfer, a PIN change or a password change.
-                // Never over a full-screen flow: the rotation itself, the transfer ("VettID has moved"), the move's arrival
-                // dialog and the daily owner check (owner test 2026-10-27).
-                val rotateShown = rotateOffered && !movePaneOpen && checkMode == null &&
-                    current?.hierarchy?.any { it.hasRoute(CredentialRotateRoute::class) || it.hasRoute(TransferOutRoute::class) } != true
-                if (rotateShown) {
-                    RotateOfferBanner(
-                        // The offer stays until a rotation succeeds (or it is put away); it is hidden on the rotation screen.
-                        onRotate = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
-                        onDismiss = rotateVm::dismiss,
-                        statusBarPadding = !alarmShown && !deletionShown && !gate.bannerShown() && !release.visible && !notifyPrompt.note,
-                    )
-                }
-                val bannerShown = alarmShown || deletionShown || gate.bannerShown() || release.visible || notifyPrompt.note || rotateShown
+                val bannerShown = alarmShown || deletionShown || gate.bannerShown() || release.visible || notifyPrompt.note
                 Box(
                     Modifier
                         .weight(1f)
@@ -395,6 +377,7 @@ fun AppShell(
                                 onOwnerCheck = { holdOff -> asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY },
                                 onOpenItem = { id -> navController.navigate(ItemDetailRoute(id)) { launchSingleTop = true } },
                                 onReleaseUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
+                                onReplaceKeys = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
                                 bell = bell,
                             ),
                         )

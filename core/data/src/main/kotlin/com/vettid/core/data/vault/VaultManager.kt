@@ -677,11 +677,6 @@ class VaultManager(
         lock = { lock() },
         // Its own prompt, not the unlock screen's two steps (§11.14.9 step 2): refused while a change is unresolved.
         unlock = { pin, taken -> unlockOnce(pin, null, false, holderApp = true, pinTaken = taken) },
-        generation = { generation },
-        signedOut = { phaseFlow.value == AppPhase.SignedOut },
-        // ANDROID-PLAN "Transfer": after a transfer the app offers to rotate the vault's keys. Not after a wipe that
-        // overtook the unlock: the offer would land in the fresh record, for a vault enrolled here later.
-        onOpened = { gen -> offerRotationAt(gen) },
     )
 
     /** (Release R, §11.14.10) This old phone took the vault back after a transfer that did not finish. */
@@ -2866,8 +2861,6 @@ class VaultManager(
         changeSender.send(rec, ChangeKind.PASSWORD, epoch) { store ->
             s.openApi.credentialChangePassword(password, newPassword, pin?.takeIf { local.phone.inUse }, since = gen, onMarker = store)
         }
-        // ANDROID-PLAN "Transfer" (release R): after a password change the app offers to rotate the vault's keys.
-        if (local.phone.inUse) offerRotation(true, rec)
     }
 
     /**
@@ -2907,8 +2900,6 @@ class VaultManager(
                 next.fill(0)
             }
         }
-        // ANDROID-PLAN "Transfer": after a PIN change the app offers to rotate the vault's keys.
-        offerRotation(true, rec)
     }
 
     override val changeCheck: StateFlow<ChangeCheck?> get() = changes.check
@@ -3017,11 +3008,9 @@ class VaultManager(
     override val recoveryOffered: Boolean get() = ReleasePath.recoveryOffered(local.capabilities)
 
     override suspend fun rotate(password: String) = guard {
-        val rec = record.recordGeneration
         val s = session()
         // vettid.org #358: while a clone alarm is open, the held blob is checked (and refreshed) before the rotation.
         s.openApi.credentialRotate(password, alarmOpen = alarmFlow.value != null)
-        offerRotation(false, rec)
         windowFlow.value = null
         refreshAlarm(s)
     }
@@ -4180,23 +4169,6 @@ class VaultManager(
     }
 
     override val moveNotDone: StateFlow<Boolean> = moveNotDoneFlow.asStateFlow()
-
-    override val rotateOffered: StateFlow<Boolean> = record.rotateOffer
-
-    override fun dismissRotateOffer() {
-        // UNBOUND: putting the offer away is right for whatever record is current.
-        scope.launch { offerRotation(false, RecordStore.UNBOUND) }
-    }
-
-    /** The rotate offer, kept on the phone (a restart does not lose it), for the record of [since]. */
-    private suspend fun offerRotation(on: Boolean, since: Int) {
-        io { record.setRotateOffer(on, since) }
-    }
-
-    /** The offer after "Finish the move" opened the vault ([AccountRecord.offerAfterMove]): not after a lock, reset or wipe. */
-    private suspend fun offerRotationAt(gen: Int) {
-        io { record.offerAfterMove(gen) }
-    }
 
     override val movedAway: StateFlow<Boolean> = movedAwayFlow.asStateFlow()
 

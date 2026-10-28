@@ -358,4 +358,51 @@ class SettingsViewModelsTest {
         vault.recoveryOfferedValue = false
         assertFalse(RecoveryViewModel(vault, vault).uiState.value.offered)
     }
+
+    /** ANDROID-PLAN 0.1.88: the key prompt after an applied PIN change, once; none after "didn't go through". */
+    @Test
+    fun anAppliedPinChangeAsksAboutTheKeysOnce() = runTest {
+        val vm = ChangePinViewModel(vault)
+        assertFalse(vm.uiState.value.askReplaceKeys)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertTrue(vm.uiState.value.askReplaceKeys)
+        vm.putAwayReplaceKeys()
+        assertTrue(vm.uiState.value.done)
+        assertFalse(vm.uiState.value.askReplaceKeys)
+    }
+
+    @Test
+    fun aLostPinAnswerSettledOnTheScreenAsksAboutTheKeysOnlyWhenItWentThrough() = runTest {
+        vault.fail["changePin"] = VaultFailure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = ChangePinViewModel(vault)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PIN)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.NotApplied(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.done)
+        assertFalse(vm.uiState.value.askReplaceKeys)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PIN)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertTrue(vm.uiState.value.askReplaceKeys)
+    }
+
+    @Test
+    fun noKeyPromptForAPinChangeFoundOnOpening() = runTest {
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PIN)
+        val vm = ChangePinViewModel(vault)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.PIN)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertFalse(vm.uiState.value.askReplaceKeys)
+    }
 }
