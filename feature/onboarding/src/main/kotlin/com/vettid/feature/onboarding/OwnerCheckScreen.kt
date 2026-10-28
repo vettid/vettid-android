@@ -185,21 +185,22 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 is OwnerCheckMessage.BadPassword -> m.checksLeft
                 else -> v?.takeIf { it.failures > 0 }?.checksLeft
             }.takeIf { state.unlockedWrong == null && !state.locked }
-            if (!state.pinKept) SecretField(
+            // Locked: the lock text only, no fields (§3.6.5: not a retry).
+            if (!state.pinKept && !state.locked) SecretField(
                 value = state.pin,
                 onValueChange = actions::setPin,
                 label = stringResource(R.string.ownercheck_pin_label),
                 isPin = true,
-                enabled = !state.busy && state.waitSeconds == 0L,
+                enabled = !state.busy && !state.locking && state.waitSeconds == 0L,
                 error = if (m is OwnerCheckMessage.BadPin) stringResource(R.string.ownercheck_bad_pin) else null,
                 imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("owner_check_pin"),
             )
-            SecretField(
+            if (!state.locked) SecretField(
                 value = state.password,
                 onValueChange = actions::setPassword,
                 label = stringResource(R.string.ownercheck_password_label),
-                enabled = !state.busy && state.waitSeconds == 0L,
+                enabled = !state.busy && !state.locking && state.waitSeconds == 0L,
                 error = if (m is OwnerCheckMessage.BadPassword) stringResource(R.string.ownercheck_bad_password) else null,
                 onImeAction = actions::submit,
                 modifier = Modifier.testTag("owner_check_password"),

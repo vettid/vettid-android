@@ -145,7 +145,18 @@ class OwnerCheckViewModel @Inject constructor(
         }
         viewModelScope.launch {
             repo.lockedByOwnerCheck.collect { l ->
-                state.update { if (l) it.copy(locked = true, pin = "", password = "", pinKept = false) else it.copy(locked = false) }
+                // Locked: only the lock text; the vault-is-open and tries lines, or a backoff's wait, would contradict it.
+                if (l) ticker?.cancel()
+                state.update {
+                    if (l) {
+                        it.copy(
+                            locked = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false,
+                            waitSeconds = 0L, message = it.message.takeUnless { m -> m is OwnerCheckMessage.Backoff },
+                        )
+                    } else {
+                        it.copy(locked = false)
+                    }
+                }
             }
         }
         viewModelScope.launch { repo.presenceUnrecorded.collect { p -> state.update { it.copy(presenceUnrecorded = p) } } }
@@ -252,12 +263,16 @@ class OwnerCheckViewModel @Inject constructor(
 
     override fun lockVault() {
         if (state.value.locking) return
-        state.update { it.copy(locking = true, pin = "", password = "") }
+        // The kept PIN goes with the fields: a lock that fails leaves the ordinary check (both fields), not a hidden PIN field.
+        state.update {
+            it.copy(locking = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false)
+        }
         viewModelScope.launch {
             try {
                 vault.lock()
-            } catch (_: VaultFailure) {
-                state.update { it.copy(locking = false) }
+            } catch (e: VaultFailure) {
+                // Not expected (an unconfirmed lock stays pending and is retried), but never silent.
+                state.update { it.copy(locking = false, message = OwnerCheckMessage.Failed(e.kind, e.code, e.shownCode)) }
             }
         }
     }
