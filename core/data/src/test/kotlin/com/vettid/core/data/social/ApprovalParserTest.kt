@@ -329,7 +329,15 @@ class AuthPurposeParserTest {
     @Test
     fun plainContextDropsBidiAndFormatCharactersAndKeepsLines() {
         assertEquals("Sign in to Bank?\nok", AuthContext.plain("Sign in to ‮Bank?‬\r\nok"))
-        assertEquals("a b", AuthContext.plain("a​b".replace("​", " ")))
+        assertEquals("ab", AuthContext.plain("a\u200Bb"))
+        assertEquals("ab", AuthContext.plain("a\uFEFFb"))
+        assertEquals("abc", AuthContext.plain("a\u202A\u202B\u202D\u202Eb\u202Cc"))
+        assertEquals("a\nb", AuthContext.plain("a\u0085b"))
+        assertEquals("ab", AuthContext.plain("a\u0007b"))
+        assertEquals("ab", AuthContext.plain("a\u00ADb\uDB40\uDC41"))
+        // ZWJ and ZWNJ cannot reorder text and stay (emoji sequences, Persian and Indic shaping).
+        assertEquals("a\u200Db\u200Cc", AuthContext.plain("a\u200Db\u200Cc"))
+        assertEquals("\uD83D\uDC69\u200D\uD83D\uDCBB", AuthContext.plain("\uD83D\uDC69\u200D\uD83D\uDCBB"))
         assertEquals("ab", AuthContext.plain("a⁦⁧⁨⁩‎‏؜b"))
         assertEquals("a\nb\nc", AuthContext.plain("a b c"))
         assertEquals("x y", AuthContext.plain("x\ty"))

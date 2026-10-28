@@ -37,6 +37,10 @@ object AuthContext {
     /** The first line of [plain], isolated, for a list row's second line; null when it has none. */
     fun firstLineIsolated(s: String): String? = isolated(clean(s).trimStart('\n').lineSequence().first())
 
+    /** Kept: they cannot reorder text, and emoji sequences and Persian or Indic shaping need them. */
+    private const val ZWNJ = 0x200C
+    private const val ZWJ = 0x200D
+
     private val LINE_BREAKS = setOf(0x2028, 0x2029, 0x85)
 
     private fun clean(s: String): String = buildString {
@@ -48,6 +52,7 @@ object AuthContext {
                 cp == '\n'.code || cp in LINE_BREAKS -> append('\n')
                 cp == '\t'.code -> append(' ')
                 cp == '\r'.code -> if (i >= s.length || s[i] != '\n') append('\n')
+                cp == ZWNJ || cp == ZWJ -> appendCodePoint(cp)
                 Character.getType(cp).let { it == Character.CONTROL.toInt() || it == Character.FORMAT.toInt() } -> Unit
                 else -> appendCodePoint(cp)
             }

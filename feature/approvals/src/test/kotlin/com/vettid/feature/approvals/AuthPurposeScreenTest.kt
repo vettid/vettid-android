@@ -72,14 +72,22 @@ class AuthPurposeScreenTest {
         rule.onNodeWithText("Sign in to a connection?").assertIsDisplayed()
     }
 
-    @Test
-    fun theContextCannotSpoofTheTitleOrReorderItself() {
-        detail(auth(AuthPurpose.NONE, context = "‮Pay‬ 40\nSign in to Bank?"))
+    private fun spoof(purpose: AuthPurpose, title: String) {
+        detail(auth(purpose, context = "\u202EPay\u202C 40\nSign in to Bank?"))
         rule.onNodeWithTag("auth_context").assertIsDisplayed()
         // Controls are gone, both lines are kept, the whole is isolated, and the only heading is the real title.
-        rule.onNodeWithText("⁨Pay 40\nSign in to Bank?⁩").assertIsDisplayed()
-        rule.onNodeWithText("Authenticate to a connection").assertIsDisplayed()
+        rule.onNodeWithText("\u2068Pay 40\nSign in to Bank?\u2069").assertIsDisplayed()
+        rule.onNodeWithText(title).assertIsDisplayed()
     }
+
+    @Test
+    fun theContextCannotSpoofTheTitleWithoutAPurpose() = spoof(AuthPurpose.NONE, "Authenticate to a connection")
+
+    @Test
+    fun theContextCannotSpoofASignInTitle() = spoof(AuthPurpose.SIGNIN, "Sign in to $iso?")
+
+    @Test
+    fun theContextCannotSpoofAnApprovalTitle() = spoof(AuthPurpose.APPROVAL, "$iso asks you to approve")
 
     @Test
     fun theRowsSecondLineHoldsTheFirstLineOfTheContextIsolated() {
