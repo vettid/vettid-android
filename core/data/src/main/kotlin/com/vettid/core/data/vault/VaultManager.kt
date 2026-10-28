@@ -2012,7 +2012,10 @@ class VaultManager(
      * the check with [pin] and [password] before the app opens, so that the member types both once.
      */
     override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
-        unlockOnce(pin, approve, cancelRecovery, holderApp = true, twoStepScreen = true) { ownerCheck.afterUnlock(pin, password) }
+        // The foreground generation before the request: leaving and coming back while it runs keeps no PIN.
+        ownerCheck.foregroundGeneration.let { gen ->
+            unlockOnce(pin, approve, cancelRecovery, holderApp = true, twoStepScreen = true) { ownerCheck.afterUnlock(pin, password, gen) }
+        }
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") An unlock with `cancel_recovery`, then at once the owner check with the

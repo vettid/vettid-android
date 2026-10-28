@@ -204,6 +204,8 @@ class OwnerCheckViewModel @Inject constructor(
             null
         }
         state.update { it.copy(busy = true, message = null) }
+        // The app leaving and coming back while the request runs keeps no PIN (the generation counts the departures).
+        val generation = repo.foregroundGeneration
         viewModelScope.launch {
             val r = try {
                 repo.check(s.pin, s.password, holdOff)
@@ -214,15 +216,20 @@ class OwnerCheckViewModel @Inject constructor(
             // keeps the screen, with the notice, until the member goes on.
             val passed = r == OwnerCheckOutcome.Passed
             val unrecorded = passed && repo.presenceUnrecorded.value
-            state.update { it.answered(r, passed, unrecorded) }
+            state.update { it.answered(r, passed, unrecorded, repo.foregroundGeneration == generation) }
             if (r is OwnerCheckOutcome.Backoff) startBackoff(r.retryAfterSeconds)
         }
     }
 
     /** The state after the vault's answer [r]: neither entry is kept, except the unlock's PIN for another try of the password. */
-    private fun OwnerCheckUiState.answered(r: OwnerCheckOutcome, passed: Boolean, unrecorded: Boolean): OwnerCheckUiState {
+    private fun OwnerCheckUiState.answered(
+        r: OwnerCheckOutcome,
+        passed: Boolean,
+        unrecorded: Boolean,
+        sameFront: Boolean,
+    ): OwnerCheckUiState {
         val retry = r is OwnerCheckOutcome.BadPassword || r is OwnerCheckOutcome.Backoff || r is OwnerCheckOutcome.Failed
-        val keep = pinKept && retry
+        val keep = pinKept && retry && sameFront
         val left = (r as? OwnerCheckOutcome.BadPassword)?.checksLeft?.takeIf { keep && it > 0 }
         return copy(
             busy = false, pin = if (keep) pin else "", password = "", passed = passed && !unrecorded, passedUnrecorded = unrecorded,

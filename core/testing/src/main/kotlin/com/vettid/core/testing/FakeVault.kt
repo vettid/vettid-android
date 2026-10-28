@@ -424,6 +424,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastPin = pin
         lastApproved = approve
         lastCancelRecovery = cancelRecovery
+        duringUnlock?.invoke()
         val r = unlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
         if (r !is UnlockAttempt.Failed) refusedByVault.value = false // a sealed answer, as VaultManager
         if (!(r is UnlockAttempt.Failed && r.kind in setOf(FailureKind.NETWORK, FailureKind.NO_RESPONSE))) {
@@ -452,6 +453,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
         lastPassword = password
+        val gen = foregroundGen
         val r = unlock(pin, approve, cancelRecovery)
         calls += "unlockWithCheck"
         if (r == UnlockAttempt.Success || r is UnlockAttempt.UpdateRefused) {
@@ -459,7 +461,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
             unlockCheckOutcome.value = o
             lockIfTenth(o)
             val retry = (o is OwnerCheckOutcome.BadPassword && (o.checksLeft ?: 0) > 0) || o is OwnerCheckOutcome.Backoff
-            unlockPin = pin.takeIf { retry && foregroundFlow.value }
+            unlockPin = pin.takeIf { retry && foregroundFlow.value && gen == foregroundGen }
         }
         return r
     }
@@ -475,9 +477,18 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override fun takeUnlockPin(): String? = unlockPin.also { unlockPin = null }
 
     override fun setForeground(inFront: Boolean) {
+        if (!inFront) {
+            foregroundGen++
+            unlockPin = null
+        }
         foregroundFlow.value = inFront
-        if (!inFront) unlockPin = null
     }
+
+    private var foregroundGen = 0
+    override val foregroundGeneration: Int get() = foregroundGen
+
+    /** Runs inside [unlock], as the app's leaving and coming back would while the request is on its way. */
+    var duringUnlock: (() -> Unit)? = null
 
     private val foregroundFlow = MutableStateFlow(true)
     override val inFront: kotlinx.coroutines.flow.StateFlow<Boolean> get() = foregroundFlow

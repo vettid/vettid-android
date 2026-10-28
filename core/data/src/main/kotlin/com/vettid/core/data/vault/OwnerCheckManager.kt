@@ -204,9 +204,10 @@ class OwnerCheckManager(
      * The unlock of a vault that may be past its deadline (§3.6.5): reads `vault.status` and, if the vault is
      * held or due, sends the check with the same entries; the answer waits in [unlockCheckOutcome]. After a wrong password
      * or a backoff the held screen shows it and asks for the password only (ANDROID-PLAN 0.1.93): the accepted [pin] is
-     * kept in memory for it ([takeUnlockPin]), and not at all if the app is not in front.
+     * kept in memory for it ([takeUnlockPin]), and not at all if the app is not in front, or left the front since
+     * [generation] ([foregroundGeneration] read before the unlock request) and came back before this answer.
      */
-    suspend fun afterUnlock(pin: String, password: String) {
+    suspend fun afterUnlock(pin: String, password: String, generation: Int = foregroundGeneration) {
         unlockPin = null
         locked.value = false
         endIdleLocked()
@@ -219,7 +220,7 @@ class OwnerCheckManager(
         val r = check(pin, password, null)
         unlockOutcome.value = r
         val retry = (r is OwnerCheckOutcome.BadPassword && (r.checksLeft ?: 0) > 0) || r is OwnerCheckOutcome.Backoff
-        unlockPin = pin.takeIf { retry && foregroundFlow.value }
+        unlockPin = pin.takeIf { retry && foregroundFlow.value && generation == foregroundGeneration }
     }
 
     /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */
@@ -229,9 +230,15 @@ class OwnerCheckManager(
     override fun takeUnlockPin(): String? = unlockPin.also { unlockPin = null }
 
     override fun setForeground(inFront: Boolean) {
+        if (!inFront) {
+            foregroundGen.incrementAndGet()
+            unlockPin = null
+        }
         foregroundFlow.value = inFront
-        if (!inFront) unlockPin = null
     }
+
+    private val foregroundGen = java.util.concurrent.atomic.AtomicInteger()
+    override val foregroundGeneration: Int get() = foregroundGen.get()
 
     private val foregroundFlow = MutableStateFlow(true)
     override val inFront: StateFlow<Boolean> = foregroundFlow.asStateFlow()
@@ -323,16 +330,15 @@ class OwnerCheckManager(
     }
 
     /** A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). */
-    private suspend fun checksLeftAfterFailure(): Int? = checksLeftAfterFailureRead().also {
-        // The tenth failure locks the vault (§3.6.4), whether or not `vault.locking` has arrived yet (ANDROID-PLAN 0.1.93).
-        if (it != null && it <= 0) locked.value = true
-    }
-
-    private suspend fun checksLeftAfterFailureRead(): Int? {
+    private suspend fun checksLeftAfterFailure(): Int? {
         val before = view.value
         val after = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { runCatching { readStatus() }.getOrNull() }
+        val fresh = after != null && after !== before
+        // The tenth failure locks the vault (§3.6.4), whether or not `vault.locking` has arrived yet (ANDROID-PLAN 0.1.93):
+        // marked only from a fresh `vault.status`, never from the estimate below.
+        if (fresh && after != null && after.checksLeft <= 0) locked.value = true
         return when {
-            after != null && after !== before -> after.checksLeft
+            fresh -> after?.checksLeft
             before != null -> {
                 set(before.copy(failures = before.failures + 1))
                 view.value?.checksLeft

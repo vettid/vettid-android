@@ -368,16 +368,33 @@ class OwnerCheckManagerTest {
         assertNull(m.takeUnlockPin())
     }
 
-    /** The tenth failed check locks the vault without waiting for `vault.locking` (ANDROID-PLAN 0.1.93). */
+    /** A departure since the generation read before the unlock request keeps no PIN, though the app is in front again. */
     @Test
-    fun theTenthFailureMarksTheLockWithoutTheNotice() = runTest {
+    fun anOutAndBackSinceTheGenerationKeepsNoPin() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
+        val m = manager(ops)
+        ops.checkError = "bad_password"
+        val gen = m.foregroundGeneration
+        m.setForeground(false)
+        m.setForeground(true)
+        m.afterUnlock("975310", "nope", gen)
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "nope", m.foregroundGeneration)
+        assertEquals("975310", m.takeUnlockPin())
+    }
+
+    /**
+     * The lock is marked from a fresh status only, not from the estimate (here the status read does not answer in time, as in
+     * this harness the IO dispatcher is outside the test's virtual time).
+     */
+    @Test
+    fun anEstimatedCountNeverMarksTheLock() = runTest {
         val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 9) }
         val m = manager(ops)
         m.refreshOwnerCheck()
         ops.checkError = "bad_password"
-        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 10)
         assertEquals(OwnerCheckOutcome.BadPassword(0), m.check("975310", "nope"))
-        assertTrue(m.lockedByOwnerCheck.value)
+        assertEquals(false, m.lockedByOwnerCheck.value)
     }
 
     /** The notices are the feed's unread `owner_check.*` items (one source: the feed, ANDROID-PLAN 0.1.23, 6). */

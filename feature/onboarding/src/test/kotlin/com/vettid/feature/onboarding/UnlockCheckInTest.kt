@@ -226,4 +226,41 @@ class UnlockCheckInTest {
         assertEquals(8, held.uiState.value.unlockedWrong)
         assertEquals("51392846", held.uiState.value.pin)
     }
+
+    /** Out and back while the unlock request runs: the app was in front at the answer, but no PIN is kept. */
+    @Test
+    fun anOutAndBackDuringTheUnlockKeepsNoPin() = runTest {
+        val vm = dueUnlock()
+        vault.duringUnlock = {
+            vault.setForeground(false)
+            vault.setForeground(true)
+        }
+        vault.checkResults.add(OwnerCheckOutcome.BadPassword(7))
+        vm.checkIn("40281795", "nope")
+        advanceUntilIdle()
+        val s = heldScreen().uiState.value
+        assertFalse(s.pinKept)
+        assertEquals("", s.pin)
+        assertEquals(OwnerCheckMessage.BadPassword(7), s.message)
+    }
+
+    /** Submit, out and back, then the answer: the kept PIN is dropped and the screen asks for both. */
+    @Test
+    fun anOutAndBackBetweenSubmitAndAnswerDropsThePin() = runTest {
+        val vm = dueUnlock()
+        vault.checkResults.add(OwnerCheckOutcome.BadPassword(9))
+        vm.checkIn("40281795", "nope")
+        advanceUntilIdle()
+        val held = heldScreen()
+        vault.checkResults.add(OwnerCheckOutcome.BadPassword(8))
+        held.setPassword("again")
+        held.submit()
+        vault.setForeground(false)
+        vault.setForeground(true)
+        advanceUntilIdle()
+        val s = held.uiState.value
+        assertFalse(s.pinKept)
+        assertEquals("", s.pin)
+        assertEquals(OwnerCheckMessage.BadPassword(8), s.message)
+    }
 }
