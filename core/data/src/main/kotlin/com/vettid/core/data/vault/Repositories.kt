@@ -404,6 +404,9 @@ interface VaultRepository {
      */
     suspend fun checkHeldUnlock(pin: String, password: String): OwnerCheckOutcome? = null
 
+    /** An open waits for [checkHeldUnlock]; false again when a lock, a wipe or another unlock ended the wait. */
+    val checkHeld: StateFlow<Boolean> get() = MutableStateFlow(false)
+
     suspend fun lock()
 
     suspend fun overview(): VaultOverview

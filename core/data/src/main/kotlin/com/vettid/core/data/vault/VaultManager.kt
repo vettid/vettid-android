@@ -1474,6 +1474,7 @@ class VaultManager(
 
     private fun lockedByNotice() {
         windowFlow.value = null
+        openHold.clear() // a lock ends a waiting open (ANDROID-PLAN 0.1.93)
         val p = phaseFlow.value
         if (p is AppPhase.Unlocked || p is AppPhase.Setup) {
             phaseFlow.value = AppPhase.Locked
@@ -2199,13 +2200,13 @@ class VaultManager(
      * else the vault sends is held back until the app opens.
      */
     private suspend fun openAfterUnlock(s: Session, gen: Int, before: (suspend () -> Boolean)?) {
-        heldOpen = null
+        openHold.clear()
         if (before == null) {
             openApp(s, gen)
         } else {
             opening.run {
                 // False: the check did not pass on the password; the vault is open, this phone waits for another try.
-                if (before()) openApp(s, gen) else heldOpen = HeldOpen(s, gen)
+                if (before()) openApp(s, gen) else openHold.hold(s, gen)
             }
         }
     }
@@ -2217,10 +2218,9 @@ class VaultManager(
     }
 
     /** An unlock that opened the vault whose check did not pass on the password: the open waits for [checkHeldUnlock]. */
-    private class HeldOpen(val s: Session, val gen: Int)
+    private val openHold = OpenHold<Session>()
 
-    @Volatile
-    private var heldOpen: HeldOpen? = null
+    override val checkHeld: StateFlow<Boolean> get() = openHold.holding
 
     /**
      * (ANDROID-PLAN 0.1.93) Another try of the check after an unlock whose check failed on the password: the vault is
@@ -2228,16 +2228,12 @@ class VaultManager(
      * waiting (a lock, a wipe or another unlock since), and the unlock screen asks for both again.
      */
     override suspend fun checkHeldUnlock(pin: String, password: String): OwnerCheckOutcome? {
-        val h = heldOpen ?: return null
-        if (h.gen != generation) {
-            heldOpen = null
-            return null
-        }
+        val h = openHold.claim(generation) ?: return null
         return opening.run {
             val r = ownerCheck.check(pin, password, null)
             if (r == OwnerCheckOutcome.Passed) {
-                heldOpen = null
-                openApp(h.s, h.gen)
+                openHold.clear()
+                openApp(h.item, h.generation)
             }
             r
         }

@@ -454,28 +454,38 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastPassword = password
         val r = unlock(pin, approve, cancelRecovery)
         calls += "unlockWithCheck"
-        if (r == UnlockAttempt.Success) {
+        if (r == UnlockAttempt.Success || r is UnlockAttempt.UpdateRefused) {
             val o = checkResults.removeFirstOrNull() ?: passed()
             unlockCheckOutcome.value = o
+            lockIfTenth(o)
             // As VaultManager: a wrong password or a backoff leaves the vault open and the app closed, waiting for another try.
-            if (o is OwnerCheckOutcome.BadPassword || o is OwnerCheckOutcome.Backoff) {
+            if ((o is OwnerCheckOutcome.BadPassword && o.checksLeft != null) || o is OwnerCheckOutcome.Backoff) {
                 phase.value = AppPhase.Locked
-                openHeld = true
+                checkHeld.value = true
             }
         }
         return r
     }
 
+    /** As the manager: the tenth failed check locks the vault, whether or not `vault.locking` has arrived. */
+    private fun lockIfTenth(o: OwnerCheckOutcome) {
+        val left = (o as? OwnerCheckOutcome.BadPassword)?.checksLeft ?: (o as? OwnerCheckOutcome.BadPin)?.checksLeft
+        if (left == 0) {
+            lockedByOwnerCheck.value = true
+        }
+    }
+
     /** An unlock's check failed on the password (or backed off): [checkHeldUnlock] has something to retry. */
-    var openHeld = false
+    override val checkHeld = MutableStateFlow(false)
     var lastHeldCheck: Pair<String, String>? = null
 
     override suspend fun checkHeldUnlock(pin: String, password: String): OwnerCheckOutcome? {
-        if (!openHeld) return null
+        if (!checkHeld.value) return null
         lastHeldCheck = pin to password
         val o = checkResults.removeFirstOrNull() ?: passed()
+        lockIfTenth(o)
         if (o == OwnerCheckOutcome.Passed) {
-            openHeld = false
+            checkHeld.value = false
             phase.value = AppPhase.Unlocked
         }
         return o

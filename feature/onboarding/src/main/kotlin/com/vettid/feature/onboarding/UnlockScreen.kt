@@ -92,6 +92,7 @@ fun UnlockContent(
     val p = state.preflight
     val blocked = state.preflightError == FailureKind.RELEASE_ENDED || p?.rollback == true || state.stateRollback
     // ANDROID-PLAN 0.1.93: the PIN kept for "Check in" is forgotten when the app leaves the foreground.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { actions.appEntered() }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { actions.appLeft() }
     FormScaffold(
         title = stringResource(R.string.unlock_title),
@@ -395,6 +396,7 @@ fun UnlockContent(
                     )
                 }
                 when (val m = state.message) {
+                    is UnlockMessage.CheckPasswordWrong -> if (!state.checkRetry) CheckWrongNotice(m)
                     // Release R (§11.14.10): the old phone's "The move didn't finish" could not open the vault.
                     UnlockMessage.MoveBackFailed -> NoticeCard(
                         NoticeKind.URGENT,
@@ -476,17 +478,7 @@ fun UnlockContent(
 private fun CheckRetry(state: UnlockUiState) {
     val m = state.message
     if (m is UnlockMessage.CheckPasswordWrong) {
-        NoticeCard(
-            NoticeKind.WARNING,
-            stringResource(R.string.unlock_owner_check_title),
-            if (m.checksLeft != null) {
-                pluralStringResource(R.plurals.unlock_check_password_wrong, m.checksLeft, m.checksLeft)
-            } else {
-                stringResource(R.string.unlock_check_password_wrong_unknown)
-            },
-            modifier = Modifier.testTag("unlock_check_wrong"),
-            announce = LiveRegionMode.Assertive,
-        )
+        CheckWrongNotice(m)
     } else if (m == null) {
         NoticeCard(
             NoticeKind.INFO,
@@ -503,6 +495,18 @@ private fun CheckRetry(state: UnlockUiState) {
             modifier = Modifier.testTag("unlock_check_wait"),
         )
     }
+}
+
+/** The tries left after a wrong password (ANDROID-PLAN 0.1.93), also on the ordinary screen after the app was left. */
+@Composable
+private fun CheckWrongNotice(m: UnlockMessage.CheckPasswordWrong) {
+    NoticeCard(
+        NoticeKind.WARNING,
+        stringResource(R.string.unlock_owner_check_title),
+        pluralStringResource(R.plurals.unlock_check_password_wrong, m.checksLeft, m.checksLeft),
+        modifier = Modifier.testTag("unlock_check_wrong"),
+        announce = LiveRegionMode.Assertive,
+    )
 }
 
 /**

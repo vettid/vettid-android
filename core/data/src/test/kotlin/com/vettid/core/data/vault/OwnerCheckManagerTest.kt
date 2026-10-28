@@ -332,6 +332,18 @@ class OwnerCheckManagerTest {
         assertEquals(true, m.afterUnlock("975310", "pw"))
     }
 
+    /** The tenth failed check locks the vault without waiting for `vault.locking` (ANDROID-PLAN 0.1.93). */
+    @Test
+    fun theTenthFailureMarksTheLockWithoutTheNotice() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 9) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        ops.checkError = "bad_password"
+        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 10)
+        assertEquals(OwnerCheckOutcome.BadPassword(0), m.check("975310", "nope"))
+        assertTrue(m.lockedByOwnerCheck.value)
+    }
+
     /** The notices are the feed's unread `owner_check.*` items (one source: the feed, ANDROID-PLAN 0.1.23, 6). */
     @Test
     fun noticesAreTheOwnerCheckFeedItems() = runTest {

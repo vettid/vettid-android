@@ -219,8 +219,9 @@ class OwnerCheckManager(
         return !holdsOpen(r)
     }
 
-    /** Whether the open waits for another try of the check: a wrong password (a try used) or a backoff (none used). */
-    private fun holdsOpen(r: OwnerCheckOutcome) = r is OwnerCheckOutcome.BadPassword || r is OwnerCheckOutcome.Backoff
+    /** Whether the open waits for another try: a wrong password with the tries left known (a try used), or a backoff. */
+    private fun holdsOpen(r: OwnerCheckOutcome) =
+        (r is OwnerCheckOutcome.BadPassword && r.checksLeft != null) || r is OwnerCheckOutcome.Backoff
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") Right after an unlock that cancelled a recovery: the owner check at once,
@@ -308,7 +309,12 @@ class OwnerCheckManager(
     }
 
     /** A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). */
-    private suspend fun checksLeftAfterFailure(): Int? {
+    private suspend fun checksLeftAfterFailure(): Int? = checksLeftAfterFailureRead().also {
+        // The tenth failure locks the vault (§3.6.4), whether or not `vault.locking` has arrived yet (ANDROID-PLAN 0.1.93).
+        if (it != null && it <= 0) locked.value = true
+    }
+
+    private suspend fun checksLeftAfterFailureRead(): Int? {
         val before = view.value
         val after = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { runCatching { readStatus() }.getOrNull() }
         return when {
