@@ -334,6 +334,7 @@ class UnlockCheckInTest {
         assertEquals("", s.pin)
         assertNull(s.unlockedWrong)
         assertFalse(s.unlockedOpen)
+        assertEquals(OwnerCheckMessage.Failed(FailureKind.NETWORK, null, null), s.message) // never silent
         held.setPin("40281795")
         held.setPassword("pw")
         assertTrue(held.uiState.value.submitAllowed)
@@ -351,6 +352,26 @@ class UnlockCheckInTest {
         assertTrue(s.pinKept)
         assertEquals("40281795", s.pin)
         assertEquals("", s.password)
+    }
+
+    /** The vault found locked during a backoff: the lock text only, not "Your vault is unlocked…" beside it. */
+    @Test
+    fun aLockDuringABackoffLeavesOnlyTheLockText() = runTest {
+        val vm = dueUnlock()
+        vault.checkResults.add(OwnerCheckOutcome.Backoff(30))
+        vm.checkIn("40281795", "pw")
+        advanceUntilIdle()
+        val held = heldScreen()
+        advanceTimeBy(100)
+        assertTrue(held.uiState.value.unlockedOpen)
+        vault.lockedByOwnerCheck.value = true
+        advanceTimeBy(100)
+        val s = held.uiState.value
+        assertTrue(s.locked)
+        assertFalse(s.unlockedOpen)
+        assertNull(s.unlockedWrong)
+        assertFalse(s.pinKept)
+        assertEquals("", s.pin)
     }
 
     private suspend fun TestScope.heldAfterWrongPassword(): OwnerCheckViewModel {

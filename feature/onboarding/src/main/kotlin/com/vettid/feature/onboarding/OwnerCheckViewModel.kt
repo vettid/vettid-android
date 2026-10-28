@@ -145,7 +145,14 @@ class OwnerCheckViewModel @Inject constructor(
         }
         viewModelScope.launch {
             repo.lockedByOwnerCheck.collect { l ->
-                state.update { if (l) it.copy(locked = true, pin = "", password = "", pinKept = false) else it.copy(locked = false) }
+                // Locked: only the lock text; the vault-is-open and tries lines would contradict it.
+                state.update {
+                    if (l) {
+                        it.copy(locked = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false)
+                    } else {
+                        it.copy(locked = false)
+                    }
+                }
             }
         }
         viewModelScope.launch { repo.presenceUnrecorded.collect { p -> state.update { it.copy(presenceUnrecorded = p) } } }
@@ -259,8 +266,9 @@ class OwnerCheckViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 vault.lock()
-            } catch (_: VaultFailure) {
-                state.update { it.copy(locking = false) }
+            } catch (e: VaultFailure) {
+                // Not expected (an unconfirmed lock stays pending and is retried), but never silent.
+                state.update { it.copy(locking = false, message = OwnerCheckMessage.Failed(e.kind, e.code, e.shownCode)) }
             }
         }
     }
