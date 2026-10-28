@@ -350,7 +350,6 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                         SettingsDivider()
                         SettingsRow(
                             stringResource(R.string.credential_rotate), actions.rotate, icon = Icons.Outlined.Sync,
-                            supporting = stringResource(R.string.credential_rotate_supporting),
                         )
                         SettingsDivider()
                         SettingsSwitchRow(
@@ -702,7 +701,7 @@ fun AlarmContent(state: AlarmUiState, actions: AlarmActions) {
         AlarmStep.ROTATE -> FormScaffold(
             title = stringResource(R.string.credential_alarm_rotate_title),
             body = stringResource(R.string.credential_alarm_rotate_body),
-            primaryLabel = stringResource(R.string.credential_rotate_submit),
+            primaryLabel = stringResource(R.string.credential_alarm_rotate_submit),
             onPrimary = actions.rotate,
             primaryEnabled = state.password.isNotEmpty(),
             busy = state.busy,
