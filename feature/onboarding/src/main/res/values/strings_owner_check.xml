@@ -64,7 +64,7 @@
     <string name="unlock_check_open_waiting">Your vault is unlocked. Enter your credential password to check in.</string>
     <string name="unlock_password_label">Credential password</string>
     <string name="unlock_owner_check_locked_title">Locked after ten wrong checks</string>
-    <string name="unlock_owner_check_locked_body">Your vault locked itself after ten wrong daily checks in a row. Unlock it with your PIN; it then asks for the check again.</string>
+    <string name="unlock_owner_check_locked_body">Your vault locked itself after ten wrong daily checks in a row. Unlock it with your PIN and your credential password.</string>
     <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock. Title and body as ANDROID-PLAN §4 "Locking the vault" part 2 (approved by the owner 2026-10-24); %1$s is the time past the deadline, computed from seconds ("7 days", "7 hours" on staging). -->
     <string name="unlock_idle_locked_title">Your vault locked itself</string>
     <string name="unlock_idle_locked_body">You hadn\'t checked in for %1$s, so your vault locked. Unlock it with your PIN and your credential password to carry on. New messages wait for up to 14 days.</string>
