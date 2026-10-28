@@ -46,6 +46,8 @@ import androidx.navigation.compose.composable
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.ItemCategories
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AuthContext
+import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.needsDecision
 import com.vettid.core.data.vault.message
@@ -289,7 +291,17 @@ private fun PausedNotice(
 
 /** The kind of request, as a row title. */
 @Composable
-fun titleOf(a: Approval): String = stringResource(
+fun titleOf(a: Approval): String {
+    val name = (a as? Approval.Authentication)?.connectionName?.let { AccountNames.isolate(it) }
+    val inline = stringResource(R.string.approvals_a_connection_inline)
+    return when ((a as? Approval.Authentication)?.purpose) {
+        AuthPurpose.SIGNIN -> stringResource(R.string.approvals_auth_signin_title, name ?: inline)
+        AuthPurpose.APPROVAL -> stringResource(R.string.approvals_auth_approval_title, name ?: inline)
+        else -> stringResource(kindTitleRes(a))
+    }
+}
+
+private fun kindTitleRes(a: Approval): Int =
     when (a) {
         is Approval.ConnectionRequest -> if (a.remote) R.string.approvals_type_connection_remote else R.string.approvals_type_connection
         is Approval.OutgoingRequest -> R.string.approvals_type_outgoing
@@ -299,8 +311,7 @@ fun titleOf(a: Approval): String = stringResource(
         is Approval.ShareDecision -> R.string.approvals_type_share
         is Approval.DeviceRequest ->
             if (a.type == "device.session.pending") R.string.approvals_type_session else R.string.approvals_type_device
-    },
-)
+    }
 
 @Composable
 private fun whoOf(a: Approval): String? = when (a) {
@@ -325,7 +336,7 @@ private fun summaryOf(a: Approval): String? = when (a) {
             else -> stringResource(R.string.approvals_summary_sas, sas)
         }
     }
-    is Approval.Authentication -> a.context
+    is Approval.Authentication -> a.context?.let { AuthContext.firstLineIsolated(it) }
     is Approval.GrantRequest -> pluralStringResource(R.plurals.approvals_summary_items, a.entries.size, a.entries.size)
     is Approval.CriticalUse -> "${a.itemName} · ${a.fieldLabel}"
     is Approval.ShareDecision -> pluralStringResource(R.plurals.approvals_summary_items, a.items.size, a.items.size)
@@ -378,7 +389,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         onPrimary = actions.onApprove,
         primaryEnabled = state.canApprove,
         busy = state.busy,
-        secondaryLabel = stringResource(if (a is Approval.ShareDecision) R.string.approvals_share_decline else R.string.approvals_deny),
+        secondaryLabel = stringResource(denyLabelRes(a)),
         onSecondary = actions.onDeny,
         onBack = actions.onBack,
         modifier = modifier.testTag("approval_detail"),
@@ -426,6 +437,13 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
             destructive = true,
         )
     }
+}
+
+/** The decline button: "Not me" for a sign-in challenge (it sends the plain deny), "Decline" for a share, else "Deny". */
+private fun denyLabelRes(a: Approval): Int = when {
+    a is Approval.ShareDecision -> R.string.approvals_share_decline
+    a is Approval.Authentication && a.purpose == AuthPurpose.SIGNIN -> R.string.approvals_auth_signin_deny
+    else -> R.string.approvals_deny
 }
 
 /** A refusal in words; a password backoff counts down to its end; a named limit (0.21.0 §10.1) says which. */
@@ -740,16 +758,21 @@ private fun outgoingBody(a: Approval.OutgoingRequest): String = if (a.sas == nul
 
 @Composable
 @Suppress("CyclomaticComplexMethod")
-private fun bodyOf(a: Approval): String = when (a) {
+private fun bodyOf(a: Approval): String? = when (a) {
     is Approval.ConnectionRequest -> stringResource(
         if (a.remote) R.string.approvals_connection_body_remote else R.string.approvals_connection_body,
         a.name ?: stringResource(R.string.approvals_someone),
     )
     is Approval.OutgoingRequest -> outgoingBody(a)
-    is Approval.Authentication -> stringResource(
-        R.string.approvals_auth_body,
-        a.connectionName ?: stringResource(R.string.approvals_a_connection),
-    )
+    is Approval.Authentication -> when (a.purpose) {
+        AuthPurpose.SIGNIN -> stringResource(R.string.approvals_auth_signin_body)
+        // The title says who asks, and their note follows in full (VAULT-MESSAGING 0.65.0 §10.4).
+        AuthPurpose.APPROVAL -> null
+        AuthPurpose.NONE -> stringResource(
+            R.string.approvals_auth_body,
+            a.connectionName ?: stringResource(R.string.approvals_a_connection),
+        )
+    }
     is Approval.GrantRequest -> stringResource(
         R.string.approvals_grant_body,
         a.connectionName ?: stringResource(R.string.approvals_a_connection),
@@ -773,7 +796,8 @@ private fun approveLabel(a: Approval): String? = when (a) {
         if (a.state == RequestState.PENDING) stringResource(R.string.approvals_connection_approve) else null
     is Approval.OutgoingRequest ->
         if (a.state == RequestState.PENDING && a.sas != null) stringResource(R.string.approvals_outgoing_approve) else null
-    is Approval.Authentication -> stringResource(R.string.approvals_auth_approve)
+    is Approval.Authentication ->
+        stringResource(if (a.purpose == AuthPurpose.NONE) R.string.approvals_auth_approve else R.string.approvals_auth_purpose_approve)
     is Approval.GrantRequest -> stringResource(R.string.approvals_grant_approve)
     is Approval.CriticalUse -> stringResource(R.string.approvals_critical_approve)
     is Approval.ShareDecision -> stringResource(R.string.approvals_share_approve)
@@ -886,9 +910,10 @@ private fun Facts(a: Approval) {
         is Approval.Authentication -> {
             Label(stringResource(R.string.approvals_from))
             Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
-            a.context?.let {
+            // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
+            a.context?.let { AuthContext.isolated(it) }?.let {
                 Label(stringResource(R.string.approvals_context))
-                Value(it)
+                Value(it, Modifier.testTag("auth_context"))
             }
             a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
         }

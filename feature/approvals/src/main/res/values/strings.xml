@@ -66,6 +66,13 @@
     <string name="approvals_expires">Expires %1$s</string>
     <string name="approvals_auth_body">%1$s asks you to prove it is you. Approving signs their challenge with your credential key.</string>
     <string name="approvals_auth_approve">Authenticate</string>
+    <!-- DRAFT (owner approves the texts): a challenge with a purpose, VAULT-MESSAGING 0.65.0 §10.4 "The screens per purpose"; as vettid-ios #154. -->
+    <string name="approvals_auth_signin_title">Sign in to %1$s?</string>
+    <string name="approvals_auth_signin_body">Only approve if you are signing in right now.</string>
+    <string name="approvals_auth_signin_deny">Not me</string>
+    <string name="approvals_auth_approval_title">%1$s asks you to approve</string>
+    <string name="approvals_auth_purpose_approve">Approve</string>
+    <string name="approvals_a_connection_inline">a connection</string>
     <string name="approvals_from">From</string>
     <string name="approvals_context">Their note</string>
     <string name="approvals_grant_body">%1$s asks to see items from your vault.</string>

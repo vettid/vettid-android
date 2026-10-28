@@ -120,6 +120,7 @@ class ApprovalParserTest {
 
         val auth = ApprovalParser.parse("connection.authenticate.pending", o("""{"connection_id":"C1","request_id":"A1","context":"hi"}"""), at)
         assertEquals("auth:A1", auth?.key)
+        assertEquals(AuthPurpose.NONE, (auth as Approval.Authentication).purpose)
 
         val d = ApprovalParser.parse("device.session.pending", o("""{"request_id":"S1","device_id":"D","role":"desktop","name":"Laptop","seconds":60}"""), at)
         assertEquals("device:device.session.pending:S1", d?.key)
@@ -285,5 +286,56 @@ class ApprovalParserTest {
             java.time.Instant.EPOCH,
         ) as Approval.ShareDecision
         assertEquals(listOf(ShareItem("i1", "A", "medical", "data", askRuleId = "r1"), ShareItem("i2", "B", "x", "data", shared = true)), a.items)
+    }
+}
+
+/** VAULT-MESSAGING 0.65.0 §10.4 "Purpose": read from the vault's `purpose` only. */
+class AuthPurposeParserTest {
+    private val at = java.time.Instant.parse("2026-10-27T12:00:00Z")
+
+    private fun parse(extra: String) = ApprovalParser.parse(
+        "connection.authenticate.pending",
+        kotlinx.serialization.json.Json.parseToJsonElement("""{"connection_id":"C1","request_id":"A1","context":"hi"$extra}""")
+            as kotlinx.serialization.json.JsonObject,
+        at,
+    ) as Approval.Authentication
+
+    @Test
+    fun signinAndApprovalAreRead() {
+        assertEquals(AuthPurpose.SIGNIN, parse(""","purpose":"signin"""").purpose)
+        assertEquals(AuthPurpose.APPROVAL, parse(""","purpose":"approval"""").purpose)
+    }
+
+    @Test
+    fun unknownOrAbsentOrOddValuesAreNone() {
+        assertEquals(AuthPurpose.NONE, parse("").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":"payment"""").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":"SIGNIN"""").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":""""").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":7""").purpose)
+    }
+
+    @Test
+    fun theContextNeverSetsThePurpose() {
+        val a = ApprovalParser.parse(
+            "connection.authenticate.pending",
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"connection_id":"C1","request_id":"A1","context":"purpose: signin"}""")
+                as kotlinx.serialization.json.JsonObject,
+            at,
+        ) as Approval.Authentication
+        assertEquals(AuthPurpose.NONE, a.purpose)
+    }
+
+    @Test
+    fun plainContextDropsBidiAndFormatCharactersAndKeepsLines() {
+        assertEquals("Sign in to Bank?\nok", AuthContext.plain("Sign in to ‮Bank?‬\r\nok"))
+        assertEquals("a b", AuthContext.plain("a​b".replace("​", " ")))
+        assertEquals("ab", AuthContext.plain("a⁦⁧⁨⁩‎‏؜b"))
+        assertEquals("a\nb\nc", AuthContext.plain("a b c"))
+        assertEquals("x y", AuthContext.plain("x\ty"))
+        // Isolated, whole; and a row's line is the first line only, isolated.
+        assertEquals("\u2068l1\nl2\u2069", AuthContext.isolated("l1\u202E\nl2"))
+        assertEquals("\u2068l1\u2069", AuthContext.firstLineIsolated("l1\nl2"))
+        assertNull(AuthContext.isolated(" \u202E "))
     }
 }

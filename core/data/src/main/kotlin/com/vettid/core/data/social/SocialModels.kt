@@ -355,6 +355,8 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant?,
         override val connectionName: String? = null,
+        /** Why it asks (§10.4 "Purpose", 0.65.0), from the vault's `purpose` only; [AuthPurpose.NONE] when absent or unknown. */
+        val purpose: AuthPurpose = AuthPurpose.NONE,
     ) : Approval {
         override val key: String get() = "auth:$requestId"
     }

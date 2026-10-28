@@ -54,7 +54,13 @@ object ApprovalParser {
         "connection.authenticate.pending" -> {
             val id = body.s("request_id")
             val conn = body.s("connection_id")
-            if (id == null || conn == null) null else Approval.Authentication(id, conn, body.s("context"), at, instant(body.s("exp")))
+            if (id == null || conn == null) {
+                null
+            } else {
+                Approval.Authentication(
+                    id, conn, body.s("context"), at, instant(body.s("exp")), purpose = AuthPurpose.of(body.s("purpose")),
+                )
+            }
         }
         "grant.pending" -> grant(body, at)
         "critical-secret-use.pending" -> critical(body, at)
