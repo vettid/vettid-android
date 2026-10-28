@@ -301,4 +301,19 @@ class ProbablyLockedTest {
         runCurrent()
         assertEquals("", seen)
     }
+
+    /** Lock vault is offered in every mode while the watch runs, and Cancel stays beside it where the check can be left. */
+    @Test
+    fun lockVaultAndCancelStayOfferedWhileTheWatchRuns() {
+        for (watch in listOf(LockWatch.CHECKING, LockWatch.SILENT)) {
+            for (mode in OwnerCheckMode.entries) {
+                assertTrue(lockOffered(mode, watch))
+                assertEquals(mode != OwnerCheckMode.GATED, cancelBesideLock(mode, watch))
+            }
+        }
+        // Without the watch: gated offers the lock only, the others their Cancel only.
+        assertTrue(lockOffered(OwnerCheckMode.GATED, LockWatch.NONE))
+        assertFalse(lockOffered(OwnerCheckMode.VOLUNTARY, LockWatch.NONE))
+        assertFalse(cancelBesideLock(OwnerCheckMode.HOLD_OFF, LockWatch.NONE))
+    }
 }

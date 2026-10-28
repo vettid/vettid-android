@@ -29,7 +29,7 @@ import java.io.IOException
  */
 @Suppress("CyclomaticComplexMethod", "ThrowsCount")
 internal suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T = try {
-    withContext(Dispatchers.IO) { counted(resend, block) }
+    withContext(Dispatchers.IO) { counted(block) }
 } catch (e: VaultFailure) {
     throw e
 } catch (e: TimeoutCancellationException) {
@@ -112,19 +112,19 @@ internal fun limitOf(e: VaultOpException): VaultLimit? {
 
 /**
  * (ANDROID-PLAN 0.1.95, VAULT-MESSAGING 0.73.0, §3.6.4) Tells [CheckSink] about the answers of the operations that count as
- * failed checks (a `bad_pin` or `bad_password` to one of [CheckSink.COUNTED]) and, failing secure, about any other operation
- * that got no answer ([resend] false: not an idempotent read).
+ * failed checks (a `bad_pin` or `bad_password` to one of [CheckSink.COUNTED]) and about one of them that got no answer (it
+ * may have counted at the vault). An operation outside the list that got no answer is not a check and changes nothing.
  */
-@Suppress("TooGenericExceptionCaught")
-private suspend inline fun <T> counted(resend: Boolean, block: suspend () -> T): T = try {
+private suspend inline fun <T> counted(block: suspend () -> T): T = try {
     block()
 } catch (e: VaultOpException) {
     if (e.type in CheckSink.COUNTED && e.code in CheckSink.CODES) CheckSink.counter?.answered()
     throw e
 } catch (e: CancellationException) {
     throw e
-} catch (e: IOException) {
-    if (!resend) CheckSink.counter?.unanswered()
+} catch (e: VaultStateException) {
+    // Only a counted operation that got no answer may have been a failed check; any other leaves the estimate alone.
+    if (e.type in CheckSink.COUNTED) CheckSink.counter?.unanswered()
     throw e
 }
 
@@ -134,7 +134,7 @@ internal object CheckSink {
         /** An operation that counts as a failed check was answered `bad_pin` or `bad_password`. */
         fun answered()
 
-        /** An operation that is not an idempotent read got no answer. */
+        /** An operation of [COUNTED] got no answer: it may have counted as a failed check. */
         fun unanswered()
     }
 

@@ -465,7 +465,7 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckOutcome.BadPassword(0, estimated = true), m.check("975310", "nope"))
     }
 
-    /** The other operations that count as failed checks (§3.6.4) spend the same estimate; an unanswered one falls to 0. */
+    /** The other operations that count as failed checks (§3.6.4) spend the same estimate, answered or not; others do not. */
     @Test
     fun otherOperationsThatCountSpendTheEstimate() = runTest {
         val ops = opsAt(5)
@@ -478,11 +478,27 @@ class OwnerCheckManagerTest {
         runCatching { vaultGuard { throw VaultOpException("item.get", "bad_password") } }
         // 5 left as read, less two: this failed check leaves 2.
         assertEquals(OwnerCheckOutcome.BadPassword(2, estimated = true), m.check("975310", "nope"))
-        // An idempotent read that got no answer changes nothing; any other operation with no answer falls secure to 0.
-        runCatching { vaultGuard(resend = true) { throw VaultStateException("no response") } }
+        // A message send (not a check) with no answer leaves the estimate alone, whatever its timing.
+        runCatching { vaultGuard { throw VaultStateException("message.send: no response", "message.send") } }
         assertEquals(OwnerCheckOutcome.BadPassword(1, estimated = true), m.check("975310", "nope"))
-        runCatching { vaultGuard { throw VaultStateException("no response") } }
+        // A counted operation with no answer may have counted: exactly one try.
+        runCatching { vaultGuard { throw VaultStateException("pin.change: no response", "pin.change") } }
         assertEquals(OwnerCheckOutcome.BadPassword(0, estimated = true), m.check("975310", "nope"))
+    }
+
+    /** A lock by the member during a read drops the read's result (the epoch moved). */
+    @Test
+    fun aProbeThatFinishesAfterTheMembersLockIsDropped() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        memberState = "locked"
+        memberGate = kotlinx.coroutines.CompletableDeferred()
+        val late = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
+        Thread.sleep(200)
+        m.onLockedHere()
+        memberGate!!.complete(Unit)
+        assertEquals(VaultProbe.NO_ANSWER, late.await())
+        assertFalse(m.lockedByOwnerCheck.value)
     }
 
     /** The estimate is never kept in the view or on disk: only a count the vault gave. */

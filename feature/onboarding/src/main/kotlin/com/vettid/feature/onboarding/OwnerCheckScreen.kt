@@ -49,6 +49,7 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.StagingTimeNote
@@ -108,7 +109,8 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         PresenceAfterCheck(title, actions)
         return
     }
-    val lockOffered = state.mode == OwnerCheckMode.GATED || state.watch != LockWatch.NONE
+    val lockOffered = lockOffered(state.mode, state.watch)
+    val cancelBesideLock = cancelBesideLock(state.mode, state.watch)
     FormScaffold(
         title = title,
         body = body,
@@ -128,6 +130,13 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         secondaryLabel = stringResource(if (lockOffered) R.string.ownercheck_lock else R.string.ownercheck_cancel),
         onSecondary = if (lockOffered) actions::lockVault else onCancel,
         modifier = Modifier.testTag("owner_check"),
+        // Cancel stays beside Lock vault while the vault is probably locked (a voluntary check or the hold-off can be left).
+        onBack = if (cancelBesideLock) onCancel else null,
+        topActions = {
+            if (cancelBesideLock) {
+                TopBarTextAction(stringResource(R.string.ownercheck_cancel), onCancel, Modifier.testTag("owner_check_cancel"))
+            }
+        },
         header = {
             Spacer(Modifier.height(Spacing.l))
             Icon(
@@ -268,6 +277,12 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 }
 
 private const val WARN_LEFT = 3
+
+/** "Lock vault" is the secondary action when gated, and in every mode while the vault is probably locked (0.73.0). */
+fun lockOffered(mode: OwnerCheckMode, watch: LockWatch): Boolean = mode == OwnerCheckMode.GATED || watch != LockWatch.NONE
+
+/** A check that can be left (not gated) keeps its Cancel, in the top bar, beside "Lock vault" while the watch runs. */
+fun cancelBesideLock(mode: OwnerCheckMode, watch: LockWatch): Boolean = mode != OwnerCheckMode.GATED && watch != LockWatch.NONE
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

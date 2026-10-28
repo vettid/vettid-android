@@ -179,7 +179,7 @@ class VaultOpException(val type: String, val code: String, message: String = "",
 }
 
 /** The device is not (yet) paired with a vault, or the vault sent something it should not have. */
-class VaultStateException(message: String) : IOException("vault client: $message")
+class VaultStateException(message: String, val type: String? = null) : IOException("vault client: $message")
 
 /**
  * The owner rejected this device's pairing or transfer on their phone after its
@@ -1192,7 +1192,7 @@ class VaultDevice private constructor(
         try {
             lock.withLock { sendOnceLocked(id, type, body, exp) }
             return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
-                ?: throw VaultStateException("$type: no response")
+                ?: throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
         }
@@ -1349,7 +1349,7 @@ class VaultDevice private constructor(
                 ensureCollecting()
                 if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, null) }
             }
-            throw VaultStateException("$type: no response")
+            throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
         }
@@ -1898,7 +1898,7 @@ class VaultDevice private constructor(
                 ensureCollecting()
                 if (attempt < APP_RETRIES) lock.withLock { sendRequestLocked(id, type, body, exp) }
             }
-            throw VaultStateException("$type: no response")
+            throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
         }

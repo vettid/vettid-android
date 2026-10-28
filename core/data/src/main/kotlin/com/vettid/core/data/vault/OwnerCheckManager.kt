@@ -195,10 +195,6 @@ class OwnerCheckManager(
     /** Counts the lock, wipe and unlock events a read must not outlive: a result is dropped if it changed during the read. */
     private val epoch = java.util.concurrent.atomic.AtomicInteger()
 
-    /** An owner check of this manager is on its way: its own failure is counted by [failed], not by [CheckSink]. */
-    @Volatile
-    private var checking = false
-
     init {
         // (ANDROID-PLAN 0.1.95) The other operations that count as failed checks (§3.6.4) spend the same estimate.
         CheckSink.counter = object : CheckSink.Counter {
@@ -207,8 +203,7 @@ class OwnerCheckManager(
             }
 
             override fun unanswered() {
-                // Which operation it was, and whether its PIN was tested, is not known here: fail secure, the estimate falls to 0.
-                if (!checking) estimate = 0
+                spendEstimate() // it may have counted; the owner check's own type is not in the list (see [failed])
             }
         }
     }
@@ -401,7 +396,6 @@ class OwnerCheckManager(
     override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
         unlockPin = null
         val until = holdOff?.until?.let { clampHoldOff(it) }
-        checking = true
         val outcome = try {
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
             markOpen()
@@ -425,8 +419,6 @@ class OwnerCheckManager(
             OwnerCheckOutcome.Passed
         } catch (e: VaultFailure) {
             failed(e)
-        } finally {
-            checking = false
         }
         return outcome
     }
