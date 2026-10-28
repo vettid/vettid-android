@@ -312,6 +312,74 @@ class OwnerCheckManagerTest {
         assertEquals(1, ops.checks.size)
     }
 
+    /** (ANDROID-PLAN 0.1.93) A wrong password or a backoff after the unlock keeps the PIN for the held screen, once. */
+    @Test
+    fun theUnlockKeepsThePinForAPasswordOnlyRetry() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
+        val m = manager(ops)
+        ops.checkError = "bad_password"
+        m.afterUnlock("975310", "nope")
+        assertTrue(m.unlockCheckOutcome.value is OwnerCheckOutcome.BadPassword)
+        assertEquals("975310", m.takeUnlockPin())
+        assertNull(m.takeUnlockPin())
+        ops.checkError = "backoff"
+        ops.checkErrorBody = JsonObject(mapOf("retry_after" to JsonPrimitive(300)))
+        m.afterUnlock("975310", "pw")
+        assertEquals("975310", m.takeUnlockPin())
+        // Not in front: never kept. A pass: nothing to keep.
+        m.afterUnlock("975310", "pw")
+        m.setForeground(false)
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "pw")
+        assertNull(m.takeUnlockPin())
+        m.setForeground(true)
+        ops.checkError = null
+        ops.checkErrorBody = null
+        m.afterUnlock("975310", "pw")
+        assertNull(m.takeUnlockPin())
+        // Nothing due: no check, nothing kept.
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
+        m.afterUnlock("975310", "pw")
+        assertNull(m.takeUnlockPin())
+    }
+
+    /** The kept PIN does not outlive a lock of any reason, a wipe, another unlock or a check. */
+    @Test
+    fun theKeptPinEndsWithALockAWipeOrAnotherCheck() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 1) }
+        val m = manager(ops)
+        ops.checkError = "bad_password"
+        m.afterUnlock("975310", "nope")
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "nope")
+        m.onLockedHere()
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "nope")
+        m.clear()
+        assertNull(m.takeUnlockPin())
+        m.afterUnlock("975310", "nope")
+        m.check("975310", "pw")
+        assertNull(m.takeUnlockPin())
+        // The process in the background: not kept, and the front is told.
+        m.setForeground(false)
+        assertEquals(false, m.inFront.value)
+        m.afterUnlock("975310", "nope")
+        assertNull(m.takeUnlockPin())
+    }
+
+    /** The tenth failed check locks the vault without waiting for `vault.locking` (ANDROID-PLAN 0.1.93). */
+    @Test
+    fun theTenthFailureMarksTheLockWithoutTheNotice() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 9) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        ops.checkError = "bad_password"
+        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 10)
+        assertEquals(OwnerCheckOutcome.BadPassword(0), m.check("975310", "nope"))
+        assertTrue(m.lockedByOwnerCheck.value)
+    }
+
     /** The notices are the feed's unread `owner_check.*` items (one source: the feed, ANDROID-PLAN 0.1.23, 6). */
     @Test
     fun noticesAreTheOwnerCheckFeedItems() = runTest {

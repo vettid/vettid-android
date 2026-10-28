@@ -52,16 +52,24 @@
     <string name="ownercheck_cancel">Cancel</string>
 
     <!-- Unlock past the deadline (§3.6.5) and after ten failed checks (§3.6.4) -->
-    <string name="unlock_owner_check_title">Your daily check is due</string>
-    <string name="unlock_owner_check_body">Enter your credential password too: the app sends the check right after the unlock.</string>
+    <string name="unlock_owner_check_title">Unlock and check in</string>
+    <string name="unlock_owner_check_body">Your daily check is due, so your vault needs your PIN and your credential password.</string>
+    <string name="unlock_check_in">Check in</string>
+    <!-- ANDROID-PLAN 0.1.93: the PIN unlocked the vault and the check failed on the password (text approved by the owner 2026-10-28). -->
+    <plurals name="unlock_check_password_wrong">
+        <item quantity="one">Your vault is unlocked, but the credential password was wrong, so your daily check didn\'t pass. %1$d try left before your vault locks again.</item>
+        <item quantity="other">Your vault is unlocked, but the credential password was wrong, so your daily check didn\'t pass. %1$d tries left before your vault locks again.</item>
+    </plurals>
+    <!-- A backoff used no try: the vault is open and the check waits (text approved by the owner 2026-10-28; the countdown is ownercheck_backoff_wait). -->
+    <string name="unlock_check_open_waiting">Your vault is unlocked. Enter your credential password to check in.</string>
     <string name="unlock_password_label">Credential password</string>
     <string name="unlock_owner_check_locked_title">Locked after ten wrong checks</string>
     <string name="unlock_owner_check_locked_body">Your vault locked itself after ten wrong daily checks in a row. Unlock it with your PIN; it then asks for the check again.</string>
     <!-- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock. Title and body as ANDROID-PLAN §4 "Locking the vault" part 2 (approved by the owner 2026-10-24); %1$s is the time past the deadline, computed from seconds ("7 days", "7 hours" on staging). -->
     <string name="unlock_idle_locked_title">Your vault locked itself</string>
-    <string name="unlock_idle_locked_body">You hadn\'t checked in for %1$s, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.</string>
+    <string name="unlock_idle_locked_body">You hadn\'t checked in for %1$s, so your vault locked. Unlock it with your PIN and your credential password to carry on. New messages wait for up to 14 days.</string>
     <!-- Release L: the same when the time is not known (no idle_lock_at was read). Approved by the owner 2026-10-24. -->
-    <string name="unlock_idle_locked_body_unknown">You hadn\'t checked in, so your vault locked. Unlock it with your PIN to carry on. New messages wait for up to 14 days.</string>
+    <string name="unlock_idle_locked_body_unknown">You hadn\'t checked in, so your vault locked. Unlock it with your PIN and your credential password to carry on. New messages wait for up to 14 days.</string>
     <!-- Release L: the held and daily-check screens (ANDROID-PLAN §4 "Locking the vault" part 2; approved by the owner 2026-10-24); %1$s a date and time. -->
     <string name="ownercheck_idle_lock_at">Your vault locks itself on %1$s if you don\'t check in.</string>
 </resources>

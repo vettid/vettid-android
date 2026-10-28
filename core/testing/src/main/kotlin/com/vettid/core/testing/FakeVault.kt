@@ -454,9 +454,33 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastPassword = password
         val r = unlock(pin, approve, cancelRecovery)
         calls += "unlockWithCheck"
-        if (r == UnlockAttempt.Success) unlockCheckOutcome.value = checkResults.removeFirstOrNull() ?: passed()
+        if (r == UnlockAttempt.Success || r is UnlockAttempt.UpdateRefused) {
+            val o = checkResults.removeFirstOrNull() ?: passed()
+            unlockCheckOutcome.value = o
+            lockIfTenth(o)
+            val retry = (o is OwnerCheckOutcome.BadPassword && (o.checksLeft ?: 0) > 0) || o is OwnerCheckOutcome.Backoff
+            unlockPin = pin.takeIf { retry && foregroundFlow.value }
+        }
         return r
     }
+
+    private var unlockPin: String? = null
+
+    /** As the manager: the tenth failed check locks the vault, whether or not `vault.locking` has arrived. */
+    private fun lockIfTenth(o: OwnerCheckOutcome) {
+        val left = (o as? OwnerCheckOutcome.BadPassword)?.checksLeft ?: (o as? OwnerCheckOutcome.BadPin)?.checksLeft
+        if (left == 0) lockedByOwnerCheck.value = true
+    }
+
+    override fun takeUnlockPin(): String? = unlockPin.also { unlockPin = null }
+
+    override fun setForeground(inFront: Boolean) {
+        foregroundFlow.value = inFront
+        if (!inFront) unlockPin = null
+    }
+
+    private val foregroundFlow = MutableStateFlow(true)
+    override val inFront: kotlinx.coroutines.flow.StateFlow<Boolean> get() = foregroundFlow
 
     override val pendingDeletion = MutableStateFlow<DeletionView?>(null)
 

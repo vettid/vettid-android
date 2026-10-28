@@ -79,8 +79,19 @@ data class OwnerCheckUiState(
     val passedUnrecorded: Boolean = false,
     /** (STAGING-TIME-SCALE) The vault's time scale: the interval as it runs, and the staging note. */
     val timeScale: TimeScaleView = TimeScaleView(),
+    /**
+     * (ANDROID-PLAN 0.1.93) The unlock's PIN was accepted and the check after it failed on the password (or backed off): the
+     * PIN is kept in [pin] only while this screen is in front, and only the password is asked for, with "Check in".
+     */
+    val pinKept: Boolean = false,
+    /** The tries left after the wrong password that followed the unlock ([pinKept]): the approved line under the counts. */
+    val unlockedWrong: Int? = null,
+    /** The check after the unlock ran into a backoff ([pinKept]): the vault is open, the password is asked for. */
+    val unlockedOpen: Boolean = false,
+    /** The vault locked after ten wrong checks (§3.6.4): the lock text, and no check is sent. */
+    val locked: Boolean = false,
 ) {
-    val submitAllowed: Boolean get() = !busy && !locking && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
+    val submitAllowed: Boolean get() = !busy && !locking && !locked && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
 
     override fun toString(): String = "OwnerCheckUiState(mode=$mode, busy=$busy, message=$message, wait=$waitSeconds, passed=$passed)"
 
@@ -98,6 +109,7 @@ interface OwnerCheckActions {
     fun setHoldOff(choice: HoldOffChoice)
     fun submit()
     fun lockVault()
+
 
     /** After a check that passed with the presence notice: the member read it; the screen closes. */
     fun acknowledgePresence() {}
@@ -121,6 +133,18 @@ class OwnerCheckViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
+        // ANDROID-PLAN 0.1.93: the PIN kept for the password-only retry is forgotten when the app leaves the foreground (the
+        // process, not this screen: navigation and rotation keep it); then the same screen asks for both.
+        viewModelScope.launch {
+            repo.inFront.collect { front ->
+                if (!front) state.update { if (it.pinKept) it.copy(pin = "", password = "", pinKept = false, unlockedOpen = false) else it }
+            }
+        }
+        viewModelScope.launch {
+            repo.lockedByOwnerCheck.collect { l ->
+                state.update { if (l) it.copy(locked = true, pin = "", password = "", pinKept = false) else it.copy(locked = false) }
+            }
+        }
         viewModelScope.launch { repo.presenceUnrecorded.collect { p -> state.update { it.copy(presenceUnrecorded = p) } } }
         viewModelScope.launch { vault.timeScale.collect { t -> state.update { it.copy(timeScale = t) } } }
     }
@@ -130,9 +154,15 @@ class OwnerCheckViewModel @Inject constructor(
         ticker?.cancel()
         val after = repo.unlockCheckOutcome.value
         repo.consumeUnlockCheckOutcome()
+        // (ANDROID-PLAN 0.1.93) A check that failed on the password right after the unlock: the PIN is kept, the password asked.
+        val retry = mode == OwnerCheckMode.GATED && (after is OwnerCheckOutcome.BadPassword || after is OwnerCheckOutcome.Backoff)
+        val pin = if (retry) repo.takeUnlockPin() else null
+        val wrong = (after as? OwnerCheckOutcome.BadPassword)?.checksLeft?.takeIf { pin != null && it > 0 }
         state.value = OwnerCheckUiState(
-            mode = mode, view = repo.ownerCheck.value, message = after?.let { messageOf(it) },
+            mode = mode, view = repo.ownerCheck.value, message = after?.takeIf { wrong == null }?.let { messageOf(it) },
             presenceUnrecorded = repo.presenceUnrecorded.value, timeScale = vault.timeScale.value,
+            pin = pin.orEmpty(), pinKept = pin != null, unlockedWrong = wrong,
+            unlockedOpen = pin != null && after is OwnerCheckOutcome.Backoff,
         )
         if (after is OwnerCheckOutcome.Backoff) startBackoff(after.retryAfterSeconds)
         viewModelScope.launch { runCatching { repo.refreshOwnerCheck() } }
@@ -175,14 +205,22 @@ class OwnerCheckViewModel @Inject constructor(
             // keeps the screen, with the notice, until the member goes on.
             val passed = r == OwnerCheckOutcome.Passed
             val unrecorded = passed && repo.presenceUnrecorded.value
-            state.update {
-                it.copy(
-                    busy = false, pin = "", password = "", passed = passed && !unrecorded, passedUnrecorded = unrecorded,
-                    presenceUnrecorded = if (passed) repo.presenceUnrecorded.value else it.presenceUnrecorded, message = messageOf(r),
-                )
-            }
+            state.update { it.answered(r, passed, unrecorded) }
             if (r is OwnerCheckOutcome.Backoff) startBackoff(r.retryAfterSeconds)
         }
+    }
+
+    /** The state after the vault's answer [r]: neither entry is kept, except the unlock's PIN for another try of the password. */
+    private fun OwnerCheckUiState.answered(r: OwnerCheckOutcome, passed: Boolean, unrecorded: Boolean): OwnerCheckUiState {
+        val retry = r is OwnerCheckOutcome.BadPassword || r is OwnerCheckOutcome.Backoff || r is OwnerCheckOutcome.Failed
+        val keep = pinKept && retry
+        val left = (r as? OwnerCheckOutcome.BadPassword)?.checksLeft?.takeIf { keep && it > 0 }
+        return copy(
+            busy = false, pin = if (keep) pin else "", password = "", passed = passed && !unrecorded, passedUnrecorded = unrecorded,
+            presenceUnrecorded = if (passed) repo.presenceUnrecorded.value else presenceUnrecorded,
+            message = if (left != null) null else messageOf(r),
+            pinKept = keep, unlockedWrong = left, unlockedOpen = keep && r is OwnerCheckOutcome.Backoff,
+        )
     }
 
     override fun lockVault() {

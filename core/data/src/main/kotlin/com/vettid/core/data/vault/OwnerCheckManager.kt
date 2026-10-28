@@ -130,6 +130,7 @@ class OwnerCheckManager(
 
     /** Events the manager follows: `vault.held`, `sync.event{owner_check}`, `vault.locking` (the notices come from [onFeed]). */
     fun onEvent(m: VaultMessage) {
+        if (m.type == "vault.locking") unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
         when (m.type) {
             "vault.held" -> onHeld(m)
             "sync.event" -> when (VaultJson.str(m.body, "kind")) {
@@ -201,9 +202,12 @@ class OwnerCheckManager(
 
     /**
      * The unlock of a vault that may be past its deadline (§3.6.5): reads `vault.status` and, if the vault is
-     * held or due, sends the check with the same entries; the answer waits in [unlockCheckOutcome].
+     * held or due, sends the check with the same entries; the answer waits in [unlockCheckOutcome]. After a wrong password
+     * or a backoff the held screen shows it and asks for the password only (ANDROID-PLAN 0.1.93): the accepted [pin] is
+     * kept in memory for it ([takeUnlockPin]), and not at all if the app is not in front.
      */
     suspend fun afterUnlock(pin: String, password: String) {
+        unlockPin = null
         locked.value = false
         endIdleLocked()
         val v = try {
@@ -211,8 +215,26 @@ class OwnerCheckManager(
         } catch (_: VaultFailure) {
             null
         }
-        if (v != null && v.gated(now())) unlockOutcome.value = check(pin, password, null)
+        if (v == null || !v.gated(now())) return
+        val r = check(pin, password, null)
+        unlockOutcome.value = r
+        val retry = (r is OwnerCheckOutcome.BadPassword && (r.checksLeft ?: 0) > 0) || r is OwnerCheckOutcome.Backoff
+        unlockPin = pin.takeIf { retry && foregroundFlow.value }
     }
+
+    /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */
+    @Volatile
+    private var unlockPin: String? = null
+
+    override fun takeUnlockPin(): String? = unlockPin.also { unlockPin = null }
+
+    override fun setForeground(inFront: Boolean) {
+        foregroundFlow.value = inFront
+        if (!inFront) unlockPin = null
+    }
+
+    private val foregroundFlow = MutableStateFlow(true)
+    override val inFront: StateFlow<Boolean> = foregroundFlow.asStateFlow()
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") Right after an unlock that cancelled a recovery: the owner check at once,
@@ -265,6 +287,7 @@ class OwnerCheckManager(
     }
 
     override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
+        unlockPin = null
         val until = holdOff?.until?.let { clampHoldOff(it) }
         val outcome = try {
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
@@ -300,7 +323,12 @@ class OwnerCheckManager(
     }
 
     /** A failed check counts (§3.6.4): re-read `failures` (the tenth locks the vault, and then nothing answers). */
-    private suspend fun checksLeftAfterFailure(): Int? {
+    private suspend fun checksLeftAfterFailure(): Int? = checksLeftAfterFailureRead().also {
+        // The tenth failure locks the vault (§3.6.4), whether or not `vault.locking` has arrived yet (ANDROID-PLAN 0.1.93).
+        if (it != null && it <= 0) locked.value = true
+    }
+
+    private suspend fun checksLeftAfterFailureRead(): Int? {
         val before = view.value
         val after = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { runCatching { readStatus() }.getOrNull() }
         return when {
@@ -346,6 +374,7 @@ class OwnerCheckManager(
         ?: view.value?.idleLockAt?.takeIf { !lockedHere && !now.isBefore(it) }?.let { IdleLocked(idleAfterKnown) }
 
     override fun onLockedHere() {
+        unlockPin = null
         lockedHere = true
         view.value?.let { set(it) }
     }
@@ -446,6 +475,7 @@ class OwnerCheckManager(
 
     /** Forgets everything (a wipe, a deleted vault). */
     fun clear() {
+        unlockPin = null
         view.value = null
         locked.value = false
         unlockOutcome.value = null

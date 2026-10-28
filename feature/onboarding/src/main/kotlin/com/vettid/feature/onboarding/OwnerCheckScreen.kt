@@ -25,7 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -101,7 +104,11 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         title = title,
         body = body,
         primaryLabel = stringResource(
-            if (state.mode == OwnerCheckMode.HOLD_OFF) R.string.ownercheck_submit_hold_off else R.string.ownercheck_submit,
+            when {
+                state.pinKept -> R.string.unlock_check_in
+                state.mode == OwnerCheckMode.HOLD_OFF -> R.string.ownercheck_submit_hold_off
+                else -> R.string.ownercheck_submit
+            },
         ),
         onPrimary = actions::submit,
         primaryEnabled = state.submitAllowed,
@@ -123,6 +130,30 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             if (state.timeScale.stagingNote) StagingTimeNote()
             if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
+            // (ANDROID-PLAN 0.1.93) After an unlock whose check failed: directly under the counts, the approved lines.
+            // The tenth failure locked the vault: the existing lock text, no retry.
+            if (state.locked) {
+                NoticeCard(
+                    NoticeKind.URGENT,
+                    stringResource(R.string.unlock_owner_check_locked_title),
+                    stringResource(R.string.unlock_owner_check_locked_body),
+                    modifier = Modifier.testTag("owner_check_locked"),
+                )
+            }
+            state.unlockedWrong?.takeIf { !state.locked }?.let {
+                Text(
+                    pluralStringResource(R.plurals.unlock_check_password_wrong, it, it),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_unlocked_wrong"),
+                )
+            }
+            if (state.unlockedOpen) {
+                Text(
+                    stringResource(R.string.unlock_check_open_waiting),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("owner_check_unlocked_open"),
+                )
+            }
             // (Release L, §3.6.8) The held and daily-check screens say when the vault locks itself.
             idleLockAtOf(state.mode, v, Instant.now())?.let {
                 Text(
@@ -145,8 +176,8 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 is OwnerCheckMessage.BadPin -> m.checksLeft
                 is OwnerCheckMessage.BadPassword -> m.checksLeft
                 else -> v?.takeIf { it.failures > 0 }?.checksLeft
-            }
-            SecretField(
+            }.takeIf { state.unlockedWrong == null && !state.locked }
+            if (!state.pinKept) SecretField(
                 value = state.pin,
                 onValueChange = actions::setPin,
                 label = stringResource(R.string.ownercheck_pin_label),
