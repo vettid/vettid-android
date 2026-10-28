@@ -12,6 +12,7 @@ import com.vettid.core.vault.NotATransferCodeException
 import com.vettid.core.vault.PairingRejectedException
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.VaultStateException
+import com.vettid.core.vault.opType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -122,9 +123,10 @@ private suspend inline fun <T> counted(block: suspend () -> T): T = try {
     throw e
 } catch (e: CancellationException) {
     throw e
-} catch (e: VaultStateException) {
-    // Only a counted operation that got no answer may have been a failed check; any other leaves the estimate alone.
-    if (e.type in CheckSink.COUNTED) CheckSink.counter?.unanswered()
+} catch (e: IOException) {
+    // No answer (a timeout, a transport failure, a relay refusal): a counted operation may already be at the vault and have
+    // counted; any other leaves the estimate alone. The type comes from the device's send, not from the message.
+    if (e.opType in CheckSink.COUNTED) CheckSink.counter?.unanswered()
     throw e
 }
 

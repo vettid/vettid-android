@@ -444,6 +444,32 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckOutcome.BadPassword(1, estimated = true), m.check("975310", "nope"))
     }
 
+    /** The sink is process-wide: each test starts without a manager listening (the one it makes registers itself). */
+    @org.junit.After
+    fun detachSink() {
+        CheckSink.counter = null
+    }
+
+    private fun tagged(e: java.io.IOException, type: String) = e.also { it.addSuppressed(com.vettid.core.vault.OpTypeTag(type)) }
+
+    /** A counted operation whose send failed (a relay refusal, a timeout, an I/O error) may have counted: one try each. */
+    @Test
+    fun aCountedOperationWithATransportFailureSpendsOne() = runTest {
+        val ops = opsAt(5)
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        ops.checkError = "bad_password"
+        val relay = runCatching { vaultGuard { throw tagged(com.vettid.core.relay.RelayException(503, "unavailable", ""), "pin.change") } }
+        // The failure keeps its class and kind.
+        assertEquals(FailureKind.NETWORK, (relay.exceptionOrNull() as VaultFailure).kind)
+        runCatching { vaultGuard { throw tagged(java.io.IOException("socket timeout"), "vault.delete") } }
+        assertEquals(OwnerCheckOutcome.BadPassword(2, estimated = true), m.check("975310", "nope")) // 5 - 2 - 1
+        // Not counted: a message send, or an untagged failure.
+        runCatching { vaultGuard { throw tagged(java.io.IOException("x"), "message.send") } }
+        runCatching { vaultGuard { throw java.io.IOException("x") } }
+        assertEquals(OwnerCheckOutcome.BadPassword(1, estimated = true), m.check("975310", "nope"))
+    }
+
     private fun opsAt(failures: Int) = Ops().apply {
         status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = failures)
         statusDownAfterCheck = true
