@@ -173,12 +173,6 @@ interface ApprovalsRepository {
     suspend fun declineDeviceRequest(key: String)
 
     /**
-     * Approves a desktop's or agent's access-session request (`device.session.approve{request_id}`, §6.8): the vault's
-     * default length. Only a `device.session.pending` request has this; any other is [FailureKind.NOT_FOUND].
-     */
-    suspend fun approveDeviceSession(key: String)
-
-    /**
      * A device's access ended or the device was removed here (ANDROID-PLAN 0.1.53 AA1): its waiting requests are gone
      * (the vault declined them, §6.8), so its entries leave the list at once.
      */

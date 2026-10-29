@@ -1396,12 +1396,6 @@ class SocialManager(
         }
     }
 
-    override suspend fun approveDeviceSession(key: String) {
-        val req = find(key) as? Approval.DeviceRequest
-        if (req == null || req.type != Approval.DeviceRequest.SESSION_PENDING) throw VaultFailure(FailureKind.NOT_FOUND)
-        decide(key) { it.sessionApprove(req.id) }
-    }
-
     override suspend fun dropDeviceRequests(deviceId: String) {
         edit { l -> l.copy(events = l.events.filterNot { (parsed(it) as? Approval.DeviceRequest)?.deviceId == deviceId }) }
         listedFlow.update { l -> l.filterNot { it is Approval.DeviceRequest && it.deviceId == deviceId } }

@@ -83,17 +83,17 @@ class RenewalTest {
     }
 
     @Test
-    fun aRenewalOffersThreeChoicesAndAFirstRequestTwo() = runTest {
+    fun aRenewalOffersTheEndChoiceAndAFirstRequestDoesNot() = runTest {
         val renewal = vm()
         runCurrent()
         assertEquals(live, renewal.uiState.value.renewalUntil)
-        assertTrue(renewal.uiState.value.canApprove)
+        assertFalse(renewal.uiState.value.canApprove)
         assertTrue("refresh" in devices.calls)
 
         val first = vm(list = listOf(device(expires = null)))
         runCurrent()
         assertNull(first.uiState.value.renewalUntil)
-        assertTrue(first.uiState.value.canApprove)
+        assertFalse(first.uiState.value.canApprove)
     }
 
     @Test
@@ -105,9 +105,9 @@ class RenewalTest {
         assertNotNull(m.uiState.value.approval)
         assertNull(m.uiState.value.error)
         assertFalse(m.uiState.value.gone)
-        m.approve()
+        m.deny()
         runCurrent()
-        assertTrue("approveDeviceSession" in social.calls)
+        assertTrue("declineDeviceRequest" in social.calls)
     }
 
     @Test
@@ -185,7 +185,6 @@ class RenewalTest {
         advanceTimeBy(6_000)
         runCurrent()
         assertNull(m.uiState.value.renewalUntil)
-        assertTrue(m.uiState.value.canApprove)
         assertFalse(m.uiState.value.gone)
     }
 

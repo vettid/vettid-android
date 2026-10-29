@@ -324,11 +324,6 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         drop(key)
     }
 
-    override suspend fun approveDeviceSession(key: String) {
-        call("approveDeviceSession")
-        drop(key)
-    }
-
     companion object {
         /**
          * A connection titled "[first] [last]" (the names on the peer's account, VAULT-MESSAGING 0.18.0 §10.8), with

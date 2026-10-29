@@ -226,7 +226,8 @@ data class ApprovalDetailUiState(
     val canApprove: Boolean get() = when (val a = approval) {
         null -> false
         // Only an access-session request can be approved here; a step-up or referred request can only be declined.
-        is Approval.DeviceRequest -> a.isSession
+        // A desktop's or agent's request can only be declined until AA5 (Allow with a length).
+        is Approval.DeviceRequest -> false
         is Approval.GrantRequest -> grantIndexes.isNotEmpty()
         // 0.10.3: only once the safety code is known, and only once per member.
         is Approval.ConnectionRequest -> a.state == RequestState.PENDING
@@ -392,7 +393,7 @@ class ApprovalDetailViewModel @Inject constructor(
                     val ids = shown ?: a.items.map { it.itemId }
                     repo.decideShare(a.ruleId, include = ids - s.shareExcluded, decline = ids.filter { it in s.shareExcluded })
                 }
-                is Approval.DeviceRequest -> repo.approveDeviceSession(a.key)
+                is Approval.DeviceRequest -> Unit
             }
         }
     }

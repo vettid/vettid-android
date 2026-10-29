@@ -37,12 +37,13 @@ class RenewalScreenTest {
         ApprovalDetailUiState(a.key, a, renewalUntil = until, confirmEnd = confirm, endFailure = failure)
 
     @Test
-    fun aRenewalShowsTheNoticeAndThreeChoices() {
+    fun aRenewalShowsTheNoticeAndTwoChoices() {
         show(state(request()))
         rule.onNodeWithTag("renewal_notice").assertExists()
         rule.onNodeWithText("Denying refuses only the extra time. $iso keeps its current access until ${Times.full(until)}.")
             .assertExists()
-        rule.onNodeWithText("Approve").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("Approve").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("This version of the app", substring = true).fetchSemanticsNodes().size)
         rule.onNodeWithText("Deny").assertExists()
         rule.onNodeWithText("Deny and end access now").assertExists()
     }
@@ -55,10 +56,11 @@ class RenewalScreenTest {
     }
 
     @Test
-    fun aFirstRequestHasNoNoticeAndTwoChoices() {
+    fun aFirstRequestHasNoNoticeAndOnlyDeny() {
         show(state(request(), until = null))
         assertEquals(0, rule.onAllNodesWithTag("renewal_notice").size)
-        rule.onNodeWithText("Approve").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("Approve").fetchSemanticsNodes().size)
+        rule.onNodeWithText("This version of the app does not pair desktops or agents, so it can only decline.").assertExists()
         rule.onNodeWithText("Deny").assertExists()
         assertEquals(0, rule.onAllNodesWithText("Deny and end access now").fetchSemanticsNodes().size)
     }
@@ -92,17 +94,14 @@ class RenewalScreenTest {
         rule.onNodeWithTag("end_retry").performScrollTo().performClick()
         assertEquals(1, again)
         // The request stays open.
-        rule.onNodeWithText("Approve").assertExists()
+        rule.onNodeWithText("Deny").assertExists()
     }
 
     @Test
-    fun approveAndDenyAreTheirOwnCalls() {
-        var approved = 0
+    fun denyIsItsOwnCall() {
         var denied = 0
-        show(state(request()), DecisionActions(onApprove = { approved++ }, onDeny = { denied++ }))
-        rule.onNodeWithText("Approve").performClick()
+        show(state(request()), DecisionActions(onDeny = { denied++ }))
         rule.onNodeWithText("Deny").performClick()
-        assertEquals(1, approved)
         assertEquals(1, denied)
     }
 }

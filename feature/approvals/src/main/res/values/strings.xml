@@ -155,7 +155,6 @@
     <string name="approvals_request">Request</string>
     <!-- VAULT-MESSAGING 0.78.0 §6.8 step 3, texts approved by the owner. -->
     <string name="approvals_renewal_notice">Denying refuses only the extra time. %1$s keeps its current access until %2$s.</string>
-    <string name="approvals_device_approve">Approve</string>
     <string name="approvals_deny_end_access">Deny and end access now</string>
     <string name="approvals_device_v1">This version of the app does not pair desktops or agents, so it can only decline.</string>
     <string name="approvals_grant_their_words">They asked for: %1$s</string>

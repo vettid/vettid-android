@@ -451,7 +451,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         when (a) {
             is Approval.ShareDecision -> ShareFacts(a, state.shareExcluded, actions.onToggleShareItem)
             is Approval.GrantRequest -> GrantFacts(a, state, actions)
-            else -> Facts(a)
+            else -> Facts(a, renewal = state.renewalUntil != null)
         }
         if (state.needs == Needs.PASSWORD) {
             Spacer(Modifier.height(Spacing.l))
@@ -939,7 +939,7 @@ private fun approveLabel(a: Approval): String? = when (a) {
     is Approval.GrantRequest -> stringResource(R.string.approvals_grant_approve)
     is Approval.CriticalUse -> stringResource(R.string.approvals_critical_approve)
     is Approval.ShareDecision -> stringResource(R.string.approvals_share_approve)
-    is Approval.DeviceRequest -> if (a.isSession) stringResource(R.string.approvals_device_approve) else null
+    is Approval.DeviceRequest -> null
 }
 
 @Composable
@@ -958,7 +958,7 @@ private fun Value(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
-private fun Facts(a: Approval) {
+private fun Facts(a: Approval, renewal: Boolean = false) {
     when (a) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
@@ -1129,7 +1129,8 @@ private fun Facts(a: Approval) {
                 Label(stringResource(R.string.approvals_request))
                 Value(it)
             }
-            if (!a.isSession) {
+            // A renewal says what a deny does instead (RenewalNotices).
+            if (!renewal) {
                 Text(stringResource(R.string.approvals_device_v1), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start)
             }
         }
