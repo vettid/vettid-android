@@ -147,6 +147,18 @@ class FeedAuthPurposeTest {
     }
 
     @Test
+    fun aHostileNameIsCleanedBeforeItsIsolationInBothTitles() {
+        val bad = ConnectionInfo("c1", "Bank\u2069\u202E", ConnectionState.ACTIVE)
+        for ((p, res) in listOf(AuthPurpose.SIGNIN to R.string.data_feed_authenticate_signin, AuthPurpose.APPROVAL to R.string.data_feed_authenticate_approval)) {
+            val n = names(p).copy(connections = mapOf("c1" to bad))
+            val t = FeedKinds.title(item(), n)
+            val arg = (t.args.single() as FeedText).literal
+            assertEquals(res, t.res)
+            assertEquals("\u2068Bank\u2069", arg)
+        }
+    }
+
+    @Test
     fun aBatchIsNeverTitledAsASignIn() {
         val title = FeedKinds.title(item(count = 3), names(AuthPurpose.SIGNIN))
         assertEquals(

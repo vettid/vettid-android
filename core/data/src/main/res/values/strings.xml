@@ -142,7 +142,7 @@
     <string name="data_feed_connection_stale">%1$s has not been reachable</string>
     <string name="data_feed_asks_paused">%1$s’s requests are paused</string>
     <string name="data_feed_authenticate">%1$s asks you to confirm it is you</string>
-    <!-- DRAFT (owner approves the texts): a challenge with a purpose, VAULT-MESSAGING 0.65.0 §10.4; as vettid-ios #154. -->
+    <!-- Owner-approved 2026-10-29: a challenge with a purpose, VAULT-MESSAGING 0.65.0 §10.4; as vettid-ios #154. -->
     <string name="data_feed_authenticate_signin">Sign in to %1$s?</string>
     <string name="data_feed_authenticate_signin_body">Only approve if you are signing in right now.</string>
     <string name="data_feed_authenticate_approval">%1$s asks you to approve</string>

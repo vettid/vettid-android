@@ -292,7 +292,7 @@ private fun PausedNotice(
 /** The kind of request, as a row title. */
 @Composable
 fun titleOf(a: Approval): String {
-    val name = (a as? Approval.Authentication)?.connectionName?.let { AccountNames.isolate(it) }
+    val name = (a as? Approval.Authentication)?.connectionName?.let { AuthContext.isolatedName(it) }
     val inline = stringResource(R.string.approvals_a_connection_inline)
     return when ((a as? Approval.Authentication)?.purpose) {
         AuthPurpose.SIGNIN -> stringResource(R.string.approvals_auth_signin_title, name ?: inline)
@@ -911,7 +911,9 @@ private fun Facts(a: Approval) {
             Label(stringResource(R.string.approvals_from))
             Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
             // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
-            a.context?.let { AuthContext.isolated(it) }?.let {
+            val note = a.context?.let { AuthContext.isolated(it) }
+                ?: stringResource(R.string.approvals_auth_no_details).takeIf { a.purpose != AuthPurpose.NONE }
+            note?.let {
                 Label(stringResource(R.string.approvals_context))
                 Value(it, Modifier.testTag("auth_context"))
             }

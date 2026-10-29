@@ -89,6 +89,37 @@ class AuthPurposeScreenTest {
     @Test
     fun theContextCannotSpoofAnApprovalTitle() = spoof(AuthPurpose.APPROVAL, "$iso asks you to approve")
 
+    private fun hostile(purpose: AuthPurpose, title: String) {
+        detail(auth(purpose, name = "Bank\u2069\u202E"))
+        rule.onNodeWithText(title).assertIsDisplayed()
+    }
+
+    @Test
+    fun aHostileNameCannotCloseItsIsolationInASignInTitle() = hostile(AuthPurpose.SIGNIN, "Sign in to \u2068Bank\u2069?")
+
+    @Test
+    fun aHostileNameCannotCloseItsIsolationInAnApprovalTitle() = hostile(AuthPurpose.APPROVAL, "\u2068Bank\u2069 asks you to approve")
+
+    private fun noDetails(purpose: AuthPurpose, ctx: String?) {
+        detail(auth(purpose, context = ctx))
+        rule.onNodeWithText("No details were given. Only approve if you know what this is for.").assertIsDisplayed()
+    }
+
+    @Test
+    fun noContextShowsTheFixedLineForSignIn() = noDetails(AuthPurpose.SIGNIN, null)
+
+    @Test
+    fun noContextShowsTheFixedLineForApproval() = noDetails(AuthPurpose.APPROVAL, null)
+
+    @Test
+    fun anEmptyContextShowsTheFixedLineForApproval() = noDetails(AuthPurpose.APPROVAL, "")
+
+    @Test
+    fun aControlOnlyContextShowsTheFixedLineForSignIn() = noDetails(AuthPurpose.SIGNIN, "\u202E\u202C\u0007")
+
+    @Test
+    fun aControlOnlyContextShowsTheFixedLineForApproval() = noDetails(AuthPurpose.APPROVAL, "\u202E\u202C\u0007")
+
     @Test
     fun theRowsSecondLineHoldsTheFirstLineOfTheContextIsolated() {
         val state = ApprovalsUiState(loading = false, approvals = listOf(auth(AuthPurpose.NONE, context = "Line one\nLine two")))

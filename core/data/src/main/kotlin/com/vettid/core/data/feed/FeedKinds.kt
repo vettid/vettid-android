@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import com.vettid.core.data.R
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AuthContext
 import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.vault.RecoveryRefs
@@ -196,7 +197,7 @@ object FeedKinds {
                 args = listOf(firstName(item, names), count),
             )
         }
-        val known = knownName(item, names)?.let { AccountNames.isolate(it) }?.let { FeedText(literal = it) }
+        val known = knownName(item, names)?.let { AuthContext.isolatedName(it) }?.let { FeedText(literal = it) }
         val aConnection = FeedText(R.string.data_feed_a_connection_inline)
         return when (authenticationPurpose(item, names)) {
             AuthPurpose.SIGNIN -> FeedText(R.string.data_feed_authenticate_signin, listOf(known ?: aConnection))
