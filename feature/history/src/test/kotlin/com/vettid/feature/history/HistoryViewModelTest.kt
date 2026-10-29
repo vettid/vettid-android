@@ -48,6 +48,9 @@ class HistoryViewModelTest {
         private val queue = ArrayDeque(pages.toList())
         val calls = mutableListOf<Map<String, Any?>>()
 
+        /** A vault that does not take `q` (VAULT-MESSAGING before 0.15.0): the phone searches what it loaded. */
+        var refusesSearch = false
+
         override suspend fun auditList(
             connectionId: String?,
             kinds: List<String>?,
@@ -58,6 +61,7 @@ class HistoryViewModelTest {
             until: String?,
         ): AuditPage {
             calls += mapOf("connection_id" to connectionId, "before_seq" to beforeSeq, "q" to q, "limit" to limit)
+            if (refusesSearch && q != null) throw VaultOpException("audit.list", "bad_request")
             return queue.removeFirstOrNull()?.invoke() ?: error("unexpected request ${calls.last()}")
         }
     }
@@ -165,6 +169,37 @@ class HistoryViewModelTest {
         assertTrue(s.end)
         assertFalse(s.partial)
         assertFalse(s.localSearch)
+    }
+
+    /**
+     * Names follow-up (VAULT-MESSAGING §10.8): when this phone runs the search, a query across a name and the words
+     * around it finds the entry; the title it matches carries no FSI/PDI, nor the controls the cleaning removed.
+     */
+    @Test
+    fun aLocalSearchAcrossTheNameAndTheWordsAroundItFindsTheEntry() = runTest(main.dispatcher) {
+        val rlo = "\u202E"
+        val named = FakeSocial().apply { seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam$rlo\u200B", lastName = "Lee"))) }
+        val full = { AuditPage(listOf(entry(900, "call.permission_off")), seq = 1000) }
+        val vault = Vault(*Array(30) { full }).apply { refusesSearch = true }
+        val model = HistoryViewModel(
+            SavedStateHandle(mapOf("connectionId" to "c1")),
+            HistoryManager { vault },
+            named,
+            RuntimeEnvironment.getApplication(),
+            FakeItems(),
+            FakeVault(),
+        )
+        settle(model, ::idle)
+        for (q in listOf("calls from sam lee turned", "FROM Sam Lee", "sam lee turned off", "Lee")) {
+            val before = vault.calls.size
+            model.setQuery(q)
+            val s = settle(model) { idle(it) && it.filter.q == q && vault.calls.size > before }
+            assertEquals(q, listOf(900L), s.entries.map { it.seq })
+        }
+        // Words that are not in the title still miss.
+        val before = vault.calls.size
+        model.setQuery("sam lee turned on")
+        assertTrue(settle(model) { idle(it) && it.filter.q == "sam lee turned on" && vault.calls.size > before }.entries.isEmpty())
     }
 
     @Test

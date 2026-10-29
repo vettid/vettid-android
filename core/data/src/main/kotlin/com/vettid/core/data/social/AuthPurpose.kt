@@ -40,8 +40,12 @@ object AuthContext {
      */
     fun isolatedName(s: String): String? = AccountNames.isolateOrNull(s)
 
-    /** The first line of [plain], isolated, for a list row's second line; null when it has none. */
-    fun firstLineIsolated(s: String): String? = isolated(clean(s).trimStart('\n').lineSequence().first())
+    /**
+     * The first line of [plain] that shows something (a blank, white-space-only or control-only line is skipped),
+     * trimmed and isolated, for a list row's second line; null when no line shows anything.
+     */
+    fun firstLineIsolated(s: String): String? =
+        clean(s).lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { AccountNames.wrapIsolated(it) }
 
     /** Kept: they cannot reorder text, and emoji sequences and Persian or Indic shaping need them. */
     private const val ZWNJ = 0x200C
