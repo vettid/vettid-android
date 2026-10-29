@@ -6,8 +6,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /** The registration rule for a requested name and the receiver's rule for core names (VAULT-MESSAGING 0.18.0/0.19.0 §10.8). */
+// android.icu (Default_Ignorable_Code_Point) needs the Android runtime.
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class AccountNamesTest {
     @Test
     fun registrationRule() {
@@ -134,5 +140,79 @@ class AccountNamesTest {
         assertEquals("Sam", c.secondaryName)
         val invisible = com.vettid.core.data.social.ConnectionInfo("c2", "\u200B\u202E", com.vettid.core.data.social.ConnectionState.ACTIVE)
         assertNull(invisible.secondaryName)
+    }
+
+    // VAULT-MESSAGING 0.76.0 §10.8 "Showing received text".
+
+    @Test
+    fun breaksAreRecognisedInTheTextAsReceived() {
+        // CR+LF is one break; CR, ZWSP, LF is two (the ZWSP is removed only afterwards).
+        assertEquals("a\nb", AccountNames.cleanedLines("a\r\nb"))
+        assertEquals("a\n\nb", AccountNames.cleanedLines("a\r\u200B\nb"))
+        // VT and FF are breaks, not deleted.
+        assertEquals("a b", AccountNames.cleaned("a\u000Bb"))
+        assertEquals("a b", AccountNames.cleaned("a\u000Cb"))
+        assertEquals("a\nb", AccountNames.cleanedLines("a\u000Bb"))
+        assertEquals("a\nb", AccountNames.cleanedLines("a\u000Cb"))
+        assertEquals("a\nb", AccountNames.cleanedLines("a\u0085b"))
+        assertEquals("a\nb", AccountNames.cleanedLines("a\u2028b"))
+        assertEquals("a\nb", AccountNames.cleanedLines("a\u2029b"))
+        assertEquals("a b", AccountNames.cleaned("a\u2028b"))
+    }
+
+    @Test
+    fun keptLinesAreTrimmedPerLineWithNoEmptyLineAtEitherEnd() {
+        assertEquals("one\n\ntwo", AccountNames.cleanedLines("\n \u00A0\r\n  one \n\n\t two\u3000\n \n"))
+        assertNull(AccountNames.cleanedLines("\n \n"))
+    }
+
+    @Test
+    fun overrideAndIsolateInsideTheTextAreRemoved() {
+        assertEquals("Bank", AccountNames.cleaned("\u202EBank"))
+        assertEquals("${fsi}Bank$pdi", AccountNames.isolate("Ba\u2069nk\u202E"))
+        assertEquals("Bank?", AccountNames.cleanedLines("Ban\u2069k\u202E?"))
+        assertEquals("ab", AccountNames.cleaned("a\uDB40\uDC41b")) // tag character
+    }
+
+    @Test
+    fun nothingButIgnorablesAndWhiteSpaceIsEmptyYetStaysInTheShownText() {
+        assertNull(AccountNames.cleaned("\u200D"))
+        assertNull(AccountNames.cleaned("\u200C \u200D"))
+        assertNull(AccountNames.cleaned("\u3164"))
+        assertNull(AccountNames.isolateOrNull("\u3164\u200D\u00A0"))
+        assertNull(AccountNames.cleanedLines("\u3164\n\u200D"))
+        assertEquals("a\u3164", AccountNames.cleaned("a\u3164"))
+        assertEquals("a\u200D", AccountNames.cleaned("a\u200D"))
+        assertTrue(AccountNames.isEmptyText("\u3164\u200D "))
+    }
+
+    @Test
+    fun aLoneSurrogateIsShownAsTheReplacementCharacter() {
+        assertEquals("a\uFFFDb", AccountNames.cleaned("a\uD800b"))
+        assertEquals("a\uFFFDb", AccountNames.cleaned("a\uDC00b"))
+        assertEquals("\uFFFD", AccountNames.cleaned("\uD800"))
+        assertEquals("x\uD83D\uDE00\uFFFD", AccountNames.cleaned("x\uD83D\uDE00\uD83D"))
+    }
+
+    @Test
+    fun aSummaryTakesTheFirstNonEmptyLineAndIsolatesIt() {
+        assertEquals("${fsi}real$pdi", AccountNames.firstLineIsolated("\u3164\n\u200D\u202E\n real \nnext"))
+        assertNull(AccountNames.firstLineIsolated("\u3164\n\u200D"))
+        assertNull(AccountNames.firstLineIsolated(null))
+    }
+
+    @Test
+    fun keptLinesAreIsolatedLineByLine() {
+        assertEquals("${fsi}a$pdi\n${fsi}b$pdi", AccountNames.isolateLines("a\nb"))
+    }
+
+    @Test
+    fun aMessageBubbleKeepsDirectionalMarksOnly() {
+        // RLM, LRM, ALM kept; RLO and the isolates removed; ZWSP removed; ZWJ kept.
+        assertEquals("a\u200Fb\u200Ec\u061Cd\u200De", AccountNames.cleanedMessage("a\u200Fb\u200E\u202Ec\u061C\u2069d\u200B\u200De"))
+        // Breaks as LF; only the ends of the whole text are trimmed, so indentation stays.
+        assertEquals("a\n  b", AccountNames.cleanedMessage("\n\r\n  a\u2028  b \u000B\n"))
+        assertEquals("a\n\nb", AccountNames.cleanedMessage("a\r\u200B\nb"))
+        assertEquals("", AccountNames.cleanedMessage("\u3164 \u200D"))
     }
 }

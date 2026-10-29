@@ -253,8 +253,10 @@ fun MessagesScreen(
 @Composable
 private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
     val name = AccountNames.isolateOrNull(c.connection.displayName) ?: stringResource(R.string.messages_name_not_shared)
+    // The first line that shows something, cleaned and isolated (§10.8 "Showing received text", step 6); "You: " is ours.
     val preview = c.last?.let { m ->
-        if (m.outgoing) stringResource(R.string.messages_preview_you, m.text) else m.text
+        val line = AccountNames.firstLineIsolated(m.text).orEmpty()
+        if (m.outgoing) stringResource(R.string.messages_preview_you, line) else line
     } ?: stringResource(R.string.messages_preview_none)
     val unread = c.unread > 0
     VettIdListRow(
@@ -264,10 +266,10 @@ private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
                 R.plurals.messages_row_unread,
                 c.unread,
                 c.unread,
-                AuthContext.firstLineIsolated(preview).orEmpty(),
+                preview,
             )
         } else {
-            preview.lines().first()
+            preview
         },
         meta = c.last?.let { Times.short(it.sentAt) },
         tileName = AccountNames.cleaned(name) ?: name,
@@ -442,13 +444,14 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
                     m.delivered -> stringResource(R.string.messages_status_delivered)
                     else -> stringResource(R.string.messages_status_sent)
                 }
+                val shown = AuthContext.bubble(m.text)
                 val label = if (status != null) {
-                    stringResource(R.string.messages_cd_outgoing, m.text, time, status)
+                    stringResource(R.string.messages_cd_outgoing, AccountNames.cleanedMessage(m.text), time, status)
                 } else {
-                    stringResource(R.string.messages_cd_incoming, name, m.text, time)
+                    stringResource(R.string.messages_cd_incoming, name, AccountNames.cleanedMessage(m.text), time)
                 }
                 MessageBubble(
-                    text = m.text,
+                    text = shown,
                     outgoing = m.outgoing,
                     meta = status?.let { "$time · $it" } ?: time,
                     accessibilityLabel = label,

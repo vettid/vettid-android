@@ -4,6 +4,7 @@ import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.IkFingerprint
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.Connection
 import com.vettid.core.vault.Message
 import com.vettid.core.vault.VaultJson
@@ -243,7 +244,7 @@ object ApprovalParser {
         size = a.size,
         width = a.width,
         height = a.height,
-        name = com.vettid.core.media.AttachmentNames.sanitize(a.name),
+        name = AccountNames.cleaned(a.name)?.let { com.vettid.core.media.AttachmentNames.sanitize(it) },
     )
 
     /** `connection.authenticate.list` states and `.result` events. */

@@ -197,7 +197,9 @@ class HistoryViewModel @Inject constructor(
         return AuditFilter.kindText(r.kind) + listOfNotNull(
             // Without the isolation (FSI/PDI) around the name: a query across the name and the words around it must match.
             HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item), isolate = false),
-            c?.name, c?.firstName, c?.lastName, c?.accountName,
+            // Cleaned like what is shown (§10.8 step 7); the entry is matched against these.
+            AccountNames.cleaned(c?.name), AccountNames.cleaned(c?.firstName), AccountNames.cleaned(c?.lastName),
+            AccountNames.cleaned(c?.accountName),
             item,
             device,
         )

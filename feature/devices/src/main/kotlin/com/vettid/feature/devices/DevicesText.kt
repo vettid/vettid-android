@@ -47,7 +47,17 @@ internal object DeviceText {
 
     /** The name inside a sentence: bidirectionally isolated (a self-asserted name may run either way, §10.8). */
     @Composable
-    fun sentenceName(d: DeviceInfo): String = AccountNames.isolate(name(d))
+    fun sentenceName(d: DeviceInfo): String = when {
+        d.name.isNotEmpty() -> AccountNames.isolate(name(d))
+        d.isAgent -> stringResource(R.string.devices_an_agent)
+        d.kind == DeviceInfo.KIND_DESKTOP -> stringResource(R.string.devices_a_desktop)
+        else -> AccountNames.isolate(name(d))
+    }
+
+    /** The agent a pairing shows, inside a sentence: its name isolated, "an agent" when it gave none (§10.8). */
+    @Composable
+    fun sentenceAgent(name: String): String =
+        if (name.isEmpty()) stringResource(R.string.devices_an_agent) else AccountNames.isolate(agentName(name))
 
     /** "Access until 15:40" (the date with it when not today), or "No access". */
     @Composable

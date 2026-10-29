@@ -317,7 +317,7 @@ private fun kindTitleRes(a: Approval): Int =
 private fun whoOf(a: Approval): String? = when (a) {
     is Approval.ConnectionRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
     is Approval.OutgoingRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
-    is Approval.DeviceRequest -> a.deviceName
+    is Approval.DeviceRequest -> deviceWho(a)
     is Approval.ShareDecision -> AccountNames.isolateOrNull(a.connectionName)
         ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
     else -> AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection)
@@ -339,10 +339,23 @@ private fun summaryOf(a: Approval): String? = when (a) {
     }
     is Approval.Authentication -> a.context?.let { AuthContext.firstLineIsolated(it) }
     is Approval.GrantRequest -> pluralStringResource(R.plurals.approvals_summary_items, a.entries.size, a.entries.size)
-    is Approval.CriticalUse -> "${a.itemName} · ${a.fieldLabel}"
+    is Approval.CriticalUse -> criticalItem(a)
     is Approval.ShareDecision -> pluralStringResource(R.plurals.approvals_summary_items, a.items.size, a.items.size)
-    is Approval.DeviceRequest -> a.requestType
+    is Approval.DeviceRequest -> a.requestType?.let { AccountNames.firstLineIsolated(it) }
 }
+
+/** The name a desktop or agent gave itself, isolated; its kind ("a desktop", "an agent") when it gave none (§10.8). */
+@Composable
+private fun deviceWho(a: Approval.DeviceRequest): String? =
+    AccountNames.isolateOrNull(a.deviceName) ?: when (AccountNames.cleaned(a.role)?.lowercase()) {
+        "agent" -> stringResource(R.string.approvals_an_agent_inline)
+        "desktop" -> stringResource(R.string.approvals_a_desktop_inline)
+        else -> null
+    }
+
+/** "item · field", each cleaned and isolated; null when neither shows anything. */
+private fun criticalItem(a: Approval.CriticalUse): String? =
+    listOfNotNull(AccountNames.isolateOrNull(a.itemName), AccountNames.isolateOrNull(a.fieldLabel)).joinToString(" · ").ifEmpty { null }
 
 /** What the decision screen can ask for. */
 data class DecisionActions(
@@ -498,8 +511,8 @@ private fun CriticalResult(status: String, a: Approval, onFinish: () -> Unit, mo
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, actions: DecisionActions) {
     Label(stringResource(R.string.approvals_from))
-    Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection))
-    a.reason?.let {
+    Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+    a.reason?.let { AuthContext.isolated(it) }?.let {
         Label(stringResource(R.string.approvals_reason))
         Value(it)
     }
@@ -509,7 +522,9 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
         // The member's own item as their vault names it (0.21.0: name, category, labels on the entry); an older vault
         // sends only the id, which the item list names.
         val local = if (e.kind == "item" && e.name == null) state.items.firstOrNull { it.itemId == e.ref } else null
-        val itemName = e.name ?: local?.name
+        val itemName = AccountNames.isolateOrNull(e.name ?: local?.name)
+        // The asker's own words (§10.8 "Showing received text"): cleaned and isolated before they sit in a sentence.
+        val theirs = AccountNames.isolateOrNull(e.label)
         val answer = state.grantAnswers[i]?.let { id -> state.items.firstOrNull { it.itemId == id } }
         val grantable = (e.kind == "item" && e.available) || answer != null
         Row(
@@ -525,12 +540,14 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
             Column(Modifier.weight(1f)) {
                 val title = when {
                     // A category is the asker's label, or its identifier as the vault names it (a custom one humanized, §10.7).
-                    e.kind == "category" -> stringResource(R.string.approvals_grant_category, e.label ?: ItemCategories.humanize(e.ref))
+                    e.kind == "category" -> stringResource(
+                        R.string.approvals_grant_category,
+                        theirs ?: AccountNames.isolate(ItemCategories.humanize(e.ref)),
+                    )
                     e.available && itemName != null -> itemName
-                    else -> stringResource(R.string.approvals_grant_item_missing, e.label ?: e.ref)
+                    else -> stringResource(R.string.approvals_grant_item_missing, theirs ?: AccountNames.isolate(e.ref))
                 }
                 Text(title, style = MaterialTheme.typography.bodyLarge)
-                val theirs = e.label
                 val named = e.kind == "item" && e.available && itemName != null
                 if (named && theirs != null) {
                     Text(stringResource(R.string.approvals_grant_their_words, theirs), style = MaterialTheme.typography.bodySmall)
@@ -538,7 +555,10 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
                 val fields = e.labels
                 if (e.kind == "item" && e.available && !fields.isNullOrEmpty()) {
                     Text(
-                        stringResource(R.string.approvals_grant_fields, fields.joinToString(", ") { it.label }),
+                        stringResource(
+                            R.string.approvals_grant_fields,
+                            fields.mapNotNull { AccountNames.isolateOrNull(it.label) }.joinToString(", "),
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.testTag("grant_fields_$i"),
@@ -604,7 +624,7 @@ private fun AnswerPicker(index: Int, category: String, chosen: String?, state: A
                 )
             }
             options.forEach { i ->
-                androidx.compose.material3.DropdownMenuItem(text = { Text(i.name) }, onClick = {
+                androidx.compose.material3.DropdownMenuItem(text = { Text(AccountNames.isolateOrNull(i.name).orEmpty()) }, onClick = {
                     open = false
                     actions.onAnswerGrant(index, i.itemId)
                 })
@@ -628,11 +648,12 @@ private const val DEFAULT_GRANT_SECONDS = WEEK_SECONDS
 private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggle: (String) -> Unit) {
     val names = com.vettid.core.data.items.RuleNames.of(a.rules)
     val who = AccountNames.isolateOrNull(a.connectionName)
-        ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
-        ?: stringResource(R.string.approvals_a_connection)
-    if (a.tags.isNotEmpty()) {
+        ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent_inline) }
+        ?: stringResource(R.string.approvals_a_connection_inline)
+    val tags = a.tags.mapNotNull { AccountNames.isolateOrNull(it) }
+    if (tags.isNotEmpty()) {
         Label(stringResource(R.string.approvals_share_tags))
-        Value(a.tags.joinToString(", "))
+        Value(tags.joinToString(", "))
     }
     a.reason?.let {
         Text(
@@ -655,7 +676,10 @@ private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggl
             Checkbox(checked = i.itemId !in excluded, onCheckedChange = null)
             Spacer(Modifier.width(Spacing.m))
             Column {
-                Text(i.name.ifBlank { stringResource(R.string.approvals_share_unnamed) }, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    AccountNames.isolateOrNull(i.name) ?: stringResource(R.string.approvals_share_unnamed),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
                 if (i.sensitivity == "critical") {
                     Text(
                         stringResource(R.string.approvals_share_usable),
@@ -785,8 +809,8 @@ private fun bodyOf(a: Approval): String? = when (a) {
     is Approval.ShareDecision -> stringResource(
         R.string.approvals_share_body,
         AccountNames.isolateOrNull(a.connectionName)
-            ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
-            ?: stringResource(R.string.approvals_a_connection),
+            ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent_inline) }
+            ?: stringResource(R.string.approvals_a_connection_inline),
     )
     is Approval.DeviceRequest -> stringResource(R.string.approvals_device_body)
 }
@@ -910,7 +934,7 @@ private fun Facts(a: Approval) {
         }
         is Approval.Authentication -> {
             Label(stringResource(R.string.approvals_from))
-            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection))
+            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
             // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
             val note = a.context?.let { AuthContext.isolated(it) }
                 ?: stringResource(R.string.approvals_auth_no_details).takeIf { a.purpose != AuthPurpose.NONE }
@@ -924,9 +948,11 @@ private fun Facts(a: Approval) {
         is Approval.GrantRequest -> Unit
         is Approval.CriticalUse -> {
             Label(stringResource(R.string.approvals_from))
-            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection))
-            Label(stringResource(R.string.approvals_critical_item))
-            Value("${a.itemName} · ${a.fieldLabel}")
+            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+            criticalItem(a)?.let {
+                Label(stringResource(R.string.approvals_critical_item))
+                Value(it)
+            }
             a.kind?.let { k ->
                 Label(stringResource(R.string.approvals_critical_kind))
                 Value(kindText(k))
@@ -934,7 +960,7 @@ private fun Facts(a: Approval) {
             SuitabilityNotice(a)
             Label(stringResource(R.string.approvals_critical_operation))
             Value(stringResource(if (a.operation == "auth") R.string.approvals_operation_auth else R.string.approvals_operation_sign))
-            a.context?.let {
+            a.context?.let { AuthContext.isolated(it) }?.let {
                 Label(stringResource(R.string.approvals_context))
                 Value(it)
             }
@@ -971,12 +997,15 @@ private fun Facts(a: Approval) {
         }
         is Approval.ShareDecision -> {
             Label(stringResource(R.string.approvals_items_asked))
-            a.items.forEach { Text("• ${it.name} (${ItemCategories.humanize(it.category)})", style = MaterialTheme.typography.bodyLarge) }
+            a.items.forEach {
+                val n = AccountNames.isolateOrNull(it.name) ?: stringResource(R.string.approvals_share_unnamed)
+                Text("• $n (${AccountNames.isolate(ItemCategories.humanize(it.category))})", style = MaterialTheme.typography.bodyLarge)
+            }
         }
         is Approval.DeviceRequest -> {
             Label(stringResource(R.string.approvals_device))
-            Value(listOfNotNull(a.deviceName, a.role).joinToString(" · ").ifEmpty { "?" })
-            a.requestType?.let {
+            Value(listOfNotNull(deviceWho(a), AccountNames.isolateOrNull(a.role)).joinToString(" · ").ifEmpty { "?" })
+            a.requestType?.let { AuthContext.isolated(it) }?.let {
                 Label(stringResource(R.string.approvals_request))
                 Value(it)
             }

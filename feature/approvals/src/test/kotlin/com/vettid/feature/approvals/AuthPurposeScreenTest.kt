@@ -75,8 +75,8 @@ class AuthPurposeScreenTest {
     private fun spoof(purpose: AuthPurpose, title: String) {
         detail(auth(purpose, context = "\u202EPay\u202C 40\nSign in to Bank?"))
         rule.onNodeWithTag("auth_context").assertIsDisplayed()
-        // Controls are gone, both lines are kept, the whole is isolated, and the only heading is the real title.
-        rule.onNodeWithText("\u2068Pay 40\nSign in to Bank?\u2069").assertIsDisplayed()
+        // Controls are gone, both lines are kept, each line is isolated, and the only heading is the real title.
+        rule.onNodeWithText("\u2068Pay 40\u2069\n\u2068Sign in to Bank?\u2069").assertIsDisplayed()
         rule.onNodeWithText(title).assertIsDisplayed()
     }
 

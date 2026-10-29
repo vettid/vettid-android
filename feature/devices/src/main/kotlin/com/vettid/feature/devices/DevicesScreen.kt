@@ -32,7 +32,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.navigationBarsPadding
-import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
@@ -71,7 +70,7 @@ fun DevicesScreen(
 ) {
     val snackbar = remember { SnackbarHostState() }
     // The name as the list shows it (a name that could pass for the phone or VettID comes with its role).
-    val removed = state.removedDevice?.let { stringResource(R.string.devices_removed, AccountNames.isolate(DeviceText.name(it))) }
+    val removed = state.removedDevice?.let { stringResource(R.string.devices_removed, DeviceText.sentenceName(it)) }
     LaunchedEffect(removed) {
         val text = removed ?: return@LaunchedEffect
         onRemovedShown()

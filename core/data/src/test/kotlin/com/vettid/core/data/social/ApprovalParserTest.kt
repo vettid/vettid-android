@@ -14,8 +14,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.time.Instant
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class ApprovalParserTest {
     private val at = Instant.parse("2026-10-04T12:00:00Z")
 
@@ -290,6 +295,8 @@ class ApprovalParserTest {
 }
 
 /** VAULT-MESSAGING 0.65.0 §10.4 "Purpose": read from the vault's `purpose` only. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class AuthPurposeParserTest {
     private val at = java.time.Instant.parse("2026-10-27T12:00:00Z")
 
@@ -342,7 +349,7 @@ class AuthPurposeParserTest {
         assertEquals("a\nb\nc", AuthContext.plain("a b c"))
         assertEquals("x y", AuthContext.plain("x\ty"))
         // Isolated, whole; and a row's line is the first line only, isolated.
-        assertEquals("\u2068l1\nl2\u2069", AuthContext.isolated("l1\u202E\nl2"))
+        assertEquals("\u2068l1\u2069\n\u2068l2\u2069", AuthContext.isolated("l1\u202E\nl2"))
         assertEquals("\u2068l1\u2069", AuthContext.firstLineIsolated("l1\nl2"))
         assertNull(AuthContext.isolated(" \u202E "))
         // A row's line is the first line that shows something, never an empty or invisible one.
@@ -354,5 +361,11 @@ class AuthPurposeParserTest {
         assertEquals("\u2068a b\u2069", AuthContext.firstLineIsolated("a\tb\nsecond"))
         assertNull(AuthContext.firstLineIsolated(""))
         assertNull(AuthContext.firstLineIsolated("\u200B\u202E\n\t\n \u2069"))
+    }
+
+    @Test
+    fun messageBubbleKeepsDirectionalMarksRemovesOverridesAndIsolatesEachLine() {
+        assertEquals("\u2068a\u200Fb\u2069\n\u2068c\u2069", AuthContext.bubble("\n a\u200F\u202Eb\r\nc \u2028"))
+        assertEquals("", AuthContext.bubble("\u200B\u3164"))
     }
 }
