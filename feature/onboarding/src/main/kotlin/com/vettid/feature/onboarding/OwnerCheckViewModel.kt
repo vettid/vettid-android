@@ -368,7 +368,8 @@ class OwnerCheckViewModel @Inject constructor(
 
     /** A reconnect or a foreground return: one read now, or after the one running. Never more than one waits. */
     private fun readNowIfWatching() {
-        if (state.value.watch == LockWatch.NONE || !triggerPending.compareAndSet(false, true)) return
+        // Not while the member's Lock vault is on its way (ANDROID-PLAN 0.1.96): its result would be dropped, and the read is noise.
+        if (state.value.watch == LockWatch.NONE || state.value.locking || !triggerPending.compareAndSet(false, true)) return
         triggerJob = viewModelScope.launch {
             try {
                 readOnce()
