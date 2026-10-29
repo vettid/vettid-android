@@ -3,6 +3,7 @@ package com.vettid.feature.history
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.ExportAnswer
@@ -226,12 +227,16 @@ class HistoryExportViewModel @Inject constructor(
                 device = r.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } },
                 item = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] },
             ),
+            isolate = false,
         ),
         category = r.category.id,
-        connectionName = r.connectionId?.let { c.connectionNames[it] ?: context.getString(R.string.history_connection_removed) },
+        connectionName = r.connectionId?.let { cleanName(c.connectionNames[it]) ?: context.getString(R.string.history_connection_removed) },
         deviceName = HistoryDevice.name(r.deviceId, devices, context.getString(R.string.history_device_removed)),
-        itemName = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] ?: context.getString(R.string.history_item_deleted) },
+        itemName = AuditKinds.itemOf(r.kind, r.ref)?.let { cleanName(c.itemNames[it]) ?: context.getString(R.string.history_item_deleted) },
     )
+
+    /** Names go into the file cleaned of every control and format character (no bidi tricks in other viewers). */
+    private fun cleanName(n: String?): String? = AccountNames.cleaned(n)
 
     private fun header(c: ExportContext, a: ExportAnswer, at: Instant): ExportHeader {
         val f = c.filter.exportFilters()
@@ -241,7 +246,9 @@ class HistoryExportViewModel @Inject constructor(
                 category = c.filter.category?.id,
                 kinds = f.kinds,
                 connectionId = f.connectionId,
-                connectionName = f.connectionId?.let { c.connectionNames[it] ?: context.getString(R.string.history_connection_removed) },
+                connectionName = f.connectionId?.let {
+                    cleanName(c.connectionNames[it]) ?: context.getString(R.string.history_connection_removed)
+                },
                 q = f.q,
                 since = f.since,
                 until = f.until,

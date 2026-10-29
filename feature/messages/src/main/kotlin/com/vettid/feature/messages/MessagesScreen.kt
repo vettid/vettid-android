@@ -58,6 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.social.AuthContext
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.social.MessageInfo
@@ -259,7 +260,12 @@ private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
     VettIdListRow(
         title = name,
         supporting = if (unread) {
-            pluralStringResource(R.plurals.messages_row_unread, c.unread, c.unread, preview.lines().first())
+            pluralStringResource(
+                R.plurals.messages_row_unread,
+                c.unread,
+                c.unread,
+                AuthContext.firstLineIsolated(preview).orEmpty(),
+            )
         } else {
             preview.lines().first()
         },
@@ -590,7 +596,7 @@ private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
     val name = AccountNames.isolateOrNull(c.displayName) ?: stringResource(R.string.messages_name_not_shared)
     VettIdListRow(
         title = name,
-        supporting = c.secondaryName,
+        supporting = c.secondaryName, // cleaned by the model
         tileName = AccountNames.cleaned(name) ?: name,
         tileStyle = if (c.favorite) TileStyle.Favorite else TileStyle.Connection,
         onClick = onClick,

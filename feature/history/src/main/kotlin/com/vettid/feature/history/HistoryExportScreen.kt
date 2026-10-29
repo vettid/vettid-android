@@ -42,6 +42,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.ExportAnswer
 import com.vettid.core.data.vault.ExportFormat
@@ -215,7 +216,7 @@ private fun filterWords(w: ExportFilterWords): String {
     val f = w.filter
     val parts = listOfNotNull(
         f.category?.let { stringResource(AuditKinds.categoryLabel(it)) },
-        f.connectionId?.let { w.connectionName ?: stringResource(R.string.history_connection_removed) },
+        f.connectionId?.let { AccountNames.cleaned(w.connectionName) ?: stringResource(R.string.history_connection_removed) },
         w.dates.takeIf { f.since != null || f.until != null },
         f.q?.let { stringResource(R.string.history_export_search, it) },
     )

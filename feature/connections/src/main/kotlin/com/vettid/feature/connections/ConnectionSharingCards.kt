@@ -89,7 +89,7 @@ internal fun OutgoingSharingCard(
     onManage: () -> Unit,
     onDeleteRule: (ShareRule) -> Unit = {},
 ) {
-    val name = first?.let { AccountNames.isolate(it) }
+    val name = AccountNames.isolateOrNull(first)
     DirectionCard(
         accent = MaterialTheme.colorScheme.primary,
         badgeFill = MaterialTheme.colorScheme.primaryContainer,
@@ -152,7 +152,7 @@ internal fun OutgoingSharingCard(
  */
 @Composable
 internal fun IncomingSharingCard(sharing: DetailSharing, first: String?, onAsk: () -> Unit, onOpen: () -> Unit) {
-    val name = first?.let { AccountNames.isolate(it) }
+    val name = AccountNames.isolateOrNull(first)
     DirectionCard(
         accent = MaterialTheme.colorScheme.secondary,
         badgeFill = MaterialTheme.colorScheme.secondaryContainer,
@@ -402,7 +402,7 @@ private fun ReceivedLine(g: GrantView, name: String?, onOpen: () -> Unit) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                AccountNames.isolateOrNull(g.name) ?: g.label?.let { AccountNames.isolate(it) }
+                AccountNames.isolateOrNull(g.name) ?: AccountNames.isolateOrNull(g.label)
                     ?: stringResource(R.string.connections_share_deleted_item),
                 style = MaterialTheme.typography.bodyLarge,
             )

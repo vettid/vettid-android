@@ -85,7 +85,7 @@ data class SharedWithYouRoute(val connectionId: String, val ask: Boolean = false
 /** The connection's name inside a sentence (bidi-isolated, §10.8), or a neutral placeholder. */
 @Composable
 internal fun sharingNameOf(n: String?): String =
-    n?.let { AccountNames.isolate(it) } ?: stringResource(R.string.items_sharing_this_connection)
+    AccountNames.isolateOrNull(n) ?: stringResource(R.string.items_sharing_this_connection)
 
 @Composable
 private fun Section(text: String) = SettingsSectionHeader(text)
@@ -188,7 +188,10 @@ fun ConnectionSharingScreen(state: ConnectionSharingUiState, actions: Connection
     }
     state.confirmRevoke?.let { g ->
         ConfirmDialog(
-            title = stringResource(R.string.items_sharing_revoke_title, AccountNames.isolate(g.name)),
+            title = stringResource(
+                R.string.items_sharing_revoke_title,
+                AccountNames.isolateOrNull(g.name) ?: stringResource(R.string.items_deleted_item),
+            ),
             text = stringResource(
                 if (g.ruleId != null) R.string.items_sharing_revoke_body_rule else R.string.items_sharing_revoke_body,
                 name,
@@ -395,7 +398,10 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
     state.ask?.let { AskDialog(it, name, actions) }
     state.confirmGiveUp?.let { g ->
         ConfirmDialog(
-            title = stringResource(R.string.items_shared_give_up_title, AccountNames.isolate(g.name)),
+            title = stringResource(
+                R.string.items_shared_give_up_title,
+                AccountNames.isolateOrNull(g.name) ?: stringResource(R.string.items_deleted_item),
+            ),
             text = stringResource(R.string.items_shared_give_up_body, name),
             confirmLabel = stringResource(R.string.items_shared_give_up),
             onConfirm = actions.onGiveUp,
@@ -409,7 +415,11 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
 private fun ReceivedCard(g: GrantView, state: SharedWithYouUiState, name: String, actions: SharedWithYouActions) {
     val content = state.opened[g.grantId]
     DetailCard(Modifier.padding(vertical = Spacing.xs).testTag("received_${g.grantId}")) {
-        Text(AccountNames.isolate(content?.name ?: g.name), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            AccountNames.isolateOrNull(content?.name ?: g.name) ?: stringResource(R.string.items_deleted_item),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
         Text(
             receivedLabel(g, content?.category, name),
             style = MaterialTheme.typography.bodySmall,

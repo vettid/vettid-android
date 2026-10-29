@@ -5,6 +5,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.items.ItemsRepository
@@ -161,7 +162,9 @@ class HistoryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { runCatching { connections.refresh() } }
-        viewModelScope.launch { items.items.collect { l -> state.update { it.copy(itemNames = l.associate { i -> i.itemId to i.name }) } } }
+        viewModelScope.launch { items.items.collect { l ->
+                state.update { it.copy(itemNames = l.associate { i -> i.itemId to AccountNames.cleaned(i.name).orEmpty() }) }
+            } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         loadDevices(refresh = false)
         reload()
@@ -181,7 +184,7 @@ class HistoryViewModel @Inject constructor(
     }
 
     private fun names(list: List<ConnectionInfo>): Map<String, String> =
-        list.associate { c -> c.id to c.displayName.ifEmpty { context.getString(R.string.history_connection_unnamed) } }
+        list.associate { c -> c.id to (AccountNames.cleaned(c.displayName) ?: context.getString(R.string.history_connection_unnamed)) }
 
     /**
      * What this phone can search when the vault does not (§10.9's fields it holds): the kind in both forms, the

@@ -3,6 +3,7 @@ package com.vettid.feature.messages
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
 import com.vettid.core.data.calls.CallHistoryEntry
@@ -57,7 +58,8 @@ data class MessagesUiState(
 internal fun ConversationSummary.matches(query: String): Boolean {
     val q = query.trim()
     if (q.isEmpty()) return true
-    return listOfNotNull(connection.displayName, connection.name, last?.text).any { it.contains(q, ignoreCase = true) }
+    return listOfNotNull(connection.displayName, connection.name, last?.text)
+        .any { AccountNames.cleaned(it).orEmpty().contains(q, ignoreCase = true) }
 }
 
 /** Messages (ANDROID-PLAN §4, Proton's inbox): conversations by connection, the Unread chip. */
@@ -514,7 +516,10 @@ class NewMessageViewModel @Inject constructor(private val repo: ConnectionsRepos
     val uiState: StateFlow<NewMessageUiState> = combine(local, repo.connections) { s, cs ->
         s.copy(
             connections = cs.filter { it.state == ConnectionState.ACTIVE }
-                .sortedWith(compareByDescending<ConnectionInfo> { it.favorite }.thenBy { it.displayName.lowercase() }),
+                .sortedWith(
+                    compareByDescending<ConnectionInfo> { it.favorite }
+                        .thenBy { AccountNames.cleaned(it.displayName).orEmpty().lowercase() },
+                ),
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, NewMessageUiState())
 

@@ -66,7 +66,9 @@ data class ConnectionInfo(
     val displayName: String get() = accountName ?: ""
 
     /** The peer's display name when it adds something to the title (non-empty and different), for secondary text. */
-    val secondaryName: String? get() = name.takeIf { it.isNotBlank() && it != displayName && it != accountName }
+    val secondaryName: String?
+        get() = AccountNames.cleaned(name)
+            ?.takeIf { it != AccountNames.cleaned(displayName) && it != AccountNames.cleaned(accountName) }
 }
 
 /**

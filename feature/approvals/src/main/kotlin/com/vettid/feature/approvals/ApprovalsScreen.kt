@@ -838,9 +838,9 @@ private fun Facts(a: Approval) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            a.displayName?.let {
+            AccountNames.isolateOrNull(a.displayName)?.let {
                 Spacer(Modifier.height(Spacing.s))
-                Text(stringResource(R.string.approvals_display_name, AccountNames.isolate(it)), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.approvals_display_name, it), style = MaterialTheme.typography.bodyMedium)
                 Text(
                     stringResource(R.string.approvals_self_asserted),
                     style = MaterialTheme.typography.bodySmall,

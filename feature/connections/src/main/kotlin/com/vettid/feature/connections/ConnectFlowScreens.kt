@@ -387,10 +387,10 @@ fun ConnectionRequestContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        displayName?.let {
+        AccountNames.isolateOrNull(displayName)?.let {
             Spacer(Modifier.height(Spacing.s))
             Text(
-                stringResource(R.string.connections_request_display_name, AccountNames.isolate(it)),
+                stringResource(R.string.connections_request_display_name, it),
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(

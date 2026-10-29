@@ -97,7 +97,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         TransferOutStep.SHOWING -> ShowCode(state, leave)
         TransferOutStep.COMPARE -> FormScaffold(
             title = stringResource(R.string.settings_transfer_compare_title),
-            body = stringResource(R.string.settings_transfer_compare_body, AccountNames.isolateOrNull(state.pending?.name).orEmpty()),
+            body = stringResource(R.string.settings_transfer_compare_body, pendingName(state)),
             primaryLabel = stringResource(R.string.settings_transfer_match),
             onPrimary = actions::codesMatch,
             secondaryLabel = stringResource(R.string.settings_transfer_reject),
@@ -137,7 +137,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         }
         TransferOutStep.APPROVE -> FormScaffold(
             title = stringResource(R.string.settings_transfer_approve_title),
-            body = stringResource(R.string.settings_transfer_approve_body, AccountNames.isolateOrNull(state.pending?.name).orEmpty()),
+            body = stringResource(R.string.settings_transfer_approve_body, pendingName(state)),
             primaryLabel = stringResource(R.string.settings_transfer_approve),
             onPrimary = { actions.askApprove(true) },
             primaryEnabled = state.canApprove,
@@ -195,7 +195,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
             body = if (state.keptKeys) {
                 stringResource(R.string.settings_transfer_moved_kept_body)
             } else {
-                stringResource(R.string.settings_transfer_moved_body, AccountNames.isolateOrNull(state.pending?.name).orEmpty())
+                stringResource(R.string.settings_transfer_moved_body, pendingName(state))
             },
             primaryLabel = stringResource(R.string.settings_done),
             onPrimary = leave,
@@ -218,7 +218,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         ConfirmDialog(
             title = stringResource(
                 R.string.settings_transfer_approve_confirm_title,
-                AccountNames.isolateOrNull(state.pending?.name).orEmpty(),
+                pendingName(state),
             ),
             text = stringResource(R.string.settings_transfer_approve_confirm_body),
             confirmLabel = stringResource(R.string.settings_transfer_approve_confirm),
@@ -343,3 +343,8 @@ private fun TransferError(state: TransferOutUiState) {
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(NoticeKind.URGENT, stringResource(kind.titleRes(R.string.settings_transfer_title)), text, Modifier.testTag("transfer_error"))
 }
+
+/** The new phone's name as it sits in a sentence; a name that is nothing but invisible characters reads as unnamed. */
+@Composable
+private fun pendingName(state: TransferOutUiState): String =
+    AccountNames.isolateOrNull(state.pending?.name) ?: stringResource(R.string.settings_transfer_unnamed_device)

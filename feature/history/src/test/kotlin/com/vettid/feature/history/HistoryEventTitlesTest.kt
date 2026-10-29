@@ -337,4 +337,17 @@ class HistoryEventTitlesTest {
         const val SETTLE_ROUNDS = 100
         const val SETTLE_SLEEP_MS = 20L
     }
+
+    @Test
+    fun aNameOfOnlyInvisibleCharactersFallsBackToTheTitleWithoutIt() {
+        val n = EntryNames(connection = "\u202E\u200B\u2069")
+        assertEquals("Calls turned off", title("call.permission_off", names = n))
+    }
+
+    @Test
+    fun anExportTitleCarriesTheCleanedNameWithNoBidiControls() {
+        val n = EntryNames(connection = "Sam\u202E Lee")
+        assertEquals("Calls from Sam Lee turned off", HistoryText.title(context, "call.permission_off", null, n, isolate = false))
+        assertEquals("Calls from \u2068Sam Lee\u2069 turned off", HistoryText.title(context, "call.permission_off", null, n))
+    }
 }

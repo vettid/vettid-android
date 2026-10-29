@@ -225,6 +225,7 @@
     <string name="settings_transfer_waiting">Waiting for your new phone</string>
     <string name="settings_transfer_cancel">Cancel the transfer</string>
     <string name="settings_transfer_compare_title">Compare the code</string>
+    <string name="settings_transfer_unnamed_device">The other phone</string>
     <string name="settings_transfer_compare_body">%1$s wants to take over your vault. Continue only if it shows the same code.</string>
     <string name="settings_transfer_match">The codes match</string>
     <string name="settings_transfer_reject">Reject</string>

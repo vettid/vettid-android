@@ -119,4 +119,20 @@ class AccountNamesTest {
         assertEquals("${fsi}Bank$pdi", out)
         assertEquals(1, out.count { it == '\u2069' })
     }
+
+    @Test
+    fun aNameOfOnlyFormatCharactersIsNullSoCallersKeepTheirFallback() {
+        assertNull(AccountNames.isolateOrNull("\u200B\u202E\uFEFF"))
+        assertNull(AccountNames.cleaned("\u200B\u202E\uFEFF"))
+    }
+
+    @Test
+    fun theProfileNameIsComparedAndShownCleaned() {
+        val c = com.vettid.core.data.social.ConnectionInfo(
+            "c1", "Sam\u202E", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Samira", lastName = "Rivera",
+        )
+        assertEquals("Sam", c.secondaryName)
+        val invisible = com.vettid.core.data.social.ConnectionInfo("c2", "\u200B\u202E", com.vettid.core.data.social.ConnectionState.ACTIVE)
+        assertNull(invisible.secondaryName)
+    }
 }

@@ -387,7 +387,7 @@ private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
 }
 
 @Composable
-private fun supportingLine(c: ConnectionInfo): String = listOfNotNull(stateLabel(c.state), c.secondaryName)
+private fun supportingLine(c: ConnectionInfo): String = listOfNotNull(stateLabel(c.state), AccountNames.isolateOrNull(c.secondaryName))
     .joinToString(" · ")
     .ifEmpty { stringResource(R.string.connections_state_active) }
 
