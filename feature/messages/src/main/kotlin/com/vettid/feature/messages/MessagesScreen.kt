@@ -265,7 +265,7 @@ private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
     // The first line that shows something, cleaned and isolated (§10.8 "Showing received text", step 6); "You: " is ours.
     // A photo with nothing to show says "Photo"; any other text with nothing to show leaves out the line and its "You: ".
     val photo = stringResource(R.string.messages_preview_photo)
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = androidx.compose.ui.platform.LocalResources.current
     val preview = c.last?.let { m ->
         previewLine(m.text, m.outgoing, m.attachment != null, photo) { context.getString(R.string.messages_preview_you, it) }
     } ?: stringResource(R.string.messages_preview_none)
