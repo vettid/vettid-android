@@ -2088,6 +2088,7 @@ class VaultManager(
          */
         pinTaken: Int? = null,
     ): StepOutcome {
+        ownerCheck.beginUnlock() // a count kept for an earlier attempt is not carried into this one (ANDROID-PLAN 0.1.96)
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
         // (0.44.0, §11.14.9 step 5; H1) With a PIN change unresolved only the unlock screen's two steps know which PIN was
@@ -2355,7 +2356,8 @@ class VaultManager(
         }
 
         override fun ownerCheckDue(): Boolean =
-            ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || ownerCheck.lockedByOwnerCheck.value
+            ownerCheck.ownerCheck.value?.gated(Instant.now()) == true ||
+                (ownerCheck.lockedByOwnerCheck.value && !ownerCheck.lockCauseUnknown.value) // a lock of unknown cause asks for no password
 
         // (0.44.0, §11.14.9; H1) No lock and unlock while a PIN or password change is undecided.
         override fun changeUnresolved(): Boolean = changeHoldFlow.value != null

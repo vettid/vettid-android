@@ -142,7 +142,10 @@ class OwnerCheckManager(
 
     /** Events the manager follows: `vault.held`, `sync.event{owner_check}`, `vault.locking` (the notices come from [onFeed]). */
     fun onEvent(m: VaultMessage) {
-        if (m.type == "vault.locking") unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
+        if (m.type == "vault.locking") {
+            unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
+            epoch.incrementAndGet() // and drops a probe that finishes after it, whatever the reason (ANDROID-PLAN 0.1.96)
+        }
         when (m.type) {
             "vault.held" -> onHeld(m)
             "sync.event" -> when (VaultJson.str(m.body, "kind")) {
@@ -191,6 +194,14 @@ class OwnerCheckManager(
      */
     @Volatile
     private var estimate = 0
+
+    /**
+     * (ANDROID-PLAN 0.1.96, VAULT-MESSAGING 0.73.2) [afterUnlock] read the count: the [onOpened] that ends this unlock keeps it
+     * (one count read "since the unlock" is a count read). Every unlock attempt clears it at its start ([beginUnlock]); a late
+     * `vault.locking` leaves it alone.
+     */
+    @Volatile
+    private var keepCount = false
 
     /** Counts the lock, wipe and unlock events a read must not outlive: a result is dropped if it changed during the read. */
     private val epoch = java.util.concurrent.atomic.AtomicInteger()
@@ -279,8 +290,10 @@ class OwnerCheckManager(
     /** The vault opened (an unlock, or the app started with it unlocked): re-read the check (the notices come with the feed). */
     fun onOpened(afterUnlock: Boolean = true) {
         if (afterUnlock) {
-            // An unlock or a start: a count is read next; until then none is known. A return to the foreground keeps the estimate.
-            estimate = 0
+            // An unlock or a start: a count is read next; until then none is known. A return to the foreground keeps the estimate,
+            // and so does the unlock whose own count [afterUnlock] just read (ANDROID-PLAN 0.1.96, VAULT-MESSAGING 0.73.2).
+            if (!keepCount) estimate = 0
+            keepCount = false
             epoch.incrementAndGet()
         }
         endIdleLocked()
@@ -306,10 +319,11 @@ class OwnerCheckManager(
         unlockPin = null
         markOpen()
         estimate = 0
+        keepCount = false
         epoch.incrementAndGet()
         endIdleLocked()
         val v = try {
-            readStatus()
+            readStatus().also { keepCount = true } // the count is read: the open that follows keeps it (ANDROID-PLAN 0.1.96)
         } catch (_: VaultFailure) {
             null
         }
@@ -320,6 +334,11 @@ class OwnerCheckManager(
         unlockPin = pin.takeIf { retry && foregroundFlow.value && generation == foregroundGeneration }
         // Closes the race with setForeground(false) on the main thread between the test above and the assignment.
         if (!foregroundFlow.value || generation != foregroundGeneration) unlockPin = null
+    }
+
+    /** An unlock attempt starts (ANDROID-PLAN 0.1.96): a count kept for an earlier one is not carried into this one. */
+    fun beginUnlock() {
+        keepCount = false
     }
 
     /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */
@@ -349,6 +368,9 @@ class OwnerCheckManager(
      */
     suspend fun afterCancelledRecovery(pin: String, password: String) {
         markOpen()
+        // No count was read in this session: the check does not go out with the previous session's estimate (ANDROID-PLAN 0.1.96).
+        estimate = 0
+        keepCount = false
         val r = check(pin, password, null)
         if (r != OwnerCheckOutcome.Passed) {
             unlockOutcome.value = r
@@ -588,6 +610,7 @@ class OwnerCheckManager(
         unlockPin = null
         epoch.incrementAndGet()
         estimate = 0
+        keepCount = false
         view.value = null
         markOpen()
         unlockOutcome.value = null

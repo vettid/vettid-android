@@ -270,6 +270,21 @@ class ProbablyLockedTest {
         assertTrue(vm.screen().message is OwnerCheckMessage.Failed)
     }
 
+    /** (ANDROID-PLAN 0.1.96) No trigger read starts while the member's Lock vault is on its way. */
+    @Test
+    fun noTriggerReadStartsWhileTheMembersLockIsOnItsWay() = runTest {
+        val vm = sendCheck(estimatedZero)
+        advanceTimeBy(1_000)
+        vm.lockVault()
+        runCurrent()
+        val base = vault.calls.count { it == "probeVault" }
+        vault.reconnectRelay()
+        vault.setForeground(false)
+        vault.setForeground(true)
+        runCurrent()
+        assertEquals(base, vault.calls.count { it == "probeVault" })
+    }
+
     /** Trigger reads do not pile up: while one runs, at most one more waits. */
     @Test
     fun triggerReadsAreBounded() = runTest {

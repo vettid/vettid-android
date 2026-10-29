@@ -512,6 +512,66 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckOutcome.BadPassword(0, estimated = true), m.check("975310", "nope"))
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.96, VAULT-MESSAGING 0.73.2) The count the unlock's own read gave survives the open that follows: the
+     * unlock's check gets no answer with 6 left, and the next unanswered check says 4, not 0 ("probably locked").
+     */
+    @Test
+    fun theUnlocksOwnCountSurvivesTheOpen() = runTest {
+        val ops = opsAt(4)
+        val m = manager(ops)
+        ops.checkThrows = com.vettid.core.vault.VaultStateException("no response")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertEquals(5, (m.unlockCheckOutcome.value as OwnerCheckOutcome.Failed).estimatedLeft)
+        m.onOpened() // the open that ends this unlock
+        advanceUntilIdle()
+        assertEquals(4, (m.check("975310", "pw") as OwnerCheckOutcome.Failed).estimatedLeft)
+    }
+
+    /** A late `vault.locking` does not clear the kept count; the next unlock attempt does; an open with no read before it resets. */
+    @Test
+    fun theKeptCountIsClearedByTheNextUnlockAttemptOnly() = runTest {
+        val ops = opsAt(4)
+        val m = manager(ops)
+        ops.checkThrows = com.vettid.core.vault.VaultStateException("no response")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        m.onOpened()
+        advanceUntilIdle()
+        assertEquals(4, (m.check("975310", "pw") as OwnerCheckOutcome.Failed).estimatedLeft)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        m.beginUnlock() // the attempt that follows: its open has no count read
+        m.onOpened()
+        advanceUntilIdle()
+        assertEquals(0, (m.check("975310", "pw") as OwnerCheckOutcome.Failed).estimatedLeft)
+    }
+
+    /** (ANDROID-PLAN 0.1.96) The check after a cancelled recovery does not go out with the previous session's estimate. */
+    @Test
+    fun theCheckAfterACancelledRecoveryForgetsTheEstimate() = runTest {
+        val ops = opsAt(2)
+        val m = manager(ops)
+        m.refreshOwnerCheck() // 8 left, as read in an earlier session
+        ops.checkThrows = com.vettid.core.vault.VaultStateException("no response")
+        m.afterCancelledRecovery("975310", "pw")
+        assertEquals(0, (m.unlockCheckOutcome.value as OwnerCheckOutcome.Failed).estimatedLeft)
+    }
+
+    /** (ANDROID-PLAN 0.1.96) A `vault.locking` of any reason drops a probe that finishes after it, not only the member's own. */
+    @Test
+    fun aProbeThatFinishesAfterAnyLockingEventIsDropped() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        memberState = "locked"
+        memberGate = kotlinx.coroutines.CompletableDeferred()
+        val late = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
+        Thread.sleep(200)
+        m.onEvent(event("vault.locking", """{"reason":"update"}"""))
+        memberGate!!.complete(Unit)
+        assertEquals(VaultProbe.NO_ANSWER, late.await())
+        assertFalse(m.lockedByOwnerCheck.value)
+    }
+
     /** A lock by the member during a read drops the read's result (the epoch moved). */
     @Test
     fun aProbeThatFinishesAfterTheMembersLockIsDropped() = runTest {

@@ -113,7 +113,9 @@ class ReleaseUpdateViewModel @Inject constructor(
             set { it.copy(loading = false) }
         }
         viewModelScope.launch {
-            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> v?.gated(Instant.now()) == true || locked }
+            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.lockCauseUnknown) { v, locked, unknown ->
+                v?.gated(Instant.now()) == true || (locked && !unknown) // a lock of unknown cause asks for no password
+            }
                 .collect { due -> set { it.copy(checkDue = due) } }
         }
     }
