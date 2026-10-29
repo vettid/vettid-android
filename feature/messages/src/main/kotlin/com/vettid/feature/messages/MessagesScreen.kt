@@ -250,24 +250,36 @@ fun MessagesScreen(
     }
 }
 
+/**
+ * A conversation row's preview (§10.8 step 6): the first line that shows something, cleaned and isolated; "Photo" for a
+ * photo with nothing to show; otherwise nothing, and then not even the "You: " label ([you] adds it).
+ */
+internal fun previewLine(text: String, outgoing: Boolean, hasPhoto: Boolean, photo: String, you: (String) -> String): String {
+    val line = AccountNames.firstLineIsolated(text) ?: photo.takeIf { hasPhoto } ?: return ""
+    return if (outgoing) you(line) else line
+}
+
 @Composable
 private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
     val name = AccountNames.isolateOrNull(c.connection.displayName) ?: stringResource(R.string.messages_name_not_shared)
+    // The first line that shows something, cleaned and isolated (§10.8 "Showing received text", step 6); "You: " is ours.
+    // A photo with nothing to show says "Photo"; any other text with nothing to show leaves out the line and its "You: ".
+    val photo = stringResource(R.string.messages_preview_photo)
+    val context = androidx.compose.ui.platform.LocalResources.current
     val preview = c.last?.let { m ->
-        if (m.outgoing) stringResource(R.string.messages_preview_you, m.text) else m.text
+        previewLine(m.text, m.outgoing, m.attachment != null, photo) { context.getString(R.string.messages_preview_you, it) }
     } ?: stringResource(R.string.messages_preview_none)
     val unread = c.unread > 0
     VettIdListRow(
         title = name,
         supporting = if (unread) {
-            pluralStringResource(
-                R.plurals.messages_row_unread,
-                c.unread,
-                c.unread,
-                AuthContext.firstLineIsolated(preview).orEmpty(),
-            )
+            if (preview.isEmpty()) {
+                pluralStringResource(R.plurals.messages_row_unread_bare, c.unread, c.unread)
+            } else {
+                pluralStringResource(R.plurals.messages_row_unread, c.unread, c.unread, preview)
+            }
         } else {
-            preview.lines().first()
+            preview
         },
         meta = c.last?.let { Times.short(it.sentAt) },
         tileName = AccountNames.cleaned(name) ?: name,
@@ -442,13 +454,14 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
                     m.delivered -> stringResource(R.string.messages_status_delivered)
                     else -> stringResource(R.string.messages_status_sent)
                 }
+                val shown = AuthContext.bubble(m.text)
                 val label = if (status != null) {
-                    stringResource(R.string.messages_cd_outgoing, m.text, time, status)
+                    stringResource(R.string.messages_cd_outgoing, AccountNames.cleanedMessage(m.text), time, status)
                 } else {
-                    stringResource(R.string.messages_cd_incoming, name, m.text, time)
+                    stringResource(R.string.messages_cd_incoming, name, AccountNames.cleanedMessage(m.text), time)
                 }
                 MessageBubble(
-                    text = m.text,
+                    text = shown,
                     outgoing = m.outgoing,
                     meta = status?.let { "$time · $it" } ?: time,
                     accessibilityLabel = label,

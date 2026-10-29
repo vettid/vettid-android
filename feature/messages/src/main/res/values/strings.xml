@@ -15,6 +15,11 @@
     <string name="messages_invite">Invite a connection</string>
     <string name="messages_name_not_shared">Name not shared yet</string>
     <string name="messages_preview_you">You: %1$s</string>
+    <string name="messages_preview_photo">Photo</string>
+    <plurals name="messages_row_unread_bare">
+        <item quantity="one">%1$d unread</item>
+        <item quantity="other">%1$d unread</item>
+    </plurals>
     <string name="messages_preview_none">No messages yet</string>
     <plurals name="messages_row_unread">
         <item quantity="one">%1$d unread · %2$s</item>

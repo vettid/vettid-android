@@ -1,6 +1,7 @@
 package com.vettid.core.data.devices
 
 import com.vettid.core.crypto.IkFingerprint
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -79,23 +80,10 @@ object DeviceWire {
     const val MAX_NAME = 64
 
     /**
-     * [name] as shown, by code point (as `RecoveryRefs` does): control, format (bidi marks, tag characters), line and
-     * paragraph separators and unassigned code points dropped, white space collapsed, trimmed, cut at [MAX_NAME].
+     * [name] as shown: the one cleaning step for received text (`AccountNames.cleaned`, VAULT-MESSAGING 0.76.0 §10.8),
+     * cut at [MAX_NAME] code points without splitting a grapheme cluster. Empty when nothing shows.
      */
-    fun cleanName(name: String?): String {
-        val kept = name.orEmpty().codePoints().filter { !hidden(it) }.toArray()
-        val collapsed = String(kept, 0, kept.size).replace(WHITE_SPACE, " ").trim()
-        val capped = collapsed.codePoints().limit(MAX_NAME.toLong()).toArray()
-        return String(capped, 0, capped.size).trim()
-    }
-
-    private val WHITE_SPACE = Regex("[\\s\\p{Z}]+")
-
-    private fun hidden(cp: Int): Boolean {
-        val type = Character.getType(cp)
-        return Character.isISOControl(cp) || type == Character.FORMAT.toInt() || type == Character.LINE_SEPARATOR.toInt() ||
-            type == Character.PARAGRAPH_SEPARATOR.toInt() || type == Character.UNASSIGNED.toInt()
-    }
+    fun cleanName(name: String?): String = AccountNames.cleanedCapped(name, MAX_NAME).orEmpty()
 
     private fun JsonObject.s(k: String) = VaultJson.str(this, k)
 

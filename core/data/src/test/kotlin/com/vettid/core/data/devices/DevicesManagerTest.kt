@@ -24,12 +24,17 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.time.Instant
 
 private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObject
 
 /** The devices list and the two actions of AA1 (ANDROID-PLAN 0.1.53 "Devices & agents"; VAULT-MESSAGING §10.3, §10.11). */
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class DevicesManagerTest {
     private val now = Instant.parse("2026-10-21T12:00:00Z")
 
@@ -121,12 +126,15 @@ class DevicesManagerTest {
         val body = obj("""{"devices":[{"kind":"agent","name":"No id"},{"id":"a1","kind":"agent","name":"  Re\u0000d‮   Team  "}]}""")
         val d = DeviceWire.devices(body, self = null)
         assertEquals(listOf("a1"), d.map { it.id })
-        // Control and format characters dropped, white space collapsed.
-        assertEquals("Red Team", d[0].name)
+        // Control and format characters dropped; inner white space stays (§10.8).
+        assertEquals("Red   Team", d[0].name)
         // A tag character (U+E0041) is dropped whole, not by UTF-16 half.
         assertEquals("ab", DeviceWire.cleanName("a\uDB40\uDC41b"))
-        assertEquals("a b", DeviceWire.cleanName("a\u2003\u00a0b"))
+        assertEquals("a\u2003\u00a0b", DeviceWire.cleanName("a\u2003\u00a0b"))
         assertEquals(DeviceWire.MAX_NAME, DeviceWire.cleanName("x".repeat(200)).length)
+        // The cap and the cleaning together: no trailing space after the cut, an invisible name is empty.
+        assertEquals(DeviceWire.MAX_NAME - 1, DeviceWire.cleanName("\u202E" + "x".repeat(DeviceWire.MAX_NAME - 1) + " yy").length)
+        assertEquals("", DeviceWire.cleanName("\u3164\u200D"))
     }
 
     @Test

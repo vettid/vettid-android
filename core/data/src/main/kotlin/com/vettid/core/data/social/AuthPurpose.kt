@@ -23,49 +23,23 @@ enum class AuthPurpose {
     }
 }
 
-/** A challenge's `context` is the connection's own words: shown as plain text that cannot reorder or hide anything. */
+/**
+ * A challenge's `context` (and any note, memo or reason) is another party's own words: cleaned by AccountNames
+ * (VAULT-MESSAGING 0.76.0 §10.8 "Showing received text") and shown as plain text that cannot reorder or hide anything.
+ */
 object AuthContext {
-    /**
-     * [s] with control and format characters (bidirectional overrides, embeddings, isolates and marks, zero-width ones)
-     * removed, tabs as spaces, and line breaks (including U+2028/2029) kept as `\n`, so that a note's lines stay visible.
-     */
-    fun plain(s: String): String = clean(s)
+    /** [s] with every break one LF, Cc and Cf removed (but ZWJ and ZWNJ), trimmed per line; "" when nothing shows. */
+    fun plain(s: String): String = AccountNames.cleanedLines(s).orEmpty()
 
-    /** [plain], in bidirectional isolation (FSI ... PDI, §10.8), for next to other text; null when nothing is left. */
-    fun isolated(s: String): String? = clean(s).takeIf { it.isNotBlank() }?.let { AccountNames.wrapIsolated(it) }
+    /** [plain] with each line in its own isolate (FSI ... PDI), for next to other text; null when nothing shows. */
+    fun isolated(s: String): String? = AccountNames.cleanedLines(s)?.let { AccountNames.isolateLines(it) }
 
-    /**
-     * A received name for a fixed sentence: control and format characters removed (a PDI or RLO in it cannot close the
-     * isolation or reverse the words around it), line breaks as spaces, then isolated; null when nothing is left.
-     */
+    /** A received name for a fixed sentence: cleaned as one line, then isolated; null when empty. */
     fun isolatedName(s: String): String? = AccountNames.isolateOrNull(s)
 
-    /**
-     * The first line of [plain] that shows something (a blank, white-space-only or control-only line is skipped),
-     * trimmed and isolated, for a list row's second line; null when no line shows anything.
-     */
-    fun firstLineIsolated(s: String): String? =
-        clean(s).lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { AccountNames.wrapIsolated(it) }
+    /** The first line that shows something, isolated, for a list row's second line; null when none does. */
+    fun firstLineIsolated(s: String): String? = AccountNames.firstLineIsolated(s)
 
-    /** Kept: they cannot reorder text, and emoji sequences and Persian or Indic shaping need them. */
-    private const val ZWNJ = 0x200C
-    private const val ZWJ = 0x200D
-
-    private val LINE_BREAKS = setOf(0x2028, 0x2029, 0x85)
-
-    private fun clean(s: String): String = buildString {
-        var i = 0
-        while (i < s.length) {
-            val cp = s.codePointAt(i)
-            i += Character.charCount(cp)
-            when {
-                cp == '\n'.code || cp in LINE_BREAKS -> append('\n')
-                cp == '\t'.code -> append(' ')
-                cp == '\r'.code -> if (i >= s.length || s[i] != '\n') append('\n')
-                cp == ZWNJ || cp == ZWJ -> appendCodePoint(cp)
-                Character.getType(cp).let { it == Character.CONTROL.toInt() || it == Character.FORMAT.toInt() } -> Unit
-                else -> appendCodePoint(cp)
-            }
-        }
-    }
+    /** A message's full text for its bubble: breaks as LF, LRM/RLM/ALM kept, each line isolated; "" when empty. */
+    fun bubble(s: String): String = AccountNames.cleanedMessage(s).let { if (it.isEmpty()) it else AccountNames.isolateLines(it) }
 }

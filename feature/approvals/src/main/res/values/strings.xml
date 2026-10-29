@@ -23,6 +23,8 @@
     <string name="approvals_name_not_shared">Name not shared yet</string>
     <string name="approvals_a_connection">A connection</string>
     <string name="approvals_an_agent">An agent</string>
+    <string name="approvals_an_agent_inline">an agent</string>
+    <string name="approvals_a_desktop">A desktop</string>
     <string name="approvals_summary_sas">code %1$s</string>
     <string name="approvals_type_outgoing">Your connection request</string>
     <string name="approvals_summary_handshake">waiting for their vault</string>

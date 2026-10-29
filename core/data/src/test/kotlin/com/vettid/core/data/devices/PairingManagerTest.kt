@@ -170,7 +170,7 @@ class PairingManagerTest {
         m.onEvent(pending(name = "  Red\\u202e  Team  ", sas = "123 456"))
         val p = (m.state.value.stage as PairingStage.Compare).pending
         assertEquals("123456", p.sas)
-        assertEquals("Red Team", p.name)
+        assertEquals("Red  Team", p.name)
         assertTrue(p.comparable)
         assertFalse(p.toString().contains("123456"))
     }

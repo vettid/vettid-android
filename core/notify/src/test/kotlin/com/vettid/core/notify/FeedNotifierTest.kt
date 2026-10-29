@@ -295,4 +295,14 @@ class FeedNotifierTest {
         assertEquals("150 seconds", FeedNotifier.durationText(150, res))
         assertEquals("15 minutes", FeedNotifier.durationText(900, res))
     }
+
+    @Test
+    fun receivedMessageTextIsCleanedIsolatedAndFirstLineOnly() {
+        val fsi = "\u2068"
+        val pdi = "\u2069"
+        assertEquals("${fsi}hi$pdi", notifyMessageText("\u202E\n hi \nsecond", false, res))
+        assertNull(notifyMessageText("\u200B\u3164\n\u200D", false, res))
+        assertEquals("Photo", notifyMessageText("\u3164", true, res))
+        assertEquals("Photo: ${fsi}beach$pdi", notifyMessageText("\u202Ebeach\nmore", true, res))
+    }
 }
