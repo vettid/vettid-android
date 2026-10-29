@@ -50,6 +50,7 @@ import com.vettid.core.data.social.AuthContext
 import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.needsDecision
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
@@ -149,7 +150,7 @@ data class PausedActions(
  * a notice with "Resume requests" and "Remove connection".
  */
 @Composable
-@Suppress("LongParameterList")
+@Suppress("LongParameterList", "CyclomaticComplexMethod")
 fun ApprovalsScreen(
     state: ApprovalsUiState,
     chrome: ShellChrome,
@@ -178,12 +179,21 @@ fun ApprovalsScreen(
                     actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } },
                 )
             }
-            nothing -> EmptyState(
-                icon = Icons.Outlined.TaskAlt,
-                title = stringResource(R.string.approvals_empty_title),
-                body = stringResource(R.string.approvals_empty_body),
-            )
+            nothing -> Column(Modifier.fillMaxSize()) {
+                OpenAsksNotice(state.openAsksError, state.openAsksCode, onRetry, Modifier.padding(Spacing.gutter))
+                EmptyState(
+                    icon = Icons.Outlined.TaskAlt,
+                    title = stringResource(R.string.approvals_empty_title),
+                    body = stringResource(R.string.approvals_empty_body),
+                )
+            }
             else -> LazyColumn(Modifier.fillMaxSize().testTag("approvals"), contentPadding = PaddingValues(bottom = Spacing.xxl)) {
+                // §10.4.2: the open asks could not be read; the list below is what this phone knows.
+                state.openAsksError?.let { k ->
+                    item(key = "open-asks-error") {
+                        OpenAsksNotice(k, state.openAsksCode, onRetry, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
+                    }
+                }
                 // The other member declined a request (0.10.5): it has left the list; told once.
                 items(state.peerDeclines, key = { "declined-${it.requestId}" }) { d ->
                     PeerDeclineNotice(
@@ -218,6 +228,21 @@ fun ApprovalsScreen(
             destructive = true,
         )
     }
+}
+
+/** The open asks (`pending.list`, §10.4.2) could not be read: a held vault is said to be held, not failed. */
+@Composable
+private fun OpenAsksNotice(error: FailureKind?, code: String?, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    if (error == null) return
+    val held = error == FailureKind.OWNER_CHECK_REQUIRED
+    NoticeCard(
+        kind = if (held) NoticeKind.INFO else NoticeKind.WARNING,
+        title = stringResource(if (held) R.string.approvals_open_asks_held_title else R.string.approvals_open_asks_error_title),
+        body = failureText(error.messageRes(), error.vaultCode(code)),
+        // Held: the list reads again by itself when the daily check passes, so there is nothing to retry.
+        actions = if (held) null else ({ TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } }),
+        modifier = modifier.testTag("open_asks_notice"),
+    )
 }
 
 @Composable
