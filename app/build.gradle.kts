@@ -892,6 +892,8 @@ dependencies {
         "${type}Implementation"(projects.core.calls)
         "${type}Implementation"(projects.feature.calls)
     }
+    // Wallet W0 spike (not for merge): bitcoin-kmp in every build type, to measure the APK and run the foss checks.
+    implementation(projects.core.chain)
     if (callsInRelease) {
         "releaseImplementation"(projects.core.calls)
         "releaseImplementation"(projects.feature.calls)

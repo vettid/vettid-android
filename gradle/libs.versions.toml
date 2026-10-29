@@ -50,7 +50,15 @@ work = "2.11.2"
 webrtcSdk = "150.7871.04"
 androidxAnnotation = "1.10.0"
 
+# Bitcoin (wallet W0 spike, second library): ACINQ bitcoin-kmp (Apache-2.0) on secp256k1-kmp (Apache-2.0, wrapping
+# bitcoin-core/secp256k1, MIT). The JNI binding comes in two flavours: android (the app) and jvm (host unit tests only).
+bitcoinKmp = "0.32.0"
+secp256k1Kmp = "0.24.0"
+
 [libraries]
+bitcoin-kmp = { group = "fr.acinq.bitcoin", name = "bitcoin-kmp", version.ref = "bitcoinKmp" }
+secp256k1-jni-android = { group = "fr.acinq.secp256k1", name = "secp256k1-kmp-jni-android", version.ref = "secp256k1Kmp" }
+secp256k1-jni-jvm = { group = "fr.acinq.secp256k1", name = "secp256k1-kmp-jni-jvm", version.ref = "secp256k1Kmp" }
 webrtc-sdk = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtcSdk" }
 androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "androidxAnnotation" }
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime", version.ref = "work" }
