@@ -1,5 +1,6 @@
 package com.vettid.core.notify
 
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.feed.FeedNames
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.CredentialAlarm
@@ -43,14 +44,20 @@ class VaultNotifySource(
     /** A photo's notification says "Photo" and, with previews on, its caption; never the image or the thumbnail. */
     override suspend fun messageText(connectionId: String, messageId: String): String? {
         val m = vault.social.messages(connectionId).first().firstOrNull { it.messageId == messageId && !it.outgoing }
-        val r = res()
-        return when {
-            m == null -> null
-            m.attachment == null -> m.text
-            r == null -> m.text.ifEmpty { null }
-            m.text.isEmpty() -> r.getString(R.string.notify_photo)
-            else -> r.getString(R.string.notify_photo_caption, m.text)
-        }
+        return m?.let { notifyMessageText(it.text, it.attachment != null, res()) }
+    }
+}
+
+/**
+ * A received message's text for a notification: the first line that shows something, cleaned and isolated
+ * (VAULT-MESSAGING 0.76.0 §10.8 step 6); "Photo" for a photo with nothing to show; null for a text with nothing to show.
+ */
+internal fun notifyMessageText(text: String, photo: Boolean, r: android.content.res.Resources?): String? {
+    val line = AccountNames.firstLineIsolated(text)
+    return when {
+        !photo || r == null -> line
+        line == null -> r.getString(R.string.notify_photo)
+        else -> r.getString(R.string.notify_photo_caption, line)
     }
 }
 

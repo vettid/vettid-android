@@ -132,6 +132,9 @@ class DevicesManagerTest {
         assertEquals("ab", DeviceWire.cleanName("a\uDB40\uDC41b"))
         assertEquals("a\u2003\u00a0b", DeviceWire.cleanName("a\u2003\u00a0b"))
         assertEquals(DeviceWire.MAX_NAME, DeviceWire.cleanName("x".repeat(200)).length)
+        // The cap and the cleaning together: no trailing space after the cut, an invisible name is empty.
+        assertEquals(DeviceWire.MAX_NAME - 1, DeviceWire.cleanName("\u202E" + "x".repeat(DeviceWire.MAX_NAME - 1) + " yy").length)
+        assertEquals("", DeviceWire.cleanName("\u3164\u200D"))
     }
 
     @Test

@@ -250,24 +250,34 @@ fun MessagesScreen(
     }
 }
 
+/**
+ * A conversation row's preview (§10.8 step 6): the first line that shows something, cleaned and isolated; "Photo" for a
+ * photo with nothing to show; otherwise nothing, and then not even the "You: " label ([you] adds it).
+ */
+internal fun previewLine(text: String, outgoing: Boolean, hasPhoto: Boolean, photo: String, you: (String) -> String): String {
+    val line = AccountNames.firstLineIsolated(text) ?: photo.takeIf { hasPhoto } ?: return ""
+    return if (outgoing) you(line) else line
+}
+
 @Composable
 private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
     val name = AccountNames.isolateOrNull(c.connection.displayName) ?: stringResource(R.string.messages_name_not_shared)
     // The first line that shows something, cleaned and isolated (§10.8 "Showing received text", step 6); "You: " is ours.
+    // A photo with nothing to show says "Photo"; any other text with nothing to show leaves out the line and its "You: ".
+    val photo = stringResource(R.string.messages_preview_photo)
+    val context = androidx.compose.ui.platform.LocalContext.current
     val preview = c.last?.let { m ->
-        val line = AccountNames.firstLineIsolated(m.text).orEmpty()
-        if (m.outgoing) stringResource(R.string.messages_preview_you, line) else line
+        previewLine(m.text, m.outgoing, m.attachment != null, photo) { context.getString(R.string.messages_preview_you, it) }
     } ?: stringResource(R.string.messages_preview_none)
     val unread = c.unread > 0
     VettIdListRow(
         title = name,
         supporting = if (unread) {
-            pluralStringResource(
-                R.plurals.messages_row_unread,
-                c.unread,
-                c.unread,
-                preview,
-            )
+            if (preview.isEmpty()) {
+                pluralStringResource(R.plurals.messages_row_unread_bare, c.unread, c.unread)
+            } else {
+                pluralStringResource(R.plurals.messages_row_unread, c.unread, c.unread, preview)
+            }
         } else {
             preview
         },

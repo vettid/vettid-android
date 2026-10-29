@@ -244,7 +244,7 @@ object ApprovalParser {
         size = a.size,
         width = a.width,
         height = a.height,
-        name = AccountNames.cleaned(a.name)?.let { com.vettid.core.media.AttachmentNames.sanitize(it) },
+        name = AccountNames.cleanedCapped(a.name, com.vettid.core.media.PhotoLimits.NAME_MAX_CHARS),
     )
 
     /** `connection.authenticate.list` states and `.result` events. */

@@ -89,6 +89,21 @@ object AccountNames {
     fun cleaned(s: String?): String? = s?.let { scrub(it, keepLines = false, keepMarks = false) }?.takeUnless(::isEmptyText)
 
     /**
+     * [cleaned], cut at [max] code points (never inside a grapheme cluster) and cleaned again, so that the cut cannot
+     * leave trailing white space or an empty-looking name. Null when empty.
+     */
+    @Suppress("ReturnCount")
+    fun cleanedCapped(s: String?, max: Int): String? {
+        val c = cleaned(s) ?: return null
+        if (c.codePointCount(0, c.length) <= max) return c
+        val limit = c.offsetByCodePoints(0, max)
+        val bi = android.icu.text.BreakIterator.getCharacterInstance()
+        bi.setText(c)
+        val cut = if (bi.isBoundary(limit)) limit else bi.preceding(limit).takeIf { it > 0 } ?: limit
+        return cleaned(c.substring(0, cut))
+    }
+
+    /**
      * Steps 1-3 for text whose lines are kept (a context, a note): every break one LF, trimmed on each line and with no
      * empty line at either end. Null when empty (step 4). The result is not isolated: see [isolateLines].
      */
@@ -101,6 +116,31 @@ object AccountNames {
      */
     fun cleanedMessage(s: String?): String =
         s?.let { scrub(it, keepLines = false, keepMarks = true, wholeText = true) }?.takeUnless(::isEmptyText).orEmpty()
+
+    /**
+     * A comparison key for "could this pass for that name": Default_Ignorable code points removed, every run of White_Space
+     * one U+0020, NFKC, case-folded, trimmed.
+     */
+    fun lookalikeKey(s: String): String {
+        fun strip(t: String) = buildString {
+            var i = 0
+            var space = false
+            while (i < t.length) {
+                val cp = t.codePointAt(i)
+                i += Character.charCount(cp)
+                when {
+                    UCharacter.hasBinaryProperty(cp, UProperty.DEFAULT_IGNORABLE_CODE_POINT) -> Unit
+                    isWhiteSpace(cp) -> space = true
+                    else -> {
+                        if (space && isNotEmpty()) append(' ')
+                        space = false
+                        appendCodePoint(cp)
+                    }
+                }
+            }
+        }
+        return UCharacter.foldCase(strip(java.text.Normalizer.normalize(strip(s), java.text.Normalizer.Form.NFKC)), true)
+    }
 
     /** [s] (already cleaned) with every line in its own isolate (an isolate ends at a line break, §10.8 step 5). */
     fun isolateLines(s: String): String = s.split('\n').joinToString("\n") { FSI + it + PDI }

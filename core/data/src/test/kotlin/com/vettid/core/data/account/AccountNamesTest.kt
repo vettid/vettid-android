@@ -215,4 +215,45 @@ class AccountNamesTest {
         assertEquals("a\n\nb", AccountNames.cleanedMessage("a\r\u200B\nb"))
         assertEquals("", AccountNames.cleanedMessage("\u3164 \u200D"))
     }
+
+    @Test
+    fun canaryTheIcuDefaultIgnorableDataIsPresent() {
+        // Fails on a plain JVM (isReturnDefaultValues makes android.icu answer false), so that run cannot pass silently.
+        assertTrue(AccountNames.isEmptyText("\u3164"))
+        assertTrue(AccountNames.isEmptyText("\u200D\u200C"))
+    }
+
+    @Test
+    fun crAloneIsABreakSoftHyphenAndBomAreRemovedTabIsASpace() {
+        assertEquals("a\nb", AccountNames.cleanedLines("a\rb"))
+        assertEquals("a b", AccountNames.cleaned("a\rb"))
+        assertEquals("ab", AccountNames.cleaned("a\u00ADb\uFEFF"))
+        assertEquals("a b", AccountNames.cleaned("a\tb"))
+        assertEquals("a b", AccountNames.cleanedLines("a\tb"))
+    }
+
+    @Test
+    fun privateUseAndUnassignedCodePointsAreKept() {
+        assertEquals("a\uE000b", AccountNames.cleaned("a\uE000b"))
+        assertEquals("a\u0378b", AccountNames.cleaned("a\u0378b")) // unassigned (Cn)
+        assertEquals("a\uDB80\uDC00b", AccountNames.cleaned("a\uDB80\uDC00b")) // supplementary private use
+    }
+
+    @Test
+    fun aCapCutsAtAGraphemeBoundaryAndLeavesNoTrailingSpace() {
+        val family = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67"
+        assertEquals("a", AccountNames.cleanedCapped("a$family", 4))
+        assertEquals("x".repeat(63), AccountNames.cleanedCapped("x".repeat(63) + " yy", 64))
+        assertEquals("xxx", AccountNames.cleanedCapped("\u202Ex\u202Ex\u202Ex", 64))
+        assertNull(AccountNames.cleanedCapped("\u3164", 64))
+    }
+
+    @Test
+    fun lookalikeKeyIgnoresSpacingIgnorablesAndCase() {
+        val phone = AccountNames.lookalikeKey("This phone")
+        for (s in listOf("This  phone", "This\u00A0phone", "THIS PHONE\u3164", "Th\u200Dis phone")) {
+            assertEquals(s, phone, AccountNames.lookalikeKey(s))
+        }
+        assertEquals(AccountNames.lookalikeKey("VettID"), AccountNames.lookalikeKey("Vett\u200DID\u200D"))
+    }
 }

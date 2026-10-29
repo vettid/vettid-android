@@ -200,8 +200,8 @@ class HistoryViewModel @Inject constructor(
             // Cleaned like what is shown (§10.8 step 7); the entry is matched against these.
             AccountNames.cleaned(c?.name), AccountNames.cleaned(c?.firstName), AccountNames.cleaned(c?.lastName),
             AccountNames.cleaned(c?.accountName),
-            item,
-            device,
+            AccountNames.cleaned(item),
+            AccountNames.cleaned(device),
         )
     }
 

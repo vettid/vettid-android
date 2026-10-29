@@ -81,13 +81,9 @@ object DeviceWire {
 
     /**
      * [name] as shown: the one cleaning step for received text (`AccountNames.cleaned`, VAULT-MESSAGING 0.76.0 §10.8),
-     * cut at [MAX_NAME] code points. Empty when nothing shows.
+     * cut at [MAX_NAME] code points without splitting a grapheme cluster. Empty when nothing shows.
      */
-    fun cleanName(name: String?): String {
-        val kept = AccountNames.cleaned(name).orEmpty()
-        val capped = kept.codePoints().limit(MAX_NAME.toLong()).toArray()
-        return AccountNames.cleaned(String(capped, 0, capped.size)).orEmpty()
-    }
+    fun cleanName(name: String?): String = AccountNames.cleanedCapped(name, MAX_NAME).orEmpty()
 
     private fun JsonObject.s(k: String) = VaultJson.str(this, k)
 

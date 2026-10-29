@@ -9,6 +9,8 @@
     <!-- A device whose own name reads "This phone" or "VettID": shown with its role, so it cannot pass for either. -->
     <string name="devices_an_agent">an agent</string>
     <string name="devices_a_desktop">a desktop</string>
+    <string name="devices_a_desktop_cap">A desktop</string>
+    <string name="devices_an_agent_cap">An agent</string>
     <string name="devices_name_with_role">%1$s (%2$s)</string>
     <!-- A kind the vault names that this app does not know is shown as it is; this is for one with no text at all. -->
     <string name="devices_role_unknown">Device</string>

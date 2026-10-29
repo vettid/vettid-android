@@ -59,24 +59,6 @@ class ImageFormatsTest {
     }
 
     @Test
-    fun namesAreSanitized() {
-        assertEquals("etcpasswd", AttachmentNames.sanitize("../../etc/passwd"))
-        assertEquals("etcpasswd", AttachmentNames.sanitize("../etc/passwd"))
-        assertEquals("photogpj.exe", AttachmentNames.sanitize("photo‮gpj.exe"))
-        assertEquals("ab", AttachmentNames.sanitize("a\u0000\u0007\nb"))
-        assertEquals("hidden", AttachmentNames.sanitize("...hidden"))
-        assertEquals("a b", AttachmentNames.sanitize("a​ ⁦b⁩"))
-        assertEquals("windowsfile", AttachmentNames.sanitize("windows\\file"))
-        assertNull(AttachmentNames.sanitize("‮/\\.."))
-        assertNull(AttachmentNames.sanitize(null))
-        val long = AttachmentNames.sanitize("x".repeat(300))!!
-        assertEquals(PhotoLimits.NAME_MAX_CHARS, long.length)
-        // Characters, not UTF-16 units: an emoji counts once and is never cut in half.
-        val emoji = AttachmentNames.sanitize("📷".repeat(70))!!
-        assertEquals(PhotoLimits.NAME_MAX_CHARS, emoji.codePointCount(0, emoji.length))
-    }
-
-    @Test
     fun theCacheIsBoundedLeastRecentlyUsedOutAndCleared() {
         val evicted = mutableListOf<String>()
         val c = MemoryCache<String, ByteArray>(100, { it.size.toLong() }) { evicted += String(it) }

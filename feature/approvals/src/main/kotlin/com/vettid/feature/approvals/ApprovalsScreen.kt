@@ -344,14 +344,17 @@ private fun summaryOf(a: Approval): String? = when (a) {
     is Approval.DeviceRequest -> a.requestType?.let { AccountNames.firstLineIsolated(it) }
 }
 
-/** The name a desktop or agent gave itself, isolated; its kind ("a desktop", "an agent") when it gave none (§10.8). */
+/** The kind of a desktop or agent request ("A desktop", "An agent"), or null for a kind this app does not name (§10.8). */
 @Composable
-private fun deviceWho(a: Approval.DeviceRequest): String? =
-    AccountNames.isolateOrNull(a.deviceName) ?: when (AccountNames.cleaned(a.role)?.lowercase()) {
-        "agent" -> stringResource(R.string.approvals_an_agent_inline)
-        "desktop" -> stringResource(R.string.approvals_a_desktop_inline)
-        else -> null
-    }
+private fun deviceKind(a: Approval.DeviceRequest): String? = when (AccountNames.cleaned(a.role)?.lowercase()) {
+    "agent" -> stringResource(R.string.approvals_an_agent)
+    "desktop" -> stringResource(R.string.approvals_a_desktop)
+    else -> null
+}
+
+/** The name a desktop or agent gave itself, isolated; its kind when it gave none (§10.8). Starts the row's second line. */
+@Composable
+private fun deviceWho(a: Approval.DeviceRequest): String? = AccountNames.isolateOrNull(a.deviceName) ?: deviceKind(a)
 
 /** "item · field", each cleaned and isolated; null when neither shows anything. */
 private fun criticalItem(a: Approval.CriticalUse): String? =
@@ -552,12 +555,12 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
                 if (named && theirs != null) {
                     Text(stringResource(R.string.approvals_grant_their_words, theirs), style = MaterialTheme.typography.bodySmall)
                 }
-                val fields = e.labels
+                val fields = e.labels?.mapNotNull { AccountNames.isolateOrNull(it.label) }
                 if (e.kind == "item" && e.available && !fields.isNullOrEmpty()) {
                     Text(
                         stringResource(
                             R.string.approvals_grant_fields,
-                            fields.mapNotNull { AccountNames.isolateOrNull(it.label) }.joinToString(", "),
+                            fields.joinToString(", "),
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -624,10 +627,13 @@ private fun AnswerPicker(index: Int, category: String, chosen: String?, state: A
                 )
             }
             options.forEach { i ->
-                androidx.compose.material3.DropdownMenuItem(text = { Text(AccountNames.isolateOrNull(i.name).orEmpty()) }, onClick = {
-                    open = false
-                    actions.onAnswerGrant(index, i.itemId)
-                })
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(AccountNames.isolateOrNull(i.name) ?: stringResource(R.string.approvals_share_unnamed)) },
+                    onClick = {
+                        open = false
+                        actions.onAnswerGrant(index, i.itemId)
+                    },
+                )
             }
         }
     }
@@ -1004,7 +1010,14 @@ private fun Facts(a: Approval) {
         }
         is Approval.DeviceRequest -> {
             Label(stringResource(R.string.approvals_device))
-            Value(listOfNotNull(deviceWho(a), AccountNames.isolateOrNull(a.role)).joinToString(" · ").ifEmpty { "?" })
+            // With a name: "name · role". Without: the kind once ("A desktop"), never "a desktop · desktop".
+            val named = AccountNames.isolateOrNull(a.deviceName)
+            val who = if (named != null) {
+                listOfNotNull(named, AccountNames.isolateOrNull(a.role)).joinToString(" · ")
+            } else {
+                deviceKind(a) ?: AccountNames.isolateOrNull(a.role).orEmpty()
+            }
+            Value(who.ifEmpty { "?" })
             a.requestType?.let { AuthContext.isolated(it) }?.let {
                 Label(stringResource(R.string.approvals_request))
                 Value(it)
