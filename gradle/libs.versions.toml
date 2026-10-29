@@ -50,7 +50,16 @@ work = "2.11.2"
 webrtcSdk = "150.7871.04"
 androidxAnnotation = "1.10.0"
 
+# Bitcoin (wallet W0 spike): Bitcoin Dev Kit, Rust core with UniFFI Kotlin bindings (MIT OR Apache-2.0). bdk-android carries
+# the native library for arm64-v8a, armeabi-v7a and x86_64; bdk-jvm (same version) is the host build for JVM unit tests only.
+bdk = "3.1.1"
+# 5.14.0 (bdk-android's own) has 4 KB-aligned libjnidispatch for armeabi-v7a and x86_64; 5.19.1 is 16 KB-aligned for all ABIs.
+jna = "5.19.1"
+
 [libraries]
+bdk-android = { group = "org.bitcoindevkit", name = "bdk-android", version.ref = "bdk" }
+bdk-jvm = { group = "org.bitcoindevkit", name = "bdk-jvm", version.ref = "bdk" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 webrtc-sdk = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtcSdk" }
 androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "androidxAnnotation" }
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime", version.ref = "work" }

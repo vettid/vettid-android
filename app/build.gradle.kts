@@ -180,6 +180,8 @@ android {
         // libraries again only where an NDK is installed, so two machines could package different bytes: they go
         // into the APK exactly as the pinned artifact has them (reproducible builds; `check<Variant>Calls` compares).
         jniLibs.keepDebugSymbols += "**/libjingle_peerconnection_so.so"
+        // Wallet W0 spike: the same for BDK's and JNA's prebuilt libraries (see docs/spikes/WALLET-W0.md).
+        jniLibs.keepDebugSymbols += listOf("**/libbdkffi.so", "**/libjnidispatch.so")
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
 
@@ -892,6 +894,8 @@ dependencies {
         "${type}Implementation"(projects.core.calls)
         "${type}Implementation"(projects.feature.calls)
     }
+    // Wallet W0 spike (not for merge): BDK in every build type, to measure the APK and run the foss checks.
+    implementation(projects.core.chain)
     if (callsInRelease) {
         "releaseImplementation"(projects.core.calls)
         "releaseImplementation"(projects.feature.calls)
