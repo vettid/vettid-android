@@ -195,7 +195,8 @@ class HistoryViewModel @Inject constructor(
         val item = AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] }
         val device = r.deviceId?.let { state.value.deviceNames?.get(it)?.ifEmpty { null } }
         return AuditFilter.kindText(r.kind) + listOfNotNull(
-            HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item)),
+            // Without the isolation (FSI/PDI) around the name: a query across the name and the words around it must match.
+            HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item), isolate = false),
             c?.name, c?.firstName, c?.lastName, c?.accountName,
             item,
             device,

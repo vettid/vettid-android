@@ -345,5 +345,14 @@ class AuthPurposeParserTest {
         assertEquals("\u2068l1\nl2\u2069", AuthContext.isolated("l1\u202E\nl2"))
         assertEquals("\u2068l1\u2069", AuthContext.firstLineIsolated("l1\nl2"))
         assertNull(AuthContext.isolated(" \u202E "))
+        // A row's line is the first line that shows something, never an empty or invisible one.
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\nreal"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("   \nreal\nnext"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\u200B\u202E\nreal"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\t\t\r\n\u202D\u2069\u2028real\u202E"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\u00A0\u3000\n  real  \n"))
+        assertEquals("\u2068a b\u2069", AuthContext.firstLineIsolated("a\tb\nsecond"))
+        assertNull(AuthContext.firstLineIsolated(""))
+        assertNull(AuthContext.firstLineIsolated("\u200B\u202E\n\t\n \u2069"))
     }
 }
