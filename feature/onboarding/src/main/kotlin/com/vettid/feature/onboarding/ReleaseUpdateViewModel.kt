@@ -3,6 +3,7 @@ package com.vettid.feature.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.ownerCheckDue
 import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.ReleaseUpdateOffer
@@ -114,7 +115,7 @@ class ReleaseUpdateViewModel @Inject constructor(
         }
         viewModelScope.launch {
             combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.lockCauseUnknown) { v, locked, unknown ->
-                v?.gated(Instant.now()) == true || (locked && !unknown) // a lock of unknown cause asks for no password
+                ownerCheckDue(v, locked, unknown, Instant.now())
             }
                 .collect { due -> set { it.copy(checkDue = due) } }
         }

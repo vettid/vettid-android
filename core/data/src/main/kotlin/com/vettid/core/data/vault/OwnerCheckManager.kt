@@ -145,6 +145,7 @@ class OwnerCheckManager(
         if (m.type == "vault.locking") {
             unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
             epoch.incrementAndGet() // and drops a probe that finishes after it, whatever the reason (ANDROID-PLAN 0.1.96)
+            if (VaultJson.str(m.body, "reason") != REASON_OWNER_CHECK) lockedOther = true
         }
         when (m.type) {
             "vault.held" -> onHeld(m)
@@ -174,6 +175,14 @@ class OwnerCheckManager(
         }
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.97) A `vault.locking` whose reason is not the owner check (idle, the member, an update, another
+     * device) came since the vault last opened: a read that finds the vault locked after it never names the owner check as
+     * the cause, whatever the caller assumed (never claim a lock from a guess).
+     */
+    @Volatile
+    private var lockedOther = false
+
     /** The vault is known locked; [causeKnown]: by ten wrong checks (`vault.locking{owner_check}`, or an estimate of 0). */
     private fun markLocked(causeKnown: Boolean) {
         // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
@@ -185,6 +194,7 @@ class OwnerCheckManager(
     private fun markOpen() {
         locked.value = false
         causeUnknown.value = false
+        lockedOther = false
     }
 
     /**
@@ -242,7 +252,7 @@ class OwnerCheckManager(
             answered -> VaultProbe.OPEN
             api != STATE_LOCKED -> VaultProbe.NO_ANSWER
             else -> {
-                markLocked(lockCauseKnown)
+                markLocked(lockCauseKnown && !lockedOther)
                 onFoundLocked()
                 VaultProbe.LOCKED
             }
@@ -508,6 +518,7 @@ class OwnerCheckManager(
         unlockPin = null
         epoch.incrementAndGet() // a read that finishes after the member's own lock does not mark it
         lockedHere = true
+        lockedOther = true
         view.value?.let { set(it) }
     }
 

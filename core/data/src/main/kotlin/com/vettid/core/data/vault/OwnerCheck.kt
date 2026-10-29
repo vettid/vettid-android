@@ -324,3 +324,10 @@ fun OwnerCheckRepository.checkCleared(): Flow<Unit> = flow {
         held = now
     }
 }
+
+/**
+ * (ANDROID-PLAN 0.1.96) Whether the owner check must be passed before this: the view is past its deadline, or the vault is
+ * locked by the check. A lock of unknown cause ([causeUnknown]) asks for no password (ask only for what is used).
+ */
+fun ownerCheckDue(view: OwnerCheckView?, locked: Boolean, causeUnknown: Boolean, now: Instant): Boolean =
+    view?.gated(now) == true || (locked && !causeUnknown)

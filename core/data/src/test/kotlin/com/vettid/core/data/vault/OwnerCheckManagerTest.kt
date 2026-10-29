@@ -46,7 +46,7 @@ class OwnerCheckManagerTest {
 
         /** Once a check was sent, the status reads fail (the count is then the estimate, deterministically). */
         var statusDownAfterCheck = false
-        private var statusDown = false
+        var statusDown = false
 
         /** `vault.status` does not answer (the probe's relay read). */
         var failStatus = false
@@ -539,11 +539,35 @@ class OwnerCheckManagerTest {
         m.onOpened()
         advanceUntilIdle()
         assertEquals(4, (m.check("975310", "pw") as OwnerCheckOutcome.Failed).estimatedLeft)
+        ops.statusDown = false // the read works this time: the flag is set, and only beginUnlock() clears it
         m.afterUnlock("975310", "pw", m.foregroundGeneration)
         m.beginUnlock() // the attempt that follows: its open has no count read
         m.onOpened()
         advanceUntilIdle()
         assertEquals(0, (m.check("975310", "pw") as OwnerCheckOutcome.Failed).estimatedLeft)
+    }
+
+    /** An unlock whose status read fails read no count: the open that follows keeps nothing (fail secure). */
+    @Test
+    fun anUnlockWhoseReadFailedKeepsNoCount() = runTest {
+        val ops = opsAt(4).apply { statusDown = true }
+        val m = manager(ops)
+        ops.checkThrows = com.vettid.core.vault.VaultStateException("no response")
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        m.onOpened()
+        advanceUntilIdle()
+        assertEquals(0, (m.check("975310", "pw") as OwnerCheckOutcome.Failed).estimatedLeft)
+    }
+
+    /** (ANDROID-PLAN 0.1.97) After a `vault.locking` that is not the owner check's, a read never names the check as the cause. */
+    @Test
+    fun aProbeAfterAnotherKindOfLockNeverNamesTheOwnerCheck() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        memberState = "locked"
+        assertEquals(VaultProbe.LOCKED, m.probeVault(lockCauseKnown = true)) // the watch's scheduled read assumes ten checks
+        assertTrue(m.lockCauseUnknown.value)
     }
 
     /** (ANDROID-PLAN 0.1.96) The check after a cancelled recovery does not go out with the previous session's estimate. */
