@@ -6,7 +6,6 @@ import androidx.annotation.StringRes
 import com.vettid.core.data.R
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
-import com.vettid.core.data.social.AuthContext
 import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.vault.RecoveryRefs
@@ -171,7 +170,7 @@ object FeedKinds {
     private fun knownName(item: FeedItem, names: FeedNames): String? {
         val c = item.connectionId?.let { names.connections[it] }
         val sender = FeedAsks.approvalKey(item.kind, item.ref)?.let { names.approvals[it] }?.let { a -> senderOf(a) }
-        return c?.accountName ?: c?.name?.takeIf { it.isNotBlank() } ?: sender
+        return AccountNames.isolateOrNull(c?.accountName ?: c?.name?.takeIf { it.isNotBlank() } ?: sender)
     }
 
     /**
@@ -197,7 +196,7 @@ object FeedKinds {
                 args = listOf(firstName(item, names), count),
             )
         }
-        val known = knownName(item, names)?.let { AuthContext.isolatedName(it) }?.let { FeedText(literal = it) }
+        val known = knownName(item, names)?.let { FeedText(literal = it) }
         val aConnection = FeedText(R.string.data_feed_a_connection_inline)
         return when (authenticationPurpose(item, names)) {
             AuthPurpose.SIGNIN -> FeedText(R.string.data_feed_authenticate_signin, listOf(known ?: aConnection))
@@ -209,7 +208,7 @@ object FeedKinds {
     /** The connection's first name (the short labels), else as [connectionName]. */
     fun firstName(item: FeedItem, names: FeedNames): FeedText {
         val c = item.connectionId?.let { names.connections[it] }
-        c?.firstName?.takeIf { it.isNotBlank() }?.let { return FeedText(literal = it) }
+        AccountNames.isolateOrNull(c?.firstName)?.let { return FeedText(literal = it) }
         return connectionName(item, names)
     }
 
@@ -227,12 +226,12 @@ object FeedKinds {
             (names.approvals[FeedAsks.approvalKey(item.kind, item.ref) ?: ""] as? Approval.CriticalUse)?.itemName
         "leash.item.run", "leash.item.proxy" -> item.ref?.let { names.items[it] }
         else -> null
-    }?.takeIf { it.isNotBlank() }
+    }.let { AccountNames.isolateOrNull(it) }
 
     /** The tag a `share.pending` rule is named by (0.1.22); null when unknown. */
     private fun ruleTag(item: FeedItem, names: FeedNames): String? =
         (names.approvals[FeedAsks.approvalKey(item.kind, item.ref) ?: ""] as? Approval.ShareDecision)?.let { d ->
-            d.rule?.tags?.firstOrNull() ?: d.tags.firstOrNull()
+            AccountNames.isolateOrNull(d.rule?.tags?.firstOrNull() ?: d.tags.firstOrNull())
         }
 
     /**

@@ -3,6 +3,7 @@ package com.vettid.feature.connections
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
 import com.vettid.core.data.calls.NoCallAccess
@@ -66,7 +67,8 @@ data class ConnectionsUiState(
 /** Whether [c] matches [query]: its title ("First Last") or display name, ignoring case. */
 internal fun ConnectionInfo.matches(query: String): Boolean {
     val q = query.trim()
-    return q.isEmpty() || displayName.contains(q, ignoreCase = true) || name.contains(q, ignoreCase = true)
+    return q.isEmpty() ||
+        listOfNotNull(displayName, name).any { AccountNames.cleaned(it).orEmpty().contains(q, ignoreCase = true) }
 }
 
 /**
@@ -85,7 +87,10 @@ class ConnectionsViewModel @Inject constructor(
     val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections, approvals.peerDeclines) { s, cs, declines ->
         s.copy(
             connections = cs.filter { it.matches(s.query) }
-                .sortedWith(compareByDescending<ConnectionInfo> { it.favorite }.thenBy { it.displayName.lowercase() }),
+                .sortedWith(
+                    compareByDescending<ConnectionInfo> { it.favorite }
+                        .thenBy { AccountNames.cleaned(it.displayName).orEmpty().lowercase() },
+                ),
             peerDeclines = declines,
             searchable = cs.isNotEmpty(),
         )

@@ -68,7 +68,7 @@ class HistoryDeviceTest {
     @Test
     fun rowsNameTheirDeviceAfterWhatTheyAlreadyShow() {
         list(devices)
-        rule.onNodeWithTag("history_entry_5").assertTextContains("Ada Lovelace · Desktop")
+        rule.onNodeWithTag("history_entry_5").assertTextContains("\u2068Ada Lovelace\u2069 · Desktop")
         rule.onNodeWithTag("history_entry_4").assertTextContains("Vault unlocked").assertTextContains("Pixel 10 Pro")
         rule.onNodeWithTag("history_entry_3").assertTextContains("Vault locked").assertTextContains("Removed device")
         assertEquals(1, rule.onAllNodesWithText("Removed device").fetchSemanticsNodes().size)
@@ -89,7 +89,7 @@ class HistoryDeviceTest {
         list(null)
         rule.onNodeWithTag("history_entry_4").assertTextContains("Unlocks and daily checks")
         assertEquals(0, rule.onAllNodesWithText("Removed device").fetchSemanticsNodes().size)
-        rule.onNodeWithTag("history_entry_5").assertTextContains("Ada Lovelace")
+        rule.onNodeWithTag("history_entry_5").assertTextContains("\u2068Ada Lovelace\u2069")
         assertEquals(0, rule.onAllNodesWithText("Desktop", substring = true).fetchSemanticsNodes().size)
     }
 

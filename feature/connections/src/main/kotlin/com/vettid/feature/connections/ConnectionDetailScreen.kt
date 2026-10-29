@@ -101,7 +101,7 @@ data class DetailActions(
 fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailActions, modifier: Modifier = Modifier) {
     LaunchedEffect(state.gone) { if (state.gone) actions.onBack() }
     val c = state.connection
-    val title = c?.displayName?.ifBlank { null } ?: stringResource(R.string.connections_name_not_shared)
+    val title = AccountNames.cleaned(c?.displayName) ?: stringResource(R.string.connections_name_not_shared)
     // In sentences the name is bidi-isolated (§10.8); the heading and the tile take it as is.
     val name = AccountNames.isolate(title)
     DetailScaffold(
@@ -207,7 +207,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         }
         // A connection's asks (0.23.0 §10.4.1): paused or muted comes first, with the action that ends it.
         val asks = AsksView.of(c.asks)?.takeIf { c.state == ConnectionState.ACTIVE }
-        val asksName = sharingName(c)?.let { AccountNames.isolate(it) }
+        val asksName = sharingName(c)?.let { AccountNames.isolateOrNull(it) }
         if (asks?.prominent == true) AsksCard(asks, asksName, state.busy, actions.onMuteAsks, actions.onResumeAsks)
         ProfileCard(c)
         if (c.state == ConnectionState.ACTIVE) {
@@ -262,13 +262,19 @@ private fun ProfileCard(c: ConnectionInfo) {
             Spacer(Modifier.height(Spacing.s))
         }
         if (c.name.isNotBlank() || c.sharedItems.isNotEmpty()) {
-            if (c.name.isNotBlank()) InfoLine(stringResource(R.string.connections_detail_profile_name), c.name)
+            AccountNames.cleaned(c.name)?.let { InfoLine(stringResource(R.string.connections_detail_profile_name), it) }
             if (c.sharedItems.isNotEmpty()) {
                 Spacer(Modifier.height(Spacing.s))
                 Text(stringResource(R.string.connections_detail_shared_items), style = MaterialTheme.typography.labelLarge)
                 c.sharedItems.forEach { item ->
-                    Text(item.name, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = Spacing.xs))
-                    item.fields.forEach { (label, value) -> InfoLine(label, value) }
+                    Text(
+                        AccountNames.cleaned(item.name).orEmpty(),
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = Spacing.xs),
+                    )
+                    item.fields.forEach { (label, value) ->
+                        InfoLine(AccountNames.cleaned(label).orEmpty(), AccountNames.cleaned(value).orEmpty())
+                    }
                 }
             }
             Spacer(Modifier.height(Spacing.s))
@@ -347,7 +353,7 @@ private fun DetailDialogs(state: ConnectionDetailUiState, name: String, actions:
         null -> Unit
     }
     state.deleteRule?.let {
-        val first = state.connection?.let(::sharingName)?.let { n -> AccountNames.isolate(n) }
+        val first = state.connection?.let(::sharingName)?.let { n -> AccountNames.isolateOrNull(n) }
         ConfirmDialog(
             title = stringResource(R.string.connections_share_rule_delete_title),
             text = if (first != null) {

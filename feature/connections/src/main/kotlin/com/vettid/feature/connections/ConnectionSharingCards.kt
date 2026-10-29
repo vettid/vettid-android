@@ -89,7 +89,7 @@ internal fun OutgoingSharingCard(
     onManage: () -> Unit,
     onDeleteRule: (ShareRule) -> Unit = {},
 ) {
-    val name = first?.let { AccountNames.isolate(it) }
+    val name = AccountNames.isolateOrNull(first)
     DirectionCard(
         accent = MaterialTheme.colorScheme.primary,
         badgeFill = MaterialTheme.colorScheme.primaryContainer,
@@ -152,7 +152,7 @@ internal fun OutgoingSharingCard(
  */
 @Composable
 internal fun IncomingSharingCard(sharing: DetailSharing, first: String?, onAsk: () -> Unit, onOpen: () -> Unit) {
-    val name = first?.let { AccountNames.isolate(it) }
+    val name = AccountNames.isolateOrNull(first)
     DirectionCard(
         accent = MaterialTheme.colorScheme.secondary,
         badgeFill = MaterialTheme.colorScheme.secondaryContainer,
@@ -365,7 +365,10 @@ private fun GivenLine(g: GrantView) {
     Column(
         Modifier.fillMaxWidth().padding(vertical = Spacing.xs).semantics(mergeDescendants = true) {}.testTag("sharing_given_${g.grantId}"),
     ) {
-        Text(g.name.ifBlank { stringResource(R.string.connections_share_deleted_item) }, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            AccountNames.isolateOrNull(g.name) ?: stringResource(R.string.connections_share_deleted_item),
+            style = MaterialTheme.typography.bodyLarge,
+        )
         Text(
             listOfNotNull(
                 stringResource(if (g.ruleId != null) R.string.connections_share_by_rule else R.string.connections_share_one_off),
@@ -399,7 +402,8 @@ private fun ReceivedLine(g: GrantView, name: String?, onOpen: () -> Unit) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                g.name.ifBlank { g.label ?: stringResource(R.string.connections_share_deleted_item) },
+                AccountNames.isolateOrNull(g.name) ?: AccountNames.isolateOrNull(g.label)
+                    ?: stringResource(R.string.connections_share_deleted_item),
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(

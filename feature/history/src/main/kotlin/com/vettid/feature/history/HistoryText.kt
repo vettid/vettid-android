@@ -3,6 +3,7 @@ package com.vettid.feature.history
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.scaledDurationText
@@ -12,14 +13,21 @@ data class EntryNames(val connection: String? = null, val device: String? = null
 
 /** The member-facing title of an audit entry ([AuditKinds]), in Compose and from a [Context] (search, export). */
 object HistoryText {
-    fun title(context: Context, kind: String, ref: String? = null, names: EntryNames = EntryNames()): String =
+    /** [isolate] false for a file (an export): the names are cleaned but carry no bidi controls at all. */
+    fun title(
+        context: Context,
+        kind: String,
+        ref: String? = null,
+        names: EntryNames = EntryNames(),
+        isolate: Boolean = true,
+    ): String =
         when (val t = AuditKinds.title(kind, ref)) {
             is AuditKinds.Title.Known -> context.getString(t.res)
             is AuditKinds.Title.Summary -> context.getString(R.string.history_kind_summary, context.getString(t.res))
             is AuditKinds.Title.Dropped -> context.getString(R.string.history_kind_dropped, t.reason)
             is AuditKinds.Title.Unknown -> context.getString(R.string.history_kind_unknown, t.kind)
             is AuditKinds.Title.Counted -> context.getString(t.res, t.n, t.of)
-            is AuditKinds.Title.Named -> named(context, t, names)
+            is AuditKinds.Title.Named -> named(context, t, names, isolate)
         }
 
     @Composable
@@ -35,18 +43,20 @@ object HistoryText {
                 AuditKinds.Who.DEVICE -> names.device
                 AuditKinds.Who.ITEM -> names.item
             }
-            if (name != null) stringResource(t.res, name) else stringResource(t.anyRes)
+            val clean = AccountNames.isolateOrNull(name)
+            if (clean != null) stringResource(t.res, clean) else stringResource(t.anyRes)
         }
     }
 
     /** Without the name (gone or not known), the title drops it. */
-    private fun named(context: Context, t: AuditKinds.Title.Named, names: EntryNames): String {
+    private fun named(context: Context, t: AuditKinds.Title.Named, names: EntryNames, isolate: Boolean): String {
         val name = when (t.who) {
             AuditKinds.Who.CONNECTION -> names.connection
             AuditKinds.Who.DEVICE -> names.device
             AuditKinds.Who.ITEM -> names.item
         }
-        return if (name != null) context.getString(t.res, name) else context.getString(t.anyRes)
+        val clean = if (isolate) AccountNames.isolateOrNull(name) else AccountNames.cleaned(name)
+        return if (clean != null) context.getString(t.res, clean) else context.getString(t.anyRes)
     }
 
     /**
@@ -56,12 +66,12 @@ object HistoryText {
     @Composable
     fun details(kind: String, ref: String?, outcome: AuditKinds.Outcome): List<String> {
         val scale = LocalTimeScale.current.scale
-        return AuditKinds.details(kind, ref, outcome).map { d ->
+        return AuditKinds.details(kind, ref, outcome).mapNotNull { d ->
             when (d) {
                 is AuditKinds.Detail.Line -> stringResource(d.res)
                 is AuditKinds.Detail.Scaled ->
                     if (scale <= 1) stringResource(d.res) else stringResource(d.scaledRes, scaledDurationText(d.realSeconds))
-                is AuditKinds.Detail.Named -> stringResource(d.res, d.name)
+                is AuditKinds.Detail.Named -> AccountNames.isolateOrNull(d.name)?.let { stringResource(d.res, it) }
             }
         }
     }

@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -23,7 +24,7 @@ internal fun peerDeclineRes(outgoing: Boolean): Int =
 /** A peer's decline at the top of Approvals, shown until the member dismisses it (once). */
 @Composable
 internal fun PeerDeclineNotice(d: PeerDecline, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
-    val name = d.name?.takeIf { it.isNotBlank() } ?: stringResource(R.string.approvals_peer_declined_someone)
+    val name = AccountNames.isolateOrNull(d.name) ?: stringResource(R.string.approvals_peer_declined_someone)
     NoticeCard(
         kind = NoticeKind.INFO,
         title = stringResource(peerDeclineRes(d.outgoing), name),

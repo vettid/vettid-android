@@ -70,12 +70,52 @@ object AccountNames {
     fun full(first: String?, last: String?): String? =
         if (isValidCore(first) && isValidCore(last)) "$first $last" else null
 
-    /** [s] in Unicode bidirectional isolation (FSI … PDI), for names shown next to other text (§10.8). */
-    fun isolate(s: String): String = buildString {
-        append(FSI)
-        append(s)
-        append(PDI)
+    /**
+     * A received name made safe to sit in a sentence or next to fixed wording, or alone (§10.8): every control and format
+     * character removed (a PDI or RLO in it cannot close our isolation or reverse the words around it) except ZWJ and ZWNJ,
+     * which emoji sequences and Persian or Indic shaping need; line breaks (including U+2028, U+2029, U+0085) and tabs as
+     * spaces; trimmed; then in bidirectional isolation (FSI ... PDI). Null when nothing is left. The one cleaning step for
+     * every name that another member controls.
+     */
+    fun isolateOrNull(s: String?): String? = cleaned(s)?.let { FSI + it + PDI }
+
+    /** [isolateOrNull] without the isolation (an avatar's initial, a search key); also strips an isolate it is given. */
+    fun cleaned(s: String?): String? {
+        if (s == null) return null
+        val cleaned = buildString {
+            var i = 0
+            while (i < s.length) {
+                val cp = s.codePointAt(i)
+                i += Character.charCount(cp)
+                val crlf = cp == '\r'.code && i < s.length && s[i] == '\n' // one break
+                when {
+                    crlf -> Unit
+                    isBreak(cp) -> append(' ')
+                    isInvisible(cp) -> Unit
+                    else -> appendCodePoint(cp)
+                }
+            }
+        }.trim()
+        return cleaned.ifEmpty { null }
     }
+
+    private fun isBreak(cp: Int) = cp == '\t'.code || cp == '\n'.code || cp == '\r'.code || cp in LINE_BREAKS
+
+    /** Control and format characters (bidi, zero-width, BOM, tags), except ZWJ and ZWNJ. */
+    private fun isInvisible(cp: Int): Boolean {
+        val type = Character.getType(cp)
+        return cp != ZWNJ && cp != ZWJ && (type == Character.CONTROL.toInt() || type == Character.FORMAT.toInt())
+    }
+
+    /** [s], already cleaned by the caller, in isolation as it is (line breaks kept: a note's lines stay visible). */
+    fun wrapIsolated(s: String): String = FSI + s + PDI
+
+    /** [isolateOrNull], for a name that must be shown: an empty result is an empty isolate, never the raw text. */
+    fun isolate(s: String): String = isolateOrNull(s) ?: (FSI.toString() + PDI)
+
+    private const val ZWNJ = 0x200C
+    private const val ZWJ = 0x200D
+    private val LINE_BREAKS = setOf(0x2028, 0x2029, 0x85)
 
     /** FIRST STRONG ISOLATE and POP DIRECTIONAL ISOLATE, by code point: lint rightly flags them as literals. */
     private val FSI = Char(0x2068)

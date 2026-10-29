@@ -25,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
@@ -104,7 +105,10 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
                     Field(R.string.history_detail_details, details.joinToString("\n"), Modifier.testTag("history_entry_details"))
                 }
                 e.connectionId?.let { id ->
-                    Field(R.string.history_detail_connection, state.connectionName ?: stringResource(R.string.history_connection_removed))
+                    Field(
+                        R.string.history_detail_connection,
+                        AccountNames.isolateOrNull(state.connectionName) ?: stringResource(R.string.history_connection_removed),
+                    )
                     if (state.connectionExists) {
                         TextButton(
                             onClick = { onOpenConnection(id) },
