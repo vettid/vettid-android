@@ -40,6 +40,11 @@ data class ApprovalsUiState(
     val error: FailureKind? = null,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
+    /**
+     * Why the last read of the open asks (`pending.list`, §10.4.2) failed, or null: shown as a notice with Retry, and as
+     * held for [FailureKind.OWNER_CHECK_REQUIRED]. Also set by the quiet reads after an unlock or a passed check.
+     */
+    val openAsksError: FailureKind? = null,
     /** Connections whose asks are paused after several declines (0.23.0 §10.4.1): resume, or remove the connection. */
     val paused: List<ConnectionInfo> = emptyList(),
     /** A paused connection the member asked to remove (confirmed first). */
@@ -73,21 +78,25 @@ class ApprovalsViewModel @Inject constructor(
     }
 
     val uiState: StateFlow<ApprovalsUiState> =
-        combine(local, repo.approvals, repo.peerDeclines, connections.connections, clock) { s, list, declines, cs, now ->
-            // An expired request is not offered (the list drops it itself only at the next vault event).
-            s.copy(
-                approvals = list.filterNot { it.expiredAt(now) },
-                peerDeclines = declines,
-                paused = cs.filter { it.asks?.paused == true },
-            )
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
+        combine(
+            combine(local, repo.approvals, repo.peerDeclines, connections.connections, clock) { s, list, declines, cs, now ->
+                // An expired request is not offered (the list drops it itself only at the next vault event).
+                s.copy(
+                    approvals = list.filterNot { it.expiredAt(now) },
+                    peerDeclines = declines,
+                    paused = cs.filter { it.asks?.paused == true },
+                )
+            },
+            repo.pendingReadFailure,
+        ) { s, openAsks -> s.copy(openAsksError = openAsks) }.stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
 
     init {
         refresh()
         // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
         viewModelScope.launch {
             ownerCheck.checkCleared().collect {
-                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+                val held = FailureKind.OWNER_CHECK_REQUIRED
+                if (local.value.error == held || uiState.value.openAsksError == held) refresh()
             }
         }
     }

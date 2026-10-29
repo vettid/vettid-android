@@ -13,6 +13,7 @@ import com.vettid.core.vault.PendingPage
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -98,13 +99,42 @@ class PendingListTest {
     }
 
     @Test
-    fun aRepeatedCursorEndsTheRead() = runTest {
+    fun aListThatNeverReachesItsEndIsNotMergedAndThrows() = runTest {
         val m = manager()
-        var calls = 0
-        m.refreshPendingFrom { calls++; page(at(10), ask("authenticate", auth("r1")), next = "same") }
-        assertEquals(2, calls)
+        m.refreshPendingFrom { page(at(5), ask("authenticate", auth("r9"))) }
         runCurrent()
-        assertEquals(listOf("auth:r1"), m.keys())
+        var calls = 0
+        try {
+            m.refreshPendingFrom { calls++; page(at(10), ask("authenticate", auth("r1")), next = "same") }
+            org.junit.Assert.fail("a partial list must not be merged")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.OTHER, e.kind)
+        }
+        // Started over once (two pages each), then given up; r9, which is not on page 1, survives.
+        assertEquals(4, calls)
+        runCurrent()
+        assertEquals(listOf("auth:r9"), m.keys())
+        assertEquals(FailureKind.OTHER, m.pendingReadFailure.value)
+    }
+
+    @Test
+    fun aStaleCursorStartsTheReadOverOnce() = runTest {
+        val m = manager()
+        var first = true
+        m.refreshPendingFrom { after ->
+            when {
+                after == null && first -> page(at(10), ask("authenticate", auth("r1")), next = "c")
+                after == null -> page(at(20), ask("authenticate", auth("r2")), next = "d")
+                after == "c" -> { first = false; page(at(10), ask("authenticate", auth("r1")), next = "c") }
+                else -> page(at(20), ask("approval", approval("h1")))
+            }
+        }
+        runCurrent()
+        // The second, whole read counts, with its own first-page ts.
+        assertEquals(listOf("auth:r2", "device:approval.pending:h1"), m.keys())
+        m.onEvent(event("connection.authenticate.pending", auth("mid"), at(15)))
+        runCurrent()
+        assertEquals(2, m.keys().size)
     }
 
     @Test
@@ -286,5 +316,151 @@ class PendingListTest {
         m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
         runCurrent()
         assertTrue("auth:r2" in m.keys())
+    }
+
+    @Test
+    fun aCloseThatCameFirstRefusesItsCreationOutsideAnyRead() = runTest {
+        val m = manager()
+        m.onEvent(sync("connection.authenticate.decided", """"request_id":"r1","approved":true""", at(12)))
+        m.onEvent(event("connection.authenticate.pending", auth("r1"), at(11)))
+        m.onEvent(sync("device.session", """"device_id":"A"""", at(12)))
+        m.onEvent(event("device.session.pending", session("s1", "A"), at(11)))
+        // A session request after the close is a new one.
+        m.onEvent(event("device.session.pending", session("s2", "A"), at(13)))
+        runCurrent()
+        assertEquals(listOf("device:device.session.pending:s2"), m.keys())
+    }
+
+    @Test
+    fun aLockMidReadDiscardsThatRead() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        launch { m.refreshPendingFrom { gate.await(); page(at(10), ask("authenticate", auth("r1"))) } }
+        runCurrent()
+        m.forgetOpenVault()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(emptyList<String>(), m.keys())
+        // No cut was set: an event at 5 applies.
+        m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
+        runCurrent()
+        assertEquals(listOf("auth:r2"), m.keys())
+    }
+
+    @Test
+    fun anEarlierStartedReadWithTheNewerTsLosesToALaterStartedOneThatMergedFirst() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        launch { m.refreshPendingFrom { gate.await(); page(at(30), ask("authenticate", auth("a"))) } }
+        runCurrent()
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("b"))) }
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("auth:b"), m.keys())
+        // The cut is the merged list's 20, not the dropped list's 30.
+        m.onEvent(event("connection.authenticate.pending", auth("c"), at(25)))
+        runCurrent()
+        assertEquals(listOf("auth:b", "auth:c"), m.keys())
+    }
+
+    @Test
+    fun unsupportedDuringAnotherReadKeepsTheLiveEventsAndClearsTheNotice() = runTest {
+        val m = manager()
+        m.onEvent(event("connection.authenticate.pending", auth("live"), at(1)))
+        try {
+            m.refreshPendingFrom { throw VaultFailure(FailureKind.NETWORK) }
+        } catch (_: VaultFailure) {
+            // noted
+        }
+        assertEquals(FailureKind.NETWORK, m.pendingReadFailure.value)
+        val gate = CompletableDeferred<Unit>()
+        val unsupported = VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")
+        launch { m.refreshPendingFrom { gate.await(); throw unsupported } }
+        runCurrent()
+        m.refreshPendingFrom { throw unsupported }
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("auth:live"), m.keys())
+        assertEquals(null, m.pendingReadFailure.value)
+    }
+
+    @Test
+    fun aFailedPendingReadStillReadsTheOtherListsThenThrows() = runTest {
+        val m = manager()
+        var listsRead = false
+        try {
+            m.refreshAllLists(
+                base,
+                pendingRead = { throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required") },
+                lists = { listsRead = true; SocialManager.ListRead(emptyList(), grantsOk = true, criticalOk = true, sharesOk = true) },
+            )
+            org.junit.Assert.fail("the failure must reach the screen")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.OWNER_CHECK_REQUIRED, e.kind)
+        }
+        assertTrue(listsRead)
+    }
+
+    @Test
+    fun aSessionEventWithExpiresAtClosesOnlyTheRequestNotTheHeldApprovals() = runTest {
+        val m = manager()
+        m.onEvent(event("device.session.pending", session("s1", "A"), at(1)))
+        m.onEvent(event("approval.pending", approval("h1", "A"), at(1)))
+        // A deny of a renewal keeps the session and its expires_at: only the request closes.
+        m.onEvent(sync("device.session", """"device_id":"A","expires_at":"2026-10-29T14:00:00.000Z"""", at(2)))
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h1"), m.keys())
+        // The held approval closes with its own approval.decided (0.77.0).
+        m.onEvent(sync("approval.decided", """"approval_id":"h1","approved":false""", at(3)))
+        runCurrent()
+        assertEquals(emptyList<String>(), m.keys())
+    }
+
+    /** The check-then-write race: a creation admitted before a merge must not be written after it (real threads). */
+    @Test
+    fun aCreationIsDecidedInsideTheSameEditAsTheWrite() {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val inSave = java.util.concurrent.CountDownLatch(1)
+        val gated = java.util.concurrent.atomic.AtomicBoolean(false)
+        val inner = InMemoryDeviceStateStore()
+        val store = object : com.vettid.core.vault.DeviceStateStore {
+            override fun load() = inner.load()
+            override fun save(state: ByteArray) {
+                if (gated.get()) {
+                    inSave.countDown()
+                    gate.await()
+                }
+                inner.save(state)
+            }
+            override fun clear() = inner.clear()
+        }
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob())
+        try {
+            val m = SocialManager(
+                scope,
+                api = { throw VaultFailure(FailureKind.OTHER) },
+                credential = credential,
+                store = store,
+                clock = Clock.fixed(base, ZoneOffset.UTC),
+            )
+            kotlinx.coroutines.runBlocking {
+                m.refreshPendingFrom { page(at(5), ask("authenticate", auth("x"))) }
+                gated.set(true)
+                // The merge of a list at 12 without K (nor x) writes under the mutex, and blocks in the save.
+                val merge = scope.launch { m.refreshPendingFrom { page(at(12)) } }
+                inSave.await()
+                // K (ts 10) is delivered meanwhile; it waits for the mutex and must then be judged against cut 12.
+                val create = scope.launch { m.onEvent(event("connection.authenticate.pending", auth("K"), at(10))) }
+                kotlinx.coroutines.delay(100)
+                gate.countDown()
+                merge.join()
+                create.join()
+                m.onEvent(sync("connection.authenticate.decided", """"request_id":"K","approved":true""", at(11)))
+                kotlinx.coroutines.delay(200)
+                assertEquals(emptyList<String>(), m.keys())
+            }
+        } finally {
+            scope.cancel()
+        }
     }
 }

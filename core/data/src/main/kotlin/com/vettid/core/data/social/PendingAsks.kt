@@ -30,13 +30,17 @@ internal class PendingAsks {
     private var issued = 0L
     private var merged = 0L
     private var floor = 0L
-    private var active = 0
     private var unsupported = false
 
     /** Creation events accepted: key to `ts`; those not later than the cut leave at each merge. */
     private val created = HashMap<String, Instant>()
 
-    /** Closing events accepted while a read is on its way (the list it brings may still hold what they closed). */
+    /**
+     * Closing events accepted that no merged list reflects yet: the list a read brings may still hold what they closed,
+     * and a creation event that comes after its own close (§8.4) is refused. Empty after an unlock until events arrive,
+     * so a cold map may let a late close drop a newer stored request until the first list merges (the list then
+     * settles it).
+     */
     private val closedKeys = HashMap<String, Instant>()
     private val closedDevices = HashMap<String, Instant>()
 
@@ -47,20 +51,7 @@ internal class PendingAsks {
     val isUnsupported: Boolean get() = synchronized(lock) { unsupported }
 
     /** A read starts. */
-    fun begin(): Long = synchronized(lock) {
-        active++
-        ++issued
-    }
-
-    /** A read ends (merged, stale or failed). */
-    fun end() = synchronized(lock) {
-        active--
-        if (active <= 0) {
-            active = 0
-            closedKeys.clear()
-            closedDevices.clear()
-        }
-    }
+    fun begin(): Long = synchronized(lock) { ++issued }
 
     /** The older release's answer: keep the live events as they are until the next [reset]. */
     fun markUnsupported(ticket: Long) = synchronized(lock) {
@@ -79,10 +70,14 @@ internal class PendingAsks {
 
     private fun reflected(ts: Instant): Boolean = cut?.let { !ts.isAfter(it) } ?: false
 
-    /** A creation event of ask [key]: false when the last list already reflects it (or a closing event came first). */
-    fun acceptCreate(key: String, ts: Instant): Boolean = synchronized(lock) {
+    /**
+     * A creation event of ask [key] (a session request of [deviceId]): false when the last list already reflects it or a
+     * closing event came first. Called inside the store's edit, so that no merge falls between the decision and the write.
+     */
+    fun acceptCreate(key: String, ts: Instant, deviceId: String? = null, session: Boolean = false): Boolean = synchronized(lock) {
         if (reflected(ts)) return false
         if (closedKeys[key]?.let { !it.isBefore(ts) } == true) return false
+        if (session && deviceId != null && closedDevices[deviceId]?.let { !it.isBefore(ts) } == true) return false
         created[key] = ts
         if (created.size > MAX_KEPT) created.entries.minByOrNull { it.value }?.let { created.remove(it.key) }
         true
@@ -91,15 +86,20 @@ internal class PendingAsks {
     /** A closing event of ask [key] (`connection.authenticate.decided`, `approval.decided`): false when reflected. */
     fun acceptClose(key: String, ts: Instant): Boolean = synchronized(lock) {
         if (reflected(ts)) return false
-        if (active > 0) closedKeys[key] = ts
+        remember(closedKeys, key, ts)
         true
     }
 
     /** A `device.session` event for [deviceId]: false when reflected. A device has at most one session request. */
     fun acceptDeviceClose(deviceId: String, ts: Instant): Boolean = synchronized(lock) {
         if (reflected(ts)) return false
-        if (active > 0) closedDevices[deviceId] = ts
+        remember(closedDevices, deviceId, ts)
         true
+    }
+
+    private fun remember(m: MutableMap<String, Instant>, k: String, ts: Instant) {
+        m[k] = m[k]?.takeIf { it.isAfter(ts) } ?: ts
+        if (m.size > MAX_KEPT) m.entries.minByOrNull { it.value }?.let { m.remove(it.key) }
     }
 
     /** Whether the ask [key] was created after [ts]: a closing event at [ts] is not about it. */
@@ -120,6 +120,8 @@ internal class PendingAsks {
                 (e.type != SESSION || e.deviceId == null || closedDevices[e.deviceId]?.isAfter(ts) != true)
         }
         created.values.removeAll { !it.isAfter(ts) }
+        closedKeys.values.removeAll { !it.isAfter(ts) }
+        closedDevices.values.removeAll { !it.isAfter(ts) }
         Plan(entries, created.keys.toSet())
     }
 
