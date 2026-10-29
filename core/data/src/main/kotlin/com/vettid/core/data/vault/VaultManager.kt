@@ -82,9 +82,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -4311,6 +4313,9 @@ class VaultManager(
     val enrolledOnThisPhone: Boolean get() = local.setupComplete && local.replaced == null
 
     override fun held(): Boolean = ownerCheck.ownerCheck.value?.let { it.state != OwnerCheckState.OK } == true
+
+    override val heldChanges: Flow<Boolean>
+        get() = ownerCheck.ownerCheck.map { v -> v != null && v.state != OwnerCheckState.OK }.distinctUntilChanged()
 
     override fun pauseRelay() {
         // Requests before the app opens wait for their answers over this connection (OpeningWindow): paused, if the

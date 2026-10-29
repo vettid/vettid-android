@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -12,6 +13,9 @@ interface BackgroundVault {
 
     /** Held or due now (VAULT-MESSAGING §3.6.3). */
     fun held(): Boolean
+
+    /** [held] as it changes, so the service's status follows a passed (or newly due) owner check at once. */
+    val heldChanges: Flow<Boolean>
 
     /** Reads the vault's state again (`GET /api/vault/status`, signed by the app key); finds an unsignalled lock. */
     suspend fun refresh()
