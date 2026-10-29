@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -204,6 +205,8 @@ data class ApprovalDetailUiState(
     val endFailure: EndFailure? = null,
     /** The device list was read when the request was shown (a failed read leaves this false: a first request). */
     val deviceListRead: Boolean = false,
+    /** The vault is held (§3.6.3) and this is a session request: it left the screen, and a confirmation ends nothing. */
+    val held: Boolean = false,
 ) {
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -225,8 +228,7 @@ data class ApprovalDetailUiState(
 
     val canApprove: Boolean get() = when (val a = approval) {
         null -> false
-        // Only an access-session request can be approved here; a step-up or referred request can only be declined.
-        // A desktop's or agent's request can only be declined until AA5 (Allow with a length).
+        // A desktop's or agent's request can only be declined here until AA5 (Allow with a length).
         is Approval.DeviceRequest -> false
         is Approval.GrantRequest -> grantIndexes.isNotEmpty()
         // 0.10.3: only once the safety code is known, and only once per member.
@@ -247,7 +249,7 @@ data class ApprovalDetailUiState(
  * One approval (ANDROID-PLAN §4): what is asked, by whom, and approve / deny.
  * Member authentication and critical-item uses take the credential password
  * (§10.4, §10.13); a connection request shows its safety code and can be
- * blocked; a desktop's or agent's session request is approved or denied, and a renewal can also deny and end access
+ * blocked; a desktop's or agent's request can only be declined (approving comes with AA5), and a renewal can also deny and end access
  * (VAULT-MESSAGING 0.78.0 §6.8 step 3).
  */
 @HiltViewModel
@@ -273,7 +275,10 @@ class ApprovalDetailViewModel @Inject constructor(
                     devices.refresh()
                     local.update { it.copy(deviceListRead = true) }
                 } catch (_: VaultFailure) {
-                    // Nothing is logged or shown: the request is a first request.
+                    // Nothing is logged or shown: the request is a first request, until a later read succeeds (a
+                    // `sync.event` of kind `device.session` re-reads the list in the repository).
+                    devices.load.first { it == ListLoad.LOADED }
+                    local.update { it.copy(deviceListRead = true) }
                 }
             }
         }
@@ -329,8 +334,12 @@ class ApprovalDetailViewModel @Inject constructor(
             s.copy(
                 approval = shown,
                 gone = (over || held) && !s.done && !s.busy && s.criticalResult == null,
-                // Past the session's end the request reads as a first request: no notice, Approve and Deny.
-                renewalUntil = Renewal.expiresAt(shown, ds, s.deviceListRead, now),
+                held = held,
+                // Past the session's end the request reads as a first request: no notice, only Deny.
+                renewalUntil = Renewal.expiresAt(shown, ds, s.deviceListRead, now).also { until ->
+                    // A failure about a session that has since ended has nothing left to retry.
+                    if (until == null && s.endFailure != null) local.update { it.copy(endFailure = null) }
+                },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 

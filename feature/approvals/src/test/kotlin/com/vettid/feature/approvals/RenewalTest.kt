@@ -248,4 +248,97 @@ class RenewalTest {
         assertNull(m.uiState.value.renewalUntil)
         assertFalse("refresh" in devices.calls)
     }
+
+    @Test
+    fun aConfirmationOpenWhenTheRequestReachesItsExpiryStaysAndEndsAccess() = runTest {
+        val soon = Instant.now().plusMillis(5_000)
+        val m = vm(r = request().copy(exp = soon))
+        runCurrent()
+        m.askEndAccess()
+        runCurrent()
+        advanceTimeBy(6_000)
+        runCurrent()
+        assertTrue(m.uiState.value.gone)
+        assertFalse(m.uiState.value.held)
+        assertTrue(m.uiState.value.confirmEnd)
+        m.endAccess()
+        runCurrent()
+        assertTrue("endAccess:dev1" in devices.calls)
+    }
+
+    @Test
+    fun aConfirmationOpenWhenAnotherDeviceDecidesStays() = runTest {
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        runCurrent()
+        social.approvals.value = emptyList()
+        runCurrent()
+        assertTrue(m.uiState.value.gone)
+        assertTrue(m.uiState.value.confirmEnd)
+        m.endAccess()
+        runCurrent()
+        assertTrue("endAccess:dev1" in devices.calls)
+    }
+
+    @Test
+    fun heldIsReportedSoTheConfirmationIsNotDrawn() = runTest {
+        val m = vm()
+        runCurrent()
+        vault.ownerCheck.value = OwnerCheckView(OwnerCheckState.HELD, null, 86_400, 0, hold = true, holdOffUntil = null)
+        runCurrent()
+        assertTrue(m.uiState.value.held)
+    }
+
+    @Test
+    fun aFailureLeavesWhenTheSessionEndsAndTheRetryIsNeverDead() = runTest {
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.NETWORK)
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        // A sync event re-reads the list: the session ended meanwhile; it is a first request, with no failure to retry.
+        devices.devices.value = listOf(device(expires = null))
+        runCurrent()
+        assertNull(m.uiState.value.renewalUntil)
+        assertNull(m.uiState.value.endFailure)
+        assertFalse(m.uiState.value.gone)
+    }
+
+    @Test
+    fun aSyncDrivenSessionEndFlipsBackToAFirstRequest() = runTest {
+        val m = vm()
+        runCurrent()
+        assertEquals(live, m.uiState.value.renewalUntil)
+        devices.devices.value = listOf(device(expires = null))
+        runCurrent()
+        assertNull(m.uiState.value.renewalUntil)
+    }
+
+    @Test
+    fun aLaterSuccessfulReadAfterAFailedOneCanMakeItARenewal() = runTest {
+        devices.fail["refresh"] = VaultFailure(FailureKind.NETWORK)
+        val m = vm()
+        runCurrent()
+        assertNull(m.uiState.value.renewalUntil)
+        // The repository's quiet re-read (after `sync.event` kind `device.session`) succeeds.
+        devices.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        runCurrent()
+        assertEquals(live, m.uiState.value.renewalUntil)
+    }
+
+    @Test
+    fun aRefusedDailyCheckIsSaidInTheVaultsWords() = runTest {
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, m.uiState.value.endFailure?.kind)
+        assertFalse(m.uiState.value.done)
+        assertNotNull(m.uiState.value.approval)
+    }
 }

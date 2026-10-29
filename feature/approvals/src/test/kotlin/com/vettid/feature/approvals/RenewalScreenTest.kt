@@ -98,6 +98,29 @@ class RenewalScreenTest {
     }
 
     @Test
+    fun aRefusedDailyCheckShowsTheVaultsWordsWithTryAgain() {
+        show(state(request(), failure = EndFailure(FailureKind.OWNER_CHECK_REQUIRED, null)))
+        rule.onNodeWithText("Access not ended").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("Access for $iso could not be ended. Try again.").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("end_retry").assertExists()
+    }
+
+    @Test
+    fun anOpenConfirmationIsStillDrawnOnTheGoneScreen() {
+        var ended = 0
+        show(state(request(), until = null, confirm = true).copy(gone = true), DecisionActions(onEndAccess = { ended++ }))
+        rule.onNodeWithText("End access for $iso?").assertExists()
+        rule.onNodeWithText("End access").performClick()
+        assertEquals(1, ended)
+    }
+
+    @Test
+    fun heldDrawsNoConfirmation() {
+        show(state(request(), until = null, confirm = true).copy(gone = true, held = true))
+        assertEquals(0, rule.onAllNodesWithText("End access for $iso?").fetchSemanticsNodes().size)
+    }
+
+    @Test
     fun denyIsItsOwnCall() {
         var denied = 0
         show(state(request()), DecisionActions(onDeny = { denied++ }))

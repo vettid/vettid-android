@@ -420,14 +420,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
     LaunchedEffect(state.done) { if (state.done) actions.onBack() }
     val a = state.approval
     if (a == null || state.gone) {
-        FormScaffold(
-            title = stringResource(R.string.approvals_gone_title),
-            body = stringResource(R.string.approvals_gone_body),
-            primaryLabel = stringResource(R.string.approvals_back),
-            onPrimary = actions.onBack,
-            onBack = actions.onBack,
-            modifier = modifier,
-        ) {}
+        GoneScreen(a, state, actions, modifier)
         return
     }
     state.criticalResult?.let { status ->
@@ -482,17 +475,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
             )
         }
     }
-    if (state.confirmEnd) {
-        // The Devices page's confirmation, its words reused (core:ui strings).
-        ConfirmDialog(
-            title = stringResource(UiR.string.devices_end_access_title, deviceSentenceInline(a)),
-            text = stringResource(UiR.string.devices_end_access_body),
-            confirmLabel = stringResource(UiR.string.devices_end_access),
-            onConfirm = actions.onEndAccess,
-            onDismiss = actions.onDismissEndAccess,
-            destructive = true,
-        )
-    }
+    if (state.confirmEnd) EndAccessDialog(a, actions)
     if (state.confirmBlock) {
         ConfirmDialog(
             title = stringResource(R.string.approvals_block_title),
@@ -503,6 +486,33 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
             destructive = true,
         )
     }
+}
+
+/** "Already decided … or it expired"; a confirmation already open stays and still ends access (0.78.0 §6.8), except while held. */
+@Composable
+private fun GoneScreen(a: Approval?, state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier) {
+    FormScaffold(
+        title = stringResource(R.string.approvals_gone_title),
+        body = stringResource(R.string.approvals_gone_body),
+        primaryLabel = stringResource(R.string.approvals_back),
+        onPrimary = actions.onBack,
+        onBack = actions.onBack,
+        modifier = modifier,
+    ) {}
+    if (a != null && state.confirmEnd && !state.held) EndAccessDialog(a, actions)
+}
+
+/** The Devices page's confirmation, its words reused (core:ui strings). */
+@Composable
+private fun EndAccessDialog(a: Approval, actions: DecisionActions) {
+    ConfirmDialog(
+        title = stringResource(UiR.string.devices_end_access_title, deviceSentenceInline(a)),
+        text = stringResource(UiR.string.devices_end_access_body),
+        confirmLabel = stringResource(UiR.string.devices_end_access),
+        onConfirm = actions.onEndAccess,
+        onDismiss = actions.onDismissEndAccess,
+        destructive = true,
+    )
 }
 
 /** A renewal request's notice above the choices (0.78.0 §6.8 step 3), and why ending access failed. */
