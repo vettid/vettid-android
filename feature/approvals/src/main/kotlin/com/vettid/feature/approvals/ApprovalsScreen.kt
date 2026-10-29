@@ -180,7 +180,7 @@ fun ApprovalsScreen(
                 )
             }
             nothing -> Column(Modifier.fillMaxSize()) {
-                OpenAsksNotice(state.openAsksError, state.errorCode, onRetry, Modifier.padding(Spacing.gutter))
+                OpenAsksNotice(state.openAsksError, state.openAsksCode, onRetry, Modifier.padding(Spacing.gutter))
                 EmptyState(
                     icon = Icons.Outlined.TaskAlt,
                     title = stringResource(R.string.approvals_empty_title),
@@ -191,7 +191,7 @@ fun ApprovalsScreen(
                 // §10.4.2: the open asks could not be read; the list below is what this phone knows.
                 state.openAsksError?.let { k ->
                     item(key = "open-asks-error") {
-                        OpenAsksNotice(k, state.errorCode, onRetry, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
+                        OpenAsksNotice(k, state.openAsksCode, onRetry, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
                     }
                 }
                 // The other member declined a request (0.10.5): it has left the list; told once.
@@ -239,7 +239,8 @@ private fun OpenAsksNotice(error: FailureKind?, code: String?, onRetry: () -> Un
         kind = if (held) NoticeKind.INFO else NoticeKind.WARNING,
         title = stringResource(if (held) R.string.approvals_open_asks_held_title else R.string.approvals_open_asks_error_title),
         body = failureText(error.messageRes(), error.vaultCode(code)),
-        actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } },
+        // Held: the list reads again by itself when the daily check passes, so there is nothing to retry.
+        actions = if (held) null else ({ TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } }),
         modifier = modifier.testTag("open_asks_notice"),
     )
 }

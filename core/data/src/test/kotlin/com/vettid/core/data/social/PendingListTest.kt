@@ -114,7 +114,7 @@ class PendingListTest {
         assertEquals(4, calls)
         runCurrent()
         assertEquals(listOf("auth:r9"), m.keys())
-        assertEquals(FailureKind.OTHER, m.pendingReadFailure.value)
+        assertEquals(FailureKind.OTHER, m.pendingReadFailure.value?.kind)
     }
 
     @Test
@@ -372,7 +372,7 @@ class PendingListTest {
         } catch (_: VaultFailure) {
             // noted
         }
-        assertEquals(FailureKind.NETWORK, m.pendingReadFailure.value)
+        assertEquals(FailureKind.NETWORK, m.pendingReadFailure.value?.kind)
         val gate = CompletableDeferred<Unit>()
         val unsupported = VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")
         launch { m.refreshPendingFrom { gate.await(); throw unsupported } }
@@ -382,6 +382,28 @@ class PendingListTest {
         runCurrent()
         assertEquals(listOf("auth:live"), m.keys())
         assertEquals(null, m.pendingReadFailure.value)
+    }
+
+    @Test
+    fun aStaleFailureDoesNotOverwriteANewerSuccess() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        var thrown: VaultFailure? = null
+        launch {
+            try {
+                m.refreshPendingFrom { gate.await(); throw VaultFailure(FailureKind.NETWORK) }
+            } catch (e: VaultFailure) {
+                thrown = e
+            }
+        }
+        runCurrent()
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
+        gate.complete(Unit)
+        runCurrent()
+        // The older read still reports its failure to its caller, but the notice stays cleared by the newer merge.
+        assertEquals(FailureKind.NETWORK, thrown?.kind)
+        assertEquals(null, m.pendingReadFailure.value)
+        assertEquals(listOf("auth:r1"), m.keys())
     }
 
     @Test
@@ -416,9 +438,12 @@ class PendingListTest {
         assertEquals(emptyList<String>(), m.keys())
     }
 
-    /** The check-then-write race: a creation admitted before a merge must not be written after it (real threads). */
+    /**
+     * The creation must be judged when its write runs, not before: an unrelated write holds the mutex, the merge of a list
+     * at 12 queues, then K (ts 10) arrives; judged on arrival (cut 5) it would pass and be written after the merge.
+     */
     @Test
-    fun aCreationIsDecidedInsideTheSameEditAsTheWrite() {
+    fun aCreationQueuedBehindAMergeIsJudgedAgainstTheNewCut() {
         val gate = java.util.concurrent.CountDownLatch(1)
         val inSave = java.util.concurrent.CountDownLatch(1)
         val gated = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -426,7 +451,7 @@ class PendingListTest {
         val store = object : com.vettid.core.vault.DeviceStateStore {
             override fun load() = inner.load()
             override fun save(state: ByteArray) {
-                if (gated.get()) {
+                if (gated.getAndSet(false)) {
                     inSave.countDown()
                     gate.await()
                 }
@@ -444,17 +469,19 @@ class PendingListTest {
                 clock = Clock.fixed(base, ZoneOffset.UTC),
             )
             kotlinx.coroutines.runBlocking {
-                m.refreshPendingFrom { page(at(5), ask("authenticate", auth("x"))) }
+                m.refreshPendingFrom { page(at(5)) }
                 gated.set(true)
-                // The merge of a list at 12 without K (nor x) writes under the mutex, and blocks in the save.
-                val merge = scope.launch { m.refreshPendingFrom { page(at(12)) } }
+                // An unrelated write holds the mutex (blocked in its save).
+                val other = scope.launch { m.onEvent(event("connection.authenticate.pending", auth("y"), at(6))) }
                 inSave.await()
-                // K (ts 10) is delivered meanwhile; it waits for the mutex and must then be judged against cut 12.
+                // The merge of a list at 12 (without K) queues on the mutex first...
+                val merge = scope.launch { m.refreshPendingFrom { page(at(12)) } }
+                kotlinx.coroutines.delay(200)
+                // ...then K (ts 10) arrives: judged now (cut 5) it would pass, and be written after the merge.
                 val create = scope.launch { m.onEvent(event("connection.authenticate.pending", auth("K"), at(10))) }
-                kotlinx.coroutines.delay(100)
+                kotlinx.coroutines.delay(200)
                 gate.countDown()
-                merge.join()
-                create.join()
+                other.join(); merge.join(); create.join()
                 m.onEvent(sync("connection.authenticate.decided", """"request_id":"K","approved":true""", at(11)))
                 kotlinx.coroutines.delay(200)
                 assertEquals(emptyList<String>(), m.keys())

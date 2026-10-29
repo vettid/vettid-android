@@ -45,6 +45,8 @@ data class ApprovalsUiState(
      * held for [FailureKind.OWNER_CHECK_REQUIRED]. Also set by the quiet reads after an unlock or a passed check.
      */
     val openAsksError: FailureKind? = null,
+    /** The code `error_vault_code` names with [openAsksError], or null (not the code of the screen's own [error]). */
+    val openAsksCode: String? = null,
     /** Connections whose asks are paused after several declines (0.23.0 §10.4.1): resume, or remove the connection. */
     val paused: List<ConnectionInfo> = emptyList(),
     /** A paused connection the member asked to remove (confirmed first). */
@@ -88,7 +90,9 @@ class ApprovalsViewModel @Inject constructor(
                 )
             },
             repo.pendingReadFailure,
-        ) { s, openAsks -> s.copy(openAsksError = openAsks) }.stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
+        ) { s, openAsks ->
+            s.copy(openAsksError = openAsks?.kind, openAsksCode = openAsks?.shownCode)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
 
     init {
         refresh()

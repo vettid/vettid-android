@@ -53,6 +53,9 @@ internal class PendingAsks {
     /** A read starts. */
     fun begin(): Long = synchronized(lock) { ++issued }
 
+    /** Whether the read of [ticket] is still current: no lock since it began and no later-started read has merged. */
+    fun current(ticket: Long): Boolean = synchronized(lock) { ticket > floor && ticket >= merged }
+
     /** The older release's answer: keep the live events as they are until the next [reset]. */
     fun markUnsupported(ticket: Long) = synchronized(lock) {
         if (ticket > floor) unsupported = true

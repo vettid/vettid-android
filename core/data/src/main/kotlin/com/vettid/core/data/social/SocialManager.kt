@@ -84,9 +84,9 @@ class SocialManager(
 
     /** `pending.list` (§10.4.2): the cut, the ticket of each read, what an older release answered. */
     private val pending = PendingAsks()
-    private val pendingFailureFlow = MutableStateFlow<FailureKind?>(null)
+    private val pendingFailureFlow = MutableStateFlow<VaultFailure?>(null)
 
-    override val pendingReadFailure: StateFlow<FailureKind?> = pendingFailureFlow.asStateFlow()
+    override val pendingReadFailure: StateFlow<VaultFailure?> = pendingFailureFlow.asStateFlow()
 
     /** Peer declines noted in this run, so the `failed` that accompanies one never shows it again (0.10.5). */
     private val notedDeclines = mutableSetOf<String>()
@@ -899,13 +899,14 @@ class SocialManager(
         try {
             val list = readWhole(page) ?: readWhole(page)
                 ?: throw VaultFailure(FailureKind.OTHER, "list_incomplete")
-            if (takeInPending(ticket, list.ts, list.asks)) pendingFailureFlow.value = null
+            if (takeInPending(ticket, list.ts, list.asks) && pending.current(ticket)) pendingFailureFlow.value = null
         } catch (e: VaultFailure) {
+            // A read that is no longer current (a lock, or a later-started read merged) does not touch the notice.
             if (e.code == "unsupported_type") {
                 pending.markUnsupported(ticket)
-                pendingFailureFlow.value = null
+                if (pending.current(ticket)) pendingFailureFlow.value = null
             } else {
-                pendingFailureFlow.value = e.kind
+                if (pending.current(ticket)) pendingFailureFlow.value = e
                 throw e
             }
         }
@@ -932,7 +933,7 @@ class SocialManager(
 
     /** After a quiet read failed for want of a connection, once more a few seconds later (§10.4.2 is read after an unlock). */
     private suspend fun retryPendingOnce() {
-        val kind = pendingFailureFlow.value
+        val kind = pendingFailureFlow.value?.kind
         if (kind != FailureKind.NETWORK && kind != FailureKind.NO_RESPONSE) return
         delay(PENDING_RETRY_MS)
         runCatching { readPending(vaultGuard { api() }) }

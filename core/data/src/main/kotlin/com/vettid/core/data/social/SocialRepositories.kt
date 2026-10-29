@@ -109,11 +109,11 @@ interface ApprovalsRepository {
     suspend fun dismissPeerDecline(requestId: String)
 
     /**
-     * Why the last read of the open asks (`pending.list`, §10.4.2) failed, or null: set on a failure (a held vault is
+     * Why the last read of the open asks (`pending.list`, §10.4.2) failed, or null: set on a failure (a held vault has the kind
      * [com.vettid.core.data.vault.FailureKind.OWNER_CHECK_REQUIRED]), cleared by a good read, an older release's
      * `unsupported_type` and a lock. The quiet reads after an unlock and a passed check set it too, so no failure is silent.
      */
-    val pendingReadFailure: StateFlow<com.vettid.core.data.vault.FailureKind?>
+    val pendingReadFailure: StateFlow<com.vettid.core.data.vault.VaultFailure?>
 
     /** Re-reads what the vault lists (connection, grant and critical-item requests) and drops expired requests. */
     suspend fun refreshApprovals()
