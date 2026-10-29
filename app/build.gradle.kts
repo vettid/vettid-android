@@ -103,7 +103,12 @@ android {
             // A release with calls linked in (`-PvettidCallsInRelease=true`, CI's F-Droid-with-calls step) is a
             // check build and nothing else: under this id it cannot replace or pass for the production app, and no
             // vault accepts its key attestation (a release names its Android package, §11.10.8).
-            if (providers.gradleProperty("vettidCallsInRelease").orNull == "true") applicationIdSuffix = ".callscheck"
+            // The same for a release with the wallet linked in (`-PvettidWalletInRelease=true`, W1).
+            if (providers.gradleProperty("vettidCallsInRelease").orNull == "true" ||
+                providers.gradleProperty("vettidWalletInRelease").orNull == "true"
+            ) {
+                applicationIdSuffix = ".callscheck"
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -739,6 +744,14 @@ abstract class CallsTestCheck : DefaultTask() {
 val callsInRelease = providers.gradleProperty("vettidCallsInRelease").orNull == "true"
 
 /**
+ * The wallet (:core:chain, bitcoin-kmp) in a release build: off until the wallet is promoted (staging first,
+ * STAGING-DEVELOPMENT-PLAN). `-PvettidWalletInRelease=true` links it in, for the one CI step that keeps the F-Droid
+ * distribution building with it (`:app:assembleFossRelease :app:checkFossReleaseApk`). Like `callsInRelease`, such a build has the
+ * application id `com.vettid.app.callscheck` and is never published.
+ */
+val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull == "true"
+
+/**
  * "No calls code in production" beyond the media stack: the call code of :core:crypto and :core:vault is compiled
  * into every variant and only R8 keeps it out of a release. These strings are in that code and nowhere else, and
  * R8 does not rename strings: a release dex that has one has call code that something reaches (for example a
@@ -806,7 +819,7 @@ androidComponents {
                 applicationId.set(
                     when {
                         staging -> stagingApplicationId
-                        callsInRelease -> "$releaseApplicationId.callscheck"
+                        callsInRelease || walletInRelease -> "$releaseApplicationId.callscheck"
                         else -> releaseApplicationId
                     },
                 )
@@ -891,6 +904,13 @@ dependencies {
     for (type in listOf("debug", "devStack", "staging")) {
         "${type}Implementation"(projects.core.calls)
         "${type}Implementation"(projects.feature.calls)
+    }
+    // Wallet (ANDROID-PLAN §4 "Wallet", W1): not in production builds until it is promoted (see walletInRelease above).
+    for (type in listOf("debug", "devStack", "staging")) {
+        "${type}Implementation"(projects.core.chain)
+    }
+    if (walletInRelease) {
+        "releaseImplementation"(projects.core.chain)
     }
     if (callsInRelease) {
         "releaseImplementation"(projects.core.calls)

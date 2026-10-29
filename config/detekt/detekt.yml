@@ -10,7 +10,8 @@ naming:
     active: false
 
 # Protocol modules (:core:crypto, :core:attestation, :core:keystore, and since
-# A2 :core:relay, :core:altchan, :core:vault) port the Go reference byte
+# A2 :core:relay, :core:altchan, :core:vault; since wallet W1 :core:chain, which follows
+# vettid-vault's vms/btc byte for byte) port the Go reference byte
 # layout by byte layout and flow by flow: offsets, sizes and lengths are the
 # spec's numbers (named in the spec, not in Kotlin), strict parsers reject
 # input with one throw per rule, wire records carry the spec's member lists,
@@ -25,16 +26,26 @@ complexity:
     ignoreAnnotated: ['Composable']
     excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/altchan/**', '**/core/vault/**']
   ComplexCondition:
-    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/altchan/**', '**/core/vault/**']
+    excludes: ['**/core/chain/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/altchan/**', '**/core/vault/**']
   CyclomaticComplexMethod:
-    excludes: ['**/test/**', '**/androidTest/**']
+    excludes: ['**/test/**', '**/androidTest/**', '**/core/chain/**']
   LongMethod:
     threshold: 80
     ignoreAnnotated: ['Composable']
+    excludes: ['**/core/chain/**']
+  NestedBlockDepth:
+    excludes: ['**/core/chain/**']
   TooManyFunctions:
     ignoreAnnotatedFunctions: ['Composable']
     ignorePrivate: true
     excludes: ['**/test/**', '**/androidTest/**', '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**']
+
+exceptions:
+  # :core:chain hands a decoder's exception to a policy answer (a refusal with the vault's reason), never to the caller.
+  TooGenericExceptionCaught:
+    excludes: ['**/core/chain/**']
+  SwallowedException:
+    excludes: ['**/core/chain/**']
 
 style:
   MagicNumber:
@@ -42,19 +53,20 @@ style:
     ignoreCompanionObjectPropertyDeclaration: true
     ignoreAnnotated: ['Composable']
     excludes: ['**/test/**', '**/androidTest/**', '**/theme/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**',
-               '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**', '**/core/testing/**', '**/core/media/**']
+               '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**', '**/core/testing/**', '**/core/media/**', '**/core/chain/**']
   ThrowsCount:
-    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/relay/**', '**/core/altchan/**',
+    excludes: ['**/core/chain/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/relay/**', '**/core/altchan/**',
                '**/core/vault/**', '**/core/media/**']
   ReturnCount:
-    excludes: ['**/test/**', '**/androidTest/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/relay/**', '**/core/altchan/**',
+    excludes: ['**/test/**', '**/androidTest/**', '**/core/chain/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/relay/**', '**/core/altchan/**',
                '**/core/vault/**']
   LoopWithTooManyJumpStatements:
-    excludes: ['**/core/altchan/**']
+    excludes: ['**/core/altchan/**', '**/core/chain/**']
   UnusedPrivateMember:
     ignoreAnnotated: ['Preview']
   MaxLineLength:
     maxLineLength: 140
+    excludes: ['**/core/chain/**']  # vault byte layouts, vectors and spec citations stay on one line
   WildcardImport:
     active: true
   ForbiddenComment:

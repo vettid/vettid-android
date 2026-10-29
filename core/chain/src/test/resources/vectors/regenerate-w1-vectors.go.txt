@@ -1,0 +1,484 @@
+package wallet
+
+// W1 conformance vector generator (vettid-android, wallet W1). Not part of the vault: run in a scratch copy.
+// It builds PSBTs with the vault's own btc.BuildPSBT (and mutates them as vms/btc/btc_test.go does), runs the
+// vault's own btc.Inspect, and renders the answer exactly as Feature.inspect does (summaryJSON / psbtError).
+
+import (
+	"github.com/vettid/vettid-vault/internal/strictjson"
+	"bytes"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"testing"
+
+	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/psbt"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
+
+	"github.com/vettid/vettid-vault/vms/btc"
+)
+
+const abandonPhrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+type vAcct struct {
+	Type        string            `json:"type"`
+	Path        string            `json:"path"`
+	XPub        string            `json:"xpub"`
+	Descriptors map[string]string `json:"descriptors"`
+}
+type vWallet struct {
+	Network     string  `json:"network"`
+	Fingerprint string  `json:"fingerprint"`
+	Accounts    []vAcct `json:"accounts"`
+}
+type vCoin struct {
+	Account string `json:"account"`
+	Chain   uint32 `json:"chain"`
+	Index   uint32 `json:"index"`
+	PrevTx  string `json:"prev_tx_hex"`
+	Vout    uint32 `json:"vout"`
+}
+type vPayee struct {
+	Address string `json:"address,omitempty"`
+	Change  bool   `json:"change,omitempty"`
+	Account string `json:"account,omitempty"`
+	Chain   uint32 `json:"chain,omitempty"`
+	Index   uint32 `json:"index,omitempty"`
+	Amount  int64  `json:"amount"`
+}
+type vBuild struct {
+	Account string   `json:"account"` // BuildPSBT's default account
+	Coins   []vCoin  `json:"coins"`
+	Payees  []vPayee `json:"payees"`
+}
+type vExpect struct {
+	OK      bool            `json:"ok"`
+	Summary string `json:"summary_json,omitempty"` // the exact bytes inspect returns
+	Reason  string          `json:"reason,omitempty"`  // invalid_psbt message
+	Code    string          `json:"code,omitempty"`    // bad_request for an unusable "psbt" member
+}
+type vCase struct {
+	Name   string   `json:"name"`
+	Why    string   `json:"why"`
+	Source string   `json:"source"`
+	Wallet string   `json:"wallet"`
+	PSBT   string   `json:"psbt"`
+	Build  *vBuild  `json:"build,omitempty"`
+	Expect vExpect  `json:"expect"`
+}
+
+func TestW1Vectors(t *testing.T) {
+	out := os.Getenv("W1_OUT")
+	if out == "" {
+		t.Skip("W1_OUT not set")
+	}
+	seed, _ := btc.Seed(abandonPhrase, "")
+	wallets := map[string]vWallet{}
+	accts := map[string]map[string]*btc.Account{}
+	nets := map[string]string{"regtest": btc.Regtest, "mainnet": btc.Mainnet, "testnet4": btc.Testnet4, "signet": btc.Signet}
+	for name, nn := range nets {
+		n, _ := btc.LookupNetwork(nn)
+		w := vWallet{Network: nn}
+		accts[name] = map[string]*btc.Account{}
+		for _, typ := range []string{btc.P2TR, btc.P2WPKH} {
+			a, err := btc.NewAccount(seed, n, typ)
+			if err != nil {
+				t.Fatal(err)
+			}
+			accts[name][typ] = a
+			w.Fingerprint = a.FingerprintHex()
+			w.Accounts = append(w.Accounts, vAcct{Type: typ, Path: btc.PathString(a.AccountPath()), XPub: a.XPub,
+				Descriptors: map[string]string{"receive": a.Descriptor(0), "change": a.Descriptor(1)}})
+		}
+		wallets[name] = w
+	}
+	var cases []vCase
+	cur := "regtest"
+	both := func() []*btc.Account { return []*btc.Account{accts[cur][btc.P2TR], accts[cur][btc.P2WPKH]} }
+	wp := func() *btc.Account { return accts[cur][btc.P2WPKH] }
+	tr := func() *btc.Account { return accts[cur][btc.P2TR] }
+	payReg := "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
+	salt := byte(0)
+	fund := func(a *btc.Account, chain, index uint32, amount int64) *wire.MsgTx {
+		salt++
+		tx, err := btc.FundingTx(a, chain, index, amount, salt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tx
+	}
+	ser := func(tx *wire.MsgTx) string {
+		var b bytes.Buffer
+		if err := tx.Serialize(&b); err != nil {
+			t.Fatal(err)
+		}
+		return hex.EncodeToString(b.Bytes())
+	}
+	accName := func(a *btc.Account) string { return a.Type }
+
+	// record runs the vault's inspect on raw bytes (as Feature.inspect does after parsePSBT) and stores the case.
+	record := func(name, why, source string, raw []byte, b *vBuild) {
+		c := vCase{Name: name, Why: why, Source: source, Wallet: cur, PSBT: base64.StdEncoding.EncodeToString(raw), Build: b}
+		sum, err := btc.Inspect(both(), raw)
+		if err != nil {
+			e := psbtError(err)
+			c.Expect = vExpect{Reason: e.Error()}
+			if pe, ok := err.(*btc.PSBTError); ok {
+				c.Expect.Reason = pe.Reason
+			}
+		} else {
+			n, _ := btc.LookupNetwork(wallets[cur].Network)
+			c.Expect = vExpect{OK: true, Summary: string(summaryJSON(n, sum).Bytes())}
+		}
+		cases = append(cases, c)
+	}
+	build := func(def *btc.Account, coins []btc.Coin, payees []btc.Payee) ([]byte, *vBuild) {
+		raw, err := btc.BuildPSBT(def, coins, payees)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := &vBuild{Account: accName(def)}
+		for _, c := range coins {
+			a := c.Acct
+			if a == nil {
+				a = def
+			}
+			b.Coins = append(b.Coins, vCoin{Account: accName(a), Chain: c.Chain, Index: c.Index, PrevTx: ser(c.PrevTx), Vout: c.Vout})
+		}
+		for _, p := range payees {
+			a := p.Acct
+			if a == nil {
+				a = def
+			}
+			vp := vPayee{Address: p.Address, Amount: p.Amount}
+			if p.Change {
+				vp = vPayee{Change: true, Account: accName(a), Chain: p.Chain, Index: p.Index, Amount: p.Amount}
+			}
+			b.Payees = append(b.Payees, vp)
+		}
+		return raw, b
+	}
+	mutate := func(raw []byte, f func(p *psbt.Packet)) []byte {
+		p, err := btc.ParsePSBT(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f(p)
+		var buf bytes.Buffer
+		if err := p.Serialize(&buf); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	const srcTests = "vms/btc/btc_test.go"
+	const srcBuild = "vms/btc/build.go (BuildPSBT), mutation as in vms/btc/btc_test.go"
+
+	{
+		pay := payReg
+		raw, b := build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0, Chain: 0, Index: 0}, {PrevTx: fund(wp(), 1, 3, 50000), Vout: 0, Chain: 1, Index: 3}},
+			[]btc.Payee{{Address: pay, Amount: 70000}, {Change: true, Chain: 1, Index: 4, Amount: 39000}})
+		record("regtest/ok_p2wpkh_two_inputs_change", "two BIP84 coins (receive and change chain), one payee, BIP84 change", srcTests+" TestSignRegtest", raw, b)
+	}
+	cur = "regtest"
+	pay := payReg
+	// ---- valid PSBTs ----
+	raw, b := build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0}}, []btc.Payee{{Address: pay, Amount: 59000}})
+	record("regtest/ok_p2wpkh_no_change", "one coin, no change output", srcBuild, raw, b)
+	raw, b = build(tr(), []btc.Coin{{PrevTx: fund(tr(), 0, 0, 80000), Vout: 0}}, []btc.Payee{{Address: pay, Amount: 50000}, {Change: true, Chain: 1, Index: 0, Amount: 29500}})
+	record("regtest/ok_p2tr_change_p2tr", "one taproot coin, taproot change (non_witness_utxo on a taproot input)", srcTests+" TestSignTaprootAndMixed", raw, b)
+	f1 := fund(tr(), 0, 0, 80000)
+	f2 := fund(wp(), 0, 2, 40000)
+	raw, b = build(wp(), []btc.Coin{{PrevTx: f1, Vout: 0, Acct: tr()}, {PrevTx: f2, Vout: 0, Chain: 0, Index: 2}},
+		[]btc.Payee{{Address: pay, Amount: 100000}, {Change: true, Acct: tr(), Chain: 1, Index: 1, Amount: 19000}})
+	record("regtest/ok_mixed_accounts_change_p2tr", "a taproot and a BIP84 coin in one PSBT, taproot change", srcTests+" TestSignTaprootAndMixed (mixed)", raw, b)
+	mixedRaw := raw
+	raw, b = build(tr(), []btc.Coin{{PrevTx: f2, Vout: 0, Chain: 0, Index: 2, Acct: wp()}, {PrevTx: f1, Vout: 0}},
+		[]btc.Payee{{Address: pay, Amount: 100000}, {Change: true, Acct: wp(), Chain: 1, Index: 0, Amount: 9000}})
+	record("regtest/ok_mixed_accounts_change_p2wpkh", "taproot first then BIP84 coin, BIP84 change", "features/wallet/wallet_test.go TestAddressTypes (mixed), reordered", raw, b)
+	// payee kinds on regtest
+	regtestAddrs := map[string]string{}
+	{
+		n, _ := btc.LookupNetwork(btc.Regtest)
+		k, _ := btc.Seed("x", "")
+		_ = k
+		pk := wp()
+		_, s, _ := pk.Address(0, 9)
+		h := s[2:]
+		p2pkh, _ := btcutil.NewAddressPubKeyHash(h, n.Params)
+		p2sh, _ := btcutil.NewAddressScriptHashFromHash(h, n.Params)
+		wsh, _ := btcutil.NewAddressWitnessScriptHash(bytes.Repeat([]byte{7}, 32), n.Params)
+		trAddr, _, _ := tr().Address(0, 9)
+		regtestAddrs["p2pkh"], regtestAddrs["p2sh"], regtestAddrs["p2wsh"], regtestAddrs["p2tr"] = p2pkh.EncodeAddress(), p2sh.EncodeAddress(), wsh.EncodeAddress(), trAddr
+	}
+	for _, k := range []string{"p2pkh", "p2sh", "p2wsh", "p2tr"} {
+		raw, b = build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0}}, []btc.Payee{{Address: regtestAddrs[k], Amount: 50000}})
+		record("regtest/ok_payee_"+k, "payee script kind "+k+" (standard)", "vms/btc/psbt.go standard()", raw, b)
+	}
+	raw, b = build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0}}, []btc.Payee{{Address: pay, Amount: 30000}, {Address: regtestAddrs["p2tr"], Amount: 20000}, {Change: true, Chain: 0, Index: 7, Amount: 5000}})
+	record("regtest/ok_change_on_receive_chain", "an own output on the receive chain (chain 0) counts as change", "vms/btc/psbt.go own()", raw, b)
+	base, bb := build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0}, {PrevTx: fund(wp(), 1, 3, 50000), Vout: 0, Chain: 1, Index: 3}},
+		[]btc.Payee{{Address: pay, Amount: 70000}, {Change: true, Chain: 1, Index: 4, Amount: 39000}})
+	record("regtest/ok_sighash_absent_p2wpkh", "no sighash type on a P2WPKH input: the vault accepts (treats as ALL)", "vms/btc/psbt.go Inspect (in.SighashType != 0)", mutate(base, func(p *psbt.Packet) { p.Inputs[0].SighashType = 0 }), nil)
+	record("regtest/ok_no_witness_utxo", "witness_utxo absent: only non_witness_utxo is required", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].WitnessUtxo = nil; p.Inputs[1].WitnessUtxo = nil }), nil)
+	record("regtest/ok_tx_version_1", "transaction version 1", "vms/btc/psbt.go Inspect (version 1 or 2)", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.Version = 1 }), nil)
+	record("regtest/ok_final_sequence_and_locktime", "sequence 0xffffffff and locktime: the vault does not require RBF", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxIn[0].Sequence = 0xffffffff; p.UnsignedTx.LockTime = 500000 }), nil)
+	record("regtest/ok_output_foreign_fingerprint_is_payee", "change derivation with another fingerprint: not change, counted as sending", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Outputs[1].Bip32Derivation[0].MasterKeyFingerprint ^= 1 }), nil)
+	record("regtest/ok_output_without_derivation_is_payee", "own address without derivation: counted as sending", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Outputs[1].Bip32Derivation = nil }), nil)
+	traw, _ := build(tr(), []btc.Coin{{PrevTx: fund(tr(), 0, 0, 80000), Vout: 0}}, []btc.Payee{{Address: pay, Amount: 50000}, {Change: true, Chain: 1, Index: 0, Amount: 29500}})
+	record("regtest/ok_p2tr_sighash_all", "SIGHASH_ALL on a taproot input: 67 witness units in vsize", "vms/btc/psbt.go vsize()", mutate(traw, func(p *psbt.Packet) { p.Inputs[0].SighashType = txscript.SigHashAll }), nil)
+	record("regtest/ok_p2tr_no_internal_key", "tap_internal_key absent (optional)", "vms/btc/psbt.go Inspect", mutate(traw, func(p *psbt.Packet) { p.Inputs[0].TaprootInternalKey = nil }), nil)
+	record("regtest/ok_p2tr_sighash_absent", "taproot input with no sighash: SIGHASH_DEFAULT, 66 witness units", "vms/btc/psbt.go vsize()", mutate(traw, func(p *psbt.Packet) { p.Inputs[0].SighashType = 0 }), nil)
+
+	// 64 inputs / fee-rate boundary.
+	var coins64 []btc.Coin
+	for i := uint32(0); i < 64; i++ {
+		coins64 = append(coins64, btc.Coin{PrevTx: fund(wp(), 0, i, 10000), Vout: 0, Chain: 0, Index: i})
+	}
+	raw, b = build(wp(), coins64, []btc.Payee{{Address: pay, Amount: 600000}})
+	record("regtest/ok_64_inputs", "the input limit", "vms/btc/psbt.go MaxInputs", raw, b)
+	// vsize of a 1-in/1-out P2WPKH spend.
+	probe, _ := build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 1000000), Vout: 0}}, []btc.Payee{{Address: pay, Amount: 900000}})
+	ps, err := btc.Inspect(both(), probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs := ps.VSize
+	pf := fund(wp(), 0, 0, 1000000)
+	raw, b = build(wp(), []btc.Coin{{PrevTx: pf, Vout: 0}}, []btc.Payee{{Address: pay, Amount: 1000000 - 1000*vs}})
+	record("regtest/ok_fee_rate_at_limit", "fee exactly 1,000 sat/vB of the vault's vsize", "vms/btc/psbt.go MaxFeeRate", raw, b)
+	raw, b = build(wp(), []btc.Coin{{PrevTx: pf, Vout: 0}}, []btc.Payee{{Address: pay, Amount: 1000000 - 1000*vs - 1}})
+	record("regtest/fee_rate_over_limit", "one sat above 1,000 sat/vB", "vms/btc/psbt.go MaxFeeRate", raw, b)
+	raw, b = build(wp(), []btc.Coin{{PrevTx: pf, Vout: 0}}, []btc.Payee{{Address: pay, Amount: 1000000 - 1}})
+	record("regtest/ok_fee_one_sat", "fee of one sat (positive is enough; no minimum rate)", "vms/btc/psbt.go Inspect", raw, b)
+	raw, b = build(wp(), []btc.Coin{{PrevTx: pf, Vout: 0}}, []btc.Payee{{Address: pay, Amount: 1000000}})
+	record("regtest/fee_zero", "outputs equal inputs", "vms/btc/psbt.go Inspect", raw, b)
+	raw, b = build(wp(), []btc.Coin{{PrevTx: pf, Vout: 0}}, []btc.Payee{{Address: pay, Amount: 1000001}})
+	record("regtest/fee_negative", "outputs above inputs", "vms/btc/psbt.go Inspect", raw, b)
+	raw, b = build(wp(), coins64, []btc.Payee{{Address: pay, Amount: 600000}})
+	_, _ = raw, b
+
+	// ---- refusals ----
+	record("regtest/malformed_garbage", "not a PSBT", srcTests+" TestInspectRefusals", []byte("psbt\xff\x00"), nil)
+	record("regtest/malformed_no_magic", "bytes without the magic", "vms/btc/psbt.go ParsePSBT", []byte("hello world, not a psbt at all"), nil)
+	record("regtest/malformed_truncated", "a valid PSBT cut short", "vms/btc/psbt.go ParsePSBT", base[:len(base)-9], nil)
+	record("regtest/size_over_limit", "65,537 bytes", "vms/btc/psbt.go MaxPSBT", append(append([]byte{}, base...), make([]byte, 65537-len(base))...), nil)
+	record("regtest/shape_input_map_missing", "one input map fewer than inputs", "vms/btc/psbt.go Inspect (shape)", mutate(base, func(p *psbt.Packet) { p.Inputs = p.Inputs[:1] }), nil)
+	{
+		var coins65 []btc.Coin
+		for i := uint32(0); i < 65; i++ {
+			coins65 = append(coins65, btc.Coin{PrevTx: fund(wp(), 0, i, 10000), Vout: 0, Chain: 0, Index: i})
+		}
+		raw, b = build(wp(), coins65, []btc.Payee{{Address: pay, Amount: 600000}})
+		record("regtest/shape_65_inputs", "one input above the limit", "vms/btc/psbt.go MaxInputs", raw, b)
+		var pays []btc.Payee
+		for i := 0; i < 65; i++ {
+			pays = append(pays, btc.Payee{Address: pay, Amount: 1000})
+		}
+		raw, b = build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 100000), Vout: 0}}, pays)
+		record("regtest/shape_65_outputs", "one output above the limit", "vms/btc/psbt.go MaxOutputs", raw, b)
+	}
+	record("regtest/version_3", "transaction version 3", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.Version = 3 }), nil)
+	record("regtest/version_0", "transaction version 0", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.Version = 0 }), nil)
+	record("regtest/duplicate_input", "the same outpoint twice", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) {
+		p.UnsignedTx.TxIn[1].PreviousOutPoint = p.UnsignedTx.TxIn[0].PreviousOutPoint
+		p.Inputs[1] = p.Inputs[0]
+	}), nil)
+	record("regtest/previous_tx_missing", "non_witness_utxo absent", srcTests+" TestInspectRefusals no_prev_tx", mutate(base, func(p *psbt.Packet) { p.Inputs[0].NonWitnessUtxo = nil }), nil)
+	record("regtest/previous_tx_missing_witness_only", "only witness_utxo (what a BDK taproot input carries)", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].NonWitnessUtxo = nil }), nil)
+	record("regtest/previous_tx_wrong_txid", "non_witness_utxo is another transaction", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].NonWitnessUtxo = p.Inputs[1].NonWitnessUtxo }), nil)
+	record("regtest/previous_tx_vout_out_of_range", "outpoint index beyond the previous transaction's outputs", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxIn[0].PreviousOutPoint.Index = 3 }), nil)
+	record("regtest/witness_utxo_value", "witness_utxo amount differs", srcTests+" TestInspectRefusals witness_utxo", mutate(base, func(p *psbt.Packet) { p.Inputs[0].WitnessUtxo = wire.NewTxOut(1, p.Inputs[0].WitnessUtxo.PkScript) }), nil)
+	record("regtest/witness_utxo_script", "witness_utxo script differs", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].WitnessUtxo = wire.NewTxOut(60000, p.Inputs[1].WitnessUtxo.PkScript) }), nil)
+	for name, sh := range map[string]txscript.SigHashType{"none": txscript.SigHashNone, "single": txscript.SigHashSingle, "all_anyonecanpay": txscript.SigHashAll | txscript.SigHashAnyOneCanPay} {
+		sh := sh
+		record("regtest/sighash_"+name, "sighash other than ALL", srcTests+" TestInspectRefusals sighash", mutate(base, func(p *psbt.Packet) { p.Inputs[0].SighashType = sh }), nil)
+	}
+	zeroSig := make([]byte, 64)
+	der := append(append(append([]byte{0x30, 0x44, 0x02, 0x20}, bytes.Repeat([]byte{1}, 32)...), append([]byte{0x02, 0x20}, bytes.Repeat([]byte{1}, 32)...)...), 0x01)
+	pubOf := func(a *btc.Account, c, i uint32) []byte { k, _ := a.PubKey(c, i); return k }
+	record("regtest/input_script_partial_sig", "partial signature present", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) {
+		p.Inputs[0].PartialSigs = []*psbt.PartialSig{{PubKey: pubOf(wp(), 0, 0), Signature: der}}
+	}), nil)
+	record("regtest/input_script_final_witness", "finalised input", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].FinalScriptWitness = []byte{0x01, 0x01, 0x01} }), nil)
+	record("regtest/input_script_final_scriptsig", "finalised scriptSig", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].FinalScriptSig = []byte{0x51} }), nil)
+	record("regtest/input_script_redeem_script", "redeem script", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].RedeemScript = []byte{0x51} }), nil)
+	record("regtest/input_script_witness_script", "witness script", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].WitnessScript = []byte{0x51} }), nil)
+	record("regtest/input_script_taproot_key_sig", "taproot key signature present", "vms/btc/psbt.go Inspect", mutate(traw, func(p *psbt.Packet) { p.Inputs[0].TaprootKeySpendSig = zeroSig }), nil)
+	record("regtest/input_script_taproot_merkle_root", "taproot merkle root (script tree)", srcTests+" TestSignTaprootAndMixed merkle_root", mutate(traw, func(p *psbt.Packet) { p.Inputs[0].TaprootMerkleRoot = make([]byte, 32) }), nil)
+	record("regtest/input_script_taproot_leaf_script", "taproot leaf script", "vms/btc/psbt.go Inspect", mutate(traw, func(p *psbt.Packet) {
+		p.Inputs[0].TaprootLeafScript = []*psbt.TaprootTapLeafScript{{ControlBlock: append([]byte{0xc0}, pubOf(tr(), 0, 0)...), Script: []byte{0x51}, LeafVersion: 0xc0}}
+	}), nil)
+	record("regtest/input_script_taproot_script_sig", "taproot script-path signature", "vms/btc/psbt.go Inspect", mutate(traw, func(p *psbt.Packet) {
+		p.Inputs[0].TaprootScriptSpendSig = []*psbt.TaprootScriptSpendSig{{XOnlyPubKey: pubOf(tr(), 0, 0), LeafHash: make([]byte, 32), Signature: zeroSig, SigHash: 0}}
+	}), nil)
+	// amount: a previous output of 0 / above 21M BTC
+	for name, amt := range map[string]int64{"zero": 0, "over_max": btcutil.MaxSatoshi + 1} {
+		tx := fund(wp(), 0, 0, amt)
+		raw, b = func() ([]byte, *vBuild) {
+			// BuildPSBT does not check amounts.
+			return build(wp(), []btc.Coin{{PrevTx: tx, Vout: 0}}, []btc.Payee{{Address: pay, Amount: 5000}})
+		}()
+		record("regtest/amount_prev_out_"+name, "previous output amount "+name, "vms/btc/psbt.go Inspect", raw, b)
+	}
+	record("regtest/foreign_input_no_derivation", "input without any derivation", srcTests+" TestInspectRefusals foreign", mutate(base, func(p *psbt.Packet) { p.Inputs[1].Bip32Derivation = nil }), nil)
+	record("regtest/foreign_input_other_fingerprint", "derivation with another fingerprint", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].MasterKeyFingerprint ^= 0x01 }), nil)
+	record("regtest/derivation_path_index", "index above the vault's limit (2^20)", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].Bip32Path[4] = 1 << 20 }), nil)
+	record("regtest/derivation_path_chain_2", "chain 2", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].Bip32Path[3] = 2 }), nil)
+	record("regtest/derivation_path_short", "three-element path", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].Bip32Path = p.Inputs[0].Bip32Derivation[0].Bip32Path[:3] }), nil)
+	record("regtest/derivation_path_coin_type", "coin type 0 on a regtest wallet", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].Bip32Path[1] = 0x80000000 }), nil)
+	record("regtest/derivation_path_purpose_44", "purpose 44'", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].Bip32Path[0] = 0x80000000 + 44 }), nil)
+	record("regtest/derivation_path_unhardened_account", "account index not hardened", "vms/btc/psbt.go own() (path[2] compared with the hardened value)", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].Bip32Path[2] = 0 }), nil)
+	record("regtest/derivation_path_taproot_leaf_hashes", "taproot derivation with a leaf hash", srcTests+" TestSignTaprootAndMixed leaf_hashes", mutate(traw, func(p *psbt.Packet) { p.Inputs[0].TaprootBip32Derivation[0].LeafHashes = [][]byte{make([]byte, 32)} }), nil)
+	record("regtest/derivation_path_taproot_in_bip84_slot", "BIP32 (not taproot) derivation with a 86' path for a taproot script", srcTests+" TestSignTaprootAndMixed key_as_wpkh", mutate(traw, func(p *psbt.Packet) {
+		d := p.Inputs[0].TaprootBip32Derivation[0]
+		p.Inputs[0].TaprootBip32Derivation = nil
+		p.Inputs[0].Bip32Derivation = []*psbt.Bip32Derivation{{PubKey: d.XOnlyPubKey, MasterKeyFingerprint: d.MasterKeyFingerprint, Bip32Path: d.Bip32Path}}
+	}), nil)
+	record("regtest/derivation_key_wrong_index_key", "path index 9 with the key of index 0", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation[0].Bip32Path[4] = 9 }), nil)
+	record("regtest/derivation_key_fake_change", "change output claims index 5, key of index 4", srcTests+" TestInspectRefusals fake_change", mutate(base, func(p *psbt.Packet) { p.Outputs[1].Bip32Derivation[0].Bip32Path[4] = 5 }), nil)
+	record("regtest/derivation_script_input", "path and key agree (index 9) but the coin sits at index 0", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) {
+		d := p.Inputs[0].Bip32Derivation[0]
+		d.Bip32Path[4] = 9
+		d.PubKey = pubOf(wp(), 0, 9)
+	}), nil)
+	record("regtest/derivation_script_change_output", "change output: path and key of index 9, script of index 4", "vms/btc/psbt.go own()", mutate(base, func(p *psbt.Packet) {
+		d := p.Outputs[1].Bip32Derivation[0]
+		d.Bip32Path[4] = 9
+		d.PubKey = pubOf(wp(), 1, 9)
+		d.Bip32Path[3] = 1
+	}), nil)
+	record("regtest/internal_key_other", "tap_internal_key of another index", srcTests+" TestSignTaprootAndMixed internal_key", mutate(traw, func(p *psbt.Packet) { p.Inputs[0].TaprootInternalKey = pubOf(tr(), 0, 5) }), nil)
+	for name, amt := range map[string]int64{"329": 329, "0": 0} {
+		raw, b = build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0}}, []btc.Payee{{Address: pay, Amount: amt}})
+		record("regtest/output_amount_"+name, "payee below 330 sats", srcTests+" TestInspectRefusals output", raw, b)
+	}
+	record("regtest/output_amount_over_max", "output above 21M BTC", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].Value = btcutil.MaxSatoshi + 1 }), nil)
+	record("regtest/output_amount_negative", "negative output value", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].Value = -5 }), nil)
+	opret, _ := txscript.NullDataScript([]byte("hi"))
+	record("regtest/output_script_op_return", "OP_RETURN output", "vms/btc/psbt.go standard()", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].PkScript = opret }), nil)
+	record("regtest/output_script_empty", "empty output script", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].PkScript = nil }), nil)
+	pk33 := pubOf(wp(), 0, 0)
+	bare := append(append([]byte{0x21}, pk33...), 0xac)
+	record("regtest/output_script_p2pk", "bare P2PK output", "vms/btc/psbt.go standard()", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].PkScript = bare }), nil)
+	ms := append(append(append([]byte{0x51, 0x21}, pk33...), 0x51), 0xae)
+	record("regtest/output_script_bare_multisig", "bare 1-of-1 multisig", "vms/btc/psbt.go standard()", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].PkScript = ms }), nil)
+	record("regtest/output_script_witness_v2", "unknown witness version 2", "vms/btc/psbt.go standard()", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].PkScript = append([]byte{0x52, 0x20}, bytes.Repeat([]byte{9}, 32)...) }), nil)
+	// order of checks
+	record("regtest/order_previous_tx_before_foreign", "no previous tx and no derivation: previous_tx is reported first", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].NonWitnessUtxo = nil; p.Inputs[0].Bip32Derivation = nil }), nil)
+	record("regtest/order_sighash_before_foreign", "bad sighash and no derivation: sighash first", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].SighashType = txscript.SigHashNone; p.Inputs[0].Bip32Derivation = nil }), nil)
+	record("regtest/order_input_error_before_output_error", "bad input 1 and bad output 0: the input is reported", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[1].Bip32Derivation = nil; p.UnsignedTx.TxOut[0].Value = 1 }), nil)
+	record("regtest/order_output_amount_before_fee", "dust output and a fee rate over the limit", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].Value = 100 }), nil)
+	record("regtest/order_first_input_wins", "input 0 foreign, input 1 amount 0: input 0 reported", "vms/btc/psbt.go Inspect", mutate(base, func(p *psbt.Packet) { p.Inputs[0].Bip32Derivation = nil }), nil)
+
+	// a mixed-account PSBT that a wallet with only one account would see
+	_ = mixedRaw
+	_ = chainhash.Hash{}
+
+	// ---- mainnet / testnet4 / signet: address encodings ----
+	for _, nn := range []string{"mainnet", "testnet4", "signet"} {
+		cur = nn
+		var pays []string
+		switch nn {
+		case "mainnet":
+			pays = []string{"bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr", "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy"}
+		default:
+			pays = []string{"tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl", "tb1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesf3hn0c"}
+		}
+		raw, b = build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0}, {PrevTx: fund(tr(), 0, 1, 50000), Vout: 0, Chain: 0, Index: 1, Acct: tr()}},
+			append(func() []btc.Payee {
+				var ps []btc.Payee
+				for _, a := range pays {
+					ps = append(ps, btc.Payee{Address: a, Amount: 20000})
+				}
+				return ps
+			}(), btc.Payee{Change: true, Acct: tr(), Chain: 1, Index: 2, Amount: 20000}))
+		record(nn+"/ok_mixed_payee_kinds", "both accounts in one PSBT, payees of each standard kind for the network, taproot change", "vms/btc/psbt.go; addresses from vms/btc/btc_test.go TestCheckAddress", raw, b)
+		raw, b = build(wp(), []btc.Coin{{PrevTx: fund(wp(), 0, 0, 60000), Vout: 0}}, []btc.Payee{{Address: pays[0], Amount: 50000}, {Change: true, Chain: 1, Index: 0, Amount: 9000}})
+		record(nn+"/ok_p2wpkh", "single BIP84 coin and change", "vms/btc/psbt.go", raw, b)
+		raw, b = build(tr(), []btc.Coin{{PrevTx: fund(tr(), 0, 0, 60000), Vout: 0}}, []btc.Payee{{Address: pays[0], Amount: 50000}, {Change: true, Chain: 1, Index: 0, Amount: 9000}})
+		record(nn+"/ok_p2tr", "single taproot coin and change", "vms/btc/psbt.go", raw, b)
+	}
+	// ---- network re-encoding: a mainnet payee script in a regtest wallet is shown as the regtest address ----
+	cur = "regtest"
+	{
+		mp := "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+		mn, _ := btc.LookupNetwork(btc.Mainnet)
+		a, _ := btcutil.DecodeAddress(mp, mn.Params)
+		sc, _ := txscript.PayToAddrScript(a)
+		record("regtest/ok_foreign_network_script_reencoded", "a mainnet payee's script is shown as a regtest address (the app must compare)", "VAULT-MESSAGING §10.18 (0.37.0, as built)", mutate(base, func(p *psbt.Packet) { p.UnsignedTx.TxOut[0].PkScript = sc }), nil)
+	}
+	_ = base
+	_ = bb
+
+	// ---- the "psbt" member as text (features/wallet/wallet.go parsePSBT), then the decoded bytes through Inspect ----
+	record("regtest/ok_trailing_bytes_ignored", "two bytes after the last map: btcd's decoder stops after the output maps, the vault accepts", "vms/btc/psbt.go ParsePSBT", append(append([]byte{}, base...), 0x00, 0x00), nil)
+	std := base64.StdEncoding.EncodeToString(base)
+	members := []struct{ name, text, why string }{
+		{"empty_string", "", "empty psbt member"},
+		{"not_base64", "!!!!", "not base64"},
+		{"url_safe_base64", base64.URLEncoding.EncodeToString(append([]byte{0xfb, 0xff}, base...)), "URL-safe alphabet"},
+		{"too_long", string(bytes.Repeat([]byte("A"), 87388)), "base64 text above (65536+2)/3*4 characters"},
+		{"unpadded", base64.RawStdEncoding.EncodeToString(base), "padding removed"},
+		{"newline_inside", std[:40] + "\n" + std[40:], "a line break inside"},
+		{"leading_space", " " + std, "a leading space"},
+		{"trailing_newline", std + "\n", "a trailing line break"},
+	}
+	for _, m := range members {
+		o, err := strictjson.ParseObject([]byte(`{"psbt":` + string(mustJSON(m.text)) + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec, perr := parsePSBT(o)
+		c := vCase{Name: "regtest/member_" + m.name, Why: m.why, Source: "features/wallet/wallet.go parsePSBT", Wallet: "regtest", PSBT: m.text}
+		if perr != nil {
+			c.Expect = vExpect{Code: "bad_request"}
+		} else {
+			sum, err := btc.Inspect(both(), dec)
+			if err != nil {
+				c.Expect = vExpect{Reason: err.(*btc.PSBTError).Reason}
+			} else {
+				n, _ := btc.LookupNetwork(btc.Regtest)
+				c.Expect = vExpect{OK: true, Summary: string(summaryJSON(n, sum).Bytes())}
+			}
+		}
+		cases = append(cases, c)
+	}
+
+	doc := map[string]any{
+		"generator": "scratch test features/wallet/w1gen_test.go at vettid-vault origin/main 214b88f; vault code paths: vms/btc/psbt.go Inspect, vms/btc/build.go BuildPSBT, features/wallet/wallet.go inspect/summaryJSON/psbtError",
+		"mnemonic":  abandonPhrase,
+		"wallets":   wallets,
+		"cases":     cases,
+	}
+	buf, err := json.MarshalIndent(doc, "", " ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ok := 0
+	for _, c := range cases {
+		if c.Expect.OK {
+			ok++
+		}
+	}
+	t.Logf("%d cases, %d ok", len(cases), ok)
+	for _, c := range cases {
+		if !c.Expect.OK {
+			t.Logf("%-55s %s%s", c.Name, c.Expect.Reason, c.Expect.Code)
+		}
+	}
+}
+
+func mustJSON(s string) []byte {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
