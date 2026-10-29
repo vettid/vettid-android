@@ -64,7 +64,7 @@ object PsbtInspector {
             throw e
         } catch (e: Exception) {
             // Anything a decoder trips over is a refusal, as in the vault (`ParsePSBT` recovers a panic).
-            throw Bip174Malformed(e.message ?: "decode")
+            throw Bip174Malformed("decode")
         }
         val t = tx ?: refuse(PsbtReasons.MALFORMED)
         if (t.txIn.isEmpty() || t.txIn.size > MAX_INPUTS || t.txOut.isEmpty() || t.txOut.size > MAX_OUTPUTS) refuse(PsbtReasons.SHAPE)

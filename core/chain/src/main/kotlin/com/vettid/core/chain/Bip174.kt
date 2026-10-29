@@ -281,7 +281,7 @@ internal class InputMap(entries: List<Bip174Entry>) {
     }
 
     private inline fun single(e: Bip174Entry, seen: MutableSet<String>, f: () -> Unit) {
-        if (e.hasKeyData || !seen.add(e.type.toString())) throw Bip174Malformed("entry ${e.type}")
+        if (e.hasKeyData || !seen.add(e.type.toString())) throw Bip174Malformed("repeated or keyed singleton entry")
         f()
     }
 }
@@ -299,7 +299,7 @@ internal class OutputMap(entries: List<Bip174Entry>) {
             when (e.type) {
                 // redeem script, witness script, taproot internal key, taproot tree: once each, no key data
                 0x00, 0x01, 0x05, 0x06 -> {
-                    if (e.hasKeyData || !seen.add(e.type.toString())) throw Bip174Malformed("output entry ${e.type}")
+                    if (e.hasKeyData || !seen.add(e.type.toString())) throw Bip174Malformed("repeated or keyed singleton output entry")
                     if (e.type == 0x05 && !validXonly(e.value)) throw Bip174Malformed("taproot internal key")
                 }
                 0x02 -> {

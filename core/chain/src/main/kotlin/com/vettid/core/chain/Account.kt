@@ -116,7 +116,7 @@ class Account private constructor(
             }
             // The vault only signs m/84'/c'/0' and m/86'/c'/0' (§10.18, derivation_path): refuse anything else early.
             if (r.origin != "/${r.type.purpose}'/${network.coinType}'/0'") {
-                throw DescriptorException("origin ${r.origin} is not ${originString(r.type, network)}")
+                throw DescriptorException("origin is not the account origin of the network")
             }
             val parentPath = KeyPath(listOf(hardened(r.type.purpose), hardened(network.coinType)))
             val (prefix, key) = try {
@@ -126,7 +126,7 @@ class Account private constructor(
             }
             val wantPrefix = if (network.testKeys) DeterministicWallet.tpub else DeterministicWallet.xpub
             if (prefix != wantPrefix) throw DescriptorException("key version does not match the network")
-            if (key.depth != 3) throw DescriptorException("not an account key (depth ${key.depth})")
+            if (key.depth != 3) throw DescriptorException("not an account key")
             if (key.path.lastChildNumber != hardened(0)) throw DescriptorException("not account 0")
             return Account(r.type, network, r.fingerprint, key)
         }
@@ -149,5 +149,5 @@ class Wallet(val network: Network, val accounts: List<Account>) {
     internal val fingerprint: ByteArray get() = accounts[0].fingerprint
 
     fun account(type: AccountType): Account = accounts.firstOrNull { it.type == type } ?:
-        throw IllegalArgumentException("no ${type.vaultName} account")
+        throw IllegalArgumentException("no account of that type")
 }

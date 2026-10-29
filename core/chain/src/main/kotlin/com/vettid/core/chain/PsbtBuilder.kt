@@ -139,7 +139,7 @@ object PsbtBuilder {
 
     private fun <A> Either<*, A>.orThrow(): A = when (this) {
         is Either.Right -> value
-        is Either.Left -> throw BuildException("psbt: $value")
+        is Either.Left -> throw BuildException("psbt")
     }
 }
 
