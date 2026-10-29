@@ -73,6 +73,7 @@ import com.vettid.core.data.wipe.AppDataClear
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.relay.NetworkGate
 import com.vettid.core.relay.TransportRetry
+import com.vettid.core.relay.fixedUserAgent
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -139,6 +140,7 @@ object AppModule {
     fun http(pool: ConnectionPool, gate: NetworkGate): OkHttpClient = OkHttpClient.Builder()
         .connectionPool(pool)
         .addInterceptor(TransportRetry(gate))
+        .fixedUserAgent()
         .readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS)
         .build()
 

@@ -4,6 +4,7 @@ import com.vettid.core.altchan.AltTrust
 import com.vettid.core.attestation.manifest.ManifestKey
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.relay.OriginMapInterceptor
+import com.vettid.core.relay.fixedUserAgent
 import com.vettid.core.vault.VaultJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,6 +40,7 @@ class DevStack(
 
     val http: OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(OriginMapInterceptor(mapOf(relayUrl to relayTransport)))
+        .fixedUserAgent()
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
