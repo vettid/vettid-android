@@ -4,7 +4,10 @@ import android.content.res.Resources
 import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import com.vettid.core.data.R
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AuthContext
+import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.vault.RecoveryRefs
 import com.vettid.core.data.vault.SignerClass
@@ -155,13 +158,51 @@ object FeedKinds {
     /** The connection's "First Last" (never an alias), the request's sender, or "Removed connection". */
     fun connectionName(item: FeedItem, names: FeedNames): FeedText {
         val c = item.connectionId?.let { names.connections[it] }
-        val sender = FeedAsks.approvalKey(item.kind, item.ref)?.let { names.approvals[it] }?.let { a -> senderOf(a) }
-        val name = c?.accountName ?: c?.name?.takeIf { it.isNotBlank() } ?: sender
+        val name = knownName(item, names)
         return when {
             name != null -> FeedText(literal = name)
             c != null -> FeedText(R.string.data_feed_name_not_shared)
             item.connectionId != null -> FeedText(R.string.data_feed_removed_connection)
             else -> FeedText(R.string.data_feed_someone)
+        }
+    }
+
+    /** The connection's "First Last" or the request's sender; null when neither is known. */
+    private fun knownName(item: FeedItem, names: FeedNames): String? {
+        val c = item.connectionId?.let { names.connections[it] }
+        val sender = FeedAsks.approvalKey(item.kind, item.ref)?.let { names.approvals[it] }?.let { a -> senderOf(a) }
+        return c?.accountName ?: c?.name?.takeIf { it.isNotBlank() } ?: sender
+    }
+
+    /**
+     * A challenge's purpose (VAULT-MESSAGING 0.65.0 §10.4), from its pending approval of the same connection: the feed
+     * item does not carry it, so an item whose approval is no longer pending (or names another connection) reads as one
+     * without a purpose.
+     */
+    fun authenticationPurpose(item: FeedItem, names: FeedNames): AuthPurpose {
+        val a = FeedAsks.approvalKey(item.kind, item.ref)?.let { names.approvals[it] } as? Approval.Authentication
+        return if (a != null && a.connectionId == item.connectionId) a.purpose else AuthPurpose.NONE
+    }
+
+    /**
+     * A challenge's title (§10.4): a batch (§10.4.1) reads "Sam asks for 3 things" whatever the purpose; else per purpose,
+     * the name bidirectionally isolated (§10.8) in the purpose's sentences.
+     */
+    private fun authenticationTitle(item: FeedItem, names: FeedNames): FeedText {
+        val count = item.count ?: 0
+        if (count > 1) {
+            return FeedText(
+                plural = R.plurals.data_feed_grant_request_batch,
+                quantity = count,
+                args = listOf(firstName(item, names), count),
+            )
+        }
+        val known = knownName(item, names)?.let { AuthContext.isolatedName(it) }?.let { FeedText(literal = it) }
+        val aConnection = FeedText(R.string.data_feed_a_connection_inline)
+        return when (authenticationPurpose(item, names)) {
+            AuthPurpose.SIGNIN -> FeedText(R.string.data_feed_authenticate_signin, listOf(known ?: aConnection))
+            AuthPurpose.APPROVAL -> FeedText(R.string.data_feed_authenticate_approval, listOf(known ?: aConnection))
+            AuthPurpose.NONE -> FeedText(R.string.data_feed_authenticate, listOf(connectionName(item, names)))
         }
     }
 
@@ -211,7 +252,7 @@ object FeedKinds {
             "connection.removed" -> FeedText(R.string.data_feed_connection_removed, listOf(who))
             "connection.stale" -> FeedText(R.string.data_feed_connection_stale, listOf(who))
             "connection.asks_paused" -> FeedText(R.string.data_feed_asks_paused, listOf(first))
-            "connection.authenticate.requested" -> FeedText(R.string.data_feed_authenticate, listOf(who))
+            "connection.authenticate.requested" -> authenticationTitle(item, names)
             "message.received" -> FeedText(R.string.data_feed_message, listOf(who))
             // §10.5.1 (0.32.0): an outgoing photo that failed, an incoming one refused because the vault is full.
             "message.attachment_failed" -> FeedText(R.string.data_feed_photo_failed, listOf(who))
@@ -351,6 +392,8 @@ object FeedKinds {
         (item.count ?: 0) > 1 -> things(item.count ?: 0)
         item.kind == "guide" -> item.body?.takeIf { it.isNotBlank() }?.let { FeedText(literal = it.lineSequence().first()) }
         item.kind == "device.signer_changed" -> signerChange(item.ref)
+        item.kind == "connection.authenticate.requested" && authenticationPurpose(item, names) == AuthPurpose.SIGNIN ->
+            FeedText(R.string.data_feed_authenticate_signin_body)
         else -> eventLine(item) ?: itemName(item, names)?.let { FeedText(literal = it) }
     }
 

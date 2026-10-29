@@ -4,6 +4,8 @@
 package com.vettid.core.data.feed
 
 import com.vettid.core.data.R
+import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.vault.FeedItem
@@ -105,5 +107,88 @@ class FeedEventTitlesTest {
         }
         assertEquals(setOf("vault.pin_changed", "credential.recovered", "recovery.device_paired"), FeedKinds.HISTORY_ONLY)
         assertFalse(FeedKinds.historyOnly("recovery.completed"))
+    }
+}
+
+/** VAULT-MESSAGING 0.65.0 §10.4: a challenge's feed text per purpose (as vettid-ios #154). */
+class FeedAuthPurposeTest {
+    private val t = java.time.Instant.parse("2026-10-27T12:00:00Z")
+    private val sam = ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee")
+
+    private fun item(count: Int? = null, connectionId: String? = "c1") =
+        FeedItem("i", 1, "connection.authenticate.requested", "2026-10-27T12:00:00Z", "active", "normal", connectionId = connectionId, ref = "A1", count = count)
+
+    private fun names(purpose: AuthPurpose, connection: Boolean = true) = FeedNames(
+        connections = if (connection) mapOf("c1" to sam) else emptyMap(),
+        approvals = mapOf("auth:A1" to Approval.Authentication("A1", "c1", null, t, null, purpose = purpose)),
+    )
+
+    private val isolated = "⁨Sam Lee⁩"
+
+    @Test
+    fun signinReadsSignInToTheNameWithItsBody() {
+        val n = names(AuthPurpose.SIGNIN)
+        assertEquals(FeedText(R.string.data_feed_authenticate_signin, listOf(FeedText(literal = isolated))), FeedKinds.title(item(), n))
+        assertEquals(FeedText(R.string.data_feed_authenticate_signin_body), FeedKinds.supporting(item(), n))
+    }
+
+    @Test
+    fun approvalReadsTheNameAsksYouToApprove() {
+        val n = names(AuthPurpose.APPROVAL)
+        assertEquals(FeedText(R.string.data_feed_authenticate_approval, listOf(FeedText(literal = isolated))), FeedKinds.title(item(), n))
+        assertNull(FeedKinds.supporting(item(), n))
+    }
+
+    @Test
+    fun noPurposeOrNoPendingApprovalIsToday() {
+        val today = FeedText(R.string.data_feed_authenticate, listOf(FeedText(literal = "Sam Lee")))
+        assertEquals(today, FeedKinds.title(item(), names(AuthPurpose.NONE)))
+        assertEquals(today, FeedKinds.title(item(), FeedNames(connections = mapOf("c1" to sam))))
+    }
+
+    @Test
+    fun aHostileNameIsCleanedBeforeItsIsolationInBothTitles() {
+        val bad = ConnectionInfo("c1", "Bank\u2069\u202E", ConnectionState.ACTIVE)
+        for ((p, res) in listOf(AuthPurpose.SIGNIN to R.string.data_feed_authenticate_signin, AuthPurpose.APPROVAL to R.string.data_feed_authenticate_approval)) {
+            val n = names(p).copy(connections = mapOf("c1" to bad))
+            val t = FeedKinds.title(item(), n)
+            val arg = (t.args.single() as FeedText).literal
+            assertEquals(res, t.res)
+            assertEquals("\u2068Bank\u2069", arg)
+        }
+    }
+
+    @Test
+    fun aBatchIsNeverTitledAsASignIn() {
+        val title = FeedKinds.title(item(count = 3), names(AuthPurpose.SIGNIN))
+        assertEquals(
+            FeedText(plural = R.plurals.data_feed_grant_request_batch, quantity = 3, args = listOf(FeedText(literal = "Sam"), 3)),
+            title,
+        )
+        // Its second line is the count, not the sign-in body.
+        assertEquals(FeedText(plural = R.plurals.data_feed_things, quantity = 3, args = listOf(3)), FeedKinds.supporting(item(count = 3), names(AuthPurpose.SIGNIN)))
+    }
+
+    @Test
+    fun withoutAnyNameASignInSaysAConnection() {
+        val n = names(AuthPurpose.SIGNIN, connection = false)
+        assertEquals(FeedText(R.string.data_feed_authenticate_signin, listOf(FeedText(R.string.data_feed_a_connection_inline))), FeedKinds.title(item(), n))
+    }
+
+    @Test
+    fun bothPurposesFallBackToAConnection() {
+        val i = item()
+        val inline = listOf(FeedText(R.string.data_feed_a_connection_inline))
+        assertEquals(FeedText(R.string.data_feed_authenticate_approval, inline), FeedKinds.title(i, names(AuthPurpose.APPROVAL, connection = false)))
+        // A connection that was removed (id known, not in the map) reads the same, not "Removed connection".
+        val gone = item(connectionId = "c1")
+        val n = FeedNames(approvals = mapOf("auth:A1" to Approval.Authentication("A1", "c1", null, t, null, purpose = AuthPurpose.APPROVAL)))
+        assertEquals(FeedText(R.string.data_feed_authenticate_approval, inline), FeedKinds.title(gone, n))
+    }
+
+    @Test
+    fun aPendingApprovalOfAnotherConnectionDoesNotCarryItsPurpose() {
+        val n = names(AuthPurpose.SIGNIN)
+        assertEquals(AuthPurpose.NONE, FeedKinds.authenticationPurpose(item(connectionId = "c9"), n))
     }
 }
