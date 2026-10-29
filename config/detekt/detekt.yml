@@ -28,24 +28,14 @@ complexity:
   ComplexCondition:
     excludes: ['**/core/chain/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/altchan/**', '**/core/vault/**']
   CyclomaticComplexMethod:
-    excludes: ['**/test/**', '**/androidTest/**', '**/core/chain/**']
+    excludes: ['**/test/**', '**/androidTest/**']
   LongMethod:
     threshold: 80
     ignoreAnnotated: ['Composable']
-    excludes: ['**/core/chain/**']
-  NestedBlockDepth:
-    excludes: ['**/core/chain/**']
   TooManyFunctions:
     ignoreAnnotatedFunctions: ['Composable']
     ignorePrivate: true
     excludes: ['**/test/**', '**/androidTest/**', '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**']
-
-exceptions:
-  # :core:chain hands a decoder's exception to a policy answer (a refusal with the vault's reason), never to the caller.
-  TooGenericExceptionCaught:
-    excludes: ['**/core/chain/**']
-  SwallowedException:
-    excludes: ['**/core/chain/**']
 
 style:
   MagicNumber:
@@ -61,12 +51,11 @@ style:
     excludes: ['**/test/**', '**/androidTest/**', '**/core/chain/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/relay/**', '**/core/altchan/**',
                '**/core/vault/**']
   LoopWithTooManyJumpStatements:
-    excludes: ['**/core/altchan/**', '**/core/chain/**']
+    excludes: ['**/core/altchan/**']
   UnusedPrivateMember:
     ignoreAnnotated: ['Preview']
   MaxLineLength:
     maxLineLength: 140
-    excludes: ['**/core/chain/**']  # vault byte layouts, vectors and spec citations stay on one line
   WildcardImport:
     active: true
   ForbiddenComment:

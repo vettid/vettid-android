@@ -23,21 +23,23 @@ class VaultConformanceTest {
 
     @Test
     fun vectors_are_there_and_cover_the_vaults_reasons() {
-        assertTrue("${cases.size} vectors", cases.size >= 100)
+        assertTrue("${cases.size} vectors", cases.size >= 120)
         val reasons = cases.mapNotNull { it.reason }.toSet()
         // Every invalid_psbt reason of VAULT-MESSAGING §10.18 that a PSBT alone can cause (not no_account / wrong_seed / the
         // payment-request ones, which are not about the PSBT).
         val wanted = setOf(
             "size", "malformed", "shape", "version", "duplicate_input", "previous_tx", "witness_utxo", "sighash", "input_script", "amount",
-            "foreign_input", "derivation_path", "derivation_key", "derivation_script", "internal_key", "output_amount", "output_script", "fee", "fee_rate",
+            "foreign_input", "derivation_path", "derivation_key", "derivation_script", "internal_key", "output_amount", "output_script",
+                "fee", "fee_rate",
         )
         assertEquals("reasons without a vector", emptySet<String>(), wanted - reasons)
-        assertEquals(setOf("regtest", "mainnet", "testnet4", "signet"), Vectors.wallets.keys)
+        assertEquals(setOf("regtest", "mainnet", "testnet", "testnet4", "signet"), Vectors.wallets.keys)
         // both accounts in one PSBT, taproot with non_witness_utxo, on four networks
         assertTrue(cases.any { it.name == "mainnet/ok_mixed_payee_kinds" && it.ok })
         assertTrue(cases.any { it.name == "regtest/ok_mixed_accounts_change_p2tr" && it.ok })
     }
 
+    @Suppress("LoopWithTooManyJumpStatements")
     @Test
     fun inspector_gives_the_vaults_answer_for_every_vector() {
         val failures = ArrayList<String>()
@@ -59,7 +61,8 @@ class VaultConformanceTest {
             when (val r = PsbtInspector.inspect(wallet, raw)) {
                 is InspectResult.Ok -> {
                     if (!c.ok) failures += "${c.name}: app accepts, vault refuses with ${c.reason}"
-                    else if (r.summary.toJson() != c.summaryJson) failures += "${c.name}: summary differs\n  app:   ${r.summary.toJson()}\n  vault: ${c.summaryJson}"
+                    else if (r.summary.toJson() != c.summaryJson) failures +=
+                        "${c.name}: summary differs\n  app:   ${r.summary.toJson()}\n  vault: ${c.summaryJson}"
                     else ok++
                 }
                 is InspectResult.Refused -> {
@@ -69,7 +72,10 @@ class VaultConformanceTest {
                 }
             }
         }
-        println("W1 inspect conformance: $ok summaries identical, $refused refusals identical, $members undecodable members identical, ${failures.size} differences, ${cases.size} vectors")
+        println(
+            "W1 inspect conformance: $ok summaries identical, $refused refusals identical, $members undecodable members identical, " +
+                "${failures.size} differences, ${cases.size} vectors",
+        )
         if (failures.isNotEmpty()) fail(failures.joinToString("\n"))
     }
 
@@ -97,7 +103,8 @@ class VaultConformanceTest {
             try {
                 val got = PsbtBuilder.build(wallet, Vectors.coins(b), Vectors.outputs(b))
                 if (want == null || !c.ok) failures += "${c.name}: builder made a PSBT; vault says ${c.reason ?: c.code}"
-                else if (!got.contentEquals(want)) failures += "${c.name}: bytes differ at ${firstDiff(got, want)} (app ${got.size} bytes, vault ${want.size})"
+                else if (!got.contentEquals(want)) failures +=
+                    "${c.name}: bytes differ at ${firstDiff(got, want)} (app ${got.size} bytes, vault ${want.size})"
                 else same++
             } catch (e: BuildException) {
                 if (c.ok) failures += "${c.name}: builder refuses with ${e.reason}, vault accepts"
@@ -105,7 +112,10 @@ class VaultConformanceTest {
                 else refused++
             }
         }
-        println("W1 builder conformance: $same PSBTs byte-identical, $refused refusals identical, ${failures.size} differences, $withBuild vectors with a build recipe")
+        println(
+            "W1 builder conformance: $same PSBTs byte-identical, $refused refusals identical, ${failures.size} differences, " +
+                "$withBuild vectors with a build recipe",
+        )
         if (failures.isNotEmpty()) fail(failures.joinToString("\n"))
     }
 
@@ -114,6 +124,8 @@ class VaultConformanceTest {
         val raw = decode(cases.first { it.name == "regtest/ok_p2wpkh_two_inputs_change" })!!
         assertEquals(raw.toList(), PsbtBase64.decode(PsbtBase64.encode(raw))!!.toList())
         assertNull(PsbtBase64.decode(""))
+        assertEquals(listOf<Byte>(0, 0), PsbtBase64.decode("AAA=")!!.toList())
+        assertNull(PsbtBase64.decode("AAB=")) // non-zero padding bits: Go's StdEncoding.Strict() refuses it
         assertNull(PsbtBase64.decode("A".repeat(PsbtBase64.MAX_CHARS + 4)))
     }
 

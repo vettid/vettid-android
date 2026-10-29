@@ -526,6 +526,70 @@ abstract class NoGoogleCheck : DefaultTask() {
 }
 
 /**
+ * The wallet (:core:chain, bitcoin-kmp; ANDROID-PLAN §4 "Wallet", W1) is in the builds that are meant to have it and in no other.
+ * With [expected] off (a production release): no `libsecp256k1-jni.so` and no class of ACINQ's libraries or of :core:chain in the dex.
+ * With it on (staging; a release built with `-PvettidWalletInRelease=true`): the library for all four ABIs, each byte for byte the
+ * one in the pinned artifact (`secp256k1-kmp-jni-android-0.24.0.aar`, SHA-256 `a4d75fc5...e090`, checked by :core:chain).
+ */
+abstract class WalletApkCheck : DefaultTask() {
+    @get:InputFiles
+    abstract val apkDir: DirectoryProperty
+
+    @get:Input
+    abstract val expected: Property<Boolean>
+
+    @TaskAction
+    fun check() {
+        val apks = apkDir.get().asFile.listFiles { f -> f.name.endsWith(".apk") }.orEmpty()
+        require(apks.isNotEmpty()) { "no APK in ${apkDir.get().asFile}" }
+        for (apk in apks) {
+            ZipFile(apk).use { z ->
+                val entries = z.entries().asSequence().toList()
+                val libs = entries.filter { it.name.endsWith("/$LIBRARY") }.associate { e ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    z.getInputStream(e).use { input ->
+                        val buffer = ByteArray(1 shl 16)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            digest.update(buffer, 0, n)
+                        }
+                    }
+                    e.name.removePrefix("lib/").substringBefore('/') to digest.digest().joinToString("") { "%02x".format(it) }
+                }
+                val dex = entries.filter { it.name.endsWith(".dex") }
+                    .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
+                val classes = DEX.filter { dex.contains(it) }
+                if (expected.get()) {
+                    check(libs == NATIVE_SHA256) { "${apk.name}: the wallet's native libraries are $libs, expected $NATIVE_SHA256 (universal, unchanged)" }
+                    logger.lifecycle("${apk.name}: wallet: libsecp256k1-jni.so for ${libs.keys.sorted()}, each as pinned")
+                } else {
+                    check(libs.isEmpty() && classes.isEmpty()) {
+                        "${apk.name}: the wallet is not in production builds yet, but found: libraries ${libs.keys}, dex $classes"
+                    }
+                    logger.lifecycle("${apk.name}: no wallet: no secp256k1 library, no bitcoin-kmp or :core:chain class")
+                }
+            }
+        }
+    }
+
+    companion object {
+        const val LIBRARY = "libsecp256k1-jni.so"
+
+        /** The four libraries inside `fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.24.0` (:core:chain pins the AAR). */
+        val NATIVE_SHA256 = mapOf(
+            "arm64-v8a" to "d2de0b61a954f157074a934cb7aa0ccb6ab025edf92b42c604c3f3436fdf297a",
+            "armeabi-v7a" to "77db9960f7d6cdbfed5486817b38a259f36cc0effe661e3928081a29b7462f70",
+            "x86_64" to "6d93801de3aced51b1869f669d631708710720079cdebdfc952c0f32f28b3cb2",
+            "x86" to "5253651ce43124a00a8da493eb55fe0bb60a9bb3bf96420ba39ac9716b00be50",
+        )
+
+        /** Type descriptors: ACINQ's libraries and :core:chain. */
+        val DEX = listOf("Lfr/acinq/", "Lcom/vettid/core/chain/")
+    }
+}
+
+/**
  * Calls (CALLS-PLAN 0.1.1, phase C1) are in the debug, devStack and staging builds only until they are promoted
  * (STAGING-DEVELOPMENT-PLAN §2.4). `check<Variant>Calls`, run by `checkReleaseApk`, `checkFossReleaseApk` and
  * `checkStagingApk`:
@@ -834,6 +898,12 @@ androidComponents {
                 expected.set(staging || callsInRelease)
             }
         }
+        if (staging || v.buildType == "release") {
+            tasks.register<WalletApkCheck>("check${name}Wallet") {
+                apkDir.set(v.artifacts.get(SingleArtifact.APK))
+                expected.set(staging || walletInRelease)
+            }
+        }
         if (staging) {
             tasks.register<CallsTestCheck>("check${name}CallsTest") {
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
@@ -844,7 +914,7 @@ androidComponents {
         when (v.buildType) {
             "release" -> {
                 val contents = tasks.register<ApkContentCheck>(if (foss) "checkFossReleaseApkContents" else "checkReleaseApk") {
-                    dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls")
+                    dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls", "check${name}Wallet")
                     apkDir.set(v.artifacts.get(SingleArtifact.APK))
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(
@@ -863,7 +933,7 @@ androidComponents {
                 }
             }
             "staging" -> tasks.register<ApkContentCheck>("checkStagingApk") {
-                dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls", "check${name}CallsTest")
+                dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls", "check${name}CallsTest", "check${name}Wallet")
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 forbidden.set(productionPins + devOnly + listOfNotNull(fcmOptions("release")?.get("ApplicationId")))
                 required.set(stagingPins)

@@ -37,18 +37,21 @@ data class InspectSummary(
         append("],\"outputs\":[")
         outputs.forEachIndexed { i, x ->
             if (i > 0) append(',')
-            append("{\"address\":").append(q(x.address)).append(",\"amount_sats\":").append(x.amountSats).append(",\"change\":").append(x.change)
+            append("{\"address\":").append(q(x.address)).append(",\"amount_sats\":").append(x.amountSats)
+            append(",\"change\":").append(x.change)
             if (x.change) append(",\"type\":").append(q(x.type!!)).append(",\"path\":").append(q(x.path!!))
             append('}')
         }
         append("],\"total_in_sats\":").append(totalInSats).append(",\"sending_sats\":").append(sendingSats)
-        append(",\"change_sats\":").append(changeSats).append(",\"fee_sats\":").append(feeSats).append(",\"vsize\":").append(vsize).append('}')
+        append(",\"change_sats\":").append(changeSats).append(",\"fee_sats\":").append(feeSats)
+        append(",\"vsize\":").append(vsize).append('}')
     }
 
     companion object {
         private fun q(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
         /** Reads the vault's answer; any member missing or of the wrong type is an [IllegalArgumentException]. */
+        @Suppress("TooGenericExceptionCaught")
         fun fromJson(text: String): InspectSummary = try {
             val o = Json.parseToJsonElement(text).jsonObject
             fun JsonObject.s(k: String) = getValue(k).jsonPrimitive.also { require(it.isString) }.content
@@ -63,7 +66,8 @@ data class InspectSummary(
                 outputs = o.a("outputs").map {
                     val x = it.jsonObject
                     val change = x.getValue("change").jsonPrimitive.boolean
-                    SummaryOutput(x.s("address"), x.n("amount_sats"), change, if (change) x.s("type") else null, if (change) x.s("path") else null)
+                    SummaryOutput(x.s("address"), x.n("amount_sats"), change, if (change) x.s("type") else null,
+                        if (change) x.s("path") else null)
                 },
                 totalInSats = o.n("total_in_sats"),
                 sendingSats = o.n("sending_sats"),

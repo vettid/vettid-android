@@ -21,7 +21,7 @@ enum class AccountType(val purpose: Long, val descriptorFunction: String, val va
     }
 }
 
-class DescriptorException(message: String) : IllegalArgumentException(message)
+class DescriptorException(message: String, cause: Throwable? = null) : IllegalArgumentException(message, cause)
 
 /**
  * One account of a wallet, from what the vault gives in `wallet.get` (`accounts[].descriptors.receive` and `.change`):
@@ -76,13 +76,17 @@ class Account private constructor(
     /** `m/84'/1'/0'/1/4`, the form `wallet.psbt.inspect` and `wallet.address.*` use. */
     fun path(change: Boolean, index: Int): String = originString(type, network) + "/" + (if (change) 1 else 0) + "/" + index
 
-    internal fun fullPath(change: Boolean, index: Int): KeyPath = KeyPath(originPath.toList()).append(if (change) 1L else 0L).append(index.toLong())
+    internal fun fullPath(change: Boolean,
+        index: Int): KeyPath = KeyPath(originPath.toList()).append(if (change) 1L else 0L).append(index.toLong())
 
     companion object {
         /** The vault issues and accepts indices below this (vettid-vault `vms/btc/account.go`, `MaxIndex`). */
         const val MAX_INDEX: Int = 1 shl 20
 
-        private val DESCRIPTOR = Regex("""^(wpkh|tr)\(\[([0-9a-fA-F]{8})((?:/[0-9]+['h])*)]([1-9A-HJ-NP-Za-km-z]+)/([01])/\*\)(?:#([a-z0-9]{8}))?$""")
+        private val DESCRIPTOR = Regex(
+            """^(wpkh|tr)\(\[([0-9a-fA-F]{8})((?:/[0-9]+['h])*)]""" +
+                """([1-9A-HJ-NP-Za-km-z]+)/([01])/\*\)(?:#([a-z0-9]{8}))?$""",
+        )
 
         internal fun hardened(i: Long): Long = i + 0x80000000L
 
@@ -96,7 +100,8 @@ class Account private constructor(
             val g = m.groupValues
             val (fn, fp, path) = listOf(g[1], g[2], g[3])
             val (key, branch, checksum) = listOf(g[4], g[5], g[6])
-            if (checksum.isNotEmpty() && Descriptor.checksum(trimmed.substringBefore('#')) != checksum) throw DescriptorException("bad descriptor checksum")
+            if (checksum.isNotEmpty() &&
+                Descriptor.checksum(trimmed.substringBefore('#')) != checksum) throw DescriptorException("bad descriptor checksum")
             val type = AccountType.entries.first { it.descriptorFunction == fn }
             return Parsed(type, fp.lowercase().hexToBytes(), path.replace('h', '\''), key, branch.toInt())
         }
@@ -116,8 +121,8 @@ class Account private constructor(
             val parentPath = KeyPath(listOf(hardened(r.type.purpose), hardened(network.coinType)))
             val (prefix, key) = try {
                 DeterministicWallet.ExtendedPublicKey.decode(r.xpub, parentPath)
-            } catch (e: Exception) {
-                throw DescriptorException("not an extended public key")
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                throw DescriptorException("not an extended public key", e)
             }
             val wantPrefix = if (network.testKeys) DeterministicWallet.tpub else DeterministicWallet.xpub
             if (prefix != wantPrefix) throw DescriptorException("key version does not match the network")
@@ -143,5 +148,6 @@ class Wallet(val network: Network, val accounts: List<Account>) {
     val fingerprintHex: String get() = accounts[0].fingerprintHex
     internal val fingerprint: ByteArray get() = accounts[0].fingerprint
 
-    fun account(type: AccountType): Account = accounts.firstOrNull { it.type == type } ?: throw IllegalArgumentException("no ${type.vaultName} account")
+    fun account(type: AccountType): Account = accounts.firstOrNull { it.type == type } ?:
+        throw IllegalArgumentException("no ${type.vaultName} account")
 }

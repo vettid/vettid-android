@@ -7,15 +7,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
-/** The watch-only account: BIP84 and BIP86 published vectors, the vault's descriptors, and what the parser refuses. Public test data only. */
+/** The watch-only account: BIP84 and BIP86 published vectors, the vault's descriptors, and what the parser refuses. Public data only. */
 class AccountTest {
     // BIP84 spec, account 0 of the test phrase, xpub form of the published zpub. BIP86 spec, account 0.
-    private val bip84Xpub = "xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V"
-    private val bip86Xpub = "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
+    private val bip84Xpub =
+        "xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V"
+    private val bip86Xpub =
+        "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
     private val fp = "73c5da0a"
 
-    private fun main84() = Account.fromDescriptors("wpkh([$fp/84'/0'/0']$bip84Xpub/0/*)", "wpkh([$fp/84'/0'/0']$bip84Xpub/1/*)", Network.MAINNET)
-    private fun main86() = Account.fromDescriptors("tr([$fp/86'/0'/0']$bip86Xpub/0/*)", "tr([$fp/86'/0'/0']$bip86Xpub/1/*)", Network.MAINNET)
+    private fun main84() = Account.fromDescriptors("wpkh([$fp/84'/0'/0']$bip84Xpub/0/*)", "wpkh([$fp/84'/0'/0']$bip84Xpub/1/*)",
+        Network.MAINNET)
+    private fun main86() = Account.fromDescriptors("tr([$fp/86'/0'/0']$bip86Xpub/0/*)", "tr([$fp/86'/0'/0']$bip86Xpub/1/*)",
+        Network.MAINNET)
 
     @Test
     fun bip84_vector_mainnet() {

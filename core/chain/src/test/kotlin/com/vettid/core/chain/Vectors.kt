@@ -14,7 +14,8 @@ import kotlinx.serialization.json.long
  * (see the file's `generator` member and `regenerate-w1-vectors.go.txt`). Test data only: the public BIP39 phrase "abandon ... about".
  */
 object Vectors {
-    class Case(val name: String, val why: String, val source: String, val wallet: String, val psbt: String, val build: JsonObject?, val expect: JsonObject) {
+    class Case(val name: String, val why: String, val source: String, val wallet: String, val psbt: String, val build: JsonObject?,
+        val expect: JsonObject) {
         val ok: Boolean get() = expect.getValue("ok").jsonPrimitive.boolean
         val summaryJson: String get() = expect.getValue("summary_json").jsonPrimitive.content
         val reason: String? get() = expect["reason"]?.jsonPrimitive?.content
@@ -43,7 +44,8 @@ object Vectors {
                 o.getValue("accounts").jsonArray.map { a ->
                     val ao = a.jsonObject
                     val d = ao.getValue("descriptors").jsonObject
-                    Account.fromDescriptors(d.getValue("receive").jsonPrimitive.content, d.getValue("change").jsonPrimitive.content, network)
+                    Account.fromDescriptors(d.getValue("receive").jsonPrimitive.content, d.getValue("change").jsonPrimitive.content,
+                        network)
                 },
             )
         }

@@ -44,14 +44,28 @@ object PsbtBuilder {
     private const val RBF_SEQUENCE = 0xfffffffdL
     private const val SIGHASH_ALL = 1
 
-    fun build(wallet: Wallet, coins: List<BuildCoin>, outputs: List<BuildOutput>): ByteArray {
+    @Suppress("SwallowedException")
+    fun build(wallet: Wallet, coins: List<BuildCoin>, outputs: List<BuildOutput>): ByteArray = try {
+        assemble(wallet, coins, outputs)
+    } catch (e: IllegalArgumentException) {
+        // An index outside the range the vault accepts (Account.MAX_INDEX), or a key the library will not derive.
+        throw BuildException("coin")
+    }
+
+    @Suppress("CyclomaticComplexMethod")
+    private fun assemble(wallet: Wallet, coins: List<BuildCoin>, outputs: List<BuildOutput>): ByteArray {
         if (coins.isEmpty() || outputs.isEmpty()) throw BuildException(PsbtReasons.SHAPE)
         val prevTxs = coins.map { c ->
-            val tx = try { Transaction.read(c.prevTx) } catch (e: Exception) { throw BuildException("coin") }
+            val tx = try {
+                Transaction.read(c.prevTx)
+            } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") e: Exception) {
+                throw BuildException("coin")
+            }
             if (c.vout !in tx.txOut.indices) throw BuildException("coin")
             val account = account(wallet, c.accountType)
             // A chain source that lies about where a coin is cannot make the app build a PSBT the vault would read differently.
-            if (!tx.txOut[c.vout].publicKeyScript.toByteArray().contentEquals(account.scriptPubKey(c.change, c.index))) throw BuildException("coin")
+            if (!tx.txOut[c.vout].publicKeyScript.toByteArray().contentEquals(account.scriptPubKey(c.change,
+                c.index))) throw BuildException("coin")
             tx
         }
         val txOuts = outputs.map { o ->
@@ -63,7 +77,8 @@ object PsbtBuilder {
                     }
                     TxOut(Satoshi(o.amountSats), ByteVector(script))
                 }
-                is BuildOutput.Own -> TxOut(Satoshi(o.amountSats), ByteVector(account(wallet, o.accountType).scriptPubKey(o.change, o.index)))
+                is BuildOutput.Own -> TxOut(Satoshi(o.amountSats), ByteVector(account(wallet, o.accountType).scriptPubKey(o.change,
+                    o.index)))
             }
         }
         val tx = Transaction(
@@ -80,13 +95,15 @@ object PsbtBuilder {
             val origin = KeyPathWithMaster(fingerprintLong(account), account.fullPath(c.change, c.index))
             // updateWitnessInputTx always sets non_witness_utxo (and witness_utxo), taproot included.
             psbt = when (account.type) {
-                AccountType.P2WPKH -> psbt.updateWitnessInputTx(prevTxs[i], c.vout, sighashType = SIGHASH_ALL, derivationPaths = mapOf(pub to origin))
+                AccountType.P2WPKH -> psbt.updateWitnessInputTx(prevTxs[i], c.vout, sighashType = SIGHASH_ALL,
+                    derivationPaths = mapOf(pub to origin))
                 AccountType.P2TR -> {
                     val internal = pub.xOnly()
                     psbt.updateWitnessInputTx(
                         prevTxs[i], c.vout,
                         taprootInternalKey = internal,
-                        taprootDerivationPaths = mapOf(internal to TaprootBip32DerivationPath(emptyList(), origin.masterKeyFingerprint, origin.keyPath)),
+                        taprootDerivationPaths = mapOf(internal to TaprootBip32DerivationPath(emptyList(), origin.masterKeyFingerprint,
+                            origin.keyPath)),
                     )
                 }
             }.orThrow()
@@ -101,7 +118,8 @@ object PsbtBuilder {
                 AccountType.P2TR -> psbt.updateWitnessOutput(
                     i,
                     taprootInternalKey = pub.xOnly(),
-                    taprootDerivationPaths = mapOf(pub.xOnly() to TaprootBip32DerivationPath(emptyList(), origin.masterKeyFingerprint, origin.keyPath)),
+                    taprootDerivationPaths = mapOf(pub.xOnly() to TaprootBip32DerivationPath(emptyList(), origin.masterKeyFingerprint,
+                        origin.keyPath)),
                 )
             }.orThrow()
         }
@@ -133,8 +151,11 @@ object PsbtBase64 {
     fun encode(psbt: ByteArray): String = java.util.Base64.getEncoder().encodeToString(psbt)
 
     /** Null for text the vault answers `bad_request` to (empty, too long, not standard base64). */
+    @Suppress("SwallowedException")
     fun decode(text: String): ByteArray? {
         if (text.isEmpty() || text.length > MAX_CHARS || text.length % 4 != 0) return null
-        return try { java.util.Base64.getDecoder().decode(text) } catch (e: IllegalArgumentException) { null }
+        val bytes = try { java.util.Base64.getDecoder().decode(text) } catch (e: IllegalArgumentException) { null } ?: return null
+        // Strict, as Go's StdEncoding.Strict(): the trailing padding bits must be zero, i.e. the text is the canonical encoding.
+        return if (encode(bytes) == text) bytes else null
     }
 }

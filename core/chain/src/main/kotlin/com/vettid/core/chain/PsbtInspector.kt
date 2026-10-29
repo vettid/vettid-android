@@ -3,7 +3,6 @@ package com.vettid.core.chain
 import fr.acinq.bitcoin.Bitcoin
 import fr.acinq.bitcoin.Protocol
 import fr.acinq.bitcoin.Transaction
-import fr.acinq.bitcoin.TxOut
 import fr.acinq.bitcoin.utils.Either
 
 /**
@@ -29,20 +28,28 @@ object PsbtInspector {
 
     private fun refuse(reason: String): Nothing = throw Refusal(reason)
 
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
     fun inspect(wallet: Wallet, psbt: ByteArray): InspectResult = try {
         InspectResult.Ok(check(wallet, psbt))
     } catch (r: Refusal) {
         InspectResult.Refused(r.reason)
     } catch (e: Bip174Malformed) {
         InspectResult.Refused(PsbtReasons.MALFORMED)
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        // Whatever a decoder trips over on hostile bytes is a refusal, as in the vault (`ParsePSBT` recovers a panic): never a crash.
+        InspectResult.Refused(PsbtReasons.MALFORMED)
     }
 
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
     private fun parseTx(bytes: ByteArray, withWitness: Boolean): Transaction? = try {
-        Transaction.read(bytes, if (withWitness) Protocol.PROTOCOL_VERSION else Protocol.PROTOCOL_VERSION or Transaction.SERIALIZE_TRANSACTION_NO_WITNESS)
+        Transaction.read(bytes,
+            if (withWitness) Protocol.PROTOCOL_VERSION else Protocol.PROTOCOL_VERSION or Transaction.SERIALIZE_TRANSACTION_NO_WITNESS)
     } catch (e: Exception) {
         null
     }
 
+    // A port of vettid-vault `Inspect`, check for check and in its order: one function on purpose.
+    @Suppress("TooGenericExceptionCaught", "SwallowedException", "CyclomaticComplexMethod", "LongMethod", "NestedBlockDepth")
     private fun check(wallet: Wallet, raw: ByteArray): InspectSummary {
         if (raw.isEmpty() || raw.size > MAX_PSBT) refuse(PsbtReasons.SIZE)
         var tx: Transaction? = null
@@ -73,18 +80,16 @@ object PsbtInspector {
         val prevTxs = maps.map { m ->
             m.nonWitnessUtxo?.let { parseTx(it, withWitness = true) ?: throw Bip174Malformed("non-witness utxo") }
         }
-        val witnessUtxos = maps.map { m ->
-            m.witnessUtxo?.let { w -> try { TxOut.read(w) } catch (e: Exception) { throw Bip174Malformed("witness utxo") } }
-        }
         for ((i, m) in maps.withIndex()) {
             val op = t.txIn[i].outPoint
             val opKey = op.hash.value.toByteArray().toHex() + ":" + op.index
             if (!seen.add(opKey)) refuse(PsbtReasons.DUPLICATE_INPUT)
             val prevTx = prevTxs[i]
-            if (prevTx == null || !prevTx.txid.value.toByteArray().contentEquals(op.txid.value.toByteArray()) || op.index >= prevTx.txOut.size) refuse(PsbtReasons.PREVIOUS_TX)
+            if (prevTx == null || !prevTx.txid.value.toByteArray().contentEquals(op.txid.value.toByteArray()) ||
+                op.index >= prevTx.txOut.size) refuse(PsbtReasons.PREVIOUS_TX)
             val prev = prevTx.txOut[op.index.toInt()]
-            witnessUtxos[i]?.let { wu ->
-                if (wu.amount.sat != prev.amount.sat || !wu.publicKeyScript.toByteArray().contentEquals(prev.publicKeyScript.toByteArray())) refuse(PsbtReasons.WITNESS_UTXO)
+            m.witnessUtxo?.let { (amount, script) ->
+                if (amount != prev.amount.sat || !script.contentEquals(prev.publicKeyScript.toByteArray())) refuse(PsbtReasons.WITNESS_UTXO)
             }
             if (m.sighash != 0L && m.sighash != SIGHASH_ALL) refuse(PsbtReasons.SIGHASH)
             if (m.finalScriptSig || m.finalScriptWitness || m.redeemScript || m.witnessScript || m.partialSigs > 0 || m.taprootKeySig ||
@@ -104,7 +109,9 @@ object PsbtInspector {
             val sighashDefault = account.type == AccountType.P2TR && m.sighash == 0L
             inputKinds += account.type to sighashDefault
             totalIn += value
-            inputs += SummaryInput(op.hash.value.toByteArray().toDisplayHex(), op.index, value, account.type.vaultName, account.path(own.change, own.index))
+            inputs += SummaryInput(op.hash.value.toByteArray().toDisplayHex(), op.index, value, account.type.vaultName,
+                account.path(own.change,
+                    own.index))
         }
 
         val outputs = ArrayList<SummaryOutput>()
@@ -146,13 +153,15 @@ object PsbtInspector {
      * The wallet's derivation among those a PSBT claims for a script (vettid-vault `own`): the first one with the wallet's fingerprint
      * decides. One that does not check out is a refusal; none at all is null (the script is not the wallet's).
      */
+    @Suppress("CyclomaticComplexMethod")
     private fun own(wallet: Wallet, ds: List<Derivation>, script: ByteArray): Own? {
         for (d in ds) {
             if (!d.fingerprint.contentEquals(wallet.fingerprint)) continue
             var account: Account? = null
             for (a in wallet.accounts) {
                 val want = a.originPath
-                if ((a.type == AccountType.P2TR) == d.taproot && d.path.size == 5 && d.path[0] == want[0] && d.path[1] == want[1] && d.path[2] == want[2]) account = a
+                if ((a.type == AccountType.P2TR) == d.taproot && d.path.size == 5 && d.path[0] == want[0] && d.path[1] == want[1] &&
+                    d.path[2] == want[2]) account = a
             }
             if (account == null || d.leafHashes != 0) refuse(PsbtReasons.DERIVATION_PATH)
             val chain = d.path[3]
@@ -167,6 +176,7 @@ object PsbtInspector {
     }
 
     /** P2PKH, P2SH, P2WPKH, P2WSH, P2TR: the standard scripts the vault will pay to (vettid-vault `standard`). */
+    @Suppress("CyclomaticComplexMethod")
     internal fun isStandard(s: ByteArray): Boolean {
         fun u(i: Int) = s[i].toInt() and 0xff
         return when (s.size) {

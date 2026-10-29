@@ -22,7 +22,9 @@ class PsbtBuilderTest {
         return hex.hexToBytes()
     }
 
-    private fun coin(a: Account, index: Int, sats: Long, salt: Int, change: Boolean = false) = BuildCoin(a.type, change, index, prevTx(a, change, index, sats, salt), 0)
+    private fun coin(a: Account, index: Int, sats: Long, salt: Int, change: Boolean = false) = BuildCoin(a.type, change, index, prevTx(a,
+        change, index, sats, salt),
+            0)
 
     private fun reason(f: () -> Unit): String = try { f(); "none" } catch (e: BuildException) { e.reason }
 
@@ -54,25 +56,39 @@ class PsbtBuilderTest {
     }
 
     @Test
+    fun an_index_outside_the_vaults_range_is_a_refusal_not_a_crash() {
+        val far = BuildCoin(AccountType.P2WPKH, false, Account.MAX_INDEX, prevTx(wp, false, 0, 50_000, 11), 0)
+        assertEquals("coin", reason { PsbtBuilder.build(wallet, listOf(far), listOf(BuildOutput.Pay(payee, 40_000))) })
+        val c = coin(wp, 0, 50_000, 12)
+        assertEquals("coin", reason { PsbtBuilder.build(wallet, listOf(c), listOf(BuildOutput.Own(AccountType.P2TR, true, -1, 40_000))) })
+    }
+
+    @Test
     fun the_same_coin_twice_a_payee_of_another_network_and_a_missing_account_are_refused() {
         val c = coin(wp, 0, 50_000, 6)
         assertEquals("duplicate_coin", reason { PsbtBuilder.build(wallet, listOf(c, c), listOf(BuildOutput.Pay(payee, 40_000))) })
-        assertEquals("address", reason { PsbtBuilder.build(wallet, listOf(c), listOf(BuildOutput.Pay("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", 40_000))) })
+        assertEquals("address", reason { PsbtBuilder.build(wallet, listOf(c),
+            listOf(BuildOutput.Pay("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
+                40_000))) })
         assertEquals("address", reason { PsbtBuilder.build(wallet, listOf(c), listOf(BuildOutput.Pay("not an address", 40_000))) })
         val only84 = Wallet(Network.REGTEST, listOf(wp))
-        assertEquals(PsbtReasons.NO_ACCOUNT, reason { PsbtBuilder.build(only84, listOf(coin(tr, 0, 50_000, 7)), listOf(BuildOutput.Pay(payee, 40_000))) })
+        assertEquals(PsbtReasons.NO_ACCOUNT, reason { PsbtBuilder.build(only84, listOf(coin(tr, 0, 50_000, 7)),
+            listOf(BuildOutput.Pay(payee,
+                40_000))) })
         assertEquals(PsbtReasons.SHAPE, reason { PsbtBuilder.build(wallet, emptyList(), listOf(BuildOutput.Pay(payee, 40_000))) })
     }
 
     @Test
     fun the_vaults_limits_are_checked_before_anything_is_sent() {
         val c = coin(wp, 0, 50_000, 8)
-        assertEquals(PsbtReasons.OUTPUT_AMOUNT, reason { PsbtBuilder.build(wallet, listOf(c), listOf(BuildOutput.Pay(payee, 329))) }) // dust
+        // dust
+        assertEquals(PsbtReasons.OUTPUT_AMOUNT, reason { PsbtBuilder.build(wallet, listOf(c), listOf(BuildOutput.Pay(payee, 329))) })
         assertEquals(PsbtReasons.FEE, reason { PsbtBuilder.build(wallet, listOf(c), listOf(BuildOutput.Pay(payee, 50_000))) }) // no fee
         // A 1-in 1-out P2WPKH spend has a vsize of 110: 1,000 sat/vB is 110,000 sats, allowed; one sat more is not.
         val big = coin(wp, 1, 1_000_000, 10)
         PsbtBuilder.build(wallet, listOf(big), listOf(BuildOutput.Pay(payee, 1_000_000 - 110_000)))
-        assertEquals(PsbtReasons.FEE_RATE, reason { PsbtBuilder.build(wallet, listOf(big), listOf(BuildOutput.Pay(payee, 1_000_000 - 110_001))) })
+        assertEquals(PsbtReasons.FEE_RATE, reason { PsbtBuilder.build(wallet, listOf(big), listOf(BuildOutput.Pay(payee,
+            1_000_000 - 110_001))) })
     }
 
     @Test
@@ -95,10 +111,13 @@ class PsbtBuilderTest {
     @Test
     fun no_bitcoin_kmp_type_in_the_public_surface() {
         val classes = listOf(
-            Account::class.java, Wallet::class.java, Network::class.java, AccountType::class.java, PsbtInspector::class.java, PsbtBuilder::class.java,
-            PsbtBase64::class.java, PsbtReasons::class.java, InspectSummary::class.java, SummaryInput::class.java, SummaryOutput::class.java,
+            Account::class.java, Wallet::class.java, Network::class.java, AccountType::class.java, PsbtInspector::class.java,
+                PsbtBuilder::class.java,
+            PsbtBase64::class.java, PsbtReasons::class.java, InspectSummary::class.java, SummaryInput::class.java,
+                SummaryOutput::class.java,
             InspectResult::class.java, InspectResult.Ok::class.java, InspectResult.Refused::class.java, BuildCoin::class.java,
-            BuildOutput::class.java, BuildOutput.Pay::class.java, BuildOutput.Own::class.java, BuildException::class.java, DescriptorException::class.java,
+            BuildOutput::class.java, BuildOutput.Pay::class.java, BuildOutput.Own::class.java, BuildException::class.java,
+                DescriptorException::class.java,
         )
         val leaks = ArrayList<String>()
         fun check(owner: Class<*>, what: String, vararg types: Class<*>) {
