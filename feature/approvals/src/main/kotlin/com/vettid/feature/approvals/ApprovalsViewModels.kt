@@ -3,6 +3,7 @@ package com.vettid.feature.approvals
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionInfo
@@ -16,6 +17,7 @@ import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -156,6 +159,9 @@ class ApprovalsViewModel @Inject constructor(
 /** What a decision needs from the member. */
 enum class Needs { NOTHING, PASSWORD }
 
+/** Why "Deny and end access now" did not end access: the failure's kind and the code its message names (or null). */
+data class EndFailure(val kind: FailureKind, val code: String?)
+
 /** Immutable UI state of one approval. */
 data class ApprovalDetailUiState(
     val key: String,
@@ -187,6 +193,17 @@ data class ApprovalDetailUiState(
     val retryUntil: java.time.Instant? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1: `grants_given`, say). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
+    /**
+     * A renewal request (VAULT-MESSAGING 0.78.0 §6.8 step 3): when the session the device already has ends, or null for a
+     * first request. Set only while that session has not expired and the device list was read when the request was shown.
+     */
+    val renewalUntil: java.time.Instant? = null,
+    /** "End access for <device>?" is open (from "Deny and end access now"). */
+    val confirmEnd: Boolean = false,
+    /** Ending access failed: said plainly with Try again; the request stays open. */
+    val endFailure: EndFailure? = null,
+    /** The device list was read when the request was shown (a failed read leaves this false: a first request). */
+    val deviceListRead: Boolean = false,
 ) {
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -207,7 +224,9 @@ data class ApprovalDetailUiState(
     }
 
     val canApprove: Boolean get() = when (val a = approval) {
-        null, is Approval.DeviceRequest -> false
+        null -> false
+        // Only an access-session request can be approved here; a step-up or referred request can only be declined.
+        is Approval.DeviceRequest -> a.isSession
         is Approval.GrantRequest -> grantIndexes.isNotEmpty()
         // 0.10.3: only once the safety code is known, and only once per member.
         is Approval.ConnectionRequest -> a.state == RequestState.PENDING
@@ -227,7 +246,8 @@ data class ApprovalDetailUiState(
  * One approval (ANDROID-PLAN §4): what is asked, by whom, and approve / deny.
  * Member authentication and critical-item uses take the credential password
  * (§10.4, §10.13); a connection request shows its safety code and can be
- * blocked; a desktop's or agent's request can only be declined in v1.
+ * blocked; a desktop's or agent's session request is approved or denied, and a renewal can also deny and end access
+ * (VAULT-MESSAGING 0.78.0 §6.8 step 3).
  */
 @HiltViewModel
 @Suppress("TooManyFunctions")
@@ -235,6 +255,8 @@ class ApprovalDetailViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val repo: ApprovalsRepository,
     private val items: ItemsRepository,
+    private val devices: DevicesRepository,
+    private val ownerCheck: OwnerCheckRepository,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val local = MutableStateFlow(ApprovalDetailUiState(key, approval = repo.approvals.value.firstOrNull { it.key == key }))
@@ -242,6 +264,18 @@ class ApprovalDetailViewModel @Inject constructor(
     init {
         viewModelScope.launch { items.items.collect { l -> local.update { it.copy(items = l.sortedBy { i -> i.name.lowercase() }) } } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
+        // A session request: whether it renews a live session comes from the device list, read now (§6.8 step 3). The
+        // read never holds the request back: if it fails the request is shown as a first request.
+        if ((local.value.approval as? Approval.DeviceRequest)?.sessionDeviceId != null) {
+            viewModelScope.launch {
+                try {
+                    devices.refresh()
+                    local.update { it.copy(deviceListRead = true) }
+                } catch (_: VaultFailure) {
+                    // Nothing is logged or shown: the request is a first request.
+                }
+            }
+        }
         // A critical-item request from the list has only the payload's hash: fetch the payload (§10.13).
         val a = local.value.approval
         if (a is Approval.CriticalUse && a.payload.isEmpty()) {
@@ -257,8 +291,20 @@ class ApprovalDetailViewModel @Inject constructor(
 
     private val resumed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
-    /** Ticks at this request's expiry, so an open screen stops offering it the moment it expires. */
-    private val clock = expiryClock(repo.approvals.map { l -> listOfNotNull(l.firstOrNull { it.key == key }?.exp) }, resumed)
+    /** The end of the session this request renews, as the device list says now; null for a first request. */
+    private val sessionEnd = combine(
+        repo.approvals,
+        devices.devices,
+        local.map { it.deviceListRead }.distinctUntilChanged(),
+    ) { l, ds, read ->
+        Renewal.sessionEnd(l.firstOrNull { it.key == key } ?: local.value.approval, ds, read)
+    }
+
+    /** Ticks at this request's expiry and at the end of the session it renews, so an open screen follows both. */
+    private val clock = expiryClock(
+        combine(repo.approvals, sessionEnd) { l, end -> listOfNotNull(l.firstOrNull { it.key == key }?.exp, end) },
+        resumed,
+    )
 
     /** The screen came back to the front: the time is read again (a sleep stops in deep sleep). */
     fun tick() {
@@ -268,13 +314,24 @@ class ApprovalDetailViewModel @Inject constructor(
     /** A decision on a request that has expired by the clock: nothing is sent, the screen reads as expired. */
     private fun expiredNow(a: Approval): Boolean = a.expiredAt(Instant.now()).also { if (it) tick() }
 
-    val uiState: StateFlow<ApprovalDetailUiState> = combine(local, repo.approvals, clock) { s, list, now ->
-        val a = list.firstOrNull { it.key == key }
-        val shown = a ?: s.approval
-        // Gone from the list, or expired while open: both read as "Already decided … or it expired" (no actions).
-        val over = (a == null || a.expiredAt(now)) && shown != null
-        s.copy(approval = shown, gone = over && !s.done && !s.busy && s.criticalResult == null)
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
+    /** Whether the vault is held (§3.6.3): a session request leaves the screen, and a confirmation open ends nothing. */
+    private fun isHeld(): Boolean = ownerCheck.ownerCheck.value?.state == OwnerCheckState.HELD
+
+    val uiState: StateFlow<ApprovalDetailUiState> =
+        combine(local, repo.approvals, clock, devices.devices, ownerCheck.ownerCheck) { s, list, now, ds, check ->
+            val a = list.firstOrNull { it.key == key }
+            val shown = a ?: s.approval
+            // Gone from the list, or expired while open: both read as "Already decided … or it expired" (no actions).
+            val over = (a == null || a.expiredAt(now)) && shown != null
+            // The hold drops a session request (§3.6.3): it leaves the screen even before the list says so.
+            val held = check?.state == OwnerCheckState.HELD && (shown as? Approval.DeviceRequest)?.isSession == true
+            s.copy(
+                approval = shown,
+                gone = (over || held) && !s.done && !s.busy && s.criticalResult == null,
+                // Past the session's end the request reads as a first request: no notice, Approve and Deny.
+                renewalUntil = Renewal.expiresAt(shown, ds, s.deviceListRead, now),
+            )
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 
     fun setPassword(v: String) = local.update { it.copy(password = v, error = null) }
 
@@ -335,7 +392,7 @@ class ApprovalDetailViewModel @Inject constructor(
                     val ids = shown ?: a.items.map { it.itemId }
                     repo.decideShare(a.ruleId, include = ids - s.shareExcluded, decline = ids.filter { it in s.shareExcluded })
                 }
-                is Approval.DeviceRequest -> Unit
+                is Approval.DeviceRequest -> repo.approveDeviceSession(a.key)
             }
         }
     }
@@ -353,6 +410,41 @@ class ApprovalDetailViewModel @Inject constructor(
                 is Approval.CriticalUse -> repo.denyCriticalUse(a.requestId)
                 is Approval.ShareDecision -> repo.decideShare(a.ruleId, include = emptyList(), decline = shown ?: a.items.map { it.itemId })
                 is Approval.DeviceRequest -> repo.declineDeviceRequest(a.key)
+            }
+        }
+    }
+
+    /** "Deny and end access now" on a renewal request: asks "End access for <device>?" first; nothing is sent yet. */
+    fun askEndAccess() {
+        val s = uiState.value
+        if (s.busy || s.renewalUntil == null || s.gone) return
+        local.update { it.copy(confirmEnd = true, endFailure = null) }
+    }
+
+    fun dismissEndAccess() = local.update { it.copy(confirmEnd = false) }
+
+    fun dismissEndFailure() = local.update { it.copy(endFailure = null) }
+
+    /**
+     * The member confirmed: `device.session.end{device_id}` alone (§6.8 step 3), never `device.session.deny` as well: an
+     * end drops the pending request, and is audited and synced once, as an end. A confirmation already open stays and
+     * ends access when confirmed, even after the session passed; nothing is sent while the vault is held. A failure
+     * says so and leaves the request open; Try again asks the confirmation again.
+     */
+    fun endAccess() {
+        val s = local.value
+        if (!s.confirmEnd || s.busy || isHeld()) return
+        val id = (uiState.value.approval as? Approval.DeviceRequest)?.sessionDeviceId ?: return
+        local.update { it.copy(confirmEnd = false, busy = true, endFailure = null) }
+        viewModelScope.launch {
+            try {
+                devices.endAccess(id)
+                // The request left the list with the end (the repository declines it); the screen closes.
+                local.update { it.copy(busy = false, done = true) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(busy = false, endFailure = EndFailure(e.kind, e.shownCode)) }
+                // What the vault says now settles whether the device still has a session.
+                devices.refreshQuietly()
             }
         }
     }

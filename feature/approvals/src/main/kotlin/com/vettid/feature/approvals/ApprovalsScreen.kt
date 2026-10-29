@@ -54,6 +54,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
@@ -132,6 +133,10 @@ fun NavGraphBuilder.approvalsDestination(
                 onGrantUses = vm::setGrantUses,
                 onGrantExpiresIn = vm::setGrantExpiresIn,
                 onFinish = vm::finish,
+                onAskEndAccess = vm::askEndAccess,
+                onEndAccess = vm::endAccess,
+                onDismissEndAccess = vm::dismissEndAccess,
+                onDismissEndFailure = vm::dismissEndFailure,
             ),
         )
     }
@@ -402,6 +407,11 @@ data class DecisionActions(
     val onGrantExpiresIn: (Long?) -> Unit = {},
     /** Leaves a critical use's result. */
     val onFinish: () -> Unit = {},
+    /** A renewal request (0.78.0 §6.8 step 3): "Deny and end access now" asks the confirmation; it ends access; it closes. */
+    val onAskEndAccess: () -> Unit = {},
+    val onEndAccess: () -> Unit = {},
+    val onDismissEndAccess: () -> Unit = {},
+    val onDismissEndFailure: () -> Unit = {},
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
@@ -433,6 +443,8 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         busy = state.busy,
         secondaryLabel = stringResource(denyLabelRes(a)),
         onSecondary = actions.onDeny,
+        tertiaryLabel = if (state.renewalUntil != null) stringResource(R.string.approvals_deny_end_access) else null,
+        onTertiary = actions.onAskEndAccess,
         onBack = actions.onBack,
         modifier = modifier.testTag("approval_detail"),
     ) {
@@ -460,6 +472,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
                 modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("block_request"),
             ) { Text(stringResource(R.string.approvals_block), color = MaterialTheme.colorScheme.error) }
         }
+        RenewalNotices(state, a, actions)
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
             Text(
@@ -468,6 +481,17 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
                 modifier = Modifier.testTag("failure"),
             )
         }
+    }
+    if (state.confirmEnd) {
+        // The Devices page's confirmation, its words reused (core:ui strings).
+        ConfirmDialog(
+            title = stringResource(UiR.string.devices_end_access_title, deviceSentenceInline(a)),
+            text = stringResource(UiR.string.devices_end_access_body),
+            confirmLabel = stringResource(UiR.string.devices_end_access),
+            onConfirm = actions.onEndAccess,
+            onDismiss = actions.onDismissEndAccess,
+            destructive = true,
+        )
     }
     if (state.confirmBlock) {
         ConfirmDialog(
@@ -479,6 +503,64 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
             destructive = true,
         )
     }
+}
+
+/** A renewal request's notice above the choices (0.78.0 §6.8 step 3), and why ending access failed. */
+@Composable
+private fun RenewalNotices(state: ApprovalDetailUiState, a: Approval, actions: DecisionActions) {
+    state.renewalUntil?.let { until ->
+        Spacer(Modifier.height(Spacing.l))
+        Text(
+            stringResource(R.string.approvals_renewal_notice, deviceSentenceStart(a), Times.full(until)),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.testTag("renewal_notice"),
+        )
+    }
+    state.endFailure?.let { f ->
+        Spacer(Modifier.height(Spacing.m))
+        EndFailureNotice(f, deviceSentenceInline(a), actions)
+    }
+}
+
+/** The device's name inside a sentence ("a desktop", "an agent" when it gave none, §10.8). */
+@Composable
+private fun deviceSentenceInline(a: Approval): String {
+    val d = a as? Approval.DeviceRequest
+    val agent = AccountNames.cleaned(d?.role)?.lowercase() == "agent"
+    return AccountNames.isolateOrNull(d?.deviceName)
+        ?: stringResource(if (agent) R.string.approvals_an_agent_inline else R.string.approvals_a_desktop_inline)
+}
+
+/** The device's name starting a sentence ("A desktop", "An agent" when it gave none, §10.8). */
+@Composable
+private fun deviceSentenceStart(a: Approval): String {
+    val d = a as? Approval.DeviceRequest
+    val agent = AccountNames.cleaned(d?.role)?.lowercase() == "agent"
+    return AccountNames.isolateOrNull(d?.deviceName)
+        ?: stringResource(if (agent) R.string.approvals_an_agent else R.string.approvals_a_desktop)
+}
+
+/** Ending access failed (the Devices page's words): the request stays open; Try again asks the confirmation again. */
+@Composable
+private fun EndFailureNotice(f: EndFailure, name: String, actions: DecisionActions) {
+    // A refused daily check says why in the vault's words; anything else says what did not happen.
+    val body = if (f.kind == com.vettid.core.data.vault.FailureKind.OWNER_CHECK_REQUIRED) {
+        failureText(f.kind.messageRes(), f.kind.vaultCode(f.code))
+    } else {
+        stringResource(UiR.string.devices_end_failed, name)
+    }
+    NoticeCard(
+        kind = NoticeKind.WARNING,
+        title = stringResource(UiR.string.devices_end_failed_title),
+        body = body,
+        modifier = Modifier.testTag("end_failure"),
+        actions = {
+            TextButton(onClick = actions.onAskEndAccess, modifier = Modifier.testTag("end_retry")) {
+                Text(stringResource(R.string.approvals_retry))
+            }
+            TextButton(onClick = actions.onDismissEndFailure) { Text(stringResource(R.string.approvals_ok)) }
+        },
+    )
 }
 
 /** The decline button: "Not me" for a sign-in challenge (it sends the plain deny), "Decline" for a share, else "Deny". */
@@ -857,7 +939,7 @@ private fun approveLabel(a: Approval): String? = when (a) {
     is Approval.GrantRequest -> stringResource(R.string.approvals_grant_approve)
     is Approval.CriticalUse -> stringResource(R.string.approvals_critical_approve)
     is Approval.ShareDecision -> stringResource(R.string.approvals_share_approve)
-    is Approval.DeviceRequest -> null
+    is Approval.DeviceRequest -> if (a.isSession) stringResource(R.string.approvals_device_approve) else null
 }
 
 @Composable
@@ -1047,7 +1129,9 @@ private fun Facts(a: Approval) {
                 Label(stringResource(R.string.approvals_request))
                 Value(it)
             }
-            Text(stringResource(R.string.approvals_device_v1), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start)
+            if (!a.isSession) {
+                Text(stringResource(R.string.approvals_device_v1), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start)
+            }
         }
     }
 }

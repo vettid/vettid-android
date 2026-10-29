@@ -39,6 +39,7 @@ import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
@@ -199,12 +200,12 @@ private fun FailureNotice(state: DeviceUiState, f: DeviceFailure, name: String, 
     val body = if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
         failureText(kind.messageRes(), kind.vaultCode(state.errorCode))
     } else {
-        stringResource(if (f == DeviceFailure.END_ACCESS) R.string.devices_end_failed else R.string.devices_remove_failed, name)
+        stringResource(if (f == DeviceFailure.END_ACCESS) UiR.string.devices_end_failed else R.string.devices_remove_failed, name)
     }
     NoticeCard(
         kind = NoticeKind.WARNING,
         title = stringResource(
-            if (f == DeviceFailure.END_ACCESS) R.string.devices_end_failed_title else R.string.devices_remove_failed_title,
+            if (f == DeviceFailure.END_ACCESS) UiR.string.devices_end_failed_title else R.string.devices_remove_failed_title,
         ),
         body = body,
         modifier = Modifier.padding(horizontal = Spacing.s).testTag("device_failure"),
@@ -221,7 +222,7 @@ private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: 
         if (d.actionable && d.hasAccess(now)) {
             Spacer(Modifier.height(Spacing.m))
             SecondaryButton(
-                stringResource(R.string.devices_end_access),
+                stringResource(UiR.string.devices_end_access),
                 onEndAccess,
                 enabled = !busy,
                 modifier = Modifier.testTag("end_access"),
@@ -250,9 +251,9 @@ private fun PageDialogs(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
     val name = DeviceText.sentenceName(d)
     when (state.confirm) {
         DeviceConfirm.END_ACCESS -> ConfirmDialog(
-            title = stringResource(R.string.devices_end_access_title, name),
-            text = stringResource(R.string.devices_end_access_body),
-            confirmLabel = stringResource(R.string.devices_end_access),
+            title = stringResource(UiR.string.devices_end_access_title, name),
+            text = stringResource(UiR.string.devices_end_access_body),
+            confirmLabel = stringResource(UiR.string.devices_end_access),
             onConfirm = actions.onConfirm,
             onDismiss = actions.onDismissConfirm,
         )

@@ -45,16 +45,11 @@
     <string name="devices_no_access_agent">No access. When the agent needs access, it asks you in Approvals.</string>
     <string name="devices_no_access_desktop">No access. When the desktop needs access, it asks you in Approvals.</string>
     <string name="devices_agents_rule">Agents act only while you allow access, and only within the permissions you give them.</string>
-    <string name="devices_end_access">End access</string>
     <string name="devices_access_ended">Access ended</string>
     <string name="devices_history">History</string>
     <string name="devices_remove">Remove</string>
 
-    <string name="devices_end_access_title">End access for %1$s?</string>
-    <string name="devices_end_access_body">It stops at once, and any of its requests still waiting for you are declined. It can ask for access again; you decide then.</string>
-    <string name="devices_end_failed_title">Access not ended</string>
     <string name="devices_remove_failed_title">Not removed</string>
-    <string name="devices_end_failed">Access for %1$s could not be ended. Try again.</string>
 
     <string name="devices_remove_title">Remove %1$s?</string>
     <string name="devices_remove_agent_body">It loses access to your vault at once and cannot connect again. Its permissions and its share rules are deleted.</string>
