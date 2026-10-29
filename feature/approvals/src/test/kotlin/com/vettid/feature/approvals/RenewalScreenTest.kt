@@ -115,6 +115,26 @@ class RenewalScreenTest {
     }
 
     @Test
+    fun aFailedEndOnTheGoneScreenIsSaidWithTryAgain() {
+        var again = 0
+        show(
+            state(request(), failure = EndFailure(FailureKind.NETWORK, null)).copy(gone = true),
+            DecisionActions(onAskEndAccess = { again++ }),
+        )
+        rule.onNodeWithText("Access not ended").assertExists()
+        rule.onNodeWithText("Access for $iso could not be ended. Try again.").assertExists()
+        rule.onNodeWithTag("end_retry").performScrollTo().performClick()
+        assertEquals(1, again)
+    }
+
+    @Test
+    fun aFailedEndOnTheGoneScreenWithoutALiveSessionOffersNoRetry() {
+        show(state(request(), until = null, failure = EndFailure(FailureKind.NETWORK, null)).copy(gone = true))
+        rule.onNodeWithText("Access not ended").assertExists()
+        assertEquals(0, rule.onAllNodesWithTag("end_retry").size)
+    }
+
+    @Test
     fun heldDrawsNoConfirmation() {
         show(state(request(), until = null, confirm = true).copy(gone = true, held = true))
         assertEquals(0, rule.onAllNodesWithText("End access for $iso?").fetchSemanticsNodes().size)

@@ -498,8 +498,16 @@ private fun GoneScreen(a: Approval?, state: ApprovalDetailUiState, actions: Deci
         onPrimary = actions.onBack,
         onBack = actions.onBack,
         modifier = modifier,
-    ) {}
-    if (a != null && state.confirmEnd && !state.held) EndAccessDialog(a, actions)
+    ) {
+        // A failed end is said here too (never silent), with Try again while the session is live; not while held.
+        val f = state.endFailure
+        if (a != null && f != null && !state.held) {
+            EndFailureNotice(f, deviceSentenceInline(a), actions, canRetry = state.renewalUntil != null)
+        }
+    }
+    if (a == null || state.held) return
+    // A confirmation already open stays and still ends access.
+    if (state.confirmEnd) EndAccessDialog(a, actions)
 }
 
 /** The Devices page's confirmation, its words reused (core:ui strings). */
@@ -528,7 +536,7 @@ private fun RenewalNotices(state: ApprovalDetailUiState, a: Approval, actions: D
     }
     state.endFailure?.let { f ->
         Spacer(Modifier.height(Spacing.m))
-        EndFailureNotice(f, deviceSentenceInline(a), actions)
+        EndFailureNotice(f, deviceSentenceInline(a), actions, canRetry = state.renewalUntil != null)
     }
 }
 
@@ -552,7 +560,7 @@ private fun deviceSentenceStart(a: Approval): String {
 
 /** Ending access failed (the Devices page's words): the request stays open; Try again asks the confirmation again. */
 @Composable
-private fun EndFailureNotice(f: EndFailure, name: String, actions: DecisionActions) {
+private fun EndFailureNotice(f: EndFailure, name: String, actions: DecisionActions, canRetry: Boolean) {
     // A refused daily check says why in the vault's words; anything else says what did not happen.
     val body = if (f.kind == com.vettid.core.data.vault.FailureKind.OWNER_CHECK_REQUIRED) {
         failureText(f.kind.messageRes(), f.kind.vaultCode(f.code))
@@ -565,8 +573,11 @@ private fun EndFailureNotice(f: EndFailure, name: String, actions: DecisionActio
         body = body,
         modifier = Modifier.testTag("end_failure"),
         actions = {
-            TextButton(onClick = actions.onAskEndAccess, modifier = Modifier.testTag("end_retry")) {
-                Text(stringResource(R.string.approvals_retry))
+            // Nothing to retry once the session has passed.
+            if (canRetry) {
+                TextButton(onClick = actions.onAskEndAccess, modifier = Modifier.testTag("end_retry")) {
+                    Text(stringResource(R.string.approvals_retry))
+                }
             }
             TextButton(onClick = actions.onDismissEndFailure) { Text(stringResource(R.string.approvals_ok)) }
         },

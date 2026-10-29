@@ -236,7 +236,8 @@ class RenewalTest {
         m.endAccess()
         runCurrent()
         assertFalse(devices.calls.any { it.startsWith("endAccess") })
-        assertTrue(m.uiState.value.confirmEnd)
+        // The hold closes the confirmation.
+        assertFalse(m.uiState.value.confirmEnd)
     }
 
     @Test
@@ -340,5 +341,67 @@ class RenewalTest {
         assertEquals(FailureKind.OWNER_CHECK_REQUIRED, m.uiState.value.endFailure?.kind)
         assertFalse(m.uiState.value.done)
         assertNotNull(m.uiState.value.approval)
+    }
+
+    @Test
+    fun aFailedEndFromTheGoneScreenIsSaidAndCanBeRetried() = runTest {
+        val soon = Instant.now().plusMillis(5_000)
+        val m = vm(r = request().copy(exp = soon))
+        runCurrent()
+        m.askEndAccess()
+        runCurrent()
+        advanceTimeBy(6_000)
+        runCurrent()
+        assertTrue(m.uiState.value.gone)
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.NETWORK)
+        m.endAccess()
+        runCurrent()
+        var s = m.uiState.value
+        assertTrue(s.gone)
+        assertFalse(s.ending)
+        assertEquals(FailureKind.NETWORK, s.endFailure?.kind)
+        // The session is still live: Try again reopens the confirmation on the gone screen.
+        assertNotNull(s.renewalUntil)
+        m.askEndAccess()
+        runCurrent()
+        assertTrue(m.uiState.value.confirmEnd)
+        m.endAccess()
+        runCurrent()
+        s = m.uiState.value
+        assertTrue(s.done)
+        assertEquals(2, devices.calls.count { it == "endAccess:dev1" })
+    }
+
+    @Test
+    fun theGoneScreenStaysWhileAccessIsBeingEnded() = runTest {
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        runCurrent()
+        social.approvals.value = emptyList()
+        runCurrent()
+        m.endAccess()
+        // Sent but not yet run: the screen has not flickered back to the request.
+        assertTrue(m.uiState.value.busy || m.uiState.value.gone)
+        runCurrent()
+        assertTrue(m.uiState.value.done)
+    }
+
+    @Test
+    fun aFailureRecordedAfterTheSessionPassedIsStillShown() = runTest {
+        val m = vm(list = listOf(device(expires = null)))
+        runCurrent()
+        // An open confirmation cannot be asked for a first request, so the end is set up through a live session first.
+        devices.devices.value = listOf(device(expires = live))
+        runCurrent()
+        m.askEndAccess()
+        runCurrent()
+        devices.devices.value = listOf(device(expires = null))
+        runCurrent()
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.NETWORK)
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        assertNull(m.uiState.value.renewalUntil)
     }
 }

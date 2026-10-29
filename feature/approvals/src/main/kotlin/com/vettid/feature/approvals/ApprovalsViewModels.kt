@@ -207,6 +207,8 @@ data class ApprovalDetailUiState(
     val deviceListRead: Boolean = false,
     /** The vault is held (§3.6.3) and this is a session request: it left the screen, and a confirmation ends nothing. */
     val held: Boolean = false,
+    /** Ending access is being sent (`busy` too): the gone screen stays. */
+    val ending: Boolean = false,
 ) {
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -333,15 +335,31 @@ class ApprovalDetailViewModel @Inject constructor(
             val held = check?.state == OwnerCheckState.HELD && (shown as? Approval.DeviceRequest)?.isSession == true
             s.copy(
                 approval = shown,
-                gone = (over || held) && !s.done && !s.busy && s.criticalResult == null,
+                // While access is being ended the gone screen stays (it does not flicker back to the request).
+                gone = (over || held) && !s.done && (!s.busy || s.ending) && s.criticalResult == null,
                 held = held,
                 // Past the session's end the request reads as a first request: no notice, only Deny.
-                renewalUntil = Renewal.expiresAt(shown, ds, s.deviceListRead, now).also { until ->
-                    // A failure about a session that has since ended has nothing left to retry.
-                    if (until == null && s.endFailure != null) local.update { it.copy(endFailure = null) }
-                },
+                renewalUntil = Renewal.expiresAt(shown, ds, s.deviceListRead, now),
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
+
+    init {
+        // A failure about a session that then ended has nothing left to retry: cleared on that change only, so a failure
+        // recorded after the session had already passed is still shown.
+        viewModelScope.launch {
+            var live = false
+            uiState.map { it.renewalUntil != null }.distinctUntilChanged().collect { now ->
+                if (live && !now) local.update { it.copy(endFailure = null) }
+                live = now
+            }
+        }
+        // The hold closes a confirmation: nothing is ended while held (§6.8).
+        viewModelScope.launch {
+            uiState.map { it.held }.distinctUntilChanged().collect { held ->
+                if (held) local.update { it.copy(confirmEnd = false) }
+            }
+        }
+    }
 
     fun setPassword(v: String) = local.update { it.copy(password = v, error = null) }
 
@@ -427,7 +445,9 @@ class ApprovalDetailViewModel @Inject constructor(
     /** "Deny and end access now" on a renewal request: asks "End access for <device>?" first; nothing is sent yet. */
     fun askEndAccess() {
         val s = uiState.value
-        if (s.busy || s.renewalUntil == null || s.gone) return
+        // From the gone screen (the request left) only a failure's Try again, and only while the session is live.
+        if (s.busy || s.held || s.renewalUntil == null) return
+        if (s.gone && s.endFailure == null) return
         local.update { it.copy(confirmEnd = true, endFailure = null) }
     }
 
@@ -445,14 +465,14 @@ class ApprovalDetailViewModel @Inject constructor(
         val s = local.value
         if (!s.confirmEnd || s.busy || isHeld()) return
         val id = (uiState.value.approval as? Approval.DeviceRequest)?.sessionDeviceId ?: return
-        local.update { it.copy(confirmEnd = false, busy = true, endFailure = null) }
+        local.update { it.copy(confirmEnd = false, busy = true, ending = true, endFailure = null) }
         viewModelScope.launch {
             try {
                 devices.endAccess(id)
                 // The request left the list with the end (the repository declines it); the screen closes.
-                local.update { it.copy(busy = false, done = true) }
+                local.update { it.copy(busy = false, ending = false, done = true) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, endFailure = EndFailure(e.kind, e.shownCode)) }
+                local.update { it.copy(busy = false, ending = false, endFailure = EndFailure(e.kind, e.shownCode)) }
                 // What the vault says now settles whether the device still has a session.
                 devices.refreshQuietly()
             }
