@@ -178,7 +178,9 @@ class HistoryViewModelTest {
     @Test
     fun aLocalSearchAcrossTheNameAndTheWordsAroundItFindsTheEntry() = runTest(main.dispatcher) {
         val rlo = "\u202E"
-        val named = FakeSocial().apply { seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam$rlo\u200B", lastName = "Lee"))) }
+        val named = FakeSocial().apply {
+            seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam$rlo\u200B", lastName = "Lee")))
+        }
         val full = { AuditPage(listOf(entry(900, "call.permission_off")), seq = 1000) }
         val vault = Vault(*Array(30) { full }).apply { refusesSearch = true }
         val model = HistoryViewModel(
