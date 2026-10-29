@@ -57,6 +57,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.social.MessageInfo
@@ -250,7 +251,7 @@ fun MessagesScreen(
 
 @Composable
 private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
-    val name = c.connection.displayName.ifBlank { stringResource(R.string.messages_name_not_shared) }
+    val name = AccountNames.isolateOrNull(c.connection.displayName) ?: stringResource(R.string.messages_name_not_shared)
     val preview = c.last?.let { m ->
         if (m.outgoing) stringResource(R.string.messages_preview_you, m.text) else m.text
     } ?: stringResource(R.string.messages_preview_none)
@@ -263,7 +264,7 @@ private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
             preview.lines().first()
         },
         meta = c.last?.let { Times.short(it.sentAt) },
-        tileName = name,
+        tileName = AccountNames.cleaned(name) ?: name,
         tileStyle = if (c.connection.favorite) TileStyle.Favorite else TileStyle.Connection,
         emphasized = unread,
         onClick = onClick,
@@ -312,7 +313,7 @@ data class ConversationActions(
 /** A conversation (ANDROID-PLAN §4): bubbles by day, the reply field at the bottom. */
 @Composable
 fun ConversationScreen(state: ConversationUiState, actions: ConversationActions, modifier: Modifier = Modifier) {
-    val name = state.connection?.displayName?.ifBlank { null } ?: stringResource(R.string.messages_name_not_shared)
+    val name = AccountNames.isolateOrNull(state.connection?.displayName) ?: stringResource(R.string.messages_name_not_shared)
     val listState = rememberLazyListState()
     // To the newest entry when one is added at the end, a message or a call (calls are their own list, and may load
     // after the messages), not when an older page is added at the top (§10.5.2): the list keeps its place then, by
@@ -586,11 +587,11 @@ fun NewMessageScreen(
 
 @Composable
 private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
-    val name = c.displayName.ifBlank { stringResource(R.string.messages_name_not_shared) }
+    val name = AccountNames.isolateOrNull(c.displayName) ?: stringResource(R.string.messages_name_not_shared)
     VettIdListRow(
         title = name,
         supporting = c.secondaryName,
-        tileName = name,
+        tileName = AccountNames.cleaned(name) ?: name,
         tileStyle = if (c.favorite) TileStyle.Favorite else TileStyle.Connection,
         onClick = onClick,
         tilePhoto = com.vettid.core.ui.components.rememberProfilePhoto(c.photo),

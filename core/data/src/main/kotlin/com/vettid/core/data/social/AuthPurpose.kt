@@ -32,14 +32,13 @@ object AuthContext {
     fun plain(s: String): String = clean(s)
 
     /** [plain], in bidirectional isolation (FSI ... PDI, §10.8), for next to other text; null when nothing is left. */
-    fun isolated(s: String): String? = clean(s).takeIf { it.isNotBlank() }?.let { AccountNames.isolate(it) }
+    fun isolated(s: String): String? = clean(s).takeIf { it.isNotBlank() }?.let { AccountNames.wrapIsolated(it) }
 
     /**
      * A received name for a fixed sentence: control and format characters removed (a PDI or RLO in it cannot close the
      * isolation or reverse the words around it), line breaks as spaces, then isolated; null when nothing is left.
      */
-    fun isolatedName(s: String): String? =
-        clean(s).replace('\n', ' ').trim().takeIf { it.isNotEmpty() }?.let { AccountNames.isolate(it) }
+    fun isolatedName(s: String): String? = AccountNames.isolateOrNull(s)
 
     /** The first line of [plain], isolated, for a list row's second line; null when it has none. */
     fun firstLineIsolated(s: String): String? = isolated(clean(s).trimStart('\n').lineSequence().first())

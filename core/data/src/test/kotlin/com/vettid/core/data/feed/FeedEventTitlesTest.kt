@@ -36,7 +36,7 @@ class FeedEventTitlesTest {
 
         assertEquals(FeedText(R.string.data_feed_rotation_failed), title(item("identity.rotation_failed", "recovery", "high")))
         assertEquals(
-            FeedText(R.string.data_feed_rotate_conflict, listOf(FeedText(literal = "Sam Lee"))),
+            FeedText(R.string.data_feed_rotate_conflict, listOf(FeedText(literal = "\u2068Sam Lee\u2069"))),
             title(item("identity.rotate_conflict", priority = "high", connectionId = "c1")),
         )
         // Not listed, but titled for the detail sheet of an older list.
@@ -88,7 +88,7 @@ class FeedEventTitlesTest {
     @Test
     fun anAgentsRunAndProxyNameTheItem() {
         for (k in listOf("leash.item.run", "leash.item.proxy")) {
-            assertEquals(FeedText(R.string.data_feed_leash_item_used, listOf("GitHub token")), title(item(k, "01ITEM")))
+            assertEquals(FeedText(R.string.data_feed_leash_item_used, listOf("\u2068GitHub token\u2069")), title(item(k, "01ITEM")))
             assertEquals(FeedText(R.string.data_feed_leash_item_used_any), title(item(k, "01ITEM"), details = false))
             assertEquals(FeedText(R.string.data_feed_leash_item_used_any), title(item(k, "01GONE")))
         }
@@ -141,7 +141,7 @@ class FeedAuthPurposeTest {
 
     @Test
     fun noPurposeOrNoPendingApprovalIsToday() {
-        val today = FeedText(R.string.data_feed_authenticate, listOf(FeedText(literal = "Sam Lee")))
+        val today = FeedText(R.string.data_feed_authenticate, listOf(FeedText(literal = isolated)))
         assertEquals(today, FeedKinds.title(item(), names(AuthPurpose.NONE)))
         assertEquals(today, FeedKinds.title(item(), FeedNames(connections = mapOf("c1" to sam))))
     }
@@ -162,7 +162,7 @@ class FeedAuthPurposeTest {
     fun aBatchIsNeverTitledAsASignIn() {
         val title = FeedKinds.title(item(count = 3), names(AuthPurpose.SIGNIN))
         assertEquals(
-            FeedText(plural = R.plurals.data_feed_grant_request_batch, quantity = 3, args = listOf(FeedText(literal = "Sam"), 3)),
+            FeedText(plural = R.plurals.data_feed_grant_request_batch, quantity = 3, args = listOf(FeedText(literal = "\u2068Sam\u2069"), 3)),
             title,
         )
         // Its second line is the count, not the sign-in body.
@@ -190,5 +190,23 @@ class FeedAuthPurposeTest {
     fun aPendingApprovalOfAnotherConnectionDoesNotCarryItsPurpose() {
         val n = names(AuthPurpose.SIGNIN)
         assertEquals(AuthPurpose.NONE, FeedKinds.authenticationPurpose(item(connectionId = "c9"), n))
+    }
+
+    private val bank = ConnectionInfo("c1", "Bank\u2069\u202E", ConnectionState.ACTIVE, firstName = "Bank\u2069\u202E")
+
+    @Test
+    fun aHostileNameIsCleanedInTheConfirmItIsYouTitle() {
+        val n = names(AuthPurpose.NONE).copy(connections = mapOf("c1" to bank))
+        assertEquals(
+            FeedText(R.string.data_feed_authenticate, listOf(FeedText(literal = "\u2068Bank\u2069"))),
+            FeedKinds.title(item(), n),
+        )
+    }
+
+    @Test
+    fun aHostileNameIsCleanedInTheBatchTitle() {
+        val n = names(AuthPurpose.NONE).copy(connections = mapOf("c1" to bank))
+        val t = FeedKinds.title(item(count = 3), n)
+        assertEquals(FeedText(literal = "\u2068Bank\u2069"), t.args.first())
     }
 }

@@ -547,8 +547,7 @@ private fun ProfileChoice(state: ItemEditUiState, onInProfile: (Boolean) -> Unit
 
 @Composable
 private fun impactText(i: ShareImpact): String {
-    val who = i.connectionName.ifBlank { stringResource(R.string.items_sharing_this_connection) }
-        .let { com.vettid.core.data.account.AccountNames.isolate(it) }
+    val who = sharingNameOf(i.connectionName)
     return when {
         i.withdrawn -> stringResource(R.string.items_impact_withdrawn, who)
         i.usableOnly -> stringResource(R.string.items_impact_usable, who)

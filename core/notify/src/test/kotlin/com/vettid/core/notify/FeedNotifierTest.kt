@@ -95,7 +95,7 @@ class FeedNotifierTest {
         arrive(item("f1"))
         val n = poster.shown.getValue("f1")
         assertEquals(Channels.MESSAGES, n.channel)
-        assertEquals("New message from Sam Lee", n.title)
+        assertEquals("New message from \u2068Sam Lee\u2069", n.title)
         assertNull("Names: never the message text", n.text)
         assertEquals("New activity in VettID", n.publicTitle)
         // Read on another device (a catch-up changed its status).
@@ -110,7 +110,7 @@ class FeedNotifierTest {
         arrive(item("b", kind = "grant.request", count = 2, ref = "g1"))
         arrive(item("b", kind = "grant.request", count = 3, ref = "g1"))
         assertEquals(listOf("post:b", "post:b"), poster.log)
-        assertEquals("Sam asks for 3 things", poster.shown.getValue("b").title)
+        assertEquals("\u2068Sam\u2069 asks for 3 things", poster.shown.getValue("b").title)
         assertTrue(poster.shown.getValue("b").alertOnce)
         assertEquals(Channels.REQUESTS, poster.shown.getValue("b").channel)
     }
@@ -122,7 +122,7 @@ class FeedNotifierTest {
         arrive(item("f1"))
         assertEquals("See you at 6", poster.shown.getValue("f1").text)
         arrive(item("f2", kind = "item.revealed", ref = "i1"))
-        assertEquals("Passport was revealed", poster.shown.getValue("f2").title)
+        assertEquals("\u2068Passport\u2069 was revealed", poster.shown.getValue("f2").title)
         settings.value = NotifySettings(previews = NotificationPreviews.NAMES)
         arrive(item("f3", kind = "item.revealed", ref = "i1"))
         assertFalse("Names: no item names", poster.shown.getValue("f3").title.contains("Passport"))

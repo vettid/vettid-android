@@ -124,6 +124,30 @@ class AuthPurposeScreenTest {
     fun theRowsSecondLineHoldsTheFirstLineOfTheContextIsolated() {
         val state = ApprovalsUiState(loading = false, approvals = listOf(auth(AuthPurpose.NONE, context = "Line one\nLine two")))
         rule.setContent { ApprovalsScreen(state, ShellChrome("Sam", onMenuClick = {}, onAvatarClick = {})) }
-        rule.onNodeWithText("Sam Lee · ⁨Line one⁩").assertIsDisplayed()
+        rule.onNodeWithText("⁨Sam Lee⁩ · ⁨Line one⁩").assertIsDisplayed()
+    }
+
+    private val bank = "Bank\u2069\u202E"
+
+    @Test
+    fun aHostileNameCannotReverseTheProveItIsYouBody() {
+        detail(auth(AuthPurpose.NONE, name = bank))
+        rule.onNodeWithText("\u2068Bank\u2069 asks you to prove it is you.", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun aHostileNameCannotReverseTheBatchRow() {
+        val a = auth(AuthPurpose.NONE, name = bank)
+        val b = Approval.Authentication("a2", "c1", null, now.plusSeconds(5), null, bank, AuthPurpose.NONE)
+        val state = ApprovalsUiState(loading = false, approvals = listOf(a, b))
+        rule.setContent { ApprovalsScreen(state, ShellChrome("Sam", onMenuClick = {}, onAvatarClick = {})) }
+        rule.onNodeWithText("\u2068Bank\u2069 asks for 2 things").assertIsDisplayed()
+    }
+
+    @Test
+    fun aHostileNameCannotReverseTheRowsWhoLine() {
+        val state = ApprovalsUiState(loading = false, approvals = listOf(auth(AuthPurpose.NONE, name = bank, context = null)))
+        rule.setContent { ApprovalsScreen(state, ShellChrome("Sam", onMenuClick = {}, onAvatarClick = {})) }
+        rule.onNodeWithText("\u2068Bank\u2069", substring = true).assertIsDisplayed()
     }
 }

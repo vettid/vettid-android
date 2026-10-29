@@ -208,9 +208,9 @@ fun ApprovalsScreen(
         }
     }
     state.confirmRemove?.let { c ->
-        val name = c.displayName.ifBlank { stringResource(R.string.approvals_a_connection) }
+        val name = AccountNames.isolateOrNull(c.displayName) ?: stringResource(R.string.approvals_a_connection)
         ConfirmDialog(
-            title = stringResource(R.string.approvals_remove_title, com.vettid.core.data.account.AccountNames.isolate(name)),
+            title = stringResource(R.string.approvals_remove_title, name),
             text = stringResource(R.string.approvals_remove_body),
             confirmLabel = stringResource(R.string.approvals_paused_remove),
             onConfirm = paused.onRemove,
@@ -227,7 +227,7 @@ private fun ApprovalRow(a: Approval, onOpen: (String) -> Unit, modifier: Modifie
         title = titleOf(a),
         supporting = listOfNotNull(who, summaryOf(a)).joinToString(" · "),
         meta = Times.short(a.receivedAt),
-        tileName = who ?: "?",
+        tileName = AccountNames.cleaned(who) ?: "?",
         emphasized = a.needsDecision,
         onClick = { onOpen(a.key) },
         modifier = modifier.testTag("approval_${a.key}"),
@@ -237,13 +237,13 @@ private fun ApprovalRow(a: Approval, onOpen: (String) -> Unit, modifier: Modifie
 /** One entry for a batch of a connection's asks (§10.4.1): "Dr Lee asks for 3 things", listing them when opened. */
 @Composable
 private fun BatchRow(b: ApprovalEntry.Batch, open: Boolean, onOpen: (String) -> Unit, onToggle: () -> Unit) {
-    val who = b.connectionName ?: stringResource(R.string.approvals_a_connection)
+    val who = AccountNames.isolateOrNull(b.connectionName) ?: stringResource(R.string.approvals_a_connection)
     Column(Modifier.testTag("approval_${b.key}")) {
         VettIdListRow(
             title = pluralStringResource(R.plurals.approvals_batch_title, b.asks.size, who, b.asks.size),
             supporting = b.asks.map { titleOf(it) }.distinct().joinToString(" · "),
             meta = Times.short(b.receivedAt),
-            tileName = who,
+            tileName = AccountNames.cleaned(who) ?: "?",
             emphasized = true,
             onClick = onToggle,
         )
@@ -268,7 +268,7 @@ private fun PausedNotice(
     actions: PausedActions,
     modifier: Modifier = Modifier,
 ) {
-    val name = c.displayName.takeIf { it.isNotBlank() }?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
+    val name = AccountNames.isolateOrNull(c.displayName)
     NoticeCard(
         kind = NoticeKind.WARNING,
         title = if (name != null) {
@@ -315,11 +315,12 @@ private fun kindTitleRes(a: Approval): Int =
 
 @Composable
 private fun whoOf(a: Approval): String? = when (a) {
-    is Approval.ConnectionRequest -> a.name ?: stringResource(R.string.approvals_name_not_shared)
-    is Approval.OutgoingRequest -> a.name ?: stringResource(R.string.approvals_name_not_shared)
+    is Approval.ConnectionRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
+    is Approval.OutgoingRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
     is Approval.DeviceRequest -> a.deviceName
-    is Approval.ShareDecision -> a.connectionName ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
-    else -> a.connectionName ?: stringResource(R.string.approvals_a_connection)
+    is Approval.ShareDecision -> AccountNames.isolateOrNull(a.connectionName)
+        ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
+    else -> AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection)
 }
 
 @Composable
@@ -497,7 +498,7 @@ private fun CriticalResult(status: String, a: Approval, onFinish: () -> Unit, mo
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, actions: DecisionActions) {
     Label(stringResource(R.string.approvals_from))
-    Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
+    Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection))
     a.reason?.let {
         Label(stringResource(R.string.approvals_reason))
         Value(it)
@@ -626,7 +627,7 @@ private const val DEFAULT_GRANT_SECONDS = WEEK_SECONDS
 @Composable
 private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggle: (String) -> Unit) {
     val names = com.vettid.core.data.items.RuleNames.of(a.rules)
-    val who = a.connectionName?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
+    val who = AccountNames.isolateOrNull(a.connectionName)
         ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
         ?: stringResource(R.string.approvals_a_connection)
     if (a.tags.isNotEmpty()) {
@@ -752,7 +753,7 @@ private fun outgoingBody(a: Approval.OutgoingRequest): String = if (a.sas == nul
 } else {
     stringResource(
         if (a.remote) R.string.approvals_outgoing_body_remote else R.string.approvals_outgoing_body,
-        a.name ?: stringResource(R.string.approvals_them),
+        themOf(a.name),
     )
 }
 
@@ -761,7 +762,7 @@ private fun outgoingBody(a: Approval.OutgoingRequest): String = if (a.sas == nul
 private fun bodyOf(a: Approval): String? = when (a) {
     is Approval.ConnectionRequest -> stringResource(
         if (a.remote) R.string.approvals_connection_body_remote else R.string.approvals_connection_body,
-        a.name ?: stringResource(R.string.approvals_someone),
+        AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_someone),
     )
     is Approval.OutgoingRequest -> outgoingBody(a)
     is Approval.Authentication -> when (a.purpose) {
@@ -770,20 +771,20 @@ private fun bodyOf(a: Approval): String? = when (a) {
         AuthPurpose.APPROVAL -> null
         AuthPurpose.NONE -> stringResource(
             R.string.approvals_auth_body,
-            a.connectionName ?: stringResource(R.string.approvals_a_connection),
+            AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection),
         )
     }
     is Approval.GrantRequest -> stringResource(
         R.string.approvals_grant_body,
-        a.connectionName ?: stringResource(R.string.approvals_a_connection),
+        AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection),
     )
     is Approval.CriticalUse -> stringResource(
         R.string.approvals_critical_body,
-        a.connectionName ?: stringResource(R.string.approvals_a_connection),
+        AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection),
     )
     is Approval.ShareDecision -> stringResource(
         R.string.approvals_share_body,
-        a.connectionName
+        AccountNames.isolateOrNull(a.connectionName)
             ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
             ?: stringResource(R.string.approvals_a_connection),
     )
@@ -811,7 +812,7 @@ private fun Label(text: String) {
 
 /** A requester's name inside a sentence (bidi-isolated, §10.8), or "them". */
 @Composable
-private fun themOf(name: String?): String = name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.approvals_them)
+private fun themOf(name: String?): String = AccountNames.isolateOrNull(name) ?: stringResource(R.string.approvals_them)
 
 @Composable
 private fun Value(text: String, modifier: Modifier = Modifier) {
@@ -825,12 +826,12 @@ private fun Facts(a: Approval) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
             Text(
-                a.name ?: stringResource(R.string.approvals_name_not_shared),
+                AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.testTag("request_name"),
             )
-            if (a.name != null) {
+            if (AccountNames.isolateOrNull(a.name) != null) {
                 Text(
                     stringResource(R.string.approvals_names_note),
                     style = MaterialTheme.typography.bodySmall,
@@ -880,7 +881,7 @@ private fun Facts(a: Approval) {
         is Approval.OutgoingRequest -> {
             Label(stringResource(R.string.approvals_outgoing_name))
             Text(
-                a.name ?: stringResource(R.string.approvals_name_not_shared),
+                AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -909,7 +910,7 @@ private fun Facts(a: Approval) {
         }
         is Approval.Authentication -> {
             Label(stringResource(R.string.approvals_from))
-            Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
+            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection))
             // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
             val note = a.context?.let { AuthContext.isolated(it) }
                 ?: stringResource(R.string.approvals_auth_no_details).takeIf { a.purpose != AuthPurpose.NONE }
@@ -923,7 +924,7 @@ private fun Facts(a: Approval) {
         is Approval.GrantRequest -> Unit
         is Approval.CriticalUse -> {
             Label(stringResource(R.string.approvals_from))
-            Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
+            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection))
             Label(stringResource(R.string.approvals_critical_item))
             Value("${a.itemName} · ${a.fieldLabel}")
             a.kind?.let { k ->

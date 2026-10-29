@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.data.vault.messageRes
@@ -96,7 +97,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         TransferOutStep.SHOWING -> ShowCode(state, leave)
         TransferOutStep.COMPARE -> FormScaffold(
             title = stringResource(R.string.settings_transfer_compare_title),
-            body = stringResource(R.string.settings_transfer_compare_body, state.pending?.name ?: ""),
+            body = stringResource(R.string.settings_transfer_compare_body, AccountNames.isolateOrNull(state.pending?.name).orEmpty()),
             primaryLabel = stringResource(R.string.settings_transfer_match),
             onPrimary = actions::codesMatch,
             secondaryLabel = stringResource(R.string.settings_transfer_reject),
@@ -136,7 +137,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         }
         TransferOutStep.APPROVE -> FormScaffold(
             title = stringResource(R.string.settings_transfer_approve_title),
-            body = stringResource(R.string.settings_transfer_approve_body, state.pending?.name ?: ""),
+            body = stringResource(R.string.settings_transfer_approve_body, AccountNames.isolateOrNull(state.pending?.name).orEmpty()),
             primaryLabel = stringResource(R.string.settings_transfer_approve),
             onPrimary = { actions.askApprove(true) },
             primaryEnabled = state.canApprove,
@@ -194,7 +195,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
             body = if (state.keptKeys) {
                 stringResource(R.string.settings_transfer_moved_kept_body)
             } else {
-                stringResource(R.string.settings_transfer_moved_body, state.pending?.name ?: "")
+                stringResource(R.string.settings_transfer_moved_body, AccountNames.isolateOrNull(state.pending?.name).orEmpty())
             },
             primaryLabel = stringResource(R.string.settings_done),
             onPrimary = leave,
@@ -215,7 +216,10 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
     }
     if (state.confirmApprove) {
         ConfirmDialog(
-            title = stringResource(R.string.settings_transfer_approve_confirm_title, state.pending?.name ?: ""),
+            title = stringResource(
+                R.string.settings_transfer_approve_confirm_title,
+                AccountNames.isolateOrNull(state.pending?.name).orEmpty(),
+            ),
             text = stringResource(R.string.settings_transfer_approve_confirm_body),
             confirmLabel = stringResource(R.string.settings_transfer_approve_confirm),
             onConfirm = actions::approve,

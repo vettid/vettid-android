@@ -46,7 +46,7 @@ class NotificationsScreenTest {
         }
         rule.onNodeWithText("Needs attention").assertExists()
         rule.onNodeWithText("Your credential was used somewhere else").assertExists()
-        rule.onNodeWithText("New message from Alice Moreau").assertExists()
+        rule.onNodeWithText("New message from \u2068Alice Moreau\u2069").assertExists()
         rule.onNodeWithTag("feed_row_a").assert(SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions))
         val custom = rule.onNodeWithTag("feed_row_a").fetchSemanticsNode().config[SemanticsActions.CustomActions]
         assertEquals(listOf("Archive", "Mark as read"), custom.map { it.label })

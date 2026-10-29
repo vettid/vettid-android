@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.notify.Channels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -92,7 +93,8 @@ class CallService : Service() {
 
     private fun notification(host: CallServiceHost?, live: CallState.Live?): Notification {
         Channels.ensure(this)
-        val name = live?.let { host?.displayName(it.connectionId) } ?: getString(R.string.core_calls_notification_unnamed)
+        val name = AccountNames.isolateOrNull(live?.let { host?.displayName(it.connectionId) })
+            ?: getString(R.string.core_calls_notification_unnamed)
         val open = packageManager.getLaunchIntentForPackage(packageName)?.let {
             PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }

@@ -63,4 +63,60 @@ class AccountNamesTest {
         assertNull(AccountNames.full("", "King"))
         assertEquals("\u2068Ada King\u2069", AccountNames.isolate("Ada King"))
     }
+
+    private val fsi = "\u2068"
+    private val pdi = "\u2069"
+
+    @Test
+    fun everyBidiControlIsRemovedFromAReceivedName() {
+        val controls = listOf(
+            "LRE" to "\u202A", "RLE" to "\u202B", "PDF" to "\u202C", "LRO" to "\u202D", "RLO" to "\u202E",
+            "LRI" to "\u2066", "RLI" to "\u2067", "FSI" to "\u2068", "PDI" to "\u2069",
+            "LRM" to "\u200E", "RLM" to "\u200F", "ALM" to "\u061C",
+        )
+        for ((label, c) in controls) {
+            assertEquals(label, "${fsi}AdaKing$pdi", AccountNames.isolate("Ada${c}King"))
+            assertEquals(label, "AdaKing", AccountNames.cleaned("${c}Ada${c}King$c"))
+        }
+    }
+
+    @Test
+    fun zeroWidthByteOrderMarkAndTagCharactersAreRemoved() {
+        assertEquals("AdaKing", AccountNames.cleaned("Ada\u200BKing"))
+        assertEquals("AdaKing", AccountNames.cleaned("\uFEFFAdaKing"))
+        // Tag characters (U+E0020..U+E007F) are outside the BMP: surrogate pairs.
+        assertEquals("Ada", AccountNames.cleaned("A\uDB40\uDC20d\uDB40\uDC41a\uDB40\uDC7F"))
+    }
+
+    @Test
+    fun lineBreaksBecomeSpacesAndTheNameIsTrimmed() {
+        for (br in listOf("\n", "\r\n", "\r", "\u2028", "\u2029", "\u0085", "\t")) {
+            assertEquals(br, "${fsi}Ada King$pdi", AccountNames.isolate("Ada${br}King"))
+        }
+        assertEquals("${fsi}Ada$pdi", AccountNames.isolate("\n  Ada \u2029"))
+    }
+
+    @Test
+    fun zwjAndZwnjAreKept() {
+        assertEquals("$fsi\uD83D\uDC69\u200D\uD83D\uDCBB$pdi", AccountNames.isolate("\uD83D\uDC69\u200D\uD83D\uDCBB"))
+        assertEquals("${fsi}می\u200Cخواهم$pdi", AccountNames.isolate("می\u200Cخواهم"))
+    }
+
+    @Test
+    fun nothingLeftIsNullAndIsolationIsIdempotent() {
+        assertNull(AccountNames.isolateOrNull(null))
+        assertNull(AccountNames.isolateOrNull(""))
+        assertNull(AccountNames.isolateOrNull(" \u202E\u202C\u200B\n "))
+        assertEquals("$fsi$pdi", AccountNames.isolate("\u202E"))
+        val once = AccountNames.isolate("Bank")
+        assertEquals(once, AccountNames.isolate(once))
+        assertEquals("Bank", AccountNames.cleaned(once))
+    }
+
+    @Test
+    fun aClosingIsolateCannotEscapeAndReverseTheFixedWords() {
+        val out = AccountNames.isolate("Bank${pdi}\u202E")
+        assertEquals("${fsi}Bank$pdi", out)
+        assertEquals(1, out.count { it == '\u2069' })
+    }
 }

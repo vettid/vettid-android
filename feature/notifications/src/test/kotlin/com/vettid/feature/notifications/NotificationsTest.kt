@@ -62,9 +62,9 @@ class NotificationsTest {
             val t = FeedKinds.target(i)
             if (FeedKinds.notAvailable(kind)) assertEquals(kind, FeedTarget.Sheet, t)
         }
-        assertEquals("New message from Alice Moreau", FeedKinds.title(item("message.received"), names).resolve(res))
-        assertEquals("Alice asks for Passport", FeedKinds.title(item("grant.request", ref = "g1"), names).resolve(res))
-        assertEquals("Alice asks for 3 things", FeedKinds.title(item("grant.request", count = 3), names).resolve(res))
+        assertEquals("New message from \u2068Alice Moreau\u2069", FeedKinds.title(item("message.received"), names).resolve(res))
+        assertEquals("\u2068Alice\u2069 asks for \u2068Passport\u2069", FeedKinds.title(item("grant.request", ref = "g1"), names).resolve(res))
+        assertEquals("\u2068Alice\u2069 asks for 3 things", FeedKinds.title(item("grant.request", count = 3), names).resolve(res))
         assertEquals("3 things", FeedKinds.supporting(item("grant.request", count = 3), names)?.resolve(res))
         assertEquals("A daily check failed: wrong password", FeedKinds.title(item("owner_check.failed", ref = "password"), names).resolve(res))
         // VAULT-MESSAGING 0.27.0 §11.7.1: the classes of a signer change, in the plan's words; never a raw kind.
@@ -104,9 +104,9 @@ class NotificationsTest {
         assertFalse(FeedKinds.known(unknown.kind))
         assertEquals("Removed connection was removed", FeedKinds.title(item("connection.removed", c = "gone"), names).resolve(res))
         assertEquals("Deleted item was revealed", FeedKinds.title(item("item.revealed", c = null, ref = "i9"), names).resolve(res))
-        assertEquals("Passport was revealed", FeedKinds.title(item("item.revealed", c = null, ref = "i1"), names).resolve(res))
+        assertEquals("\u2068Passport\u2069 was revealed", FeedKinds.title(item("item.revealed", c = null, ref = "i1"), names).resolve(res))
         // Never a value, never an email: names only.
-        assertEquals("Alice asks for an item", FeedKinds.title(item("grant.request", ref = "g9"), names).resolve(res))
+        assertEquals("\u2068Alice\u2069 asks for an item", FeedKinds.title(item("grant.request", ref = "g9"), names).resolve(res))
     }
 
     @Test

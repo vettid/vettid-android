@@ -365,7 +365,10 @@ private fun GivenLine(g: GrantView) {
     Column(
         Modifier.fillMaxWidth().padding(vertical = Spacing.xs).semantics(mergeDescendants = true) {}.testTag("sharing_given_${g.grantId}"),
     ) {
-        Text(g.name.ifBlank { stringResource(R.string.connections_share_deleted_item) }, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            AccountNames.isolateOrNull(g.name) ?: stringResource(R.string.connections_share_deleted_item),
+            style = MaterialTheme.typography.bodyLarge,
+        )
         Text(
             listOfNotNull(
                 stringResource(if (g.ruleId != null) R.string.connections_share_by_rule else R.string.connections_share_one_off),
@@ -399,7 +402,8 @@ private fun ReceivedLine(g: GrantView, name: String?, onOpen: () -> Unit) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                g.name.ifBlank { g.label ?: stringResource(R.string.connections_share_deleted_item) },
+                AccountNames.isolateOrNull(g.name) ?: g.label?.let { AccountNames.isolate(it) }
+                    ?: stringResource(R.string.connections_share_deleted_item),
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(

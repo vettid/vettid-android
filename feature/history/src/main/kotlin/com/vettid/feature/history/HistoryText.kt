@@ -3,6 +3,7 @@ package com.vettid.feature.history
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.scaledDurationText
@@ -35,7 +36,8 @@ object HistoryText {
                 AuditKinds.Who.DEVICE -> names.device
                 AuditKinds.Who.ITEM -> names.item
             }
-            if (name != null) stringResource(t.res, name) else stringResource(t.anyRes)
+            val clean = AccountNames.isolateOrNull(name)
+            if (clean != null) stringResource(t.res, clean) else stringResource(t.anyRes)
         }
     }
 
@@ -46,7 +48,8 @@ object HistoryText {
             AuditKinds.Who.DEVICE -> names.device
             AuditKinds.Who.ITEM -> names.item
         }
-        return if (name != null) context.getString(t.res, name) else context.getString(t.anyRes)
+        val clean = AccountNames.isolateOrNull(name)
+        return if (clean != null) context.getString(t.res, clean) else context.getString(t.anyRes)
     }
 
     /**
@@ -61,7 +64,7 @@ object HistoryText {
                 is AuditKinds.Detail.Line -> stringResource(d.res)
                 is AuditKinds.Detail.Scaled ->
                     if (scale <= 1) stringResource(d.res) else stringResource(d.scaledRes, scaledDurationText(d.realSeconds))
-                is AuditKinds.Detail.Named -> stringResource(d.res, d.name)
+                is AuditKinds.Detail.Named -> stringResource(d.res, AccountNames.isolate(d.name))
             }
         }
     }

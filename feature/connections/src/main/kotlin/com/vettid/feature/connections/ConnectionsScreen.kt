@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.OutstandingInvite
@@ -372,7 +373,7 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
 
 @Composable
 private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
-    val name = c.displayName.ifBlank { stringResource(R.string.connections_name_not_shared) }
+    val name = AccountNames.cleaned(c.displayName) ?: stringResource(R.string.connections_name_not_shared)
     ConnectionRow(
         name = name,
         favorite = c.favorite,

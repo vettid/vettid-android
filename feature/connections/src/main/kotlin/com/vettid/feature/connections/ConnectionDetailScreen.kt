@@ -101,7 +101,7 @@ data class DetailActions(
 fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailActions, modifier: Modifier = Modifier) {
     LaunchedEffect(state.gone) { if (state.gone) actions.onBack() }
     val c = state.connection
-    val title = c?.displayName?.ifBlank { null } ?: stringResource(R.string.connections_name_not_shared)
+    val title = AccountNames.cleaned(c?.displayName) ?: stringResource(R.string.connections_name_not_shared)
     // In sentences the name is bidi-isolated (§10.8); the heading and the tile take it as is.
     val name = AccountNames.isolate(title)
     DetailScaffold(
@@ -262,7 +262,7 @@ private fun ProfileCard(c: ConnectionInfo) {
             Spacer(Modifier.height(Spacing.s))
         }
         if (c.name.isNotBlank() || c.sharedItems.isNotEmpty()) {
-            if (c.name.isNotBlank()) InfoLine(stringResource(R.string.connections_detail_profile_name), c.name)
+            AccountNames.cleaned(c.name)?.let { InfoLine(stringResource(R.string.connections_detail_profile_name), it) }
             if (c.sharedItems.isNotEmpty()) {
                 Spacer(Modifier.height(Spacing.s))
                 Text(stringResource(R.string.connections_detail_shared_items), style = MaterialTheme.typography.labelLarge)
