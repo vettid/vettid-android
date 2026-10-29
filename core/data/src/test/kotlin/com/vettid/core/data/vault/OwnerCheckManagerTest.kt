@@ -570,6 +570,18 @@ class OwnerCheckManagerTest {
         assertTrue(m.lockCauseUnknown.value)
     }
 
+    /** The member's own lock, then an open: a later read that finds the vault locked by an estimate of 0 names the check. */
+    @Test
+    fun anOpenAfterAnotherKindOfLockLetsALaterProbeNameTheOwnerCheck() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        m.onLockedHere()
+        m.onOpened()
+        memberState = "locked"
+        assertEquals(VaultProbe.LOCKED, m.probeVault(lockCauseKnown = true))
+        assertFalse(m.lockCauseUnknown.value)
+    }
+
     /** (ANDROID-PLAN 0.1.96) The check after a cancelled recovery does not go out with the previous session's estimate. */
     @Test
     fun theCheckAfterACancelledRecoveryForgetsTheEstimate() = runTest {

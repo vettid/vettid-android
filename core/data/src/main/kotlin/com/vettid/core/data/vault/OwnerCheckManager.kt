@@ -304,6 +304,7 @@ class OwnerCheckManager(
             // and so does the unlock whose own count [afterUnlock] just read (ANDROID-PLAN 0.1.96, VAULT-MESSAGING 0.73.2).
             if (!keepCount) estimate = 0
             keepCount = false
+            lockedOther = false // a lock before this open names no cause for one after it
             epoch.incrementAndGet()
         }
         endIdleLocked()
