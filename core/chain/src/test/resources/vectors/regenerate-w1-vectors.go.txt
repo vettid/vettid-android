@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/vettid/vettid-vault/internal/strictjson"
 	"os"
 	"testing"
@@ -70,6 +71,13 @@ type vCase struct {
 	PSBT   string  `json:"psbt"`
 	Build  *vBuild `json:"build,omitempty"`
 	Expect vExpect `json:"expect"`
+	// AppExpect is set where the app differs from the vault ON PURPOSE (the app is stricter, or does not copy a btcd bug).
+	AppExpect *vAppExpect `json:"app_expected_difference,omitempty"`
+}
+
+type vAppExpect struct {
+	Result string `json:"app"` // "ok" or the reason the app refuses with
+	Why    string `json:"why"`
 }
 
 func TestW1Vectors(t *testing.T) {
@@ -98,6 +106,13 @@ func TestW1Vectors(t *testing.T) {
 		wallets[name] = w
 	}
 	var cases []vCase
+	appDiffers := map[string]vAppExpect{
+		"regtest/probe_x_unknown_version":         {"malformed", "btcd ignores the version bytes of a global xpub; the app requires a registered one (erratum to the vault: stricter)"},
+		"regtest/probe_x_duplicate":               {"malformed", "btcd never detects a repeated global xpub (its comparison is against the wrong value); the app refuses a repeat"},
+		"regtest/probe_x_xprv_version_pubkey":     {"malformed", "a private-key version with a public key: btcd ignores the version; the app requires it to match the key kind"},
+		"regtest/probe_x_depth0_nonzero_parent":   {"malformed", "depth 0 with a non-zero parent: btcd does not check it; the app does"},
+		"regtest/probe_unknown_type_low_byte_dup": {"ok", "btcd compares an unknown entry by the low byte of its key type, so 0xf0 and 0x1f0 collide and the vault refuses (a btcd bug, fails closed at the vault); the app does not copy it"},
+	}
 	cur := "regtest"
 	both := func() []*btc.Account { return []*btc.Account{accts[cur][btc.P2TR], accts[cur][btc.P2WPKH]} }
 	wp := func() *btc.Account { return accts[cur][btc.P2WPKH] }
@@ -134,6 +149,9 @@ func TestW1Vectors(t *testing.T) {
 		} else {
 			n, _ := btc.LookupNetwork(wallets[cur].Network)
 			c.Expect = vExpect{OK: true, Summary: string(summaryJSON(n, sum).Bytes())}
+		}
+		if d, ok := appDiffers[name]; ok {
+			c.AppExpect = &d
 		}
 		cases = append(cases, c)
 	}
@@ -369,6 +387,45 @@ func TestW1Vectors(t *testing.T) {
 		p.Outputs[0].Unknowns = append(p.Outputs[0].Unknowns, &psbt.Unknown{Key: []byte{0x00}, Value: []byte{1}}, &psbt.Unknown{Key: []byte{0x00}, Value: []byte{2}})
 	}), nil)
 
+	// ---- second round of the reviewer's btcd probes: global xpubs, unknown types, sighash ----
+	{
+		xk, err := hdkeychain.NewKeyFromString(wp().XPub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		xb := psbt.EncodeExtendedKey(xk)
+		path := func(depth int) []byte { return make([]byte, 4*(depth+1)) }
+		withX := func(f func(k []byte)) []byte { c := append([]byte{}, xb...); f(c); return c }
+		addX := func(keys ...[]byte) func(p *psbt.Packet) {
+			return func(p *psbt.Packet) {
+				for _, k := range keys {
+					p.Unknowns = append(p.Unknowns, &psbt.Unknown{Key: append([]byte{0x01}, k...), Value: path(3)})
+				}
+			}
+		}
+		record("regtest/probe_x_valid", "a well-formed global xpub entry (depth 3)", "btcutil/psbt ReadXPub", mutate(base, addX(xb)), nil)
+		record("regtest/probe_x_unknown_version", "global xpub with an unregistered version", "btcutil/psbt ReadXPub", mutate(base, addX(withX(func(k []byte) { k[0], k[1], k[2], k[3] = 0x04, 0x5f, 0x1c, 0xf6 }))), nil)
+		record("regtest/probe_x_duplicate", "the same global xpub twice", "btcutil/psbt deserialize (xPub duplicate loop)", mutate(base, addX(xb, xb)), nil)
+		record("regtest/probe_x_xprv_version_pubkey", "tprv version bytes on a public key", "btcutil/psbt ReadXPub", mutate(base, addX(withX(func(k []byte) { k[0], k[1], k[2], k[3] = 0x04, 0x35, 0x83, 0x94 }))), nil)
+		record("regtest/probe_x_depth0_nonzero_parent", "depth 0 with a non-zero parent fingerprint", "btcutil/psbt ReadXPub", mutate(base, func(p *psbt.Packet) {
+			k := withX(func(k []byte) { k[4] = 0 })
+			p.Unknowns = append(p.Unknowns, &psbt.Unknown{Key: append([]byte{0x01}, k...), Value: path(0)})
+		}), nil)
+		record("regtest/probe_x_private_zero_scalar", "a private key of zero", "btcutil/psbt ReadXPub (hdkeychain)", mutate(base, addX(withX(func(k []byte) {
+			for i := 45; i < 78; i++ {
+				k[i] = 0
+			}
+			k[0], k[1], k[2], k[3] = 0x04, 0x35, 0x83, 0x94
+		}))), nil)
+	}
+	record("regtest/probe_unknown_type_low_byte_dup", "unknown types 0xf0 and 0x1f0 with equal data: btcd keeps the low byte of the type", "btcutil/psbt deserialize (byte(keyCode))", mutate(base, func(p *psbt.Packet) {
+		p.Inputs[0].Unknowns = append(p.Inputs[0].Unknowns, &psbt.Unknown{Key: []byte{0xf0, 0xaa}, Value: []byte{1}}, &psbt.Unknown{Key: []byte{0xfd, 0xf0, 0x01, 0xaa}, Value: []byte{1}})
+	}), nil)
+	record("regtest/probe_sighash_zero_twice", "an explicit sighash of 0 twice", "btcutil/psbt deserialize (SighashType != 0)", mutate(base, func(p *psbt.Packet) {
+		p.Inputs[0].SighashType = 0
+		p.Inputs[0].Unknowns = append(p.Inputs[0].Unknowns, &psbt.Unknown{Key: []byte{0x03}, Value: []byte{0, 0, 0, 0}}, &psbt.Unknown{Key: []byte{0x03}, Value: []byte{0, 0, 0, 0}})
+	}), nil)
+
 	// ---- refusals ----
 	record("regtest/malformed_garbage", "not a PSBT", srcTests+" TestInspectRefusals", []byte("psbt\xff\x00"), nil)
 	record("regtest/malformed_no_magic", "bytes without the magic", "vms/btc/psbt.go ParsePSBT", []byte("hello world, not a psbt at all"), nil)
@@ -574,7 +631,7 @@ func TestW1Vectors(t *testing.T) {
 	}
 
 	doc := map[string]any{
-		"generator": "scratch test features/wallet/w1gen_test.go at vettid-vault origin/main 214b88f; vault code paths: vms/btc/psbt.go Inspect, vms/btc/build.go BuildPSBT, features/wallet/wallet.go inspect/summaryJSON/psbtError",
+		"generator": generatorText,
 		"mnemonic":  abandonPhrase,
 		"wallets":   wallets,
 		"cases":     cases,
@@ -599,6 +656,8 @@ func TestW1Vectors(t *testing.T) {
 		}
 	}
 }
+
+const generatorText = "Generated from vettid-vault origin/main 214b88f (2026-10-29) by regenerate-w1-vectors.go.txt (copy it to features/wallet/w1gen_test.go in a scratch clone and run: W1_OUT=out.json go test ./features/wallet -run TestW1Vectors). Expectations are what the vault's own btc.Inspect and features/wallet/wallet.go summaryJSON/psbtError/parsePSBT return; nothing is hand-written. Vault sources: vms/btc/psbt.go (Inspect), vms/btc/build.go (BuildPSBT), vms/btc/account.go, features/wallet/wallet.go (inspect, summaryJSON, psbtError, parsePSBT); vault tests this extends: vms/btc/btc_test.go, features/wallet/wallet_test.go. All keys come from the public BIP39 phrase 'abandon ... about' (no funds)."
 
 func mustJSON(s string) []byte {
 	b, err := json.Marshal(s)

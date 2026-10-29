@@ -185,6 +185,8 @@ android {
         // libraries again only where an NDK is installed, so two machines could package different bytes: they go
         // into the APK exactly as the pinned artifact has them (reproducible builds; `check<Variant>Calls` compares).
         jniLibs.keepDebugSymbols += "**/libjingle_peerconnection_so.so"
+        // The same for the wallet's secp256k1 library (:core:chain; `check<Variant>Wallet` compares it with the pinned bytes).
+        jniLibs.keepDebugSymbols += "**/libsecp256k1-jni.so"
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
 

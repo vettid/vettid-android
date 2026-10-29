@@ -15,11 +15,17 @@ import kotlinx.serialization.json.long
  */
 object Vectors {
     class Case(val name: String, val why: String, val source: String, val wallet: String, val psbt: String, val build: JsonObject?,
-        val expect: JsonObject) {
+        val expect: JsonObject, private val obj: JsonObject) {
         val ok: Boolean get() = expect.getValue("ok").jsonPrimitive.boolean
         val summaryJson: String get() = expect.getValue("summary_json").jsonPrimitive.content
         val reason: String? get() = expect["reason"]?.jsonPrimitive?.content
         val code: String? get() = expect["code"]?.jsonPrimitive?.content
+
+        /** Where the app differs from the vault on purpose: what the app answers (`ok` or a reason) and why. */
+        val appDifference: Pair<String, String>? get() =
+            (obj["app_expected_difference"] as? JsonObject)?.let {
+                it.getValue("app").jsonPrimitive.content to it.getValue("why").jsonPrimitive.content
+            }
     }
 
     private val root: JsonObject by lazy {
@@ -31,7 +37,7 @@ object Vectors {
         root.getValue("cases").jsonArray.map {
             val o = it.jsonObject
             fun s(k: String) = o.getValue(k).jsonPrimitive.content
-            Case(s("name"), s("why"), s("source"), s("wallet"), s("psbt"), o["build"]?.jsonObject, o.getValue("expect").jsonObject)
+            Case(s("name"), s("why"), s("source"), s("wallet"), s("psbt"), o["build"]?.jsonObject, o.getValue("expect").jsonObject, o)
         }
     }
 

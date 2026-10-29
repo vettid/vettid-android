@@ -1581,6 +1581,114 @@
    }
   },
   {
+   "name": "regtest/probe_x_valid",
+   "why": "a well-formed global xpub entry (depth 3)",
+   "source": "btcutil/psbt ReadXPub",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAATwEENYfPAw70sa+AAAAAPIwgN+5MFiHaDTSNtRFjcJpiLQ0oON3m2EGcUfYwHGIDuI4Pvj9kYzftk7wMDzuEP899JYnl7IhHVOZAICeokLQQAAAAAAAAAAAAAAAAAAAAAAABAFMCAAAAAQwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFR/////wFg6gAAAAAAABYAFNDEo+8J6Ze26Z45flGP4+QaEYyhAAAAAAEBH2DqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEBAwQBAAAAIgYC56slN7XUnpcDCargbp5J82zhyf671E7I4NHMoLT5wxkYc8XaClQAAIABAACAAAAAgAAAAAAAAAAAAAEAUwIAAAABDQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AVDDAAAAAAAAFgAUaKj93jik1TJfovmxzccWc3zAhTcAAAAAAQEfUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwEDBAEAAAAiBgNHEi/lTPGI8fdc+OHUwcTCNBKMWhp85tSUihVzIjLM7xhzxdoKVAAAgAEAAIAAAACAAQAAAAMAAAAAACICAubGAHk3KVHDAkoDPs9lhFeevy95J66ZxCYz6AVZbyk1GHPF2gpUAACAAQAAgAAAAIABAAAABAAAAAA=",
+   "expect": {
+    "ok": true,
+    "summary_json": "{\"txid\":\"b5d5cb3dc1a51c5e0bcf3e6f5546d0cbcf586424569bef10955e6b3c3a37055a\",\"inputs\":[{\"txid\":\"44c0cbe35b76db325c77ce83f0acdaab2032f42a30553eb1604dfd59f5601784\",\"vout\":0,\"amount_sats\":60000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/0/0\"},{\"txid\":\"aa29372fca435e29b024e7e510713a53f290549343458d4d4349265d3c65a7ca\",\"vout\":0,\"amount_sats\":50000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/3\"}],\"outputs\":[{\"address\":\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",\"amount_sats\":70000,\"change\":false},{\"address\":\"bcrt1qw3xfnyuspj8qnr2envc448mxwam7f7p249rqs0\",\"amount_sats\":39000,\"change\":true,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/4\"}],\"total_in_sats\":110000,\"sending_sats\":70000,\"change_sats\":39000,\"fee_sats\":1000,\"vsize\":209}"
+   }
+  },
+  {
+   "name": "regtest/probe_x_unknown_version",
+   "why": "global xpub with an unregistered version",
+   "source": "btcutil/psbt ReadXPub",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAATwEEXxz2Aw70sa+AAAAAPIwgN+5MFiHaDTSNtRFjcJpiLQ0oON3m2EGcUfYwHGIDuI4Pvj9kYzftk7wMDzuEP899JYnl7IhHVOZAICeokLQQAAAAAAAAAAAAAAAAAAAAAAABAFMCAAAAAQwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFR/////wFg6gAAAAAAABYAFNDEo+8J6Ze26Z45flGP4+QaEYyhAAAAAAEBH2DqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEBAwQBAAAAIgYC56slN7XUnpcDCargbp5J82zhyf671E7I4NHMoLT5wxkYc8XaClQAAIABAACAAAAAgAAAAAAAAAAAAAEAUwIAAAABDQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AVDDAAAAAAAAFgAUaKj93jik1TJfovmxzccWc3zAhTcAAAAAAQEfUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwEDBAEAAAAiBgNHEi/lTPGI8fdc+OHUwcTCNBKMWhp85tSUihVzIjLM7xhzxdoKVAAAgAEAAIAAAACAAQAAAAMAAAAAACICAubGAHk3KVHDAkoDPs9lhFeevy95J66ZxCYz6AVZbyk1GHPF2gpUAACAAQAAgAAAAIABAAAABAAAAAA=",
+   "expect": {
+    "ok": true,
+    "summary_json": "{\"txid\":\"b5d5cb3dc1a51c5e0bcf3e6f5546d0cbcf586424569bef10955e6b3c3a37055a\",\"inputs\":[{\"txid\":\"44c0cbe35b76db325c77ce83f0acdaab2032f42a30553eb1604dfd59f5601784\",\"vout\":0,\"amount_sats\":60000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/0/0\"},{\"txid\":\"aa29372fca435e29b024e7e510713a53f290549343458d4d4349265d3c65a7ca\",\"vout\":0,\"amount_sats\":50000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/3\"}],\"outputs\":[{\"address\":\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",\"amount_sats\":70000,\"change\":false},{\"address\":\"bcrt1qw3xfnyuspj8qnr2envc448mxwam7f7p249rqs0\",\"amount_sats\":39000,\"change\":true,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/4\"}],\"total_in_sats\":110000,\"sending_sats\":70000,\"change_sats\":39000,\"fee_sats\":1000,\"vsize\":209}"
+   },
+   "app_expected_difference": {
+    "app": "malformed",
+    "why": "btcd ignores the version bytes of a global xpub; the app requires a registered one (erratum to the vault: stricter)"
+   }
+  },
+  {
+   "name": "regtest/probe_x_duplicate",
+   "why": "the same global xpub twice",
+   "source": "btcutil/psbt deserialize (xPub duplicate loop)",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAATwEENYfPAw70sa+AAAAAPIwgN+5MFiHaDTSNtRFjcJpiLQ0oON3m2EGcUfYwHGIDuI4Pvj9kYzftk7wMDzuEP899JYnl7IhHVOZAICeokLQQAAAAAAAAAAAAAAAAAAAAAE8BBDWHzwMO9LGvgAAAADyMIDfuTBYh2g00jbURY3CaYi0NKDjd5thBnFH2MBxiA7iOD74/ZGM37ZO8DA87hD/PfSWJ5eyIR1TmQCAnqJC0EAAAAAAAAAAAAAAAAAAAAAAAAQBTAgAAAAEMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABUf////8BYOoAAAAAAAAWABTQxKPvCemXtumeOX5Rj+PkGhGMoQAAAAABAR9g6gAAAAAAABYAFNDEo+8J6Ze26Z45flGP4+QaEYyhAQMEAQAAACIGAuerJTe11J6XAwmq4G6eSfNs4cn+u9ROyODRzKC0+cMZGHPF2gpUAACAAQAAgAAAAIAAAAAAAAAAAAABAFMCAAAAAQ0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFR/////wFQwwAAAAAAABYAFGio/d44pNUyX6L5sc3HFnN8wIU3AAAAAAEBH1DDAAAAAAAAFgAUaKj93jik1TJfovmxzccWc3zAhTcBAwQBAAAAIgYDRxIv5UzxiPH3XPjh1MHEwjQSjFoafObUlIoVcyIyzO8Yc8XaClQAAIABAACAAAAAgAEAAAADAAAAAAAiAgLmxgB5NylRwwJKAz7PZYRXnr8veSeumcQmM+gFWW8pNRhzxdoKVAAAgAEAAIAAAACAAQAAAAQAAAAA",
+   "expect": {
+    "ok": true,
+    "summary_json": "{\"txid\":\"b5d5cb3dc1a51c5e0bcf3e6f5546d0cbcf586424569bef10955e6b3c3a37055a\",\"inputs\":[{\"txid\":\"44c0cbe35b76db325c77ce83f0acdaab2032f42a30553eb1604dfd59f5601784\",\"vout\":0,\"amount_sats\":60000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/0/0\"},{\"txid\":\"aa29372fca435e29b024e7e510713a53f290549343458d4d4349265d3c65a7ca\",\"vout\":0,\"amount_sats\":50000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/3\"}],\"outputs\":[{\"address\":\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",\"amount_sats\":70000,\"change\":false},{\"address\":\"bcrt1qw3xfnyuspj8qnr2envc448mxwam7f7p249rqs0\",\"amount_sats\":39000,\"change\":true,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/4\"}],\"total_in_sats\":110000,\"sending_sats\":70000,\"change_sats\":39000,\"fee_sats\":1000,\"vsize\":209}"
+   },
+   "app_expected_difference": {
+    "app": "malformed",
+    "why": "btcd never detects a repeated global xpub (its comparison is against the wrong value); the app refuses a repeat"
+   }
+  },
+  {
+   "name": "regtest/probe_x_xprv_version_pubkey",
+   "why": "tprv version bytes on a public key",
+   "source": "btcutil/psbt ReadXPub",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAATwEENYOUAw70sa+AAAAAPIwgN+5MFiHaDTSNtRFjcJpiLQ0oON3m2EGcUfYwHGIDuI4Pvj9kYzftk7wMDzuEP899JYnl7IhHVOZAICeokLQQAAAAAAAAAAAAAAAAAAAAAAABAFMCAAAAAQwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFR/////wFg6gAAAAAAABYAFNDEo+8J6Ze26Z45flGP4+QaEYyhAAAAAAEBH2DqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEBAwQBAAAAIgYC56slN7XUnpcDCargbp5J82zhyf671E7I4NHMoLT5wxkYc8XaClQAAIABAACAAAAAgAAAAAAAAAAAAAEAUwIAAAABDQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AVDDAAAAAAAAFgAUaKj93jik1TJfovmxzccWc3zAhTcAAAAAAQEfUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwEDBAEAAAAiBgNHEi/lTPGI8fdc+OHUwcTCNBKMWhp85tSUihVzIjLM7xhzxdoKVAAAgAEAAIAAAACAAQAAAAMAAAAAACICAubGAHk3KVHDAkoDPs9lhFeevy95J66ZxCYz6AVZbyk1GHPF2gpUAACAAQAAgAAAAIABAAAABAAAAAA=",
+   "expect": {
+    "ok": true,
+    "summary_json": "{\"txid\":\"b5d5cb3dc1a51c5e0bcf3e6f5546d0cbcf586424569bef10955e6b3c3a37055a\",\"inputs\":[{\"txid\":\"44c0cbe35b76db325c77ce83f0acdaab2032f42a30553eb1604dfd59f5601784\",\"vout\":0,\"amount_sats\":60000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/0/0\"},{\"txid\":\"aa29372fca435e29b024e7e510713a53f290549343458d4d4349265d3c65a7ca\",\"vout\":0,\"amount_sats\":50000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/3\"}],\"outputs\":[{\"address\":\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",\"amount_sats\":70000,\"change\":false},{\"address\":\"bcrt1qw3xfnyuspj8qnr2envc448mxwam7f7p249rqs0\",\"amount_sats\":39000,\"change\":true,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/4\"}],\"total_in_sats\":110000,\"sending_sats\":70000,\"change_sats\":39000,\"fee_sats\":1000,\"vsize\":209}"
+   },
+   "app_expected_difference": {
+    "app": "malformed",
+    "why": "a private-key version with a public key: btcd ignores the version; the app requires it to match the key kind"
+   }
+  },
+  {
+   "name": "regtest/probe_x_depth0_nonzero_parent",
+   "why": "depth 0 with a non-zero parent fingerprint",
+   "source": "btcutil/psbt ReadXPub",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAATwEENYfPAA70sa+AAAAAPIwgN+5MFiHaDTSNtRFjcJpiLQ0oON3m2EGcUfYwHGIDuI4Pvj9kYzftk7wMDzuEP899JYnl7IhHVOZAICeokLQEAAAAAAABAFMCAAAAAQwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFR/////wFg6gAAAAAAABYAFNDEo+8J6Ze26Z45flGP4+QaEYyhAAAAAAEBH2DqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEBAwQBAAAAIgYC56slN7XUnpcDCargbp5J82zhyf671E7I4NHMoLT5wxkYc8XaClQAAIABAACAAAAAgAAAAAAAAAAAAAEAUwIAAAABDQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AVDDAAAAAAAAFgAUaKj93jik1TJfovmxzccWc3zAhTcAAAAAAQEfUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwEDBAEAAAAiBgNHEi/lTPGI8fdc+OHUwcTCNBKMWhp85tSUihVzIjLM7xhzxdoKVAAAgAEAAIAAAACAAQAAAAMAAAAAACICAubGAHk3KVHDAkoDPs9lhFeevy95J66ZxCYz6AVZbyk1GHPF2gpUAACAAQAAgAAAAIABAAAABAAAAAA=",
+   "expect": {
+    "ok": true,
+    "summary_json": "{\"txid\":\"b5d5cb3dc1a51c5e0bcf3e6f5546d0cbcf586424569bef10955e6b3c3a37055a\",\"inputs\":[{\"txid\":\"44c0cbe35b76db325c77ce83f0acdaab2032f42a30553eb1604dfd59f5601784\",\"vout\":0,\"amount_sats\":60000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/0/0\"},{\"txid\":\"aa29372fca435e29b024e7e510713a53f290549343458d4d4349265d3c65a7ca\",\"vout\":0,\"amount_sats\":50000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/3\"}],\"outputs\":[{\"address\":\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",\"amount_sats\":70000,\"change\":false},{\"address\":\"bcrt1qw3xfnyuspj8qnr2envc448mxwam7f7p249rqs0\",\"amount_sats\":39000,\"change\":true,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/4\"}],\"total_in_sats\":110000,\"sending_sats\":70000,\"change_sats\":39000,\"fee_sats\":1000,\"vsize\":209}"
+   },
+   "app_expected_difference": {
+    "app": "malformed",
+    "why": "depth 0 with a non-zero parent: btcd does not check it; the app does"
+   }
+  },
+  {
+   "name": "regtest/probe_x_private_zero_scalar",
+   "why": "a private key of zero",
+   "source": "btcutil/psbt ReadXPub (hdkeychain)",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAATwEENYOUAw70sa+AAAAAPIwgN+5MFiHaDTSNtRFjcJpiLQ0oON3m2EGcUfYwHGIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAABAFMCAAAAAQwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFR/////wFg6gAAAAAAABYAFNDEo+8J6Ze26Z45flGP4+QaEYyhAAAAAAEBH2DqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEBAwQBAAAAIgYC56slN7XUnpcDCargbp5J82zhyf671E7I4NHMoLT5wxkYc8XaClQAAIABAACAAAAAgAAAAAAAAAAAAAEAUwIAAAABDQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AVDDAAAAAAAAFgAUaKj93jik1TJfovmxzccWc3zAhTcAAAAAAQEfUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwEDBAEAAAAiBgNHEi/lTPGI8fdc+OHUwcTCNBKMWhp85tSUihVzIjLM7xhzxdoKVAAAgAEAAIAAAACAAQAAAAMAAAAAACICAubGAHk3KVHDAkoDPs9lhFeevy95J66ZxCYz6AVZbyk1GHPF2gpUAACAAQAAgAAAAIABAAAABAAAAAA=",
+   "expect": {
+    "ok": false,
+    "reason": "malformed"
+   }
+  },
+  {
+   "name": "regtest/probe_unknown_type_low_byte_dup",
+   "why": "unknown types 0xf0 and 0x1f0 with equal data: btcd keeps the low byte of the type",
+   "source": "btcutil/psbt deserialize (byte(keyCode))",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAAAAEAUwIAAAABDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AWDqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEAAAAAAQEfYOoAAAAAAAAWABTQxKPvCemXtumeOX5Rj+PkGhGMoQEDBAEAAAAiBgLnqyU3tdSelwMJquBunknzbOHJ/rvUTsjg0cygtPnDGRhzxdoKVAAAgAEAAIAAAACAAAAAAAAAAAAC8KoBAQT98AGqAQEAAQBTAgAAAAENAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABUf////8BUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwAAAAABAR9QwwAAAAAAABYAFGio/d44pNUyX6L5sc3HFnN8wIU3AQMEAQAAACIGA0cSL+VM8Yjx91z44dTBxMI0EoxaGnzm1JSKFXMiMszvGHPF2gpUAACAAQAAgAAAAIABAAAAAwAAAAAAIgIC5sYAeTcpUcMCSgM+z2WEV56/L3knrpnEJjPoBVlvKTUYc8XaClQAAIABAACAAAAAgAEAAAAEAAAAAA==",
+   "expect": {
+    "ok": false,
+    "reason": "malformed"
+   },
+   "app_expected_difference": {
+    "app": "ok",
+    "why": "btcd compares an unknown entry by the low byte of its key type, so 0xf0 and 0x1f0 collide and the vault refuses (a btcd bug, fails closed at the vault); the app does not copy it"
+   }
+  },
+  {
+   "name": "regtest/probe_sighash_zero_twice",
+   "why": "an explicit sighash of 0 twice",
+   "source": "btcutil/psbt deserialize (SighashType != 0)",
+   "wallet": "regtest",
+   "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAAAAEAUwIAAAABDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AWDqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEAAAAAAQEfYOoAAAAAAAAWABTQxKPvCemXtumeOX5Rj+PkGhGMoSIGAuerJTe11J6XAwmq4G6eSfNs4cn+u9ROyODRzKC0+cMZGHPF2gpUAACAAQAAgAAAAIAAAAAAAAAAAAEDBAAAAAABAwQAAAAAAAEAUwIAAAABDQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AVDDAAAAAAAAFgAUaKj93jik1TJfovmxzccWc3zAhTcAAAAAAQEfUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwEDBAEAAAAiBgNHEi/lTPGI8fdc+OHUwcTCNBKMWhp85tSUihVzIjLM7xhzxdoKVAAAgAEAAIAAAACAAQAAAAMAAAAAACICAubGAHk3KVHDAkoDPs9lhFeevy95J66ZxCYz6AVZbyk1GHPF2gpUAACAAQAAgAAAAIABAAAABAAAAAA=",
+   "expect": {
+    "ok": true,
+    "summary_json": "{\"txid\":\"b5d5cb3dc1a51c5e0bcf3e6f5546d0cbcf586424569bef10955e6b3c3a37055a\",\"inputs\":[{\"txid\":\"44c0cbe35b76db325c77ce83f0acdaab2032f42a30553eb1604dfd59f5601784\",\"vout\":0,\"amount_sats\":60000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/0/0\"},{\"txid\":\"aa29372fca435e29b024e7e510713a53f290549343458d4d4349265d3c65a7ca\",\"vout\":0,\"amount_sats\":50000,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/3\"}],\"outputs\":[{\"address\":\"bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080\",\"amount_sats\":70000,\"change\":false},{\"address\":\"bcrt1qw3xfnyuspj8qnr2envc448mxwam7f7p249rqs0\",\"amount_sats\":39000,\"change\":true,\"type\":\"p2wpkh\",\"path\":\"m/84'/1'/0'/1/4\"}],\"total_in_sats\":110000,\"sending_sats\":70000,\"change_sats\":39000,\"fee_sats\":1000,\"vsize\":209}"
+   }
+  },
+  {
    "name": "regtest/malformed_garbage",
    "why": "not a PSBT",
    "source": "vms/btc/btc_test.go TestInspectRefusals",
@@ -3520,7 +3628,7 @@
   {
    "name": "regtest/ok_foreign_network_script_reencoded",
    "why": "a mainnet payee's script is shown as a regtest address (the app must compare)",
-   "source": "VAULT-MESSAGING \u00a710.18 (0.37.0, as built)",
+   "source": "VAULT-MESSAGING §10.18 (0.37.0, as built)",
    "wallet": "regtest",
    "psbt": "cHNidP8BAJoCAAAAAoQXYPVZ/U1gsT5VMCr0MiCr2qzwg853XDLbdlvjy8BEAAAAAAD9////yqdlPF0mSUNNjUVDk1SQ8lM6cRDl5ySwKV5Dyi83KaoAAAAAAP3///8CcBEBAAAAAAAWABTAzrzWw9PKjHXcXsYuvlUzDvkQ4liYAAAAAAAAFgAUdEyZk5AMjgmNWZsxWp9md3fk+CoAAAAAAAEAUwIAAAABDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVH/////AWDqAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEAAAAAAQEfYOoAAAAAAAAWABTQxKPvCemXtumeOX5Rj+PkGhGMoQEDBAEAAAAiBgLnqyU3tdSelwMJquBunknzbOHJ/rvUTsjg0cygtPnDGRhzxdoKVAAAgAEAAIAAAACAAAAAAAAAAAAAAQBTAgAAAAENAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABUf////8BUMMAAAAAAAAWABRoqP3eOKTVMl+i+bHNxxZzfMCFNwAAAAABAR9QwwAAAAAAABYAFGio/d44pNUyX6L5sc3HFnN8wIU3AQMEAQAAACIGA0cSL+VM8Yjx91z44dTBxMI0EoxaGnzm1JSKFXMiMszvGHPF2gpUAACAAQAAgAAAAIABAAAAAwAAAAAAIgIC5sYAeTcpUcMCSgM+z2WEV56/L3knrpnEJjPoBVlvKTUYc8XaClQAAIABAACAAAAAgAEAAAAEAAAAAA==",
    "expect": {

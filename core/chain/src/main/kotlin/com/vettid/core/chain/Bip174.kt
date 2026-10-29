@@ -11,11 +11,21 @@ import fr.acinq.bitcoin.Crypto
  * What it refuses as malformed is what vettid-vault's decoder (btcd `btcutil/psbt` v1.1.10, `NewFromRawBytes`) refuses, for these
  * rules: the magic, canonical compact sizes, truncation, the transaction being the first global entry and parsing without witness,
  * singleton entries (once only, no key data), duplicate keys, key and value lengths, valid secp256k1 points for public keys, strict
- * DER for partial signatures, the `witness_utxo` layout (`readTxOut`), unknown entries repeated with the same key and value, and the
- * global xpub layout. Known gaps, all of which fail closed or are caught by the vault: the base58 version bytes of a global xpub are
- * checked against the four registered ones (btcd also checks the key's validity as hdkeychain does, approximated here); a taproot
- * leaf script's control block is checked for length, not for its leaf version. `BIP174` vectors with the vault's answers are in
- * `VaultConformanceTest`.
+ * DER for partial signatures, the `witness_utxo` layout (`readTxOut`), and unknown entries repeated with the same key and value.
+ *
+ * Documented differences from btcd, each with a vector marked as an expected difference in `VaultConformanceTest` (all fail closed,
+ * because the app is the stricter side or the vault refuses where the app accepts):
+ *  - Global xpubs. btcd (`ReadXPub`, hdkeychain) ignores the version bytes and the depth/parent consistency, decides "private" by
+ *    the key's first byte (0), and does not detect a repeated xpub. The app also requires one of the four registered versions
+ *    (matching the key kind), depth 0 with a zero parent, and no repeated xpub. Where the key is private (first byte 0) both
+ *    require a scalar in 1..n-1; otherwise both require a valid point. Vectors `x_unknown_version`, `x_duplicate`,
+ *    `x_xprv_version_pubkey`, `x_depth0_nonzero_parent`: the vault accepts, the app refuses. To be raised as a vault erratum.
+ *  - Unknown entries. btcd compares an unknown entry's key by its LOW BYTE of the key type (`byte(keyCode)`), so 0xf0 and 0x1f0
+ *    (`fd f0 01`) with equal data count as a repeat and the vault refuses. The app compares the whole key type and accepts them
+ *    as different entries (the vault's behaviour is a bug and is not copied). Vector `unknown_type_low_byte_dup`.
+ *  - A taproot leaf script's control block is checked for length, not for its leaf version (both refuse the PSBT later, as
+ *    `input_script`).
+ * `BIP174` vectors with the vault's answers are in `VaultConformanceTest`.
  */
 internal class Bip174Malformed(message: String) : Exception(message)
 
@@ -33,6 +43,7 @@ internal class Bip174(
         private val XKEY_VERSIONS = listOf(0x0488B21E, 0x0488ADE4, 0x043587CF, 0x04358394)
 
         /** Global xpub entries as btcd's `ReadXPub` reads them (the other global entries are not looked at). */
+        @Suppress("CyclomaticComplexMethod")
         private fun checkGlobal(global: List<Bip174Entry>) {
             val seen = HashSet<String>()
             for (e in global.drop(1)) {
@@ -45,11 +56,13 @@ internal class Bip174(
                 val depth = k[4].toInt() and 0xff
                 val zeroParent = (5..12).all { k[it].toInt() == 0 }
                 if (depth == 0 && !zeroParent) throw Bip174Malformed("xpub depth")
-                val isPrivate = version == XKEY_VERSIONS[1] || version == XKEY_VERSIONS[3]
+                val isPrivateVersion = version == XKEY_VERSIONS[1] || version == XKEY_VERSIONS[3]
                 val keyBytes = k.copyOfRange(45, 78)
-                if (isPrivate) {
-                    if (keyBytes[0].toInt() != 0) throw Bip174Malformed("xprv")
-                } else if (!validPubkey(keyBytes)) {
+                // Like btcd/hdkeychain, a key is private when its first byte is 0: then a scalar in 1..n-1 is required.
+                if (keyBytes[0].toInt() == 0) {
+                    val scalar = java.math.BigInteger(1, keyBytes.copyOfRange(1, 33))
+                    if (!isPrivateVersion || scalar.signum() == 0 || scalar >= CURVE_ORDER) throw Bip174Malformed("xprv")
+                } else if (isPrivateVersion || !validPubkey(keyBytes)) {
                     throw Bip174Malformed("xpub key")
                 }
                 if (e.value.size != 4 * (depth + 1)) throw Bip174Malformed("xpub path")

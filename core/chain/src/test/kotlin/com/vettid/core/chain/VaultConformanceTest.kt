@@ -23,7 +23,7 @@ class VaultConformanceTest {
 
     @Test
     fun vectors_are_there_and_cover_the_vaults_reasons() {
-        assertTrue("${cases.size} vectors", cases.size >= 120)
+        assertTrue("${cases.size} vectors", cases.size >= 130)
         val reasons = cases.mapNotNull { it.reason }.toSet()
         // Every invalid_psbt reason of VAULT-MESSAGING §10.18 that a PSBT alone can cause (not no_account / wrong_seed / the
         // payment-request ones, which are not about the PSBT).
@@ -46,6 +46,7 @@ class VaultConformanceTest {
         var ok = 0
         var refused = 0
         var members = 0
+        var differences = 0
         for (c in cases) {
             val wallet = Vectors.wallets.getValue(c.wallet)
             val raw = decode(c)
@@ -58,7 +59,16 @@ class VaultConformanceTest {
                 failures += "${c.name}: vault says ${c.code} but the app decoded it"
                 continue
             }
-            when (val r = PsbtInspector.inspect(wallet, raw)) {
+            val result = PsbtInspector.inspect(wallet, raw)
+            c.appDifference?.let { (app, why) ->
+                // An expected difference: the app must give exactly the declared answer, and the vault's must be the other one.
+                val got = if (result is InspectResult.Ok) "ok" else (result as InspectResult.Refused).reason
+                if (why.isBlank() || got != app) failures += "${c.name}: app says $got, declared difference is $app ($why)"
+                differences++
+                continue
+            }
+            val r = result
+            when (r) {
                 is InspectResult.Ok -> {
                     if (!c.ok) failures += "${c.name}: app accepts, vault refuses with ${c.reason}"
                     else if (r.summary.toJson() != c.summaryJson) failures +=
@@ -73,9 +83,11 @@ class VaultConformanceTest {
             }
         }
         println(
-            "W1 inspect conformance: $ok summaries identical, $refused refusals identical, $members undecodable members identical, " +
-                "${failures.size} differences, ${cases.size} vectors",
+            "W1 inspect conformance: $ok summaries identical, $refused refusals identical, " +
+                "$members undecodable members identical, $differences declared differences, " +
+                "${failures.size} unexpected differences, ${cases.size} vectors",
         )
+        assertEquals("expected differences with the vault (Bip174.kt documents each; vault erratum)", 5, differences)
         if (failures.isNotEmpty()) fail(failures.joinToString("\n"))
     }
 
