@@ -1,5 +1,6 @@
 package com.vettid.core.relay
 
+import okhttp3.Authenticator
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -18,5 +19,20 @@ object FixedUserAgent : Interceptor {
         chain.proceed(chain.request().newBuilder().header("User-Agent", VALUE).build())
 }
 
-/** Adds [FixedUserAgent] as an application interceptor. */
-fun OkHttpClient.Builder.fixedUserAgent(): OkHttpClient.Builder = addInterceptor(FixedUserAgent)
+/**
+ * Adds [FixedUserAgent] as an application interceptor. OkHttp builds the proxy tunnel's `CONNECT` itself with
+ * `User-Agent: okhttp/x.y.z`, and no interceptor sees it; a proxy authenticator is asked about that request first
+ * (preemptively, challenge `OkHttp-Preemptive`), so it replaces the value there. A [proxyAuthenticator] already
+ * wanted is kept, and asked for every other challenge.
+ */
+fun OkHttpClient.Builder.fixedUserAgent(proxyAuthenticator: Authenticator = Authenticator.NONE): OkHttpClient.Builder =
+    addInterceptor(FixedUserAgent).proxyAuthenticator(fixedUserAgentTunnel(proxyAuthenticator))
+
+/** The preemptive-CONNECT rewrite of [fixedUserAgent], with [other] answering real proxy challenges. */
+internal fun fixedUserAgentTunnel(other: Authenticator): Authenticator = Authenticator { route, response ->
+    if (response.header("Proxy-Authenticate") == "OkHttp-Preemptive") {
+        response.request.newBuilder().header("User-Agent", FixedUserAgent.VALUE).build()
+    } else {
+        other.authenticate(route, response)
+    }
+}

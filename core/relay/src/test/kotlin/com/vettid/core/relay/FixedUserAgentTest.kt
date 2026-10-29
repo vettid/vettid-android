@@ -2,6 +2,7 @@ package com.vettid.core.relay
 
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import okhttp3.Authenticator
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.After
@@ -53,5 +54,32 @@ class FixedUserAgentTest {
         val ua = server.takeRequest(5, TimeUnit.SECONDS)!!.headers.values("User-Agent")
         ws.cancel()
         assertEquals(listOf("VettID-Android"), ua)
+    }
+
+    private fun preemptive(challenge: String) = okhttp3.Response.Builder()
+        .request(Request.Builder().url("https://example.test/").method("CONNECT", null).header("User-Agent", "okhttp/5.5.0").build())
+        .protocol(okhttp3.Protocol.HTTP_1_1).code(407).message("Preemptive Authenticate")
+        .header("Proxy-Authenticate", challenge).build()
+
+    @Test
+    fun `the preemptive proxy CONNECT carries it`() {
+        val a = fixedUserAgentTunnel(Authenticator.NONE)
+        val r = a.authenticate(null, preemptive("OkHttp-Preemptive"))!!
+        assertEquals(listOf("VettID-Android"), r.headers.values("User-Agent"))
+        assertEquals("CONNECT", r.method)
+    }
+
+    @Test
+    fun `a real proxy challenge goes to the kept authenticator`() {
+        val kept = Authenticator { _, resp -> resp.request.newBuilder().header("Proxy-Authorization", "x").build() }
+        val r = fixedUserAgentTunnel(kept).authenticate(null, preemptive("Basic realm=\"p\""))!!
+        assertEquals("x", r.header("Proxy-Authorization"))
+        assertEquals(null, fixedUserAgentTunnel(Authenticator.NONE).authenticate(null, preemptive("Basic realm=\"p\"")))
+    }
+
+    @Test
+    fun `the client carries the tunnel rewrite`() {
+        val a = shared.proxyAuthenticator
+        assertEquals(listOf("VettID-Android"), a.authenticate(null, preemptive("OkHttp-Preemptive"))!!.headers.values("User-Agent"))
     }
 }

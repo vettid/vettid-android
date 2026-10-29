@@ -932,6 +932,7 @@ dependencies {
     "devStackImplementation"(projects.core.testing)
 
     testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.kotlinx.coroutines.test)
     // TagColorsViewModelTest: the in-memory tags and owner check (TEST ONLY).
     testImplementation(projects.core.testing)
