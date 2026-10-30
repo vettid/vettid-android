@@ -131,6 +131,8 @@ data class SettingsHost(
     val onChangePassword: () -> Unit = onOpenCredential,
     /** Opens the update screen (ANDROID-PLAN 0.1.19): Settings → Vault → "Update available". */
     val onReleaseUpdate: () -> Unit = {},
+    /** Opens Settings → Security → Credential → "Replace your vault's keys" (the prompt after a PIN change). */
+    val onReplaceKeys: () -> Unit = {},
     /** The Notifications bell (ANDROID-PLAN 0.1.23): Settings is a drawer screen; null hides it. */
     val bell: com.vettid.core.ui.components.NotificationBell? = null,
 )
@@ -279,6 +281,11 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         ChangePinContent(
             state.copy(fromAttempts = fromAttempts), vm::setCurrent, vm::setPin, vm::setConfirm, vm::submit, host.onBack, vm::setPassword,
             onLockAndUnlock = vm::lockAndUnlock,
+            onReplaceKeys = {
+                vm.putAwayReplaceKeys()
+                host.onReplaceKeys()
+            },
+            onNotNow = vm::putAwayReplaceKeys,
         )
     }
     composable<NewPhoneSecretRoute> {

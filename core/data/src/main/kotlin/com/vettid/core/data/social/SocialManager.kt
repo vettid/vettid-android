@@ -5,12 +5,15 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.DeviceStateStore
+import com.vettid.core.vault.PendingPage
+import com.vettid.core.vault.pendingList
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.connectionAsksMute
 import com.vettid.core.vault.connectionAsksResume
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -98,6 +101,12 @@ class SocialManager(
     private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     private val declinesFlow = MutableStateFlow<List<PeerDecline>>(emptyList())
+
+    /** `pending.list` (§10.4.2): the cut, the ticket of each read, what an older release answered. */
+    private val pending = PendingAsks()
+    private val pendingFailureFlow = MutableStateFlow<VaultFailure?>(null)
+
+    override val pendingReadFailure: StateFlow<VaultFailure?> = pendingFailureFlow.asStateFlow()
 
     /** Peer declines noted in this run, so the `failed` that accompanies one never shows it again (0.10.5). */
     private val notedDeclines = mutableSetOf<String>()
@@ -232,6 +241,8 @@ class SocialManager(
      */
     fun forgetOpenVault() {
         dropLocal()
+        pending.reset()
+        pendingFailureFlow.value = null
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
@@ -247,6 +258,9 @@ class SocialManager(
      */
     fun forgetPending() {
         dropLocal()
+        // The cut of the last `pending.list` and the reads on their way go with the events they described (§10.4.2).
+        pending.reset()
+        pendingFailureFlow.value = null
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
@@ -256,6 +270,8 @@ class SocialManager(
     fun clear() {
         dropLocal()
         obsoleteStore?.clear()
+        pending.reset()
+        pendingFailureFlow.value = null
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
@@ -275,7 +291,8 @@ class SocialManager(
         // Deletes the file whatever this process has read of it.
         pendingSettled = true
         persisted = listOf(StoredEvent("", "", 0))
-        persistPending(local)    }
+        persistPending(local)
+    }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */
     fun refreshAllQuietly() {
@@ -283,6 +300,7 @@ class SocialManager(
             runCatching { refresh() }
             runCatching { refreshConversations() }
             runCatching { refreshApprovals() }
+            retryPendingOnce()
         }
     }
 
@@ -295,7 +313,15 @@ class SocialManager(
         when (m.type) {
             "message.new" -> runCatching { VaultJson.decode(com.vettid.core.vault.Message.serializer(), b) }
                 .getOrNull()?.let { upsert(ApprovalParser.message(it)) }
-            in ApprovalParser.TYPES -> store(m.type, b)
+            in ApprovalParser.TYPES -> {
+                // §10.4.2: a creation event not later than the last list is already reflected by it. Decided inside the
+                // store's edit, so that no list merge falls between the decision and the write.
+                val p = if (m.type in PendingAsks.LISTED_TYPES) ApprovalParser.parse(m.type, b, now()) else null
+                val admit = p?.let { a ->
+                    { pending.acceptCreate(a.key, m.ts, (a as? Approval.DeviceRequest)?.deviceId, m.type == PendingAsks.SESSION) }
+                }
+                store(m.type, b, admit)
+            }
             "connection.request.pending" -> ApprovalParser.incoming(b, now())?.let { onRequest(it, it.pendingId) }
             "connection.request.outgoing" -> ApprovalParser.outgoing(b, now())?.let { onRequest(it, it.connectionId) }
             "connection.event" -> onConnectionEvent(b)
@@ -303,18 +329,19 @@ class SocialManager(
                 val conn = VaultJson.str(b, "connection_id") ?: return
                 ApprovalParser.authResult(b, now(), authFlow.value[conn])?.let { s -> authFlow.update { it + (conn to s) } }
             }
-            "sync.event" -> onSync(VaultJson.str(b, "kind") ?: "", b)
+            "sync.event" -> onSync(VaultJson.str(b, "kind") ?: "", b, m.ts)
         }
         nowFlow.value = now()
     }
 
-    private suspend fun store(type: String, body: JsonObject) {
+    private suspend fun store(type: String, body: JsonObject, admit: (() -> Boolean)? = null) {
         val parsed = ApprovalParser.parse(type, body, now()) ?: return
         val at = now().toEpochMilli()
         val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
         // Noted before the suspending write, so a read that reaches its prune step in the gap keeps the batch.
         if (parsed is Approval.ShareDecision) noteBatch(parsed)
         edit { l ->
+            if (admit != null && !admit()) return@edit l
             val others = l.events.filterNot { e -> keyOf(e) == parsed.key }
             val merged = if (parsed is Approval.ShareDecision) mergeShare(l.events, parsed, body) else text
             l.copy(events = others + StoredEvent(type, merged, at))
@@ -513,7 +540,7 @@ class SocialManager(
     }
 
     @Suppress("CyclomaticComplexMethod", "ReturnCount")
-    private suspend fun onSync(kind: String, b: JsonObject) {
+    private suspend fun onSync(kind: String, b: JsonObject, ts: Instant) {
         fun s(k: String) = VaultJson.str(b, k)
         when (kind) {
             "message.receipt" -> {
@@ -529,7 +556,8 @@ class SocialManager(
             }
             "connection.changed", "block.added", "block.removed" -> runCatching { refresh() }
             "connection.request" -> onRequestSync(b)
-            "connection.authenticate.decided" -> s("request_id")?.let { dropApproval("auth:$it") }
+            "connection.authenticate.decided" -> s("request_id")?.let { closeAsk("auth:$it", ts) }
+            "device.session" -> s("device_id")?.let { onSessionClosed(it, ts) }
             "grant.request.decided" -> s("request_id")?.let { id ->
                 dropApproval("grant:$id")
                 listedFlow.update { l -> l.filterNot { it.key == "grant:$id" } }
@@ -539,8 +567,29 @@ class SocialManager(
                 listedFlow.update { l -> l.filterNot { it.key == "critical:$id" } }
             }
             "share.decided" -> s("rule_id")?.let { onShareDecided(it, b) }
-            "approval.decided" -> s("approval_id")?.let { dropApproval("device:approval.pending:$it") }
+            "approval.decided" -> s("approval_id")?.let { closeAsk("device:approval.pending:$it", ts) }
         }
+    }
+
+    /** A closing event of an ask `pending.list` carries: decided inside the edit, with the drop (§10.4.2 ts rule). */
+    private suspend fun closeAsk(key: String, ts: Instant) = edit { l ->
+        if (!pending.acceptClose(key, ts)) l else l.copy(events = l.events.filterNot { keyOf(it) == key })
+    }
+
+    /**
+     * `sync.event{device.session}` (granted, denied or ended; with `expires_at` a session goes on, and a deny of a
+     * renewal keeps it): the device's session request is closed, only it (a device has at most one, §6.8; the held
+     * approvals of an ended session arrive as their own `approval.decided`, 0.77.0). A late one for an earlier session
+     * (not later than the last list) is ignored, and a request created after the event stays: it is not about it.
+     */
+    private suspend fun onSessionClosed(deviceId: String, ts: Instant) = edit { l ->
+        if (!pending.acceptDeviceClose(deviceId, ts)) return@edit l
+        l.copy(
+            events = l.events.filterNot { e ->
+                val p = parsed(e) as? Approval.DeviceRequest
+                p != null && p.type == PendingAsks.SESSION && p.deviceId == deviceId && !pending.createdAfter(p.key, ts)
+            },
+        )
     }
 
     private suspend fun onShareDecided(rule: String, b: JsonObject) {
@@ -891,7 +940,101 @@ class SocialManager(
         val t = now()
         val a = vaultGuard { api() }
         refreshRequestsQuietly()
-        refreshApprovalsFrom(t) { readLists(a, t) }
+        refreshAllLists(t, pendingRead = { readPending(a) }, lists = { readLists(a, t) })
+    }
+
+    /**
+     * The other lists are read and taken in even when `pending.list` failed; its failure is thrown after them, so the
+     * screen is told (no silent failure; a held vault shows as held).
+     */
+    internal suspend fun refreshAllLists(t: Instant, pendingRead: suspend () -> Unit, lists: suspend () -> ListRead) {
+        val pendingFailure = try {
+            pendingRead()
+            null
+        } catch (e: VaultFailure) {
+            e
+        }
+        refreshApprovalsFrom(t, lists)
+        pendingFailure?.let { throw it }
+    }
+
+    /**
+     * Reads every page of `pending.list` (§10.4.2) and replaces the stored asks of its kinds with it, by ask id (an ask
+     * not in it is gone: decided elsewhere, expired or withdrawn); events newer than the first page's `ts` stay. A
+     * failed read changes nothing and is thrown (and noted in [pendingReadFailure]); `unsupported_type` (an older
+     * release) is not a failure: the live events stay as they are until the next unlock. Reads may overlap; an older
+     * list never replaces a newer one. A list is merged only whole: when the cursors do not reach the end (a stale
+     * cursor starts again from the beginning, §10.4.2) the read starts over once with a fresh first page and `ts`.
+     */
+    internal suspend fun refreshPendingFrom(page: suspend (after: String?) -> PendingPage) {
+        if (pending.isUnsupported) return
+        val ticket = pending.begin()
+        try {
+            val list = readWhole(page) ?: readWhole(page)
+                ?: throw VaultFailure(FailureKind.OTHER, "list_incomplete")
+            if (takeInPending(ticket, list.ts, list.asks) && pending.current(ticket)) pendingFailureFlow.value = null
+        } catch (e: VaultFailure) {
+            // A read that is no longer current (a lock, or a later-started read merged) does not touch the notice.
+            if (e.code == "unsupported_type") {
+                pending.markUnsupported(ticket)
+                if (pending.current(ticket)) pendingFailureFlow.value = null
+            } else {
+                if (pending.current(ticket)) pendingFailureFlow.value = e
+                throw e
+            }
+        }
+    }
+
+    /** Every page from the first, with the first page's `ts`; null when the cursors do not reach the end. */
+    private suspend fun readWhole(page: suspend (after: String?) -> PendingPage): PendingPage? {
+        val first = page(null)
+        val asks = first.asks.toMutableList()
+        val seen = mutableSetOf<String>()
+        var next = first.next
+        while (next != null) {
+            if (!seen.add(next) || seen.size > MAX_PENDING_PAGES) return null
+            val p = page(next)
+            asks += p.asks
+            next = p.next
+        }
+        return PendingPage(asks, null, first.ts)
+    }
+
+    /** Reads `pending.list` with [a]; a failure is noted and thrown. */
+    private suspend fun readPending(a: VaultApi) =
+        refreshPendingFrom { after -> vaultGuard(resend = true) { a.pendingList(after, PENDING_PAGE) } }
+
+    /** After a quiet read failed for want of a connection, once more a few seconds later (§10.4.2 is read after an unlock). */
+    private suspend fun retryPendingOnce() {
+        val kind = pendingFailureFlow.value?.kind
+        if (kind != FailureKind.NETWORK && kind != FailureKind.NO_RESPONSE) return
+        delay(PENDING_RETRY_MS)
+        runCatching { readPending(vaultGuard { api() }) }
+    }
+
+    private suspend fun takeInPending(ticket: Long, ts: Instant, asks: List<JsonObject>): Boolean {
+        val listed = asks.mapNotNull { a ->
+            val type = PendingAsks.TYPES[VaultJson.str(a, "kind")] ?: return@mapNotNull null // action, location, unknown: skipped
+            val body = a["body"] as? JsonObject ?: return@mapNotNull null
+            val p = ApprovalParser.parse(type, body, now()) ?: return@mapNotNull null
+            PendingAsks.Entry(type, body, p.key, (p as? Approval.DeviceRequest)?.deviceId)
+        }.distinctBy { it.key }
+        var merged = false
+        edit { l ->
+            val plan = pending.merge(ticket, ts, listed) ?: return@edit l
+            merged = true
+            val at = now().toEpochMilli()
+            val (gone, kept) = l.events.partition { e ->
+                e.type in PendingAsks.LISTED_TYPES && keyOf(e).let { k -> k == null || !plan.keepEvent(k) }
+            }
+            val stillThere = kept.mapNotNull { keyOf(it) }.toSet()
+            val firstSeen = gone.mapNotNull { e -> keyOf(e)?.let { it to e.at } }.toMap()
+            l.copy(
+                events = kept + plan.entries.filter { it.key !in stillThere }
+                    .map { StoredEvent(it.type, enc(it.body), firstSeen[it.key] ?: at) },
+            )
+        }
+        return merged
     }
 
     /** What one read of the vault's lists brought; a flag is false when that list could not be read. */
@@ -1358,6 +1501,11 @@ class SocialManager(
 
         /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
         private const val PAGE = 100
+
+        /** `pending.list` entries asked for per page (§10.4.2: 1-100); the read stops at this many pages. */
+        private const val PENDING_PAGE = 100
+        private const val MAX_PENDING_PAGES = 1_000
+        private const val PENDING_RETRY_MS = 5_000L
 
         /** At most this many share decisions and batches are remembered for reads on their way. */
         private const val MAX_LOG = 64

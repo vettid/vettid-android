@@ -69,4 +69,11 @@ class MessagesSearchTest {
         rule.setContent { MessagesScreen(MessagesUiState(loading = false), chrome) }
         rule.onNodeWithContentDescription("Search messages").assertDoesNotExist()
     }
+
+    @Test
+    fun aNameWithAZeroWidthSpaceIsFoundBySearchingItsVisibleText() {
+        val bank = ConversationSummary(FakeSocial.connection("c3", "Ba\u200Bnk"), null, 0)
+        assertEquals(true, bank.matches("Bank"))
+        assertEquals(false, all.first().matches("Bank"))
+    }
 }

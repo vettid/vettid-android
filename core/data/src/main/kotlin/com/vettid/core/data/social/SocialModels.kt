@@ -66,7 +66,9 @@ data class ConnectionInfo(
     val displayName: String get() = accountName ?: ""
 
     /** The peer's display name when it adds something to the title (non-empty and different), for secondary text. */
-    val secondaryName: String? get() = name.takeIf { it.isNotBlank() && it != displayName && it != accountName }
+    val secondaryName: String?
+        get() = AccountNames.cleaned(name)
+            ?.takeIf { it != AccountNames.cleaned(displayName) && it != AccountNames.cleaned(accountName) }
 }
 
 /**
@@ -355,6 +357,8 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant?,
         override val connectionName: String? = null,
+        /** Why it asks (§10.4 "Purpose", 0.65.0), from the vault's `purpose` only; [AuthPurpose.NONE] when absent or unknown. */
+        val purpose: AuthPurpose = AuthPurpose.NONE,
     ) : Approval {
         override val key: String get() = "auth:$requestId"
     }
@@ -450,6 +454,16 @@ sealed interface Approval {
         val deviceId: String? = null,
     ) : Approval {
         override val key: String get() = "device:$type:$id"
+
+        /** An access-session request (`device.session.pending`); a renewal when the device has a live session. */
+        val isSession: Boolean get() = type == SESSION_PENDING
+
+        /** The device of an access-session request, or null for any other request or an event without one. */
+        val sessionDeviceId: String? get() = deviceId.takeIf { isSession }
+
+        companion object {
+            const val SESSION_PENDING = "device.session.pending"
+        }
     }
 }
 

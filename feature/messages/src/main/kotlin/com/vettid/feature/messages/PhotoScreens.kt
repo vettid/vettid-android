@@ -76,6 +76,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.social.AuthContext
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
@@ -372,7 +374,8 @@ internal fun PhotoBubble(m: MessageInfo, name: String, actions: PhotoActions, on
     val status = photoStatus(a, m.outgoing)
     val statusText = status?.let { if (it.withName) stringResource(it.text, name) else stringResource(it.text) }
     val head = if (m.outgoing) stringResource(R.string.messages_photo_cd_out) else stringResource(R.string.messages_photo_cd_in, name)
-    val label = photoLabel(head, m.text, statusText)
+    val caption = AuthContext.bubble(m.text)
+    val label = photoLabel(head, AccountNames.cleanedMessage(m.text), statusText)
     val ratio = if (a.width in 1..PhotoLimits.VIEW_MAX_SIDE && a.height in 1..PhotoLimits.VIEW_MAX_SIDE) {
         (a.width.toFloat() / a.height).coerceIn(MIN_RATIO, MAX_RATIO)
     } else {
@@ -401,8 +404,8 @@ internal fun PhotoBubble(m: MessageInfo, name: String, actions: PhotoActions, on
             thumb?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
                 ?: Icon(Icons.Outlined.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (m.text.isNotEmpty()) {
-            Text(m.text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = Spacing.xxs))
+        if (caption.isNotEmpty()) {
+            Text(caption, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = Spacing.xxs))
         }
         statusText?.let {
             Text(

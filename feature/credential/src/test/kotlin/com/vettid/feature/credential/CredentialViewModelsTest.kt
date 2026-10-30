@@ -257,4 +257,68 @@ class CredentialViewModelsTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.done)
     }
+
+    private fun ChangePasswordViewModel.typed() {
+        setCurrent("old password 1")
+        setPassword("a much better passphrase here")
+        setConfirm("a much better passphrase here")
+    }
+
+    /** ANDROID-PLAN 0.1.88: the key prompt after an applied change, once; "Not now" or back stores nothing. */
+    @Test
+    fun anAppliedPasswordChangeAsksAboutTheKeysOnce() = runTest {
+        val vm = ChangePasswordViewModel(vault, vault)
+        assertFalse(vm.uiState.value.askReplaceKeys)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertTrue(vm.uiState.value.askReplaceKeys)
+        vm.putAwayReplaceKeys()
+        assertTrue(vm.uiState.value.done)
+        assertFalse(vm.uiState.value.askReplaceKeys)
+    }
+
+    @Test
+    fun aLostPasswordAnswerSettledWentThroughOnTheScreenAsksAboutTheKeys() = runTest {
+        vault.fail["changePassword"] = VaultFailure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = ChangePasswordViewModel(vault, vault)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.askReplaceKeys)
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertTrue(vm.uiState.value.askReplaceKeys)
+    }
+
+    @Test
+    fun noKeyPromptAfterDidNotGoThrough() = runTest {
+        vault.fail["changePassword"] = VaultFailure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = ChangePasswordViewModel(vault, vault)
+        vm.typed()
+        vm.submit()
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.NotApplied(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.done)
+        assertFalse(vm.uiState.value.askReplaceKeys)
+    }
+
+    /** A change that was being decided when this screen opened (not sent from it) settles: done, but no prompt. */
+    @Test
+    fun noKeyPromptForAPasswordChangeFoundOnOpening() = runTest {
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.PASSWORD)
+        val opened = ChangePasswordViewModel(vault, vault)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.PASSWORD)
+        advanceUntilIdle()
+        assertTrue(opened.uiState.value.done)
+        assertFalse(opened.uiState.value.askReplaceKeys)
+    }
 }

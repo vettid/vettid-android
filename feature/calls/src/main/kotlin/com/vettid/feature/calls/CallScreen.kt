@@ -60,6 +60,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.calls.CallEnd
 import com.vettid.core.calls.CallPhase
 import com.vettid.core.calls.CallState
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.PrimaryButton
@@ -139,7 +140,10 @@ fun MicrophonePrompt(name: String?, blocked: Boolean = false, onAnswered: (Boole
     }
     ConfirmDialog(
         title = stringResource(R.string.calls_microphone_title),
-        text = stringResource(R.string.calls_microphone_body, name ?: stringResource(R.string.calls_name_unknown)),
+        text = stringResource(
+            R.string.calls_microphone_body,
+            AccountNames.isolateOrNull(name) ?: stringResource(R.string.calls_name_unknown),
+        ),
         confirmLabel = stringResource(R.string.calls_microphone_allow),
         onConfirm = { launcher.launch(Manifest.permission.RECORD_AUDIO) },
         onDismiss = { onAnswered(false) },
@@ -157,14 +161,14 @@ private tailrec fun Context.activity(): Activity? = when (this) {
 /** The call, full screen: who, what is happening, and what can be done about it. */
 @Composable
 fun CallScreen(state: CallUiState, actions: CallActions, modifier: Modifier = Modifier, now: () -> Instant = Instant::now) {
-    val name = state.name ?: stringResource(R.string.calls_name_unknown)
+    val name = AccountNames.isolateOrNull(state.name) ?: stringResource(R.string.calls_name_unknown)
     Surface(modifier.fillMaxSize().testTag("call_screen"), color = MaterialTheme.colorScheme.background) {
         Column(
             Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = Spacing.xl, vertical = Spacing.xxl),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(Spacing.xxxl))
-            InitialTile(name = name, size = AVATAR_DP)
+            InitialTile(name = AccountNames.cleaned(state.name) ?: name, size = AVATAR_DP)
             Spacer(Modifier.height(Spacing.l))
             Text(
                 name,

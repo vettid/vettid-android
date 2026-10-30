@@ -57,6 +57,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
+import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.social.AuthContext
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.social.MessageInfo
@@ -248,22 +250,39 @@ fun MessagesScreen(
     }
 }
 
+/**
+ * A conversation row's preview (§10.8 step 6): the first line that shows something, cleaned and isolated; "Photo" for a
+ * photo with nothing to show; otherwise nothing, and then not even the "You: " label ([you] adds it).
+ */
+internal fun previewLine(text: String, outgoing: Boolean, hasPhoto: Boolean, photo: String, you: (String) -> String): String {
+    val line = AccountNames.firstLineIsolated(text) ?: photo.takeIf { hasPhoto } ?: return ""
+    return if (outgoing) you(line) else line
+}
+
 @Composable
 private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
-    val name = c.connection.displayName.ifBlank { stringResource(R.string.messages_name_not_shared) }
+    val name = AccountNames.isolateOrNull(c.connection.displayName) ?: stringResource(R.string.messages_name_not_shared)
+    // The first line that shows something, cleaned and isolated (§10.8 "Showing received text", step 6); "You: " is ours.
+    // A photo with nothing to show says "Photo"; any other text with nothing to show leaves out the line and its "You: ".
+    val photo = stringResource(R.string.messages_preview_photo)
+    val context = androidx.compose.ui.platform.LocalResources.current
     val preview = c.last?.let { m ->
-        if (m.outgoing) stringResource(R.string.messages_preview_you, m.text) else m.text
+        previewLine(m.text, m.outgoing, m.attachment != null, photo) { context.getString(R.string.messages_preview_you, it) }
     } ?: stringResource(R.string.messages_preview_none)
     val unread = c.unread > 0
     VettIdListRow(
         title = name,
         supporting = if (unread) {
-            pluralStringResource(R.plurals.messages_row_unread, c.unread, c.unread, preview.lines().first())
+            if (preview.isEmpty()) {
+                pluralStringResource(R.plurals.messages_row_unread_bare, c.unread, c.unread)
+            } else {
+                pluralStringResource(R.plurals.messages_row_unread, c.unread, c.unread, preview)
+            }
         } else {
-            preview.lines().first()
+            preview
         },
         meta = c.last?.let { Times.short(it.sentAt) },
-        tileName = name,
+        tileName = AccountNames.cleaned(name) ?: name,
         tileStyle = if (c.connection.favorite) TileStyle.Favorite else TileStyle.Connection,
         emphasized = unread,
         onClick = onClick,
@@ -312,7 +331,7 @@ data class ConversationActions(
 /** A conversation (ANDROID-PLAN §4): bubbles by day, the reply field at the bottom. */
 @Composable
 fun ConversationScreen(state: ConversationUiState, actions: ConversationActions, modifier: Modifier = Modifier) {
-    val name = state.connection?.displayName?.ifBlank { null } ?: stringResource(R.string.messages_name_not_shared)
+    val name = AccountNames.isolateOrNull(state.connection?.displayName) ?: stringResource(R.string.messages_name_not_shared)
     val listState = rememberLazyListState()
     // To the newest entry when one is added at the end, a message or a call (calls are their own list, and may load
     // after the messages), not when an older page is added at the top (§10.5.2): the list keeps its place then, by
@@ -435,13 +454,14 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
                     m.delivered -> stringResource(R.string.messages_status_delivered)
                     else -> stringResource(R.string.messages_status_sent)
                 }
+                val shown = AuthContext.bubble(m.text)
                 val label = if (status != null) {
-                    stringResource(R.string.messages_cd_outgoing, m.text, time, status)
+                    stringResource(R.string.messages_cd_outgoing, AccountNames.cleanedMessage(m.text), time, status)
                 } else {
-                    stringResource(R.string.messages_cd_incoming, name, m.text, time)
+                    stringResource(R.string.messages_cd_incoming, name, AccountNames.cleanedMessage(m.text), time)
                 }
                 MessageBubble(
-                    text = m.text,
+                    text = shown,
                     outgoing = m.outgoing,
                     meta = status?.let { "$time · $it" } ?: time,
                     accessibilityLabel = label,
@@ -586,11 +606,11 @@ fun NewMessageScreen(
 
 @Composable
 private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
-    val name = c.displayName.ifBlank { stringResource(R.string.messages_name_not_shared) }
+    val name = AccountNames.isolateOrNull(c.displayName) ?: stringResource(R.string.messages_name_not_shared)
     VettIdListRow(
         title = name,
-        supporting = c.secondaryName,
-        tileName = name,
+        supporting = c.secondaryName, // cleaned by the model
+        tileName = AccountNames.cleaned(name) ?: name,
         tileStyle = if (c.favorite) TileStyle.Favorite else TileStyle.Connection,
         onClick = onClick,
         tilePhoto = com.vettid.core.ui.components.rememberProfilePhoto(c.photo),

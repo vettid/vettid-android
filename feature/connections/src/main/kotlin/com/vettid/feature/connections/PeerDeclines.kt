@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -23,7 +24,7 @@ internal fun peerDeclineRes(outgoing: Boolean): Int =
 /** [peerDeclineRes] with the name the request showed, or "Someone" without one. */
 @Composable
 internal fun peerDeclineText(outgoing: Boolean, name: String?): String =
-    stringResource(peerDeclineRes(outgoing), name?.takeIf { it.isNotBlank() } ?: stringResource(R.string.connections_peer_declined_someone))
+    stringResource(peerDeclineRes(outgoing), AccountNames.isolateOrNull(name) ?: stringResource(R.string.connections_peer_declined_someone))
 
 /** A peer's decline, shown until the member dismisses it (once). */
 @Composable

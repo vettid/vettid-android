@@ -47,36 +47,6 @@ object PhotoLimits {
     const val THUMB_CACHE_BYTES = 8L * 1024 * 1024
 }
 
-/** A peer's `name` made safe to show; it is never used as a file name. */
-object AttachmentNames {
-    private val BIDI = setOf(0x061C, 0x200E, 0x200F) + (0x202A..0x202E) + (0x2066..0x2069)
-
-    /**
-     * Removes control and bidirectional formatting characters (and every other format character, zero-width ones
-     * included), path separators and leading dots; trims; at most [PhotoLimits.NAME_MAX_CHARS] characters. Null when
-     * nothing is left.
-     */
-    @Suppress("ReturnCount", "CyclomaticComplexMethod")
-    fun sanitize(name: String?): String? {
-        if (name == null) return null
-        val sb = StringBuilder()
-        var i = 0
-        while (i < name.length) {
-            val cp = name.codePointAt(i)
-            i += Character.charCount(cp)
-            val type = Character.getType(cp)
-            val drop = type == Character.CONTROL.toInt() || type == Character.FORMAT.toInt() || cp in BIDI ||
-                cp == '/'.code || cp == '\\'.code || type == Character.UNASSIGNED.toInt() ||
-                type == Character.LINE_SEPARATOR.toInt() || type == Character.PARAGRAPH_SEPARATOR.toInt()
-            if (!drop) sb.appendCodePoint(cp)
-        }
-        val s = sb.toString().trim().trimStart('.').trim()
-        if (s.isEmpty()) return null
-        if (s.codePointCount(0, s.length) <= PhotoLimits.NAME_MAX_CHARS) return s
-        return s.substring(0, s.offsetByCodePoints(0, PhotoLimits.NAME_MAX_CHARS))
-    }
-}
-
 /**
  * A memory-only cache bounded by bytes, least recently used out first (ANDROID-PLAN "Memory only, wiped at lock"):
  * thumbnails, photos and prepared uploads never go to a file, Room, DataStore or an image library's disk cache.

@@ -14,8 +14,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.time.Instant
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class ApprovalParserTest {
     private val at = Instant.parse("2026-10-04T12:00:00Z")
 
@@ -120,6 +125,7 @@ class ApprovalParserTest {
 
         val auth = ApprovalParser.parse("connection.authenticate.pending", o("""{"connection_id":"C1","request_id":"A1","context":"hi"}"""), at)
         assertEquals("auth:A1", auth?.key)
+        assertEquals(AuthPurpose.NONE, (auth as Approval.Authentication).purpose)
 
         val d = ApprovalParser.parse("device.session.pending", o("""{"request_id":"S1","device_id":"D","role":"desktop","name":"Laptop","seconds":60}"""), at)
         assertEquals("device:device.session.pending:S1", d?.key)
@@ -285,5 +291,81 @@ class ApprovalParserTest {
             java.time.Instant.EPOCH,
         ) as Approval.ShareDecision
         assertEquals(listOf(ShareItem("i1", "A", "medical", "data", askRuleId = "r1"), ShareItem("i2", "B", "x", "data", shared = true)), a.items)
+    }
+}
+
+/** VAULT-MESSAGING 0.65.0 §10.4 "Purpose": read from the vault's `purpose` only. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
+class AuthPurposeParserTest {
+    private val at = java.time.Instant.parse("2026-10-27T12:00:00Z")
+
+    private fun parse(extra: String) = ApprovalParser.parse(
+        "connection.authenticate.pending",
+        kotlinx.serialization.json.Json.parseToJsonElement("""{"connection_id":"C1","request_id":"A1","context":"hi"$extra}""")
+            as kotlinx.serialization.json.JsonObject,
+        at,
+    ) as Approval.Authentication
+
+    @Test
+    fun signinAndApprovalAreRead() {
+        assertEquals(AuthPurpose.SIGNIN, parse(""","purpose":"signin"""").purpose)
+        assertEquals(AuthPurpose.APPROVAL, parse(""","purpose":"approval"""").purpose)
+    }
+
+    @Test
+    fun unknownOrAbsentOrOddValuesAreNone() {
+        assertEquals(AuthPurpose.NONE, parse("").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":"payment"""").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":"SIGNIN"""").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":""""").purpose)
+        assertEquals(AuthPurpose.NONE, parse(""","purpose":7""").purpose)
+    }
+
+    @Test
+    fun theContextNeverSetsThePurpose() {
+        val a = ApprovalParser.parse(
+            "connection.authenticate.pending",
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"connection_id":"C1","request_id":"A1","context":"purpose: signin"}""")
+                as kotlinx.serialization.json.JsonObject,
+            at,
+        ) as Approval.Authentication
+        assertEquals(AuthPurpose.NONE, a.purpose)
+    }
+
+    @Test
+    fun plainContextDropsBidiAndFormatCharactersAndKeepsLines() {
+        assertEquals("Sign in to Bank?\nok", AuthContext.plain("Sign in to ‮Bank?‬\r\nok"))
+        assertEquals("ab", AuthContext.plain("a\u200Bb"))
+        assertEquals("ab", AuthContext.plain("a\uFEFFb"))
+        assertEquals("abc", AuthContext.plain("a\u202A\u202B\u202D\u202Eb\u202Cc"))
+        assertEquals("a\nb", AuthContext.plain("a\u0085b"))
+        assertEquals("ab", AuthContext.plain("a\u0007b"))
+        assertEquals("ab", AuthContext.plain("a\u00ADb\uDB40\uDC41"))
+        // ZWJ and ZWNJ cannot reorder text and stay (emoji sequences, Persian and Indic shaping).
+        assertEquals("a\u200Db\u200Cc", AuthContext.plain("a\u200Db\u200Cc"))
+        assertEquals("\uD83D\uDC69\u200D\uD83D\uDCBB", AuthContext.plain("\uD83D\uDC69\u200D\uD83D\uDCBB"))
+        assertEquals("ab", AuthContext.plain("a⁦⁧⁨⁩‎‏؜b"))
+        assertEquals("a\nb\nc", AuthContext.plain("a b c"))
+        assertEquals("x y", AuthContext.plain("x\ty"))
+        // Isolated, whole; and a row's line is the first line only, isolated.
+        assertEquals("\u2068l1\u2069\n\u2068l2\u2069", AuthContext.isolated("l1\u202E\nl2"))
+        assertEquals("\u2068l1\u2069", AuthContext.firstLineIsolated("l1\nl2"))
+        assertNull(AuthContext.isolated(" \u202E "))
+        // A row's line is the first line that shows something, never an empty or invisible one.
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\nreal"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("   \nreal\nnext"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\u200B\u202E\nreal"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\t\t\r\n\u202D\u2069\u2028real\u202E"))
+        assertEquals("\u2068real\u2069", AuthContext.firstLineIsolated("\u00A0\u3000\n  real  \n"))
+        assertEquals("\u2068a b\u2069", AuthContext.firstLineIsolated("a\tb\nsecond"))
+        assertNull(AuthContext.firstLineIsolated(""))
+        assertNull(AuthContext.firstLineIsolated("\u200B\u202E\n\t\n \u2069"))
+    }
+
+    @Test
+    fun messageBubbleKeepsDirectionalMarksRemovesOverridesAndIsolatesEachLine() {
+        assertEquals("\u2068a\u200Fb\u2069\n\u2068c\u2069", AuthContext.bubble("\n a\u200F\u202Eb\r\nc \u2028"))
+        assertEquals("", AuthContext.bubble("\u200B\u3164"))
     }
 }

@@ -20,10 +20,17 @@ class ConnectionKeeperTest {
     private class Vault : BackgroundVault {
         override val phase = MutableStateFlow<AppPhase>(AppPhase.Starting)
         val calls = mutableListOf<String>()
-        var held = false
+        val heldFlow = MutableStateFlow(false)
+        var held: Boolean
+            get() = heldFlow.value
+            set(v) {
+                heldFlow.value = v
+            }
         var onRefresh: () -> Unit = {}
 
         override fun held() = held
+
+        override val heldChanges = heldFlow
 
         override suspend fun refresh() {
             calls += "refresh"
@@ -117,6 +124,27 @@ class ConnectionKeeperTest {
             assertTrue("$before: nothing published after the vault went: $seen", seen.isEmpty())
             watch.cancel()
         }
+    }
+
+    @Test
+    fun aPassedOwnerCheckClearsTheNoticeWithoutWaitingForTheHourlyTurn() = runTest {
+        val v = Vault().apply {
+            phase.value = AppPhase.Unlocked
+            held = true
+        }
+        val k = ConnectionKeeper(v, network, ReconnectBackoff(random = Random(1)))
+        val job = launch { k.run() }
+        runCurrent()
+        assertEquals(KeeperStatus.CHECK_DUE, k.status.value)
+        v.held = false
+        runCurrent()
+        assertEquals(KeeperStatus.CONNECTED, k.status.value)
+        assertTrue("no status read for it", v.calls.none { it == "refresh" })
+        // The reverse: the check becomes due while the vault stays open.
+        v.held = true
+        runCurrent()
+        assertEquals(KeeperStatus.CHECK_DUE, k.status.value)
+        job.cancel()
     }
 
     @Test

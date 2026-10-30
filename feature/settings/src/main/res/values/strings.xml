@@ -10,7 +10,7 @@
     <string name="settings_vault_update_body">Release %1$d (your vault runs release %2$d)</string>
     <string name="settings_section_security">Security</string>
     <string name="settings_security_credential">Credential</string>
-    <string name="settings_security_credential_body">Password, rotation, backup, unlock window</string>
+    <string name="settings_security_credential_body">Password, keys, backup, unlock window</string>
     <string name="settings_security_recovery">Recovery</string>
     <string name="settings_security_transfer">Move to a new phone</string>
     <string name="settings_security_transfer_body">Direct transfer: no waiting, with your PIN and password</string>
@@ -225,6 +225,7 @@
     <string name="settings_transfer_waiting">Waiting for your new phone</string>
     <string name="settings_transfer_cancel">Cancel the transfer</string>
     <string name="settings_transfer_compare_title">Compare the code</string>
+    <string name="settings_transfer_unnamed_device">The other phone</string>
     <string name="settings_transfer_compare_body">%1$s wants to take over your vault. Continue only if it shows the same code.</string>
     <string name="settings_transfer_match">The codes match</string>
     <string name="settings_transfer_reject">Reject</string>

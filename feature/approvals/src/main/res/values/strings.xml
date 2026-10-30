@@ -4,6 +4,8 @@
     <string name="approvals_empty_title">Nothing to approve</string>
     <string name="approvals_empty_body">Requests that need your decision appear here</string>
     <string name="approvals_error_title">Could not load approvals</string>
+    <string name="approvals_open_asks_error_title">Couldn\'t check for open requests</string>
+    <string name="approvals_open_asks_held_title">Open requests are on hold</string>
     <string name="approvals_retry">Try again</string>
     <!-- 0.10.5 (§6.4): the other member declined; the name is the one the request showed (self-asserted). -->
     <string name="approvals_peer_declined_outgoing">%1$s declined your connection request</string>
@@ -23,6 +25,9 @@
     <string name="approvals_name_not_shared">Name not shared yet</string>
     <string name="approvals_a_connection">A connection</string>
     <string name="approvals_an_agent">An agent</string>
+    <string name="approvals_an_agent_inline">an agent</string>
+    <string name="approvals_a_desktop">A desktop</string>
+    <string name="approvals_a_desktop_inline">a desktop</string>
     <string name="approvals_summary_sas">code %1$s</string>
     <string name="approvals_type_outgoing">Your connection request</string>
     <string name="approvals_summary_handshake">waiting for their vault</string>
@@ -66,6 +71,15 @@
     <string name="approvals_expires">Expires %1$s</string>
     <string name="approvals_auth_body">%1$s asks you to prove it is you. Approving signs their challenge with your credential key.</string>
     <string name="approvals_auth_approve">Authenticate</string>
+    <!-- Owner-approved 2026-10-29: a challenge with a purpose, VAULT-MESSAGING 0.65.0 §10.4 "The screens per purpose"; as vettid-ios #154. -->
+    <string name="approvals_auth_signin_title">Sign in to %1$s?</string>
+    <string name="approvals_auth_signin_body">Only approve if you are signing in right now.</string>
+    <string name="approvals_auth_signin_deny">Not me</string>
+    <string name="approvals_auth_approval_title">%1$s asks you to approve</string>
+    <string name="approvals_auth_purpose_approve">Approve</string>
+    <!-- Owner-approved 2026-10-29: shown when a sign-in or approval has no usable note. -->
+    <string name="approvals_auth_no_details">No details were given. Only approve if you know what this is for.</string>
+    <string name="approvals_a_connection_inline">a connection</string>
     <string name="approvals_from">From</string>
     <string name="approvals_context">Their note</string>
     <string name="approvals_grant_body">%1$s asks to see items from your vault.</string>
@@ -139,6 +153,9 @@
     <string name="approvals_device_body">A desktop or agent of yours asks for a decision.</string>
     <string name="approvals_device">Device</string>
     <string name="approvals_request">Request</string>
+    <!-- VAULT-MESSAGING 0.78.0 §6.8 step 3, texts approved by the owner. -->
+    <string name="approvals_renewal_notice">Denying refuses only the extra time. %1$s keeps its current access until %2$s.</string>
+    <string name="approvals_deny_end_access">Deny and end access now</string>
     <string name="approvals_device_v1">This version of the app does not pair desktops or agents, so it can only decline.</string>
     <string name="approvals_grant_their_words">They asked for: %1$s</string>
     <string name="approvals_grant_answer">Choose one of your items</string>

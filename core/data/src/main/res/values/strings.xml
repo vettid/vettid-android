@@ -13,7 +13,7 @@
     <string name="data_failure_bad_password">That credential password is not correct.</string>
     <string name="data_failure_backoff">Too many wrong attempts. Wait before trying again.</string>
     <string name="data_failure_frozen">Your credential is frozen after a clone alert. Answer the alert first.</string>
-    <string name="data_failure_rotation_required">Your credential must be rotated before it can be used again.</string>
+    <string name="data_failure_rotation_required">Your vault\'s keys must be replaced before your credential can be used again.</string>
     <string name="data_failure_not_supported">Your vault\'s software release does not support this yet.</string>
     <string name="data_failure_no_response">Your vault did not answer in time. Try again.</string>
     <string name="data_failure_enroll_waiting">Your vault was created but has not answered this phone yet. Nothing was lost. Try again in a minute: VettID picks up where it stopped.</string>
@@ -142,6 +142,11 @@
     <string name="data_feed_connection_stale">%1$s has not been reachable</string>
     <string name="data_feed_asks_paused">%1$s’s requests are paused</string>
     <string name="data_feed_authenticate">%1$s asks you to confirm it is you</string>
+    <!-- Owner-approved 2026-10-29: a challenge with a purpose, VAULT-MESSAGING 0.65.0 §10.4; as vettid-ios #154. -->
+    <string name="data_feed_authenticate_signin">Sign in to %1$s?</string>
+    <string name="data_feed_authenticate_signin_body">Only approve if you are signing in right now.</string>
+    <string name="data_feed_authenticate_approval">%1$s asks you to approve</string>
+    <string name="data_feed_a_connection_inline">a connection</string>
     <string name="data_feed_message">New message from %1$s</string>
     <string name="data_feed_call_missed">Missed call from %1$s</string>
     <string name="data_feed_photo_failed">Photo to %1$s not delivered</string>
@@ -221,7 +226,7 @@
     <string name="data_feed_recovery_rollback">Your vault was given an older recovery record</string>
     <string name="data_feed_recovery_rollback_body">A host may have served an older copy of your vault\'s recovery record, one on which recovery attempts had already been used. Your vault moved past it. If you did not try to recover your vault, change your PIN and your password now, and contact VettID.</string>
     <string name="data_feed_rotation_failed">Your vault could not update its keys</string>
-    <string name="data_feed_rotation_failed_body">Your connections still know your old keys. VettID will offer the update again.</string>
+    <string name="data_feed_rotation_failed_body">Your connections still know your old keys. Your vault will try again the next time you unlock it.</string>
     <string name="data_feed_rotate_conflict">%1$s: verify again</string>
     <string name="data_feed_rotate_conflict_body">This connection\'s vault announced two different new keys. That can mean someone holds an old copy of their vault. Nothing is sent or received until you check.</string>
     <string name="data_feed_leash_item_used">An agent used %1$s</string>

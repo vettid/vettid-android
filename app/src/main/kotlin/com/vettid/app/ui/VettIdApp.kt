@@ -183,13 +183,11 @@ fun VettIdApp(
                 }
                 // Release R (§11.14.10): "Finish the move" and "This phone is your vault's phone again".
                 val topBanner = paused || prefsReset
-                var movePaneOpen by remember { mutableStateOf(false) }
                 val moveNotice = MoveNotices(
                     viewModel,
                     phase == AppPhase.Unlocked,
                     appLocked = locked,
                     statusBarPadding = !topBanner,
-                    onPane = { movePaneOpen = it },
                 )
                 Box(
                     Modifier
@@ -235,7 +233,6 @@ fun VettIdApp(
                                     val shown = account.shownInShell()
                                     AppShell(
                                         launchRoute = launchRoute,
-                                        movePaneOpen = movePaneOpen,
                                         accountName = shown?.fullName ?: shown?.displayEmail
                                             ?: stringResource(R.string.account_placeholder_name),
                                         account = shown,
@@ -274,8 +271,6 @@ private fun MoveNotices(
     unlocked: Boolean,
     appLocked: Boolean,
     statusBarPadding: Boolean,
-    /** Tells whether the "Finish the move" dialog is open, so that no banner of the shell shows over it. */
-    onPane: (Boolean) -> Unit,
 ): Boolean {
     val finishMove by viewModel.finishMovePending.collectAsStateWithLifecycle()
     val movedBack by viewModel.movedBack.collectAsStateWithLifecycle()
@@ -354,10 +349,6 @@ private fun MoveNotices(
     val showFinishMove = finishMove && !appLocked && (unlocked || finishing)
     if (finishMoveOpen && showFinishMove) {
         val busy = finishState.busy
-        DisposableEffect(Unit) {
-            onPane(true)
-            onDispose { onPane(false) }
-        }
         Dialog(
             onDismissRequest = { if (!busy) finishMoveOpen = false },
             properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),

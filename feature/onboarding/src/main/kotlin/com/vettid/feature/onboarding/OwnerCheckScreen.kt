@@ -1,5 +1,8 @@
 package com.vettid.feature.onboarding
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -25,7 +29,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -41,6 +49,7 @@ import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.RECOVERY_QUIET_S
 import com.vettid.core.ui.format.StagingTimeNote
@@ -64,6 +73,9 @@ fun OwnerCheckRoute(
     viewModel: OwnerCheckViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(mode) { viewModel.start(mode) }
+    // The screen leaving for good (not a rotation) forgets what it shows, so that the next one starts afresh.
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) viewModel.cancel() } }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(state.passed) {
         if (state.passed) {
@@ -97,18 +109,34 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         PresenceAfterCheck(title, actions)
         return
     }
+    val lockOffered = lockOffered(state.mode, state.watch)
+    val cancelBesideLock = cancelBesideLock(state.mode, state.watch)
     FormScaffold(
         title = title,
         body = body,
         primaryLabel = stringResource(
-            if (state.mode == OwnerCheckMode.HOLD_OFF) R.string.ownercheck_submit_hold_off else R.string.ownercheck_submit,
+            when {
+                state.watch == LockWatch.SILENT -> R.string.ownercheck_check_again
+                state.pinKept -> R.string.unlock_check_in
+                state.mode == OwnerCheckMode.HOLD_OFF -> R.string.ownercheck_submit_hold_off
+                else -> R.string.ownercheck_submit
+            },
         ),
-        onPrimary = actions::submit,
-        primaryEnabled = state.submitAllowed,
+        onPrimary = if (state.watch == LockWatch.SILENT) actions::checkAgain else actions::submit,
+        primaryEnabled = state.submitAllowed || (state.watch == LockWatch.SILENT && !state.locking),
         busy = state.busy || state.locking,
-        secondaryLabel = stringResource(if (state.mode == OwnerCheckMode.GATED) R.string.ownercheck_lock else R.string.ownercheck_cancel),
-        onSecondary = if (state.mode == OwnerCheckMode.GATED) actions::lockVault else onCancel,
+        // While the vault is probably locked "Lock vault" stays offered in every mode (VAULT-MESSAGING 0.73.0); it takes the
+        // place of Cancel there, which comes back when the reads end.
+        secondaryLabel = stringResource(if (lockOffered) R.string.ownercheck_lock else R.string.ownercheck_cancel),
+        onSecondary = if (lockOffered) actions::lockVault else onCancel,
         modifier = Modifier.testTag("owner_check"),
+        // Cancel stays beside Lock vault while the vault is probably locked (a voluntary check or the hold-off can be left).
+        onBack = if (cancelBesideLock) onCancel else null,
+        topActions = {
+            if (cancelBesideLock) {
+                TopBarTextAction(stringResource(R.string.ownercheck_cancel), onCancel, Modifier.testTag("owner_check_cancel"))
+            }
+        },
         header = {
             Spacer(Modifier.height(Spacing.l))
             Icon(
@@ -123,6 +151,53 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             if (state.timeScale.stagingNote) StagingTimeNote()
             if (state.presenceUnrecorded) PresenceNotice()
             waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
+            // (ANDROID-PLAN 0.1.93) After an unlock whose check failed: directly under the counts, the approved lines.
+            // The tenth failure locked the vault: the existing lock text, no retry.
+            // (ANDROID-PLAN 0.1.95) A lock found without a known cause shows the locked screen, not this text.
+            if (state.locked && !state.lockCauseUnknown) {
+                NoticeCard(
+                    NoticeKind.URGENT,
+                    stringResource(R.string.unlock_owner_check_locked_title),
+                    stringResource(R.string.unlock_owner_check_locked_body),
+                    modifier = Modifier.testTag("owner_check_locked"),
+                )
+            }
+            // A lock found by a read, cause unknown: the existing "locked" line, not the ten-checks text.
+            if (state.locked && state.lockCauseUnknown) {
+                Text(
+                    stringResource(R.string.unlock_lock_confirmed),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("owner_check_locked_unknown"),
+                )
+            }
+            // (ANDROID-PLAN 0.1.95) Probably locked: the approved lines; the fields are not offered.
+            if (state.watch != LockWatch.NONE && !state.locked) {
+                Text(
+                    stringResource(
+                        if (state.watch == LockWatch.CHECKING) {
+                            R.string.ownercheck_probably_locked_checking
+                        } else {
+                            R.string.ownercheck_probably_locked_silent
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_probably_locked"),
+                )
+            }
+            state.unlockedWrong?.takeIf { !state.locked }?.let {
+                Text(
+                    pluralStringResource(R.plurals.unlock_check_password_wrong, it, it),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_unlocked_wrong"),
+                )
+            }
+            if (state.unlockedOpen) {
+                Text(
+                    stringResource(R.string.unlock_check_open_waiting),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("owner_check_unlocked_open"),
+                )
+            }
             // (Release L, §3.6.8) The held and daily-check screens say when the vault locks itself.
             idleLockAtOf(state.mode, v, Instant.now())?.let {
                 Text(
@@ -145,22 +220,24 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                 is OwnerCheckMessage.BadPin -> m.checksLeft
                 is OwnerCheckMessage.BadPassword -> m.checksLeft
                 else -> v?.takeIf { it.failures > 0 }?.checksLeft
-            }
-            SecretField(
+            }.takeIf { state.unlockedWrong == null && !state.locked && state.watch == LockWatch.NONE }
+            // Locked: the lock text only, no fields (§3.6.5: not a retry).
+            val fields = !state.locked && state.watch == LockWatch.NONE
+            if (!state.pinKept && fields) SecretField(
                 value = state.pin,
                 onValueChange = actions::setPin,
                 label = stringResource(R.string.ownercheck_pin_label),
                 isPin = true,
-                enabled = !state.busy && state.waitSeconds == 0L,
+                enabled = !state.busy && !state.locking && state.waitSeconds == 0L,
                 error = if (m is OwnerCheckMessage.BadPin) stringResource(R.string.ownercheck_bad_pin) else null,
                 imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("owner_check_pin"),
             )
-            SecretField(
+            if (fields) SecretField(
                 value = state.password,
                 onValueChange = actions::setPassword,
                 label = stringResource(R.string.ownercheck_password_label),
-                enabled = !state.busy && state.waitSeconds == 0L,
+                enabled = !state.busy && !state.locking && state.waitSeconds == 0L,
                 error = if (m is OwnerCheckMessage.BadPassword) stringResource(R.string.ownercheck_bad_password) else null,
                 onImeAction = actions::submit,
                 modifier = Modifier.testTag("owner_check_password"),
@@ -179,6 +256,11 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("owner_check_wait"),
                 )
+                m is OwnerCheckMessage.MaybeCounted -> Text(
+                    pluralStringResource(R.plurals.unlock_check_maybe_counted, m.atLeast, m.atLeast),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_maybe_counted"),
+                )
                 m is OwnerCheckMessage.Backoff ->
                     Text(stringResource(R.string.ownercheck_backoff), style = MaterialTheme.typography.bodyMedium)
                 // (ANDROID-PLAN 0.1.57) "Not the holder" under "Your vault moved to a new phone"; an unmapped code named.
@@ -195,6 +277,18 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 }
 
 private const val WARN_LEFT = 3
+
+/** "Lock vault" is the secondary action when gated, and in every mode while the vault is probably locked (0.73.0). */
+fun lockOffered(mode: OwnerCheckMode, watch: LockWatch): Boolean = mode == OwnerCheckMode.GATED || watch != LockWatch.NONE
+
+/** A check that can be left (not gated) keeps its Cancel, in the top bar, beside "Lock vault" while the watch runs. */
+fun cancelBesideLock(mode: OwnerCheckMode, watch: LockWatch): Boolean = mode != OwnerCheckMode.GATED && watch != LockWatch.NONE
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 /**
  * The presence notice's body: in real time (production, and every vault at scale 1) the approved words ("three days");

@@ -12,6 +12,7 @@ import com.vettid.core.vault.NotATransferCodeException
 import com.vettid.core.vault.PairingRejectedException
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.VaultStateException
+import com.vettid.core.vault.opType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -29,7 +30,7 @@ import java.io.IOException
  */
 @Suppress("CyclomaticComplexMethod", "ThrowsCount")
 internal suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T = try {
-    withContext(Dispatchers.IO) { block() }
+    withContext(Dispatchers.IO) { counted(block) }
 } catch (e: VaultFailure) {
     throw e
 } catch (e: TimeoutCancellationException) {
@@ -108,4 +109,45 @@ internal fun limitOf(e: VaultOpException): VaultLimit? {
     val name = (b["limit"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() } ?: return null
     fun n(k: String) = (b[k] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it >= 0 }
     return VaultLimit(name, n("max"), n("size"))
+}
+
+/**
+ * (ANDROID-PLAN 0.1.95, VAULT-MESSAGING 0.73.0, §3.6.4) Tells [CheckSink] about the answers of the operations that count as
+ * failed checks (a `bad_pin` or `bad_password` to one of [CheckSink.COUNTED]) and about one of them that got no answer (it
+ * may have counted at the vault). An operation outside the list that got no answer is not a check and changes nothing.
+ */
+private suspend inline fun <T> counted(block: suspend () -> T): T = try {
+    block()
+} catch (e: VaultOpException) {
+    if (e.type in CheckSink.COUNTED && e.code in CheckSink.CODES) CheckSink.counter?.answered()
+    throw e
+} catch (e: CancellationException) {
+    throw e
+} catch (e: IOException) {
+    // No answer (a timeout, a transport failure, a relay refusal): a counted operation may already be at the vault and have
+    // counted; any other leaves the estimate alone. The type comes from the device's send, not from the message.
+    if (e.opType in CheckSink.COUNTED) CheckSink.counter?.unanswered()
+    throw e
+}
+
+/** Where [vaultGuard] reports what bears on the owner check's estimate of tries left; the owner check manager listens. */
+internal object CheckSink {
+    interface Counter {
+        /** An operation that counts as a failed check was answered `bad_pin` or `bad_password`. */
+        fun answered()
+
+        /** An operation of [COUNTED] got no answer: it may have counted as a failed check. */
+        fun unanswered()
+    }
+
+    @Volatile
+    var counter: Counter? = null
+
+    val CODES = setOf("bad_pin", "bad_password")
+
+    /** The operations that verify the PIN as an owner check does (VAULT-MESSAGING §3.6.4), but not the check itself. */
+    val COUNTED = setOf(
+        "pin.change", "credential.password.change", "device.transfer.approve", "vault.delete", "wallet.caps.raise", "item.reveal",
+        "account.name.set", "vault.secret.renew", "credential.reset", "credential.create",
+    )
 }

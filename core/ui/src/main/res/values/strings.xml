@@ -66,4 +66,16 @@
     <string name="core_ui_erase_phone_body">Everything VettID keeps on this phone is erased, including its keys for your vault, and VettID goes back to the start. Your vault itself is not changed.\n\nTo get back into it you then need a recovery from the account site (it takes %1$s and needs your PIN and credential password, and the credential backup must be on), or a move from another phone that still holds your vault.</string>
     <!-- ANDROID-PLAN 0.1.57 (2) (approved by the owner 2026-10-20): a vault error code the app does not map. -->
     <string name="error_vault_code">Something went wrong (code: %1$s). Try again. If it keeps happening, contact VettID and give this code.</string>
+    <!-- ANDROID-PLAN 0.1.88 "Replacing the vault's keys, once" (approved by the owner 2026-10-27). -->
+    <string name="core_ui_replace_keys_title">Also replace your vault\'s keys?</string>
+    <string name="core_ui_replace_keys_body">So an older copy of your vault, opened with your old PIN or password, can\'t be used to reach your connections. Your connections are told about your new keys.</string>
+    <string name="core_ui_replace_keys_action">Replace keys</string>
+    <string name="core_ui_replace_keys_not_now">Not now</string>
+
+    <!-- End access (VAULT-MESSAGING 0.78.0 §6.8): the Devices page and a renewal request in Approvals share these. -->
+    <string name="devices_end_access">End access</string>
+    <string name="devices_end_access_title">End access for %1$s?</string>
+    <string name="devices_end_access_body">It stops at once, and any of its requests still waiting for you are declined. It can ask for access again; you decide then.</string>
+    <string name="devices_end_failed_title">Access not ended</string>
+    <string name="devices_end_failed">Access for %1$s could not be ended. Try again.</string>
 </resources>

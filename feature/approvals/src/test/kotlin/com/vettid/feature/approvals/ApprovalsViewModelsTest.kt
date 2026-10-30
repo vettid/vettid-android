@@ -50,7 +50,11 @@ class ApprovalsViewModelsTest {
         add(com.vettid.core.testing.FakeItems.item("i3", "Seed", com.vettid.core.data.items.Sensitivity.CRITICAL))
     }
 
-    private fun detail(a: Approval) = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items)
+    private val devices = com.vettid.core.testing.FakeDevices()
+    private val vault = FakeVault()
+
+    private fun detail(a: Approval) =
+        ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault)
 
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
@@ -66,6 +70,36 @@ class ApprovalsViewModelsTest {
         advanceUntilIdle()
         assertNull(vm.uiState.value.error)
         assertEquals(2, social.calls.count { it == "refreshApprovals" })
+    }
+
+    /** §10.4.2: the notice follows the repository's note of the last failed read of the open asks, and its own code. */
+    @Test
+    fun theOpenAsksNoticeFollowsTheRepositoryNote() = runTest {
+        val vm = ApprovalsViewModel(social, social, FakeVault())
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.openAsksError)
+        social.pendingReadFailure.value = VaultFailure(FailureKind.NETWORK)
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.openAsksError)
+        assertNull(vm.uiState.value.openAsksCode)
+        social.pendingReadFailure.value = null
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.openAsksError)
+    }
+
+    /** A held read (the daily check due) reads again by itself once the check passes; no Retry is needed. */
+    @Test
+    fun aHeldOpenAsksReadReadsAgainWhenTheCheckPasses() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        val vm = ApprovalsViewModel(social, social, vault)
+        advanceUntilIdle()
+        social.pendingReadFailure.value = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
+        advanceUntilIdle()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.openAsksError)
+        val before = social.calls.count { it == "refreshApprovals" }
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertEquals(before + 1, social.calls.count { it == "refreshApprovals" })
     }
 
     @Test

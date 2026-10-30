@@ -97,16 +97,16 @@ class HistoryEventTitlesTest {
     @Test
     fun namedTitlesShowTheConnectionDeviceOrItem() {
         val n = EntryNames(connection = "Sam Lee", device = "Pixel 7", item = "GitHub token")
-        assertEquals("Connection with Sam Lee paused", title("identity.rotate_conflict", names = n))
-        assertEquals("Connection with Sam Lee checked and resumed", title("identity.rotate_resolved", "fp", n))
-        assertEquals("Calls from Sam Lee turned off", title("call.permission_off", names = n))
-        assertEquals("Calls from Sam Lee turned on", title("call.permission_on", names = n))
-        assertEquals("Notifications turned on for Pixel 7", title("push.registered", "fcm", n))
-        assertEquals("Notifications turned off for Pixel 7", title("push.unregistered", "app", n))
-        assertEquals("Notifications stopped reaching Pixel 7", title("push.token_gone", "token_gone", n))
-        assertEquals("An agent used GitHub token", title("leash.item.run", "01ITEM", n))
-        assertEquals("An agent used GitHub token", title("leash.item.proxy", "01ITEM", n))
-        assertEquals("You changed how an agent may use GitHub token", title("leash.item.changed", "01ITEM", n))
+        assertEquals("Connection with \u2068Sam Lee\u2069 paused", title("identity.rotate_conflict", names = n))
+        assertEquals("Connection with \u2068Sam Lee\u2069 checked and resumed", title("identity.rotate_resolved", "fp", n))
+        assertEquals("Calls from \u2068Sam Lee\u2069 turned off", title("call.permission_off", names = n))
+        assertEquals("Calls from \u2068Sam Lee\u2069 turned on", title("call.permission_on", names = n))
+        assertEquals("Notifications turned on for \u2068Pixel 7\u2069", title("push.registered", "fcm", n))
+        assertEquals("Notifications turned off for \u2068Pixel 7\u2069", title("push.unregistered", "app", n))
+        assertEquals("Notifications stopped reaching \u2068Pixel 7\u2069", title("push.token_gone", "token_gone", n))
+        assertEquals("An agent used \u2068GitHub token\u2069", title("leash.item.run", "01ITEM", n))
+        assertEquals("An agent used \u2068GitHub token\u2069", title("leash.item.proxy", "01ITEM", n))
+        assertEquals("You changed how an agent may use \u2068GitHub token\u2069", title("leash.item.changed", "01ITEM", n))
         // Without the name (gone or not known), the title drops it.
         assertEquals("Connection paused", title("identity.rotate_conflict"))
         assertEquals("Connection checked and resumed", title("identity.rotate_resolved"))
@@ -171,7 +171,9 @@ class HistoryEventTitlesTest {
             listOf("If this lasts three days, your vault is no longer protected against a recovery started by someone else."),
             lines("recovery.presence_unrecorded", null),
         )
-        assertEquals(listOf("Your connections still know your old keys. VettID will offer the update again."), lines("identity.rotation_failed", "recovery"))
+        assertEquals(listOf("Your connections still know your old keys. Your vault will try again the next time you unlock it."), lines("identity.rotation_failed", "recovery"))
+        assertEquals(listOf("Replaced when you moved your vault to a new phone."), lines("identity.rotated", "t-1"))
+        assertEquals(emptyList<String>(), lines("identity.rotated", null))
         assertEquals(listOf("This phone's one-time keys were replaced with a fresh set."), lines("credential.utk_resync", null))
         assertEquals(
             listOf("Your vault found its credential holder missing and cleared it. If you didn't remove a phone, contact VettID."),
@@ -334,5 +336,18 @@ class HistoryEventTitlesTest {
     private companion object {
         const val SETTLE_ROUNDS = 100
         const val SETTLE_SLEEP_MS = 20L
+    }
+
+    @Test
+    fun aNameOfOnlyInvisibleCharactersFallsBackToTheTitleWithoutIt() {
+        val n = EntryNames(connection = "\u202E\u200B\u2069")
+        assertEquals("Calls turned off", title("call.permission_off", names = n))
+    }
+
+    @Test
+    fun anExportTitleCarriesTheCleanedNameWithNoBidiControls() {
+        val n = EntryNames(connection = "Sam\u202E Lee")
+        assertEquals("Calls from Sam Lee turned off", HistoryText.title(context, "call.permission_off", null, n, isolate = false))
+        assertEquals("Calls from \u2068Sam Lee\u2069 turned off", HistoryText.title(context, "call.permission_off", null, n))
     }
 }

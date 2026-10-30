@@ -84,4 +84,11 @@ class ConnectionsSearchTest {
         advanceUntilIdle()
         assertEquals(2, vm.uiState.value.connections.size)
     }
+
+    @Test
+    fun aNameWithAZeroWidthSpaceIsFoundBySearchingItsVisibleText() {
+        val bank = ConnectionInfo("c3", "Ba\u200Bnk", ConnectionState.ACTIVE)
+        assertEquals(true, bank.matches("Bank"))
+        assertEquals(false, ada.matches("Bank"))
+    }
 }

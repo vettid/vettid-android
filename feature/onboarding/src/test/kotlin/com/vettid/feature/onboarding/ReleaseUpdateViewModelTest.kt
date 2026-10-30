@@ -118,6 +118,19 @@ class ReleaseUpdateViewModelTest {
         assertTrue(updates.calls.isEmpty())
     }
 
+    /** (ANDROID-PLAN 0.1.96) A lock of unknown cause asks for no password: only a lock the check caused does. */
+    @Test
+    fun aLockOfUnknownCauseAsksForNoPassword() = runTest {
+        val vm = ReleaseUpdateViewModel(FakeReleaseUpdates(offer), vault, FakeReleaseNotes())
+        vault.lockedByOwnerCheck.value = true
+        vault.lockCauseUnknown.value = true
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.checkDue)
+        vault.lockCauseUnknown.value = false
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.checkDue)
+    }
+
     @Test
     fun noOfferNothingToApprove() = runTest {
         val updates = FakeReleaseUpdates(null)

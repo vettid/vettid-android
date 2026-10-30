@@ -529,6 +529,20 @@ class VaultDeviceTest {
         }
     }
 
+    /** A request whose send fails leaves its exception as it was, tagged with the operation (ANDROID-PLAN 0.1.95). */
+    @Test
+    fun aFailedSendIsTaggedWithItsOperationAndKeepsItsClass() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val api = VaultApi(d)
+            refuseDeposits = RelayException.TOKEN_EXPIRED
+            val e = runCatching { api.status() }.exceptionOrNull()
+            assertTrue(e is RelayException)
+            assertEquals("vault.status", e?.opType)
+            refuseDeposits = null
+        }
+    }
+
     /**
      * W9 staging (2026-10-06): the old phone of a recovery found a vault message in its mailbox whose answer the
      * relay refused with `token_revoked` (the vault had denylisted it, §7.4). The refusal escaped the handler, ended

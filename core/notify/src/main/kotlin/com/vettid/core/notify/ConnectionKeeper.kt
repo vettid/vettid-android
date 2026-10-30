@@ -57,7 +57,8 @@ class ConnectionKeeper(
         val p = vault.phase.value
         // No vault any more: the service ends, and no last status ("connecting") is published for it to show.
         if (ModeController.enrolled(p) == false) return false
-        statusFlow.value = statusOf(p, network.value, vault.held())
+        val held = vault.held()
+        statusFlow.value = statusOf(p, network.value, held)
         when {
             !network.value -> {
                 backoff.onDropped()
@@ -66,11 +67,11 @@ class ConnectionKeeper(
             p == AppPhase.Unlocked -> {
                 vault.resumeRelay()
                 backoff.onConnected()
-                if (!changes(p)) runCatching { vault.refresh() }
+                if (!changes(p, held)) runCatching { vault.refresh() }
             }
             p == AppPhase.Locked -> {
                 vault.pauseRelay()
-                if (!changes(p)) runCatching { vault.refresh() }
+                if (!changes(p, held)) runCatching { vault.refresh() }
             }
             else -> {
                 // Starting, or unreachable: read the vault's state again after the backoff (or a validated network).
@@ -82,9 +83,12 @@ class ConnectionKeeper(
         return true
     }
 
-    /** Waits up to [statusEveryMs] for the phase or the network to change; false when the time ran out. */
-    private suspend fun changes(p: AppPhase): Boolean = withTimeoutOrNull(statusEveryMs) {
-        combine(vault.phase, network) { q, n -> q != p || !n }.first { it }
+    /**
+     * Waits up to [statusEveryMs] for the phase, the network or the held state to change; false when the time ran out.
+     * A passed owner check changes only the held state, and the notice follows it without waiting for the hourly turn.
+     */
+    private suspend fun changes(p: AppPhase, held: Boolean): Boolean = withTimeoutOrNull(statusEveryMs) {
+        combine(vault.phase, network, vault.heldChanges) { q, n, h -> q != p || !n || h != held }.first { it }
     } != null
 
     companion object {

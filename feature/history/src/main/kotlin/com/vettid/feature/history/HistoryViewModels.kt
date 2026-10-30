@@ -5,6 +5,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.items.ItemsRepository
@@ -161,7 +162,9 @@ class HistoryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { runCatching { connections.refresh() } }
-        viewModelScope.launch { items.items.collect { l -> state.update { it.copy(itemNames = l.associate { i -> i.itemId to i.name }) } } }
+        viewModelScope.launch { items.items.collect { l ->
+                state.update { it.copy(itemNames = l.associate { i -> i.itemId to AccountNames.cleaned(i.name).orEmpty() }) }
+            } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         loadDevices(refresh = false)
         reload()
@@ -181,7 +184,7 @@ class HistoryViewModel @Inject constructor(
     }
 
     private fun names(list: List<ConnectionInfo>): Map<String, String> =
-        list.associate { c -> c.id to c.displayName.ifEmpty { context.getString(R.string.history_connection_unnamed) } }
+        list.associate { c -> c.id to (AccountNames.cleaned(c.displayName) ?: context.getString(R.string.history_connection_unnamed)) }
 
     /**
      * What this phone can search when the vault does not (§10.9's fields it holds): the kind in both forms, the
@@ -192,10 +195,13 @@ class HistoryViewModel @Inject constructor(
         val item = AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] }
         val device = r.deviceId?.let { state.value.deviceNames?.get(it)?.ifEmpty { null } }
         return AuditFilter.kindText(r.kind) + listOfNotNull(
-            HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item)),
-            c?.name, c?.firstName, c?.lastName, c?.accountName,
-            item,
-            device,
+            // Without the isolation (FSI/PDI) around the name: a query across the name and the words around it must match.
+            HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item), isolate = false),
+            // Cleaned like what is shown (§10.8 step 7); the entry is matched against these.
+            AccountNames.cleaned(c?.name), AccountNames.cleaned(c?.firstName), AccountNames.cleaned(c?.lastName),
+            AccountNames.cleaned(c?.accountName),
+            AccountNames.cleaned(item),
+            AccountNames.cleaned(device),
         )
     }
 

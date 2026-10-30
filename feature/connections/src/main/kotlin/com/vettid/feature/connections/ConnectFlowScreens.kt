@@ -358,12 +358,12 @@ fun ConnectionRequestContent(
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     errorCode: String? = null,
 ) {
-    val who = name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.connections_request_them)
+    val who = AccountNames.isolateOrNull(name) ?: stringResource(R.string.connections_request_them)
     FormScaffold(
         title = stringResource(R.string.connections_request_title),
         body = stringResource(
             if (remote) R.string.connections_request_body_remote else R.string.connections_request_body,
-            name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.connections_request_someone),
+            AccountNames.isolateOrNull(name) ?: stringResource(R.string.connections_request_someone),
         ),
         primaryLabel = if (approved) null else stringResource(R.string.connections_request_approve),
         onPrimary = onApprove,
@@ -387,10 +387,10 @@ fun ConnectionRequestContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        displayName?.let {
+        AccountNames.isolateOrNull(displayName)?.let {
             Spacer(Modifier.height(Spacing.s))
             Text(
-                stringResource(R.string.connections_request_display_name, AccountNames.isolate(it)),
+                stringResource(R.string.connections_request_display_name, it),
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
@@ -473,7 +473,7 @@ data class AcceptActions(
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifier = Modifier) {
-    val who = state.name ?: state.connectionName ?: stringResource(R.string.connections_request_them)
+    val who = AccountNames.isolateOrNull(state.name ?: state.connectionName) ?: stringResource(R.string.connections_request_them)
     when (state.step) {
         AcceptStep.INPUT, AcceptStep.ACCEPTING -> FormScaffold(
             title = stringResource(if (state.fromLink) R.string.connections_open_link_title else R.string.connections_accept_title),
@@ -499,7 +499,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             FailureText(state.error, Modifier.padding(top = Spacing.s), state.errorCode)
         }
         AcceptStep.WAITING -> FormScaffold(
-            title = state.name?.let { stringResource(R.string.connections_waiting_title, it) }
+            title = AccountNames.isolateOrNull(state.name)?.let { stringResource(R.string.connections_waiting_title, it) }
                 ?: stringResource(R.string.connections_waiting_title_unnamed),
             body = stringResource(R.string.connections_waiting_body),
             primaryLabel = stringResource(R.string.connections_done),

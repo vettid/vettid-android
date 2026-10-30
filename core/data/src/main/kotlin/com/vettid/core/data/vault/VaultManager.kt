@@ -82,9 +82,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -678,11 +680,6 @@ class VaultManager(
         lock = { lock() },
         // Its own prompt, not the unlock screen's two steps (§11.14.9 step 2): refused while a change is unresolved.
         unlock = { pin, taken -> unlockOnce(pin, null, false, holderApp = true, pinTaken = taken) },
-        generation = { generation },
-        signedOut = { phaseFlow.value == AppPhase.SignedOut },
-        // ANDROID-PLAN "Transfer": after a transfer the app offers to rotate the vault's keys. Not after a wipe that
-        // overtook the unlock: the offer would land in the fresh record, for a vault enrolled here later.
-        onOpened = { gen -> offerRotationAt(gen) },
     )
 
     /** (Release R, §11.14.10) This old phone took the vault back after a transfer that did not finish. */
@@ -962,6 +959,9 @@ class VaultManager(
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },
             onTimeScale = { t, since -> noteStatusTimeScale(t, since) },
+            // (ANDROID-PLAN 0.1.95) "Probably locked, checking": the member API's word on the vault, and the lock it finds.
+            memberState = { lockSession()?.let { runCatching { guard { vaultStatus(it) } }.getOrNull()?.state } },
+            onFoundLocked = { lockedByNotice() },
         )
     }
 
@@ -1438,6 +1438,7 @@ class VaultManager(
                 surviveEvent("mailbox restart", ::logSurvived, { isActive }) {
                     android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
                     s.device.start(scope)
+                    ownerCheck.onRelayReconnected()
                     // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
                     if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
                     // §11.14.9: and an unresolved change is checked again.
@@ -1590,7 +1591,7 @@ class VaultManager(
         if (lockGuard.admits()) scope.launch { runCatching { d.flushOutbox() } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
-        if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
+        if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
         if (phaseFlow.value is AppPhase.Unlocked) {
             scope.launch { releaseUpdate.refreshOffer() }
             feed.catchUp()
@@ -2027,7 +2028,10 @@ class VaultManager(
      * the check with [pin] and [password] before the app opens, so that the member types both once.
      */
     override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
-        unlockOnce(pin, approve, cancelRecovery, holderApp = true, twoStepScreen = true) { ownerCheck.afterUnlock(pin, password) }
+        // The foreground generation before the request: leaving and coming back while it runs keeps no PIN.
+        ownerCheck.foregroundGeneration.let { gen ->
+            unlockOnce(pin, approve, cancelRecovery, holderApp = true, twoStepScreen = true) { ownerCheck.afterUnlock(pin, password, gen) }
+        }
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") An unlock with `cancel_recovery`, then at once the owner check with the
@@ -2094,6 +2098,7 @@ class VaultManager(
          */
         pinTaken: Int? = null,
     ): StepOutcome {
+        ownerCheck.beginUnlock() // a count kept for an earlier attempt is not carried into this one (ANDROID-PLAN 0.1.96)
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
         // (0.44.0, §11.14.9 step 5; H1) With a PIN change unresolved only the unlock screen's two steps know which PIN was
@@ -2218,13 +2223,18 @@ class VaultManager(
             // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
             if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
         }
-        if (before == null) {
-            openApp()
-        } else {
-            opening.run {
-                before()
+        try {
+            if (before == null) {
                 openApp()
+            } else {
+                opening.run {
+                    before()
+                    openApp()
+                }
             }
+        } finally {
+            // Whatever ended the open, a count kept for it is not carried to the next one (ANDROID-PLAN 0.1.97).
+            ownerCheck.beginUnlock()
         }
     }
 
@@ -2361,7 +2371,9 @@ class VaultManager(
         }
 
         override fun ownerCheckDue(): Boolean =
-            ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || ownerCheck.lockedByOwnerCheck.value
+            ownerCheckDue(
+                ownerCheck.ownerCheck.value, ownerCheck.lockedByOwnerCheck.value, ownerCheck.lockCauseUnknown.value, Instant.now(),
+            )
 
         // (0.44.0, §11.14.9; H1) No lock and unlock while a PIN or password change is undecided.
         override fun changeUnresolved(): Boolean = changeHoldFlow.value != null
@@ -2876,8 +2888,6 @@ class VaultManager(
         changeSender.send(rec, ChangeKind.PASSWORD, epoch) { store ->
             s.openApi.credentialChangePassword(password, newPassword, pin?.takeIf { local.phone.inUse }, since = gen, onMarker = store)
         }
-        // ANDROID-PLAN "Transfer" (release R): after a password change the app offers to rotate the vault's keys.
-        if (local.phone.inUse) offerRotation(true, rec)
     }
 
     /**
@@ -2917,8 +2927,6 @@ class VaultManager(
                 next.fill(0)
             }
         }
-        // ANDROID-PLAN "Transfer": after a PIN change the app offers to rotate the vault's keys.
-        offerRotation(true, rec)
     }
 
     override val changeCheck: StateFlow<ChangeCheck?> get() = changes.check
@@ -3027,11 +3035,9 @@ class VaultManager(
     override val recoveryOffered: Boolean get() = ReleasePath.recoveryOffered(local.capabilities)
 
     override suspend fun rotate(password: String) = guard {
-        val rec = record.recordGeneration
         val s = session()
         // vettid.org #358: while a clone alarm is open, the held blob is checked (and refreshed) before the rotation.
         s.openApi.credentialRotate(password, alarmOpen = alarmFlow.value != null)
-        offerRotation(false, rec)
         windowFlow.value = null
         refreshAlarm(s)
     }
@@ -4191,23 +4197,6 @@ class VaultManager(
 
     override val moveNotDone: StateFlow<Boolean> = moveNotDoneFlow.asStateFlow()
 
-    override val rotateOffered: StateFlow<Boolean> = record.rotateOffer
-
-    override fun dismissRotateOffer() {
-        // UNBOUND: putting the offer away is right for whatever record is current.
-        scope.launch { offerRotation(false, RecordStore.UNBOUND) }
-    }
-
-    /** The rotate offer, kept on the phone (a restart does not lose it), for the record of [since]. */
-    private suspend fun offerRotation(on: Boolean, since: Int) {
-        io { record.setRotateOffer(on, since) }
-    }
-
-    /** The offer after "Finish the move" opened the vault ([AccountRecord.offerAfterMove]): not after a lock, reset or wipe. */
-    private suspend fun offerRotationAt(gen: Int) {
-        io { record.offerAfterMove(gen) }
-    }
-
     override val movedAway: StateFlow<Boolean> = movedAwayFlow.asStateFlow()
 
     override fun acknowledgeMovedAway() {
@@ -4343,6 +4332,9 @@ class VaultManager(
 
     override fun held(): Boolean = ownerCheck.ownerCheck.value?.let { it.state != OwnerCheckState.OK } == true
 
+    override val heldChanges: Flow<Boolean>
+        get() = ownerCheck.ownerCheck.map { v -> v != null && v.state != OwnerCheckState.OK }.distinctUntilChanged()
+
     override fun pauseRelay() {
         // Requests before the app opens wait for their answers over this connection (OpeningWindow): paused, if the
         // phone is still locked, when they are done.
@@ -4373,6 +4365,7 @@ class VaultManager(
         if (relayPaused || phaseFlow.value != AppPhase.Unlocked) return
         d.stop()
         d.start(scope)
+        ownerCheck.onRelayReconnected()
         if (local.unresolvedChange != null) changes.kick()
     }
 

@@ -27,18 +27,28 @@ internal object DeviceText {
 
     /** The name as shown in a heading or a row: a device with no name is named by its role. */
     @Composable
-    fun name(d: DeviceInfo): String = label(d.name, role(d))
+    fun name(d: DeviceInfo): String = label(d.name, role(d), unnamedRes(d))
+
+    private fun unnamedRes(d: DeviceInfo): Int? = when {
+        d.isAgent -> R.string.devices_an_agent_cap
+        d.kind == DeviceInfo.KIND_DESKTOP -> R.string.devices_a_desktop_cap
+        else -> null
+    }
 
     /** The agent a pairing shows, by the name it gave (already sanitised): as [name], for an agent not yet listed. */
     @Composable
-    fun agentName(name: String): String = label(name, stringResource(R.string.devices_role_agent))
+    fun agentName(name: String): String = label(name, stringResource(R.string.devices_role_agent), R.string.devices_an_agent_cap)
 
     @Composable
-    private fun label(name: String, role: String): String {
-        val shown = name.ifEmpty { return stringResource(R.string.devices_unnamed, role.lowercase()) }
-        // A self-asserted name that could pass for the phone itself or for VettID is shown with its role.
+    private fun label(name: String, role: String, unnamed: Int?): String {
+        val shown = name.ifEmpty {
+            return if (unnamed != null) stringResource(unnamed) else stringResource(R.string.devices_unnamed, role.lowercase())
+        }
+        // A self-asserted name that could pass for the phone itself or for VettID is shown with its role. Compared by a
+        // key, so inner spaces, NBSP, ZWJ or fillers cannot slip past.
         val phone = stringResource(R.string.devices_this_phone)
-        return if (shown.equals(phone, ignoreCase = true) || shown.equals("VettID", ignoreCase = true)) {
+        val key = AccountNames.lookalikeKey(shown)
+        return if (key == AccountNames.lookalikeKey(phone) || key == AccountNames.lookalikeKey("VettID")) {
             stringResource(R.string.devices_name_with_role, shown, role)
         } else {
             shown
@@ -47,7 +57,17 @@ internal object DeviceText {
 
     /** The name inside a sentence: bidirectionally isolated (a self-asserted name may run either way, §10.8). */
     @Composable
-    fun sentenceName(d: DeviceInfo): String = AccountNames.isolate(name(d))
+    fun sentenceName(d: DeviceInfo): String = when {
+        d.name.isNotEmpty() -> AccountNames.isolate(name(d))
+        d.isAgent -> stringResource(R.string.devices_an_agent)
+        d.kind == DeviceInfo.KIND_DESKTOP -> stringResource(R.string.devices_a_desktop)
+        else -> AccountNames.isolate(name(d))
+    }
+
+    /** The agent a pairing shows, inside a sentence: its name isolated, "an agent" when it gave none (§10.8). */
+    @Composable
+    fun sentenceAgent(name: String): String =
+        if (name.isEmpty()) stringResource(R.string.devices_an_agent) else AccountNames.isolate(agentName(name))
 
     /** "Access until 15:40" (the date with it when not today), or "No access". */
     @Composable

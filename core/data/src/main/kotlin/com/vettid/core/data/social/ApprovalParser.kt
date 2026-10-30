@@ -4,6 +4,7 @@ import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.IkFingerprint
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.Connection
 import com.vettid.core.vault.Message
 import com.vettid.core.vault.VaultJson
@@ -54,7 +55,13 @@ object ApprovalParser {
         "connection.authenticate.pending" -> {
             val id = body.s("request_id")
             val conn = body.s("connection_id")
-            if (id == null || conn == null) null else Approval.Authentication(id, conn, body.s("context"), at, instant(body.s("exp")))
+            if (id == null || conn == null) {
+                null
+            } else {
+                Approval.Authentication(
+                    id, conn, body.s("context"), at, instant(body.s("exp")), purpose = AuthPurpose.of(body.s("purpose")),
+                )
+            }
         }
         "grant.pending" -> grant(body, at)
         "critical-secret-use.pending" -> critical(body, at)
@@ -237,7 +244,7 @@ object ApprovalParser {
         size = a.size,
         width = a.width,
         height = a.height,
-        name = com.vettid.core.media.AttachmentNames.sanitize(a.name),
+        name = AccountNames.cleanedCapped(a.name, com.vettid.core.media.PhotoLimits.NAME_MAX_CHARS),
     )
 
     /** `connection.authenticate.list` states and `.result` events. */

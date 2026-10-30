@@ -73,6 +73,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
@@ -408,7 +409,7 @@ private fun FilterRow(state: HistoryUiState, actions: HistoryActions) {
             }
         }
         val connectionName = state.filter.connectionId?.let {
-            state.connectionNames[it] ?: stringResource(R.string.history_connection_removed)
+            AccountNames.isolateOrNull(state.connectionNames[it]) ?: stringResource(R.string.history_connection_removed)
         }
         FilterChip(
             selected = state.filter.connectionId != null,
@@ -522,7 +523,8 @@ private fun ConnectionDialog(state: HistoryUiState, onDismiss: () -> Unit, onPic
             LazyColumn {
                 item { ChoiceRow(stringResource(R.string.history_connection_any), state.filter.connectionId == null) { onPick(null) } }
                 items(state.connections, key = { it.id }) { c ->
-                    ChoiceRow(c.name, state.filter.connectionId == c.id) { onPick(c.id) }
+                    val label = AccountNames.isolateOrNull(c.name) ?: stringResource(R.string.history_connection_unnamed)
+                    ChoiceRow(label, state.filter.connectionId == c.id) { onPick(c.id) }
                 }
             }
         },
@@ -607,9 +609,12 @@ private data class RowNames(val connections: Map<String, String>, val items: Map
 
 @Composable
 private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
-    val connection = e.connectionId?.let { names.connections[it] ?: stringResource(R.string.history_connection_removed) }
+    val connection = e.connectionId?.let {
+        AccountNames.isolateOrNull(names.connections[it]) ?: stringResource(R.string.history_connection_removed)
+    }
     // ANDROID-PLAN 0.1.11: the item's name where the entry refers to one; a removed one shows "Deleted item".
-    val item = AuditKinds.itemOf(e.kind, e.ref)?.let { names.items[it] ?: stringResource(R.string.history_item_deleted) }
+    val item = AuditKinds.itemOf(e.kind, e.ref)
+        ?.let { AccountNames.isolateOrNull(names.items[it]) ?: stringResource(R.string.history_item_deleted) }
         ?: AuditKinds.exportSummary(e.kind, e.ref)?.let { (format, count) ->
             val entries = pluralStringResource(R.plurals.history_export_count, count, count)
             stringResource(R.string.history_export_summary, format.uppercase(), entries)

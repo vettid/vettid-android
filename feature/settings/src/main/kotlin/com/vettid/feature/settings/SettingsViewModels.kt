@@ -261,6 +261,11 @@ data class ChangePinUiState(
     val errorCode: String? = null,
     val done: Boolean = false,
     /**
+     * (ANDROID-PLAN 0.1.88) The one-time prompt "Also replace your vault's keys?" is open over the success screen: set only
+     * where this screen saw the change apply, gone with "Not now", a back press or "Replace keys". Never stored.
+     */
+    val askReplaceKeys: Boolean = false,
+    /**
      * (Release R, VAULT-MESSAGING 0.33.0 §11.14.9) `pin.change` is a credential operation: the password too, and the
      * phone's next secret. Its answer gives the recovery 10 new attempts.
      */
@@ -324,6 +329,12 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
      */
     private var following = false
 
+    /** (ANDROID-PLAN 0.1.88) This screen sent the change it follows (set by [submit]): only then the key prompt. */
+    private var sentHere = false
+
+    /** "Not now", a back press or "Replace keys" (the screen opens the rotation): the prompt is put away, nothing is stored. */
+    fun putAwayReplaceKeys() = state.update { it.copy(askReplaceKeys = false) }
+
     init {
         // §11.14.9: a PIN change whose answer was lost is decided by VettID; this screen shows where that stands.
         viewModelScope.launch {
@@ -337,7 +348,8 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
         if (!following || !c.open && state.value.busy) return
         when (c) {
             is ChangeCheck.Checking, is ChangeCheck.Unreachable -> state.update { it.copy(busy = false, error = null, check = c) }
-            is ChangeCheck.Applied -> state.update { ChangePinUiState(done = true, withPassword = it.withPassword) }
+            is ChangeCheck.Applied ->
+                state.update { ChangePinUiState(done = true, withPassword = it.withPassword, askReplaceKeys = sentHere) }
             // (ANDROID-PLAN 0.1.55) Moved: another phone became the holder; said here as the one-time notice.
             is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
                 state.update { it.copy(busy = false, error = null, check = c) }
@@ -375,10 +387,11 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
             else -> {
                 state.update { it.copy(busy = true, error = null, check = null) }
                 following = true
+                sentHere = true
                 viewModelScope.launch {
                     try {
                         if (s.withPassword) vault.changePin(s.current, s.pin, s.password) else vault.changePin(s.current, s.pin)
-                        state.update { ChangePinUiState(done = true, withPassword = s.withPassword) }
+                        state.update { ChangePinUiState(done = true, withPassword = s.withPassword, askReplaceKeys = true) }
                         following = false
                         vault.acknowledgeChangeCheck() // said here: not again by the shell
                     } catch (e: VaultFailure) {

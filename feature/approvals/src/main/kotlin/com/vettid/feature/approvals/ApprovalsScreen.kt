@@ -46,11 +46,15 @@ import androidx.navigation.compose.composable
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.ItemCategories
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AuthContext
+import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.needsDecision
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
@@ -129,6 +133,10 @@ fun NavGraphBuilder.approvalsDestination(
                 onGrantUses = vm::setGrantUses,
                 onGrantExpiresIn = vm::setGrantExpiresIn,
                 onFinish = vm::finish,
+                onAskEndAccess = vm::askEndAccess,
+                onEndAccess = vm::endAccess,
+                onDismissEndAccess = vm::dismissEndAccess,
+                onDismissEndFailure = vm::dismissEndFailure,
             ),
         )
     }
@@ -147,7 +155,7 @@ data class PausedActions(
  * a notice with "Resume requests" and "Remove connection".
  */
 @Composable
-@Suppress("LongParameterList")
+@Suppress("LongParameterList", "CyclomaticComplexMethod")
 fun ApprovalsScreen(
     state: ApprovalsUiState,
     chrome: ShellChrome,
@@ -176,12 +184,21 @@ fun ApprovalsScreen(
                     actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } },
                 )
             }
-            nothing -> EmptyState(
-                icon = Icons.Outlined.TaskAlt,
-                title = stringResource(R.string.approvals_empty_title),
-                body = stringResource(R.string.approvals_empty_body),
-            )
+            nothing -> Column(Modifier.fillMaxSize()) {
+                OpenAsksNotice(state.openAsksError, state.openAsksCode, onRetry, Modifier.padding(Spacing.gutter))
+                EmptyState(
+                    icon = Icons.Outlined.TaskAlt,
+                    title = stringResource(R.string.approvals_empty_title),
+                    body = stringResource(R.string.approvals_empty_body),
+                )
+            }
             else -> LazyColumn(Modifier.fillMaxSize().testTag("approvals"), contentPadding = PaddingValues(bottom = Spacing.xxl)) {
+                // §10.4.2: the open asks could not be read; the list below is what this phone knows.
+                state.openAsksError?.let { k ->
+                    item(key = "open-asks-error") {
+                        OpenAsksNotice(k, state.openAsksCode, onRetry, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
+                    }
+                }
                 // The other member declined a request (0.10.5): it has left the list; told once.
                 items(state.peerDeclines, key = { "declined-${it.requestId}" }) { d ->
                     PeerDeclineNotice(
@@ -206,9 +223,9 @@ fun ApprovalsScreen(
         }
     }
     state.confirmRemove?.let { c ->
-        val name = c.displayName.ifBlank { stringResource(R.string.approvals_a_connection) }
+        val name = AccountNames.isolateOrNull(c.displayName) ?: stringResource(R.string.approvals_a_connection)
         ConfirmDialog(
-            title = stringResource(R.string.approvals_remove_title, com.vettid.core.data.account.AccountNames.isolate(name)),
+            title = stringResource(R.string.approvals_remove_title, name),
             text = stringResource(R.string.approvals_remove_body),
             confirmLabel = stringResource(R.string.approvals_paused_remove),
             onConfirm = paused.onRemove,
@@ -218,6 +235,21 @@ fun ApprovalsScreen(
     }
 }
 
+/** The open asks (`pending.list`, §10.4.2) could not be read: a held vault is said to be held, not failed. */
+@Composable
+private fun OpenAsksNotice(error: FailureKind?, code: String?, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    if (error == null) return
+    val held = error == FailureKind.OWNER_CHECK_REQUIRED
+    NoticeCard(
+        kind = if (held) NoticeKind.INFO else NoticeKind.WARNING,
+        title = stringResource(if (held) R.string.approvals_open_asks_held_title else R.string.approvals_open_asks_error_title),
+        body = failureText(error.messageRes(), error.vaultCode(code)),
+        // Held: the list reads again by itself when the daily check passes, so there is nothing to retry.
+        actions = if (held) null else ({ TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } }),
+        modifier = modifier.testTag("open_asks_notice"),
+    )
+}
+
 @Composable
 private fun ApprovalRow(a: Approval, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     val who = whoOf(a)
@@ -225,7 +257,7 @@ private fun ApprovalRow(a: Approval, onOpen: (String) -> Unit, modifier: Modifie
         title = titleOf(a),
         supporting = listOfNotNull(who, summaryOf(a)).joinToString(" · "),
         meta = Times.short(a.receivedAt),
-        tileName = who ?: "?",
+        tileName = AccountNames.cleaned(who) ?: "?",
         emphasized = a.needsDecision,
         onClick = { onOpen(a.key) },
         modifier = modifier.testTag("approval_${a.key}"),
@@ -235,13 +267,13 @@ private fun ApprovalRow(a: Approval, onOpen: (String) -> Unit, modifier: Modifie
 /** One entry for a batch of a connection's asks (§10.4.1): "Dr Lee asks for 3 things", listing them when opened. */
 @Composable
 private fun BatchRow(b: ApprovalEntry.Batch, open: Boolean, onOpen: (String) -> Unit, onToggle: () -> Unit) {
-    val who = b.connectionName ?: stringResource(R.string.approvals_a_connection)
+    val who = AccountNames.isolateOrNull(b.connectionName) ?: stringResource(R.string.approvals_a_connection)
     Column(Modifier.testTag("approval_${b.key}")) {
         VettIdListRow(
             title = pluralStringResource(R.plurals.approvals_batch_title, b.asks.size, who, b.asks.size),
             supporting = b.asks.map { titleOf(it) }.distinct().joinToString(" · "),
             meta = Times.short(b.receivedAt),
-            tileName = who,
+            tileName = AccountNames.cleaned(who) ?: "?",
             emphasized = true,
             onClick = onToggle,
         )
@@ -266,7 +298,7 @@ private fun PausedNotice(
     actions: PausedActions,
     modifier: Modifier = Modifier,
 ) {
-    val name = c.displayName.takeIf { it.isNotBlank() }?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
+    val name = AccountNames.isolateOrNull(c.displayName)
     NoticeCard(
         kind = NoticeKind.WARNING,
         title = if (name != null) {
@@ -289,7 +321,17 @@ private fun PausedNotice(
 
 /** The kind of request, as a row title. */
 @Composable
-fun titleOf(a: Approval): String = stringResource(
+fun titleOf(a: Approval): String {
+    val name = (a as? Approval.Authentication)?.connectionName?.let { AuthContext.isolatedName(it) }
+    val inline = stringResource(R.string.approvals_a_connection_inline)
+    return when ((a as? Approval.Authentication)?.purpose) {
+        AuthPurpose.SIGNIN -> stringResource(R.string.approvals_auth_signin_title, name ?: inline)
+        AuthPurpose.APPROVAL -> stringResource(R.string.approvals_auth_approval_title, name ?: inline)
+        else -> stringResource(kindTitleRes(a))
+    }
+}
+
+private fun kindTitleRes(a: Approval): Int =
     when (a) {
         is Approval.ConnectionRequest -> if (a.remote) R.string.approvals_type_connection_remote else R.string.approvals_type_connection
         is Approval.OutgoingRequest -> R.string.approvals_type_outgoing
@@ -299,16 +341,16 @@ fun titleOf(a: Approval): String = stringResource(
         is Approval.ShareDecision -> R.string.approvals_type_share
         is Approval.DeviceRequest ->
             if (a.type == "device.session.pending") R.string.approvals_type_session else R.string.approvals_type_device
-    },
-)
+    }
 
 @Composable
 private fun whoOf(a: Approval): String? = when (a) {
-    is Approval.ConnectionRequest -> a.name ?: stringResource(R.string.approvals_name_not_shared)
-    is Approval.OutgoingRequest -> a.name ?: stringResource(R.string.approvals_name_not_shared)
-    is Approval.DeviceRequest -> a.deviceName
-    is Approval.ShareDecision -> a.connectionName ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
-    else -> a.connectionName ?: stringResource(R.string.approvals_a_connection)
+    is Approval.ConnectionRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
+    is Approval.OutgoingRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
+    is Approval.DeviceRequest -> deviceWho(a)
+    is Approval.ShareDecision -> AccountNames.isolateOrNull(a.connectionName)
+        ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
+    else -> AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection)
 }
 
 @Composable
@@ -325,12 +367,28 @@ private fun summaryOf(a: Approval): String? = when (a) {
             else -> stringResource(R.string.approvals_summary_sas, sas)
         }
     }
-    is Approval.Authentication -> a.context
+    is Approval.Authentication -> a.context?.let { AuthContext.firstLineIsolated(it) }
     is Approval.GrantRequest -> pluralStringResource(R.plurals.approvals_summary_items, a.entries.size, a.entries.size)
-    is Approval.CriticalUse -> "${a.itemName} · ${a.fieldLabel}"
+    is Approval.CriticalUse -> criticalItem(a)
     is Approval.ShareDecision -> pluralStringResource(R.plurals.approvals_summary_items, a.items.size, a.items.size)
-    is Approval.DeviceRequest -> a.requestType
+    is Approval.DeviceRequest -> a.requestType?.let { AccountNames.firstLineIsolated(it) }
 }
+
+/** The kind of a desktop or agent request ("A desktop", "An agent"), or null for a kind this app does not name (§10.8). */
+@Composable
+private fun deviceKind(a: Approval.DeviceRequest): String? = when (AccountNames.cleaned(a.role)?.lowercase()) {
+    "agent" -> stringResource(R.string.approvals_an_agent)
+    "desktop" -> stringResource(R.string.approvals_a_desktop)
+    else -> null
+}
+
+/** The name a desktop or agent gave itself, isolated; its kind when it gave none (§10.8). Starts the row's second line. */
+@Composable
+private fun deviceWho(a: Approval.DeviceRequest): String? = AccountNames.isolateOrNull(a.deviceName) ?: deviceKind(a)
+
+/** "item · field", each cleaned and isolated; null when neither shows anything. */
+private fun criticalItem(a: Approval.CriticalUse): String? =
+    listOfNotNull(AccountNames.isolateOrNull(a.itemName), AccountNames.isolateOrNull(a.fieldLabel)).joinToString(" · ").ifEmpty { null }
 
 /** What the decision screen can ask for. */
 data class DecisionActions(
@@ -349,6 +407,11 @@ data class DecisionActions(
     val onGrantExpiresIn: (Long?) -> Unit = {},
     /** Leaves a critical use's result. */
     val onFinish: () -> Unit = {},
+    /** A renewal request (0.78.0 §6.8 step 3): "Deny and end access now" asks the confirmation; it ends access; it closes. */
+    val onAskEndAccess: () -> Unit = {},
+    val onEndAccess: () -> Unit = {},
+    val onDismissEndAccess: () -> Unit = {},
+    val onDismissEndFailure: () -> Unit = {},
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
@@ -357,14 +420,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
     LaunchedEffect(state.done) { if (state.done) actions.onBack() }
     val a = state.approval
     if (a == null || state.gone) {
-        FormScaffold(
-            title = stringResource(R.string.approvals_gone_title),
-            body = stringResource(R.string.approvals_gone_body),
-            primaryLabel = stringResource(R.string.approvals_back),
-            onPrimary = actions.onBack,
-            onBack = actions.onBack,
-            modifier = modifier,
-        ) {}
+        GoneScreen(a, state, actions, modifier)
         return
     }
     state.criticalResult?.let { status ->
@@ -378,15 +434,17 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         onPrimary = actions.onApprove,
         primaryEnabled = state.canApprove,
         busy = state.busy,
-        secondaryLabel = stringResource(if (a is Approval.ShareDecision) R.string.approvals_share_decline else R.string.approvals_deny),
+        secondaryLabel = stringResource(denyLabelRes(a)),
         onSecondary = actions.onDeny,
+        tertiaryLabel = if (state.renewalUntil != null) stringResource(R.string.approvals_deny_end_access) else null,
+        onTertiary = actions.onAskEndAccess,
         onBack = actions.onBack,
         modifier = modifier.testTag("approval_detail"),
     ) {
         when (a) {
             is Approval.ShareDecision -> ShareFacts(a, state.shareExcluded, actions.onToggleShareItem)
             is Approval.GrantRequest -> GrantFacts(a, state, actions)
-            else -> Facts(a)
+            else -> Facts(a, renewal = state.renewalUntil != null)
         }
         if (state.needs == Needs.PASSWORD) {
             Spacer(Modifier.height(Spacing.l))
@@ -407,6 +465,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
                 modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("block_request"),
             ) { Text(stringResource(R.string.approvals_block), color = MaterialTheme.colorScheme.error) }
         }
+        RenewalNotices(state, a, actions)
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
             Text(
@@ -416,6 +475,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
             )
         }
     }
+    if (state.confirmEnd) EndAccessDialog(a, actions)
     if (state.confirmBlock) {
         ConfirmDialog(
             title = stringResource(R.string.approvals_block_title),
@@ -426,6 +486,109 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
             destructive = true,
         )
     }
+}
+
+/** "Already decided … or it expired"; a confirmation already open stays and still ends access (0.78.0 §6.8), except while held. */
+@Composable
+private fun GoneScreen(a: Approval?, state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier) {
+    FormScaffold(
+        title = stringResource(R.string.approvals_gone_title),
+        body = stringResource(R.string.approvals_gone_body),
+        primaryLabel = stringResource(R.string.approvals_back),
+        onPrimary = actions.onBack,
+        onBack = actions.onBack,
+        modifier = modifier,
+    ) {
+        // A failed end is said here too (never silent), with Try again while the session is live; not while held.
+        val f = state.endFailure
+        if (a != null && f != null && !state.held) {
+            EndFailureNotice(f, deviceSentenceInline(a), actions, canRetry = state.renewalUntil != null)
+        }
+    }
+    if (a == null || state.held) return
+    // A confirmation already open stays and still ends access.
+    if (state.confirmEnd) EndAccessDialog(a, actions)
+}
+
+/** The Devices page's confirmation, its words reused (core:ui strings). */
+@Composable
+private fun EndAccessDialog(a: Approval, actions: DecisionActions) {
+    ConfirmDialog(
+        title = stringResource(UiR.string.devices_end_access_title, deviceSentenceInline(a)),
+        text = stringResource(UiR.string.devices_end_access_body),
+        confirmLabel = stringResource(UiR.string.devices_end_access),
+        onConfirm = actions.onEndAccess,
+        onDismiss = actions.onDismissEndAccess,
+        destructive = true,
+    )
+}
+
+/** A renewal request's notice above the choices (0.78.0 §6.8 step 3), and why ending access failed. */
+@Composable
+private fun RenewalNotices(state: ApprovalDetailUiState, a: Approval, actions: DecisionActions) {
+    state.renewalUntil?.let { until ->
+        Spacer(Modifier.height(Spacing.l))
+        Text(
+            stringResource(R.string.approvals_renewal_notice, deviceSentenceStart(a), Times.full(until)),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.testTag("renewal_notice"),
+        )
+    }
+    state.endFailure?.let { f ->
+        Spacer(Modifier.height(Spacing.m))
+        EndFailureNotice(f, deviceSentenceInline(a), actions, canRetry = state.renewalUntil != null)
+    }
+}
+
+/** The device's name inside a sentence ("a desktop", "an agent" when it gave none, §10.8). */
+@Composable
+private fun deviceSentenceInline(a: Approval): String {
+    val d = a as? Approval.DeviceRequest
+    val agent = AccountNames.cleaned(d?.role)?.lowercase() == "agent"
+    return AccountNames.isolateOrNull(d?.deviceName)
+        ?: stringResource(if (agent) R.string.approvals_an_agent_inline else R.string.approvals_a_desktop_inline)
+}
+
+/** The device's name starting a sentence ("A desktop", "An agent" when it gave none, §10.8). */
+@Composable
+private fun deviceSentenceStart(a: Approval): String {
+    val d = a as? Approval.DeviceRequest
+    val agent = AccountNames.cleaned(d?.role)?.lowercase() == "agent"
+    return AccountNames.isolateOrNull(d?.deviceName)
+        ?: stringResource(if (agent) R.string.approvals_an_agent else R.string.approvals_a_desktop)
+}
+
+/** Ending access failed (the Devices page's words): the request stays open; Try again asks the confirmation again. */
+@Composable
+private fun EndFailureNotice(f: EndFailure, name: String, actions: DecisionActions, canRetry: Boolean) {
+    // A refused daily check says why in the vault's words; anything else says what did not happen.
+    val body = if (f.kind == com.vettid.core.data.vault.FailureKind.OWNER_CHECK_REQUIRED) {
+        failureText(f.kind.messageRes(), f.kind.vaultCode(f.code))
+    } else {
+        stringResource(UiR.string.devices_end_failed, name)
+    }
+    NoticeCard(
+        kind = NoticeKind.WARNING,
+        title = stringResource(UiR.string.devices_end_failed_title),
+        body = body,
+        modifier = Modifier.testTag("end_failure"),
+        actions = {
+            // Nothing to retry once the session has passed.
+            if (canRetry) {
+                TextButton(onClick = actions.onAskEndAccess, modifier = Modifier.testTag("end_retry")) {
+                    Text(stringResource(R.string.approvals_retry))
+                }
+            }
+            TextButton(onClick = actions.onDismissEndFailure) { Text(stringResource(R.string.approvals_ok)) }
+        },
+    )
+}
+
+/** The decline button: "Not me" for a sign-in challenge (it sends the plain deny), "Decline" for a share, else "Deny". */
+private fun denyLabelRes(a: Approval): Int = when {
+    a is Approval.ShareDecision -> R.string.approvals_share_decline
+    a is Approval.Authentication && a.purpose == AuthPurpose.SIGNIN -> R.string.approvals_auth_signin_deny
+    else -> R.string.approvals_deny
 }
 
 /** A refusal in words; a password backoff counts down to its end; a named limit (0.21.0 §10.1) says which. */
@@ -479,8 +642,8 @@ private fun CriticalResult(status: String, a: Approval, onFinish: () -> Unit, mo
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, actions: DecisionActions) {
     Label(stringResource(R.string.approvals_from))
-    Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
-    a.reason?.let {
+    Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+    a.reason?.let { AuthContext.isolated(it) }?.let {
         Label(stringResource(R.string.approvals_reason))
         Value(it)
     }
@@ -490,7 +653,9 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
         // The member's own item as their vault names it (0.21.0: name, category, labels on the entry); an older vault
         // sends only the id, which the item list names.
         val local = if (e.kind == "item" && e.name == null) state.items.firstOrNull { it.itemId == e.ref } else null
-        val itemName = e.name ?: local?.name
+        val itemName = AccountNames.isolateOrNull(e.name ?: local?.name)
+        // The asker's own words (§10.8 "Showing received text"): cleaned and isolated before they sit in a sentence.
+        val theirs = AccountNames.isolateOrNull(e.label)
         val answer = state.grantAnswers[i]?.let { id -> state.items.firstOrNull { it.itemId == id } }
         val grantable = (e.kind == "item" && e.available) || answer != null
         Row(
@@ -506,20 +671,25 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
             Column(Modifier.weight(1f)) {
                 val title = when {
                     // A category is the asker's label, or its identifier as the vault names it (a custom one humanized, §10.7).
-                    e.kind == "category" -> stringResource(R.string.approvals_grant_category, e.label ?: ItemCategories.humanize(e.ref))
+                    e.kind == "category" -> stringResource(
+                        R.string.approvals_grant_category,
+                        theirs ?: AccountNames.isolate(ItemCategories.humanize(e.ref)),
+                    )
                     e.available && itemName != null -> itemName
-                    else -> stringResource(R.string.approvals_grant_item_missing, e.label ?: e.ref)
+                    else -> stringResource(R.string.approvals_grant_item_missing, theirs ?: AccountNames.isolate(e.ref))
                 }
                 Text(title, style = MaterialTheme.typography.bodyLarge)
-                val theirs = e.label
                 val named = e.kind == "item" && e.available && itemName != null
                 if (named && theirs != null) {
                     Text(stringResource(R.string.approvals_grant_their_words, theirs), style = MaterialTheme.typography.bodySmall)
                 }
-                val fields = e.labels
+                val fields = e.labels?.mapNotNull { AccountNames.isolateOrNull(it.label) }
                 if (e.kind == "item" && e.available && !fields.isNullOrEmpty()) {
                     Text(
-                        stringResource(R.string.approvals_grant_fields, fields.joinToString(", ") { it.label }),
+                        stringResource(
+                            R.string.approvals_grant_fields,
+                            fields.joinToString(", "),
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.testTag("grant_fields_$i"),
@@ -585,10 +755,13 @@ private fun AnswerPicker(index: Int, category: String, chosen: String?, state: A
                 )
             }
             options.forEach { i ->
-                androidx.compose.material3.DropdownMenuItem(text = { Text(i.name) }, onClick = {
-                    open = false
-                    actions.onAnswerGrant(index, i.itemId)
-                })
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(AccountNames.isolateOrNull(i.name) ?: stringResource(R.string.approvals_share_unnamed)) },
+                    onClick = {
+                        open = false
+                        actions.onAnswerGrant(index, i.itemId)
+                    },
+                )
             }
         }
     }
@@ -608,12 +781,13 @@ private const val DEFAULT_GRANT_SECONDS = WEEK_SECONDS
 @Composable
 private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggle: (String) -> Unit) {
     val names = com.vettid.core.data.items.RuleNames.of(a.rules)
-    val who = a.connectionName?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
-        ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
-        ?: stringResource(R.string.approvals_a_connection)
-    if (a.tags.isNotEmpty()) {
+    val who = AccountNames.isolateOrNull(a.connectionName)
+        ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent_inline) }
+        ?: stringResource(R.string.approvals_a_connection_inline)
+    val tags = a.tags.mapNotNull { AccountNames.isolateOrNull(it) }
+    if (tags.isNotEmpty()) {
         Label(stringResource(R.string.approvals_share_tags))
-        Value(a.tags.joinToString(", "))
+        Value(tags.joinToString(", "))
     }
     a.reason?.let {
         Text(
@@ -636,7 +810,10 @@ private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggl
             Checkbox(checked = i.itemId !in excluded, onCheckedChange = null)
             Spacer(Modifier.width(Spacing.m))
             Column {
-                Text(i.name.ifBlank { stringResource(R.string.approvals_share_unnamed) }, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    AccountNames.isolateOrNull(i.name) ?: stringResource(R.string.approvals_share_unnamed),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
                 if (i.sensitivity == "critical") {
                     Text(
                         stringResource(R.string.approvals_share_usable),
@@ -734,35 +911,40 @@ private fun outgoingBody(a: Approval.OutgoingRequest): String = if (a.sas == nul
 } else {
     stringResource(
         if (a.remote) R.string.approvals_outgoing_body_remote else R.string.approvals_outgoing_body,
-        a.name ?: stringResource(R.string.approvals_them),
+        themOf(a.name),
     )
 }
 
 @Composable
 @Suppress("CyclomaticComplexMethod")
-private fun bodyOf(a: Approval): String = when (a) {
+private fun bodyOf(a: Approval): String? = when (a) {
     is Approval.ConnectionRequest -> stringResource(
         if (a.remote) R.string.approvals_connection_body_remote else R.string.approvals_connection_body,
-        a.name ?: stringResource(R.string.approvals_someone),
+        AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_someone),
     )
     is Approval.OutgoingRequest -> outgoingBody(a)
-    is Approval.Authentication -> stringResource(
-        R.string.approvals_auth_body,
-        a.connectionName ?: stringResource(R.string.approvals_a_connection),
-    )
+    is Approval.Authentication -> when (a.purpose) {
+        AuthPurpose.SIGNIN -> stringResource(R.string.approvals_auth_signin_body)
+        // The title says who asks, and their note follows in full (VAULT-MESSAGING 0.65.0 §10.4).
+        AuthPurpose.APPROVAL -> null
+        AuthPurpose.NONE -> stringResource(
+            R.string.approvals_auth_body,
+            AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection),
+        )
+    }
     is Approval.GrantRequest -> stringResource(
         R.string.approvals_grant_body,
-        a.connectionName ?: stringResource(R.string.approvals_a_connection),
+        AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection),
     )
     is Approval.CriticalUse -> stringResource(
         R.string.approvals_critical_body,
-        a.connectionName ?: stringResource(R.string.approvals_a_connection),
+        AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection),
     )
     is Approval.ShareDecision -> stringResource(
         R.string.approvals_share_body,
-        a.connectionName
-            ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
-            ?: stringResource(R.string.approvals_a_connection),
+        AccountNames.isolateOrNull(a.connectionName)
+            ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent_inline) }
+            ?: stringResource(R.string.approvals_a_connection_inline),
     )
     is Approval.DeviceRequest -> stringResource(R.string.approvals_device_body)
 }
@@ -773,7 +955,8 @@ private fun approveLabel(a: Approval): String? = when (a) {
         if (a.state == RequestState.PENDING) stringResource(R.string.approvals_connection_approve) else null
     is Approval.OutgoingRequest ->
         if (a.state == RequestState.PENDING && a.sas != null) stringResource(R.string.approvals_outgoing_approve) else null
-    is Approval.Authentication -> stringResource(R.string.approvals_auth_approve)
+    is Approval.Authentication ->
+        stringResource(if (a.purpose == AuthPurpose.NONE) R.string.approvals_auth_approve else R.string.approvals_auth_purpose_approve)
     is Approval.GrantRequest -> stringResource(R.string.approvals_grant_approve)
     is Approval.CriticalUse -> stringResource(R.string.approvals_critical_approve)
     is Approval.ShareDecision -> stringResource(R.string.approvals_share_approve)
@@ -787,7 +970,7 @@ private fun Label(text: String) {
 
 /** A requester's name inside a sentence (bidi-isolated, §10.8), or "them". */
 @Composable
-private fun themOf(name: String?): String = name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.approvals_them)
+private fun themOf(name: String?): String = AccountNames.isolateOrNull(name) ?: stringResource(R.string.approvals_them)
 
 @Composable
 private fun Value(text: String, modifier: Modifier = Modifier) {
@@ -796,26 +979,26 @@ private fun Value(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
-private fun Facts(a: Approval) {
+private fun Facts(a: Approval, renewal: Boolean = false) {
     when (a) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
             Text(
-                a.name ?: stringResource(R.string.approvals_name_not_shared),
+                AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.testTag("request_name"),
             )
-            if (a.name != null) {
+            if (AccountNames.isolateOrNull(a.name) != null) {
                 Text(
                     stringResource(R.string.approvals_names_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            a.displayName?.let {
+            AccountNames.isolateOrNull(a.displayName)?.let {
                 Spacer(Modifier.height(Spacing.s))
-                Text(stringResource(R.string.approvals_display_name, AccountNames.isolate(it)), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.approvals_display_name, it), style = MaterialTheme.typography.bodyMedium)
                 Text(
                     stringResource(R.string.approvals_self_asserted),
                     style = MaterialTheme.typography.bodySmall,
@@ -856,7 +1039,7 @@ private fun Facts(a: Approval) {
         is Approval.OutgoingRequest -> {
             Label(stringResource(R.string.approvals_outgoing_name))
             Text(
-                a.name ?: stringResource(R.string.approvals_name_not_shared),
+                AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -885,10 +1068,13 @@ private fun Facts(a: Approval) {
         }
         is Approval.Authentication -> {
             Label(stringResource(R.string.approvals_from))
-            Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
-            a.context?.let {
+            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+            // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
+            val note = a.context?.let { AuthContext.isolated(it) }
+                ?: stringResource(R.string.approvals_auth_no_details).takeIf { a.purpose != AuthPurpose.NONE }
+            note?.let {
                 Label(stringResource(R.string.approvals_context))
-                Value(it)
+                Value(it, Modifier.testTag("auth_context"))
             }
             a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
         }
@@ -896,9 +1082,11 @@ private fun Facts(a: Approval) {
         is Approval.GrantRequest -> Unit
         is Approval.CriticalUse -> {
             Label(stringResource(R.string.approvals_from))
-            Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
-            Label(stringResource(R.string.approvals_critical_item))
-            Value("${a.itemName} · ${a.fieldLabel}")
+            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+            criticalItem(a)?.let {
+                Label(stringResource(R.string.approvals_critical_item))
+                Value(it)
+            }
             a.kind?.let { k ->
                 Label(stringResource(R.string.approvals_critical_kind))
                 Value(kindText(k))
@@ -906,7 +1094,7 @@ private fun Facts(a: Approval) {
             SuitabilityNotice(a)
             Label(stringResource(R.string.approvals_critical_operation))
             Value(stringResource(if (a.operation == "auth") R.string.approvals_operation_auth else R.string.approvals_operation_sign))
-            a.context?.let {
+            a.context?.let { AuthContext.isolated(it) }?.let {
                 Label(stringResource(R.string.approvals_context))
                 Value(it)
             }
@@ -943,16 +1131,29 @@ private fun Facts(a: Approval) {
         }
         is Approval.ShareDecision -> {
             Label(stringResource(R.string.approvals_items_asked))
-            a.items.forEach { Text("• ${it.name} (${ItemCategories.humanize(it.category)})", style = MaterialTheme.typography.bodyLarge) }
+            a.items.forEach {
+                val n = AccountNames.isolateOrNull(it.name) ?: stringResource(R.string.approvals_share_unnamed)
+                Text("• $n (${AccountNames.isolate(ItemCategories.humanize(it.category))})", style = MaterialTheme.typography.bodyLarge)
+            }
         }
         is Approval.DeviceRequest -> {
             Label(stringResource(R.string.approvals_device))
-            Value(listOfNotNull(a.deviceName, a.role).joinToString(" · ").ifEmpty { "?" })
-            a.requestType?.let {
+            // With a name: "name · role". Without: the kind once ("A desktop"), never "a desktop · desktop".
+            val named = AccountNames.isolateOrNull(a.deviceName)
+            val who = if (named != null) {
+                listOfNotNull(named, AccountNames.isolateOrNull(a.role)).joinToString(" · ")
+            } else {
+                deviceKind(a) ?: AccountNames.isolateOrNull(a.role).orEmpty()
+            }
+            Value(who.ifEmpty { "?" })
+            a.requestType?.let { AuthContext.isolated(it) }?.let {
                 Label(stringResource(R.string.approvals_request))
                 Value(it)
             }
-            Text(stringResource(R.string.approvals_device_v1), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start)
+            // A renewal says what a deny does instead (RenewalNotices).
+            if (!renewal) {
+                Text(stringResource(R.string.approvals_device_v1), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start)
+            }
         }
     }
 }

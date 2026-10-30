@@ -87,8 +87,28 @@ class DevicesScreenTest {
     @Test
     fun aDeviceWithoutANameIsNamedByItsRole() {
         list(state(phone, agent.copy(name = "", paused = false)))
-        rule.onNodeWithText("Unnamed agent").assertIsDisplayed()
+        rule.onNodeWithText("An agent").assertIsDisplayed()
     }
+
+    private fun lookalike(name: String) {
+        list(state(phone, agent.copy(id = "x1", name = name, paused = false)))
+        rule.onNodeWithText("$name (Agent)").assertIsDisplayed()
+    }
+
+    @Test
+    fun lookalikeWithTwoSpacesKeepsItsRole() = lookalike("This  phone")
+
+    @Test
+    fun lookalikeWithNoBreakSpaceKeepsItsRole() = lookalike("This\u00A0phone")
+
+    @Test
+    fun lookalikeVettIdWithTrailingZwjKeepsItsRole() = lookalike("VettID\u200D")
+
+    @Test
+    fun lookalikeVettIdWithInnerZwjKeepsItsRole() = lookalike("Vett\u200DID")
+
+    @Test
+    fun lookalikeWithHangulFillerKeepsItsRole() = lookalike("This phone\u3164")
 
     @Test
     fun aNameThatCouldPassForThePhoneOrVettIdIsShownWithItsRole() {

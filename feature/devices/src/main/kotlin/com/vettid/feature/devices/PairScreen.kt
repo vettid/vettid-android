@@ -56,7 +56,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.devices.PairingCode
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.devices.PendingPairing
@@ -308,7 +307,6 @@ private fun OwnerCheckNotice(kind: FailureKind, code: String?, actions: PairActi
 @Composable
 private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActions, modifier: Modifier) {
     val sas = p.sas
-    val name = DeviceText.agentName(p.name)
     FormScaffold(
         title = stringResource(R.string.pair_compare_title),
         primaryLabel = stringResource(if (sas != null) R.string.pair_codes_match else R.string.pair_reject),
@@ -332,7 +330,7 @@ private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActi
         }
         Spacer(Modifier.height(Spacing.l))
         Text(
-            stringResource(R.string.pair_calls_itself, isolate(name)),
+            stringResource(R.string.pair_calls_itself, DeviceText.sentenceAgent(p.name)),
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.testTag("pair_name"),
         )
@@ -345,9 +343,6 @@ private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActi
     }
     if (state.sheet && sas != null) AllowSheet(state, actions)
 }
-
-/** The name inside a sentence: isolated, a self-asserted name may run either way (§10.8). */
-private fun isolate(name: String): String = AccountNames.isolate(name)
 
 /** "Does the agent show **123 456**?": the digits in two groups of three, large; read digit by digit by a screen reader. */
 @Composable
@@ -444,7 +439,7 @@ private fun sessionLabel(c: SessionChoice): Int = when (c) {
 
 @Composable
 private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifier: Modifier) {
-    val name = isolate(DeviceText.agentName(stage.name))
+    val name = DeviceText.sentenceAgent(stage.name)
     FormScaffold(
         title = stringResource(R.string.pair_paired_title, name),
         body = stringResource(R.string.pair_paired_body),
@@ -465,7 +460,7 @@ private fun EndedStep(state: PairUiState, actions: PairActions, modifier: Modifi
     val title = if (unknown) R.string.pair_unconfirmed_title else R.string.pair_ended_title
     Plain(title, actions, modifier, primary = R.string.pair_done to actions.onDone, tag = "pair_ended") {
         if (unknown) {
-            val name = isolate(DeviceText.agentName(state.pairing.agentName.orEmpty()))
+            val name = DeviceText.sentenceAgent(state.pairing.agentName.orEmpty())
             Text(stringResource(R.string.pair_unconfirmed_body, name), style = MaterialTheme.typography.bodyLarge)
         } else {
             Text(stringResource(R.string.pair_ended), style = MaterialTheme.typography.bodyLarge)
