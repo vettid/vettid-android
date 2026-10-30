@@ -47,9 +47,6 @@ class VettIdApplication : DistributionApplication() {
     lateinit var screenshots: ScreenshotAllowance
 
     @Inject
-    lateinit var ownerCheck: com.vettid.core.data.vault.OwnerCheckRepository
-
-    @Inject
     @AppScope
     lateinit var scope: CoroutineScope
 
