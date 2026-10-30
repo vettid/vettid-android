@@ -79,6 +79,7 @@ class RenewalTest {
             com.vettid.core.testing.FakeItems(),
             devices,
             vault,
+            social,
         )
     }
 

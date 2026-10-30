@@ -381,6 +381,63 @@ class FeedManagerTest {
         assertNull(FeedAsks.approvalKey("message.received", "m1"))
     }
 
+    // --- one ask of a batch withdrawn (VAULT-MESSAGING 0.80.0 §10.4) ---
+
+    private fun batchItem(id: String, seq: Long, ref: String, count: Int? = null, minutesAgo: Long = 1) =
+        FeedItem(
+            id, seq, "connection.authenticate.requested", now.minus(minutesAgo, ChronoUnit.MINUTES).toString(), "active",
+            connectionId = "c1", ref = ref, count = count,
+        )
+
+    private fun withdrawn(remaining: Int, vararg keys: String, openUntil: Instant? = null) =
+        WithdrawnBatch("c1", keys.toSet(), now, remaining, openUntil)
+
+    @Test
+    fun theLastWithdrawnAskOfABatchMarksItsItemRead() = runTest {
+        val ops = Ops()
+        val m = opened(ops, batchItem("b", 1, "r1", count = 2))
+        // r1 (the item's ref) was decided earlier; r2 is withdrawn now and was the last open: the item is found by the batch window.
+        m.askWithdrawn(withdrawn(0, "auth:r2"))
+        settle { ops.updates.size == 1 }
+        assertEquals(listOf("b" to "read"), ops.updates)
+    }
+
+    @Test
+    fun aWithdrawnAskThatLeavesOthersKeepsTheItemAndPostsTheNotificationAgain() = runTest {
+        val ops = Ops()
+        val m = opened(ops, batchItem("b", 1, "r1", count = 3))
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val soon = now.plusSeconds(300)
+        m.askWithdrawn(withdrawn(2, "auth:r1", "auth:r2", "auth:r3", openUntil = soon))
+        advanceUntilIdle()
+        assertTrue("no feed.update: the item stays", ops.updates.isEmpty())
+        assertEquals(1, arrived.size)
+        assertEquals(2, arrived.single().count)
+        assertEquals(soon, arrived.single().openUntil)
+        // One ask left: the item stands for a single ask now.
+        m.askWithdrawn(withdrawn(1, "auth:r1", "auth:r3", openUntil = soon))
+        advanceUntilIdle()
+        assertNull(arrived.last().count)
+        assertEquals("b", m.items.value.single().itemId)
+        assertEquals(3, m.items.value.single().count)
+        job.cancel()
+    }
+
+    @Test
+    fun aReadItemIsNotPostedAgainAndAnUnknownBatchDoesNothing() = runTest {
+        val ops = Ops()
+        val m = opened(ops, batchItem("b", 1, "r1", count = 2).copy(status = "read"))
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.askWithdrawn(withdrawn(1, "auth:r1", "auth:r2"))
+        m.askWithdrawn(WithdrawnBatch("c9", setOf("auth:zz"), now, 0, null))
+        advanceUntilIdle()
+        assertTrue(arrived.isEmpty())
+        assertTrue(ops.updates.isEmpty())
+        job.cancel()
+    }
+
     private companion object {
         val json = kotlinx.serialization.json.Json { explicitNulls = false }
         const val SETTLE_TRIES = 500

@@ -33,6 +33,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import java.time.Clock
 import java.time.Duration
@@ -79,6 +80,11 @@ class SocialManager(
      * and `ref`), a conversation opened (its `message.received` items, by connection).
      */
     private val feedRead: (kinds: Set<String>, ref: String?, connectionId: String?) -> Unit = { _, _, _ -> },
+    /**
+     * (VAULT-MESSAGING 0.80.0 §10.4) One ask of a connection's asks was withdrawn by the challenger: the feed marks the
+     * batch's item read when no ask of the batch is still open, else re-posts its notification with the asks left.
+     */
+    private val feedWithdrawn: (com.vettid.core.data.feed.WithdrawnBatch) -> Unit = {},
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
     private val localLock = Any()
@@ -106,6 +112,12 @@ class SocialManager(
     private val pending = PendingAsks()
     private val pendingFailureFlow = MutableStateFlow<VaultFailure?>(null)
 
+    /** The sign-in or approval challenges this run saw withdrawn (`withdrawn: true`, 0.80.0); their screens say so. */
+    private val withdrawnFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Challenge keys the vault answered `not_found` for in a decision: a withdrawal flag that comes after is still theirs. */
+    private val notFoundKeys = LinkedHashSet<String>()
+
     override val pendingReadFailure: StateFlow<VaultFailure?> = pendingFailureFlow.asStateFlow()
 
     /** Peer declines noted in this run, so the `failed` that accompanies one never shows it again (0.10.5). */
@@ -126,6 +138,8 @@ class SocialManager(
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     override val requestEnds: StateFlow<Map<String, RequestEnd>> = endsFlow.asStateFlow()
+
+    override val withdrawn: StateFlow<Set<String>> = withdrawnFlow.asStateFlow()
 
     override val peerDeclines: StateFlow<List<PeerDecline>> = declinesFlow.asStateFlow()
 
@@ -293,6 +307,8 @@ class SocialManager(
         // The pending.list state first, inside the lock that clears the events (see [dropLocal]); the file last, and its
         // failure is thrown to the lock's steps (retry, then end the process), after everything else is dropped.
         pendingFailureFlow.value = null
+        withdrawnFlow.value = emptySet()
+        synchronized(notFoundKeys) { notFoundKeys.clear() }
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
@@ -319,6 +335,8 @@ class SocialManager(
     /** Forgets everything (sign-out with a new vault, or a deleted vault). */
     fun clear() {
         pendingFailureFlow.value = null
+        withdrawnFlow.value = emptySet()
+        synchronized(notFoundKeys) { notFoundKeys.clear() }
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
@@ -616,7 +634,7 @@ class SocialManager(
             }
             "connection.changed", "block.added", "block.removed" -> runCatching { refresh() }
             "connection.request" -> onRequestSync(b)
-            "connection.authenticate.decided" -> s("request_id")?.let { closeAsk("auth:$it", ts) }
+            "connection.authenticate.decided" -> s("request_id")?.let { onAuthenticateDecided(it, b, ts) }
             "device.session" -> s("device_id")?.let { onSessionClosed(it, ts) }
             "grant.request.decided" -> s("request_id")?.let { id ->
                 dropApproval("grant:$id")
@@ -628,6 +646,41 @@ class SocialManager(
             }
             "share.decided" -> s("rule_id")?.let { onShareDecided(it, b) }
             "approval.decided" -> s("approval_id")?.let { closeAsk("device:approval.pending:$it", ts) }
+        }
+    }
+
+    /**
+     * `sync.event{connection.authenticate.decided}`. With `withdrawn: true` (0.80.0 §10.4) the challenger withdrew the ask:
+     * it closes as for a decision elsewhere, and the open screen, the batch's entry and its notification say so (the
+     * flag is noted first, so that the screen never reads "decided elsewhere" in between). A flag for an id this app
+     * never knew does nothing. Without the flag it closes as before.
+     */
+    private suspend fun onAuthenticateDecided(id: String, b: JsonObject, ts: Instant) {
+        val key = "auth:$id"
+        val flagged = (b["withdrawn"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true &&
+            (b["approved"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true
+        if (!flagged) {
+            closeAsk(key, ts)
+            return
+        }
+        // Read from the stored state, not the published list (which may lag a moment behind the last event).
+        val before = merge(storedFlow.value, listedFlow.value + requestsFlow.value, connectionsFlow.value, now())
+        val ask = before.firstOrNull { it.key == key } as? Approval.Authentication
+        if (ask != null || synchronized(notFoundKeys) { key in notFoundKeys }) withdrawnFlow.update { it + id }
+        closeAsk(key, ts)
+        if (ask != null) {
+            val batch = AskBatching.batchOf(before, key).ifEmpty { listOf(ask) }
+            val now = now()
+            val left = batch.filter { it.key != key && it.exp?.isAfter(now) != false }
+            feedWithdrawn(
+                com.vettid.core.data.feed.WithdrawnBatch(
+                    connectionId = ask.connectionId,
+                    askKeys = batch.map { it.key }.toSet(),
+                    receivedAt = ask.receivedAt,
+                    remaining = left.size,
+                    openUntil = left.mapNotNull { it.exp }.minOrNull(),
+                ),
+            )
         }
     }
 
@@ -1323,6 +1376,11 @@ class SocialManager(
     private fun find(key: String): Approval? = approvals.value.firstOrNull { it.key == key }
         ?: storedFlow.value.mapNotNull(::parsed).firstOrNull { it.key == key }
 
+    private fun noteNotFound(key: String) = synchronized(notFoundKeys) {
+        notFoundKeys += key
+        while (notFoundKeys.size > MAX_NOT_FOUND) notFoundKeys.remove(notFoundKeys.first())
+    }
+
     /** Runs a decision; a request the vault no longer knows (`not_found`) is dropped too. */
     private suspend fun decide(key: String, block: suspend (VaultApi) -> Unit) = decideRun(key) { vaultGuard { block(api()) } }
 
@@ -1337,6 +1395,7 @@ class SocialManager(
         } catch (e: VaultFailure) {
             if (e.kind == FailureKind.NOT_FOUND) {
                 // Only here: a decision the vault took keeps the question's batches (§10.12 rule 3).
+                if (key.startsWith("auth:")) noteNotFound(key)
                 forgetBatches(key)
                 dropApproval(key)
                 listedFlow.update { l -> l.filterNot { it.key == key } }
@@ -1570,6 +1629,7 @@ class SocialManager(
 
         /** At most this many share decisions and batches are remembered for reads on their way. */
         private const val MAX_LOG = 64
+        private const val MAX_NOT_FOUND = 100
         private const val CODE_TOO_LARGE = "response_too_large"
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
 

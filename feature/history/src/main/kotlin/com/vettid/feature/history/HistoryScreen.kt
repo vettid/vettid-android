@@ -147,6 +147,9 @@ fun NavGraphBuilder.historyDestination(chrome: ShellChrome, host: HistoryHost) {
             onRetry = vm::load,
             onOpenConnection = host.onOpenConnection,
             onOpenItem = host.onOpenItem,
+            onAskMute = vm::askMute,
+            onMute = vm::mute,
+            onDismissMute = vm::dismissMute,
         )
     }
 }

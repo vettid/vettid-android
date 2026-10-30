@@ -154,6 +154,9 @@ object AuditKinds {
 
         /** [res] with a name the vault recorded ([name]). */
         data class Named(@param:StringRes val res: Int, val name: String) : Detail
+
+        /** [res] with the name of the entry's connection, shown only when that name is known. */
+        data class Connection(@param:StringRes val res: Int) : Detail
     }
 
     /** What is known of a `not_success` attempt's outcome (the matching `recovery.open`, [RecoveryRefs.outcomes]). */
@@ -202,6 +205,7 @@ object AuditKinds {
         "leash.item.proxy" -> listOf(Detail.Line(R.string.history_detail_leash_item_proxy))
         "credential.utk_resync" -> listOf(Detail.Line(R.string.history_detail_credential_utk_resync))
         "credential.holder_cleared" -> listOf(Detail.Line(R.string.history_detail_credential_holder_cleared))
+        KIND_AUTHN_WITHDRAWN -> listOf(Detail.Connection(R.string.history_detail_authn_withdrawn))
         else -> emptyList()
     }
 
@@ -244,6 +248,9 @@ object AuditKinds {
         }
         return listOfNotNull(Detail.Line(first), Detail.Line(R.string.history_detail_recovery_closed_unconfirmed).takeIf { c.unconfirmed })
     }
+
+    /** (VAULT-MESSAGING 0.80.0 §10.9; `ref` = `request_id`) The challenger withdrew a sign-in or approval challenge. */
+    const val KIND_AUTHN_WITHDRAWN = "connection.authenticate.withdrawn"
 
     const val KIND_ATTEMPT = RecoveryRefs.KIND_ATTEMPT
     const val KIND_ATTEMPTS_USED = "recovery.attempts_used"
@@ -328,6 +335,7 @@ object AuditKinds {
         "connection.unblocked" to R.string.history_kind_connection_unblocked,
         "connection.request.peer_declined" to R.string.history_kind_connection_request_peer_declined,
         "connection.authenticate.requested" to R.string.history_kind_connection_authenticate_requested,
+        KIND_AUTHN_WITHDRAWN to R.string.history_kind_connection_authenticate_withdrawn,
         "connection.authenticate.signed" to R.string.history_kind_connection_authenticate_signed,
         "connection.authenticate.denied" to R.string.history_kind_connection_authenticate_denied,
         "connection.authenticated" to R.string.history_kind_connection_authenticated,

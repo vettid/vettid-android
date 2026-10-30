@@ -54,7 +54,7 @@ class ApprovalsViewModelsTest {
     private val vault = FakeVault()
 
     private fun detail(a: Approval) =
-        ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault)
+        ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social)
 
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 

@@ -30,6 +30,7 @@ import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.CenteredTitle
+import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.InitialTile
@@ -37,6 +38,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.theme.Spacing
 
 /** An audit entry (§10.9), read-only: what, when, the connection, device and references the vault recorded. */
@@ -47,6 +49,9 @@ fun HistoryEntryScreen(
     onRetry: () -> Unit = {},
     onOpenConnection: (String) -> Unit = {},
     onOpenItem: (String) -> Unit = {},
+    onAskMute: () -> Unit = {},
+    onMute: () -> Unit = {},
+    onDismissMute: () -> Unit = {},
 ) {
     DetailScaffold(onBackClick = onBack, modifier = Modifier.testTag("history_entry")) {
         val e = state.entry
@@ -68,14 +73,33 @@ fun HistoryEntryScreen(
                 stringResource(R.string.history_detail_missing),
                 modifier = Modifier.padding(Spacing.xl),
             )
-            else -> EntryDetail(e, state, onOpenConnection, onOpenItem)
+            else -> EntryDetail(e, state, onOpenConnection, onOpenItem, onAskMute)
+        }
+        if (state.confirmMute) {
+            ConfirmDialog(
+                title = stringResource(UiR.string.core_ui_authn_withdrawn_mute, AccountNames.isolateOrNull(state.connectionName).orEmpty()),
+                text = stringResource(
+                    UiR.string.core_ui_authn_withdrawn_mute_confirm_service,
+                    AccountNames.isolateOrNull(state.connectionName).orEmpty(),
+                ),
+                confirmLabel = stringResource(UiR.string.core_ui_authn_withdrawn_mute_confirm_button),
+                onConfirm = onMute,
+                onDismiss = onDismissMute,
+                dismissLabel = stringResource(UiR.string.core_ui_authn_withdrawn_mute_cancel_button),
+            )
         }
     }
 }
 
 @Composable
 @Suppress("CyclomaticComplexMethod")
-private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnection: (String) -> Unit, onOpenItem: (String) -> Unit) {
+private fun EntryDetail(
+    e: AuditRecord,
+    state: HistoryEntryUiState,
+    onOpenConnection: (String) -> Unit,
+    onOpenItem: (String) -> Unit,
+    onAskMute: () -> Unit,
+) {
     val clipboard = LocalClipboardManager.current
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = Spacing.xxl),
@@ -96,7 +120,7 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
             Modifier.testTag("history_entry_title"),
         )
         // ANDROID-PLAN 0.1.52 §4 "Event titles": the detail lines.
-        val details = HistoryText.details(e.kind, e.ref, state.outcome)
+        val details = HistoryText.details(e.kind, e.ref, state.outcome, state.connectionName)
         DetailCard(Modifier.padding(horizontal = Spacing.s)) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
                 Field(R.string.history_detail_when, e.at?.let { Times.full(it) } ?: stringResource(R.string.history_detail_unknown_time))
@@ -114,6 +138,23 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
                             onClick = { onOpenConnection(id) },
                             modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("history_open_connection"),
                         ) { Text(stringResource(R.string.history_detail_open_connection)) }
+                    }
+                    // A withdrawn request: the existing mute, a secondary text action (ANDROID-PLAN 0.1.101).
+                    val who = AccountNames.isolateOrNull(state.connectionName)
+                    val canMute = state.connectionExists && !state.asksMuted && who != null
+                    if (e.kind == AuditKinds.KIND_AUTHN_WITHDRAWN && canMute && who != null) {
+                        TextButton(
+                            onClick = onAskMute,
+                            enabled = !state.muting,
+                            modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("history_mute_requests"),
+                        ) { Text(stringResource(UiR.string.core_ui_authn_withdrawn_mute, who)) }
+                        state.muteError?.let {
+                            Text(
+                                failureText(it.messageRes(), it.vaultCode(state.muteErrorCode)),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.testTag("history_mute_failure"),
+                            )
+                        }
                     }
                 }
                 AuditKinds.itemOf(e.kind, e.ref)?.let { id ->

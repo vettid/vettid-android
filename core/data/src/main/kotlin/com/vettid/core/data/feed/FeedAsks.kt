@@ -36,6 +36,9 @@ object FeedAsks {
         }
     }
 
+    /** The kinds of the feed items of a connection's asks (a batch's item has the kind of its first ask). */
+    val ASK_KINDS = setOf("connection.authenticate.requested", "grant.request", "critical-secret.use.request")
+
     /** `message.received` items: read when their conversation opens (0.1.23). */
     const val MESSAGE_RECEIVED = "message.received"
 

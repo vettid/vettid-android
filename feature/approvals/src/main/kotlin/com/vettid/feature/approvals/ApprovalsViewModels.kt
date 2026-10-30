@@ -18,6 +18,7 @@ import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import javax.inject.Inject
 
@@ -209,6 +211,19 @@ data class ApprovalDetailUiState(
     val held: Boolean = false,
     /** Ending access is being sent (`busy` too) from the gone screen (the request had left): that screen stays. */
     val ending: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.80.0 §10.4) The challenger withdrew this sign-in or approval: the screen stays, says so and offers
+     * Close instead of the choices. Set as soon as the withdrawal is seen, also after the screen read "decided elsewhere".
+     */
+    val withdrawn: Boolean = false,
+    /** The challenger's connection can be muted from the withdrawn notice (it exists and its requests are not muted). */
+    val canMute: Boolean = false,
+    /** The connection is a service (`peer_kind`): muting asks first. */
+    val connectionIsService: Boolean = false,
+    /** "Mute requests from …" asked on a service connection: the confirmation is open. */
+    val confirmMute: Boolean = false,
+    /** The member muted the connection from this screen. */
+    val muted: Boolean = false,
 ) {
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -262,6 +277,7 @@ class ApprovalDetailViewModel @Inject constructor(
     private val items: ItemsRepository,
     private val devices: DevicesRepository,
     private val ownerCheck: OwnerCheckRepository,
+    private val connections: ConnectionsRepository,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val local = MutableStateFlow(ApprovalDetailUiState(key, approval = repo.approvals.value.firstOrNull { it.key == key }))
@@ -325,21 +341,37 @@ class ApprovalDetailViewModel @Inject constructor(
     /** Whether the vault is held (§3.6.3): a session request leaves the screen, and a confirmation open ends nothing. */
     private fun isHeld(): Boolean = ownerCheck.ownerCheck.value?.state == OwnerCheckState.HELD
 
+    /** What the screen also follows: the devices, the daily check, the withdrawn challenges and the connections. */
+    private class Aux(
+        val devices: List<com.vettid.core.data.devices.DeviceInfo>,
+        val check: OwnerCheckView?,
+        val withdrawn: Set<String>,
+        val connections: List<ConnectionInfo>,
+    )
+
+    private val aux = combine(devices.devices, ownerCheck.ownerCheck, repo.withdrawn, connections.connections, ::Aux)
+
     val uiState: StateFlow<ApprovalDetailUiState> =
-        combine(local, repo.approvals, clock, devices.devices, ownerCheck.ownerCheck) { s, list, now, ds, check ->
+        combine(local, repo.approvals, clock, aux) { s, list, now, x ->
             val a = list.firstOrNull { it.key == key }
             val shown = a ?: s.approval
+            // The challenger withdrew it (0.80.0): the screen stays and says so, whatever else is true of the request.
+            val withdrawn = (shown as? Approval.Authentication)?.requestId?.let { it in x.withdrawn } == true
             // Gone from the list, or expired while open: both read as "Already decided … or it expired" (no actions).
-            val over = (a == null || a.expiredAt(now)) && shown != null
+            val over = (a == null || a.expiredAt(now)) && shown != null && !withdrawn
             // The hold drops a session request (§3.6.3): it leaves the screen even before the list says so.
-            val held = check?.state == OwnerCheckState.HELD && (shown as? Approval.DeviceRequest)?.isSession == true
+            val held = x.check?.state == OwnerCheckState.HELD && (shown as? Approval.DeviceRequest)?.isSession == true
+            val peer = (shown as? Approval.Authentication)?.connectionId?.let { id -> x.connections.firstOrNull { it.id == id } }
             s.copy(
                 approval = shown,
                 // While access is being ended the gone screen stays (it does not flicker back to the request).
                 gone = (over || held) && !s.done && (!s.busy || s.ending) && s.criticalResult == null,
                 held = held,
                 // Past the session's end the request reads as a first request: no notice, only Deny.
-                renewalUntil = Renewal.expiresAt(shown, ds, s.deviceListRead, now),
+                renewalUntil = Renewal.expiresAt(shown, x.devices, s.deviceListRead, now),
+                withdrawn = withdrawn,
+                canMute = withdrawn && peer != null && peer.asks?.muted != true && !s.muted,
+                connectionIsService = peer?.service == true,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 
@@ -507,6 +539,13 @@ class ApprovalDetailViewModel @Inject constructor(
                 // A critical use stays on screen with its result; everything else closes.
                 local.update { it.copy(busy = false, done = it.criticalResult == null, password = "") }
             } catch (e: VaultFailure) {
+                // A sign-in or approval the challenger withdrew is answered `not_found` like any request that is not
+                // waiting: the withdrawn notice shows only if the flag is seen (VAULT-MESSAGING 0.80.0), after a short
+                // wait for the sync event with the progress still showing; else the screen reads as it always did.
+                if (e.kind == FailureKind.NOT_FOUND && withdrawnSeen()) {
+                    local.update { it.copy(busy = false, error = null, password = "") }
+                    return@launch
+                }
                 val backoff = e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0
                 val until = if (backoff) java.time.Instant.now().plusSeconds(e.retryAfterSeconds) else null
                 local.update {
@@ -516,6 +555,45 @@ class ApprovalDetailViewModel @Inject constructor(
         }
     }
 
+    /** Whether the withdrawal of the open sign-in or approval is (or within about 2 seconds is) seen. */
+    private suspend fun withdrawnSeen(): Boolean {
+        val id = (uiState.value.approval as? Approval.Authentication)?.requestId
+        return id != null &&
+            (id in repo.withdrawn.value || withTimeoutOrNull(WITHDRAWN_WAIT_MS) { repo.withdrawn.first { id in it } } != null)
+    }
+
+    /**
+     * "Mute requests from <name>" on the withdrawn notice (ANDROID-PLAN 0.1.101): the existing mute. A service connection
+     * asks first (a superseded sign-in is routine there); a person's connection mutes at once.
+     */
+    fun askMute() {
+        val s = uiState.value
+        if (!s.withdrawn || !s.canMute || s.busy) return
+        if (s.connectionIsService) local.update { it.copy(confirmMute = true, error = null) } else mute()
+    }
+
+    fun dismissMute() = local.update { it.copy(confirmMute = false) }
+
+    fun mute() {
+        val s = uiState.value
+        val a = s.approval as? Approval.Authentication ?: return
+        if (!s.withdrawn || !s.canMute || s.busy) return
+        local.update { it.copy(confirmMute = false, busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                connections.setAsksMuted(a.connectionId, true)
+                local.update { it.copy(busy = false, muted = true) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
+            }
+        }
+    }
+
     /** The member read the critical-use result. */
     fun finish() = local.update { it.copy(done = true) }
+
+    private companion object {
+        /** How long a `not_found` waits for the withdrawal's sync event before it reads as an ordinary closed request. */
+        const val WITHDRAWN_WAIT_MS = 2_000L
+    }
 }

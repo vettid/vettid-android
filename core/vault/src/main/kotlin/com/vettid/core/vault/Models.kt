@@ -120,6 +120,8 @@ data class Connection(
     val archived: Boolean = false,
     /** The connection's asks (VAULT-MESSAGING 0.23.0 §10.4.1); absent from an older vault. */
     val asks: ConnectionAsks? = null,
+    /** (VAULT-MESSAGING 0.69.0 §6.4) `"service"` for a connection that declared itself a service; absent for a person. */
+    @SerialName("peer_kind") val peerKind: String? = null,
 )
 
 /** `<connection>.asks` (§10.4.1, 0.23.0): muted, paused (since [pausedAt]) and the number of cooldowns in force. */
@@ -366,6 +368,11 @@ data class FeedItem(
     val count: Int? = null,
     val title: String? = null,
     val body: String? = null,
+    /**
+     * Never on the wire. Set by the app when it re-posts a batch's notification after one ask of it was withdrawn
+     * (VAULT-MESSAGING 0.80.0 §10.4): the earliest `exp` among the asks still open.
+     */
+    @kotlinx.serialization.Transient val openUntil: java.time.Instant? = null,
 )
 
 @Serializable

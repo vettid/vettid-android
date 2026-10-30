@@ -20,6 +20,17 @@ enum class AuthPurpose {
             "approval" -> APPROVAL
             else -> NONE
         }
+
+        private val MATCH_CODE_LENGTHS = 2..3
+
+        /**
+         * A sign-in's match code (VAULT-MESSAGING 0.79.0 §10.4): [raw] as sent when the challenge is a sign-in and it is
+         * exactly 2 or 3 ASCII digits (no trimming, no spaces, leading zeros kept); null otherwise, and the screen is then
+         * today's. [raw] is the vault's `match_code` string only: a JSON number or `null` arrives here as null, and
+         * nothing is ever looked for in the challenge's `context`.
+         */
+        fun matchCode(purpose: AuthPurpose, raw: String?): String? =
+            raw?.takeIf { purpose == SIGNIN && it.length in MATCH_CODE_LENGTHS && it.all { c -> c in '0'..'9' } }
     }
 }
 

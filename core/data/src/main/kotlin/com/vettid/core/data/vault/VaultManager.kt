@@ -874,6 +874,7 @@ class VaultManager(
             }
         },
         feedRead = { kinds, ref, connectionId -> feed.markReadWhere(kinds, ref, connectionId) },
+        feedWithdrawn = { feed.askWithdrawn(it) },
     )
 
     /**

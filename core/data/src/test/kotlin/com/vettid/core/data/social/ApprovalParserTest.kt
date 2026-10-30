@@ -368,4 +368,49 @@ class AuthPurposeParserTest {
         assertEquals("\u2068a\u200Fb\u2069\n\u2068c\u2069", AuthContext.bubble("\n a\u200F\u202Eb\r\nc \u2028"))
         assertEquals("", AuthContext.bubble("\u200B\u3164"))
     }
+
+    // --- a sign-in's match code (VAULT-MESSAGING 0.79.0 §10.4, ANDROID-PLAN 0.1.100) ---
+
+    private fun o(s: String): JsonObject = VaultJson.json.parseToJsonElement(s).jsonObject
+
+    private fun signIn(extra: String, purpose: String = "signin") =
+        ApprovalParser.parse(
+            "connection.authenticate.pending",
+            o("""{"connection_id":"C1","request_id":"A1","purpose":"$purpose","context":"match code 42"$extra}"""),
+            at,
+        ) as Approval.Authentication
+
+    @Test
+    fun aValidMatchCodeIsKeptAsSentWithItsLeadingZero() {
+        assertEquals("42", signIn(""","match_code":"42"""").matchCode)
+        assertEquals("07", signIn(""","match_code":"07"""").matchCode)
+        assertEquals("123", signIn(""","match_code":"123"""").matchCode)
+        assertEquals("000", signIn(""","match_code":"000"""").matchCode)
+    }
+
+    @Test
+    fun aMalformedMatchCodeIsDroppedAndTheChallengeIsKept() {
+        val bad = listOf(
+            "\"4\"", "\"1234\"", "\"4a\"", "\" 42\"", "\"42 \"", "\"4 2\"", "\"\"", "\"\uFF14\uFF12\"",
+            "\"+42\"", "42", "null", "[\"42\"]", "true",
+        )
+        bad.forEach { json ->
+            val a = signIn(",\"match_code\":" + json)
+            assertNull(json, a.matchCode)
+            assertEquals("A1", a.requestId)
+        }
+    }
+
+    @Test
+    fun theCodeIsNeverTakenFromTheNoteAndOnlyASignInHasOne() {
+        // The note says "match code 42" and there is no field: no code.
+        assertNull(signIn("").matchCode)
+        assertEquals("match code 42", signIn("").context)
+        // A code on an approval, a challenge without a purpose or with an unknown one is not shown.
+        assertNull(signIn(""","match_code":"42"""", purpose = "approval").matchCode)
+        assertNull(signIn(""","match_code":"42"""", purpose = "other").matchCode)
+        assertNull(
+            (ApprovalParser.parse("connection.authenticate.pending", o("""{"connection_id":"C","request_id":"A","match_code":"42"}"""), at) as Approval.Authentication).matchCode,
+        )
+    }
 }

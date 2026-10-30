@@ -1,6 +1,7 @@
 package com.vettid.core.data.feed
 
 import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.social.AskBatching
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.FeedItem
@@ -360,6 +361,37 @@ class FeedManager(
         ids.forEach { markReadQuietly(it) }
     }
 
+    /**
+     * (VAULT-MESSAGING 0.80.0 §10.4) One ask of a connection's asks was withdrawn. The vault leaves the feed item as it is
+     * (a batch's `count` is unchanged). With no ask of the batch still open the item is marked read (its row and
+     * notification go); otherwise it stays and its notification is posted again, quietly, with the asks left and the
+     * earliest deadline among them. Nothing happens for a batch whose item this feed does not hold.
+     */
+    fun askWithdrawn(b: WithdrawnBatch) {
+        val item = synchronized(lock) { batchItem(b) } ?: return
+        if (b.remaining <= 0) {
+            markReadQuietly(item.itemId)
+        } else if (item.status == STATUS_ACTIVE) {
+            emitArrival(item.copy(count = b.remaining.takeIf { it > 1 }, openUntil = b.openUntil))
+        }
+    }
+
+    /**
+     * The feed item that stands for [b]: the ask-kind item of the connection whose `ref` is one of the batch's asks; if
+     * the first ask of the batch is gone already (decided or withdrawn earlier), the newest batch item of the connection
+     * that began within the batch window before the ask reached the member.
+     */
+    private fun batchItem(b: WithdrawnBatch): FeedItem? {
+        val items = byId.values.filter { it.connectionId == b.connectionId && it.kind in FeedAsks.ASK_KINDS }
+        items.firstOrNull { FeedAsks.approvalKey(it.kind, it.ref) in b.askKeys }?.let { return it }
+        val from = b.receivedAt.minus(BATCH_WINDOW).minus(BATCH_SKEW)
+        val to = b.receivedAt.plus(BATCH_SKEW)
+        return items.filter { it.count != null }
+            .mapNotNull { i -> runCatching { Instant.parse(i.at) }.getOrNull()?.let { i to it } }
+            .filter { (_, t) -> !t.isBefore(from) && !t.isAfter(to) }
+            .maxByOrNull { it.second }?.first
+    }
+
     override suspend fun delete(itemId: String) {
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
@@ -402,6 +434,8 @@ class FeedManager(
     }
 
     companion object {
+        private val BATCH_WINDOW: java.time.Duration = AskBatching.WINDOW
+        private val BATCH_SKEW: java.time.Duration = java.time.Duration.ofMinutes(2)
         const val STATUS_ACTIVE = "active"
         const val STATUS_READ = "read"
         const val STATUS_ARCHIVED = "archived"
@@ -433,3 +467,16 @@ class FeedManager(
         }
     }
 }
+
+/**
+ * A withdrawn ask of [connectionId]'s asks (VAULT-MESSAGING 0.80.0 §10.4): [askKeys] are the keys of the batch it was
+ * in (itself included), [receivedAt] when it reached the member, [remaining] the asks of the batch still open and
+ * [openUntil] the earliest `exp` among them.
+ */
+data class WithdrawnBatch(
+    val connectionId: String,
+    val askKeys: Set<String>,
+    val receivedAt: Instant,
+    val remaining: Int,
+    val openUntil: Instant?,
+)

@@ -55,6 +55,8 @@ data class ConnectionInfo(
     val lastActiveAt: Instant? = null,
     /** Whether the connection's asks are muted or paused (`<connection>.asks`, 0.23.0 §10.4.1); null from an older vault. */
     val asks: AskState? = null,
+    /** (VAULT-MESSAGING 0.69.0 §6.4) The connection declared itself a service (`peer_kind: "service"`); never inferred. */
+    val service: Boolean = false,
 ) {
     /** "First Last" from the names on the peer's account; null before they arrived (§10.8). */
     val accountName: String? get() = AccountNames.full(firstName, lastName)
@@ -359,6 +361,11 @@ sealed interface Approval {
         override val connectionName: String? = null,
         /** Why it asks (§10.4 "Purpose", 0.65.0), from the vault's `purpose` only; [AuthPurpose.NONE] when absent or unknown. */
         val purpose: AuthPurpose = AuthPurpose.NONE,
+        /**
+         * (0.79.0 §10.4) A sign-in's match code: exactly 2 or 3 ASCII digits as sent (a string, "07" stays "07"), read only
+         * from the vault's `match_code` and only for a sign-in; null otherwise. Never taken from [context].
+         */
+        val matchCode: String? = null,
     ) : Approval {
         override val key: String get() = "auth:$requestId"
     }

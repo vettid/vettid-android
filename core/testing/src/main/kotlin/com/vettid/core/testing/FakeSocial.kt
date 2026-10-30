@@ -50,6 +50,7 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     override val approvals = MutableStateFlow<List<Approval>>(emptyList())
     override val requestEnds = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     override val peerDeclines = MutableStateFlow<List<PeerDecline>>(emptyList())
+    override val withdrawn = MutableStateFlow<Set<String>>(emptySet())
     override val pendingReadFailure = MutableStateFlow<com.vettid.core.data.vault.VaultFailure?>(null)
     override val conversations = MutableStateFlow<List<ConversationSummary>>(emptyList())
 

@@ -341,6 +341,16 @@ data class HistoryEntryUiState(
     val error: FailureKind? = null,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
+    /** The entry's connection has its requests muted already (so "Mute requests" is not offered). */
+    val asksMuted: Boolean = false,
+    /** The entry's connection declared itself a service (`peer_kind`): muting asks first (0.1.101). */
+    val connectionIsService: Boolean = false,
+    /** "Mute requests from …" asked on a service connection: the confirmation is open. */
+    val confirmMute: Boolean = false,
+    val muting: Boolean = false,
+    /** Muting failed: said plainly under the action (never silent). */
+    val muteError: FailureKind? = null,
+    val muteErrorCode: String? = null,
 )
 
 /** One audit entry (read-only): from the entries History read, else `audit.list{before_seq: seq + 1, limit: 1}`. */
@@ -371,6 +381,7 @@ class HistoryEntryViewModel @Inject constructor(
                 state.update {
                     it.copy(
                         entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
+                        asksMuted = c?.asks?.muted == true, connectionIsService = c?.service == true,
                         itemName = i?.name, itemExists = i != null,
                         deviceName = e?.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } }, devicesKnown = devices != null,
                         deviceUnnamed = e?.deviceId?.let { id -> devices?.get(id)?.isEmpty() } == true,
@@ -380,6 +391,32 @@ class HistoryEntryViewModel @Inject constructor(
                 if (e != null) loadOutcome(e)
             } catch (f: VaultFailure) {
                 state.update { it.copy(loading = false, error = f.kind, errorCode = f.shownCode) }
+            }
+        }
+    }
+
+    /**
+     * "Mute requests from <name>" on a withdrawn request's entry (ANDROID-PLAN 0.1.101): the existing mute
+     * (`connection.asks.mute`). A service connection asks first; a person's connection mutes at once.
+     */
+    fun askMute() {
+        val s = state.value
+        if (s.muting || s.asksMuted || !s.connectionExists) return
+        if (s.connectionIsService) state.update { it.copy(confirmMute = true, muteError = null) } else mute()
+    }
+
+    fun dismissMute() = state.update { it.copy(confirmMute = false) }
+
+    fun mute() {
+        val id = state.value.entry?.connectionId ?: return
+        if (state.value.muting) return
+        state.update { it.copy(confirmMute = false, muting = true, muteError = null) }
+        viewModelScope.launch {
+            try {
+                connections.setAsksMuted(id, true)
+                state.update { it.copy(muting = false, asksMuted = true) }
+            } catch (f: VaultFailure) {
+                state.update { it.copy(muting = false, muteError = f.kind, muteErrorCode = f.shownCode) }
             }
         }
     }

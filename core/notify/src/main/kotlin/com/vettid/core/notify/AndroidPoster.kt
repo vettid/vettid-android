@@ -41,6 +41,7 @@ class AndroidPoster(private val context: Context) : Poster {
             .setAutoCancel(true)
             .setCategory(category(n.channel))
             .setContentIntent(NotifyIntents.open(context, n))
+        n.openUntil?.let { b.setTimeoutAfter(maxOf(1L, it.toEpochMilli() - System.currentTimeMillis())) }
         n.text?.let { b.setContentText(it).setStyle(NotificationCompat.BigTextStyle().bigText(it)) }
         if (n.channel == Channels.SECURITY) b.setPriority(NotificationCompat.PRIORITY_MAX)
         nm.notify(n.tag, NOTIFICATION_ID, b.build())

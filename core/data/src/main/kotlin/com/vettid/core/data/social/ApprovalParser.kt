@@ -58,8 +58,10 @@ object ApprovalParser {
             if (id == null || conn == null) {
                 null
             } else {
+                val purpose = AuthPurpose.of(body.s("purpose"))
                 Approval.Authentication(
-                    id, conn, body.s("context"), at, instant(body.s("exp")), purpose = AuthPurpose.of(body.s("purpose")),
+                    id, conn, body.s("context"), at, instant(body.s("exp")), purpose = purpose,
+                    matchCode = AuthPurpose.matchCode(purpose, body.s("match_code")),
                 )
             }
         }
@@ -220,6 +222,7 @@ object ApprovalParser {
             keyFingerprint = IkFingerprint.formatB64(c.ik),
             createdAt = instant(c.createdAt),
             lastActiveAt = instant(c.lastActiveAt),
+            service = c.peerKind == "service",
             asks = c.asks?.let { AskState(it.muted, it.paused, instant(it.pausedAt), it.cooldowns.coerceAtLeast(0)) },
         )
     }

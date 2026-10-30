@@ -64,7 +64,7 @@ object HistoryText {
      * in real time at scale 1, else as the vault runs it.
      */
     @Composable
-    fun details(kind: String, ref: String?, outcome: AuditKinds.Outcome): List<String> {
+    fun details(kind: String, ref: String?, outcome: AuditKinds.Outcome, connectionName: String? = null): List<String> {
         val scale = LocalTimeScale.current.scale
         return AuditKinds.details(kind, ref, outcome).mapNotNull { d ->
             when (d) {
@@ -72,6 +72,7 @@ object HistoryText {
                 is AuditKinds.Detail.Scaled ->
                     if (scale <= 1) stringResource(d.res) else stringResource(d.scaledRes, scaledDurationText(d.realSeconds))
                 is AuditKinds.Detail.Named -> AccountNames.isolateOrNull(d.name)?.let { stringResource(d.res, it) }
+                is AuditKinds.Detail.Connection -> AccountNames.isolateOrNull(connectionName)?.let { stringResource(d.res, it) }
             }
         }
     }
