@@ -65,13 +65,13 @@ class SocialManager(
      */
     private val obsoleteStore: DeviceStateStore? = null,
     /**
-     * NARROW EXCEPTION to "memory only" (owner decision 2026-10-27), until the vault offers a list of these at unlock
-     * (follow-up): the three event-only asks ([PERSISTED_TYPES]: no vault list brings them back) are kept here,
-     * encrypted (Keystore file, no-backup storage), only until each one's own `exp`, at most [PERSISTED_MAX], so they
-     * survive a process death. Read back by [restorePending] when the vault is open; the file is deleted when it
-     * would be empty and at lock, hold and wipe. Nothing else is ever written.
+     * The pending-asks file (`pending-asks.bin`) of builds before 2026-10-30 (the "event-only" exception, dropped because
+     * `pending.list` is in release 24): nothing is written to it any more; it is deleted at construction, and a delete
+     * that failed is tried again at every lock clear. Best effort: nothing reads the file, so a failure is reported to
+     * [onLeftoverFailed] and never thrown (a lock must always succeed).
      */
-    private val pendingStore: DeviceStateStore? = null,
+    private val obsoletePendingStore: DeviceStateStore? = null,
+    private val onLeftoverFailed: (Throwable) -> Unit = {},
     private val clock: Clock = Clock.systemUTC(),
     /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
     private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
@@ -89,10 +89,25 @@ class SocialManager(
     /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
     private val localLock = Any()
 
+    /** Whether the leftover pending-asks file is still there (its delete failed); guarded by [localLock]. */
+    private var leftoverPending = true
+
     init {
         runCatching { obsoleteStore?.clear() }
-        // Not the pending-asks file: it is read back when the vault is open (restorePending) and cleared by a lock.
+        deleteLeftoverPending()
     }
+
+    @Suppress("TooGenericExceptionCaught") // best effort: whatever the store throws, the caller goes on
+    private fun deleteLeftoverPending() = synchronized(localLock) {
+        if (!leftoverPending) return@synchronized
+        try {
+            obsoletePendingStore?.clear()
+            leftoverPending = false
+        } catch (e: Exception) {
+            runCatching { onLeftoverFailed(e) }
+        }
+    }
+
     private var local: Local = Local()
 
     private val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
@@ -170,140 +185,38 @@ class SocialManager(
     )
 
     /**
-     * Set by a lock or a wipe ([dropLocal] with `close`), cleared by [restorePending] at the next unlock: while it is set
-     * no `pending.list` merge and no write to the file happens, so a read that begins after the lock (the quiet refresh,
-     * the retry five seconds later) cannot put asks back into memory or onto the phone. Events still update memory (one
-     * that arrives right after the unlock, before [restorePending], is shown; [restorePending] writes what came).
-     * Guarded by [localLock].
+     * Set by a lock or a wipe ([dropLocal] with `close`), cleared by [reopen] at the next unlock: while it is set no
+     * `pending.list` merge happens, so a read that begins after the lock (the quiet refresh, the retry five seconds later)
+     * cannot put asks back into memory. Events still update memory (one that arrives right after the unlock, before
+     * [reopen], is shown). Guarded by [localLock].
      */
     private var closed = false
 
+    /** Test hook: runs inside every [edit], under [localLock] (a test blocks here to queue other writes behind it). */
+    @Volatile
+    internal var editHook: (() -> Unit)? = null
+
     private fun edit(f: (Local) -> Local) = synchronized(localLock) {
+        editHook?.invoke()
         val next = f(local)
         if (next == local) return@synchronized
         local = next
         storedFlow.value = next.events
         declinesFlow.value = next.declines.map { it.model() }
-        persistPending(next)
     }
 
-    /** [overflow]: more asks were open than [PERSISTED_MAX] when this was written, so some were not kept. */
-    @Serializable
-    private class PendingFile(val events: List<StoredEvent>, val overflow: Boolean = false)
-
-    private var persisted: List<StoredEvent> = emptyList()
-    private var persistedOverflow = false
-
-    private val keptDroppedFlow = MutableStateFlow(false)
-
-    /**
-     * Asks the phone kept across a restart could not all be brought back (more than [PERSISTED_MAX] were open, or the file
-     * could not be read): told once after the unlock, until [acknowledgeKeptAsksDropped]. Nothing when nothing was dropped.
-     */
-    val keptAsksDropped: StateFlow<Boolean> = keptDroppedFlow.asStateFlow()
-
-    fun acknowledgeKeptAsksDropped() {
-        keptDroppedFlow.value = false
-    }
-
-    /** The file was read back ([restorePending]) or deleted (a lock): before that, an edit must not overwrite it. */
-    private var pendingSettled = false
-
-    /**
-     * [e] reduced to the fields the approval screens, the indicator and the decision calls use ([PERSISTED_FIELDS]); the
-     * rest of the event body (an `approval.pending` carries the held request's whole body) is never written. Plain
-     * values only.
-     */
-    private fun slim(e: StoredEvent): StoredEvent {
-        val body = parseBody(e.body) ?: return e.copy(body = "{}")
-        val allowed = PERSISTED_FIELDS[e.type].orEmpty()
-        val kept = body.filter { (k, v) -> k in allowed && v is JsonPrimitive }
-        return e.copy(body = enc(JsonObject(kept)))
-    }
-
-    /** Writes the unexpired event-only asks of [l] (and only those), newest [PERSISTED_MAX]; deletes the file when none. */
-    @Suppress("ReturnCount", "TooGenericExceptionCaught") // guard clauses; a failed write stays in memory
-    private fun persistPending(l: Local) {
-        val store = pendingStore ?: return
-        if (!pendingSettled || closed) return
-        val t = now()
-        val open = l.events.filter { e ->
-            e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true
-        }.sortedBy { it.at }
-        val overflow = open.size > PERSISTED_MAX
-        val keep = open.takeLast(PERSISTED_MAX).map(::slim)
-        if (keep == persisted && overflow == persistedOverflow) return
-        try {
-            if (keep.isEmpty()) {
-                store.clear()
-            } else {
-                store.save(
-                    VaultJson.json.encodeToString(PendingFile.serializer(), PendingFile(keep, overflow)).toByteArray(Charsets.UTF_8),
-                )
-            }
-            persisted = keep
-            persistedOverflow = overflow
-        } catch (_: Exception) {
-            // kept in memory; the next change tries again (a Keystore, disk or provider failure)
-        }
-    }
-
-    private fun endedInTheGap(e: StoredEvent): Boolean {
-        val key = keyOf(e) ?: return false
-        return pending.wasClosed(key)
-    }
-
-    /**
-     * The vault is open: the event-only asks kept across a process death come back, those whose `exp` has not passed
-     * (one that has is never shown, and is dropped from the file). Called before the lists are read.
-     */
-    @Suppress("TooGenericExceptionCaught") // a failure of the file (Keystore, disk) must never end an unlock's steps
-    fun restorePending() {
-        synchronized(localLock) { closed = false } // the vault is open again
-        val store = pendingStore ?: return
-        // All under the lock a hold's forgetPending takes: a hold in between cannot have its clear undone.
-        synchronized(localLock) {
-            var unreadable = false
-            var overflowed = false
-            val back = try {
-                store.load()?.let {
-                    val f = VaultJson.json.decodeFromString(PendingFile.serializer(), String(it, Charsets.UTF_8))
-                    overflowed = f.overflow
-                    f.events
-                }
-            } catch (_: Exception) {
-                unreadable = true
-                null
-            }.orEmpty()
-            // Asks the phone could not keep (too many open, or a file it cannot read): said once after this unlock.
-            if (unreadable || overflowed) keptDroppedFlow.value = true
-            persistedOverflow = overflowed // so that the write below clears the mark
-            val t = now()
-            // An ask that a closing event already ended since the lock (the gap before this restore) is not brought back.
-            val live = back.filter { e ->
-                e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true && !endedInTheGap(e)
-            }
-            // So that the write below drops what expired; a file that cannot be read is deleted too (a sentinel no list equals).
-            persisted = if (unreadable) listOf(StoredEvent("", "", 0)) else back
-            pendingSettled = true
-            edit { l ->
-                val have = l.events.mapNotNull { keyOf(it) }.toSet()
-                l.copy(events = l.events + live.filter { keyOf(it) !in have })
-            }
-            // Events that came before this read were memory only until now: written too (nothing changed: no write).
-            persistPending(local)
-        }
+    /** The vault is open again (an unlock): the `pending.list` read that follows may merge. */
+    fun reopen() {
+        synchronized(localLock) { closed = false }
     }
 
     /**
      * The vault is no longer open on this phone (locked, or a lock was asked for): the connections, messages and
      * requests read from it are dropped from memory, and so are the approvals the vault sent as events, the names
      * requests showed and the peers' declines (owner decision 2026-10-27: none of it is kept on the phone or across a
-     * lock). An unlock reads the lists again. [keepFile]: the phone could not be reached at start (an offline cold
-     * start): that is not a lock, so the pending-asks file is kept for the unlock to read back; memory is dropped all the
-     * same. Setup phases, locks, holds and wipes delete it.
+     * lock). An unlock reads the lists again.
      */
-    fun forgetOpenVault(keepFile: Boolean = false) {
+    fun forgetOpenVault() {
         // The pending.list state first, inside the lock that clears the events (see [dropLocal]); the file last, and its
         // failure is thrown to the lock's steps (retry, then end the process), after everything else is dropped.
         pendingFailureFlow.value = null
@@ -315,14 +228,13 @@ class SocialManager(
         pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
-        dropLocal(close = true, keepFile = keepFile)
+        dropLocal(close = true)
     }
 
     /**
      * The vault is held or its check is due (§3.6.3) while the app is still open: the approvals and connection requests
      * (events, lists, names, declines) are dropped like the feed's. The connections and messages stay as they were
-     * before this change; [refreshAllQuietly] reads the lists again after the check is passed. A failure to delete the
-     * pending-asks file is thrown (after the memory is dropped).
+     * before this change; [refreshAllQuietly] reads the lists again after the check is passed. 
      */
     fun forgetPending() {
         pendingFailureFlow.value = null
@@ -350,26 +262,19 @@ class SocialManager(
     }
 
     /**
-     * The events, request names and declines held in memory: gone, and the pending-asks file deleted. The `pending.list`
+     * The events, request names and declines held in memory: gone. The `pending.list`
      * state is reset FIRST and inside the lock: a read in flight whose merge takes this lock afterwards has a ticket at or
      * below the floor and merges nothing back (into memory or the file). The delete is not swallowed: a file that stays
      * would restore the pre-lock asks at the next unlock, so the failure is thrown to the caller (ClearSteps).
      */
-    private fun dropLocal(close: Boolean = false, keepFile: Boolean = false) = synchronized(localLock) {
+    private fun dropLocal(close: Boolean = false) = synchronized(localLock) {
         pending.reset()
         if (close) closed = true
         local = Local()
         storedFlow.value = emptyList()
         declinesFlow.value = emptyList()
         notedDeclines.clear()
-        if (keepFile) return@synchronized // memory only: the file stays for the unlock (see [forgetOpenVault])
-        if (close) keptDroppedFlow.value = false
-        pendingSettled = true
-        // Before the delete: a failed delete leaves the file unknown, so a later edit with no asks still deletes it.
-        persisted = listOf(StoredEvent("", "", 0))
-        pendingStore?.clear()
-        persisted = emptyList()
-        persistedOverflow = false
+        deleteLeftoverPending() // best effort, never thrown
     }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */
@@ -1612,22 +1517,6 @@ class SocialManager(
             .sortedByDescending { it.last?.sentAt ?: it.connection.createdAt ?: Instant.EPOCH }
 
     companion object {
-        /** The only approvals that are ever written to disk (no vault list brings them back): see [pendingStore]. */
-        val PERSISTED_TYPES = setOf("connection.authenticate.pending", "approval.pending", "device.session.pending")
-
-        /**
-         * The only fields of each type that are written (what [ApprovalParser] reads for the screens and the decision
-         * calls, plus `purpose`); never the event's other members, above all not an `approval.pending`'s `body`.
-         */
-        val PERSISTED_FIELDS: Map<String, Set<String>> = mapOf(
-            "connection.authenticate.pending" to setOf("request_id", "connection_id", "context", "purpose", "exp"),
-            "approval.pending" to setOf("approval_id", "device_id", "role", "name", "type", "exp"),
-            "device.session.pending" to setOf("request_id", "device_id", "role", "name", "seconds", "exp"),
-        )
-
-        /** At most this many are kept on disk; the oldest are dropped first. */
-        const val PERSISTED_MAX = 32
-
         /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
         private const val PAGE = 100
 

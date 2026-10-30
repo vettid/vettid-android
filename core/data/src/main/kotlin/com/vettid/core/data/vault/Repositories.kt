@@ -139,7 +139,6 @@ private val NEVER_PAUSED: StateFlow<Boolean> = MutableStateFlow(false)
 /** [VaultRepository.pendingDeletion] of a repository that does not follow it. */
 private val NO_DELETION: StateFlow<DeletionView?> = MutableStateFlow(null)
 private val NO_LOCK_NOTICE: StateFlow<LockNotice> = MutableStateFlow(LockNotice.None)
-private val NO_LOCK_DROPPED: StateFlow<Boolean> = MutableStateFlow(false)
 
 /** The vault on this device: enrollment, unlock and lock, status, PIN, deletion, recovery. */
 @Suppress("TooManyFunctions")
@@ -156,14 +155,6 @@ interface VaultRepository {
      * may still be open (this phone is locked all the same and keeps trying), or that it has now confirmed.
      */
     val lockNotice: StateFlow<LockNotice> get() = NO_LOCK_NOTICE
-
-    /**
-     * Asks kept across a restart could not all be brought back (more than 32 were open, or the file could not be read):
-     * told once after the unlock, until acknowledged. False when nothing was dropped.
-     */
-    val keptAsksDropped: StateFlow<Boolean> get() = NO_LOCK_DROPPED
-
-    fun acknowledgeKeptAsksDropped() = Unit
 
     /** Tries the pending lock again now. */
     fun retryLock() = Unit
