@@ -289,7 +289,9 @@ class ApprovalDetailViewModel @Inject constructor(
         // The ask as the list has it now: a screen opened before the ask was listed (a cold start or an unlock, before
         // `pending.list` lands) still knows it when it is withdrawn.
         viewModelScope.launch {
-            repo.approvals.collect { l -> l.firstOrNull { it.key == key }?.let { a -> local.update { s -> if (s.approval == a) s else s.copy(approval = a) } } }
+            repo.approvals.collect { l ->
+                l.firstOrNull { it.key == key }?.let { a -> local.update { s -> if (s.approval == a) s else s.copy(approval = a) } }
+            }
         }
         viewModelScope.launch { items.items.collect { l -> local.update { it.copy(items = l.sortedBy { i -> i.name.lowercase() }) } } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
