@@ -563,8 +563,11 @@ class VaultManager(
     /** Proofs that this phone was replaced, and the wipe they start. */
     val holder = HolderWatch(scope) { wipeThisPhone() }
 
+    /** Whether this process is still on the cold-start offline path (the asks file is kept only then; [AsksFileRule]). */
+    private val asksFile = AsksFileRule.Track()
+
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
-    private val phaseFlow = PhaseHolder(AppPhase.Starting)
+    private val phaseFlow = PhaseHolder(AppPhase.Starting) { asksFile.published(it) }
 
     /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") The re-reads of the status after `device.unlinked{vault_deleted}`,
@@ -1009,7 +1012,7 @@ class VaultManager(
             phaseFlow.asStateFlow().collectSurviving("phase") {
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
-                keepAsksFile = it is AppPhase.Unreachable && AsksFileRule.keeps(previous, it, lockKeeper.holdsPhone)
+                keepAsksFile = it is AppPhase.Unreachable && asksFile.keeps(it, lockKeeper.holdsPhone)
                 previous = it
                 phaseSteps.onPhase(it) {
                     lockedHere = false

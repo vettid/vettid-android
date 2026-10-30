@@ -456,4 +456,39 @@ class SocialMemoryOnlyTest {
         runCurrent()
         assertTrue(m.approvals.value.any { it.key.contains("s41") })
     }
+
+    /** Starting, Unreachable(NETWORK), Unreachable(NO_RESPONSE), then Unlocked: the file is kept throughout and restored. */
+    @Test
+    fun aRetryWhileOfflineKeepsTheFileAndTheUnlockRestoresIt() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s50", "2026-10-27T12:10:00.000Z"))
+        val m = managerAt(backgroundScope, file, now) // a cold start
+        val track = AsksFileRule.Track()
+        for (kind in listOf(com.vettid.core.data.vault.FailureKind.NETWORK, com.vettid.core.data.vault.FailureKind.NO_RESPONSE)) {
+            val phase = com.vettid.core.data.vault.AppPhase.Unreachable(kind)
+            track.published(phase)
+            m.forgetOpenVault(keepFile = track.keeps(phase, lockPending = false))
+        }
+        track.published(com.vettid.core.data.vault.AppPhase.Unlocked)
+        m.restorePending()
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s50") })
+    }
+
+    /** Starting, Unreachable, Locked, Unreachable: the lock ended the offline path; the file goes at the last step. */
+    @Test
+    fun anUnreachableAfterALockDeletesTheFile() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s51", "2026-10-27T12:10:00.000Z"))
+        val m = managerAt(backgroundScope, file, now)
+        val track = AsksFileRule.Track()
+        val net = com.vettid.core.data.vault.AppPhase.Unreachable(com.vettid.core.data.vault.FailureKind.NETWORK)
+        track.published(net)
+        m.forgetOpenVault(keepFile = track.keeps(net, lockPending = false))
+        assertTrue(file.load() != null)
+        track.published(com.vettid.core.data.vault.AppPhase.Locked)
+        track.published(net)
+        m.forgetOpenVault(keepFile = track.keeps(net, lockPending = false))
+        assertNull(file.load())
+    }
 }
