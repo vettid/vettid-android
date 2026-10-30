@@ -453,6 +453,8 @@ object FeedKinds {
         val mine = if (applies) open.orEmpty().filter { AskBatching.connectionOf(it) == c } else emptyList()
         val own = mine.size == 1 && mine.single().key == key
         return when {
+            // A batch whose asks are not listed (yet: a cold start before pending.list) opens the list, which fills as it loads.
+            applies && mine.isEmpty() -> FeedTarget.Approvals
             own || mine.isEmpty() -> FeedTarget.ApprovalEntry(key)
             mine.size == 1 -> FeedTarget.ApprovalEntry(mine.single().key)
             else -> FeedTarget.Approvals

@@ -43,7 +43,7 @@ class AndroidPoster(private val context: Context) : Poster {
             .setContentIntent(NotifyIntents.open(context, n))
         // A re-post replaces the notification, so a deadline set before is cleared explicitly unless this one has its own.
         b.setTimeoutAfter(n.closeAt?.let { maxOf(1L, it.toEpochMilli() - System.currentTimeMillis()) } ?: 0L)
-        n.openUntil?.let { b.setWhen(it.toEpochMilli()).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
+        n.openUntil?.let { b.setWhen(it.toEpochMilli()).setShowWhen(true) }
         if (n.silent) b.setSilent(true)
         n.text?.let { b.setContentText(it).setStyle(NotificationCompat.BigTextStyle().bigText(it)) }
         if (n.channel == Channels.SECURITY) b.setPriority(NotificationCompat.PRIORITY_MAX)

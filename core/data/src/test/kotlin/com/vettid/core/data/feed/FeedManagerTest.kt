@@ -462,6 +462,20 @@ class FeedManagerTest {
         assertEquals(listOf("b" to "read"), ops.updates)
     }
 
+    @Test
+    fun twoVaultBatchesAfterAnUnlockEachKeepTheirOwnItem() = runTest {
+        val ops = Ops()
+        // Both batches' asks collapse into one app batch; the withdrawn ask r3 belongs to the item "second" (ref r3, count 2).
+        val m = opened(ops, batchItem("first", 1, "r1", count = 2), batchItem("second", 2, "r3", count = 2))
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.askWithdrawn(WithdrawnBatch("c1", setOf("auth:r1", "auth:r2", "auth:r3", "auth:r4"), now, 3, null, askKey = "auth:r3"))
+        advanceUntilIdle()
+        assertEquals(listOf("second"), arrived.map { it.itemId })
+        assertTrue(ops.updates.isEmpty())
+        job.cancel()
+    }
+
     private companion object {
         val json = kotlinx.serialization.json.Json { explicitNulls = false }
         const val SETTLE_TRIES = 500

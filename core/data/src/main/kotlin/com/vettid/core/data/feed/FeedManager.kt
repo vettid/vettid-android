@@ -371,7 +371,8 @@ class FeedManager(
      * Nothing happens for an ask whose item this feed does not hold.
      */
     fun askWithdrawn(b: WithdrawnBatch) {
-        val (own, item) = synchronized(lock) { ownItem(b) to batchItem(b) }
+        // The withdrawn ask's own item first, even with a count: another batch's item is never picked for it.
+        val (own, item) = synchronized(lock) { ownItem(b).let { it to (it ?: batchItem(b)) } }
         if (own != null && own.count == null) {
             markReadQuietly(own.itemId)
             return

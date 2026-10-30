@@ -34,7 +34,8 @@ class AskTargetTest {
 
     @Test
     fun withNothingOpenOrNoListItIsTheAskAsBefore() {
-        assertEquals(FeedTarget.ApprovalEntry("auth:a1"), FeedKinds.target(item("a1", count = 2), emptyList()))
+        assertEquals(FeedTarget.Approvals, FeedKinds.target(item("a1", count = 2), emptyList()))
+        assertEquals(FeedTarget.ApprovalEntry("auth:a1"), FeedKinds.target(item("a1"), emptyList()))
         assertEquals(FeedTarget.ApprovalEntry("auth:a1"), FeedKinds.target(item("a1", count = 2)))
     }
 }
