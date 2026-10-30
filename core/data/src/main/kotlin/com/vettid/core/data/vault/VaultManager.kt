@@ -953,8 +953,8 @@ class VaultManager(
             load = { runCatching { f.load() }.getOrNull() },
             persist = { f.save(it) },
             // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
-            // Approvals and requests are read again by the owner-check collector below (a pass here or elsewhere).
-            onPassed = {},
+            // A passed check also reads the approvals again here (§10.4.2), including one that came while the view was already OK.
+            onPassed = { social.refreshAllQuietly() },
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },

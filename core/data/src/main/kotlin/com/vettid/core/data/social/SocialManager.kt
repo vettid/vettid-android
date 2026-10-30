@@ -215,14 +215,17 @@ class SocialManager(
         val store = pendingStore ?: return
         // All under the lock a hold's forgetPending takes: a hold in between cannot have its clear undone.
         synchronized(localLock) {
+            var unreadable = false
             val back = try {
                 store.load()?.let { VaultJson.json.decodeFromString(PendingFile.serializer(), String(it, Charsets.UTF_8)).events }
             } catch (_: Exception) {
+                unreadable = true
                 null
             }.orEmpty()
             val t = now()
             val live = back.filter { e -> e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true }
-            persisted = back // so that the write below drops what expired
+            // So that the write below drops what expired; a file that cannot be read is deleted too (a sentinel no list equals).
+            persisted = if (unreadable) listOf(StoredEvent("", "", 0)) else back
             pendingSettled = true
             edit { l ->
                 val have = l.events.mapNotNull { keyOf(it) }.toSet()
@@ -240,8 +243,8 @@ class SocialManager(
      * lock). An unlock reads the lists again.
      */
     fun forgetOpenVault() {
-        dropLocal()
-        pending.reset()
+        // The pending.list state first, inside the lock that clears the events (see [dropLocal]); the file last, and its
+        // failure is thrown to the lock's steps (retry, then end the process), after everything else is dropped.
         pendingFailureFlow.value = null
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
@@ -249,28 +252,25 @@ class SocialManager(
         pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
+        dropLocal()
     }
 
     /**
      * The vault is held or its check is due (§3.6.3) while the app is still open: the approvals and connection requests
      * (events, lists, names, declines) are dropped like the feed's. The connections and messages stay as they were
-     * before this change; [refreshAllQuietly] reads the lists again after the check is passed.
+     * before this change; [refreshAllQuietly] reads the lists again after the check is passed. A failure to delete the
+     * pending-asks file is thrown (after the memory is dropped).
      */
     fun forgetPending() {
-        dropLocal()
-        // The cut of the last `pending.list` and the reads on their way go with the events they described (§10.4.2).
-        pending.reset()
         pendingFailureFlow.value = null
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
+        dropLocal()
     }
 
     /** Forgets everything (sign-out with a new vault, or a deleted vault). */
     fun clear() {
-        dropLocal()
-        obsoleteStore?.clear()
-        pending.reset()
         pendingFailureFlow.value = null
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
@@ -280,18 +280,25 @@ class SocialManager(
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
         ttls = null
+        runCatching { obsoleteStore?.clear() }
+        dropLocal()
     }
 
-    /** The events, request names and declines held in memory: gone. */
+    /**
+     * The events, request names and declines held in memory: gone, and the pending-asks file deleted. The `pending.list`
+     * state is reset FIRST and inside the lock: a read in flight whose merge takes this lock afterwards has a ticket at or
+     * below the floor and merges nothing back (into memory or the file). The delete is not swallowed: a file that stays
+     * would restore the pre-lock asks at the next unlock, so the failure is thrown to the caller (ClearSteps).
+     */
     private fun dropLocal() = synchronized(localLock) {
+        pending.reset()
         local = Local()
         storedFlow.value = emptyList()
         declinesFlow.value = emptyList()
         notedDeclines.clear()
-        // Deletes the file whatever this process has read of it.
         pendingSettled = true
-        persisted = listOf(StoredEvent("", "", 0))
-        persistPending(local)
+        persisted = emptyList()
+        pendingStore?.clear()
     }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */

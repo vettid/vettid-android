@@ -231,7 +231,13 @@ object SeedWrapKey {
         val key = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, AndroidKeys.PROVIDER).apply { init(spec) }.generateKey()
         // Like the phone key (VAULT-MESSAGING 0.33.0 §11.14.1): a key the Keystore holds in software, or reports
         // nowhere, is not made. A phone like that cannot enroll in the first place (attestation, phone key).
-        val level = AndroidKeys.secretKeyLevel(key)
+        val level = try {
+            AndroidKeys.secretKeyLevel(key)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Not known where the key is held: not kept (the next call would return it unchecked).
+            AndroidKeys.delete(alias)
+            throw KeystoreException("key level not known", e)
+        }
         if (!PhoneKey.holdsPhoneKey(level)) {
             AndroidKeys.delete(alias)
             refused += alias

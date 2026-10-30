@@ -192,4 +192,16 @@ class LockRecordFileTest {
             LockRecordFile(file(), boom, legacy = { LockRecord() }).save(LockRecord(pendingSinceMs = 7))
         }
     }
+
+    /** Review of #204 (3): a read-modify-write must not read the fail-secure placeholder as the record. */
+    @Test
+    fun aStrictLoadThrowsWhereThePlainLoadSaysALockIsPending() {
+        file().writeText("garbage that is not a record")
+        val f = LockRecordFile(file(), legacy = { LockRecord() }, now = { 5 })
+        assertEquals(LockRecord(pendingSinceMs = 5), f.load())
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) { f.loadStrict() }
+        val ok = LockRecordFile(dir.newFile("ok"), legacy = { LockRecord() })
+        ok.save(LockRecord(pendingSinceMs = 7))
+        assertEquals(LockRecord(pendingSinceMs = 7), ok.loadStrict())
+    }
 }

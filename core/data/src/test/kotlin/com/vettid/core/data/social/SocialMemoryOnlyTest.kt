@@ -12,6 +12,7 @@ import com.vettid.core.vault.InMemoryDeviceStateStore
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -210,7 +211,9 @@ class SocialMemoryOnlyTest {
         m.onEvent(session("s5", "2026-10-27T12:10:00.000Z"))
         runCurrent()
         assertTrue(m.approvals.value.any { it.key.contains("s5") })
-        m.forgetPending() // clearing fails too: still no exception
+        // Clearing fails too: said to the lock's steps (retry, then end the process; review of #204 item 2), after the
+        // memory is dropped.
+        org.junit.Assert.assertThrows(java.security.ProviderException::class.java) { m.forgetPending() }
         runCurrent()
         assertTrue(m.approvals.value.isEmpty())
     }
@@ -264,5 +267,42 @@ class SocialMemoryOnlyTest {
         assertEquals("agent.request", d.requestType)
         assertEquals("A", d.deviceId)
         assertEquals(2, again.approvals.value.size)
+    }
+
+    /** Review of #204 (4): a file that cannot be read is deleted at the restore, and the unlock goes on. */
+    @Test
+    fun anUnreadableFileIsDeletedAtTheRestore() = runTest {
+        val file = InMemoryDeviceStateStore().also { it.save("not json at all".toByteArray()) }
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        runCurrent()
+        assertTrue(m.approvals.value.isEmpty())
+        assertNull(file.load())
+    }
+
+    /** Review of #204 (1): a `pending.list` read that began before a lock cannot put its asks back into memory or the file. */
+    @Test
+    fun aListMergeRacingALockLeavesNothingInMemoryOrOnDisk() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        val started = java.util.concurrent.CountDownLatch(1)
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val ask = com.vettid.core.vault.VaultJson.parseObject(
+            """{"kind":"session","body":{"request_id":"s9","device_id":"A","role":"agent","name":"Bot","seconds":3600,"exp":"2026-10-27T12:10:00.000Z"}}""".toByteArray(),
+        )
+        val reader = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+            m.refreshPendingFrom {
+                started.countDown()
+                gate.await()
+                com.vettid.core.vault.PendingPage(listOf(ask), null, now.plusSeconds(5))
+            }
+        }
+        started.await()
+        m.forgetOpenVault() // the lock, while the read is on its way
+        gate.countDown()
+        reader.join()
+        assertTrue(m.approvals.value.isEmpty())
+        assertNull(file.load())
     }
 }

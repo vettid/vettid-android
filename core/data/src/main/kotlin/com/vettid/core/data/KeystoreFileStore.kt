@@ -66,7 +66,8 @@ class KeystoreFileStore(
 
     @Synchronized
     override fun clear() {
-        file.delete()
+        // A file that stays would be read back later: say so (a missing file is cleared).
+        if (!file.delete() && file.exists()) throw java.io.IOException("could not delete ${file.name}")
     }
 
     private fun aad() = Bytes.concat(LABEL.toByteArray(), byteArrayOf(0), purpose.toByteArray())

@@ -51,8 +51,23 @@ internal class LockRecordFile(
     }
 
     override fun load(): LockRecord = synchronized(lock) {
-        if (!file.exists()) return if (migrated() || recordUnreadable()) LockRecord(pendingSinceMs = now()) else legacy()
         try {
+            read()
+        } catch (_: IOException) {
+            LockRecord(pendingSinceMs = now())
+        }
+    }
+
+    /** As [load], but a record that cannot be read or understood throws (for a change that keeps the rest of the record). */
+    override fun loadStrict(): LockRecord = synchronized(lock) { read() }
+
+    @Suppress("ThrowsCount")
+    private fun read(): LockRecord {
+        if (!file.exists()) {
+            if (migrated() || recordUnreadable()) throw IOException("lock record missing")
+            return legacy()
+        }
+        val parsed = try {
             val bytes = file.readBytes()
             val s = sealer
             when {
@@ -61,13 +76,15 @@ internal class LockRecordFile(
                 // The earlier plain-text form: sealed now (best effort; the next save does it otherwise).
                 else -> parse(String(bytes))?.also { r -> runCatching { write(line(r).toByteArray()) } }
             }
-        } catch (_: IOException) {
-            null
-        } catch (_: KeystoreException) {
-            null
-        } catch (@Suppress("TooGenericExceptionCaught") _: RuntimeException) {
-            null // the Keystore failing in another way (a ProviderException, say): a lock is pending, never a crash at start
-        } ?: LockRecord(pendingSinceMs = now())
+        } catch (e: IOException) {
+            throw e
+        } catch (e: KeystoreException) {
+            throw IOException("lock record not opened", e)
+        } catch (@Suppress("TooGenericExceptionCaught") e: RuntimeException) {
+            // the Keystore failing in another way (a ProviderException, say): a lock is pending, never a crash at start
+            throw IOException("lock record not opened", e)
+        }
+        return parsed ?: throw IOException("lock record not understood")
     }
 
     override fun save(record: LockRecord) {
