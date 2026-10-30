@@ -238,7 +238,7 @@ class SocialManager(
      * below the floor and merges nothing back (into memory or the file). The delete is not swallowed: a file that stays
      * would restore the pre-lock asks at the next unlock, so the failure is thrown to the caller (ClearSteps).
      */
-    private fun dropLocal(close: Boolean = false, keepFile: Boolean = false) = synchronized(localLock) {
+    private fun dropLocal(close: Boolean = false) = synchronized(localLock) {
         pending.reset()
         if (close) closed = true
         local = Local()
