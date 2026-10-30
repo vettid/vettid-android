@@ -448,4 +448,54 @@ class RenewalTest {
         assertNotNull(m.uiState.value.endFailure)
         assertNull(m.uiState.value.renewalUntil)
     }
+
+    private fun failedEndThenHold(): ApprovalDetailViewModel {
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.NETWORK)
+        val m = vm()
+        return m
+    }
+
+    private fun held() = OwnerCheckView(OwnerCheckState.HELD, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    private fun ok() = OwnerCheckView(OwnerCheckState.OK, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    @Test
+    fun aSessionThatEndedDuringTheHoldClearsTheFailureWhenItLifts() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        vault.ownerCheck.value = held()
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        // The hold lifts and the list reads with no session: it did end.
+        vault.ownerCheck.value = ok()
+        devices.devices.value = listOf(device(expires = null))
+        devices.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        runCurrent()
+        assertNull(m.uiState.value.endFailure)
+    }
+
+    @Test
+    fun aLiveSessionAfterTheHoldKeepsTheFailure() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        vault.ownerCheck.value = held()
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        vault.ownerCheck.value = ok()
+        devices.devices.value = listOf(device(expires = live))
+        devices.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        assertEquals(live, m.uiState.value.renewalUntil)
+    }
 }

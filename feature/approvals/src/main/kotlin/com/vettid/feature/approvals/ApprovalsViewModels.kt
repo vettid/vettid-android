@@ -348,10 +348,13 @@ class ApprovalDetailViewModel @Inject constructor(
         // recorded after the session had already passed is still shown.
         viewModelScope.launch {
             var live = false
-            uiState.map { it.renewalUntil != null }.distinctUntilChanged().collect { now ->
-                // Entering the hold clears the device list (the session is only suspended): that is not the session ending.
-                val suspended = uiState.value.held || devices.load.value != ListLoad.LOADED
-                if (live && !now && !suspended) local.update { it.copy(endFailure = null) }
+            combine(uiState.map { it.renewalUntil != null }, uiState.map { it.held }, devices.load) { now, held, load ->
+                Triple(now, held, load == ListLoad.LOADED)
+            }.distinctUntilChanged().collect { (now, held, loaded) ->
+                // While held, or before the list is read again, nothing is known: the hold clears the list although the
+                // session is only suspended. `live` stays as it was, so a real end during the hold is seen once it lifts.
+                if (held || !loaded) return@collect
+                if (live && !now) local.update { it.copy(endFailure = null) }
                 live = now
             }
         }
