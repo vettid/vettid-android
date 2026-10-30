@@ -356,10 +356,11 @@ class ApprovalDetailViewModel @Inject constructor(
                 devices.load,
                 devices.devices,
                 uiState.map { it.renewalUntil != null },
-            ) { held, load, _, _ -> held to (load == ListLoad.LOADED) }.collect { (held, loaded) ->
+            ) { _, _, _, _ -> }.collect {
                 // While held, or before the list is read again, nothing is known: the hold clears the list although the
                 // session is only suspended. `live` stays as it was, so a real end during the hold is seen once it lifts.
-                if (held || !loaded) return@collect
+                // Read live, not from the combined values: the hold is set before the list is cleared.
+                if (isHeld() || devices.load.value != ListLoad.LOADED) return@collect
                 val now = Renewal.expiresAt(local.value.approval, devices.devices.value, local.value.deviceListRead, Instant.now()) != null
                 if (live && !now) local.update { it.copy(endFailure = null) }
                 live = now

@@ -521,4 +521,23 @@ class RenewalTest {
         assertNotNull(m.uiState.value.endFailure)
         assertEquals(live, m.uiState.value.renewalUntil)
     }
+
+    /** The manager's order on entering the hold: the hold is set, then the list is emptied, then NOT_LOADED. */
+    @Test
+    fun enteringTheHoldKeepsAnEndFailureWhateverTheCollectorSeesFirst() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        vault.ownerCheck.value = held()
+        devices.devices.value = emptyList()
+        // Collectors may run between the manager's writes: the list is already empty, LOADED still stands.
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+    }
 }
