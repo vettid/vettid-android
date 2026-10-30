@@ -28,7 +28,8 @@ class AskTargetTest {
     fun aWithdrawnFirstAskLeadsToTheOneAskLeftOrTheList() {
         assertEquals(FeedTarget.ApprovalEntry("auth:a2"), FeedKinds.target(item("a1", count = 2), listOf(ask("a2"), ask("x", conn = "c2"))))
         assertEquals(FeedTarget.Approvals, FeedKinds.target(item("a1", count = 3), listOf(ask("a2"), ask("a3"))))
-        assertEquals(FeedTarget.Approvals, FeedKinds.target(item("a1"), listOf(ask("a2"), ask("a3"))))
+        // An item without a count is one ask's: when that ask is gone it is gone (the sheet says so).
+        assertEquals(FeedTarget.ApprovalEntry("auth:a1"), FeedKinds.target(item("a1"), listOf(ask("a2"), ask("a3"))))
     }
 
     @Test

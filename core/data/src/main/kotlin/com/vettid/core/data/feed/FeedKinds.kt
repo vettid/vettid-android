@@ -449,9 +449,9 @@ object FeedKinds {
      */
     private fun askTarget(item: FeedItem, key: String, open: Collection<Approval>?): FeedTarget {
         val c = item.connectionId
-        val applies = open != null && c != null && item.kind in FeedAsks.ASK_KINDS
+        val applies = open != null && c != null && item.kind in FeedAsks.ASK_KINDS && (item.count ?: 0) > 1
         val mine = if (applies) open.orEmpty().filter { AskBatching.connectionOf(it) == c } else emptyList()
-        val own = (item.count ?: 0) <= 1 && mine.any { it.key == key }
+        val own = mine.size == 1 && mine.single().key == key
         return when {
             own || mine.isEmpty() -> FeedTarget.ApprovalEntry(key)
             mine.size == 1 -> FeedTarget.ApprovalEntry(mine.single().key)
