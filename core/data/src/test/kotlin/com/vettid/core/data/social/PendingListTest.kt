@@ -311,6 +311,7 @@ class PendingListTest {
         val m = manager()
         m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
         m.forgetOpenVault()
+        m.restorePending() // the next unlock opens it again
         // No cut after the lock: an event at 5 applies.
         m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
         runCurrent()
@@ -340,6 +341,7 @@ class PendingListTest {
         gate.complete(Unit)
         runCurrent()
         assertEquals(emptyList<String>(), m.keys())
+        m.restorePending() // the next unlock opens it again
         // No cut was set: an event at 5 applies.
         m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
         runCurrent()

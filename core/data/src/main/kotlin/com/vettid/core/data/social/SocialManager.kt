@@ -155,7 +155,15 @@ class SocialManager(
         val declines: List<StoredDecline> = emptyList(),
     )
 
+    /**
+     * Set by a lock or a wipe ([dropLocal] with `close`), cleared by [restorePending] at the next unlock: while it is set no
+     * event, no `pending.list` merge and no write touches the state, so a read that begins after the lock (the quiet
+     * refresh, the retry five seconds later) cannot put asks back into memory or onto the phone. Guarded by [localLock].
+     */
+    private var closed = false
+
     private fun edit(f: (Local) -> Local) = synchronized(localLock) {
+        if (closed) return@synchronized
         val next = f(local)
         if (next == local) return@synchronized
         local = next
@@ -188,7 +196,7 @@ class SocialManager(
     @Suppress("ReturnCount", "TooGenericExceptionCaught") // guard clauses; a failed write stays in memory
     private fun persistPending(l: Local) {
         val store = pendingStore ?: return
-        if (!pendingSettled) return
+        if (!pendingSettled || closed) return
         val t = now()
         val keep = l.events.filter { e ->
             e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true
@@ -212,6 +220,7 @@ class SocialManager(
      */
     @Suppress("TooGenericExceptionCaught") // a failure of the file (Keystore, disk) must never end an unlock's steps
     fun restorePending() {
+        synchronized(localLock) { closed = false } // the vault is open again
         val store = pendingStore ?: return
         // All under the lock a hold's forgetPending takes: a hold in between cannot have its clear undone.
         synchronized(localLock) {
@@ -252,7 +261,7 @@ class SocialManager(
         pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
-        dropLocal()
+        dropLocal(close = true)
     }
 
     /**
@@ -281,7 +290,7 @@ class SocialManager(
         endsFlow.value = emptyMap()
         ttls = null
         runCatching { obsoleteStore?.clear() }
-        dropLocal()
+        dropLocal(close = true)
     }
 
     /**
@@ -290,15 +299,18 @@ class SocialManager(
      * below the floor and merges nothing back (into memory or the file). The delete is not swallowed: a file that stays
      * would restore the pre-lock asks at the next unlock, so the failure is thrown to the caller (ClearSteps).
      */
-    private fun dropLocal() = synchronized(localLock) {
+    private fun dropLocal(close: Boolean = false) = synchronized(localLock) {
         pending.reset()
+        if (close) closed = true
         local = Local()
         storedFlow.value = emptyList()
         declinesFlow.value = emptyList()
         notedDeclines.clear()
         pendingSettled = true
-        persisted = emptyList()
+        // Before the delete: a failed delete leaves the file unknown, so a later edit with no asks still deletes it.
+        persisted = listOf(StoredEvent("", "", 0))
         pendingStore?.clear()
+        persisted = emptyList()
     }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */

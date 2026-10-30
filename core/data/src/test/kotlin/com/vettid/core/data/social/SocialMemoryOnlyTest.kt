@@ -92,6 +92,7 @@ class SocialMemoryOnlyTest {
         assertTrue(m.approvals.value.isEmpty())
         assertTrue(m.peerDeclines.value.isEmpty())
 
+        m.restorePending() // the next unlock
         m.feed()
         runCurrent()
         assertEquals(2, m.approvals.value.size)
@@ -107,6 +108,7 @@ class SocialMemoryOnlyTest {
         val m = setup()
         m.onEvent(event("connection.request.pending", """{"pending_id":"p2","invite_id":"i1","sas":"042817","profile":{"first_name":"Alex","last_name":"Kim"},"remote":true}"""))
         m.forgetOpenVault()
+        m.restorePending() // the next unlock
         m.onEvent(event("sync.event", """{"kind":"connection.request","pending_id":"p2","state":"peer_declined"}"""))
         runCurrent()
         assertNull(m.peerDeclines.value.single().name)
@@ -304,5 +306,46 @@ class SocialMemoryOnlyTest {
         reader.join()
         assertTrue(m.approvals.value.isEmpty())
         assertNull(file.load())
+    }
+
+    /** Recheck of #204 (a): a read that begins after the lock merges nothing into memory or onto the phone. */
+    @Test
+    fun aListReadThatBeginsAfterTheLockMergesNothing() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.forgetOpenVault() // locked: the first lock settles the file
+        val ask = com.vettid.core.vault.VaultJson.parseObject(
+            """{"kind":"session","body":{"request_id":"s10","device_id":"A","role":"agent","name":"Bot","seconds":3600,"exp":"2026-10-27T12:10:00.000Z"}}""".toByteArray(),
+        )
+        m.refreshPendingFrom { com.vettid.core.vault.PendingPage(listOf(ask), null, now.plusSeconds(5)) }
+        m.onEvent(session("s11", "2026-10-27T12:10:00.000Z")) // an event while locked
+        runCurrent()
+        assertTrue(m.approvals.value.isEmpty())
+        assertNull(file.load())
+        // The next unlock opens it again.
+        m.restorePending()
+        m.onEvent(session("s12", "2026-10-27T12:10:00.000Z"))
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s12") })
+        assertTrue(String(file.load()!!).contains("s12"))
+    }
+
+    /** Recheck of #204 (b): a failed delete on a hold, then an edit with no asks, still deletes the file. */
+    @Test
+    fun aFailedDeleteOnAHoldIsRetriedByTheNextEdit() = runTest {
+        val file = Throwing()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.onEvent(session("s13", "2026-10-27T12:10:00.000Z"))
+        runCurrent()
+        assertTrue(file.inner.load() != null)
+        file.fail = true
+        org.junit.Assert.assertThrows(java.security.ProviderException::class.java) { m.forgetPending() }
+        file.fail = false
+        // An edit that leaves no unexpired ask (this one is already past its exp): the file is deleted by it.
+        m.onEvent(session("s14", "2026-10-27T11:00:00.000Z"))
+        runCurrent()
+        assertNull(file.inner.load())
     }
 }
