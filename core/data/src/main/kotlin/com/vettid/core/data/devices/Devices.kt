@@ -244,12 +244,12 @@ class DevicesManager(
 
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
-        // Not loaded first, then empty: LOADED always means a list that was read (a screen that sees an empty list
-        // while LOADED would take it for a session that ended).
-        loadState.value = ListLoad.NOT_LOADED
         synchronized(lock) {
             generation++
             queued = false
+            // Not loaded first, then empty, under the lock a read applies its result under: LOADED always means a list
+            // that was read (a screen that sees an empty list while LOADED would take it for a session that ended).
+            loadState.value = ListLoad.NOT_LOADED
             list.value = emptyList()
             removedFlow.value = null
         }

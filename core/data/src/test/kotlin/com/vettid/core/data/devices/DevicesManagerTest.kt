@@ -195,6 +195,23 @@ class DevicesManagerTest {
         assertEquals(7, m.devices.value.size)
     }
 
+    /** A read in flight across a clear (a hold) ends not loaded and empty, never LOADED with an empty list. */
+    @Test
+    fun aReadInFlightAcrossAClearLeavesNotLoadedAndEmpty() = runTest {
+        val ops = Ops().apply { devices = fleet }
+        val m = manager(ops)
+        m.refresh()
+        assertEquals(ListLoad.LOADED, m.load.value)
+        ops.gate = CompletableDeferred()
+        val job = async { m.refresh() }
+        settle { ops.calls.count { it == "list" } == 2 }
+        m.clear()
+        ops.gate!!.complete(Unit)
+        job.await()
+        assertTrue(m.devices.value.isEmpty())
+        assertEquals(ListLoad.NOT_LOADED, m.load.value)
+    }
+
     @Test
     fun theListIsClearedAtLockAndALateReadIsNotApplied() = runTest {
         val ops = Ops().apply { devices = fleet; gate = CompletableDeferred() }
