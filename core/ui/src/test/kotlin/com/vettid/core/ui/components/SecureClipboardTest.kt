@@ -11,7 +11,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 
-/** A copied secret leaves the clipboard after 60 s and when the vault closes, but never something copied since. */
+/** A copied secret leaves the clipboard after 60 s (or when the member next returns to VettID, if the app was in the background) and when the vault closes, but never something copied since. */
 @RunWith(RobolectricTestRunner::class)
 class SecureClipboardTest {
     private val context: Context = RuntimeEnvironment.getApplication()

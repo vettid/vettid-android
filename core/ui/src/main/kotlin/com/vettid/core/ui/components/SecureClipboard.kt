@@ -19,7 +19,10 @@ import android.os.PersistableBundle
  * from the background: what is due then is cleared when the app next has the focus ([onFocus]). Never guessed.
  */
 object SecureClipboard {
-    /** How long a secret stays on the clipboard. */
+    /**
+     * How long a secret stays on the clipboard: 60 s while the app is in front; from the background it is cleared when the
+     * member next returns to VettID (Android lets an app read the clipboard only with the focus), not before.
+     */
     const val CLEAR_AFTER_MS = 60_000L
 
     /** The clip description's mark: the time (epoch ms) at which this app clears the clip. */

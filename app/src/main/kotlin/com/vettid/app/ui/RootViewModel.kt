@@ -104,6 +104,11 @@ class RootViewModel @Inject constructor(
     val preferencesReset: StateFlow<Boolean> = prefs.preferences.map { it.wasReset }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /** Asks kept across a restart could not all be brought back: told once after the unlock, until dismissed. */
+    val keptAsksDropped: StateFlow<Boolean> = vault.keptAsksDropped
+
+    fun acknowledgeKeptAsksDropped() = vault.acknowledgeKeptAsksDropped()
+
     fun acknowledgePreferencesReset() {
         viewModelScope.launch { prefs.acknowledgeReset() }
     }

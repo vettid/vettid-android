@@ -173,10 +173,24 @@ class SocialManager(
         persistPending(next)
     }
 
+    /** [overflow]: more asks were open than [PERSISTED_MAX] when this was written, so some were not kept. */
     @Serializable
-    private class PendingFile(val events: List<StoredEvent>)
+    private class PendingFile(val events: List<StoredEvent>, val overflow: Boolean = false)
 
     private var persisted: List<StoredEvent> = emptyList()
+    private var persistedOverflow = false
+
+    private val keptDroppedFlow = MutableStateFlow(false)
+
+    /**
+     * Asks the phone kept across a restart could not all be brought back (more than [PERSISTED_MAX] were open, or the file
+     * could not be read): told once after the unlock, until [acknowledgeKeptAsksDropped]. Nothing when nothing was dropped.
+     */
+    val keptAsksDropped: StateFlow<Boolean> = keptDroppedFlow.asStateFlow()
+
+    fun acknowledgeKeptAsksDropped() {
+        keptDroppedFlow.value = false
+    }
 
     /** The file was read back ([restorePending]) or deleted (a lock): before that, an edit must not overwrite it. */
     private var pendingSettled = false
@@ -199,17 +213,22 @@ class SocialManager(
         val store = pendingStore ?: return
         if (!pendingSettled || closed) return
         val t = now()
-        val keep = l.events.filter { e ->
+        val open = l.events.filter { e ->
             e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true
-        }.sortedBy { it.at }.takeLast(PERSISTED_MAX).map(::slim)
-        if (keep == persisted) return
+        }.sortedBy { it.at }
+        val overflow = open.size > PERSISTED_MAX
+        val keep = open.takeLast(PERSISTED_MAX).map(::slim)
+        if (keep == persisted && overflow == persistedOverflow) return
         try {
             if (keep.isEmpty()) {
                 store.clear()
             } else {
-                store.save(VaultJson.json.encodeToString(PendingFile.serializer(), PendingFile(keep)).toByteArray(Charsets.UTF_8))
+                store.save(
+                    VaultJson.json.encodeToString(PendingFile.serializer(), PendingFile(keep, overflow)).toByteArray(Charsets.UTF_8),
+                )
             }
             persisted = keep
+            persistedOverflow = overflow
         } catch (_: Exception) {
             // kept in memory; the next change tries again (a Keystore, disk or provider failure)
         }
@@ -232,12 +251,20 @@ class SocialManager(
         // All under the lock a hold's forgetPending takes: a hold in between cannot have its clear undone.
         synchronized(localLock) {
             var unreadable = false
+            var overflowed = false
             val back = try {
-                store.load()?.let { VaultJson.json.decodeFromString(PendingFile.serializer(), String(it, Charsets.UTF_8)).events }
+                store.load()?.let {
+                    val f = VaultJson.json.decodeFromString(PendingFile.serializer(), String(it, Charsets.UTF_8))
+                    overflowed = f.overflow
+                    f.events
+                }
             } catch (_: Exception) {
                 unreadable = true
                 null
             }.orEmpty()
+            // Asks the phone could not keep (too many open, or a file it cannot read): said once after this unlock.
+            if (unreadable || overflowed) keptDroppedFlow.value = true
+            persistedOverflow = overflowed // so that the write below clears the mark
             val t = now()
             // An ask that a closing event already ended since the lock (the gap before this restore) is not brought back.
             val live = back.filter { e ->
@@ -259,9 +286,11 @@ class SocialManager(
      * The vault is no longer open on this phone (locked, or a lock was asked for): the connections, messages and
      * requests read from it are dropped from memory, and so are the approvals the vault sent as events, the names
      * requests showed and the peers' declines (owner decision 2026-10-27: none of it is kept on the phone or across a
-     * lock). An unlock reads the lists again.
+     * lock). An unlock reads the lists again. [keepFile]: the phone could not be reached at start (an offline cold
+     * start): that is not a lock, so the pending-asks file is kept for the unlock to read back; memory is dropped all the
+     * same. Setup phases, locks, holds and wipes delete it.
      */
-    fun forgetOpenVault() {
+    fun forgetOpenVault(keepFile: Boolean = false) {
         // The pending.list state first, inside the lock that clears the events (see [dropLocal]); the file last, and its
         // failure is thrown to the lock's steps (retry, then end the process), after everything else is dropped.
         pendingFailureFlow.value = null
@@ -271,7 +300,7 @@ class SocialManager(
         pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
-        dropLocal(close = true)
+        dropLocal(close = true, keepFile = keepFile)
     }
 
     /**
@@ -309,18 +338,21 @@ class SocialManager(
      * below the floor and merges nothing back (into memory or the file). The delete is not swallowed: a file that stays
      * would restore the pre-lock asks at the next unlock, so the failure is thrown to the caller (ClearSteps).
      */
-    private fun dropLocal(close: Boolean = false) = synchronized(localLock) {
+    private fun dropLocal(close: Boolean = false, keepFile: Boolean = false) = synchronized(localLock) {
         pending.reset()
         if (close) closed = true
         local = Local()
         storedFlow.value = emptyList()
         declinesFlow.value = emptyList()
         notedDeclines.clear()
+        if (keepFile) return@synchronized // memory only: the file stays for the unlock (see [forgetOpenVault])
+        if (close) keptDroppedFlow.value = false
         pendingSettled = true
         // Before the delete: a failed delete leaves the file unknown, so a later edit with no asks still deletes it.
         persisted = listOf(StoredEvent("", "", 0))
         pendingStore?.clear()
         persisted = emptyList()
+        persistedOverflow = false
     }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */

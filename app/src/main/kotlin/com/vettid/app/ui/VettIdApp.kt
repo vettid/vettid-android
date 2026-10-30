@@ -134,6 +134,7 @@ fun VettIdApp(
     val account by viewModel.account.collectAsStateWithLifecycle()
     val paused by viewModel.servicePaused.collectAsStateWithLifecycle()
     val prefsReset by viewModel.preferencesReset.collectAsStateWithLifecycle()
+    val keptDropped by viewModel.keptAsksDropped.collectAsStateWithLifecycle()
     val retrying by viewModel.retrying.collectAsStateWithLifecycle()
     val canaryVm: CanaryManifestViewModel = hiltViewModel()
     val canaryPrompt by canaryVm.prompt.collectAsStateWithLifecycle()
@@ -181,8 +182,18 @@ fun VettIdApp(
                         statusBarPadding = !paused,
                     )
                 }
+                // Owner decision 2026-10-30: asks kept across a restart that could not all be brought back; said once.
+                if (keptDropped && phase == AppPhase.Unlocked) {
+                    InfoBanner(
+                        stringResource(R.string.root_kept_asks_dropped),
+                        Modifier.testTag("kept_asks_dropped_banner"),
+                        actionLabel = stringResource(R.string.root_preferences_reset_ok),
+                        onAction = viewModel::acknowledgeKeptAsksDropped,
+                        statusBarPadding = !paused && !prefsReset,
+                    )
+                }
                 // Release R (§11.14.10): "Finish the move" and "This phone is your vault's phone again".
-                val topBanner = paused || prefsReset
+                val topBanner = paused || prefsReset || (keptDropped && phase == AppPhase.Unlocked)
                 val moveNotice = MoveNotices(
                     viewModel,
                     phase == AppPhase.Unlocked,

@@ -789,6 +789,10 @@ class VaultManager(
      * itself, an unsignalled lock found by a status read): ANDROID-PLAN 0.1.23, "Your vault is locked".
      */
     val lockedElsewhere: StateFlow<Boolean> = lockedElsewhereFlow.asStateFlow()
+
+    override val keptAsksDropped: StateFlow<Boolean> get() = social.keptAsksDropped
+
+    override fun acknowledgeKeptAsksDropped() = social.acknowledgeKeptAsksDropped()
     override val pendingDeletion: StateFlow<DeletionView?> = deletionFlow.asStateFlow()
 
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
@@ -982,7 +986,12 @@ class VaultManager(
             // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
             val phaseSteps = PhaseSteps.of(
                 replay = { p -> replayHeldBack(heldBack.release(p)) },
-                forgetOpenVault = { social.forgetOpenVault() },
+                // An offline cold start (Unreachable) is not a lock: the asks file kept for the exception stays for the
+                // unlock. A wipe that did not finish (ERASE_FAILED) is not offline: its file goes (the wipe deletes it).
+                forgetOpenVault = {
+                    val offline = phaseFlow.value.let { it is AppPhase.Unreachable && it.failure != FailureKind.ERASE_FAILED }
+                    social.forgetOpenVault(keepFile = offline)
+                },
                 clearAttachments = { attachments.clear() },
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },

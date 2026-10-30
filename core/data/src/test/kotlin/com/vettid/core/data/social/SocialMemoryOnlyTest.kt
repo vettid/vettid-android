@@ -378,4 +378,69 @@ class SocialMemoryOnlyTest {
         runCurrent()
         assertNull(file.inner.load())
     }
+
+    /** Owner decision 2026-10-30 (finding 5): an offline cold start is not a lock; the file stays, memory is dropped. */
+    @Test
+    fun anOfflineStartKeepsTheFileAndTheUnlockBringsTheAsksBack() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.onEvent(session("s30", "2026-10-27T12:10:00.000Z"))
+        runCurrent()
+        m.forgetOpenVault(keepFile = true) // Unreachable
+        runCurrent()
+        assertTrue(m.approvals.value.isEmpty())
+        assertTrue("kept", String(file.load()!!).contains("s30"))
+        m.restorePending() // the unlock
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s30") })
+        assertTrue(!m.keptAsksDropped.value)
+        // A lock (or setup, hold, wipe) still deletes it.
+        m.forgetOpenVault()
+        assertNull(file.load())
+    }
+
+    @Test
+    fun moreAsksThanCanBeKeptAreToldOnceAfterTheUnlock() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        repeat(40) { m.onEvent(session("n$it", "2026-10-27T12:10:00.000Z")) }
+        runCurrent()
+        assertTrue("not told before a restart", !m.keptAsksDropped.value)
+        val again = managerAt(backgroundScope, file, now) // the app restarted
+        again.restorePending()
+        runCurrent()
+        assertTrue(again.keptAsksDropped.value)
+        again.acknowledgeKeptAsksDropped()
+        assertTrue(!again.keptAsksDropped.value)
+        // The mark is cleared by the restore's own write: the next restart says nothing.
+        val third = managerAt(backgroundScope, file, now)
+        third.restorePending()
+        assertTrue(!third.keptAsksDropped.value)
+    }
+
+    @Test
+    fun noNoticeWhenNothingWasDropped() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s31", "2026-10-27T12:10:00.000Z"))
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        assertTrue(!m.keptAsksDropped.value)
+        val empty = managerAt(backgroundScope, InMemoryDeviceStateStore(), now)
+        empty.restorePending()
+        assertTrue(!empty.keptAsksDropped.value)
+    }
+
+    @Test
+    fun anUnreadableOrFailedRestoreIsTold() = runTest {
+        val bad = InMemoryDeviceStateStore().also { it.save("not json".toByteArray()) }
+        val m = managerAt(backgroundScope, bad, now)
+        m.restorePending()
+        assertTrue(m.keptAsksDropped.value)
+        val failing = Throwing().also { it.fail = true }
+        val f = managerAt(backgroundScope, failing, now)
+        f.restorePending()
+        assertTrue(f.keptAsksDropped.value)
+    }
 }
