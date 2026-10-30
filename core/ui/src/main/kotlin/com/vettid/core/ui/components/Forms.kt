@@ -233,6 +233,8 @@ fun FormScaffold(
     destructive: Boolean = false,
     secondaryLabel: String? = null,
     onSecondary: () -> Unit = {},
+    tertiaryLabel: String? = null,
+    onTertiary: () -> Unit = {},
     header: @Composable ColumnScope.() -> Unit = {},
     topActions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
@@ -290,6 +292,15 @@ fun FormScaffold(
                         modifier = Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget),
                     ) {
                         Text(secondaryLabel, color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+                if (tertiaryLabel != null) {
+                    TextButton(
+                        onClick = onTertiary,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).testTag("tertiary_action"),
+                    ) {
+                        Text(tertiaryLabel, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

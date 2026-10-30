@@ -454,6 +454,16 @@ sealed interface Approval {
         val deviceId: String? = null,
     ) : Approval {
         override val key: String get() = "device:$type:$id"
+
+        /** An access-session request (`device.session.pending`); a renewal when the device has a live session. */
+        val isSession: Boolean get() = type == SESSION_PENDING
+
+        /** The device of an access-session request, or null for any other request or an event without one. */
+        val sessionDeviceId: String? get() = deviceId.takeIf { isSession }
+
+        companion object {
+            const val SESSION_PENDING = "device.session.pending"
+        }
     }
 }
 

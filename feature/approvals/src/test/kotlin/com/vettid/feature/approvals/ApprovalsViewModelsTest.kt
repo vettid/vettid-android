@@ -50,7 +50,11 @@ class ApprovalsViewModelsTest {
         add(com.vettid.core.testing.FakeItems.item("i3", "Seed", com.vettid.core.data.items.Sensitivity.CRITICAL))
     }
 
-    private fun detail(a: Approval) = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items)
+    private val devices = com.vettid.core.testing.FakeDevices()
+    private val vault = FakeVault()
+
+    private fun detail(a: Approval) =
+        ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault)
 
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 

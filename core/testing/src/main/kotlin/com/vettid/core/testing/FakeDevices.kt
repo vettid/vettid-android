@@ -25,7 +25,15 @@ class FakeDevices : DevicesRepository {
         fail.remove(name)?.let { throw it }
     }
 
-    override suspend fun refresh() = call("refresh")
+    override suspend fun refresh() {
+        try {
+            call("refresh")
+            load.value = ListLoad.LOADED
+        } catch (e: VaultFailure) {
+            load.value = ListLoad.FAILED
+            throw e
+        }
+    }
 
     override fun refreshQuietly() {
         calls += "refreshQuietly"

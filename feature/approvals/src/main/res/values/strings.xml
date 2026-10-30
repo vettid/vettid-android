@@ -27,6 +27,7 @@
     <string name="approvals_an_agent">An agent</string>
     <string name="approvals_an_agent_inline">an agent</string>
     <string name="approvals_a_desktop">A desktop</string>
+    <string name="approvals_a_desktop_inline">a desktop</string>
     <string name="approvals_summary_sas">code %1$s</string>
     <string name="approvals_type_outgoing">Your connection request</string>
     <string name="approvals_summary_handshake">waiting for their vault</string>
@@ -152,6 +153,9 @@
     <string name="approvals_device_body">A desktop or agent of yours asks for a decision.</string>
     <string name="approvals_device">Device</string>
     <string name="approvals_request">Request</string>
+    <!-- VAULT-MESSAGING 0.78.0 §6.8 step 3, texts approved by the owner. -->
+    <string name="approvals_renewal_notice">Denying refuses only the extra time. %1$s keeps its current access until %2$s.</string>
+    <string name="approvals_deny_end_access">Deny and end access now</string>
     <string name="approvals_device_v1">This version of the app does not pair desktops or agents, so it can only decline.</string>
     <string name="approvals_grant_their_words">They asked for: %1$s</string>
     <string name="approvals_grant_answer">Choose one of your items</string>

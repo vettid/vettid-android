@@ -71,4 +71,11 @@
     <string name="core_ui_replace_keys_body">So an older copy of your vault, opened with your old PIN or password, can\'t be used to reach your connections. Your connections are told about your new keys.</string>
     <string name="core_ui_replace_keys_action">Replace keys</string>
     <string name="core_ui_replace_keys_not_now">Not now</string>
+
+    <!-- End access (VAULT-MESSAGING 0.78.0 §6.8): the Devices page and a renewal request in Approvals share these. -->
+    <string name="devices_end_access">End access</string>
+    <string name="devices_end_access_title">End access for %1$s?</string>
+    <string name="devices_end_access_body">It stops at once, and any of its requests still waiting for you are declined. It can ask for access again; you decide then.</string>
+    <string name="devices_end_failed_title">Access not ended</string>
+    <string name="devices_end_failed">Access for %1$s could not be ended. Try again.</string>
 </resources>
