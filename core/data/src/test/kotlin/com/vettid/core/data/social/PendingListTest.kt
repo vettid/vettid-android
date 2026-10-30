@@ -438,4 +438,51 @@ class PendingListTest {
         runCurrent()
         assertEquals(emptyList<String>(), m.keys())
     }
+
+    /**
+     * The creation must be judged when its write runs, not before: an unrelated write holds the lock (blocked in the edit
+     * hook), the merge of a list at 12 queues, then K (ts 10) arrives; judged on arrival (cut 5) it would pass and be
+     * written after the merge.
+     */
+    @Test
+    fun aCreationQueuedBehindAMergeIsJudgedAgainstTheNewCut() {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val inEdit = java.util.concurrent.CountDownLatch(1)
+        val gated = java.util.concurrent.atomic.AtomicBoolean(false)
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob())
+        try {
+            val m = SocialManager(
+                scope,
+                api = { throw VaultFailure(FailureKind.OTHER) },
+                credential = credential,
+                clock = Clock.fixed(base, ZoneOffset.UTC),
+            )
+            m.editHook = {
+                if (gated.getAndSet(false)) {
+                    inEdit.countDown()
+                    gate.await()
+                }
+            }
+            kotlinx.coroutines.runBlocking {
+                m.refreshPendingFrom { page(at(5)) }
+                gated.set(true)
+                // An unrelated write holds the lock (blocked inside its edit).
+                val other = scope.launch { m.onEvent(event("connection.authenticate.pending", auth("y"), at(6))) }
+                inEdit.await()
+                // The merge of a list at 12 (without K) queues on the lock first...
+                val merge = scope.launch { m.refreshPendingFrom { page(at(12)) } }
+                kotlinx.coroutines.delay(200)
+                // ...then K (ts 10) arrives: judged now (cut 5) it would pass, and be written after the merge.
+                val create = scope.launch { m.onEvent(event("connection.authenticate.pending", auth("K"), at(10))) }
+                kotlinx.coroutines.delay(200)
+                gate.countDown()
+                other.join(); merge.join(); create.join()
+                m.onEvent(sync("connection.authenticate.decided", """"request_id":"K","approved":true""", at(11)))
+                kotlinx.coroutines.delay(200)
+                assertEquals(emptyList<String>(), m.keys())
+            }
+        } finally {
+            scope.cancel()
+        }
+    }
 }

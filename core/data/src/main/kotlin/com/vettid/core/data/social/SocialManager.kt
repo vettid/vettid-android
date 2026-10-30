@@ -66,9 +66,11 @@ class SocialManager(
     /**
      * The pending-asks file (`pending-asks.bin`) of builds before 2026-10-30 (the "event-only" exception, dropped because
      * `pending.list` is in release 24): nothing is written to it any more; it is deleted at construction, and a delete
-     * that failed is tried again by every lock clear, which throws if it still fails (fail closed, like the other clears).
+     * that failed is tried again at every lock clear. Best effort: nothing reads the file, so a failure is reported to
+     * [onLeftoverFailed] and never thrown (a lock must always succeed).
      */
     private val obsoletePendingStore: DeviceStateStore? = null,
+    private val onLeftoverFailed: (Throwable) -> Unit = {},
     private val clock: Clock = Clock.systemUTC(),
     /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
     private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
@@ -86,13 +88,18 @@ class SocialManager(
 
     init {
         runCatching { obsoleteStore?.clear() }
-        runCatching { deleteLeftoverPending() }
+        deleteLeftoverPending()
     }
 
+    @Suppress("TooGenericExceptionCaught") // best effort: whatever the store throws, the caller goes on
     private fun deleteLeftoverPending() = synchronized(localLock) {
         if (!leftoverPending) return@synchronized
-        obsoletePendingStore?.clear()
-        leftoverPending = false
+        try {
+            obsoletePendingStore?.clear()
+            leftoverPending = false
+        } catch (e: Exception) {
+            runCatching { onLeftoverFailed(e) }
+        }
     }
 
     private var local: Local = Local()
@@ -171,7 +178,12 @@ class SocialManager(
      */
     private var closed = false
 
+    /** Test hook: runs inside every [edit], under [localLock] (a test blocks here to queue other writes behind it). */
+    @Volatile
+    internal var editHook: (() -> Unit)? = null
+
     private fun edit(f: (Local) -> Local) = synchronized(localLock) {
+        editHook?.invoke()
         val next = f(local)
         if (next == local) return@synchronized
         local = next
@@ -206,8 +218,7 @@ class SocialManager(
     /**
      * The vault is held or its check is due (§3.6.3) while the app is still open: the approvals and connection requests
      * (events, lists, names, declines) are dropped like the feed's. The connections and messages stay as they were
-     * before this change; [refreshAllQuietly] reads the lists again after the check is passed. A leftover pending-asks file
-     * that cannot be deleted is thrown (after the memory is dropped).
+     * before this change; [refreshAllQuietly] reads the lists again after the check is passed. 
      */
     fun forgetPending() {
         pendingFailureFlow.value = null
@@ -245,7 +256,7 @@ class SocialManager(
         storedFlow.value = emptyList()
         declinesFlow.value = emptyList()
         notedDeclines.clear()
-        deleteLeftoverPending() // a failed delete is thrown to the caller (ClearSteps), after the memory is dropped
+        deleteLeftoverPending() // best effort, never thrown
     }
 
     /** Re-reads connections, conversations and approvals; failures are left for the screens to retry. */

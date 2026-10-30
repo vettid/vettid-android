@@ -861,6 +861,9 @@ class VaultManager(
         credential = this,
         obsoleteStore = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
         obsoletePendingStore = KeystoreFileStore(File(app.noBackupFilesDir, PENDING_ASKS_FILE), "pending-asks"),
+        onLeftoverFailed = {
+            android.util.Log.w("VaultManager", "the old pending-asks file could not be deleted: ${it.javaClass.simpleName}")
+        },
         itemNames = {
             items.items.value.associate { i ->
                 i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)

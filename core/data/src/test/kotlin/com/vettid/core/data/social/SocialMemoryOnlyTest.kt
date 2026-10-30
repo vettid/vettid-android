@@ -171,18 +171,44 @@ class SocialMemoryOnlyTest {
         assertNull(leftover.load())
     }
 
-    /** Fail closed: a delete that failed at start is tried again by the lock's clears, and thrown if it fails again. */
+    /** Best effort: a delete that failed is reported, tried again at each lock, and never thrown (the lock itself succeeds). */
     @Test
-    fun aLeftoverThatCannotBeDeletedIsRetriedByTheLockAndThrown() = runTest {
+    fun aLeftoverThatCannotBeDeletedIsRetriedAtEachLockAndNeverThrown() = runTest {
         val leftover = Throwing().also { it.inner.save("sealed bytes".toByteArray()); it.fail = true }
-        val m = withLeftover(backgroundScope, leftover)
+        val reported = mutableListOf<Throwable>()
+        val m = SocialManager(
+            backgroundScope,
+            api = { throw VaultFailure(FailureKind.OTHER) },
+            credential = credential,
+            obsoletePendingStore = leftover,
+            onLeftoverFailed = { reported += it },
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+        )
+        assertEquals("reported at start", 1, reported.size)
         assertTrue("still there", leftover.inner.load() != null)
-        org.junit.Assert.assertThrows(java.io.IOException::class.java) { m.forgetOpenVault() }
-        org.junit.Assert.assertThrows(java.io.IOException::class.java) { m.forgetPending() }
+        m.onEvent(session("s3", "2026-10-27T12:10:00.000Z"))
+        m.forgetOpenVault() // does not throw
+        m.forgetPending()
+        assertTrue("the lock itself succeeded", m.approvals.value.isEmpty())
+        assertEquals("tried again at each lock", 3, reported.size)
         leftover.fail = false
         m.forgetOpenVault()
         assertNull(leftover.inner.load())
         m.forgetOpenVault() // nothing left to delete
+        assertEquals(3, reported.size)
+    }
+
+    /** An event after the lock and before reopen() updates memory and is shown after reopen(). */
+    @Test
+    fun anEventWhileClosedUpdatesMemoryAndIsShownAfterReopen() = runTest {
+        val m = setup()
+        m.forgetOpenVault()
+        m.onEvent(session("s20", "2026-10-27T12:10:00.000Z"))
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s20") })
+        m.reopen()
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s20") })
     }
 
     /** A `pending.list` read that began before a lock cannot put its asks back into memory. */
