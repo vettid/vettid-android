@@ -156,14 +156,15 @@ class SocialManager(
     )
 
     /**
-     * Set by a lock or a wipe ([dropLocal] with `close`), cleared by [restorePending] at the next unlock: while it is set no
-     * event, no `pending.list` merge and no write touches the state, so a read that begins after the lock (the quiet
-     * refresh, the retry five seconds later) cannot put asks back into memory or onto the phone. Guarded by [localLock].
+     * Set by a lock or a wipe ([dropLocal] with `close`), cleared by [restorePending] at the next unlock: while it is set
+     * no `pending.list` merge and no write to the file happens, so a read that begins after the lock (the quiet refresh,
+     * the retry five seconds later) cannot put asks back into memory or onto the phone. Events still update memory (one
+     * that arrives right after the unlock, before [restorePending], is shown; [restorePending] writes what came).
+     * Guarded by [localLock].
      */
     private var closed = false
 
     private fun edit(f: (Local) -> Local) = synchronized(localLock) {
-        if (closed) return@synchronized
         val next = f(local)
         if (next == local) return@synchronized
         local = next
@@ -214,6 +215,12 @@ class SocialManager(
         }
     }
 
+    private fun endedInTheGap(e: StoredEvent): Boolean {
+        val key = keyOf(e) ?: return false
+        val d = parsed(e) as? Approval.DeviceRequest
+        return pending.wasClosed(key, d?.deviceId, e.type == PendingAsks.SESSION)
+    }
+
     /**
      * The vault is open: the event-only asks kept across a process death come back, those whose `exp` has not passed
      * (one that has is never shown, and is dropped from the file). Called before the lists are read.
@@ -232,7 +239,10 @@ class SocialManager(
                 null
             }.orEmpty()
             val t = now()
-            val live = back.filter { e -> e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true }
+            // An ask that a closing event already ended since the lock (the gap before this restore) is not brought back.
+            val live = back.filter { e ->
+                e.type in PERSISTED_TYPES && parsed(e)?.exp?.isAfter(t) == true && !endedInTheGap(e)
+            }
             // So that the write below drops what expired; a file that cannot be read is deleted too (a sentinel no list equals).
             persisted = if (unreadable) listOf(StoredEvent("", "", 0)) else back
             pendingSettled = true
@@ -1040,6 +1050,7 @@ class SocialManager(
         }.distinctBy { it.key }
         var merged = false
         edit { l ->
+            if (closed) return@edit l // a read that began after the lock merges nothing (see [closed])
             val plan = pending.merge(ticket, ts, listed) ?: return@edit l
             merged = true
             val at = now().toEpochMilli()

@@ -319,16 +319,46 @@ class SocialMemoryOnlyTest {
             """{"kind":"session","body":{"request_id":"s10","device_id":"A","role":"agent","name":"Bot","seconds":3600,"exp":"2026-10-27T12:10:00.000Z"}}""".toByteArray(),
         )
         m.refreshPendingFrom { com.vettid.core.vault.PendingPage(listOf(ask), null, now.plusSeconds(5)) }
-        m.onEvent(session("s11", "2026-10-27T12:10:00.000Z")) // an event while locked
+        m.onEvent(session("s11", "2026-10-27T12:10:00.000Z")) // an event right after the lock: memory only
         runCurrent()
-        assertTrue(m.approvals.value.isEmpty())
-        assertNull(file.load())
+        assertTrue("the list merged nothing", m.approvals.value.none { it.key.contains("s10") })
+        assertNull("nothing is written while closed", file.load())
         // The next unlock opens it again.
         m.restorePending()
         m.onEvent(session("s12", "2026-10-27T12:10:00.000Z"))
         runCurrent()
         assertTrue(m.approvals.value.any { it.key.contains("s12") })
-        assertTrue(String(file.load()!!).contains("s12"))
+        val text = String(file.load()!!)
+        assertTrue("what came in the gap is written at the restore", text.contains("s11") && text.contains("s12"))
+    }
+
+    /** Recheck of #204: an event after the lock and before the restore is shown, and written at the restore. */
+    @Test
+    fun anEventAfterTheLockAndBeforeTheRestoreIsShown() = runTest {
+        val file = InMemoryDeviceStateStore()
+        val m = managerAt(backgroundScope, file, now)
+        m.restorePending()
+        m.forgetOpenVault()
+        m.onEvent(session("s21", "2026-10-27T12:10:00.000Z")) // delivered after the unlock, before the restore
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s21") })
+        m.restorePending()
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s21") })
+        assertTrue(String(file.load()!!).contains("s21"))
+    }
+
+    /** Recheck of #204: a close that comes before the restore ends the ask the file would bring back. */
+    @Test
+    fun aCloseBeforeTheRestoreEndsTheAskTheFileHolds() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }
+            .onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r20","exp":"2026-10-27T12:10:00.000Z"}"""))
+        val m = managerAt(backgroundScope, file, now) // a new process: the file holds r20
+        m.onEvent(event("sync.event", """{"kind":"connection.authenticate.decided","request_id":"r20","approved":true}"""))
+        m.restorePending()
+        runCurrent()
+        assertTrue(m.approvals.value.none { it.key.contains("r20") })
     }
 
     /** Recheck of #204 (b): a failed delete on a hold, then an edit with no asks, still deletes the file. */

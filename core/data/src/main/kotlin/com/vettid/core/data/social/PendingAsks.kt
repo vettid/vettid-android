@@ -105,6 +105,11 @@ internal class PendingAsks {
         if (m.size > MAX_KEPT) m.entries.minByOrNull { it.value }?.let { m.remove(it.key) }
     }
 
+    /** Whether a closing event for ask [key] (or for the [session] request's [deviceId]) was accepted and no list reflects it yet. */
+    fun wasClosed(key: String, deviceId: String?, session: Boolean): Boolean = synchronized(lock) {
+        closedKeys.containsKey(key) || (session && deviceId != null && closedDevices.containsKey(deviceId))
+    }
+
     /** Whether the ask [key] was created after [ts]: a closing event at [ts] is not about it. */
     fun createdAfter(key: String, ts: Instant): Boolean = synchronized(lock) { created[key]?.isAfter(ts) == true }
 

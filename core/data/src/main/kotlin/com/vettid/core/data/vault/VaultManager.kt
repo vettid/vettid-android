@@ -1005,8 +1005,9 @@ class VaultManager(
                 phaseSteps.onPhase(it) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
-                    resumeRelay() // after an unlock the notification service's connection comes back
+                    // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
                     social.restorePending() // event-only asks kept until their exp across a process death
+                    resumeRelay() // after an unlock the notification service's connection comes back
                     social.refreshAllQuietly()
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
                     items.refreshQuietly()
