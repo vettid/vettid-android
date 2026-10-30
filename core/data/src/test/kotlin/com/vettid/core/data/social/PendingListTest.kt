@@ -45,7 +45,6 @@ class PendingListTest {
         backgroundScope,
         api = { throw VaultFailure(FailureKind.OTHER) },
         credential = credential,
-        store = InMemoryDeviceStateStore(),
         clock = Clock.fixed(base, ZoneOffset.UTC),
     )
 
@@ -312,6 +311,7 @@ class PendingListTest {
         val m = manager()
         m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
         m.forgetOpenVault()
+        m.restorePending() // the next unlock opens it again
         // No cut after the lock: an event at 5 applies.
         m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
         runCurrent()
@@ -341,6 +341,7 @@ class PendingListTest {
         gate.complete(Unit)
         runCurrent()
         assertEquals(emptyList<String>(), m.keys())
+        m.restorePending() // the next unlock opens it again
         // No cut was set: an event at 5 applies.
         m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
         runCurrent()
@@ -439,8 +440,8 @@ class PendingListTest {
     }
 
     /**
-     * The creation must be judged when its write runs, not before: an unrelated write holds the mutex, the merge of a list
-     * at 12 queues, then K (ts 10) arrives; judged on arrival (cut 5) it would pass and be written after the merge.
+     * The creation must be judged when its write runs, not before: an unrelated write holds the lock (blocked in its save
+     * of the event-only asks file), the merge of a list at 12 queues, then K (ts 10) arrives; judged on arrival (cut 5) it would pass and be written after the merge.
      */
     @Test
     fun aCreationQueuedBehindAMergeIsJudgedAgainstTheNewCut() {
@@ -465,10 +466,11 @@ class PendingListTest {
                 scope,
                 api = { throw VaultFailure(FailureKind.OTHER) },
                 credential = credential,
-                store = store,
+                pendingStore = store,
                 clock = Clock.fixed(base, ZoneOffset.UTC),
             )
             kotlinx.coroutines.runBlocking {
+                m.restorePending() // the event-only asks file is in use (owner exception 2026-10-27)
                 m.refreshPendingFrom { page(at(5)) }
                 gated.set(true)
                 // An unrelated write holds the mutex (blocked in its save).

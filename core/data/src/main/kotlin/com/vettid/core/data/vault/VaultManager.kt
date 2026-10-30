@@ -22,6 +22,7 @@ import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.altchan.ReleaseTraits
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.MemberGateway
+import com.vettid.core.data.social.AsksFileRule
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
 import com.vettid.core.data.items.ItemsManager
@@ -179,6 +180,7 @@ class VaultManager(
      */
     private val lockFile = LockRecordFile(
         File(app.noBackupFilesDir, LOCK_FILE),
+        sealer = lockSealer(File(app.noBackupFilesDir, LOCK_FILE)),
         legacy = { LockRecord(local.lockAskedAtMs, local.relayLockUntilMs) },
         migrated = { local.lockFileInUse },
         onFirstSave = { record.markLockFileInUse() },
@@ -561,8 +563,11 @@ class VaultManager(
     /** Proofs that this phone was replaced, and the wipe they start. */
     val holder = HolderWatch(scope) { wipeThisPhone() }
 
+    /** Whether this process is still on the cold-start offline path (the asks file is kept only then; [AsksFileRule]). */
+    private val asksFile = AsksFileRule.Track()
+
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
-    private val phaseFlow = PhaseHolder(AppPhase.Starting)
+    private val phaseFlow = PhaseHolder(AppPhase.Starting) { asksFile.published(it) }
 
     /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") The re-reads of the status after `device.unlinked{vault_deleted}`,
@@ -788,6 +793,10 @@ class VaultManager(
      * itself, an unsignalled lock found by a status read): ANDROID-PLAN 0.1.23, "Your vault is locked".
      */
     val lockedElsewhere: StateFlow<Boolean> = lockedElsewhereFlow.asStateFlow()
+
+    override val keptAsksDropped: StateFlow<Boolean> get() = social.keptAsksDropped
+
+    override fun acknowledgeKeptAsksDropped() = social.acknowledgeKeptAsksDropped()
     override val pendingDeletion: StateFlow<DeletionView?> = deletionFlow.asStateFlow()
 
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
@@ -857,7 +866,8 @@ class VaultManager(
         scope,
         api = { openApi() },
         credential = this,
-        store = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
+        obsoleteStore = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
+        pendingStore = KeystoreFileStore(File(app.noBackupFilesDir, PENDING_ASKS_FILE), "pending-asks"),
         itemNames = {
             items.items.value.associate { i ->
                 i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)
@@ -951,6 +961,7 @@ class VaultManager(
             load = { runCatching { f.load() }.getOrNull() },
             persist = { f.save(it) },
             // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
+            // A passed check also reads the approvals again here (§10.4.2), including one that came while the view was already OK.
             onPassed = { social.refreshAllQuietly() },
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
             mark = { record.recordGeneration },
@@ -969,15 +980,20 @@ class VaultManager(
         scope.launch { runCatching { canary.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
         scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
+        // A leftover of the removed social.bin (its write went through a temporary file).
+        scope.launch { io { runCatching { File(app.noBackupFilesDir, SOCIAL_FILE + ".tmp").delete() } } }
         // An older build kept the account snapshot and the name request in the record until a wipe: written again without.
         scope.launch { io { runCatching { if (legacyOwnAccount && record.rewrite()) legacyOwnAccount = false } } }
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             var previous: AppPhase = AppPhase.Starting
+            var keepAsksFile = false
             // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
             val phaseSteps = PhaseSteps.of(
                 replay = { p -> replayHeldBack(heldBack.release(p)) },
-                forgetOpenVault = { social.forgetOpenVault() },
+                // An offline cold start is not a lock: the asks file kept for the exception stays for the unlock. Decided from
+                // the phase being handled and the one before it (below), never from the live phase (AsksFileRule).
+                forgetOpenVault = { social.forgetOpenVault(keepFile = keepAsksFile) },
                 clearAttachments = { attachments.clear() },
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },
@@ -996,10 +1012,13 @@ class VaultManager(
             phaseFlow.asStateFlow().collectSurviving("phase") {
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
+                keepAsksFile = it is AppPhase.Unreachable && asksFile.keeps(it, lockKeeper.holdsPhone)
                 previous = it
                 phaseSteps.onPhase(it) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
+                    // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
+                    social.restorePending() // event-only asks kept until their exp across a process death
                     resumeRelay() // after an unlock the notification service's connection comes back
                     social.refreshAllQuietly()
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
@@ -1025,9 +1044,13 @@ class VaultManager(
                 if (now && !wasHeld) {
                     steps.step { feed.clear() }
                     steps.step { devices.clear() }
+                    steps.step { social.forgetPending() } // pending approvals and requests: memory only, not while held
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
-                if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { feed.open() }
+                if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
+                    steps.step { feed.open() }
+                    steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
+                }
                 // Nor the member's own names, full email or photo; read again after the passed check.
                 steps.step {
                     when (OwnProfileStep.onCheck(wasHeld = wasHeld, held = now, phase = phaseFlow.value)) {
@@ -4494,8 +4517,19 @@ class VaultManager(
     }
 
     companion object {
+        /** The lock record's seal: the app's Keystore file key, purpose `lock-record`. */
+        private fun lockSealer(file: File): LockRecordFile.Sealer {
+            val store = KeystoreFileStore(file, "lock-record")
+            return object : LockRecordFile.Sealer {
+                override fun seal(plain: ByteArray) = store.seal(plain)
+
+                override fun open(blob: ByteArray) = store.open(blob)
+            }
+        }
+
         private const val LOCK_FILE = "lock-record"
         private const val SOCIAL_FILE = "social.bin"
+        private const val PENDING_ASKS_FILE = "pending-asks.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val HTTP_OK = 200

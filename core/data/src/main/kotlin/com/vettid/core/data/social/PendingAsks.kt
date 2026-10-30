@@ -105,6 +105,13 @@ internal class PendingAsks {
         if (m.size > MAX_KEPT) m.entries.minByOrNull { it.value }?.let { m.remove(it.key) }
     }
 
+    /**
+     * Whether a closing event for ask [key] itself (`connection.authenticate.decided`, `approval.decided`) was accepted and no
+     * list reflects it yet. A device-level close is not used for this: it carries no id of the request it ended, so it
+     * could hide a newer request of the device; the list or the `exp` settles those.
+     */
+    fun wasClosed(key: String): Boolean = synchronized(lock) { closedKeys.containsKey(key) }
+
     /** Whether the ask [key] was created after [ts]: a closing event at [ts] is not about it. */
     fun createdAfter(key: String, ts: Instant): Boolean = synchronized(lock) { created[key]?.isAfter(ts) == true }
 

@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** What the root of the UI follows: the vault phase, the app lock, the clone alarm, the account and the service pause. */
+@Suppress("TooManyFunctions") // one small pass-through per notice
 @HiltViewModel
 class RootViewModel @Inject constructor(
     private val accounts: AccountRepository,
@@ -103,6 +104,11 @@ class RootViewModel @Inject constructor(
      */
     val preferencesReset: StateFlow<Boolean> = prefs.preferences.map { it.wasReset }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Asks kept across a restart could not all be brought back: told once after the unlock, until dismissed. */
+    val keptAsksDropped: StateFlow<Boolean> = vault.keptAsksDropped
+
+    fun acknowledgeKeptAsksDropped() = vault.acknowledgeKeptAsksDropped()
 
     fun acknowledgePreferencesReset() {
         viewModelScope.launch { prefs.acknowledgeReset() }

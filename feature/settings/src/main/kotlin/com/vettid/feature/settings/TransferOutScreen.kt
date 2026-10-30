@@ -23,12 +23,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -44,7 +41,6 @@ import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.titleRes
 import com.vettid.core.data.vault.vaultCode
-import com.vettid.core.ui.components.textClip
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -56,7 +52,6 @@ import com.vettid.core.ui.format.StagingTimeNote
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
-import kotlinx.coroutines.launch
 
 private const val SECONDS_PER_MINUTE = 60
 private const val LINK_LINES = 3
@@ -232,8 +227,7 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
 @Composable
 private fun ShowCode(state: TransferOutUiState, leave: () -> Unit) {
     val offer = state.offer ?: return
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var copied by remember { mutableStateOf(false) }
     val clipLabel = stringResource(R.string.settings_transfer_title)
     FormScaffold(
@@ -279,7 +273,7 @@ private fun ShowCode(state: TransferOutUiState, leave: () -> Unit) {
         Spacer(Modifier.height(Spacing.s))
         OutlinedButton(
             onClick = {
-                scope.launch { clipboard.setClipEntry(ClipEntry(textClip(clipLabel, offer.link, sensitive = true))) }
+                com.vettid.core.ui.components.SecureClipboard.copy(context, clipLabel, offer.link, sensitive = true)
                 copied = true
             },
             shape = VettIdShape.pill,

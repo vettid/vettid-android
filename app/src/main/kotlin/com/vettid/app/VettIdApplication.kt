@@ -23,6 +23,10 @@ import com.vettid.core.notify.PushRegistrar
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.ui.components.SecureClipboard
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import com.vettid.app.net.PoolEviction
@@ -108,6 +112,15 @@ class VettIdApplication : DistributionApplication() {
         }
         // "Allow screenshots" ends when the vault is no longer open (A6 audit S1).
         scope.launch { account.phase.collect { if (it != AppPhase.Unlocked) screenshots.vaultClosed() } }
+        // A copied secret leaves the clipboard when the vault is no longer open: locked, held or due (the feed's rule), wiped,
+        // or not open yet in this process (SecureClipboard; what cannot be checked without the focus waits for it).
+        scope.launch {
+            combine(account.phase, ownerCheck.ownerCheck) { phase, check ->
+                phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK)
+            }.distinctUntilChanged().collect { open ->
+                if (!open) SecureClipboard.vaultClosed(this@VettIdApplication)
+            }
+        }
         registerActivityLifecycleCallbacks(Foreground({ onForeground() }, ownerCheck::setForeground))
         // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
         releaseNotifier.start()

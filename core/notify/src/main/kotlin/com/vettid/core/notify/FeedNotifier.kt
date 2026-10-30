@@ -156,6 +156,10 @@ class FeedNotifier(
         synchronized(lock) {
             val all = posted.toList().also { posted.clear() }
             all.forEach { poster.cancel(it) }
+            // Those a process before this one posted (the set above is memory only): at start the vault is not open
+            // yet, so every item notification still showing is one that outlived the open vault (ANDROID-PLAN §4,
+            // Notification modes 8). The vault's own state notices stay.
+            runCatching { poster.cancelLeftovers(STATE_TAGS) }
         }
     }
 
@@ -224,6 +228,7 @@ class FeedNotifier(
         const val TAG_LOCKED = "vault.locked"
         const val TAG_CHECK = "owner_check.due"
         const val TAG_ALARM = "credential.alarm"
+        private val STATE_TAGS = setOf(TAG_LOCKED, TAG_CHECK, TAG_ALARM)
 
         /**
          * [seconds] in words, as the screens say a duration (`Durations` in :core:ui), but one whole day is "1 day": whole days in days,

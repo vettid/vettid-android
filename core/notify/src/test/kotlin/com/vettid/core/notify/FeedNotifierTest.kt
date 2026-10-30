@@ -47,6 +47,12 @@ class FeedNotifierTest {
         override fun cancel(tag: String) {
             if (shown.remove(tag) != null) log += "cancel:$tag"
         }
+
+        var leftoverSweeps = mutableListOf<Set<String>>()
+
+        override fun cancelLeftovers(keep: Set<String>) {
+            leftoverSweeps += keep
+        }
     }
 
     private class Source : NotifySource {
@@ -294,6 +300,25 @@ class FeedNotifierTest {
         assertEquals("30 days", FeedNotifier.durationText(2_592_000, res))
         assertEquals("150 seconds", FeedNotifier.durationText(150, res))
         assertEquals("15 minutes", FeedNotifier.durationText(900, res))
+    }
+
+    /** ANDROID-PLAN §4 Notification modes 8: a notification posted before a process death does not outlive the open vault. */
+    @Test
+    fun atStartWithTheVaultNotOpenWhatAnEarlierProcessPostedIsCancelled() = runTest {
+        source.open.value = false
+        notifier()
+        assertEquals(1, poster.leftoverSweeps.size)
+        // The vault's own state notices are not item notifications: they stay.
+        assertEquals(setOf(FeedNotifier.TAG_LOCKED, FeedNotifier.TAG_CHECK, FeedNotifier.TAG_ALARM), poster.leftoverSweeps.single())
+    }
+
+    @Test
+    fun anOpenVaultAtStartSweepsNothingAndALockSweepsAgain() = runTest {
+        notifier()
+        assertTrue(poster.leftoverSweeps.isEmpty())
+        source.open.value = false
+        runCurrent()
+        assertEquals(1, poster.leftoverSweeps.size)
     }
 
     @Test

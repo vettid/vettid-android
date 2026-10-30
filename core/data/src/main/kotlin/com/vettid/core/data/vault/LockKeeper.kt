@@ -46,7 +46,14 @@ data class LockRecord(
 
 /** Where [LockRecord] is kept: with the app's durable account record. */
 interface LockRecordStore {
+    /** The record; when it cannot be read, a record that says a lock is pending (fail secure), for plain reads. */
     fun load(): LockRecord
+
+    /**
+     * The record for a read-modify-write: throws when it cannot be read, so that the write is skipped and reported instead
+     * of saving the fail-secure placeholder (a pending lock the member never asked for) over it. Default: [load].
+     */
+    fun loadStrict(): LockRecord = load()
 
     /** Writes [record]. Must be durable when it returns. */
     fun save(record: LockRecord)
@@ -275,7 +282,7 @@ class LockKeeper(
             if (epoch != mine || !pending || openings != mark) return
             if (unlockId == null) return
             boundTo = unlockId
-            write { it.copy(unlockId = unlockId) }
+            writeKeeping { it.copy(unlockId = unlockId) }
         }
     }
 
@@ -288,7 +295,7 @@ class LockKeeper(
                 // (an unlock here ends that), and the record keeps it.
                 held && noticeFlow.value == LockNotice.OpenedAgain -> {
                     noticeFlow.value = LockNotice.ConfirmedLate
-                    write { it.copy(heldConfirmed = true) }
+                    writeKeeping { it.copy(heldConfirmed = true) }
                 }
             }
         }
@@ -315,7 +322,7 @@ class LockKeeper(
         synchronized(this) {
             val until = now().plus(validFor).plus(RELAY_MARGIN).toEpochMilli()
             relayUntilMs = until
-            write { it.copy(relayLockUntilMs = until) }
+            writeKeeping { it.copy(relayLockUntilMs = until) }
         }
     }
 
@@ -323,7 +330,7 @@ class LockKeeper(
     fun relayLockAnswered() {
         synchronized(this) {
             relayUntilMs = null
-            write { it.copy(relayLockUntilMs = null) }
+            writeKeeping { it.copy(relayLockUntilMs = null) }
         }
     }
 
@@ -391,7 +398,7 @@ class LockKeeper(
                     boundTo = id
                     held = false
                     deadId = null
-                    write { it.copy(unlockId = id, held = false, heldConfirmed = false) }
+                    writeKeeping { it.copy(unlockId = id, held = false, heldConfirmed = false) }
                 }
             }
         }
@@ -458,9 +465,15 @@ class LockKeeper(
 
     /** Saves [f] of the record ([f] null: nothing to save); a failure is reported, never thrown: the lock goes on. */
     @Suppress("TooGenericExceptionCaught") // a disk, a rename, a full phone: whatever it is, the lock is not stopped
-    private fun write(f: (LockRecord) -> LockRecord?) {
+    private fun write(f: (LockRecord) -> LockRecord?) = write(strict = false, f)
+
+    /** A change to one field of the record on disk: when that record cannot be read, nothing is saved (and it is reported). */
+    private fun writeKeeping(f: (LockRecord) -> LockRecord?) = write(strict = true, f)
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun write(strict: Boolean, f: (LockRecord) -> LockRecord?) {
         try {
-            f(store.load())?.let { store.save(it) }
+            f(if (strict) store.loadStrict() else store.load())?.let { store.save(it) }
         } catch (e: Exception) {
             onSaveFailed(e)
         }

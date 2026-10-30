@@ -328,7 +328,7 @@ internal class DeletionWatch(
  * [deleting] holds, no other write is published (an unlock, a lock or a refresh that was on its way, an event), so that
  * nothing reopens a vault that can never run again. Only [endDeleting] (the vault gone, or a wipe) ends it.
  */
-internal class PhaseHolder(initial: AppPhase) {
+internal class PhaseHolder(initial: AppPhase, private val onPublished: (AppPhase) -> Unit = {}) {
     private val flow = MutableStateFlow(initial)
     private var held: AppPhase.Deleting? = null
 
@@ -345,6 +345,7 @@ internal class PhaseHolder(initial: AppPhase) {
      */
     private fun publish(v: AppPhase) {
         val was = flow.value
+        onPublished(v) // before it is visible: a phase the collector never sees still counts
         flow.value = v
         val ends = when (v) {
             AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true

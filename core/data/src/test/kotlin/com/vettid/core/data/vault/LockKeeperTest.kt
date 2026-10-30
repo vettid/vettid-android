@@ -63,6 +63,19 @@ class LockKeeperTest {
     private val store = Store()
     private val vault = Vault()
 
+    /** A record that cannot be read: the plain load says a lock is pending, the strict one throws. */
+    private class UnreadableStore : LockRecordStore {
+        val saves = mutableListOf<LockRecord>()
+
+        override fun load(): LockRecord = LockRecord(pendingSinceMs = 1)
+
+        override fun loadStrict(): LockRecord = throw java.io.IOException("cannot read")
+
+        override fun save(record: LockRecord) {
+            saves += record
+        }
+    }
+
     /** Backoff without jitter: 1 s, 2 s, 5 s, 10 s, then 30 s. */
     private fun steps(n: Int): Duration = Duration.ofSeconds(listOf(1L, 2L, 5L, 10L).getOrElse(n) { 30L })
 
@@ -592,5 +605,18 @@ class LockKeeperTest {
         }
         runCurrent()
         assertEquals(listOf<String?>(newId, null), vault.boundTo)
+    }
+
+    /** Review of #204 (3): a change to one field of an unreadable record saves nothing (no lock the member never asked for). */
+    @Test
+    fun aRelayLockNoteOnAnUnreadableRecordSavesNothingAndIsReported() = runTest {
+        val unreadable = UnreadableStore()
+        var failures = 0
+        vault.clock = { testScheduler.currentTime }
+        val k = LockKeeper(backgroundScope, unreadable, vault, { now() }, ::steps, onSaveFailed = { failures++ })
+        k.relayLockSent(Duration.ofSeconds(30))
+        k.relayLockAnswered()
+        assertTrue(unreadable.saves.isEmpty())
+        assertEquals(2, failures)
     }
 }

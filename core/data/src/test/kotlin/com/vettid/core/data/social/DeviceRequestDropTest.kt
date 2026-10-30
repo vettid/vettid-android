@@ -40,7 +40,7 @@ class DeviceRequestDropTest {
             backgroundScope,
             api = { throw VaultFailure(FailureKind.OTHER) },
             credential = credential,
-            store = InMemoryDeviceStateStore(),
+            obsoleteStore = InMemoryDeviceStateStore(),
             clock = Clock.fixed(now, ZoneOffset.UTC),
         )
         m.onEvent(event("device.session.pending", """{"request_id":"s1","device_id":"A","role":"agent","name":"Bot","seconds":3600,"exp":"2026-10-21T12:10:00.000Z"}"""))

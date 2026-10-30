@@ -1,6 +1,7 @@
 package com.vettid.core.notify
 
 import android.Manifest
+import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -13,7 +14,8 @@ import androidx.core.content.ContextCompat
  * Posts [LocalNotification]s (ANDROID-PLAN 0.1.23, Notification modes 8): private on the lock screen with a public
  * version ("New activity in VettID", or "VettID needs your attention" for Security and Daily check); a batch's
  * update alerts once. A tap opens the app ([NotifyIntents]): the item (read, then its target) or Settings →
- * Notifications. Without the notification permission nothing is posted.
+ * Notifications. Without the notification permission nothing is posted. [cancelLeftovers] takes away what a process
+ * that died with the vault open left showing.
  */
 class AndroidPoster(private val context: Context) : Poster {
     private val nm = NotificationManagerCompat.from(context)
@@ -46,6 +48,19 @@ class AndroidPoster(private val context: Context) : Poster {
 
     override fun cancel(tag: String) {
         nm.cancel(tag, NOTIFICATION_ID)
+    }
+
+    override fun cancelLeftovers(keep: Set<String>) {
+        val active = try {
+            nm.activeNotifications
+        } catch (_: SecurityException) {
+            return
+        }
+        // Only this poster's tagged notifications; never an ongoing one (the service's), nor a state notice.
+        active.filter { n ->
+            val tag = n.tag
+            tag != null && n.id == NOTIFICATION_ID && tag !in keep && n.notification.flags and Notification.FLAG_ONGOING_EVENT == 0
+        }.forEach { nm.cancel(it.tag, NOTIFICATION_ID) }
     }
 
     private fun category(channel: String): String = when (channel) {
