@@ -22,7 +22,6 @@ import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.altchan.ReleaseTraits
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.MemberGateway
-import com.vettid.core.data.social.AsksFileRule
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
 import com.vettid.core.data.items.ItemsManager
@@ -563,11 +562,8 @@ class VaultManager(
     /** Proofs that this phone was replaced, and the wipe they start. */
     val holder = HolderWatch(scope) { wipeThisPhone() }
 
-    /** Whether this process is still on the cold-start offline path (the asks file is kept only then; [AsksFileRule]). */
-    private val asksFile = AsksFileRule.Track()
-
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
-    private val phaseFlow = PhaseHolder(AppPhase.Starting) { asksFile.published(it) }
+    private val phaseFlow = PhaseHolder(AppPhase.Starting)
 
     /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") The re-reads of the status after `device.unlinked{vault_deleted}`,
@@ -794,9 +790,6 @@ class VaultManager(
      */
     val lockedElsewhere: StateFlow<Boolean> = lockedElsewhereFlow.asStateFlow()
 
-    override val keptAsksDropped: StateFlow<Boolean> get() = social.keptAsksDropped
-
-    override fun acknowledgeKeptAsksDropped() = social.acknowledgeKeptAsksDropped()
     override val pendingDeletion: StateFlow<DeletionView?> = deletionFlow.asStateFlow()
 
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
@@ -867,7 +860,7 @@ class VaultManager(
         api = { openApi() },
         credential = this,
         obsoleteStore = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
-        pendingStore = KeystoreFileStore(File(app.noBackupFilesDir, PENDING_ASKS_FILE), "pending-asks"),
+        obsoletePendingStore = KeystoreFileStore(File(app.noBackupFilesDir, PENDING_ASKS_FILE), "pending-asks"),
         itemNames = {
             items.items.value.associate { i ->
                 i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)
@@ -982,18 +975,17 @@ class VaultManager(
         scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
         // A leftover of the removed social.bin (its write went through a temporary file).
         scope.launch { io { runCatching { File(app.noBackupFilesDir, SOCIAL_FILE + ".tmp").delete() } } }
+        // A leftover of the removed pending-asks.bin (its write went through a temporary file; the file itself is deleted by [social]).
+        scope.launch { io { runCatching { File(app.noBackupFilesDir, PENDING_ASKS_FILE + ".tmp").delete() } } }
         // An older build kept the account snapshot and the name request in the record until a wipe: written again without.
         scope.launch { io { runCatching { if (legacyOwnAccount && record.rewrite()) legacyOwnAccount = false } } }
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             var previous: AppPhase = AppPhase.Starting
-            var keepAsksFile = false
             // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
             val phaseSteps = PhaseSteps.of(
                 replay = { p -> replayHeldBack(heldBack.release(p)) },
-                // An offline cold start is not a lock: the asks file kept for the exception stays for the unlock. Decided from
-                // the phase being handled and the one before it (below), never from the live phase (AsksFileRule).
-                forgetOpenVault = { social.forgetOpenVault(keepFile = keepAsksFile) },
+                forgetOpenVault = { social.forgetOpenVault() },
                 clearAttachments = { attachments.clear() },
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },
@@ -1012,13 +1004,12 @@ class VaultManager(
             phaseFlow.asStateFlow().collectSurviving("phase") {
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
-                keepAsksFile = it is AppPhase.Unreachable && asksFile.keeps(it, lockKeeper.holdsPhone)
                 previous = it
                 phaseSteps.onPhase(it) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
                     // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
-                    social.restorePending() // event-only asks kept until their exp across a process death
+                    social.reopen() // the pending.list read below may merge again
                     resumeRelay() // after an unlock the notification service's connection comes back
                     social.refreshAllQuietly()
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock

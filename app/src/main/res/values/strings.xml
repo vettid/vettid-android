@@ -77,7 +77,6 @@
     <string name="root_erase_title">Erase VettID from this phone?</string>
     <string name="root_preferences_reset">VettID\'s settings on this phone could not be read and were reset: the theme, the app lock (now off) and notifications. Your vault is not affected.</string>
     <string name="root_preferences_reset_ok">OK</string>
-    <string name="root_kept_asks_dropped">Some requests from before the app restarted could not be kept. Ask again from the other device.</string>
     <!-- Release R (ANDROID-PLAN 0.1.40, §11.14.10): draft texts. -->
     <string name="root_finish_move">Finish moving your vault to this phone: enter your PIN on this phone.</string>
     <string name="root_finish_move_action">Finish the move</string>

@@ -311,7 +311,7 @@ class PendingListTest {
         val m = manager()
         m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
         m.forgetOpenVault()
-        m.restorePending() // the next unlock opens it again
+        m.reopen() // the next unlock opens it again
         // No cut after the lock: an event at 5 applies.
         m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
         runCurrent()
@@ -341,7 +341,7 @@ class PendingListTest {
         gate.complete(Unit)
         runCurrent()
         assertEquals(emptyList<String>(), m.keys())
-        m.restorePending() // the next unlock opens it again
+        m.reopen() // the next unlock opens it again
         // No cut was set: an event at 5 applies.
         m.onEvent(event("connection.authenticate.pending", auth("r2"), at(5)))
         runCurrent()
@@ -437,59 +437,5 @@ class PendingListTest {
         m.onEvent(sync("approval.decided", """"approval_id":"h1","approved":false""", at(3)))
         runCurrent()
         assertEquals(emptyList<String>(), m.keys())
-    }
-
-    /**
-     * The creation must be judged when its write runs, not before: an unrelated write holds the lock (blocked in its save
-     * of the event-only asks file), the merge of a list at 12 queues, then K (ts 10) arrives; judged on arrival (cut 5) it would pass and be written after the merge.
-     */
-    @Test
-    fun aCreationQueuedBehindAMergeIsJudgedAgainstTheNewCut() {
-        val gate = java.util.concurrent.CountDownLatch(1)
-        val inSave = java.util.concurrent.CountDownLatch(1)
-        val gated = java.util.concurrent.atomic.AtomicBoolean(false)
-        val inner = InMemoryDeviceStateStore()
-        val store = object : com.vettid.core.vault.DeviceStateStore {
-            override fun load() = inner.load()
-            override fun save(state: ByteArray) {
-                if (gated.getAndSet(false)) {
-                    inSave.countDown()
-                    gate.await()
-                }
-                inner.save(state)
-            }
-            override fun clear() = inner.clear()
-        }
-        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob())
-        try {
-            val m = SocialManager(
-                scope,
-                api = { throw VaultFailure(FailureKind.OTHER) },
-                credential = credential,
-                pendingStore = store,
-                clock = Clock.fixed(base, ZoneOffset.UTC),
-            )
-            kotlinx.coroutines.runBlocking {
-                m.restorePending() // the event-only asks file is in use (owner exception 2026-10-27)
-                m.refreshPendingFrom { page(at(5)) }
-                gated.set(true)
-                // An unrelated write holds the mutex (blocked in its save).
-                val other = scope.launch { m.onEvent(event("connection.authenticate.pending", auth("y"), at(6))) }
-                inSave.await()
-                // The merge of a list at 12 (without K) queues on the mutex first...
-                val merge = scope.launch { m.refreshPendingFrom { page(at(12)) } }
-                kotlinx.coroutines.delay(200)
-                // ...then K (ts 10) arrives: judged now (cut 5) it would pass, and be written after the merge.
-                val create = scope.launch { m.onEvent(event("connection.authenticate.pending", auth("K"), at(10))) }
-                kotlinx.coroutines.delay(200)
-                gate.countDown()
-                other.join(); merge.join(); create.join()
-                m.onEvent(sync("connection.authenticate.decided", """"request_id":"K","approved":true""", at(11)))
-                kotlinx.coroutines.delay(200)
-                assertEquals(emptyList<String>(), m.keys())
-            }
-        } finally {
-            scope.cancel()
-        }
     }
 }

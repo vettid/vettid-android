@@ -92,7 +92,7 @@ class SocialMemoryOnlyTest {
         assertTrue(m.approvals.value.isEmpty())
         assertTrue(m.peerDeclines.value.isEmpty())
 
-        m.restorePending() // the next unlock
+        m.reopen() // the next unlock
         m.feed()
         runCurrent()
         assertEquals(2, m.approvals.value.size)
@@ -108,186 +108,87 @@ class SocialMemoryOnlyTest {
         val m = setup()
         m.onEvent(event("connection.request.pending", """{"pending_id":"p2","invite_id":"i1","sas":"042817","profile":{"first_name":"Alex","last_name":"Kim"},"remote":true}"""))
         m.forgetOpenVault()
-        m.restorePending() // the next unlock
+        m.reopen() // the next unlock
         m.onEvent(event("sync.event", """{"kind":"connection.request","pending_id":"p2","state":"peer_declined"}"""))
         runCurrent()
         assertNull(m.peerDeclines.value.single().name)
     }
 
-    // --- the narrow exception: the three event-only asks, encrypted, until their exp (owner decision 2026-10-27) ---
-
-    private fun managerAt(scope: CoroutineScope, pending: com.vettid.core.vault.DeviceStateStore, at: Instant) = SocialManager(
-        scope,
-        api = { throw VaultFailure(FailureKind.OTHER) },
-        credential = credential,
-        pendingStore = pending,
-        clock = Clock.fixed(at, ZoneOffset.UTC),
-    )
+    // --- the event-only exception is gone (owner decision 2026-10-30): the three kinds are memory only too ---
 
     private fun session(id: String, exp: String) =
         event("device.session.pending", """{"request_id":"$id","device_id":"A","role":"agent","name":"Bot","seconds":3600,"exp":"$exp"}""")
 
-    @Test
-    fun theThreeEventOnlyAsksSurviveAProcessRestartUntilTheirExp() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.onEvent(session("s1", "2026-10-27T12:10:00.000Z"))
-        m.onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r1","exp":"2026-10-27T12:10:00.000Z"}"""))
-        m.onEvent(event("approval.pending", """{"approval_id":"h1","device_id":"A","role":"agent","name":"Bot","type":"agent.request","body":{},"exp":"2026-10-27T12:10:00.000Z"}"""))
-        runCurrent()
-        assertTrue(file.load() != null)
-
-        val again = managerAt(backgroundScope, file, now.plusSeconds(60))
-        runCurrent()
-        assertTrue("nothing before the vault is open", again.approvals.value.isEmpty())
-        again.restorePending()
-        runCurrent()
-        assertTrue(again.approvals.value.any { it.key.contains("s1") })
-        assertTrue(String(file.load()!!).contains("s1"))
-    }
-
-    @Test
-    fun anAskPastItsExpIsNeverShownAndLeavesTheFile() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s2", "2026-10-27T12:10:00.000Z"))
-        runCurrent()
-        val later = managerAt(backgroundScope, file, now.plusSeconds(601))
-        later.restorePending()
-        runCurrent()
-        assertTrue(later.approvals.value.isEmpty())
-        assertNull("deleted when it would be empty", file.load())
-    }
-
-    @Test
-    fun lockHoldAndWipeClearTheFileEvenBeforeItWasRead() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s3", "2026-10-27T12:10:00.000Z"))
-        runCurrent()
-        // A new process that is locked at once never reads it.
-        managerAt(backgroundScope, file, now).forgetOpenVault()
-        assertNull(file.load())
-
-        for (clear in listOf<(SocialManager) -> Unit>({ it.forgetOpenVault() }, { it.forgetPending() }, { it.clear() })) {
-            val m = managerAt(backgroundScope, file, now)
-            m.restorePending()
-            m.onEvent(session("s4", "2026-10-27T12:10:00.000Z"))
-            runCurrent()
-            assertTrue(file.load() != null)
-            clear(m)
-            assertNull(file.load())
-        }
-    }
-
-    @Test
-    fun onlyThoseThreeTypesAreEverWrittenAndAtMost32() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.onEvent(event("grant.pending", """{"request_id":"g1","exp":"2026-10-27T12:10:00.000Z"}"""))
-        m.onEvent(event("connection.request.pending", """{"pending_id":"p1","invite_id":"i1","sas":"042817","profile":{"first_name":"Alex","last_name":"Kim"},"remote":true}"""))
-        runCurrent()
-        assertNull("no other type is persisted", file.load())
-        repeat(40) { m.onEvent(session("n$it", "2026-10-27T12:10:00.000Z")) }
-        runCurrent()
-        val text = String(file.load()!!)
-        assertEquals(32, Regex("device.session.pending").findAll(text).count())
-        assertTrue(!text.contains("g1") && !text.contains("p1"))
-    }
+    private fun withLeftover(scope: CoroutineScope, leftover: com.vettid.core.vault.DeviceStateStore) = SocialManager(
+        scope,
+        api = { throw VaultFailure(FailureKind.OTHER) },
+        credential = credential,
+        obsoletePendingStore = leftover,
+        clock = Clock.fixed(now, ZoneOffset.UTC),
+    )
 
     private class Throwing(val inner: InMemoryDeviceStateStore = InMemoryDeviceStateStore()) : com.vettid.core.vault.DeviceStateStore {
         var fail = false
 
-        override fun load(): ByteArray? = if (fail) throw java.security.InvalidKeyException("key") else inner.load()
+        override fun load(): ByteArray? = inner.load()
 
-        override fun save(state: ByteArray) = if (fail) throw java.io.IOException("disk full") else inner.save(state)
+        override fun save(state: ByteArray) = inner.save(state)
 
-        override fun clear() = if (fail) throw java.security.ProviderException("provider") else inner.clear()
+        override fun clear() = if (fail) throw java.io.IOException("cannot delete") else inner.clear()
     }
 
     @Test
-    fun aFailingFileNeverEscapesAndTheAskStaysInMemory() = runTest {
-        val file = Throwing().also { it.fail = true }
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.onEvent(session("s5", "2026-10-27T12:10:00.000Z"))
+    fun theThreeEventOnlyAsksAreMemoryOnlyAndGoWithTheProcess() = runTest {
+        val leftover = InMemoryDeviceStateStore()
+        val m = withLeftover(backgroundScope, leftover)
+        m.onEvent(session("s1", "2026-10-27T12:10:00.000Z"))
+        m.onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r1","exp":"2026-10-27T12:10:00.000Z"}"""))
+        m.onEvent(event("approval.pending", """{"approval_id":"h1","device_id":"A","role":"agent","name":"Bot","type":"agent.request","body":{},"exp":"2026-10-27T12:10:00.000Z"}"""))
         runCurrent()
-        assertTrue(m.approvals.value.any { it.key.contains("s5") })
-        // Clearing fails too: said to the lock's steps (retry, then end the process; review of #204 item 2), after the
-        // memory is dropped.
-        org.junit.Assert.assertThrows(java.security.ProviderException::class.java) { m.forgetPending() }
+        assertEquals(3, m.approvals.value.size)
+        assertNull("nothing is written", leftover.load())
+        val again = withLeftover(backgroundScope, leftover) // a new process
         runCurrent()
-        assertTrue(m.approvals.value.isEmpty())
+        assertTrue(again.approvals.value.isEmpty())
     }
 
-    /** Events that came before the read are written at its end, even when the file already held all of them. */
     @Test
-    fun askedBeforeTheReadAreWrittenAtItsEnd() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s6", "2026-10-27T12:10:00.000Z"))
-        val m = managerAt(backgroundScope, file, now)
-        m.onEvent(session("s6", "2026-10-27T12:10:00.000Z")) // already in the file
-        m.onEvent(session("s7", "2026-10-27T12:10:00.000Z")) // fresh, memory only until settled
+    fun aLockDropsThemFromMemory() = runTest {
+        val m = setup()
+        m.onEvent(session("s2", "2026-10-27T12:10:00.000Z"))
         runCurrent()
-        m.restorePending()
-        val text = String(file.load()!!)
-        assertTrue(text.contains("s6") && text.contains("s7"))
-    }
-
-    /** A hold between the read and the restore's edit cannot be undone: the read is under the same lock. */
-    @Test
-    fun aHoldAfterTheRestoreLeavesNothingBehind() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s8", "2026-10-27T12:10:00.000Z"))
-        val m = managerAt(backgroundScope, file, now)
-        val t = Thread { repeat(50) { m.forgetPending() } }
-        t.start()
-        m.restorePending()
-        t.join()
-        m.forgetPending()
-        assertTrue(m.approvals.value.isEmpty())
-        assertNull(file.load())
-    }
-
-    /** Owner 2026-10-28: only the fields the screens and decisions need are written, never the held request's body. */
-    @Test
-    fun onlyTheAllowListedFieldsAreWrittenAndSurviveARoundTrip() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.onEvent(event("approval.pending", """{"approval_id":"h9","device_id":"A","role":"agent","name":"Bot","type":"agent.request","body":{"cmd":"rm -rf SECRETPAYLOAD"},"flags":["shell"],"extra":"EXTRAFIELD","exp":"2026-10-27T12:10:00.000Z"}"""))
-        m.onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r9","context":"login","purpose":"sign in","secret":"EXTRAFIELD","exp":"2026-10-27T12:10:00.000Z"}"""))
-        runCurrent()
-        val text = String(file.load()!!)
-        assertTrue(text.contains("h9") && text.contains("agent.request") && text.contains("sign in"))
-        assertTrue(!text.contains("SECRETPAYLOAD") && !text.contains("EXTRAFIELD") && !text.contains("flags"))
-        val again = managerAt(backgroundScope, file, now.plusSeconds(1))
-        again.restorePending()
-        runCurrent()
-        val d = again.approvals.value.filterIsInstance<Approval.DeviceRequest>().single()
-        assertEquals("Bot", d.deviceName)
-        assertEquals("agent.request", d.requestType)
-        assertEquals("A", d.deviceId)
-        assertEquals(2, again.approvals.value.size)
-    }
-
-    /** Review of #204 (4): a file that cannot be read is deleted at the restore, and the unlock goes on. */
-    @Test
-    fun anUnreadableFileIsDeletedAtTheRestore() = runTest {
-        val file = InMemoryDeviceStateStore().also { it.save("not json at all".toByteArray()) }
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
+        assertEquals(1, m.approvals.value.size)
+        m.forgetOpenVault()
         runCurrent()
         assertTrue(m.approvals.value.isEmpty())
-        assertNull(file.load())
     }
 
-    /** Review of #204 (1): a `pending.list` read that began before a lock cannot put its asks back into memory or the file. */
+    /** The pending-asks.bin of an earlier build is deleted at the next start. */
     @Test
-    fun aListMergeRacingALockLeavesNothingInMemoryOrOnDisk() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
+    fun aLeftoverPendingAsksFileIsDeletedAtStart() = runTest {
+        val leftover = InMemoryDeviceStateStore().also { it.save("sealed bytes".toByteArray()) }
+        withLeftover(backgroundScope, leftover)
+        assertNull(leftover.load())
+    }
+
+    /** Fail closed: a delete that failed at start is tried again by the lock's clears, and thrown if it fails again. */
+    @Test
+    fun aLeftoverThatCannotBeDeletedIsRetriedByTheLockAndThrown() = runTest {
+        val leftover = Throwing().also { it.inner.save("sealed bytes".toByteArray()); it.fail = true }
+        val m = withLeftover(backgroundScope, leftover)
+        assertTrue("still there", leftover.inner.load() != null)
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) { m.forgetOpenVault() }
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) { m.forgetPending() }
+        leftover.fail = false
+        m.forgetOpenVault()
+        assertNull(leftover.inner.load())
+        m.forgetOpenVault() // nothing left to delete
+    }
+
+    /** A `pending.list` read that began before a lock cannot put its asks back into memory. */
+    @Test
+    fun aListMergeRacingALockLeavesNothingInMemory() = runTest {
+        val m = setup()
         val started = java.util.concurrent.CountDownLatch(1)
         val gate = java.util.concurrent.CountDownLatch(1)
         val ask = com.vettid.core.vault.VaultJson.parseObject(
@@ -305,16 +206,13 @@ class SocialMemoryOnlyTest {
         gate.countDown()
         reader.join()
         assertTrue(m.approvals.value.isEmpty())
-        assertNull(file.load())
     }
 
-    /** Recheck of #204 (a): a read that begins after the lock merges nothing into memory or onto the phone. */
+    /** A read that begins after the lock merges nothing; the next unlock opens it again. */
     @Test
     fun aListReadThatBeginsAfterTheLockMergesNothing() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.forgetOpenVault() // locked: the first lock settles the file
+        val m = setup()
+        m.forgetOpenVault()
         val ask = com.vettid.core.vault.VaultJson.parseObject(
             """{"kind":"session","body":{"request_id":"s10","device_id":"A","role":"agent","name":"Bot","seconds":3600,"exp":"2026-10-27T12:10:00.000Z"}}""".toByteArray(),
         )
@@ -322,173 +220,9 @@ class SocialMemoryOnlyTest {
         m.onEvent(session("s11", "2026-10-27T12:10:00.000Z")) // an event right after the lock: memory only
         runCurrent()
         assertTrue("the list merged nothing", m.approvals.value.none { it.key.contains("s10") })
-        assertNull("nothing is written while closed", file.load())
-        // The next unlock opens it again.
-        m.restorePending()
-        m.onEvent(session("s12", "2026-10-27T12:10:00.000Z"))
+        m.reopen()
+        m.refreshPendingFrom { com.vettid.core.vault.PendingPage(listOf(ask), null, now.plusSeconds(6)) }
         runCurrent()
-        assertTrue(m.approvals.value.any { it.key.contains("s12") })
-        val text = String(file.load()!!)
-        assertTrue("what came in the gap is written at the restore", text.contains("s11") && text.contains("s12"))
-    }
-
-    /** Recheck of #204: an event after the lock and before the restore is shown, and written at the restore. */
-    @Test
-    fun anEventAfterTheLockAndBeforeTheRestoreIsShown() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.forgetOpenVault()
-        m.onEvent(session("s21", "2026-10-27T12:10:00.000Z")) // delivered after the unlock, before the restore
-        runCurrent()
-        assertTrue(m.approvals.value.any { it.key.contains("s21") })
-        m.restorePending()
-        runCurrent()
-        assertTrue(m.approvals.value.any { it.key.contains("s21") })
-        assertTrue(String(file.load()!!).contains("s21"))
-    }
-
-    /** Recheck of #204: a close that comes before the restore ends the ask the file would bring back. */
-    @Test
-    fun aCloseBeforeTheRestoreEndsTheAskTheFileHolds() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }
-            .onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r20","exp":"2026-10-27T12:10:00.000Z"}"""))
-        val m = managerAt(backgroundScope, file, now) // a new process: the file holds r20
-        m.onEvent(event("sync.event", """{"kind":"connection.authenticate.decided","request_id":"r20","approved":true}"""))
-        m.restorePending()
-        runCurrent()
-        assertTrue(m.approvals.value.none { it.key.contains("r20") })
-    }
-
-    /** Recheck of #204 (b): a failed delete on a hold, then an edit with no asks, still deletes the file. */
-    @Test
-    fun aFailedDeleteOnAHoldIsRetriedByTheNextEdit() = runTest {
-        val file = Throwing()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.onEvent(session("s13", "2026-10-27T12:10:00.000Z"))
-        runCurrent()
-        assertTrue(file.inner.load() != null)
-        file.fail = true
-        org.junit.Assert.assertThrows(java.security.ProviderException::class.java) { m.forgetPending() }
-        file.fail = false
-        // An edit that leaves no unexpired ask (this one is already past its exp): the file is deleted by it.
-        m.onEvent(session("s14", "2026-10-27T11:00:00.000Z"))
-        runCurrent()
-        assertNull(file.inner.load())
-    }
-
-    /** Owner decision 2026-10-30 (finding 5): an offline cold start is not a lock; the file stays, memory is dropped. */
-    @Test
-    fun anOfflineStartKeepsTheFileAndTheUnlockBringsTheAsksBack() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        m.onEvent(session("s30", "2026-10-27T12:10:00.000Z"))
-        runCurrent()
-        m.forgetOpenVault(keepFile = true) // Unreachable
-        runCurrent()
-        assertTrue(m.approvals.value.isEmpty())
-        assertTrue("kept", String(file.load()!!).contains("s30"))
-        m.restorePending() // the unlock
-        runCurrent()
-        assertTrue(m.approvals.value.any { it.key.contains("s30") })
-        assertTrue(!m.keptAsksDropped.value)
-        // A lock (or setup, hold, wipe) still deletes it.
-        m.forgetOpenVault()
-        assertNull(file.load())
-    }
-
-    @Test
-    fun moreAsksThanCanBeKeptAreToldOnceAfterTheUnlock() = runTest {
-        val file = InMemoryDeviceStateStore()
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        repeat(40) { m.onEvent(session("n$it", "2026-10-27T12:10:00.000Z")) }
-        runCurrent()
-        assertTrue("not told before a restart", !m.keptAsksDropped.value)
-        val again = managerAt(backgroundScope, file, now) // the app restarted
-        again.restorePending()
-        runCurrent()
-        assertTrue(again.keptAsksDropped.value)
-        again.acknowledgeKeptAsksDropped()
-        assertTrue(!again.keptAsksDropped.value)
-        // The mark is cleared by the restore's own write: the next restart says nothing.
-        val third = managerAt(backgroundScope, file, now)
-        third.restorePending()
-        assertTrue(!third.keptAsksDropped.value)
-    }
-
-    @Test
-    fun noNoticeWhenNothingWasDropped() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s31", "2026-10-27T12:10:00.000Z"))
-        val m = managerAt(backgroundScope, file, now)
-        m.restorePending()
-        assertTrue(!m.keptAsksDropped.value)
-        val empty = managerAt(backgroundScope, InMemoryDeviceStateStore(), now)
-        empty.restorePending()
-        assertTrue(!empty.keptAsksDropped.value)
-    }
-
-    @Test
-    fun anUnreadableOrFailedRestoreIsTold() = runTest {
-        val bad = InMemoryDeviceStateStore().also { it.save("not json".toByteArray()) }
-        val m = managerAt(backgroundScope, bad, now)
-        m.restorePending()
-        assertTrue(m.keptAsksDropped.value)
-        val failing = Throwing().also { it.fail = true }
-        val f = managerAt(backgroundScope, failing, now)
-        f.restorePending()
-        assertTrue(f.keptAsksDropped.value)
-    }
-
-    /** Recheck of #204: a device-level close carries no request id, so it must not hide a restored newer request. */
-    @Test
-    fun aDeviceLevelCloseInTheGapDoesNotHideARestoredRequest() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s41", "2026-10-27T12:10:00.000Z"))
-        val m = managerAt(backgroundScope, file, now)
-        // A late close for an earlier request R1 of device A.
-        m.onEvent(event("sync.event", """{"kind":"device.session","device_id":"A"}"""))
-        m.restorePending()
-        runCurrent()
-        assertTrue(m.approvals.value.any { it.key.contains("s41") })
-    }
-
-    /** Starting, Unreachable(NETWORK), Unreachable(NO_RESPONSE), then Unlocked: the file is kept throughout and restored. */
-    @Test
-    fun aRetryWhileOfflineKeepsTheFileAndTheUnlockRestoresIt() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s50", "2026-10-27T12:10:00.000Z"))
-        val m = managerAt(backgroundScope, file, now) // a cold start
-        val track = AsksFileRule.Track()
-        for (kind in listOf(com.vettid.core.data.vault.FailureKind.NETWORK, com.vettid.core.data.vault.FailureKind.NO_RESPONSE)) {
-            val phase = com.vettid.core.data.vault.AppPhase.Unreachable(kind)
-            track.published(phase)
-            m.forgetOpenVault(keepFile = track.keeps(phase, lockPending = false))
-        }
-        track.published(com.vettid.core.data.vault.AppPhase.Unlocked)
-        m.restorePending()
-        runCurrent()
-        assertTrue(m.approvals.value.any { it.key.contains("s50") })
-    }
-
-    /** Starting, Unreachable, Locked, Unreachable: the lock ended the offline path; the file goes at the last step. */
-    @Test
-    fun anUnreachableAfterALockDeletesTheFile() = runTest {
-        val file = InMemoryDeviceStateStore()
-        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s51", "2026-10-27T12:10:00.000Z"))
-        val m = managerAt(backgroundScope, file, now)
-        val track = AsksFileRule.Track()
-        val net = com.vettid.core.data.vault.AppPhase.Unreachable(com.vettid.core.data.vault.FailureKind.NETWORK)
-        track.published(net)
-        m.forgetOpenVault(keepFile = track.keeps(net, lockPending = false))
-        assertTrue(file.load() != null)
-        track.published(com.vettid.core.data.vault.AppPhase.Locked)
-        track.published(net)
-        m.forgetOpenVault(keepFile = track.keeps(net, lockPending = false))
-        assertNull(file.load())
+        assertTrue(m.approvals.value.any { it.key.contains("s10") })
     }
 }

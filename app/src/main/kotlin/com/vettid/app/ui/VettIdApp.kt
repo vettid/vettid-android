@@ -134,8 +134,6 @@ fun VettIdApp(
     val account by viewModel.account.collectAsStateWithLifecycle()
     val paused by viewModel.servicePaused.collectAsStateWithLifecycle()
     val prefsReset by viewModel.preferencesReset.collectAsStateWithLifecycle()
-    val keptDropped by viewModel.keptAsksDropped.collectAsStateWithLifecycle()
-    val keptShown = keptAsksShown(keptDropped, phase)
     val retrying by viewModel.retrying.collectAsStateWithLifecycle()
     val canaryVm: CanaryManifestViewModel = hiltViewModel()
     val canaryPrompt by canaryVm.prompt.collectAsStateWithLifecycle()
@@ -183,10 +181,8 @@ fun VettIdApp(
                         statusBarPadding = !paused,
                     )
                 }
-                // Owner decision 2026-10-30: asks kept across a restart that could not all be brought back; said once.
-                KeptAsksDroppedBanner(keptShown, viewModel::acknowledgeKeptAsksDropped, statusBarPadding = !paused && !prefsReset)
                 // Release R (§11.14.10): "Finish the move" and "This phone is your vault's phone again".
-                val topBanner = anyTopBanner(paused, prefsReset, keptShown)
+                val topBanner = anyTopBanner(paused, prefsReset)
                 val moveNotice = MoveNotices(
                     viewModel,
                     phase == AppPhase.Unlocked,
@@ -379,20 +375,4 @@ internal fun changeDecidedText(c: ChangeCheck): Int {
 }
 
 /** Whether a banner sits at the top of the screen (the status bar's padding goes to the first). */
-private fun anyTopBanner(paused: Boolean, prefsReset: Boolean, keptDropped: Boolean) = paused || prefsReset || keptDropped
-
-/** Owner decision 2026-10-30: asks kept across a restart that could not all be brought back; said once, until dismissed. */
-@Composable
-private fun KeptAsksDroppedBanner(show: Boolean, onDismiss: () -> Unit, statusBarPadding: Boolean) {
-    if (!show) return
-    InfoBanner(
-        stringResource(R.string.root_kept_asks_dropped),
-        Modifier.testTag("kept_asks_dropped_banner"),
-        actionLabel = stringResource(R.string.root_preferences_reset_ok),
-        onAction = onDismiss,
-        statusBarPadding = statusBarPadding,
-    )
-}
-
-/** The notice is for an open vault: the unlock has brought back what could be kept. */
-private fun keptAsksShown(dropped: Boolean, phase: AppPhase) = dropped && phase == AppPhase.Unlocked
+private fun anyTopBanner(paused: Boolean, prefsReset: Boolean) = paused || prefsReset
