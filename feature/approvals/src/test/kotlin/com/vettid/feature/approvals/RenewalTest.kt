@@ -380,11 +380,55 @@ class RenewalTest {
         runCurrent()
         social.approvals.value = emptyList()
         runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        devices.endGate = gate
         m.endAccess()
-        // Sent but not yet run: the screen has not flickered back to the request.
-        assertTrue(m.uiState.value.busy || m.uiState.value.gone)
+        runCurrent()
+        // In flight: still the gone screen, not flickered back to the request.
+        assertTrue(m.uiState.value.gone)
+        assertTrue(m.uiState.value.ending)
+        assertFalse(m.uiState.value.done)
+        gate.complete(Unit)
         runCurrent()
         assertTrue(m.uiState.value.done)
+    }
+
+    @Test
+    fun aSuccessfulEndFromTheRequestNeverShowsTheGoneScreen() = runTest {
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        devices.endGate = gate
+        m.endAccess()
+        runCurrent()
+        // The repository drops the request as the end lands; the request screen stays until `done`.
+        social.approvals.value = emptyList()
+        runCurrent()
+        assertFalse(m.uiState.value.gone)
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(m.uiState.value.done)
+        assertFalse(m.uiState.value.gone)
+    }
+
+    @Test
+    fun theHoldKeepsAnEndFailure() = runTest {
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.NETWORK)
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        // Entering the hold clears the list, so the session reads as gone, but it is only suspended.
+        vault.ownerCheck.value = OwnerCheckView(OwnerCheckState.HELD, null, 86_400, 0, hold = true, holdOffUntil = null)
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        assertNull(m.uiState.value.renewalUntil)
+        assertNotNull(m.uiState.value.endFailure)
     }
 
     @Test
