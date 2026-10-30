@@ -443,4 +443,17 @@ class SocialMemoryOnlyTest {
         f.restorePending()
         assertTrue(f.keptAsksDropped.value)
     }
+
+    /** Recheck of #204: a device-level close carries no request id, so it must not hide a restored newer request. */
+    @Test
+    fun aDeviceLevelCloseInTheGapDoesNotHideARestoredRequest() = runTest {
+        val file = InMemoryDeviceStateStore()
+        managerAt(backgroundScope, file, now).also { it.restorePending() }.onEvent(session("s41", "2026-10-27T12:10:00.000Z"))
+        val m = managerAt(backgroundScope, file, now)
+        // A late close for an earlier request R1 of device A.
+        m.onEvent(event("sync.event", """{"kind":"device.session","device_id":"A"}"""))
+        m.restorePending()
+        runCurrent()
+        assertTrue(m.approvals.value.any { it.key.contains("s41") })
+    }
 }

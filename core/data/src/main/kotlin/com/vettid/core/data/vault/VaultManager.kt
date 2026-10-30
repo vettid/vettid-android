@@ -22,6 +22,7 @@ import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.altchan.ReleaseTraits
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.MemberGateway
+import com.vettid.core.data.social.AsksFileRule
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
 import com.vettid.core.data.items.ItemsManager
@@ -983,15 +984,13 @@ class VaultManager(
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             var previous: AppPhase = AppPhase.Starting
+            var keepAsksFile = false
             // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
             val phaseSteps = PhaseSteps.of(
                 replay = { p -> replayHeldBack(heldBack.release(p)) },
-                // An offline cold start (Unreachable) is not a lock: the asks file kept for the exception stays for the
-                // unlock. A wipe that did not finish (ERASE_FAILED) is not offline: its file goes (the wipe deletes it).
-                forgetOpenVault = {
-                    val offline = phaseFlow.value.let { it is AppPhase.Unreachable && it.failure != FailureKind.ERASE_FAILED }
-                    social.forgetOpenVault(keepFile = offline)
-                },
+                // An offline cold start is not a lock: the asks file kept for the exception stays for the unlock. Decided from
+                // the phase being handled and the one before it (below), never from the live phase (AsksFileRule).
+                forgetOpenVault = { social.forgetOpenVault(keepFile = keepAsksFile) },
                 clearAttachments = { attachments.clear() },
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },
@@ -1010,6 +1009,7 @@ class VaultManager(
             phaseFlow.asStateFlow().collectSurviving("phase") {
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
+                keepAsksFile = it is AppPhase.Unreachable && AsksFileRule.keeps(previous, it, lockKeeper.holdsPhone)
                 previous = it
                 phaseSteps.onPhase(it) {
                     lockedHere = false

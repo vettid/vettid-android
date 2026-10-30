@@ -236,8 +236,7 @@ class SocialManager(
 
     private fun endedInTheGap(e: StoredEvent): Boolean {
         val key = keyOf(e) ?: return false
-        val d = parsed(e) as? Approval.DeviceRequest
-        return pending.wasClosed(key, d?.deviceId, e.type == PendingAsks.SESSION)
+        return pending.wasClosed(key)
     }
 
     /**
