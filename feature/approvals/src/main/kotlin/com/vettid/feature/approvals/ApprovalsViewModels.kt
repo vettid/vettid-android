@@ -348,12 +348,19 @@ class ApprovalDetailViewModel @Inject constructor(
         // recorded after the session had already passed is still shown.
         viewModelScope.launch {
             var live = false
-            combine(uiState.map { it.renewalUntil != null }, uiState.map { it.held }, devices.load) { now, held, load ->
-                Triple(now, held, load == ListLoad.LOADED)
-            }.distinctUntilChanged().collect { (now, held, loaded) ->
+            // The triggers are the hold, the list's load state, the list and the clock's view of the session; the session
+            // itself is read from `devices.devices` when one fires (the manager sets the list before it says LOADED), not
+            // from `uiState`, which may not have caught up yet.
+            combine(
+                uiState.map { it.held },
+                devices.load,
+                devices.devices,
+                uiState.map { it.renewalUntil != null },
+            ) { held, load, _, _ -> held to (load == ListLoad.LOADED) }.collect { (held, loaded) ->
                 // While held, or before the list is read again, nothing is known: the hold clears the list although the
                 // session is only suspended. `live` stays as it was, so a real end during the hold is seen once it lifts.
                 if (held || !loaded) return@collect
+                val now = Renewal.expiresAt(local.value.approval, devices.devices.value, local.value.deviceListRead, Instant.now()) != null
                 if (live && !now) local.update { it.copy(endFailure = null) }
                 live = now
             }

@@ -498,4 +498,27 @@ class RenewalTest {
         assertNotNull(m.uiState.value.endFailure)
         assertEquals(live, m.uiState.value.renewalUntil)
     }
+
+    /** The manager sets the list, then says LOADED; the screen's state may not have caught up when LOADED arrives. */
+    @Test
+    fun aLiveSessionKeepsTheFailureWhenLoadedArrivesBeforeTheStateCatchesUp() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        vault.ownerCheck.value = held()
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        vault.ownerCheck.value = ok()
+        runCurrent()
+        // As the manager does: the list, then LOADED, with nothing running between, so a collector can see LOADED
+        // before the screen's state has recomputed from the list.
+        devices.devices.value = listOf(device(expires = live))
+        devices.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        assertEquals(live, m.uiState.value.renewalUntil)
+    }
 }
