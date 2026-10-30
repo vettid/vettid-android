@@ -39,7 +39,11 @@ class FakeDevices : DevicesRepository {
         calls += "refreshQuietly"
     }
 
+    /** When set, [endAccess] waits for it before it answers (a request in flight). */
+    var endGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     override suspend fun endAccess(deviceId: String) {
+        endGate?.await()
         call("endAccess:$deviceId")
         devices.value = devices.value.map { if (it.id == deviceId) it.copy(sessionExpiresAt = null) else it }
     }

@@ -380,11 +380,55 @@ class RenewalTest {
         runCurrent()
         social.approvals.value = emptyList()
         runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        devices.endGate = gate
         m.endAccess()
-        // Sent but not yet run: the screen has not flickered back to the request.
-        assertTrue(m.uiState.value.busy || m.uiState.value.gone)
+        runCurrent()
+        // In flight: still the gone screen, not flickered back to the request.
+        assertTrue(m.uiState.value.gone)
+        assertTrue(m.uiState.value.ending)
+        assertFalse(m.uiState.value.done)
+        gate.complete(Unit)
         runCurrent()
         assertTrue(m.uiState.value.done)
+    }
+
+    @Test
+    fun aSuccessfulEndFromTheRequestNeverShowsTheGoneScreen() = runTest {
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        devices.endGate = gate
+        m.endAccess()
+        runCurrent()
+        // The repository drops the request as the end lands; the request screen stays until `done`.
+        social.approvals.value = emptyList()
+        runCurrent()
+        assertFalse(m.uiState.value.gone)
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(m.uiState.value.done)
+        assertFalse(m.uiState.value.gone)
+    }
+
+    @Test
+    fun theHoldKeepsAnEndFailure() = runTest {
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.NETWORK)
+        val m = vm()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        // Entering the hold clears the list, so the session reads as gone, but it is only suspended.
+        vault.ownerCheck.value = OwnerCheckView(OwnerCheckState.HELD, null, 86_400, 0, hold = true, holdOffUntil = null)
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        assertNull(m.uiState.value.renewalUntil)
+        assertNotNull(m.uiState.value.endFailure)
     }
 
     @Test
@@ -403,5 +447,97 @@ class RenewalTest {
         runCurrent()
         assertNotNull(m.uiState.value.endFailure)
         assertNull(m.uiState.value.renewalUntil)
+    }
+
+    private fun failedEndThenHold(): ApprovalDetailViewModel {
+        devices.fail["endAccess:dev1"] = VaultFailure(FailureKind.NETWORK)
+        val m = vm()
+        return m
+    }
+
+    private fun held() = OwnerCheckView(OwnerCheckState.HELD, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    private fun ok() = OwnerCheckView(OwnerCheckState.OK, null, 86_400, 0, hold = true, holdOffUntil = null)
+
+    @Test
+    fun aSessionThatEndedDuringTheHoldClearsTheFailureWhenItLifts() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        vault.ownerCheck.value = held()
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        // The hold lifts and the list reads with no session: it did end.
+        vault.ownerCheck.value = ok()
+        devices.devices.value = listOf(device(expires = null))
+        devices.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        runCurrent()
+        assertNull(m.uiState.value.endFailure)
+    }
+
+    @Test
+    fun aLiveSessionAfterTheHoldKeepsTheFailure() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        vault.ownerCheck.value = held()
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        vault.ownerCheck.value = ok()
+        devices.devices.value = listOf(device(expires = live))
+        devices.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        assertEquals(live, m.uiState.value.renewalUntil)
+    }
+
+    /** The manager sets the list, then says LOADED; the screen's state may not have caught up when LOADED arrives. */
+    @Test
+    fun aLiveSessionKeepsTheFailureWhenLoadedArrivesBeforeTheStateCatchesUp() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        vault.ownerCheck.value = held()
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        devices.devices.value = emptyList()
+        runCurrent()
+        vault.ownerCheck.value = ok()
+        runCurrent()
+        // As the manager does: the list, then LOADED, with nothing running between, so a collector can see LOADED
+        // before the screen's state has recomputed from the list.
+        devices.devices.value = listOf(device(expires = live))
+        devices.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        assertEquals(live, m.uiState.value.renewalUntil)
+    }
+
+    /** The manager's order on entering the hold: the hold is set, then the list is emptied, then NOT_LOADED. */
+    @Test
+    fun enteringTheHoldKeepsAnEndFailureWhateverTheCollectorSeesFirst() = runTest {
+        val m = failedEndThenHold()
+        runCurrent()
+        m.askEndAccess()
+        m.endAccess()
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        vault.ownerCheck.value = held()
+        devices.devices.value = emptyList()
+        // Collectors may run between the manager's writes: the list is already empty, LOADED still stands.
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
+        devices.load.value = com.vettid.core.data.items.ListLoad.NOT_LOADED
+        runCurrent()
+        assertNotNull(m.uiState.value.endFailure)
     }
 }

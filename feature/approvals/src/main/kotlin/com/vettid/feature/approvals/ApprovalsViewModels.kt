@@ -207,7 +207,7 @@ data class ApprovalDetailUiState(
     val deviceListRead: Boolean = false,
     /** The vault is held (§3.6.3) and this is a session request: it left the screen, and a confirmation ends nothing. */
     val held: Boolean = false,
-    /** Ending access is being sent (`busy` too): the gone screen stays. */
+    /** Ending access is being sent (`busy` too) from the gone screen (the request had left): that screen stays. */
     val ending: Boolean = false,
 ) {
     /** The grant entries that will be granted: chosen, and for a category answered. */
@@ -348,7 +348,20 @@ class ApprovalDetailViewModel @Inject constructor(
         // recorded after the session had already passed is still shown.
         viewModelScope.launch {
             var live = false
-            uiState.map { it.renewalUntil != null }.distinctUntilChanged().collect { now ->
+            // The triggers are the hold, the list's load state, the list and the clock's view of the session; the session
+            // itself is read from `devices.devices` when one fires (the manager sets the list before it says LOADED), not
+            // from `uiState`, which may not have caught up yet.
+            combine(
+                uiState.map { it.held },
+                devices.load,
+                devices.devices,
+                uiState.map { it.renewalUntil != null },
+            ) { _, _, _, _ -> }.collect {
+                // While held, or before the list is read again, nothing is known: the hold clears the list although the
+                // session is only suspended. `live` stays as it was, so a real end during the hold is seen once it lifts.
+                // Read live, not from the combined values: the hold is set before the list is cleared.
+                if (isHeld() || devices.load.value != ListLoad.LOADED) return@collect
+                val now = Renewal.expiresAt(local.value.approval, devices.devices.value, local.value.deviceListRead, Instant.now()) != null
                 if (live && !now) local.update { it.copy(endFailure = null) }
                 live = now
             }
@@ -465,7 +478,7 @@ class ApprovalDetailViewModel @Inject constructor(
         val s = local.value
         if (!s.confirmEnd || s.busy || isHeld()) return
         val id = (uiState.value.approval as? Approval.DeviceRequest)?.sessionDeviceId ?: return
-        local.update { it.copy(confirmEnd = false, busy = true, ending = true, endFailure = null) }
+        local.update { it.copy(confirmEnd = false, busy = true, ending = uiState.value.gone, endFailure = null) }
         viewModelScope.launch {
             try {
                 devices.endAccess(id)
