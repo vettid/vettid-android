@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** What the root of the UI follows: the vault phase, the app lock, the clone alarm, the account and the service pause. */
+@Suppress("TooManyFunctions") // one small pass-through per notice
 @HiltViewModel
 class RootViewModel @Inject constructor(
     private val accounts: AccountRepository,
