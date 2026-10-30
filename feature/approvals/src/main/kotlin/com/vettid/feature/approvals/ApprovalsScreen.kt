@@ -516,10 +516,11 @@ private fun WithdrawnScreen(a: Approval, state: ApprovalDetailUiState, actions: 
     ) {
         Facts(a, withdrawn = true)
         WithdrawnNotice(a, state.canMute, state.busy, actions.onAskMute)
-        state.error?.let {
+        // Only a failed mute is said here; a decision that failed meanwhile is moot.
+        state.muteError?.let {
             Spacer(Modifier.height(Spacing.m))
             Text(
-                failureText(it, state.retryUntil, state.limit, state.errorCode),
+                failureText(it.messageRes(), it.vaultCode(state.muteErrorCode)),
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("failure"),
             )
@@ -532,8 +533,9 @@ private fun WithdrawnScreen(a: Approval, state: ApprovalDetailUiState, actions: 
 @Composable
 private fun GoneScreen(a: Approval?, state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier) {
     FormScaffold(
-        title = stringResource(R.string.approvals_gone_title),
-        body = stringResource(R.string.approvals_gone_body),
+        // A sign-in or approval that is not waiting any more is not "decided on another device" (it may be withdrawn).
+        title = stringResource(if (a is Approval.Authentication) R.string.approvals_gone_authn else R.string.approvals_gone_title),
+        body = if (a is Approval.Authentication) null else stringResource(R.string.approvals_gone_body),
         primaryLabel = stringResource(R.string.approvals_back),
         onPrimary = actions.onBack,
         onBack = actions.onBack,
@@ -1110,7 +1112,8 @@ private fun Facts(a: Approval, renewal: Boolean = false, withdrawn: Boolean = fa
         is Approval.Authentication -> {
             // With a match code (0.79.0): the code, the note, then "Only approve if you are signing in right now." (no
             // "From" line: the title names who). Without one: as before.
-            val code = shownMatchCode(a)
+            // A withdrawn ask shows no code and no "Check that…" line: nothing is left to compare.
+            val code = shownMatchCode(a)?.takeIf { !withdrawn }
             if (code != null) {
                 MatchCodeBlock(code)
             } else {
@@ -1124,16 +1127,16 @@ private fun Facts(a: Approval, renewal: Boolean = false, withdrawn: Boolean = fa
                 Label(stringResource(R.string.approvals_context))
                 Value(it, Modifier.testTag("auth_context"))
             }
-            if (!withdrawn) {
-                a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
-            }
-            if (code != null && !withdrawn) {
+            if (code != null) {
                 Spacer(Modifier.height(Spacing.m))
                 Text(
                     stringResource(R.string.approvals_auth_signin_body),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.testTag("auth_signin_body"),
                 )
+            }
+            if (!withdrawn) {
+                a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
             }
         }
         // Shown by GrantFacts.

@@ -136,6 +136,9 @@ class WithdrawnAskTest {
         assertEquals(2, b.remaining)
         assertEquals(Instant.parse("2026-10-30T12:20:00Z"), b.openUntil)
         assertEquals(setOf("auth:r1", "auth:r2", "auth:r3"), b.askKeys)
+        assertEquals("auth:r3", b.askKey)
+        // The notification may go by itself only at the latest deadline of the asks left.
+        assertEquals(Instant.parse("2026-10-30T12:30:00Z"), b.closeAt)
         // The next withdrawal leaves one; the last leaves none.
         m.onEvent(decided(""""request_id":"r2","approved":false,"withdrawn":true""", at(110)))
         m.onEvent(decided(""""request_id":"r1","approved":false,"withdrawn":true""", at(120)))
@@ -186,5 +189,30 @@ class WithdrawnAskTest {
         runCurrent()
         m.forgetOpenVault()
         assertTrue(m.withdrawn.value.isEmpty())
+    }
+
+    @Test
+    fun anOpenAskWithoutADeadlineKeepsTheNotificationFromTimingOut() = runTest {
+        val m = manager()
+        m.onEvent(event("connection.authenticate.pending", ask("r1"), at(1)))
+        m.onEvent(event("connection.authenticate.pending", """{"connection_id":"c1","request_id":"r2","purpose":"signin"}""", at(2)))
+        m.onEvent(event("connection.authenticate.pending", ask("r3"), at(3)))
+        runCurrent()
+        m.onEvent(decided(""""request_id":"r3","approved":false,"withdrawn":true""", at(10)))
+        runCurrent()
+        assertEquals(null, told.single().closeAt)
+        assertEquals(Instant.parse("2026-10-30T13:00:00Z"), told.single().openUntil)
+    }
+
+    @Test
+    fun theWithdrawnSetIsBounded() = runTest {
+        val m = manager()
+        repeat(300) { i -> m.onEvent(event("connection.authenticate.pending", ask("r$i", conn = "c$i"), at(1))) }
+        runCurrent()
+        repeat(300) { i -> m.onEvent(decided(""""request_id":"r$i","approved":false,"withdrawn":true""", at(10))) }
+        runCurrent()
+        assertEquals(256, m.withdrawn.value.size)
+        assertTrue("r299" in m.withdrawn.value)
+        assertTrue("r0" !in m.withdrawn.value)
     }
 }

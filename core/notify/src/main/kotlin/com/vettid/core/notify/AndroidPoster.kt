@@ -41,11 +41,17 @@ class AndroidPoster(private val context: Context) : Poster {
             .setAutoCancel(true)
             .setCategory(category(n.channel))
             .setContentIntent(NotifyIntents.open(context, n))
-        n.openUntil?.let { b.setTimeoutAfter(maxOf(1L, it.toEpochMilli() - System.currentTimeMillis())) }
+        // A re-post replaces the notification, so a deadline set before is cleared explicitly unless this one has its own.
+        b.setTimeoutAfter(n.closeAt?.let { maxOf(1L, it.toEpochMilli() - System.currentTimeMillis()) } ?: 0L)
+        n.openUntil?.let { b.setWhen(it.toEpochMilli()).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
+        if (n.silent) b.setSilent(true)
         n.text?.let { b.setContentText(it).setStyle(NotificationCompat.BigTextStyle().bigText(it)) }
         if (n.channel == Channels.SECURITY) b.setPriority(NotificationCompat.PRIORITY_MAX)
         nm.notify(n.tag, NOTIFICATION_ID, b.build())
     }
+
+    override fun isPosted(tag: String): Boolean =
+        nm.activeNotifications.any { it.tag == tag && it.id == NOTIFICATION_ID }
 
     override fun cancel(tag: String) {
         nm.cancel(tag, NOTIFICATION_ID)

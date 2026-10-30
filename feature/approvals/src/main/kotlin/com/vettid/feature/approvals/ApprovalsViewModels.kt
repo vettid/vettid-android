@@ -224,6 +224,9 @@ data class ApprovalDetailUiState(
     val confirmMute: Boolean = false,
     /** The member muted the connection from this screen. */
     val muted: Boolean = false,
+    /** Muting failed: the only error the withdrawn notice shows (a decision that failed meanwhile is moot). */
+    val muteError: FailureKind? = null,
+    val muteErrorCode: String? = null,
 ) {
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -283,6 +286,11 @@ class ApprovalDetailViewModel @Inject constructor(
     private val local = MutableStateFlow(ApprovalDetailUiState(key, approval = repo.approvals.value.firstOrNull { it.key == key }))
 
     init {
+        // The ask as the list has it now: a screen opened before the ask was listed (a cold start or an unlock, before
+        // `pending.list` lands) still knows it when it is withdrawn.
+        viewModelScope.launch {
+            repo.approvals.collect { l -> l.firstOrNull { it.key == key }?.let { a -> local.update { s -> if (s.approval == a) s else s.copy(approval = a) } } }
+        }
         viewModelScope.launch { items.items.collect { l -> local.update { it.copy(items = l.sortedBy { i -> i.name.lowercase() }) } } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         // A session request: whether it renews a live session comes from the device list, read now (§6.8 step 3). The
@@ -370,6 +378,8 @@ class ApprovalDetailViewModel @Inject constructor(
                 // Past the session's end the request reads as a first request: no notice, only Deny.
                 renewalUntil = Renewal.expiresAt(shown, x.devices, s.deviceListRead, now),
                 withdrawn = withdrawn,
+                // A decision's failure is moot once the ask is withdrawn (a late `not_found` is not an error).
+                error = s.error.takeUnless { withdrawn },
                 canMute = withdrawn && peer != null && peer.asks?.muted != true && !s.muted,
                 connectionIsService = peer?.service == true,
             )
@@ -546,6 +556,11 @@ class ApprovalDetailViewModel @Inject constructor(
                     local.update { it.copy(busy = false, error = null, password = "") }
                     return@launch
                 }
+                if (uiState.value.withdrawn) {
+                    // Withdrawn meanwhile: whatever this decision came to, the screen says it was withdrawn.
+                    local.update { it.copy(busy = false, error = null, password = "") }
+                    return@launch
+                }
                 val backoff = e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0
                 val until = if (backoff) java.time.Instant.now().plusSeconds(e.retryAfterSeconds) else null
                 local.update {
@@ -569,7 +584,7 @@ class ApprovalDetailViewModel @Inject constructor(
     fun askMute() {
         val s = uiState.value
         if (!s.withdrawn || !s.canMute || s.busy) return
-        if (s.connectionIsService) local.update { it.copy(confirmMute = true, error = null) } else mute()
+        if (s.connectionIsService) local.update { it.copy(confirmMute = true, muteError = null) } else mute()
     }
 
     fun dismissMute() = local.update { it.copy(confirmMute = false) }
@@ -578,13 +593,13 @@ class ApprovalDetailViewModel @Inject constructor(
         val s = uiState.value
         val a = s.approval as? Approval.Authentication ?: return
         if (!s.withdrawn || !s.canMute || s.busy) return
-        local.update { it.copy(confirmMute = false, busy = true, error = null) }
+        local.update { it.copy(confirmMute = false, busy = true, muteError = null) }
         viewModelScope.launch {
             try {
                 connections.setAsksMuted(a.connectionId, true)
                 local.update { it.copy(busy = false, muted = true) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
+                local.update { it.copy(busy = false, muteError = e.kind, muteErrorCode = e.shownCode) }
             }
         }
     }

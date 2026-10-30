@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import com.vettid.core.data.R
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AskBatching
 import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.vault.RecoveryRefs
@@ -63,6 +64,9 @@ data class FeedNames(
  */
 sealed interface FeedTarget {
     data class ApprovalEntry(val key: String) : FeedTarget
+
+    /** The Approvals list: a batch of asks, or an ask whose first ask is no longer open. */
+    data object Approvals : FeedTarget
 
     data class Connection(val connectionId: String) : FeedTarget
 
@@ -413,10 +417,10 @@ object FeedKinds {
 
     /** Where [item] leads, before checking that it still exists (the screen's ViewModel does that). */
     @Suppress("CyclomaticComplexMethod") // one target per kind
-    fun target(item: FeedItem): FeedTarget {
+    fun target(item: FeedItem, open: Collection<Approval>? = null): FeedTarget {
         val c = item.connectionId
         val ref = item.ref
-        FeedAsks.approvalKey(item.kind, item.ref)?.let { return FeedTarget.ApprovalEntry(it) }
+        FeedAsks.approvalKey(item.kind, item.ref)?.let { return askTarget(item, it, open) }
         return when (item.kind) {
             "connection.request.peer_declined" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Connections
             "connection.added", "connection.stale", "connection.asks_paused" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
@@ -435,6 +439,23 @@ object FeedKinds {
             "credential.rotated", "credential.reset" -> FeedTarget.Credential
             "owner_check.failed", "owner_check.locked", "owner_check.hold_changed" -> FeedTarget.Security
             else -> FeedTarget.Sheet
+        }
+    }
+
+    /**
+     * An ask's item leads to its ask. A batch's item stands for several asks and has the first one's `ref`, which may have
+     * been decided or withdrawn since (0.80.0): with [open] (the asks now waiting) such an item leads to the one ask left,
+     * or to the Approvals list when several are, never to an ask that is gone while others wait.
+     */
+    private fun askTarget(item: FeedItem, key: String, open: Collection<Approval>?): FeedTarget {
+        val c = item.connectionId
+        val applies = open != null && c != null && item.kind in FeedAsks.ASK_KINDS
+        val mine = if (applies) open.orEmpty().filter { AskBatching.connectionOf(it) == c } else emptyList()
+        val own = (item.count ?: 0) <= 1 && mine.any { it.key == key }
+        return when {
+            own || mine.isEmpty() -> FeedTarget.ApprovalEntry(key)
+            mine.size == 1 -> FeedTarget.ApprovalEntry(mine.single().key)
+            else -> FeedTarget.Approvals
         }
     }
 

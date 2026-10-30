@@ -389,8 +389,8 @@ class FeedManagerTest {
             connectionId = "c1", ref = ref, count = count,
         )
 
-    private fun withdrawn(remaining: Int, vararg keys: String, openUntil: Instant? = null) =
-        WithdrawnBatch("c1", keys.toSet(), now, remaining, openUntil)
+    private fun withdrawn(remaining: Int, vararg keys: String, openUntil: Instant? = null, closeAt: Instant? = null, askTs: Instant? = null) =
+        WithdrawnBatch("c1", keys.toSet(), now, remaining, openUntil, askKey = keys.first(), closeAt = closeAt, askTs = askTs)
 
     @Test
     fun theLastWithdrawnAskOfABatchMarksItsItemRead() = runTest {
@@ -409,12 +409,15 @@ class FeedManagerTest {
         val arrived = mutableListOf<FeedItem>()
         val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
         val soon = now.plusSeconds(300)
-        m.askWithdrawn(withdrawn(2, "auth:r1", "auth:r2", "auth:r3", openUntil = soon))
+        val later = now.plusSeconds(900)
+        m.askWithdrawn(withdrawn(2, "auth:r1", "auth:r2", "auth:r3", openUntil = soon, closeAt = later))
         advanceUntilIdle()
         assertTrue("no feed.update: the item stays", ops.updates.isEmpty())
         assertEquals(1, arrived.size)
         assertEquals(2, arrived.single().count)
         assertEquals(soon, arrived.single().openUntil)
+        assertEquals("it goes by itself only at the latest deadline", later, arrived.single().closeAt)
+        assertTrue(arrived.single().quietRepost)
         // One ask left: the item stands for a single ask now.
         m.askWithdrawn(withdrawn(1, "auth:r1", "auth:r3", openUntil = soon))
         advanceUntilIdle()
@@ -436,6 +439,27 @@ class FeedManagerTest {
         assertTrue(arrived.isEmpty())
         assertTrue(ops.updates.isEmpty())
         job.cancel()
+    }
+
+    @Test
+    fun anItemWithoutACountStandsOnlyForItsOwnAskAndIsReadEvenIfOthersWait() = runTest {
+        val ops = Ops()
+        // Asks listed after an unlock collapse into one app batch; the withdrawn ask's own item is still its own.
+        val m = opened(ops, batchItem("own", 1, "r2"), batchItem("other", 2, "r9", count = 2))
+        m.askWithdrawn(WithdrawnBatch("c1", setOf("auth:r1", "auth:r2"), now, 1, null, askKey = "auth:r2"))
+        settle { ops.updates.size == 1 }
+        assertEquals(listOf("own" to "read"), ops.updates)
+    }
+
+    @Test
+    fun theWindowFallbackIgnoresReadItemsAndUsesTheVaultsTimeWhenKnown() = runTest {
+        val ops = Ops()
+        // The phone's clock is a day off; the ask's vault time (askTs) finds the batch item.
+        val m = opened(ops, batchItem("old", 1, "r0", count = 2, minutesAgo = 600).copy(status = "read"), batchItem("b", 2, "r1", count = 2, minutesAgo = 3))
+        val phone = now.plusSeconds(86_400)
+        m.askWithdrawn(WithdrawnBatch("c1", setOf("auth:r8", "auth:r9"), phone, 0, null, askKey = "auth:r9", askTs = now))
+        settle { ops.updates.size == 1 }
+        assertEquals(listOf("b" to "read"), ops.updates)
     }
 
     private companion object {

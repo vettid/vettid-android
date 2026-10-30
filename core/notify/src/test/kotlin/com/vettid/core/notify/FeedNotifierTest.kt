@@ -44,6 +44,8 @@ class FeedNotifierTest {
             log += "post:${n.tag}"
         }
 
+        override fun isPosted(tag: String): Boolean = tag in shown
+
         override fun cancel(tag: String) {
             if (shown.remove(tag) != null) log += "cancel:$tag"
         }
@@ -329,5 +331,58 @@ class FeedNotifierTest {
         assertNull(notifyMessageText("\u200B\u3164\n\u200D", false, res))
         assertEquals("Photo", notifyMessageText("\u3164", true, res))
         assertEquals("Photo: ${fsi}beach$pdi", notifyMessageText("\u202Ebeach\nmore", true, res))
+    }
+
+    // --- one ask of a batch withdrawn (VAULT-MESSAGING 0.80.0 §10.4) ---
+
+    private fun askItem() = item("b1", kind = "connection.authenticate.requested", count = 3, ref = "a1")
+
+    @Test
+    fun aWithdrawRepostIsSilentTimesOutAtTheLatestDeadlineAndShowsTheEarliest() = runTest {
+        notifier()
+        arrive(askItem())
+        val early = java.time.Instant.parse("2026-10-30T12:05:00Z")
+        val late = java.time.Instant.parse("2026-10-30T12:30:00Z")
+        arrive(askItem().copy(count = 2, openUntil = early, closeAt = late, quietRepost = true))
+        val n = poster.shown.getValue("b1")
+        assertTrue(n.silent)
+        assertEquals(early, n.openUntil)
+        assertEquals(late, n.closeAt)
+        assertTrue("alerts once", n.alertOnce)
+    }
+
+    @Test
+    fun aDismissedNotificationIsNotBroughtBackByAWithdrawRepost() = runTest {
+        notifier()
+        arrive(askItem())
+        poster.shown.remove("b1") // swiped away
+        poster.log.clear()
+        arrive(askItem().copy(count = 2, quietRepost = true))
+        assertTrue(poster.log.isEmpty())
+    }
+
+    @Test
+    fun aPlainRepostWhenAnAskJoinsCarriesNoOldDeadline() = runTest {
+        notifier()
+        arrive(askItem().copy(count = 2, closeAt = java.time.Instant.parse("2026-10-30T12:30:00Z"), quietRepost = true))
+        arrive(askItem().copy(count = 3))
+        val n = poster.shown.getValue("b1")
+        assertNull(n.closeAt)
+        assertNull(n.openUntil)
+        assertEquals(false, n.silent)
+    }
+
+    @Test
+    fun theNotificationNeverCarriesAMatchCode() = runTest {
+        notifier()
+        // Whatever a title or body of the item says, no preview setting shows it as the match code: the text is the app's own.
+        val signin = item("s1", kind = "connection.authenticate.requested", ref = "a1").copy(title = "Match code 4271", body = "match code 4271")
+        listOf(com.vettid.core.data.prefs.NotificationPreviews.NAMES, com.vettid.core.data.prefs.NotificationPreviews.NAMES_AND_TEXT).forEach {
+            settings.value = NotifySettings(previews = it)
+            arrive(signin)
+            val n = poster.shown.getValue("s1")
+            assertTrue(n.title, !n.title.contains("4271"))
+            assertTrue(n.text.orEmpty(), !n.text.orEmpty().contains("4271"))
+        }
     }
 }

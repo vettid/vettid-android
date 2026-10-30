@@ -48,6 +48,8 @@
         <item quantity="other">%1$d items</item>
     </plurals>
     <string name="approvals_gone_title">Already decided</string>
+    <!-- Owner-approved 2026-10-30 (ANDROID-PLAN 0.1.101): a sign-in or approval that is not waiting any more. -->
+    <string name="approvals_gone_authn">This request is no longer waiting.</string>
     <string name="approvals_gone_body">This request was decided on another device, or it expired.</string>
     <string name="approvals_deny">Deny</string>
     <string name="approvals_share_decline">Do not share</string>

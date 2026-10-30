@@ -146,6 +146,35 @@ class WithdrawnRequestTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.withdrawn)
         assertFalse(vm.uiState.value.gone)
+        assertNull("the earlier not_found is no longer an error", vm.uiState.value.error)
+    }
+
+    @Test
+    fun aScreenOpenedBeforeTheAskWasListedStillKnowsItWhenWithdrawn() = runTest {
+        social.approvals.value = emptyList() // cold start: pending.list has not landed
+        val vm = detail()
+        advanceUntilIdle()
+        social.approvals.value = listOf(auth) // the list lands
+        advanceUntilIdle()
+        vanish()
+        social.withdrawn.value = setOf("a1")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.withdrawn)
+        assertFalse(vm.uiState.value.gone)
+    }
+
+    @Test
+    fun aDecisionThatFailsAfterTheFlagShowsNoError() = runTest {
+        val vm = detail()
+        advanceUntilIdle()
+        vanish()
+        social.withdrawn.value = setOf("a1")
+        social.fail["approveAuthentication"] = VaultFailure(FailureKind.OTHER)
+        vm.setPassword("pw")
+        vm.approve()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.withdrawn)
+        assertNull(vm.uiState.value.error)
     }
 
     // --- mute ---
@@ -203,7 +232,7 @@ class WithdrawnRequestTest {
         social.fail["asksMute:c1:true"] = VaultFailure(FailureKind.OTHER)
         vm.askMute()
         advanceUntilIdle()
-        assertEquals(FailureKind.OTHER, vm.uiState.value.error)
+        assertEquals(FailureKind.OTHER, vm.uiState.value.muteError)
         assertTrue(vm.uiState.value.withdrawn)
         assertTrue(vm.uiState.value.canMute)
     }
@@ -231,6 +260,22 @@ class WithdrawnRequestTest {
         assertEquals(1, muted)
         rule.onNodeWithText("Close").performClick()
         assertEquals(1, closed)
+    }
+
+    @Test
+    fun aSignInThatIsNotWaitingSaysSoInTheApprovedWords() {
+        rule.setContent { ApprovalDetailScreen(ApprovalDetailUiState(auth.key, auth, gone = true), DecisionActions()) }
+        rule.onNodeWithText("This request is no longer waiting.").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("another device", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("Already decided").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aWithdrawnSignInShowsNoCodeAndNoCheckLine() {
+        rule.setContent { ApprovalDetailScreen(withdrawnState(), DecisionActions()) }
+        assertEquals(0, rule.onAllNodes(hasTestTag("match_code")).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("Check that", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("Match code").fetchSemanticsNodes().size)
     }
 
     @Test

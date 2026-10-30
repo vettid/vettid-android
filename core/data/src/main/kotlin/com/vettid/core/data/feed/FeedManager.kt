@@ -363,30 +363,45 @@ class FeedManager(
 
     /**
      * (VAULT-MESSAGING 0.80.0 §10.4) One ask of a connection's asks was withdrawn. The vault leaves the feed item as it is
-     * (a batch's `count` is unchanged). With no ask of the batch still open the item is marked read (its row and
-     * notification go); otherwise it stays and its notification is posted again, quietly, with the asks left and the
-     * earliest deadline among them. Nothing happens for a batch whose item this feed does not hold.
+     * (a batch's `count` is unchanged).
+     * - The withdrawn ask's own item without a `count` stands only for that ask: it is marked read.
+     * - A batch's item is marked read when no ask of the batch is still open; otherwise it stays and its notification is
+     *   posted again, quietly (and only if it is still showing), with the asks left, the earliest deadline among them for
+     *   display and the latest to go by itself.
+     * Nothing happens for an ask whose item this feed does not hold.
      */
     fun askWithdrawn(b: WithdrawnBatch) {
-        val item = synchronized(lock) { batchItem(b) } ?: return
+        val (own, item) = synchronized(lock) { ownItem(b) to batchItem(b) }
+        if (own != null && own.count == null) {
+            markReadQuietly(own.itemId)
+            return
+        }
+        if (item == null) return
         if (b.remaining <= 0) {
             markReadQuietly(item.itemId)
         } else if (item.status == STATUS_ACTIVE) {
-            emitArrival(item.copy(count = b.remaining.takeIf { it > 1 }, openUntil = b.openUntil))
+            emitArrival(
+                item.copy(count = b.remaining.takeIf { it > 1 }, openUntil = b.openUntil, closeAt = b.closeAt, quietRepost = true),
+            )
         }
     }
 
+    /** The ask-kind item whose `ref` is the withdrawn ask itself. Under [lock]. */
+    private fun ownItem(b: WithdrawnBatch): FeedItem? =
+        byId.values.firstOrNull { it.connectionId == b.connectionId && FeedAsks.approvalKey(it.kind, it.ref) == b.askKey }
+
     /**
-     * The feed item that stands for [b]: the ask-kind item of the connection whose `ref` is one of the batch's asks; if
-     * the first ask of the batch is gone already (decided or withdrawn earlier), the newest batch item of the connection
-     * that began within the batch window before the ask reached the member.
+     * The batch item that stands for [b]: the ask-kind item of the connection whose `ref` is one of the batch's asks; if
+     * the first ask of the batch is gone already, the newest unread batch item of the connection that began within the
+     * window before the ask was created, by the vault's own times where the app has the ask's (else the phone's).
      */
     private fun batchItem(b: WithdrawnBatch): FeedItem? {
         val items = byId.values.filter { it.connectionId == b.connectionId && it.kind in FeedAsks.ASK_KINDS }
         items.firstOrNull { FeedAsks.approvalKey(it.kind, it.ref) in b.askKeys }?.let { return it }
-        val from = b.receivedAt.minus(BATCH_WINDOW).minus(BATCH_SKEW)
-        val to = b.receivedAt.plus(BATCH_SKEW)
-        return items.filter { it.count != null }
+        val at = b.askTs ?: b.receivedAt
+        val from = at.minus(BATCH_WINDOW).minus(BATCH_SKEW)
+        val to = at.plus(BATCH_SKEW)
+        return items.filter { it.count != null && it.status == STATUS_ACTIVE }
             .mapNotNull { i -> runCatching { Instant.parse(i.at) }.getOrNull()?.let { i to it } }
             .filter { (_, t) -> !t.isBefore(from) && !t.isAfter(to) }
             .maxByOrNull { it.second }?.first
@@ -479,4 +494,10 @@ data class WithdrawnBatch(
     val receivedAt: Instant,
     val remaining: Int,
     val openUntil: Instant?,
+    /** The withdrawn ask's key (`auth:<request_id>`). */
+    val askKey: String = "",
+    /** When the re-posted notification may go by itself: the latest `exp` of the asks left; null if none, or one has no `exp`. */
+    val closeAt: Instant? = null,
+    /** The vault's time of the ask's creation event, when the app still has it. */
+    val askTs: Instant? = null,
 )

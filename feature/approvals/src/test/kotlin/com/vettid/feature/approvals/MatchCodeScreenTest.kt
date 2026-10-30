@@ -62,6 +62,7 @@ class MatchCodeScreenTest {
         val code = top("match_code")
         val note = top("auth_context")
         val only = top("auth_signin_body")
+        // "Expires" (when the ask has a deadline) comes after "Only approve", as on iOS.
         assertTrue("title above code", title < code)
         assertTrue("code above note", code < note)
         assertTrue("note above 'Only approve'", note < only)
@@ -145,6 +146,14 @@ class MatchCodeScreenTest {
         show(auth("907"), fontScale = 2f)
         rule.onNodeWithTag("match_code_digits", useUnmergedTree = true).assertTextEquals("907")
         rule.onNodeWithText("Check that the sign-in screen shows the same number: 907").assertExists()
+    }
+
+    @Test
+    fun expiresComesAfterOnlyApprove() {
+        show(auth("42").copy(exp = now.plusSeconds(600)))
+        val only = rule.onNodeWithText("Only approve if you are signing in right now.").getUnclippedBoundsInRoot().top
+        val exp = rule.onNodeWithText("Expires", substring = true).getUnclippedBoundsInRoot().top
+        assertTrue(only < exp)
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeContentTestRule.onAllNodesWithTag(tag: String) =

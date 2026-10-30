@@ -190,7 +190,7 @@ class NotificationsViewModel @Inject constructor(
     /** A tap: marks the item read (not waiting for the answer) and opens its target, or the sheet. */
     fun open(item: FeedItem) {
         feed.markReadQuietly(item.itemId)
-        val target = FeedKinds.target(item)
+        val target = FeedKinds.target(item, state.value.names.approvals.values)
         if (target == FeedTarget.Sheet || !exists(target)) {
             state.update { it.copy(sheet = item, sheetGone = target != FeedTarget.Sheet || FeedKinds.isAsk(item.kind)) }
         } else {
@@ -204,6 +204,7 @@ class NotificationsViewModel @Inject constructor(
         fun connection(id: String) = n.connections.containsKey(id)
         return when (t) {
             is FeedTarget.ApprovalEntry -> n.approvals.containsKey(t.key)
+            FeedTarget.Approvals -> n.approvals.isNotEmpty()
             is FeedTarget.Connection -> connection(t.connectionId)
             is FeedTarget.Conversation -> connection(t.connectionId)
             is FeedTarget.SharedWithYou -> connection(t.connectionId)

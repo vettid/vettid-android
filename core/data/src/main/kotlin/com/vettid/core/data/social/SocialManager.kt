@@ -666,7 +666,12 @@ class SocialManager(
         // Read from the stored state, not the published list (which may lag a moment behind the last event).
         val before = merge(storedFlow.value, listedFlow.value + requestsFlow.value, connectionsFlow.value, now())
         val ask = before.firstOrNull { it.key == key } as? Approval.Authentication
-        if (ask != null || synchronized(notFoundKeys) { key in notFoundKeys }) withdrawnFlow.update { it + id }
+        if (ask != null || synchronized(notFoundKeys) { key in notFoundKeys }) {
+            // Bounded: the last [MAX_WITHDRAWN] ids (a set keeps its insertion order).
+            withdrawnFlow.update { s ->
+                (s - id + id).let { if (it.size > MAX_WITHDRAWN) it.drop(it.size - MAX_WITHDRAWN).toSet() else it }
+            }
+        }
         closeAsk(key, ts)
         if (ask != null) {
             val batch = AskBatching.batchOf(before, key).ifEmpty { listOf(ask) }
@@ -679,6 +684,10 @@ class SocialManager(
                     receivedAt = ask.receivedAt,
                     remaining = left.size,
                     openUntil = left.mapNotNull { it.exp }.minOrNull(),
+                    askKey = key,
+                    // The notification may go by itself only when every ask still open has ended: the latest exp, none if one has none.
+                    closeAt = if (left.isEmpty() || left.any { it.exp == null }) null else left.mapNotNull { it.exp }.max(),
+                    askTs = pending.createdTs(key),
                 ),
             )
         }
@@ -1630,6 +1639,7 @@ class SocialManager(
         /** At most this many share decisions and batches are remembered for reads on their way. */
         private const val MAX_LOG = 64
         private const val MAX_NOT_FOUND = 100
+        private const val MAX_WITHDRAWN = 256
         private const val CODE_TOO_LARGE = "response_too_large"
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
 

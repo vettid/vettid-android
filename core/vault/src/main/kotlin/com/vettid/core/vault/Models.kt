@@ -373,6 +373,10 @@ data class FeedItem(
      * (VAULT-MESSAGING 0.80.0 §10.4): the earliest `exp` among the asks still open.
      */
     @kotlinx.serialization.Transient val openUntil: java.time.Instant? = null,
+    /** Never on the wire: when that re-posted notification may go by itself (the latest `exp`; null if an open ask has none). */
+    @kotlinx.serialization.Transient val closeAt: java.time.Instant? = null,
+    /** Never on the wire: a re-post after a withdrawal. It is quiet, and not shown again if the member dismissed it. */
+    @kotlinx.serialization.Transient val quietRepost: Boolean = false,
 )
 
 @Serializable
