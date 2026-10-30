@@ -1,6 +1,7 @@
 package com.vettid.core.data.feed
 
 import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.social.AskBatching
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.FeedItem
@@ -360,6 +361,53 @@ class FeedManager(
         ids.forEach { markReadQuietly(it) }
     }
 
+    /**
+     * (VAULT-MESSAGING 0.80.0 §10.4) One ask of a connection's asks was withdrawn. The vault leaves the feed item as it is
+     * (a batch's `count` is unchanged).
+     * - The withdrawn ask's own item without a `count` stands only for that ask: it is marked read.
+     * - A batch's item is marked read when no ask of the batch is still open; otherwise it stays and its notification is
+     *   posted again, quietly (and only if it is still showing), with the asks left, the earliest deadline among them for
+     *   display and the latest to go by itself.
+     * Nothing happens for an ask whose item this feed does not hold.
+     */
+    fun askWithdrawn(b: WithdrawnBatch) {
+        // The withdrawn ask's own item first, even with a count: another batch's item is never picked for it.
+        val (own, item) = synchronized(lock) { ownItem(b).let { it to (it ?: batchItem(b)) } }
+        if (own != null && own.count == null) {
+            markReadQuietly(own.itemId)
+            return
+        }
+        if (item == null) return
+        if (b.remaining <= 0) {
+            markReadQuietly(item.itemId)
+        } else if (item.status == STATUS_ACTIVE) {
+            emitArrival(
+                item.copy(count = b.remaining.takeIf { it > 1 }, openUntil = b.openUntil, closeAt = b.closeAt, quietRepost = true),
+            )
+        }
+    }
+
+    /** The ask-kind item whose `ref` is the withdrawn ask itself. Under [lock]. */
+    private fun ownItem(b: WithdrawnBatch): FeedItem? =
+        byId.values.firstOrNull { it.connectionId == b.connectionId && FeedAsks.approvalKey(it.kind, it.ref) == b.askKey }
+
+    /**
+     * The batch item that stands for [b]: the ask-kind item of the connection whose `ref` is one of the batch's asks; if
+     * the first ask of the batch is gone already, the newest unread batch item of the connection that began within the
+     * window before the ask was created, by the vault's own times where the app has the ask's (else the phone's).
+     */
+    private fun batchItem(b: WithdrawnBatch): FeedItem? {
+        val items = byId.values.filter { it.connectionId == b.connectionId && it.kind in FeedAsks.ASK_KINDS }
+        items.firstOrNull { FeedAsks.approvalKey(it.kind, it.ref) in b.askKeys }?.let { return it }
+        val at = b.askTs ?: b.receivedAt
+        val from = at.minus(BATCH_WINDOW).minus(BATCH_SKEW)
+        val to = at.plus(BATCH_SKEW)
+        return items.filter { it.count != null && it.status == STATUS_ACTIVE }
+            .mapNotNull { i -> runCatching { Instant.parse(i.at) }.getOrNull()?.let { i to it } }
+            .filter { (_, t) -> !t.isBefore(from) && !t.isAfter(to) }
+            .maxByOrNull { it.second }?.first
+    }
+
     override suspend fun delete(itemId: String) {
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
@@ -402,6 +450,8 @@ class FeedManager(
     }
 
     companion object {
+        private val BATCH_WINDOW: java.time.Duration = AskBatching.WINDOW
+        private val BATCH_SKEW: java.time.Duration = java.time.Duration.ofMinutes(2)
         const val STATUS_ACTIVE = "active"
         const val STATUS_READ = "read"
         const val STATUS_ARCHIVED = "archived"
@@ -433,3 +483,22 @@ class FeedManager(
         }
     }
 }
+
+/**
+ * A withdrawn ask of [connectionId]'s asks (VAULT-MESSAGING 0.80.0 §10.4): [askKeys] are the keys of the batch it was
+ * in (itself included), [receivedAt] when it reached the member, [remaining] the asks of the batch still open and
+ * [openUntil] the earliest `exp` among them.
+ */
+data class WithdrawnBatch(
+    val connectionId: String,
+    val askKeys: Set<String>,
+    val receivedAt: Instant,
+    val remaining: Int,
+    val openUntil: Instant?,
+    /** The withdrawn ask's key (`auth:<request_id>`). */
+    val askKey: String = "",
+    /** When the re-posted notification may go by itself: the latest `exp` of the asks left; null if none, or one has no `exp`. */
+    val closeAt: Instant? = null,
+    /** The vault's time of the ask's creation event, when the app still has it. */
+    val askTs: Instant? = null,
+)

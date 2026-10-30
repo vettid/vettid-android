@@ -141,6 +141,13 @@ interface ApprovalsRepository {
     /** Declines the request and blocks the requester's identity. */
     suspend fun blockConnectionRequest(pendingId: String)
 
+    /**
+     * (VAULT-MESSAGING 0.80.0 §10.4) The `request_id`s of sign-in and approval challenges the challenger withdrew
+     * (`connection.authenticate.decided{withdrawn: true}`) that this app knew: their screens say so instead of "decided
+     * elsewhere". Memory only; cleared when the vault is not open.
+     */
+    val withdrawn: StateFlow<Set<String>> get() = NO_WITHDRAWN
+
     /** Opens the credential's unlock window with [password] and signs the challenge (§10.4). */
     suspend fun approveAuthentication(requestId: String, password: String)
 
@@ -178,3 +185,5 @@ interface ApprovalsRepository {
      */
     suspend fun dropDeviceRequests(deviceId: String) {}
 }
+
+private val NO_WITHDRAWN: StateFlow<Set<String>> = kotlinx.coroutines.flow.MutableStateFlow(emptySet())

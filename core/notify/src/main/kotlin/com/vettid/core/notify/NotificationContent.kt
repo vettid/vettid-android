@@ -22,6 +22,15 @@ data class LocalNotification(
     val names: Boolean = false,
     val alertOnce: Boolean = false,
     val settings: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.80.0 §10.4) A batch's notification posted again after one of its asks was withdrawn: the earliest
+     * `exp` among the asks still open, shown as the deadline. Null for every other notification.
+     */
+    val openUntil: java.time.Instant? = null,
+    /** When it may go by itself: the latest `exp` among the asks still open; null (cleared) if any has none. */
+    val closeAt: java.time.Instant? = null,
+    /** A re-post after a withdrawal: no sound or vibration. */
+    val silent: Boolean = false,
 )
 
 /** Posts and cancels [LocalNotification]s ([AndroidPoster] on a phone; a list in tests). */
@@ -29,6 +38,9 @@ interface Poster {
     fun post(n: LocalNotification)
 
     fun cancel(tag: String)
+
+    /** Whether the notification [tag] is still showing (the member has not dismissed it). */
+    fun isPosted(tag: String): Boolean = true
 
     /**
      * Cancels the item notifications this app posted that are still showing, whoever posted them (a process that died
@@ -56,7 +68,7 @@ object NotificationContent {
         val urgent = NotificationMapping.urgentChannel(channel)
         val public = res.getString(if (urgent) R.string.notify_public_attention else R.string.notify_public_activity)
         val newer = res.getString(R.string.notify_newer_app).takeIf { NotificationMapping.needsNewerApp(item) }
-        return when (previews) {
+        val n = when (previews) {
             NotificationPreviews.NOTHING -> LocalNotification(
                 item.itemId, channel, res.getString(R.string.notify_public_activity), publicTitle = public, itemId = item.itemId,
                 alertOnce = true,
@@ -72,5 +84,6 @@ object NotificationContent {
                 public, item.itemId, names = true, alertOnce = true,
             )
         }
+        return n.copy(openUntil = item.openUntil, closeAt = item.closeAt, silent = item.quietRepost)
     }
 }

@@ -431,7 +431,7 @@ fun AppShell(
         when (t) {
             NotificationOpenInbox.Open.Settings -> navController.navigate(NotificationSettingsRoute) { launchSingleTop = true }
             is NotificationOpenInbox.Open.Item -> {
-                val target = shell.openItem(t.itemId)?.let { FeedKinds.target(it) }
+                val target = shell.openItem(t.itemId)?.let { FeedKinds.target(it, shell.openAsks()) }
                 if (target == null || target == FeedTarget.Sheet) {
                     navController.navigate(NotificationsRoute()) { launchSingleTop = true }
                 } else {
@@ -515,6 +515,7 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget) {
         FeedTarget.Connections -> navigateTopLevel(ConnectionsRoute)
         FeedTarget.History -> navigateTopLevel(HistoryRoute)
         FeedTarget.Security -> navigateTopLevel(SettingsRoute)
+        FeedTarget.Approvals -> navigateTopLevel(ApprovalsRoute)
         else -> feedRoute(t)?.let { navigate(it) { launchSingleTop = true } }
     }
 }

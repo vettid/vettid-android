@@ -137,6 +137,9 @@ fun NavGraphBuilder.approvalsDestination(
                 onEndAccess = vm::endAccess,
                 onDismissEndAccess = vm::dismissEndAccess,
                 onDismissEndFailure = vm::dismissEndFailure,
+                onAskMute = vm::askMute,
+                onMute = vm::mute,
+                onDismissMute = vm::dismissMute,
             ),
         )
     }
@@ -412,13 +415,22 @@ data class DecisionActions(
     val onEndAccess: () -> Unit = {},
     val onDismissEndAccess: () -> Unit = {},
     val onDismissEndFailure: () -> Unit = {},
+    /** A withdrawn request (0.80.0): "Mute requests from …" (a service asks first), its confirmation, and its dismissal. */
+    val onAskMute: () -> Unit = {},
+    val onMute: () -> Unit = {},
+    val onDismissMute: () -> Unit = {},
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
 @Composable
+@Suppress("CyclomaticComplexMethod", "ReturnCount")
 fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier = Modifier) {
     LaunchedEffect(state.done) { if (state.done) actions.onBack() }
     val a = state.approval
+    if (a != null && state.withdrawn) {
+        WithdrawnScreen(a, state, actions, modifier)
+        return
+    }
     if (a == null || state.gone) {
         GoneScreen(a, state, actions, modifier)
         return
@@ -488,12 +500,42 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
     }
 }
 
+/**
+ * The challenger withdrew this sign-in or approval (VAULT-MESSAGING 0.80.0, ANDROID-PLAN 0.1.101): the screen stays under
+ * the member's finger, the countdown stops, and Approve / Not me give way to the notice and Close. Nothing is red.
+ */
+@Composable
+private fun WithdrawnScreen(a: Approval, state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier) {
+    FormScaffold(
+        title = titleOf(a),
+        body = null,
+        primaryLabel = stringResource(R.string.approvals_withdrawn_close),
+        onPrimary = actions.onBack,
+        onBack = actions.onBack,
+        modifier = modifier.testTag("approval_detail"),
+    ) {
+        Facts(a, withdrawn = true)
+        WithdrawnNotice(a, state.canMute, state.busy, actions.onAskMute)
+        // Only a failed mute is said here; a decision that failed meanwhile is moot.
+        state.muteError?.let {
+            Spacer(Modifier.height(Spacing.m))
+            Text(
+                failureText(it.messageRes(), it.vaultCode(state.muteErrorCode)),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("failure"),
+            )
+        }
+    }
+    if (state.confirmMute) MuteConfirm(a, actions.onMute, actions.onDismissMute)
+}
+
 /** "Already decided … or it expired"; a confirmation already open stays and still ends access (0.78.0 §6.8), except while held. */
 @Composable
 private fun GoneScreen(a: Approval?, state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier) {
     FormScaffold(
-        title = stringResource(R.string.approvals_gone_title),
-        body = stringResource(R.string.approvals_gone_body),
+        // A sign-in or approval that is not waiting any more is not "decided on another device" (it may be withdrawn).
+        title = stringResource(if (a is Approval.Authentication) R.string.approvals_gone_authn else R.string.approvals_gone_title),
+        body = if (a is Approval.Authentication) null else stringResource(R.string.approvals_gone_body),
         primaryLabel = stringResource(R.string.approvals_back),
         onPrimary = actions.onBack,
         onBack = actions.onBack,
@@ -924,7 +966,8 @@ private fun bodyOf(a: Approval): String? = when (a) {
     )
     is Approval.OutgoingRequest -> outgoingBody(a)
     is Approval.Authentication -> when (a.purpose) {
-        AuthPurpose.SIGNIN -> stringResource(R.string.approvals_auth_signin_body)
+        // With a match code the line follows the note instead (Facts), as the iOS screen has it.
+        AuthPurpose.SIGNIN -> if (shownMatchCode(a) != null) null else stringResource(R.string.approvals_auth_signin_body)
         // The title says who asks, and their note follows in full (VAULT-MESSAGING 0.65.0 §10.4).
         AuthPurpose.APPROVAL -> null
         AuthPurpose.NONE -> stringResource(
@@ -979,7 +1022,7 @@ private fun Value(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
-private fun Facts(a: Approval, renewal: Boolean = false) {
+private fun Facts(a: Approval, renewal: Boolean = false, withdrawn: Boolean = false) {
     when (a) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
@@ -1067,8 +1110,16 @@ private fun Facts(a: Approval, renewal: Boolean = false) {
             a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
         }
         is Approval.Authentication -> {
-            Label(stringResource(R.string.approvals_from))
-            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+            // With a match code (0.79.0): the code, the note, then "Only approve if you are signing in right now." (no
+            // "From" line: the title names who). Without one: as before.
+            // A withdrawn ask shows no code and no "Check that…" line: nothing is left to compare.
+            val code = shownMatchCode(a)?.takeIf { !withdrawn }
+            if (code != null) {
+                MatchCodeBlock(code)
+            } else {
+                Label(stringResource(R.string.approvals_from))
+                Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+            }
             // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
             val note = a.context?.let { AuthContext.isolated(it) }
                 ?: stringResource(R.string.approvals_auth_no_details).takeIf { a.purpose != AuthPurpose.NONE }
@@ -1076,7 +1127,17 @@ private fun Facts(a: Approval, renewal: Boolean = false) {
                 Label(stringResource(R.string.approvals_context))
                 Value(it, Modifier.testTag("auth_context"))
             }
-            a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
+            if (code != null) {
+                Spacer(Modifier.height(Spacing.m))
+                Text(
+                    stringResource(R.string.approvals_auth_signin_body),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.testTag("auth_signin_body"),
+                )
+            }
+            if (!withdrawn) {
+                a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
+            }
         }
         // Shown by GrantFacts.
         is Approval.GrantRequest -> Unit

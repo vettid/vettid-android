@@ -37,6 +37,7 @@
     <string name="history_kind_connection_unblocked">Connection unblocked</string>
     <string name="history_kind_connection_request_peer_declined">They declined the connection</string>
     <string name="history_kind_connection_authenticate_requested">Authentication requested</string>
+    <string name="history_kind_connection_authenticate_withdrawn">Request withdrawn</string>
     <string name="history_kind_connection_authenticate_signed">Authentication signed</string>
     <string name="history_kind_connection_authenticate_denied">Authentication denied</string>
     <string name="history_kind_connection_authenticated">Connection authenticated</string>
@@ -233,6 +234,7 @@
     <string name="history_detail_rotated_transfer">Replaced when you moved your vault to a new phone.</string>
     <string name="history_detail_rotation_failed">Your connections still know your old keys. Your vault will try again the next time you unlock it.</string>
     <string name="history_detail_rotate_conflict">This connection\'s vault announced two different new keys. That can mean someone holds an old copy of their vault. Nothing is sent or received until you check.</string>
+    <string name="history_detail_authn_withdrawn">%1$s withdrew this request before it was answered.</string>
     <string name="history_detail_push_google">Through Google.</string>
     <string name="history_detail_push_apple">Through Apple.</string>
     <string name="history_detail_push_off_app">Turned off on that phone.</string>

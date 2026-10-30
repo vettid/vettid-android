@@ -111,7 +111,10 @@ class FeedNotifier(
         scope.launch { source.alarm.collect { onAlarm(it) } }
     }
 
+    @Suppress("ReturnCount")
     private suspend fun onArrival(item: FeedItem) {
+        // A re-post after a withdrawal only updates what is showing: a notification the member dismissed stays dismissed.
+        if (item.quietRepost && !synchronized(lock) { item.itemId in posted && poster.isPosted(item.itemId) }) return
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
         val names = source.names()
         val previews = settings.value.previews

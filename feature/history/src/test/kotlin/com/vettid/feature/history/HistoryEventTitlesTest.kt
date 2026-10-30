@@ -42,6 +42,7 @@ class HistoryEventTitlesTest {
                 is AuditKinds.Detail.Line -> context.getString(it.res)
                 is AuditKinds.Detail.Scaled -> context.getString(it.res)
                 is AuditKinds.Detail.Named -> context.getString(it.res, it.name)
+                is AuditKinds.Detail.Connection -> context.getString(it.res, "NAME")
             }
         }
 
@@ -89,9 +90,19 @@ class HistoryEventTitlesTest {
             Triple("drop.grant_limit", null, "Request refused: too many waiting"),
             Triple("drop.critical_signature", null, "Request refused: it could not be verified"),
             Triple("drop.rate_limited", null, "Message refused: too many messages"),
+            Triple("connection.authenticate.withdrawn", "r1", "Request withdrawn"),
         )
         expected.forEach { (kind, ref, text) -> assertEquals("$kind $ref", text, title(kind, ref)) }
         assertEquals("Unlocks and daily checks", context.getString(R.string.history_category_vault_access))
+    }
+
+    @Test
+    fun aWithdrawnRequestSaysWhoWithdrewItAndNothingAboutDecliningOrFailing() {
+        val d = AuditKinds.details("connection.authenticate.withdrawn", "r1")
+        assertEquals(listOf(AuditKinds.Detail.Connection(R.string.history_detail_authn_withdrawn)), d)
+        val text = context.getString(R.string.history_detail_authn_withdrawn, "Sam Lee")
+        assertEquals("Sam Lee withdrew this request before it was answered.", text)
+        assertEquals(false, title("connection.authenticate.withdrawn").contains("declin", ignoreCase = true))
     }
 
     @Test

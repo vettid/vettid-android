@@ -78,4 +78,9 @@
     <string name="devices_end_access_body">It stops at once, and any of its requests still waiting for you are declined. It can ask for access again; you decide then.</string>
     <string name="devices_end_failed_title">Access not ended</string>
     <string name="devices_end_failed">Access for %1$s could not be ended. Try again.</string>
+    <!-- Owner-approved 2026-10-30 (ANDROID-PLAN 0.1.101, VAULT-MESSAGING 0.80.0): muting a connection from a withdrawn request. -->
+    <string name="core_ui_authn_withdrawn_mute">Mute requests from %1$s</string>
+    <string name="core_ui_authn_withdrawn_mute_confirm_service">You won\'t be asked to sign in or approve anything for %1$s until you unmute.</string>
+    <string name="core_ui_authn_withdrawn_mute_confirm_button">Mute</string>
+    <string name="core_ui_authn_withdrawn_mute_cancel_button">Cancel</string>
 </resources>

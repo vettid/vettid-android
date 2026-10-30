@@ -32,7 +32,7 @@ data class ShellBadges(val approvals: Int = 0, val unread: Int = 0)
 /** The app shell (drawer badges, the Notifications bell, invitation links the app was opened with). */
 @HiltViewModel
 class ShellViewModel @Inject constructor(
-    approvals: ApprovalsRepository,
+    private val approvals: ApprovalsRepository,
     messages: MessagesRepository,
     private val invites: InviteLinkInbox,
     profiles: ProfileRepository,
@@ -45,6 +45,9 @@ class ShellViewModel @Inject constructor(
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
 
     fun tapTaken() = taps.consume()
+
+    /** The asks waiting now: a batch's notification leads to the ones that are still open. */
+    fun openAsks() = approvals.approvals.value
 
     /** The tapped item, read (not waiting for the answer); waits a little for the feed after a cold start. */
     suspend fun openItem(itemId: String): FeedItem? {

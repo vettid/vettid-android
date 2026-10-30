@@ -1,6 +1,7 @@
 package com.vettid.feature.approvals
 
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AskBatching
 import java.time.Duration
 import java.time.Instant
 
@@ -31,34 +32,19 @@ sealed interface ApprovalEntry {
  */
 object AskBatches {
     /** §10.4.1: 10 minutes from the first ask of a batch. */
-    val WINDOW: Duration = Duration.ofMinutes(10)
+    val WINDOW: Duration = AskBatching.WINDOW
 
     /** The connection an ask comes from; null for an approval that is not an ask. */
-    fun connectionOf(a: Approval): String? = when (a) {
-        is Approval.Authentication -> a.connectionId
-        is Approval.GrantRequest -> a.connectionId
-        is Approval.CriticalUse -> a.connectionId
-        else -> null
-    }
+    fun connectionOf(a: Approval): String? = AskBatching.connectionOf(a)
 
     /** [approvals] (newest first) as rows, newest first: a batch of two or more asks takes the place of its newest. */
     fun group(approvals: List<Approval>): List<ApprovalEntry> {
         val batchOf = mutableMapOf<String, ApprovalEntry.Batch>()
         approvals.filter { connectionOf(it) != null }.groupBy { connectionOf(it)!! }.forEach { (conn, asks) ->
-            var current = mutableListOf<Approval>()
-            fun close() {
-                if (current.size > 1) {
-                    val b = ApprovalEntry.Batch(conn, current.firstNotNullOfOrNull { it.connectionName }, current.toList())
-                    current.forEach { batchOf[it.key] = b }
-                }
-                current = mutableListOf()
+            AskBatching.split(asks).filter { it.size > 1 }.forEach { members ->
+                val b = ApprovalEntry.Batch(conn, members.firstNotNullOfOrNull { it.connectionName }, members)
+                members.forEach { batchOf[it.key] = b }
             }
-            asks.sortedBy { it.receivedAt }.forEach { a ->
-                val start = current.firstOrNull()?.receivedAt
-                if (start != null && !a.receivedAt.isBefore(start.plus(WINDOW))) close()
-                current += a
-            }
-            close()
         }
         val out = mutableListOf<ApprovalEntry>()
         val shown = mutableSetOf<String>()

@@ -48,6 +48,8 @@
         <item quantity="other">%1$d items</item>
     </plurals>
     <string name="approvals_gone_title">Already decided</string>
+    <!-- Owner-approved 2026-10-30 (ANDROID-PLAN 0.1.101): a sign-in or approval that is not waiting any more. -->
+    <string name="approvals_gone_authn">This request is no longer waiting.</string>
     <string name="approvals_gone_body">This request was decided on another device, or it expired.</string>
     <string name="approvals_deny">Deny</string>
     <string name="approvals_share_decline">Do not share</string>
@@ -82,6 +84,13 @@
     <string name="approvals_a_connection_inline">a connection</string>
     <string name="approvals_from">From</string>
     <string name="approvals_context">Their note</string>
+    <!-- Owner-approved 2026-10-30: a sign-in's match code, VAULT-MESSAGING 0.79.0 §10.4 (ANDROID-PLAN 0.1.100). No "verified" look. -->
+    <string name="approvals_match_code_label">Match code</string>
+    <string name="approvals_match_code_instruction">Check that the sign-in screen shows the same number: %1$s</string>
+    <string name="approvals_match_code_a11y">Match code %1$s</string>
+    <!-- Owner-approved 2026-10-30: a challenge its challenger withdrew, VAULT-MESSAGING 0.80.0 §10.4 (ANDROID-PLAN 0.1.101). -->
+    <string name="approvals_withdrawn_notice">%1$s withdrew this request. You don\'t need to answer it.</string>
+    <string name="approvals_withdrawn_close">Close</string>
     <string name="approvals_grant_body">%1$s asks to see items from your vault.</string>
     <string name="approvals_grant_approve">Share these items</string>
     <string name="approvals_reason">Reason they gave</string>

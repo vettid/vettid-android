@@ -15,6 +15,7 @@ import java.time.Instant
  * only a merged list moves the cut: a failed read changes nothing. Kinds this app does not show (`action`,
  * `location`) are skipped. [lock] ends all of it: the next unlock starts again.
  */
+@Suppress("TooManyFunctions")
 internal class PendingAsks {
     /** A listed ask the app shows: the event [type] it repeats, its parsed [key] and the requesting device. */
     class Entry(val type: String, val body: JsonObject, val key: String, val deviceId: String?)
@@ -111,6 +112,9 @@ internal class PendingAsks {
      * could hide a newer request of the device; the list or the `exp` settles those.
      */
     fun wasClosed(key: String): Boolean = synchronized(lock) { closedKeys.containsKey(key) }
+
+    /** The vault's `ts` of the creation event of ask [key] while it is remembered (until a list reflects it); else null. */
+    fun createdTs(key: String): Instant? = synchronized(lock) { created[key] }
 
     /** Whether the ask [key] was created after [ts]: a closing event at [ts] is not about it. */
     fun createdAfter(key: String, ts: Instant): Boolean = synchronized(lock) { created[key]?.isAfter(ts) == true }
