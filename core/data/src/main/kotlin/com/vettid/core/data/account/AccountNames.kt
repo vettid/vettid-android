@@ -122,7 +122,20 @@ object AccountNames {
      * A comparison key for "could this pass for that name": Default_Ignorable code points removed, every run of White_Space
      * and U+2800 (it draws as a blank, 0.78.1) one U+0020, NFKC, case-folded, trimmed.
      */
-    fun lookalikeKey(s: String): String {
+    fun lookalikeKey(s: String): String = lookalikeKey(s, dropBrailleBlank = false)
+
+    /**
+     * True when [shown] could pass for the [reserved] name: their [lookalikeKey]s match with U+2800 read as a space, or
+     * with U+2800 dropped. So "VettID" with a U+2800 inside passes for "VettID", as "This phone" with U+2800 for its space
+     * passes for "This phone"; a plain "Vett ID" still does not. A false match only adds the role label; a miss lets a
+     * name pose as a reserved one.
+     */
+    fun couldPassFor(shown: String, reserved: String): Boolean {
+        val key = lookalikeKey(reserved)
+        return lookalikeKey(shown) == key || lookalikeKey(shown, dropBrailleBlank = true) == key
+    }
+
+    private fun lookalikeKey(s: String, dropBrailleBlank: Boolean): String {
         fun strip(t: String) = buildString {
             var i = 0
             var space = false
@@ -131,6 +144,7 @@ object AccountNames {
                 i += Character.charCount(cp)
                 when {
                     UCharacter.hasBinaryProperty(cp, UProperty.DEFAULT_IGNORABLE_CODE_POINT) -> Unit
+                    dropBrailleBlank && cp == BRAILLE_PATTERN_BLANK -> Unit
                     isBlank(cp) -> space = true
                     else -> {
                         if (space && isNotEmpty()) append(' ')

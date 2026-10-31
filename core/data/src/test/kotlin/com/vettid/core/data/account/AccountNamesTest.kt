@@ -259,7 +259,7 @@ class AccountNamesTest {
 
     @Test
     fun brailleBlankIsBlankYetStaysInTheShownText() {
-        // VAULT-MESSAGING 0.78.1 \u00A710.8 step 4: U+2800 is not a Default_Ignorable_Code_Point but counts as blank.
+        // VAULT-MESSAGING 0.78.1 §10.8 step 4: U+2800 is not a Default_Ignorable_Code_Point but counts as blank.
         assertTrue(AccountNames.isEmptyText("\u2800"))
         assertTrue(AccountNames.isEmptyText("\u2800\u3164\u200D\u00A0 "))
         assertNull(AccountNames.cleaned("\u2800\u2800"))
@@ -282,4 +282,20 @@ class AccountNamesTest {
         }
         assertEquals(AccountNames.lookalikeKey("This phone"), AccountNames.lookalikeKey("This\u2800phone\u2800"))
     }
+
+    @Test
+    fun brailleBlankPaddedVettIdCouldPassForVettId() =
+        assertTrue(AccountNames.couldPassFor("\u2800VettID\u2800", "VettID"))
+
+    @Test
+    fun brailleBlankInsideThisPhoneCouldPassForThisPhone() =
+        assertTrue(AccountNames.couldPassFor("This\u2800phone", "This phone"))
+
+    @Test
+    fun brailleBlankInsideVettIdCouldPassForVettId() =
+        assertTrue(AccountNames.couldPassFor("Vett\u2800ID", "VettID"))
+
+    @Test
+    fun aPlainSpaceInsideVettIdDoesNotPassForVettId() =
+        assertFalse(AccountNames.couldPassFor("Vett ID", "VettID"))
 }
