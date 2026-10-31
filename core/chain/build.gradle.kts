@@ -104,10 +104,15 @@ dependencies {
     // the application picks the JNI binding: the Android one (a small C library, libsecp256k1-jni.so) here.
     implementation(libs.bitcoin.kmp)
     implementation(libs.secp256k1.jni.android)
-    // Reading the vault's `wallet.psbt.inspect` summary (JSON values only; no serialization plugin).
+    // Reading the vault's `wallet.psbt.inspect` summary and the chain server's answers (JSON values only; no serialization plugin).
     implementation(libs.kotlinx.serialization.json)
+    // The chain source (W1b, ANDROID-PLAN §4 "The chain source"): an Esplora client over OkHttp, with the app's fixed User-Agent.
+    implementation(projects.core.relay)
+    implementation(libs.kotlinx.coroutines.core)
 
     // JVM unit tests run on the host: the JNI binding for desktop JVMs (linux x86-64 and others) is declared first, so
     // that its loader is the one on the test classpath.
     testImplementation(libs.secp256k1.jni.jvm)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.kotlinx.coroutines.test)
 }
