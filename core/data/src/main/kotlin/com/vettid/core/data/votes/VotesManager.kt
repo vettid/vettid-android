@@ -496,20 +496,29 @@ class VotesManager(
         }
     }
 
-    /** One run: the service list, the proposals, and the results that are due. Not while another run is going. */
+    /**
+     * One run: the service list, the proposals, and the results that are due, as **separate stages** (VAULT-MESSAGING 0.81.5
+     * §10.19.8): a refusal in one does not stop the next, so that a bad or hostile site item cannot hold back a member's results
+     * check. The first failure (other than a list refused as too large, which leaves the vault its held list) is thrown once the
+     * run is over. Not while another run is going.
+     */
     suspend fun syncOnce() {
         if (!site.configured) return
         syncs.withLock {
             read(fromQueue = false)
             if (availabilityFlow.value != VotesAvailability.AVAILABLE) return@withLock
-            try {
-                syncLists()
-            } catch (e: VaultFailure) {
-                // A list the vault refused as too large leaves its held list; the proposals and the results go on.
-                if (e.code != CODE_TOO_LARGE) throw e
+            var first: VaultFailure? = null
+            suspend fun stage(block: suspend () -> Unit) {
+                try {
+                    block()
+                } catch (e: VaultFailure) {
+                    if (first == null && e.code != CODE_TOO_LARGE) first = e
+                }
             }
-            syncProposals(only = null)
-            submitDue()
+            stage { syncLists() }
+            stage { syncProposals(only = null) }
+            stage { submitDue() }
+            first?.let { throw it }
         }
     }
 
@@ -558,7 +567,16 @@ class VotesManager(
             held + byId.keys.filter { it !in held }.takeLast(VoteSync.MAX_NEW)
         }
         val entries = ids.map { id -> VoteSync.entryJson(id, byId[id], readDocument(id, byId[id])) }
-        for (call in VoteSync.entryCalls(entries)) send(call) ?: break
+        // Each call on its own: one the vault refuses does not keep the others from it. The first refusal is thrown after the last.
+        var first: VaultFailure? = null
+        for (call in VoteSync.entryCalls(entries)) {
+            try {
+                send(call)
+            } catch (e: VaultFailure) {
+                if (first == null) first = e
+            }
+        }
+        first?.let { throw it }
     }
 
     /** One proposal's documents from the site: `proposal.json` with its signature and bundle, and each extension in order. */
@@ -679,6 +697,8 @@ class VotesManager(
         if (sig == null || bundleBytes == null || rows == null) {
             return@withLock unavailable(key, siteDown)
         }
+        // (0.81.5) Results the vault would refuse as a whole are never submitted: the existing problem hint says so.
+        if (!VoteSync.submittable(doc, sig)) return@withLock fail(key, ResultsOutcome.Problem)
         val bundle = VoteSync.jsonObject(bundleBytes) ?: return@withLock fail(key, ResultsOutcome.Problem)
         val own = try {
             VoteRows.ownRow(doc, rows, tag)
@@ -718,6 +738,8 @@ class VotesManager(
                 },
             )
         }
+        // Over the request limit: the vault could never take it.
+        if (!VoteSync.fitsInline(VoteSync.encoded(body))) return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
         val answer = vaultGuard { ops().submit(body) }
         val check = answer["check"] as? JsonObject
         val state = CheckState.of(check?.let { VaultJson.str(it, "state") })

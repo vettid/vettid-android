@@ -201,7 +201,10 @@ The A2 exit test:
   vote screen is `FLAG_SECURE`; the proof is written only where the member's "Save to…" points, only on their action, never to a
   log, cache or share sheet. The app's work with votes.vettid.org (`VoteSite`, `VoteSync`, `VotesManager.startSync`: hourly while
   the vault is open and unlocked, no cookies, session or identifier; `vote.site.sync` within the per-call limits, a request over
-  245,760 bytes as a claim-check blob; the member's row and its Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
+  245,760 bytes as a claim-check blob; (VAULT-MESSAGING 0.81.5) each site item checked against the vault's shape limits first and
+  left out or replaced if it would make the vault refuse the call (`VoteSync.shaped`, `shapedIndex`, `sendable`, `submittable`), and
+  the lists, the entries and each results submit as separate stages, so one bad item stops nothing else; the member's row and its
+  Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
   in `:core:crypto` against vettid-vault's `vote.json` vectors) never decides anything: the vault checks all of it again.
   `Endpoints.votesBase` is `https://votes.vettid.org` (production) or `https://votes.staging.vettid.org` (staging), none on the dev
   stack. Screens: `votes`, `votes.notices`, `votes.empty`, `vote`, `vote.confirm`, `vote.password`, `vote.recorded`, `vote.sending`,

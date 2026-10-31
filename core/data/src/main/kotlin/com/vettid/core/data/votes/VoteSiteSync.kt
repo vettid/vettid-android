@@ -56,8 +56,57 @@ object VoteSync {
     /** New (not held) proposals the app reads the documents of in one run. */
     const val MAX_NEW = 24
 
-    /** The most extensions the site holds for a proposal (VOTES-SITE §4). */
+    /** The most extensions the site holds for a proposal (VOTES-SITE §4), and the most the vault takes in one entry. */
     const val MAX_EXTENSIONS = 24
+
+    // The vault's shape limits (VAULT-MESSAGING 0.81.5 §10.19.8 "Shape checks before sending"; vettid-vault `features/vote/sync.go`,
+    // `api.go`, `vms/votewire/votewire.go` at bc5660f): one item that breaks one makes the vault refuse the whole call, so the app
+    // checks each item first and leaves out, or replaces, what it would refuse. Content, signatures, hashes: the vault decides.
+
+    /** A detached signature: exactly 64 raw bytes. */
+    const val SIG_BYTES = 64
+
+    /** `proposal.json`, decoded. */
+    const val PROPOSAL_MAX = 65_536
+
+    /** A sigstore bundle, encoded. */
+    const val BUNDLE_MAX = 65_536
+
+    /** `extension-<n>.json`, decoded. */
+    const val EXTENSION_MAX = 4_096
+
+    /** A list the vault takes: a document and a 64-byte signature. */
+    fun sendable(l: ServedList): Boolean = l.doc.isNotEmpty() && l.sig.size == SIG_BYTES
+
+    /**
+     * A document as the vault takes it (0.81.5): a `proposal` over [PROPOSAL_MAX] is `unreachable`; a `bundle` that is over
+     * [BUNDLE_MAX] is left out; the extensions end at the [MAX_EXTENSIONS]th, or before the first whose document is over
+     * [EXTENSION_MAX], whose signature is not [SIG_BYTES], or whose bundle is missing or over [BUNDLE_MAX]. `proposal_sig` goes as
+     * served (the vault judges it).
+     */
+    fun shaped(d: Document): Document = when {
+        d !is Document.Found -> d
+        d.proposal.size > PROPOSAL_MAX -> Document.Unreachable
+        else -> Document.Found(
+            d.proposal,
+            d.proposalSig,
+            d.bundle?.takeIf(::fitsBundle),
+            d.extensions.take(MAX_EXTENSIONS).takeWhile { x ->
+                x.extension.size <= EXTENSION_MAX && x.sig?.size == SIG_BYTES && x.bundle != null && fitsBundle(x.bundle)
+            },
+        )
+    }
+
+    private fun fitsBundle(b: JsonObject): Boolean = encoded(b).size <= BUNDLE_MAX
+
+    /** An `index` element as the vault takes it: one whose `service_id` is present but not a string is left out. */
+    fun shapedIndex(index: JsonObject?): JsonObject? {
+        val serviceId = index?.get("service_id") ?: return index
+        return index.takeIf { serviceId is JsonPrimitive && serviceId.isString }
+    }
+
+    /** Whether `results` and `results_sig` are what the vault takes: results not empty and a 64-byte signature. */
+    fun submittable(results: ByteArray, resultsSig: ByteArray): Boolean = results.isNotEmpty() && resultsSig.size == SIG_BYTES
 
     /** A service list as the site serves it: the exact bytes, its detached signature (64 raw bytes) and its version. */
     class ServedList(val doc: ByteArray, val sig: ByteArray, val version: Long)
@@ -114,7 +163,9 @@ object VoteSync {
         val calls = ArrayList<List<ServedList>>()
         var current = ArrayList<ServedList>()
         for (l in lists) {
-            if (l.doc.size > BODY_MAX) break // never sent: the vault would refuse it; a later list cannot chain without it
+            // Never sent: the vault would refuse it (and the call with it); a later version cannot chain without it, so the catch-up
+            // stops here and the later versions wait for the next run.
+            if (l.doc.size > BODY_MAX || !sendable(l)) break
             val big = l.doc.size > BIG_LIST
             val full = current.size >= MAX_LISTS || current.any { it.doc.size > BIG_LIST }
             if (current.isNotEmpty() && (big || full)) {
@@ -147,8 +198,10 @@ object VoteSync {
 
     class Extension(val extension: ByteArray, val sig: ByteArray?, val bundle: JsonObject?)
 
-    /** `{proposal_id, index?, document}`; no time (the vault stamps an `absent` itself). */
-    fun entryJson(proposalId: String, index: JsonObject?, d: Document): JsonObject = buildJsonObject {
+    /** `{proposal_id, index?, document}`, each in the shape the vault takes ([shapedIndex], [shaped]); no time. */
+    fun entryJson(proposalId: String, served: JsonObject?, document: Document): JsonObject = buildJsonObject {
+        val index = shapedIndex(served)
+        val d = shaped(document)
         put("proposal_id", proposalId)
         if (index != null) put("index", index)
         put(

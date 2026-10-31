@@ -71,7 +71,8 @@ class VoteSyncTest {
     fun atMostEightEntriesACallAndNoEntryThatCouldNeverBeSent() {
         val entries = (1..10).map { entry("P$it", 10) }
         assertEquals(listOf(8, 2), VoteSync.entryCalls(entries).map { (it["entries"] as JsonArray).size })
-        val huge = entry("HUGE", VoteSync.BODY_MAX)
+        // An entry body that alone passes the limit (built raw: through entryJson a proposal this big is sent unreachable).
+        val huge = JsonObject(mapOf("proposal_id" to JsonPrimitive("HUGE"), "pad" to JsonPrimitive("x".repeat(VoteSync.BODY_MAX))))
         val calls = VoteSync.entryCalls(listOf(entry("A", 10), huge, entry("B", 10)))
         assertEquals(listOf(2), calls.map { (it["entries"] as JsonArray).size })
         assertTrue(calls.all { VoteSync.encoded(it).size <= VoteSync.BODY_MAX })
@@ -120,5 +121,80 @@ class VoteSyncTest {
         assertTrue(body(n).size < VoteSync.INLINE_MAX + 400)
         // A body under the old limit by less than the envelope no longer goes inline when the inner would not fit.
         assertFalse(VoteSync.fitsInline(body(VoteSync.INLINE_MAX - 5)))
+    }
+    // ---- Shape checks before sending (VAULT-MESSAGING 0.81.5 §10.19.8) ----
+
+    private fun found(proposal: Int = 100, bundle: JsonObject? = JsonObject(emptyMap()), extensions: List<VoteSync.Extension> = emptyList()) =
+        VoteSync.Document.Found(ByteArray(proposal), ByteArray(64), bundle, extensions)
+
+    private fun ext(size: Int = 10, sig: Int? = 64, bundle: JsonObject? = JsonObject(emptyMap())) =
+        VoteSync.Extension(ByteArray(size), sig?.let { ByteArray(it) }, bundle)
+
+    private fun bigBundle(bytes: Int) = JsonObject(mapOf("x" to JsonPrimitive("a".repeat(bytes))))
+
+    @Test
+    fun theShapeLimitsAreTheVaults() {
+        assertEquals(64, VoteSync.SIG_BYTES)
+        assertEquals(65_536, VoteSync.PROPOSAL_MAX)
+        assertEquals(65_536, VoteSync.BUNDLE_MAX)
+        assertEquals(4_096, VoteSync.EXTENSION_MAX)
+        assertEquals(24, VoteSync.MAX_EXTENSIONS)
+    }
+
+    @Test
+    fun aListWithAnEmptyDocOrABadSigIsNotSentAndTheCatchUpStopsThere() {
+        val badSig = VoteSync.ServedList(ByteArray(10), ByteArray(63), 2)
+        val empty = VoteSync.ServedList(ByteArray(0), ByteArray(64), 2)
+        for (bad in listOf(badSig, empty)) {
+            assertFalse(VoteSync.sendable(bad))
+            assertEquals(listOf(1), VoteSync.listCalls(listOf(list(1), bad, list(3))).map(::services))
+            assertTrue(VoteSync.listCalls(listOf(bad)).isEmpty())
+        }
+    }
+
+    @Test
+    fun aProposalOverTheLimitIsSentUnreachable() {
+        assertEquals(VoteSync.Document.Unreachable, VoteSync.shaped(found(proposal = 65_537)))
+        assertTrue(VoteSync.shaped(found(proposal = 65_536)) is VoteSync.Document.Found)
+        // Absent and unreachable stay as they are.
+        assertEquals(VoteSync.Document.Absent, VoteSync.shaped(VoteSync.Document.Absent))
+    }
+
+    @Test
+    fun aBundleOverTheLimitIsLeftOut() {
+        val d = VoteSync.shaped(found(bundle = bigBundle(70_000))) as VoteSync.Document.Found
+        assertNull(d.bundle)
+        assertTrue((VoteSync.shaped(found()) as VoteSync.Document.Found).bundle != null)
+    }
+
+    @Test
+    fun theExtensionsEndBeforeTheFirstBadOne() {
+        val cases = listOf(ext(size = 4_097), ext(sig = 63), ext(sig = null), ext(bundle = null), ext(bundle = bigBundle(70_000)))
+        for (bad in cases) {
+            val d = VoteSync.shaped(found(extensions = listOf(ext(), ext(), bad, ext()))) as VoteSync.Document.Found
+            assertEquals(2, d.extensions.size)
+        }
+        // At most 24.
+        val many = VoteSync.shaped(found(extensions = List(30) { ext() })) as VoteSync.Document.Found
+        assertEquals(24, many.extensions.size)
+    }
+
+    @Test
+    fun anIndexElementWithANonStringServiceIdIsLeftOut() {
+        val bad = JsonObject(mapOf("proposal_id" to JsonPrimitive("P"), "service_id" to JsonPrimitive(7)))
+        val good = JsonObject(mapOf("proposal_id" to JsonPrimitive("P"), "service_id" to JsonPrimitive("s")))
+        val none = JsonObject(mapOf("proposal_id" to JsonPrimitive("P")))
+        assertNull(VoteSync.shapedIndex(bad))
+        assertEquals(good, VoteSync.shapedIndex(good))
+        assertEquals(none, VoteSync.shapedIndex(none))
+        // The entry goes without it.
+        assertNull(VoteSync.entryJson("P", bad, VoteSync.Document.Absent)["index"])
+    }
+
+    @Test
+    fun resultsAreSubmittableOnlyWithAnythingInThemAndA64ByteSig() {
+        assertTrue(VoteSync.submittable(ByteArray(10), ByteArray(64)))
+        assertFalse(VoteSync.submittable(ByteArray(0), ByteArray(64)))
+        assertFalse(VoteSync.submittable(ByteArray(10), ByteArray(63)))
     }
 }
