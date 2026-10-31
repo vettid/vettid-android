@@ -39,6 +39,11 @@ class FakeVotes : VotesRepository {
     override val availability = MutableStateFlow(VotesAvailability.AVAILABLE)
     override val load = MutableStateFlow(ListLoad.LOADED)
     override val hints = MutableStateFlow<Map<String, VoteHint>>(emptyMap())
+    override val windowNotClosed = MutableStateFlow(false)
+
+    override fun windowNoticeShown() {
+        windowNotClosed.value = false
+    }
 
     private fun call(name: String) {
         calls += name

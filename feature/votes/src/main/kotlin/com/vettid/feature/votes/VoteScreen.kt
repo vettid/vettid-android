@@ -106,6 +106,7 @@ data class VoteActions(
     val onPin: (String) -> Unit = {},
     val onConfirmRelease: () -> Unit = {},
     val onDismissCastProblem: () -> Unit = {},
+    val onWindowNoticeShown: () -> Unit = {},
     val proofFileName: () -> String = { "vettid-vote.json" },
 )
 
@@ -227,6 +228,15 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             verticalArrangement = Arrangement.spacedBy(Spacing.s),
         ) {
             for (n in notes) NoteView(n, resources, service, time, s.reason)
+            if (state.windowNotClosed) {
+                NoticeCard(
+                    kind = NoticeKind.WARNING,
+                    title = stringResource(R.string.vote_window_not_closed_title),
+                    body = stringResource(R.string.vote_window_not_closed),
+                    modifier = Modifier.testTag("vote_window_not_closed"),
+                    actions = { TextButton(onClick = actions.onWindowNoticeShown) { Text(stringResource(R.string.vote_ok)) } },
+                )
+            }
             state.castProblem?.let { CastProblem(it, actions.onDismissCastProblem, resources, service, time) }
             state.checkProblem?.let { p ->
                 NoticeCard(
@@ -437,14 +447,16 @@ private fun CastProblem(p: VoteProblem, onDismiss: () -> Unit, resources: androi
         "checking" -> VoteNote.CHECKING_OTHER
         else -> null
     }
+    // No answer: the vote may have been sent, so it is not "not sent".
+    val unknown = p.kind == FailureKind.NO_RESPONSE || p.kind == FailureKind.NETWORK
     val text = when {
         note != null -> VoteTexts.text(resources, note, service, time)
-        p.kind == FailureKind.NO_RESPONSE -> stringResource(R.string.vote_cast_unanswered)
+        unknown -> stringResource(R.string.vote_cast_unanswered)
         else -> failureText(p.kind.messageRes(), p.kind.vaultCode(p.shownCode))
     }
     NoticeCard(
         kind = NoticeKind.WARNING,
-        title = stringResource(R.string.vote_cast_failed_title),
+        title = stringResource(if (unknown) R.string.vote_cast_unknown_title else R.string.vote_cast_failed_title),
         body = text,
         modifier = Modifier.testTag("vote_cast_problem"),
         actions = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.vote_confirm_back)) } },

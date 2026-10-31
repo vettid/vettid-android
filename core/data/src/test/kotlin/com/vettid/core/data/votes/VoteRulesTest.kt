@@ -223,6 +223,9 @@ class VoteRulesTest {
         assertTrue(VoteRules.hasProof(vote(ballot = ballot(BallotState.REFUSED, "bad_ballot"))))
         assertFalse(VoteRules.hasProof(vote(ballot = ballot(BallotState.REFUSED, "closed"))))
         assertFalse(VoteRules.hasProof(vote(ballot = ballot(BallotState.REFUSED, "late"))))
+        assertFalse(VoteRules.hasProof(vote(ballot = ballot(BallotState.REFUSED, "connection_ended"))))
+        // The vault makes not_active a problem record: it needs the proof and then Release.
+        assertTrue(VoteRules.hasProof(vote(ballot = ballot(BallotState.REFUSED, "not_active"))))
         assertFalse(VoteRules.hasProof(vote(ballot = ballot(BallotState.RECORDED))))
     }
 

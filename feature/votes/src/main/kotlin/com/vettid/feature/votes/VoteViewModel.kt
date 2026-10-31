@@ -53,6 +53,8 @@ data class VoteUiState(
     /** The end of a password backoff (`retry_after`). */
     val retryUntil: Instant? = null,
     val castProblem: VoteProblem? = null,
+    /** The lock of the unlock window this screen's cast opened failed (told once). */
+    val windowNotClosed: Boolean = false,
     val checking: Boolean = false,
     val checkProblem: VoteProblem? = null,
     /** What the last **Check again** came to when it was not handed to the vault: the site had nothing, or could not be reached. */
@@ -117,12 +119,14 @@ class VoteViewModel @Inject constructor(
     private var loadJob: Job? = null
     private var lastSummary: VoteSummary? = null
 
-    val uiState: StateFlow<VoteUiState> = combine(local, repo.votes, repo.hints, connections.connections) { s, list, hints, cs ->
+    val uiState: StateFlow<VoteUiState> =
+        combine(local, repo.votes, repo.hints, connections.connections, repo.windowNotClosed) { s, list, hints, cs, lock ->
         val summary = list.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId }
         s.copy(
             summary = summary,
             serviceName = serviceName(cs.firstOrNull { it.id == connectionId }),
             hint = hints.of(summary),
+            windowNotClosed = lock,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, VoteUiState(connectionId = connectionId, proposalId = proposalId))
 
@@ -222,13 +226,15 @@ class VoteViewModel @Inject constructor(
                 local.update { it.copy(cast = CastStep.NONE, password = "", selected = null, retryUntil = null) }
                 loadDetail()
             } catch (e: VaultFailure) {
-                onCastFailure(e, password != null)
+                onCastFailure(e)
             }
         }
     }
 
-    private fun onCastFailure(e: VaultFailure, hadPassword: Boolean) {
+    private fun onCastFailure(e: VaultFailure) {
         val p = problem(e)
+        // Whatever failed, the vote is read again: a cast whose answer was lost may have been sent, and the list says so.
+        refresh()
         when (e.kind) {
             // The window was closed after all: the prompt, then the same request once.
             FailureKind.CREDENTIAL_LOCKED -> local.update { it.copy(cast = CastStep.PASSWORD, password = "", passwordError = null) }
@@ -241,11 +247,14 @@ class VoteViewModel @Inject constructor(
                 }
             else -> {
                 // A refusal of the vault (closed, closing, already voted…) or no answer: the screen says so and reads the vote again.
-                local.update { it.copy(cast = CastStep.NONE, password = "", castProblem = p) }
-                if (!hadPassword || e.kind != FailureKind.NO_RESPONSE) refresh()
+                // `already_voted` is not a failure to tell: the re-read ballot says what was recorded.
+                val shown = p.takeUnless { it.code == "already_voted" }
+                local.update { it.copy(cast = CastStep.NONE, password = "", castProblem = shown) }
             }
         }
     }
+
+    fun windowNoticeShown() = repo.windowNoticeShown()
 
     fun dismissCastProblem() = local.update { it.copy(castProblem = null) }
 

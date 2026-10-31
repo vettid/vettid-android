@@ -15,6 +15,9 @@ sealed interface SiteAnswer {
     /** HTTP 404: the vault stamps an `absent` entry with its own clock; the app sends no time. */
     data object Absent : SiteAnswer
 
+    /** Longer than the limit asked for: a document the vault could never take, which is not a site that is down. */
+    data object TooLarge : SiteAnswer
+
     /** No answer, a 5xx or any other status, a timeout, a TLS failure, or a truncated or oversized body. */
     data object Unreachable : SiteAnswer
 }
@@ -65,7 +68,7 @@ class OkHttpVoteSite(base: String?, http: OkHttpClient) : VoteSite {
                         else -> {
                             val body = r.body
                             val declared = body.contentLength()
-                            if (declared > maxBytes) return@use SiteAnswer.Unreachable
+                            if (declared > maxBytes) return@use SiteAnswer.TooLarge
                             val bytes = body.source().use { s ->
                                 val buf = okio.Buffer()
                                 while (buf.size <= maxBytes) {
@@ -74,7 +77,9 @@ class OkHttpVoteSite(base: String?, http: OkHttpClient) : VoteSite {
                                 buf
                             }
                             // Over the limit, or shorter than the body announced: a truncated body is no answer.
-                            if (bytes.size > maxBytes || (declared >= 0 && bytes.size != declared)) {
+                            if (bytes.size > maxBytes) {
+                                SiteAnswer.TooLarge
+                            } else if (declared >= 0 && bytes.size != declared) {
                                 SiteAnswer.Unreachable
                             } else {
                                 SiteAnswer.Found(bytes.readByteArray())

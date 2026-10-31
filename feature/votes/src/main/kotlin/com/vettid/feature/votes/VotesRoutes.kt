@@ -99,6 +99,7 @@ fun NavGraphBuilder.votesDestination(chrome: ShellChrome, host: VotesHost) {
                 onPin = vm::setPin,
                 onConfirmRelease = vm::release,
                 onDismissCastProblem = vm::dismissCastProblem,
+                onWindowNoticeShown = vm::windowNoticeShown,
                 proofFileName = vm::proofFileName,
             ),
             now = rememberNow(),

@@ -3,6 +3,11 @@ package com.vettid.core.data.votes
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
+import com.vettid.core.crypto.envelope.Inner
+import com.vettid.core.crypto.envelope.Mode
+import com.vettid.core.crypto.envelope.Padding
+import com.vettid.core.crypto.envelope.Ulid
+import java.time.Instant
 import com.vettid.core.crypto.json.StrictJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -28,6 +33,21 @@ object VoteSync {
     const val BODY_MAX = 8_257_532
 
     const val MAX_LISTS = 8
+
+    /**
+     * Whether a request body travels inline: §5.5 caps the padded **inner plaintext**, which is the body inside the inner
+     * envelope (`v`, `id`, `type`, `ts`, `seq`…) and padded to its bucket, not the body alone. Measured through the real
+     * encoder with the longest `seq` and ids; over the cap it goes as a claim-check blob.
+     */
+    fun fitsInline(body: ByteArray): Boolean = try {
+        val inner = Inner(Ulid.new(), TYPE, Instant.now(), seq = StrictJson.MAX_SAFE_INTEGER, body = body)
+        Padding.paddedLen(inner.marshal(Mode.SESSION).size)
+        true
+    } catch (_: CryptoException) {
+        false
+    }
+
+    private const val TYPE = "vote.site.sync"
     const val MAX_ENTRIES = 8
 
     /** One list over this size goes in a call of its own. */

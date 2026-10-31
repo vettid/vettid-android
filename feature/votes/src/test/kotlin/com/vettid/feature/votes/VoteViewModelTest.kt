@@ -440,4 +440,61 @@ class VoteViewModelTest {
         advanceUntilIdle()
         assertTrue("diagnose:$CONN/$PID" in votes.calls)
     }
+
+    @Test
+    fun noAnswerReadsTheVoteAgainOnEveryPathAndNeverSaysNotSent() = runTest {
+        publish(summary())
+        votes.windowIsOpen = true
+        votes.fail["cast:$CONN/$PID:yes"] = VaultFailure(FailureKind.NO_RESPONSE)
+        val vm = vm()
+        advanceUntilIdle()
+        val reads = votes.calls.count { it == "refresh" }
+        vm.select("yes")
+        vm.askCast()
+        vm.confirmCast()
+        advanceUntilIdle()
+        assertTrue(votes.calls.count { it == "refresh" } > reads)
+        assertEquals(FailureKind.NO_RESPONSE, vm.uiState.value.castProblem?.kind)
+
+        // The password-prompted path reads it again too.
+        votes.windowIsOpen = false
+        votes.fail["cast:$CONN/$PID:yes"] = VaultFailure(FailureKind.NETWORK)
+        val reads2 = votes.calls.count { it == "refresh" }
+        vm.select("yes")
+        vm.askCast()
+        vm.confirmCast()
+        vm.setPassword("pw")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertTrue(votes.calls.count { it == "refresh" } > reads2)
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.castProblem?.kind)
+    }
+
+    @Test
+    fun alreadyVotedReadsTheVoteAgainAndTellsNoFailure() = runTest {
+        publish(summary())
+        votes.windowIsOpen = true
+        votes.fail["cast:$CONN/$PID:no"] = VaultFailure(FailureKind.OTHER, "already_voted")
+        val vm = vm()
+        advanceUntilIdle()
+        val reads = votes.calls.count { it == "refresh" }
+        vm.select("no")
+        vm.askCast()
+        vm.confirmCast()
+        advanceUntilIdle()
+        assertTrue(votes.calls.count { it == "refresh" } > reads)
+        assertNull(vm.uiState.value.castProblem)
+    }
+
+    @Test
+    fun aLockThatFailedIsPassedToTheScreen() = runTest {
+        publish(summary())
+        val vm = vm()
+        votes.windowNotClosed.value = true
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.windowNotClosed)
+        vm.windowNoticeShown()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.windowNotClosed)
+    }
 }

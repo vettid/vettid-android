@@ -80,7 +80,8 @@ object VoteRules {
 
     /**
      * Whether **Save the proof** is offered (screen 6): `failed`, `conflict`, `disputed`, `rejected`, `refused` (except a
-     * plain final `closed`, `late`, `not_active` or `connection_ended`, which hold nothing to show), a signed
+     * plain final `closed`, `late` or `connection_ended`, which hold nothing to show; `not_active` is a problem record in
+     * the vault, so it has the proof and then Release), a signed
      * `not_eligible`, conflict evidence and a site difference.
      */
     fun hasProof(s: VoteSummary): Boolean {
@@ -92,7 +93,7 @@ object VoteRules {
             s.site == SiteState.MISMATCH || s.site == SiteState.UNPUBLISHED
     }
 
-    private val PLAIN_REFUSALS = setOf("closed", "late", "not_active", "connection_ended")
+    private val PLAIN_REFUSALS = setOf("closed", "late", "connection_ended")
 
     /** A row's chip. */
     fun chip(s: VoteSummary): VoteChip {

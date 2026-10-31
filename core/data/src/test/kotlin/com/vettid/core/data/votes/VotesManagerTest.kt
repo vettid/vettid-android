@@ -16,6 +16,7 @@ import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.TestScope
@@ -79,6 +80,7 @@ class VotesManagerTest {
         val blobs = mutableListOf<Int>()
         val submitted = mutableListOf<JsonObject>()
         var refuse = mutableMapOf<String, String>()
+        var castGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var submitAnswer: JsonObject = obj("""{"proposal_id":"$PID","check":{"state":"verified"}}""")
 
         private fun go(type: String) {
@@ -98,6 +100,7 @@ class VotesManagerTest {
         }
 
         override suspend fun cast(connectionId: String, proposalId: String, choiceId: String): JsonObject {
+            castGate?.await()
             go("cast:$connectionId/$proposalId:$choiceId")
             return obj("""{"proposal_id":"$proposalId","ballot":{"state":"sending"}}""")
         }
@@ -155,6 +158,8 @@ class VotesManagerTest {
         var until: Instant? = null
         val opened = mutableListOf<String>()
         var closed = 0
+        var openFail: VaultFailure? = null
+        var closeFail: Exception? = null
     }
 
     private fun TestScope.manager(ops: Ops, site: Site = Site(), window: Window = Window()) = VotesManager(
@@ -165,10 +170,12 @@ class VotesManagerTest {
         openWindow = {
             window.opened += it
             window.until = clock.plusSeconds(300)
+            window.openFail?.let { f -> throw f }
         },
         closeWindow = {
             window.closed++
             window.until = null
+            window.closeFail?.let { f -> throw f }
         },
         now = { clock },
     )
@@ -658,5 +665,103 @@ class VotesManagerTest {
         m.refresh()
         m.diagnoseGaveUp(CONN, PID)
         assertEquals(GaveUpWhy.UNPUBLISHED, m.hints.value.getValue("$CONN/$PID").gaveUp)
+    }
+
+    // ---- The unlock window a cast opens ----
+
+    @Test
+    fun aCancelledCastStillLocksTheWindowItOpened() = runTest {
+        val ops = Ops().apply {
+            list = listing(summary())
+            castGate = kotlinx.coroutines.CompletableDeferred()
+        }
+        val window = Window()
+        val m = manager(ops, window = window)
+        m.refresh()
+        val job = launch(Dispatchers.Default) { m.cast(CONN, PID, "yes", "pw") }
+        eventually { window.opened.isNotEmpty() }
+        job.cancel()
+        job.join()
+        // The lock ran to its end although its caller was cancelled (a screen that left).
+        assertEquals(1, window.closed)
+        assertFalse(m.windowNotClosed.value)
+    }
+
+    @Test
+    fun anUnlockWhoseAnswerWasLostIsStillLocked() = runTest {
+        val ops = Ops().apply { list = listing(summary()) }
+        val window = Window().apply { openFail = VaultFailure(FailureKind.NO_RESPONSE) }
+        val m = manager(ops, window = window)
+        m.refresh()
+        try {
+            m.cast(CONN, PID, "yes", "pw")
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.NO_RESPONSE, e.kind)
+        }
+        assertEquals(1, window.closed)
+        assertTrue(ops.calls.none { it.startsWith("cast") })
+    }
+
+    @Test
+    fun aWrongPasswordOpenedNothingSoNothingIsLocked() = runTest {
+        val window = Window().apply { openFail = VaultFailure(FailureKind.BAD_PASSWORD, "bad_password") }
+        val m = manager(Ops(), window = window)
+        try {
+            m.cast(CONN, PID, "yes", "pw")
+            fail()
+        } catch (_: VaultFailure) {
+        }
+        assertEquals(0, window.closed)
+    }
+
+    @Test
+    fun aLockThatFailedIsToldNotSwallowed() = runTest {
+        val ops = Ops().apply { list = listing(summary()) }
+        val window = Window().apply { closeFail = VaultFailure(FailureKind.NO_RESPONSE) }
+        val m = manager(ops, window = window)
+        m.refresh()
+        m.cast(CONN, PID, "yes", "pw")
+        assertTrue(m.windowNotClosed.value)
+        m.windowNoticeShown()
+        assertFalse(m.windowNotClosed.value)
+    }
+
+    // ---- Limits ----
+
+    @Test
+    fun aHugeVersionInAnUnverifiedListFetchesAtMostEightAndSendsWhatWasFetched() = runTest {
+        val ops = Ops().apply { list = listing(tail = ""","list_version":1,"list_sha256":"AAAA"""") }
+        val site = Site().apply {
+            answers["services.json"] = ok("""{"v":1,"version":1000000000000,"previous":"AAAA","services":[]}""")
+            answers["services.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            answers["index.json"] = ok("[]")
+            for (v in 2L..20L) {
+                answers["services/$v.json"] = ok("""{"v":1,"version":$v,"previous":"AAAA","services":[]}""")
+                answers["services/$v.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            }
+        }
+        val m = manager(ops, site)
+        m.syncOnce()
+        assertEquals(8, site.reads.count { it.startsWith("services/") && it.endsWith(".json") })
+        val lists = (ops.synced.first()["services"] as JsonArray).size
+        assertEquals(8, lists)
+    }
+
+    @Test
+    fun resultsOverTheVaultsLimitAreAProblemWithTheResultsNotASiteThatIsDown() = runTest {
+        val ops = Ops().apply {
+            list = listing(closedWithPendingCheck())
+            detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed","record_tag":"${Base64s.encodeStd(tagOf(1))}"}""")
+        }
+        val site = Site().apply {
+            answers["index.json"] = ok("[]")
+            answers["p/$PID/results.json"] = SiteAnswer.TooLarge
+        }
+        val m = manager(ops, site)
+        m.refresh()
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertTrue(m.hints.value.getValue("$CONN/$PID").resultsProblem)
+        assertTrue(ops.submitted.isEmpty())
     }
 }

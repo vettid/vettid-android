@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -94,5 +95,30 @@ class VoteSyncTest {
         assertEquals(3L, VoteSync.versionOf("""{"version":3}""".toByteArray()))
         assertNull(VoteSync.versionOf("""{"version":3,"version":4}""".toByteArray()))
         assertNull(VoteSync.versionOf("nope".toByteArray()))
+    }
+
+    @Test
+    fun theInlineLimitIsMeasuredOnTheInnerPlaintextThroughTheRealEncoder() {
+        fun body(n: Int) = ("{\"k\":\"" + "a".repeat(n) + "\"}").toByteArray()
+        fun encodes(b: ByteArray) = try {
+            com.vettid.core.crypto.envelope.Inner.encode(
+                com.vettid.core.crypto.envelope.Inner(
+                    com.vettid.core.crypto.envelope.Ulid.new(), "vote.site.sync", java.time.Instant.now(), seq = com.vettid.core.crypto.json.StrictJson.MAX_SAFE_INTEGER, body = b,
+                ),
+                com.vettid.core.crypto.envelope.Mode.SESSION,
+            )
+            true
+        } catch (_: com.vettid.core.crypto.CryptoException) {
+            false
+        }
+        // The first body length that no longer fits, found by the encoder itself.
+        var n = VoteSync.INLINE_MAX - 400
+        while (encodes(body(n))) n++
+        // Just under the cap and just over: the same answer as the encoder, and the body alone is under 245,760 bytes at the edge.
+        assertTrue(VoteSync.fitsInline(body(n - 1)))
+        assertFalse(VoteSync.fitsInline(body(n)))
+        assertTrue(body(n).size < VoteSync.INLINE_MAX + 400)
+        // A body under the old limit by less than the envelope no longer goes inline when the inner would not fit.
+        assertFalse(VoteSync.fitsInline(body(VoteSync.INLINE_MAX - 5)))
     }
 }

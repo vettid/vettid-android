@@ -25,6 +25,8 @@ import com.vettid.core.vault.voteSiteSyncBlob
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -93,6 +95,11 @@ interface VotesRepository {
 
     /** What the app itself knows of each vote, by [VoteSummary.key]. */
     val hints: StateFlow<Map<String, VoteHint>>
+
+    /** The lock of the unlock window a cast opened failed: the window stays open until it closes by itself. Told once. */
+    val windowNotClosed: StateFlow<Boolean>
+
+    fun windowNoticeShown()
 
     /** Reads `vote.list`. Throws the vault's failure. */
     suspend fun refresh()
@@ -218,6 +225,7 @@ class VotesManager(
     private val availabilityFlow = MutableStateFlow(VotesAvailability.UNKNOWN)
     private val loadState = MutableStateFlow(ListLoad.NOT_LOADED)
     private val hintsFlow = MutableStateFlow<Map<String, VoteHint>>(emptyMap())
+    private val windowNotClosedFlow = MutableStateFlow(false)
     private val reads = Mutex()
     private val syncs = Mutex()
     private val results = Mutex()
@@ -245,6 +253,7 @@ class VotesManager(
     override val availability: StateFlow<VotesAvailability> = availabilityFlow.asStateFlow()
     override val load: StateFlow<ListLoad> = loadState.asStateFlow()
     override val hints: StateFlow<Map<String, VoteHint>> = hintsFlow.asStateFlow()
+    override val windowNotClosed: StateFlow<Boolean> = windowNotClosedFlow.asStateFlow()
 
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
@@ -259,6 +268,7 @@ class VotesManager(
             droppedFlow.value = emptyList()
             problemsFlow.value = emptyList()
             hintsFlow.value = emptyMap()
+            windowNotClosedFlow.value = false
             pendingAck.clear()
             listVersion = null
             listSha256 = null
@@ -366,16 +376,46 @@ class VotesManager(
         // Fail secure: a vote that waits on "Is this your vote?" is never cast, whatever the screen thought.
         val held = votesFlow.value.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId }
         if (held?.confirmPending == true) throw VaultFailure(FailureKind.OTHER, "checking")
-        val opened = password != null && !windowOpen()
-        if (password != null && opened) openWindow(password)
+        // Set before the unlock is sent: an unlock whose answer was lost may still have opened the window, so it is locked.
+        val toLock = booleanArrayOf(password != null && !windowOpen())
         try {
+            if (password != null && toLock[0]) unlock(password, toLock)
             val body = vaultGuard { ops().cast(connectionId, proposalId, choiceId) }
             refreshQuietly()
             return BallotState.of(((body["ballot"] as? JsonObject)?.let { VaultJson.str(it, "state") }))
         } finally {
             // A window this prompt opened does not stay open for its full length; one that was open is left as it was.
-            if (opened) runCatching { closeWindow() }
+            if (toLock[0]) closeOpenedWindow()
         }
+    }
+
+    /**
+     * The lock after a cast, which runs to its end even when the caller was cancelled (a screen that left); a lock that
+     * failed is not swallowed: the member is told that the window stays open until it closes by itself.
+     */
+    private suspend fun unlock(password: String, toLock: BooleanArray) {
+        try {
+            openWindow(password)
+        } catch (e: VaultFailure) {
+            // A refusal of the vault (a wrong password…) opened nothing; no answer may have.
+            if (e.kind != FailureKind.NO_RESPONSE && e.kind != FailureKind.NETWORK) toLock[0] = false
+            throw e
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun closeOpenedWindow() {
+        withContext(NonCancellable) {
+            try {
+                closeWindow()
+            } catch (e: Exception) {
+                windowNotClosedFlow.value = true
+            }
+        }
+    }
+
+    override fun windowNoticeShown() {
+        windowNotClosedFlow.value = false
     }
 
     override suspend fun check(connectionId: String, proposalId: String) {
@@ -474,7 +514,10 @@ class VotesManager(
         val between = ArrayList<VoteSync.ServedList>()
         if (held != null && version > held + 1) {
             // The missing versions in order, once the site serves them; a copy not there yet (404) is for a later run.
-            for (v in (held + 1) until version) {
+            // At most MAX_LISTS a run: `version` is the unverified document's own word, so a huge one cannot loop or fill memory;
+            // what was fetched is sent and the rest goes on at the next run.
+            val last = minOf(version, held + 1 + VoteSync.MAX_LISTS)
+            for (v in (held + 1) until last) {
                 val d = (site.get("services/$v.json", VoteSite.LIST_MAX) as? SiteAnswer.Found)?.bytes ?: break
                 val s = (site.get("services/$v.json.sig", SIG_MAX) as? SiteAnswer.Found)?.bytes ?: break
                 between += VoteSync.ServedList(d, s, v)
@@ -508,16 +551,16 @@ class VotesManager(
     private suspend fun readDocument(id: String, index: JsonObject?): VoteSync.Document {
         val p = when (val a = site.get("p/$id/proposal.json")) {
             SiteAnswer.Absent -> return VoteSync.Document.Absent
-            SiteAnswer.Unreachable -> return VoteSync.Document.Unreachable
+            SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
             is SiteAnswer.Found -> a.bytes
         }
         val sig = when (val a = site.get("p/$id/proposal.json.sig", SIG_MAX)) {
-            SiteAnswer.Unreachable -> return VoteSync.Document.Unreachable
+            SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
             SiteAnswer.Absent -> null
             is SiteAnswer.Found -> a.bytes
         }
         val bundle = when (val a = site.get("p/$id/proposal.json.sigstore.json", BUNDLE_MAX)) {
-            SiteAnswer.Unreachable -> return VoteSync.Document.Unreachable
+            SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
             SiteAnswer.Absent -> null
             is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes)
         }
@@ -526,16 +569,16 @@ class VotesManager(
         for (n in 1..count) {
             val x = when (val a = site.get("p/$id/extension-$n.json")) {
                 SiteAnswer.Absent -> break
-                SiteAnswer.Unreachable -> return VoteSync.Document.Unreachable
+                SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
                 is SiteAnswer.Found -> a.bytes
             }
             val xs = when (val a = site.get("p/$id/extension-$n.json.sig", SIG_MAX)) {
-                SiteAnswer.Unreachable -> return VoteSync.Document.Unreachable
+                SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
                 SiteAnswer.Absent -> null
                 is SiteAnswer.Found -> a.bytes
             }
             val xb = when (val a = site.get("p/$id/extension-$n.json.sigstore.json", BUNDLE_MAX)) {
-                SiteAnswer.Unreachable -> return VoteSync.Document.Unreachable
+                SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
                 SiteAnswer.Absent -> null
                 is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes)
             }
@@ -552,7 +595,7 @@ class VotesManager(
     private suspend fun send(body: JsonObject): JsonObject? {
         val bytes = VoteSync.encoded(body)
         if (bytes.size > VoteSync.BODY_MAX) return null
-        if (bytes.size <= VoteSync.INLINE_MAX) return vaultGuard { ops().sync(body) }
+        if (VoteSync.fitsInline(bytes)) return vaultGuard { ops().sync(body) }
         val sealed = ClaimBlob.seal(bytes)
         try {
             val id = uploadWithRetry(sealed.blob) ?: return null
@@ -597,19 +640,27 @@ class VotesManager(
         val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
             ?: return@withLock fail(key, ResultsOutcome.Problem)
         var siteDown = false
+        var tooLarge = false
         suspend fun fetch(name: String, max: Long): ByteArray? = when (val a = site.get("p/$proposalId/$name", max)) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.Absent -> null
+            // Over the vault's own limit: results the vault could never take, a problem with them and not a site that is down.
+            SiteAnswer.TooLarge -> {
+                tooLarge = true
+                null
+            }
             SiteAnswer.Unreachable -> {
                 siteDown = true
                 null
             }
         }
         val doc = fetch("results.json", RESULTS_MAX)
+        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem)
         if (doc == null) return@withLock unavailable(key, siteDown)
         val sig = fetch("results.json.sig", SIG_MAX)
         val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
-        val rows = fetch("rows.json", VoteSite.LIST_MAX)
+        val rows = fetch("rows.json", ROWS_MAX)
+        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem)
         if (sig == null || bundleBytes == null || rows == null) {
             return@withLock unavailable(key, siteDown)
         }
@@ -682,6 +733,7 @@ class VotesManager(
         when (site.get("p/$proposalId/results.json", RESULTS_MAX)) {
             SiteAnswer.Absent -> hint(key) { it.copy(gaveUp = GaveUpWhy.UNPUBLISHED) }
             SiteAnswer.Unreachable -> hint(key) { it.copy(gaveUp = GaveUpWhy.SITE) }
+            SiteAnswer.TooLarge -> hint(key) { it.copy(resultsProblem = true) }
             is SiteAnswer.Found -> Unit // published: **Check again** hands them to the vault
         }
     }
@@ -693,7 +745,9 @@ class VotesManager(
         const val CODE_TOO_LARGE = "payload_too_large"
         const val SIG_MAX = 256L
         const val BUNDLE_MAX = 64L * 1024
-        const val RESULTS_MAX = 512L * 1024
+        /** The vault's `MaxResultsDoc`; rows.json is bounded by the rows the app reads (about 256 bytes a row). */
+        const val RESULTS_MAX = 196_608L
+        const val ROWS_MAX = VoteRows.MAX_ROWS * 256L
         const val INDEX_MAX = 8L shl 20
         const val UPLOAD_TRIES = 2
         const val UPLOAD_WAIT_MS = 5_000L
