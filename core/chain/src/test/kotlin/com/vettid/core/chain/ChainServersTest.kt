@@ -50,10 +50,10 @@ class ChainServersTest {
     @After
     fun stop() = server.close()
 
-    private fun servers(defaults: ChainDefaults = ChainDefaults()) = ChainServers(file, defaults) { url ->
+    private fun servers(defaults: ChainDefaults = ChainDefaults()) = ChainServers(file, defaults, clientFor = { url ->
         asked += url
         EsploraClient(server.url("/api"), OkHttpClient())
-    }
+    })
 
     private fun genesis(network: Network) = MockResponse.Builder().code(200).body(Genesis.of(network)!!).build()
 
@@ -270,6 +270,20 @@ class ChainServersTest {
         file.bytes = """{"version":1,"servers":{"signet":"$own"}}""".encodeToByteArray()
         assertFalse(s.reset(Network.SIGNET))
         assertEquals(own, (s.server(Network.SIGNET) as ChainServer.Own).url.text)
+    }
+
+    @Test
+    fun aSaveThatAWipeOvertookWritesNothing() = runBlocking {
+        var generation = 0L
+        // The wipe begins while the server is being checked.
+        server.enqueue(genesis(Network.SIGNET))
+        val s = ChainServers(file, ChainDefaults(), { url ->
+            generation++
+            EsploraClient(server.url("/api"), OkHttpClient())
+        }, { generation })
+        assertEquals(SaveResult.NotWritten, s.save(Network.SIGNET, own))
+        assertNull(file.bytes)
+        assertEquals(0, file.saves)
     }
 
     @Test

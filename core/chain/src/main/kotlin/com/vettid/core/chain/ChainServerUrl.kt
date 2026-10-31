@@ -50,7 +50,9 @@ class ChainServerUrl private constructor(internal val url: HttpUrl) {
          */
         fun loopbackOrNull(text: String?): ChainServerUrl? {
             val url = text?.trim()?.takeIf { it.isNotEmpty() }?.toHttpUrlOrNull() ?: return null
-            if (url.host !in LOOPBACK || url.username.isNotEmpty() || url.password.isNotEmpty()) return null
+            // The hosts are named here only, so that a build that never calls this (every build but devStack) carries none of them.
+            val loopback = url.host == "127.0.0.1" || url.host == "localhost"
+            if (!loopback || url.username.isNotEmpty() || url.password.isNotEmpty()) return null
             if (url.query != null || url.fragment != null) return null
             return ChainServerUrl(normalised(url))
         }
@@ -60,8 +62,6 @@ class ChainServerUrl private constructor(internal val url: HttpUrl) {
 
         /** Tests only: a local mock server, whatever its scheme. */
         internal fun forTest(url: HttpUrl): ChainServerUrl = ChainServerUrl(normalised(url))
-
-        private val LOOPBACK = setOf("127.0.0.1", "localhost")
 
         /** Without a trailing empty path segment, so that `…/api` and `…/api/` are one server. */
         private fun normalised(url: HttpUrl): HttpUrl {

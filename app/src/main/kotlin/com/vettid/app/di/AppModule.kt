@@ -72,6 +72,7 @@ import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
 import com.vettid.core.data.wipe.AppDataClear
 import com.vettid.core.data.wipe.LocalWipe
+import com.vettid.core.data.wipe.WipeHook
 import com.vettid.core.relay.NetworkGate
 import com.vettid.core.relay.TransportRetry
 import com.vettid.core.relay.fixedUserAgent
@@ -163,6 +164,7 @@ object AppModule {
     /** The wipe of a replaced phone (owner decision, 2026-10-05): what it erases, and the in-memory state it resets. */
     @Provides
     @Singleton
+    @Suppress("LongParameterList") // a provider's parameters are what it is built from
     fun localWipe(
         @ApplicationContext context: Context,
         prefs: PreferencesRepository,
@@ -171,17 +173,28 @@ object AppModule {
         inviteLinks: InviteLinkInbox,
         canaryManifests: CanaryManifestInbox,
         releaseUpdates: ReleaseUpdateInbox,
+        moduleHooks: Set<@JvmSuppressWildcards WipeHook>,
     ): LocalWipe = LocalWipe(
         AndroidWipeTargets(context),
-        hooks = listOf(
-            { appLock.reset() },
-            { prefs.clear() },
-            { setupLinks.consume() },
-            { inviteLinks.consume() },
-            { canaryManifests.consume() },
-            { releaseUpdates.consume() },
+        hooks = wipeHooks(
+            moduleHooks,
+            listOf(
+                { appLock.reset() },
+                { prefs.clear() },
+                { setupLinks.consume() },
+                { inviteLinks.consume() },
+                { canaryManifests.consume() },
+                { releaseUpdates.consume() },
+            ),
         ),
     )
+
+    /**
+     * The wipe's in-memory steps: the modules' hooks first ([WipeHook]: the wallet's generation moves before any store is reset
+     * or erased), then the app's own. [LocalWipe.resetMemory] runs every one even if one throws.
+     */
+    internal fun wipeHooks(moduleHooks: Set<WipeHook>, own: List<suspend () -> Unit>): List<suspend () -> Unit> =
+        moduleHooks.map { h -> suspend { h.run() } } + own
 
     @Provides
     fun accountRepository(m: VaultManager): AccountRepository = m

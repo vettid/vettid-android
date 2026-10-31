@@ -93,7 +93,10 @@ sealed interface SaveResult {
 
 /** What a lookup on a network can use: a checked client, or why there is none. */
 sealed interface ChainAccess {
-    /** [server]'s client; its block 0 was checked this session. */
+    /**
+     * [server]'s client; its block 0 was checked this session. Use it for the lookup at hand and drop it: a client kept past
+     * [ChainServers.forgetChecks] (a new session) would skip the next check.
+     */
     data class Ready(val client: EsploraClient, val server: ChainServer) : ChainAccess
 
     /** No server to ask ([server] is [ChainServer.NotSet], [ChainServer.NotOffered] or [ChainServer.Unreadable]). */
@@ -116,8 +119,11 @@ class ChainServers(
     private val file: ChainSettingsFile,
     val defaults: ChainDefaults,
     private val clientFor: (ChainServerUrl) -> EsploraClient,
+    /** Moves when a wipe begins: a save or reset that started before it writes nothing (the file stays erased). */
+    private val generation: () -> Long = { 0 },
 ) {
-    constructor(file: ChainSettingsFile, defaults: ChainDefaults, http: OkHttpClient) : this(file, defaults, { EsploraClient(it, http) })
+    constructor(file: ChainSettingsFile, defaults: ChainDefaults, http: OkHttpClient, generation: () -> Long = { 0 }) :
+        this(file, defaults, { EsploraClient(it, http) }, generation)
 
     /** A network's entry in the file: the member's server, or none at all (the setting was lost and not yet saved or reset). */
     private sealed interface Entry {
@@ -162,6 +168,7 @@ class ChainServers(
 
     /** Checks [text] as "Use my own server" for [network] and saves it only if the check passes. */
     suspend fun save(network: Network, text: String): SaveResult {
+        val started = generation()
         if (!defaults.offered(network)) return SaveResult.NotOffered
         val url = when (val p = ChainServerUrl.parse(text)) {
             is UrlCheck.Refused -> return SaveResult.BadUrl(p.problem)
@@ -173,7 +180,7 @@ class ChainServers(
             GenesisCheck.Matches -> Unit
         }
         return lock.withLock {
-            if (write(network, Entry.Own(url))) {
+            if (write(network, Entry.Own(url), started)) {
                 checked += network to url.text
                 SaveResult.Saved(url)
             } else {
@@ -186,7 +193,10 @@ class ChainServers(
      * "Reset to default": forgets the member's server for [network]. False if the setting could not be written. With an unreadable
      * setting, every other network is written as having no server, until it is saved or reset itself.
      */
-    suspend fun reset(network: Network): Boolean = lock.withLock { write(network, null) }
+    suspend fun reset(network: Network): Boolean {
+        val started = generation()
+        return lock.withLock { write(network, null, started) }
+    }
 
     private fun current(network: Network, entries: Map<Network, Entry>?): ChainServer {
         if (!defaults.offered(network)) return ChainServer.NotOffered
@@ -204,12 +214,13 @@ class ChainServers(
      * when nothing changes.
      */
     @Suppress("TooGenericExceptionCaught")
-    private suspend fun write(network: Network, entry: Entry?): Boolean {
+    private suspend fun write(network: Network, entry: Entry?, started: Long): Boolean {
         val entries = read()
         val base = entries ?: Network.entries.filter { it != network && defaults.offered(it) }.associateWith { Entry.None }
         val next = base.toMutableMap()
         if (entry == null) next.remove(network) else next[network] = entry
         if (entries != null && next == entries) return true
+        if (generation() != started) return false
         return try {
             withContext(Dispatchers.IO) { file.save(encode(next)) }
             true

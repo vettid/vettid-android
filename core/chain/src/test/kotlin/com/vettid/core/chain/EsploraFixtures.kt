@@ -56,13 +56,13 @@ internal object EsploraFixtures {
     const val RAW_TXID = "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
 
     /** An address's totals with [confirmedTxs] confirmed transactions (and 1,000 sats confirmed). */
-    fun summary(confirmedTxs: Int, confirmedSats: Long = 1_000, unconfirmedSats: Long = 0): String {
+    fun summary(confirmedTxs: Int, confirmedSats: Long = 1_000, unconfirmedSats: Long = 0, unconfirmedTxs: Int = 0): String {
         val funded = maxOf(confirmedSats, 0)
         val spent = funded - confirmedSats
         val mFunded = maxOf(unconfirmedSats, 0)
         val mSpent = mFunded - unconfirmedSats
         return """{"chain_stats":{"funded_txo_count":1,"funded_txo_sum":$funded,"spent_txo_count":0,"spent_txo_sum":$spent,
             "tx_count":$confirmedTxs},"mempool_stats":{"funded_txo_count":0,"funded_txo_sum":$mFunded,"spent_txo_count":0,
-            "spent_txo_sum":$mSpent,"tx_count":0}}"""
+            "spent_txo_sum":$mSpent,"tx_count":$unconfirmedTxs}}"""
     }
 }

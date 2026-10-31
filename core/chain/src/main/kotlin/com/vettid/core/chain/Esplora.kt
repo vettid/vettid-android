@@ -146,7 +146,8 @@ class EsploraClient internal constructor(
     http: OkHttpClient,
     private val limits: Limits = Limits(),
 ) {
-    constructor(server: ChainServerUrl, http: OkHttpClient) : this(server.url, http)
+    /** Only [ChainServers] makes clients, so that every lookup goes through its block 0 check ([ChainServers.access]). */
+    internal constructor(server: ChainServerUrl, http: OkHttpClient) : this(server.url, http)
 
     /** Time and size limits; tests make them small. */
     internal data class Limits(
@@ -196,17 +197,21 @@ class EsploraClient internal constructor(
     /**
      * Every transaction of [target], newest first: the unconfirmed ones and the first confirmed page, then the next confirmed
      * pages (`…/txs/chain/<last txid>`) until one is short. The address's totals are read first: more confirmed transactions than
-     * [Limits.maxTransactions] is a [ChainError.TooMany], and paging that ends with fewer than the totals count is
-     * [ChainError.Malformed] (a short page cannot end it early). The whole read has one byte budget ([ChainError.TooLarge]) and one
-     * deadline ([ChainError.Timeout]).
+     * [Limits.maxTransactions] is a [ChainError.TooMany], and a list shorter than the totals count is [ChainError.Malformed] (a short
+     * page cannot end it early). Esplora lists at most [MEMPOOL_PAGE] unconfirmed transactions, the newest, and pages only the
+     * confirmed ones: with more unconfirmed than that, the older unconfirmed ones are not in the list (the totals still count
+     * them). The whole read has one byte budget ([ChainError.TooLarge]) and one deadline ([ChainError.Timeout]).
      */
     @Suppress("ThrowsCount")
     suspend fun transactions(target: ChainTarget): List<ChainTx> {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(limits.transactionsTimeoutMs)
         fun remainingMs(): Long =
             TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).also { if (it <= 0) throw ChainError.Timeout() }
-        val expected = summary(target).confirmedTxCount
+        val totals = summary(target)
+        val expected = totals.confirmedTxCount
         if (expected > limits.maxTransactions) throw ChainError.TooMany()
+        // Counted together: a transaction that confirms while the pages are read moves from one count to the other.
+        val expectedAll = expected + minOf(totals.txCount - totals.confirmedTxCount, MEMPOOL_PAGE.toLong())
         val all = ArrayList<ChainTx>()
         val seen = HashSet<String>()
         var budget = limits.transactionsBytes
@@ -224,7 +229,7 @@ class EsploraClient internal constructor(
             if (all.size > limits.maxTransactions) throw ChainError.TooMany()
             val confirmed = txs.filter { it.confirmed }
             if (confirmed.size < CONFIRMED_PAGE) {
-                if (all.count { it.confirmed } < expected) throw ChainError.Malformed()
+                if (all.size < expectedAll) throw ChainError.Malformed()
                 return all
             }
             path = targetPath(target) + listOf("txs", "chain", confirmed.last().txid)
@@ -254,7 +259,7 @@ class EsploraClient internal constructor(
         val hex = text(listOf("tx", id, "hex"), limits.rawTxBytes).lowercase()
         if (hex.isEmpty() || hex.length % 2 != 0 || !hex.all { it in HEX }) throw ChainError.Malformed()
         val bytes = hex.hexToBytes()
-        if (txidOf(bytes) != id) throw ChainError.Malformed()
+        if (withContext(Dispatchers.Default) { txidOf(bytes) } != id) throw ChainError.Malformed()
         return bytes
     }
 
@@ -268,7 +273,8 @@ class EsploraClient internal constructor(
 
     /** Broadcasts [tx] (`POST /tx`, the hex as the body); returns its txid, which the server's answer must be. */
     suspend fun broadcast(tx: ByteArray): String {
-        val txid = requireNotNull(txidOf(tx)) { "not a transaction" }
+        // Hashing a transaction of up to 4 MB is CPU work: not on the caller's thread.
+        val txid = requireNotNull(withContext(Dispatchers.Default) { txidOf(tx) }) { "not a transaction" }
         val body = tx.toHex().toRequestBody(TEXT)
         val request = Request.Builder().url(url(listOf("tx"))).post(body).header("Accept", "text/plain").build()
         val (code, bytes) = call(request, limits.smallBytes)
@@ -402,6 +408,9 @@ class EsploraClient internal constructor(
 
         /** Esplora's confirmed page: a shorter one is the last. */
         const val CONFIRMED_PAGE = 25
+
+        /** The most unconfirmed transactions Esplora lists for an address (on the first page only). */
+        const val MEMPOOL_PAGE = 50
 
         const val MAX_SERVER_TEXT = 500
         const val MAX_ADDRESS = 128
