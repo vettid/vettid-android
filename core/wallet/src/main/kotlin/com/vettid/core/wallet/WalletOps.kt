@@ -1,6 +1,5 @@
 package com.vettid.core.wallet
 
-import com.vettid.core.crypto.Bytes
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.walletAddressList
@@ -15,11 +14,11 @@ import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * A wallet's recovery phrase as `item.reveal` gave it (ANDROID-PLAN §4 "Creating and backing up"): the words in a [CharArray] that
- * [wipe] overwrites. Held only while the phrase screen and its check are shown; never on disk, in saved state or in a log.
+ * [wipe] overwrites. It takes [chars] as its own (no copy is made). Held only while the phrase screen and its check are shown; never
+ * on disk, in saved state or in a log. The decrypted item's bytes are wiped once read, but the JSON parser's `String` copies of the
+ * value cannot be: they are left to the garbage collector, as every `String` on the JVM is.
  */
-class RevealedPhrase(words: CharArray) {
-    private val chars = words.copyOf()
-
+class RevealedPhrase(private val chars: CharArray) {
     @Volatile
     private var wiped = false
 
@@ -86,11 +85,9 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
         val field = a.itemGet(walletId).fields.firstOrNull { it.label == PHRASE_LABEL }?.fieldId
             ?: throw WalletWireException("phrase field")
         val revealed = a.itemRevealCritical(password, walletId)
-        val pt = revealed.plaintext()
         try {
             return phraseOf(revealed.json(), field)
         } finally {
-            Bytes.wipe(pt)
             revealed.wipe()
         }
     }
@@ -118,6 +115,7 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
             }?.takeIf { it.isString }?.content ?: throw WalletWireException("phrase")
             val words = value.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
             if (words.size !in PHRASE_WORDS) throw WalletWireException("phrase length")
+            // The array is the phrase's own (RevealedPhrase keeps it and wipes it); no other copy of it is made here.
             return RevealedPhrase(words.joinToString(" ").toCharArray())
         }
 

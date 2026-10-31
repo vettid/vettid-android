@@ -163,6 +163,9 @@ class ChainServers(
         }
     }
 
+    /** Waits for a write in progress (a wipe's hook, after the generation moved): none that started before it is kept after. */
+    suspend fun fence() = lock.withLock { }
+
     /** A new session: every server's block 0 is checked again before its next lookup. */
     suspend fun forgetChecks() = lock.withLock { checked.clear() }
 

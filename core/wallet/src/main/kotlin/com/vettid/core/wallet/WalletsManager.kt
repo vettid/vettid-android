@@ -1,5 +1,6 @@
 package com.vettid.core.wallet
 
+import com.vettid.core.chain.Account
 import com.vettid.core.chain.AccountType
 import com.vettid.core.chain.ChainError
 import com.vettid.core.chain.ChainServer
@@ -21,7 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -68,6 +69,9 @@ sealed interface LookupResult {
 
     /** The vault could not be asked ([failure]). */
     data class VaultFailed(val failure: VaultFailure) : LookupResult
+
+    /** The vault was closed (locked, held, wiped) while the look-up ran: nothing of it is kept, nothing more was asked. */
+    data object Cleared : LookupResult
 }
 
 /** The result of [WalletsManager.create]. */
@@ -103,72 +107,109 @@ class WalletsManager(
     private val lookupsFlow = MutableStateFlow<Map<String, WalletLookup>>(emptyMap())
     val lookups: StateFlow<Map<String, WalletLookup>> = lookupsFlow.asStateFlow()
 
+    /**
+     * Guards [generation], [open], [checked] and every publish: a [clear] moves the generation and resets everything at once, and
+     * nothing read before it is published after it.
+     */
+    private val lock = Any()
     private var generation = 0L
+    private var open = false
 
-    /** Wallets whose addresses were checked against the vault's this session, with the app's derivation. */
-    private val checked = HashMap<String, Wallet>()
+    /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
+    private val checked = HashMap<Pair<String, Network>, Wallet>()
     private var pendingRefresh: Job? = null
 
     /**
-     * Follows the vault: while it is [open] (unlocked and not held) the wallets are read, and the moment it is not they are
-     * forgotten ([clear]); [events] are the vault's messages (`sync.event` `wallet.*`).
+     * Follows the vault: while it is [open] (unlocked and not held) the wallets are read ([open]); every value that says it is
+     * not closes them ([close]: forgotten, and [onClosed] run), whatever came before. A new value cancels the work of the last
+     * (`collectLatest`), so a read in flight never holds a close back. [events] are the vault's messages (`sync.event` `wallet.*`).
      */
-    fun follow(open: Flow<Boolean>, events: Flow<Pair<String, JsonObject>>): List<Job> = listOf(
+    fun follow(open: Flow<Boolean>, events: Flow<Pair<String, JsonObject>>, onClosed: suspend () -> Unit = {}): List<Job> = listOf(
         scope.launch {
-            open.distinctUntilChanged().collect { o ->
-                if (o) runCatching { refresh() } else clear()
+            open.collectLatest { o ->
+                if (o) runCatching { open() } else close(onClosed)
             }
         },
         scope.launch { events.collect { (type, body) -> onEvent(type, body) } },
     )
 
-    /** Lock, hold, wipe: forget everything. */
-    fun clear() {
-        synchronized(this) { generation++ }
-        pendingRefresh?.cancel()
-        availabilityFlow.value = WalletAvailability.UNKNOWN
-        walletsFlow.value = emptyList()
-        lookupsFlow.value = emptyMap()
-        synchronized(checked) { checked.clear() }
+    /** The vault is open: the wallets are read. */
+    suspend fun open() {
+        synchronized(lock) { open = true }
+        refresh()
     }
 
-    private fun gen(): Long = synchronized(this) { generation }
+    /** The vault is closed (locked, held, due): everything is forgotten, then [onClosed] runs (the servers' checks are reset). */
+    suspend fun close(onClosed: suspend () -> Unit = {}) {
+        clear()
+        onClosed()
+    }
 
-    /** Reads the wallets (`wallet.list`); a vault without them is [WalletAvailability.UNSUPPORTED] until the next unlock. */
+    /** Lock, hold, wipe: forget everything, at once. */
+    fun clear() {
+        synchronized(lock) {
+            generation++
+            open = false
+            pendingRefresh?.cancel()
+            pendingRefresh = null
+            availabilityFlow.value = WalletAvailability.UNKNOWN
+            walletsFlow.value = emptyList()
+            lookupsFlow.value = emptyMap()
+            checked.clear()
+        }
+    }
+
+    private fun gen(): Long = synchronized(lock) { generation }
+
+    /** Runs [update] only if nothing was cleared since [g]; false when it was (the update is dropped). */
+    private inline fun publish(g: Long, update: () -> Unit): Boolean = synchronized(lock) {
+        if (g != generation) return@synchronized false
+        update()
+        true
+    }
+
+    /**
+     * Reads the wallets (`wallet.list`), only while the vault is open; a vault without them is [WalletAvailability.UNSUPPORTED]
+     * until the next unlock.
+     */
     suspend fun refresh() {
+        val g = synchronized(lock) { if (!open) return else generation }
         if (availabilityFlow.value == WalletAvailability.UNSUPPORTED) return
-        val g = gen()
         val list = try {
             vaultGuard { ops().list() }
         } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.NOT_SUPPORTED && g == gen()) availabilityFlow.value = WalletAvailability.UNSUPPORTED
+            if (e.kind == FailureKind.NOT_SUPPORTED) publish(g) { availabilityFlow.value = WalletAvailability.UNSUPPORTED }
             throw e
         }
-        if (g != gen()) return
-        walletsFlow.value = list
-        availabilityFlow.value = WalletAvailability.AVAILABLE
-        // A wallet gone (deleted on another device): its look-up goes too.
-        lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        publish(g) {
+            walletsFlow.value = list
+            availabilityFlow.value = WalletAvailability.AVAILABLE
+            // A wallet gone (deleted on another device): its look-up goes too.
+            lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        }
     }
 
-    /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over. */
+    /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
     @Suppress("ReturnCount")
     fun onEvent(type: String, body: JsonObject) {
         if (type != "sync.event") return
         val kind = VaultJson.str(body, "kind") ?: return
-        if (kind !in EVENTS || availabilityFlow.value != WalletAvailability.AVAILABLE) return
-        if (kind == "wallet.deleted") {
-            VaultJson.str(body, "wallet_id")?.let { id ->
-                walletsFlow.update { l -> l.filterNot { it.id == id } }
-                lookupsFlow.update { it - id }
-                synchronized(checked) { checked.remove(id) }
-                scope.launch { flags.forget(id) }
+        if (kind !in EVENTS) return
+        synchronized(lock) {
+            if (!open || availabilityFlow.value != WalletAvailability.AVAILABLE) return
+            if (kind == "wallet.deleted") {
+                VaultJson.str(body, "wallet_id")?.let { id ->
+                    walletsFlow.update { l -> l.filterNot { it.id == id } }
+                    lookupsFlow.update { it - id }
+                    checked.keys.removeAll { it.first == id }
+                    scope.launch { flags.forget(id) }
+                }
             }
-        }
-        pendingRefresh?.cancel()
-        pendingRefresh = scope.launch {
-            delay(EVENT_DEBOUNCE_MS)
-            runCatching { refresh() }
+            pendingRefresh?.cancel()
+            pendingRefresh = scope.launch {
+                delay(EVENT_DEBOUNCE_MS)
+                runCatching { refresh() }
+            }
         }
     }
 
@@ -184,15 +225,26 @@ class WalletsManager(
 
     /**
      * New wallet (ANDROID-PLAN §4 "Creating and backing up", 1): [password] once, for `wallet.create` and at once after its answer
-     * `item.reveal` of the new item. A failed reveal leaves the wallet ("Not backed up"; the check is offered from its row).
+     * `item.reveal` of the new item. A failed reveal leaves the wallet ("Not backed up"; the check is offered from its row). A lock
+     * in between: the wallet is in the vault, not in memory, and nothing is revealed.
      */
     suspend fun create(name: String, network: Network, password: String): Created {
         require(offered(network) && network != Network.MAINNET) { "not a network to create on" }
+        val g = gen()
         val wallet = vaultGuard { ops().create(name, network.vaultName, password) }
-        walletsFlow.update { l -> l.filterNot { it.id == wallet.id } + wallet }
-        availabilityFlow.value = WalletAvailability.AVAILABLE
+        val kept = publish(g) {
+            walletsFlow.update { l -> l.filterNot { it.id == wallet.id } + wallet }
+            availabilityFlow.value = WalletAvailability.AVAILABLE
+        }
+        if (!kept) return Created(wallet, null, VaultFailure(FailureKind.OTHER, CLEARED))
         return try {
-            Created(wallet, vaultGuard { ops().revealPhrase(wallet.id, password) })
+            val phrase = vaultGuard { ops().revealPhrase(wallet.id, password) }
+            if (gen() != g) {
+                phrase.wipe()
+                Created(wallet, null, VaultFailure(FailureKind.OTHER, CLEARED))
+            } else {
+                Created(wallet, phrase)
+            }
         } catch (e: VaultFailure) {
             Created(wallet, null, e)
         }
@@ -203,10 +255,13 @@ class WalletsManager(
 
     /** "Delete wallet": `item.delete` of its item with the password. */
     suspend fun delete(walletId: String, password: String) {
+        val g = gen()
         vaultGuard { ops().delete(walletId, password) }
-        walletsFlow.update { l -> l.filterNot { it.id == walletId } }
-        lookupsFlow.update { it - walletId }
-        synchronized(checked) { checked.remove(walletId) }
+        publish(g) {
+            walletsFlow.update { l -> l.filterNot { it.id == walletId } }
+            lookupsFlow.update { it - walletId }
+            checked.keys.removeAll { it.first == walletId }
+        }
         flags.forget(walletId)
     }
 
@@ -228,10 +283,11 @@ class WalletsManager(
     /**
      * A look-up (ANDROID-PLAN §4 "The chain source", "How the app uses it with the vault"): the server for the wallet's network, the
      * address check once per session, then both accounts' receive and change chains up to the higher of the vault's next index and
-     * the last address with history, plus a gap of [GAP]; the totals; and the funded addresses reported with `wallet.address.used`
-     * (at most 256 per request). Nothing is sent to the server before the check passes.
+     * the last address with history, plus a gap of [GAP]; the totals; and the funded addresses the vault issued (below its next
+     * index on each chain) reported with `wallet.address.used` (at most 256 per request). Nothing is sent to the server before the
+     * check passes, and nothing more once the vault is closed: a look-up a clear overtook ends [LookupResult.Cleared].
      */
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     suspend fun lookup(walletId: String): LookupResult {
         val g = gen()
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId }
@@ -245,20 +301,23 @@ class WalletsManager(
             is ChainOpen.Unchecked -> return LookupResult.ServerFailed(open.error)
         }
         val derived = try {
-            checkedWallet(wallet, network) ?: return LookupResult.AddressMismatch
+            checkedWallet(wallet, network, g) ?: return LookupResult.AddressMismatch
         } catch (e: VaultFailure) {
             return LookupResult.VaultFailed(e)
         }
-        val (confirmed, unconfirmed, funded) = try {
-            scan(wallet, derived, ready)
+        if (gen() != g) return LookupResult.Cleared
+        val scan = try {
+            scan(wallet, derived, ready, g) ?: return LookupResult.Cleared
         } catch (e: ChainError) {
             return LookupResult.ServerFailed(e)
         }
-        if (g != gen()) return LookupResult.VaultFailed(VaultFailure(FailureKind.OTHER, "cleared"))
-        val lookup = WalletLookup(clock(), ready.host, confirmed, unconfirmed, funded)
-        lookupsFlow.update { it + (walletId to lookup) }
+        val lookup = WalletLookup(clock(), ready.host, scan.confirmed, scan.unconfirmed, scan.funded.map { it.address }.toSet())
+        if (!publish(g) { lookupsFlow.update { it + (walletId to lookup) } }) return LookupResult.Cleared
         try {
-            for (chunk in funded.sorted().chunked(ADDRESS_USED_MAX)) vaultGuard { ops().markUsed(walletId, chunk) }
+            for (chunk in reportable(wallet, scan.funded).chunked(ADDRESS_USED_MAX)) {
+                if (gen() != g) return LookupResult.Cleared
+                vaultGuard { ops().markUsed(walletId, chunk) }
+            }
         } catch (e: VaultFailure) {
             // The balance stands; the marks go again with the next look-up.
             return LookupResult.VaultFailed(e)
@@ -266,15 +325,25 @@ class WalletsManager(
         return LookupResult.Done(lookup)
     }
 
+    /**
+     * The funded addresses to report: only those the vault issued (each chain's indices below its `next_receive` / `next_change`;
+     * a gap address the app found is not the vault's), sorted, at most [MAX_ISSUED].
+     */
+    private fun reportable(vault: VaultWallet, funded: List<Funded>): List<String> = funded.filter { f ->
+        val a = vault.account(f.type) ?: return@filter false
+        f.index < if (f.change) a.nextChange else a.nextReceive
+    }.map { it.address }.sorted().take(MAX_ISSUED)
+
     /** The app's derivation, once its first addresses of each chain equal the vault's; null on any difference. */
-    private suspend fun checkedWallet(wallet: VaultWallet, network: Network): Wallet? {
-        synchronized(checked) { checked[wallet.id] }?.let { return it }
+    private suspend fun checkedWallet(wallet: VaultWallet, network: Network, g: Long): Wallet? {
+        val key = wallet.id to network
+        synchronized(lock) { checked[key] }?.let { return it }
         // The receiving chain has an address by the first look-up (the one Receive shows), so that the check always compares one.
         val receiving = AddressChain(wallet.addressType, false)
         if (vaultGuard { issued(wallet.id, receiving, all = false) }.isEmpty()) newAddress(wallet.id)
         val issued = CHAINS.associateWith { c -> vaultGuard { issued(wallet.id, c, all = false) } }
         return when (val r = AddressCheck.check(wallet, network, issued)) {
-            is AddressCheckResult.Match -> r.wallet.also { synchronized(checked) { checked[wallet.id] = it } }
+            is AddressCheckResult.Match -> r.wallet.also { publish(g) { checked[key] = it } }
             AddressCheckResult.Mismatch -> null
         }
     }
@@ -293,12 +362,17 @@ class WalletsManager(
         }
     }
 
-    private data class Scan(val confirmed: Long, val unconfirmed: Long, val funded: Set<String>)
+    /** A funded address and where it is: its account, chain and index. */
+    private data class Funded(val address: String, val type: String, val change: Boolean, val index: Int)
 
-    private suspend fun scan(vault: VaultWallet, wallet: Wallet, ready: ChainOpen.Ready): Scan = coroutineScope {
+    private class Scan(val confirmed: Long, val unconfirmed: Long, val funded: List<Funded>)
+
+    /** Both accounts' chains, in batches; null as soon as a clear overtook it (no more is asked of the server). */
+    @Suppress("NestedBlockDepth")
+    private suspend fun scan(vault: VaultWallet, wallet: Wallet, ready: ChainOpen.Ready, g: Long): Scan? = coroutineScope {
         var confirmed = 0L
         var unconfirmed = 0L
-        val funded = HashSet<String>()
+        val funded = ArrayList<Funded>()
         for (type in AccountType.entries) {
             val account = wallet.account(type)
             val stated = vault.account(type.vaultName)
@@ -307,7 +381,8 @@ class WalletsManager(
                 var lastUsed = -1
                 var index = 0
                 // Up to the higher of the vault's next index and the last address with history, plus the gap.
-                while (index < maxOf(next, lastUsed + 1) + GAP && index < com.vettid.core.chain.Account.MAX_INDEX) {
+                while (index < maxOf(next, lastUsed + 1) + GAP && index < Account.MAX_INDEX) {
+                    if (gen() != g) return@coroutineScope null
                     val batch = (index until minOf(index + BATCH, maxOf(next, lastUsed + 1) + GAP)).toList()
                     val sums = batch.map { i -> async { i to account.address(change, i).let { a -> a to ready.summary(a) } } }.awaitAll()
                     for ((i, pair) in sums) {
@@ -315,7 +390,7 @@ class WalletsManager(
                         confirmed += s.confirmedSats
                         unconfirmed += s.unconfirmedSats
                         if (s.txCount > 0) {
-                            funded += address
+                            funded += Funded(address, type.vaultName, change, i)
                             lastUsed = maxOf(lastUsed, i)
                         }
                     }
@@ -339,6 +414,9 @@ class WalletsManager(
         const val EVENT_DEBOUNCE_MS = 300L
 
         val EVENTS = setOf("wallet.changed", "wallet.deleted", "wallet.signed")
+
+        /** What a create or a look-up that a clear overtook answers. */
+        const val CLEARED = "cleared"
 
         /** The four chains: both accounts, receive and change. */
         val CHAINS = AccountType.entries.flatMap { t -> listOf(AddressChain(t.vaultName, false), AddressChain(t.vaultName, true)) }

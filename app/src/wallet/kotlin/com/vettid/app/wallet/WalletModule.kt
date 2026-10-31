@@ -9,6 +9,7 @@ import com.vettid.core.chain.ChainSettingsFile
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.wallet.WalletAccess
 import com.vettid.core.data.wipe.WipeHook
@@ -94,13 +95,14 @@ object WalletModule {
         offered = servers.defaults::offered,
     ).also { m ->
         wipe.register(m::clear)
-        manager.onBeforeLock { servers.forgetChecks() }
-        val open = combine(manager.phase, manager.ownerCheck.ownerCheck) { phase, check ->
-            // Held or due (§3.6.3): nothing of the wallets is kept or shown.
-            phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK)
+        // The member's own lock, before it reaches the vault; every other way the vault closes is the `open` flow below.
+        manager.onBeforeLock {
+            m.clear()
+            servers.forgetChecks()
         }
+        val open = combine(manager.phase, manager.ownerCheck.ownerCheck, ::openOf)
         val events = manager.vaultEvents.filterNotNull().flatMapLatest { it.events }.map { it.type to it.body }
-        m.follow(open, events)
+        m.follow(open, events, onClosed = { servers.forgetChecks() })
     }
 
     @Provides
@@ -110,15 +112,30 @@ object WalletModule {
             m.availability.map { it == WalletAvailability.AVAILABLE }.stateIn(scope, SharingStarted.Eagerly, false)
     }
 
-    /** At a live wipe, before anything is erased: the generation moves and the wallets are forgotten. */
-    @Provides
-    @IntoSet
-    fun walletWipeHook(wipe: WalletWipe): WipeHook = WipeHook { wipe.onWipe() }
+    /** Whether the wallets may be held: the vault unlocked and not held or due (§3.6.3: nothing of them is kept or shown then). */
+    internal fun openOf(phase: AppPhase, check: OwnerCheckView?): Boolean =
+        phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK)
 
-    /** And every server's block 0 is checked again. */
+    /**
+     * At a live wipe, before anything is erased: the generation moves and the wallets are forgotten; then the writes already in
+     * progress finish (a write that started before the generation moved is the only one that could still land), and every
+     * server's block 0 is checked again.
+     */
     @Provides
     @IntoSet
-    fun chainChecksWipeHook(servers: ChainServers): WipeHook = WipeHook { servers.forgetChecks() }
+    fun walletWipeHook(wipe: WalletWipe, flags: WalletFlags, servers: ChainServers): WipeHook = WipeHook {
+        wipeHook(wipe, flags, servers)
+    }
+
+    internal suspend fun wipeHook(wipe: WalletWipe, flags: WalletFlags, servers: ChainServers) {
+        try {
+            wipe.onWipe()
+        } finally {
+            flags.fence()
+            servers.fence()
+            servers.forgetChecks()
+        }
+    }
 
     internal fun chainServersFile(context: Context): File = File(context.noBackupFilesDir, CHAIN_SERVERS_FILE)
 

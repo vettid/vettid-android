@@ -69,7 +69,7 @@ class WalletsManagerTest {
         withWallet()
         val m = manager()
         assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
-        m.refresh()
+        m.open()
         assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
         assertEquals(listOf("Savings"), m.wallets.value.map { it.name })
     }
@@ -78,10 +78,10 @@ class WalletsManagerTest {
     fun aVaultWithoutWalletsIsAskedOnce() = runBlocking {
         ops.unsupported = true
         val m = manager()
-        val e = runCatching { m.refresh() }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.open() }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
         assertEquals(WalletAvailability.UNSUPPORTED, m.availability.value)
-        m.refresh()
+        m.open()
         assertEquals(1, ops.calls.count { it == "list" })
         // A new unlock asks again.
         m.clear()
@@ -96,7 +96,7 @@ class WalletsManagerTest {
         funded(receive, 15, 20_000, unconfirmed = 1_000)
         funded(AddressChain("p2wpkh", true), 3, 7_000)
         val m = manager()
-        m.refresh()
+        m.open()
         val r = m.lookup(w.id) as LookupResult.Done
         assertEquals(77_000L, r.lookup.confirmedSats)
         assertEquals(1_000L, r.lookup.unconfirmedSats)
@@ -106,17 +106,18 @@ class WalletsManagerTest {
         // The receive chain was read to index 15 + 20.
         assertTrue(chain.asked.contains(WalletFixtures.address(receive, 35).address))
         assertFalse(chain.asked.contains(WalletFixtures.address(receive, 36).address))
-        // The funded addresses go to the vault once, in one request.
-        assertEquals(listOf(r.lookup.funded.sorted()), ops.marked)
+        // Only the funded address the vault issued (receive 0; it issued none past next_receive 1, and no change) is reported, once.
+        assertEquals(listOf(listOf(WalletFixtures.address(receive, 0).address)), ops.marked)
         assertEquals(r.lookup, m.lookups.value[w.id])
     }
 
     @Test
     fun moreThan256FundedAddressesAreReportedInChunks() = runBlocking {
-        val w = withWallet()
+        // 300 issued and funded receive addresses.
+        val w = withWallet(issuedReceive = 300)
         repeat(300) { funded(receive, it, 1) }
         val m = manager()
-        m.refresh()
+        m.open()
         assertTrue(m.lookup(w.id) is LookupResult.Done)
         assertEquals(listOf(256, 44), ops.marked.map { it.size })
     }
@@ -127,7 +128,7 @@ class WalletsManagerTest {
         // The vault lists, at index 1, an address the app does not derive there.
         ops.lie = { a -> if (a.index == 1 && !a.change && a.type == "p2tr") a.copy(address = WalletFixtures.address(receive, 7).address) else a }
         val m = manager()
-        m.refresh()
+        m.open()
         assertEquals(LookupResult.AddressMismatch, m.lookup(w.id))
         assertTrue(chain.asked.isEmpty())
         assertTrue(ops.marked.isEmpty())
@@ -138,7 +139,7 @@ class WalletsManagerTest {
     fun theReceivingChainHasAnAddressBeforeTheFirstCheck() = runBlocking {
         val w = withWallet(issuedReceive = 0)
         val m = manager()
-        m.refresh()
+        m.open()
         assertTrue(m.lookup(w.id) is LookupResult.Done)
         assertEquals(1, ops.calls.count { it == "new" })
     }
@@ -147,14 +148,14 @@ class WalletsManagerTest {
     fun theCheckRunsOncePerSession() = runBlocking {
         val w = withWallet()
         val m = manager()
-        m.refresh()
+        m.open()
         m.lookup(w.id)
         val lists = ops.calls.count { it.startsWith("list:") }
         m.lookup(w.id)
         assertEquals(lists, ops.calls.count { it.startsWith("list:") })
         // A new session (after a lock) checks again.
         m.clear()
-        m.refresh()
+        m.open()
         m.lookup(w.id)
         assertTrue(ops.calls.count { it.startsWith("list:") } > lists)
     }
@@ -163,7 +164,7 @@ class WalletsManagerTest {
     fun eachServerStateIsItsOwnResult() = runBlocking {
         val w = withWallet()
         val m = manager()
-        m.refresh()
+        m.open()
         chain = FakeChain.noServer(ChainServer.NotSet)
         assertEquals(LookupResult.NoServer(ChainServer.NotSet), m.lookup(w.id))
         chain = FakeChain.noServer(ChainServer.Unreadable)
@@ -182,7 +183,7 @@ class WalletsManagerTest {
     fun aLegacyTestnetWalletAsksItsChain() = runBlocking {
         val w = withWallet(network = "testnet")
         val m = manager()
-        m.refresh()
+        m.open()
         assertEquals(LookupResult.NeedsNetwork, m.lookup(w.id))
         // testnet3: the staging app does not connect to it.
         assertTrue(m.setTestNetwork(w.id, Network.TESTNET))
@@ -195,7 +196,7 @@ class WalletsManagerTest {
     fun receiveGivesTheNewestUnusedAddressAndANewOneOnlyWhenItIsUsed() = runBlocking {
         val w = withWallet(issuedReceive = 3)
         val m = manager()
-        m.refresh()
+        m.open()
         assertEquals(2, m.receiveAddress(w.id).index)
         assertEquals(0, ops.calls.count { it == "new" })
         // Funded, as the last look-up saw it: a new one.
@@ -261,7 +262,7 @@ class WalletsManagerTest {
     fun aWalletDeletedElsewhereGoesFromTheList() = runBlocking {
         val w = withWallet()
         val m = manager()
-        m.refresh()
+        m.open()
         m.lookup(w.id)
         ops.wallets.clear()
         m.onEvent("sync.event", syncEvent("wallet.deleted", w.id))
@@ -273,14 +274,108 @@ class WalletsManagerTest {
     fun aLookupThatFinishesAfterALockIsDropped() = runBlocking {
         val w = withWallet()
         val m = manager()
-        m.refresh()
+        m.open()
         chain.gate = CompletableDeferred()
         val running = async(Dispatchers.Default) { m.lookup(w.id) }
         delay(200)
         m.clear()
         chain.gate!!.complete(Unit)
-        assertFalse(running.await() is LookupResult.Done)
+        assertEquals(LookupResult.Cleared, running.await())
         assertTrue(m.lookups.value.isEmpty())
         assertTrue(ops.marked.isEmpty())
+    }
+    // ---- The clear against work in flight (the #235 review) ----
+
+    @Test
+    fun aListReadThatAClearOvertookIsNotPublished() = runBlocking {
+        withWallet()
+        val m = manager()
+        ops.listGate = CompletableDeferred()
+        val reading = async(Dispatchers.Default) { m.open() }
+        delay(100)
+        m.clear()
+        ops.listGate!!.complete(Unit)
+        reading.await()
+        assertTrue(m.wallets.value.isEmpty())
+        assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
+    }
+
+    @Test
+    fun anEventJustBeforeAClearReadsNothingAfterIt() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        val reads = ops.calls.count { it == "list" }
+        m.onEvent("sync.event", syncEvent("wallet.changed", w.id))
+        m.clear()
+        delay(WalletsManager.EVENT_DEBOUNCE_MS * 3)
+        assertEquals(reads, ops.calls.count { it == "list" })
+        assertTrue(m.wallets.value.isEmpty())
+        // Closed: a refresh asks nothing either.
+        m.refresh()
+        assertEquals(reads, ops.calls.count { it == "list" })
+    }
+
+    @Test
+    fun aCreateThatAClearOvertookKeepsNothingAndRevealsNothing() = runBlocking {
+        lateinit var m: WalletsManager
+        // The vault is locked while the create is answered.
+        val gated = object : WalletOps by ops {
+            override suspend fun create(name: String, network: String, password: String): VaultWallet =
+                ops.create(name, network, password).also { m.clear() }
+        }
+        m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
+        m.open()
+        val c = m.create("Savings", Network.TESTNET4, "pw")
+        assertNull(c.phrase)
+        assertEquals(WalletsManager.CLEARED, c.revealFailure?.code)
+        assertTrue(m.wallets.value.isEmpty())
+        assertFalse("reveal" in ops.calls)
+    }
+
+    @Test
+    fun aFundedGapAddressIsNotReported() = runBlocking {
+        // The vault issued receive 0..1 (next_receive 2); the app finds funds at 0 and at 10, which the vault never issued.
+        val w = withWallet(issuedReceive = 2)
+        funded(receive, 0, 1_000)
+        funded(receive, 10, 2_000)
+        val m = manager()
+        m.open()
+        val r = m.lookup(w.id) as LookupResult.Done
+        // Both count toward the balance and both are funded (Receive sees them) ...
+        assertEquals(3_000L, r.lookup.confirmedSats)
+        assertEquals(2, r.lookup.funded.size)
+        // ... but only the vault's own address is reported.
+        assertEquals(listOf(listOf(WalletFixtures.address(receive, 0).address)), ops.marked)
+    }
+
+    @Test
+    fun aLookupStopsAskingTheServerOnceCleared() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        var asked = 0
+        chain = FakeChain(ChainOpen.Ready("node.example") { _ ->
+            if (++asked == WalletsManager.BATCH) m.clear()
+            ChainSummary(0, 0, 0, 0)
+        })
+        assertEquals(LookupResult.Cleared, m.lookup(w.id))
+        // The batch in flight finished; no batch after it was asked.
+        assertEquals(WalletsManager.BATCH, asked)
+    }
+
+    @Test
+    fun theCheckIsPerWalletAndNetwork() = runBlocking {
+        val w = withWallet(network = "testnet")
+        // A build that offered both test chains: the label decides which one the wallet is checked and looked up on.
+        val m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { ops }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it == Network.TESTNET4 || it == Network.TESTNET }, { now })
+        m.open()
+        m.setTestNetwork(w.id, Network.TESTNET4)
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        val lists = ops.calls.count { it.startsWith("list:") }
+        // The member says the wallet is on the other test chain: the addresses are checked again for that one.
+        m.setTestNetwork(w.id, Network.TESTNET)
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        assertTrue(ops.calls.count { it.startsWith("list:") } > lists)
     }
 }

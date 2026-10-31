@@ -18,15 +18,21 @@ class WalletWipe {
         clears += clear
     }
 
-    /** Every registered clear runs, even if one throws; the first failure is rethrown after the last. */
+    /**
+     * Every registered clear runs, even if one throws. The first [Exception] is rethrown after the last (the wipe goes on past it,
+     * LocalWipe.resetMemory); an [Error] is never rethrown, so that it cannot stop the wipe.
+     */
+    @Suppress("TooGenericExceptionCaught")
     fun onWipe() {
         gen.incrementAndGet()
-        var first: Throwable? = null
+        var first: Exception? = null
         for (c in clears) {
             try {
                 c()
-            } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+            } catch (e: Exception) {
                 if (first == null) first = e
+            } catch (_: Throwable) {
+                // An Error: the remaining clears still run, and the wipe goes on.
             }
         }
         first?.let { throw it }

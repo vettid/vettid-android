@@ -1,9 +1,11 @@
 package com.vettid.core.wallet
 
 import com.vettid.core.chain.Network
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -11,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,5 +88,70 @@ class WalletLifecycleTest {
         runCatching { wipe.onWipe() }
         assertEquals(2L, wipe.generation)
         assertTrue(m.wallets.value.isEmpty())
+    }
+    @Test
+    fun aCloseIsNotHeldBackByAReadInFlightAndRunsItsHook() = runBlocking {
+        val w = WalletFixtures.wallet()
+        ops.wallets[w.id] = w
+        ops.listGate = CompletableDeferred()
+        val open = MutableStateFlow(true)
+        var closed = 0
+        val m = manager()
+        m.follow(open, MutableSharedFlow(), onClosed = { closed++ })
+        eventually("the read started") { ops.calls.contains("list") }
+        // The vault closes while `wallet.list` is unanswered: the close runs at once, and the late answer is dropped.
+        open.value = false
+        eventually("closed") { closed == 1 }
+        ops.listGate!!.complete(Unit)
+        delay(100)
+        assertTrue(m.wallets.value.isEmpty())
+        scope.cancel()
+    }
+
+    @Test
+    fun anErrorInAClearIsNotRethrownAndTheOtherClearsRun() {
+        val wipe = WalletWipe()
+        var cleared = 0
+        wipe.register { throw StackOverflowError("an Error") }
+        wipe.register { cleared++ }
+        wipe.onWipe()
+        assertEquals(1, cleared)
+    }
+
+    @Test
+    fun theFenceWaitsForAWriteInProgress() = runBlocking {
+        val inSave = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var saved = false
+        val wipe = WalletWipe()
+        val f = WalletFlags(object : WalletFlagsFile {
+            override fun load(): ByteArray? = null
+
+            override fun save(bytes: ByteArray) {
+                inSave.complete(Unit)
+                runBlocking { release.await() }
+                saved = true
+            }
+        }) { wipe.generation }
+        val writing = async(Dispatchers.Default) { f.setBackedUp("W1") }
+        inSave.await()
+        // The wipe's hook: the generation moves, then the fence waits for the write already inside `save`.
+        wipe.onWipe()
+        val fence = async(Dispatchers.Default) { f.fence() }
+        delay(100)
+        assertFalse(fence.isCompleted)
+        release.complete(Unit)
+        fence.await()
+        assertTrue(saved)
+        writing.await()
+        // A write that starts after the generation moved is refused.
+        assertFalse(WalletFlags(object : WalletFlagsFile {
+            override fun load(): ByteArray? {
+                wipe.onWipe()
+                return null
+            }
+
+            override fun save(bytes: ByteArray) = error("must not save")
+        }) { wipe.generation }.setBackedUp("W2"))
     }
 }

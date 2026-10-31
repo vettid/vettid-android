@@ -53,12 +53,14 @@ internal class FakeWalletOps : WalletOps {
     var unsupported = false
     var revealFails = false
     var lie: ((WalletAddress) -> WalletAddress)? = null
+    var listGate: CompletableDeferred<Unit>? = null
     var created = 0
 
     private fun refuse(type: String, code: String): Nothing = throw VaultOpException(type, code)
 
     override suspend fun list(): List<VaultWallet> {
         calls += "list"
+        listGate?.await()
         if (unsupported) refuse("wallet.list", "unsupported_type")
         return wallets.values.toList()
     }
