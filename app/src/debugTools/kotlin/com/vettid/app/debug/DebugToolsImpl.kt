@@ -62,7 +62,7 @@ internal val debugTools: DebugTools = object : DebugTools {
             ?.removePrefix(CATALOG_PREFIX)
             ?.let {
                 ScreenCatalog.screens[it] ?: ItemsCatalog.screens[it] ?: PhotoCatalog.screens[it] ?: CallsCatalog.screens[it] ?: NotificationsCatalog.screens[it]
-                    ?: NotificationSettingsCatalog.screens[it] ?: DevicesCatalog.screens[it]
+                    ?: NotificationSettingsCatalog.screens[it] ?: DevicesCatalog.screens[it] ?: VotesCatalog.screens[it]
             }
 
     override fun startRoute(intent: Intent): Any? {

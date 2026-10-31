@@ -58,3 +58,11 @@ ba4776070f7babc465d4db23f860fe998f6d7f3accab5cac8a153ff0090d3914  altchan.json
 a890582a80e24cea9e10523f01f2f0040924aa47cd66cd8c442c0a1577e284b3  blob.json
 a8d86c76b9469f26526f8238d41bd07a6b74fcce3da6035879fc5910c5f36427  attachment.json
 ```
+
+`vote.json` (VAULT-MESSAGING 0.81.0 §10.19, BALLOT-PROTOCOL §8.2: the Merkle trees, the rows and the results of a vote) is
+`testdata/vote/vectors.json` of vettid-vault, byte for byte; `VoteRowsTest` in `:core:crypto` reproduces the trees and the
+member's row from it:
+
+- Source repository: github.com/vettid/vettid-vault
+- Source commit (HEAD when copied): a8a968e465ca2700d23d0f4ae6d93b2813a95b93 (the merge of PR #174, "vote: app API, site sync, reminders, staging config")
+- Copied: 2026-10-31

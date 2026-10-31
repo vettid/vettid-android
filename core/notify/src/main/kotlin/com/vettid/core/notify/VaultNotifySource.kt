@@ -2,6 +2,7 @@ package com.vettid.core.notify
 
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.feed.FeedNames
+import com.vettid.core.data.feed.VoteTitles
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.OwnerCheckState
@@ -39,6 +40,10 @@ class VaultNotifySource(
         connections = vault.social.connections.value.associateBy { it.id },
         items = vault.items.items.value.associate { it.itemId to it.name },
         approvals = vault.social.approvals.value.associateBy { it.key },
+        // Vote titles from the list in memory (ANDROID-PLAN 0.1.102): the second line of a vote item, never a choice.
+        votes = vault.votes.votes.value.mapNotNull { v ->
+            AccountNames.isolateOrNull(v.title)?.let { VoteTitles.key(v.connectionId, v.proposalId) to it }
+        }.toMap(),
     )
 
     /** A photo's notification says "Photo" and, with previews on, its caption; never the image or the thumbnail. */

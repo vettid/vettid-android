@@ -20,13 +20,21 @@ import java.io.File
  * Where the app talks to: production, staging (the `staging` build type only), or the
  * local dev stack (debug `devStack` builds only).
  */
-data class Endpoints(val apiBase: String, val manifestUrl: String, val relayUrl: String) {
+data class Endpoints(
+    val apiBase: String,
+    val manifestUrl: String,
+    val relayUrl: String,
+    /** The public votes site the app reads for the vault (ANDROID-PLAN 0.1.102 "Votes"); null where there is none (the dev stack). */
+    val votesBase: String? = null,
+) {
     companion object {
         const val PRODUCTION_RELAY = "https://relay.vettid.org"
-        val PRODUCTION = Endpoints(MemberApiClient.PRODUCTION_API, MemberApiClient.PRODUCTION_MANIFEST, PRODUCTION_RELAY)
+        const val PRODUCTION_VOTES = "https://votes.vettid.org"
+        const val STAGING_VOTES = "https://votes.staging.vettid.org"
+        val PRODUCTION = Endpoints(MemberApiClient.PRODUCTION_API, MemberApiClient.PRODUCTION_MANIFEST, PRODUCTION_RELAY, PRODUCTION_VOTES)
 
         /** Staging images pin the production relay (vettid-vault releasecfg/staging.json `relay_url`). */
-        val STAGING = Endpoints(MemberApiClient.STAGING_API, MemberApiClient.STAGING_MANIFEST, PRODUCTION_RELAY)
+        val STAGING = Endpoints(MemberApiClient.STAGING_API, MemberApiClient.STAGING_MANIFEST, PRODUCTION_RELAY, STAGING_VOTES)
     }
 }
 

@@ -9,6 +9,7 @@
     <string name="nav_help">Help</string>
     <string name="nav_history">History</string>
     <!-- ANDROID-PLAN 0.1.53 "Devices & agents", AA1. Approved by the owner 2026-10-26. -->
+    <string name="nav_votes">Votes</string>
     <string name="nav_devices">Devices &amp; agents</string>
     <string name="drawer_version">VettID %1$s (%2$d)</string>
 

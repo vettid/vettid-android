@@ -89,6 +89,17 @@ object AuditKinds {
          * the connection, device or item is gone (the title drops the name).
          */
         data class Named(@param:StringRes val res: Int, @param:StringRes val anyRes: Int, val who: Who) : Title
+
+        /**
+         * A vote entry (ANDROID-PLAN 0.1.102 "Votes"): [res] names the vote's title in quotes, [anyRes] is the same without it
+         * (the Votes list is not in memory). [service] puts the service's name first; [reason] is a refusal's reason, last.
+         */
+        data class Vote(
+            @param:StringRes val res: Int,
+            @param:StringRes val anyRes: Int,
+            val service: Boolean = false,
+            @param:StringRes val reason: Int? = null,
+        ) : Title
     }
 
     /** Whose name a [Title.Named] shows. */
@@ -110,12 +121,70 @@ object AuditKinds {
             // (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself: `vault.locked` with `ref` `idle`.
             KIND_LOCKED -> if (ref == REF_IDLE) return Title.Known(R.string.history_kind_vault_locked_idle)
         }
+        voteTitle(kind, ref)?.let { return it }
         NAMED[kind]?.let { return it }
         TITLES[kind]?.let { return Title.Known(it) }
         if (kind.endsWith(SUMMARY)) TITLES[kind.removeSuffix(SUMMARY)]?.let { return Title.Summary(it) }
         if (kind.startsWith(DROP) && kind.endsWith(MALFORMED)) return Title.Known(R.string.history_kind_drop_malformed)
         if (kind.startsWith(DROP) && kind.length > DROP.length) return Title.Dropped(kind.removePrefix(DROP).replace('_', ' '))
         return Title.Unknown(kind)
+    }
+
+    /** The proposal id of a vote entry's `ref` (`<proposal_id>` or `<proposal_id>:<detail>`); the pair is with the entry's connection. */
+    fun voteOf(kind: String, ref: String?): String? =
+        ref?.substringBefore(':')?.takeIf { it.isNotEmpty() && kind in VOTE_KINDS }
+
+    private val VOTE_KINDS = setOf(
+        "vote.cast", "vote.recorded", "vote.refused", "vote.conflict", "vote.receipt_rejected", "vote.extended",
+        "vote.extension_rejected", "vote.check_ok", "vote.check_unconfirmed", "vote.check_failed", "vote.check_gave_up",
+        "vote.released",
+    )
+
+    /** The vote kinds of ANDROID-PLAN 0.1.102 "Votes" (History): the title depends on `ref`'s suffix for some. */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    private fun voteTitle(kind: String, ref: String?): Title? {
+        val detail = ref?.substringAfter(':', "")
+        return when (kind) {
+            "vote.cast" -> Title.Vote(R.string.history_kind_vote_cast, R.string.history_kind_vote_cast_any)
+            "vote.recorded" -> Title.Vote(R.string.history_kind_vote_recorded, R.string.history_kind_vote_recorded_any, service = true)
+            "vote.refused" -> Title.Vote(
+                R.string.history_kind_vote_refused, R.string.history_kind_vote_refused_any, service = true, reason = refusedReason(detail),
+            )
+            "vote.conflict" -> Title.Vote(R.string.history_kind_vote_conflict, R.string.history_kind_vote_conflict_any, service = true)
+            "vote.receipt_rejected" ->
+                Title.Vote(R.string.history_kind_vote_receipt_rejected, R.string.history_kind_vote_receipt_rejected_any)
+            "vote.extended" -> Title.Vote(R.string.history_kind_vote_extended, R.string.history_kind_vote_extended_any)
+            "vote.extension_rejected" ->
+                Title.Vote(R.string.history_kind_vote_extension_rejected, R.string.history_kind_vote_extension_rejected_any)
+            "vote.check_ok" -> Title.Vote(R.string.history_kind_vote_check_ok, R.string.history_kind_vote_check_ok_any)
+            "vote.check_unconfirmed" ->
+                Title.Vote(R.string.history_kind_vote_check_unconfirmed, R.string.history_kind_vote_check_unconfirmed_any)
+            "vote.check_failed" -> Title.Vote(R.string.history_kind_vote_check_failed, R.string.history_kind_vote_check_failed_any)
+            "vote.check_gave_up" -> Title.Vote(R.string.history_kind_vote_check_gave_up, R.string.history_kind_vote_check_gave_up_any)
+            "vote.released" -> Title.Vote(R.string.history_kind_vote_released, R.string.history_kind_vote_released_any)
+            "vote.proposal_rejected" ->
+                serviceTitle(R.string.history_kind_vote_proposal_rejected, R.string.history_kind_vote_proposal_rejected_any)
+            "vote.proposal_conflict" -> when (detail) {
+                "mismatch" -> serviceTitle(R.string.history_kind_vote_site_mismatch, R.string.history_kind_vote_site_mismatch_any)
+                "not_listed" -> serviceTitle(R.string.history_kind_vote_not_listed, R.string.history_kind_vote_not_listed_any)
+                "unpublished" -> serviceTitle(R.string.history_kind_vote_unpublished, R.string.history_kind_vote_unpublished_any)
+                else -> serviceTitle(R.string.history_kind_vote_two_versions, R.string.history_kind_vote_two_versions_any)
+            }
+            else -> null
+        }
+    }
+
+    /** A title that names the service (the entry's connection) and drops it when it is gone. */
+    private fun serviceTitle(@StringRes res: Int, @StringRes anyRes: Int) = Title.Named(res, anyRes, Who.CONNECTION)
+
+    /** A refusal's reason in words; a code this app does not know is "not accepted". */
+    @StringRes
+    private fun refusedReason(code: String?): Int = when (code) {
+        "closed", "late" -> R.string.history_vote_reason_closed
+        "not_active" -> R.string.history_vote_reason_not_active
+        "not_eligible" -> R.string.history_vote_reason_not_eligible
+        "connection_ended" -> R.string.history_vote_reason_connection_ended
+        else -> R.string.history_vote_reason_not_accepted
     }
 
     @StringRes
@@ -471,5 +540,10 @@ object AuditKinds {
         "drop.grant_limit" to R.string.history_kind_drop_grant_limit,
         "drop.critical_signature" to R.string.history_kind_drop_critical_signature,
         "drop.rate_limited" to R.string.history_kind_drop_rate_limited,
+        // ANDROID-PLAN 0.1.102 "Votes": a vote message the vault ignored, and the list of services it did not accept.
+        "drop.vote_malformed" to R.string.history_kind_vote_ignored,
+        "drop.vote_limit" to R.string.history_kind_vote_ignored,
+        "drop.vote_not_service" to R.string.history_kind_vote_ignored,
+        "vote.list_rejected" to R.string.history_kind_vote_list_rejected,
     )
 }

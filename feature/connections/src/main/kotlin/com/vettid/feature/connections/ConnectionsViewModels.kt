@@ -27,6 +27,9 @@ import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.votes.NoVotes
+import com.vettid.core.data.votes.VoteRules
+import com.vettid.core.data.votes.VotesRepository
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
@@ -532,7 +535,16 @@ data class ConnectionDetailUiState(
     val canCall: Boolean = false,
     /** A share rule the member asked to delete, waiting for the confirmation. */
     val deleteRule: ShareRule? = null,
+    /** This connection's votes (ANDROID-PLAN 0.1.102 "Votes"); nothing where the vault has none. */
+    val votes: ConnectionVotes = ConnectionVotes(),
 )
+
+/**
+ * What the Votes feature knows of one connection: [count] votes from it (a service connection gets the row "Votes from
+ * <name>"), whether one is [unfinished] (removing the connection asks first), and whether VettID's service list names this
+ * person connection as a service ([reconnect]: "Connect again to vote").
+ */
+data class ConnectionVotes(val count: Int = 0, val unfinished: Boolean = false, val reconnect: Boolean = false)
 
 /**
  * Sharing with one connection, both ways (§10.12): what the member shares with it ([rules] for this connection and
@@ -581,14 +593,25 @@ class ConnectionDetailViewModel @Inject constructor(
     private val repo: ConnectionsRepository,
     private val sharing: SharingRepository,
     private val calls: CallAccess = NoCallAccess,
+    private val votes: VotesRepository = NoVotes,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
 
     val uiState: StateFlow<ConnectionDetailUiState> =
-        combine(local, repo.connections, repo.authentication, calls.availability) { s, cs, auth, call ->
-            s.copy(connection = cs.firstOrNull { it.id == id } ?: s.connection, auth = auth[id], canCall = call == CallAvailability.READY)
+        combine(local, repo.connections, repo.authentication, calls.availability, ownVotes()) { s, cs, auth, call, v ->
+            s.copy(
+                connection = cs.firstOrNull { it.id == id } ?: s.connection,
+                auth = auth[id],
+                canCall = call == CallAvailability.READY,
+                votes = v,
+            )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
+
+    private fun ownVotes() = combine(votes.votes, votes.reconnect) { v, r ->
+        val mine = v.filter { it.connectionId == id }
+        ConnectionVotes(count = mine.size, unfinished = mine.any(VoteRules::unfinished), reconnect = r.any { it.connectionId == id })
+    }
 
     /** The pill's "Call": the call screen follows from the call's state. */
     fun call() {

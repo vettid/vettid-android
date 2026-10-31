@@ -70,6 +70,11 @@ import com.vettid.feature.devices.DevicesHost
 import com.vettid.feature.devices.DevicesRoute
 import com.vettid.feature.devices.PairRoute
 import com.vettid.feature.devices.devicesDestination
+import com.vettid.feature.votes.ConnectionVotesRoute
+import com.vettid.feature.votes.VoteRoute
+import com.vettid.feature.votes.VotesHost
+import com.vettid.feature.votes.VotesRoute
+import com.vettid.feature.votes.votesDestination
 import com.vettid.feature.history.ConnectionHistoryRoute
 import com.vettid.feature.history.DeviceHistoryRoute
 import com.vettid.feature.history.HistoryHost
@@ -324,9 +329,18 @@ fun AppShell(
                                     navController.navigate(RuleEditRoute(id, rule)) { launchSingleTop = true }
                                 },
                                 onAskFor = { id -> navController.navigate(SharedWithYouRoute(id, ask = true)) { launchSingleTop = true } },
+                                onOpenVotes = { id -> navController.navigate(ConnectionVotesRoute(id)) { launchSingleTop = true } },
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back, onLeaveDetail = navController::leaveApprovalDetail)
+                        votesDestination(
+                            chrome,
+                            VotesHost(
+                                navigate = navigate,
+                                onBack = back,
+                                onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
+                            ),
+                        )
                         itemsDestination(
                             chrome,
                             ItemsHost(
@@ -482,10 +496,13 @@ private fun drawerSections(badges: ShellBadges): List<List<DrawerItem>> =
                 val badge = when (it) {
                     TopLevelDestination.Approvals -> badges.approvals
                     TopLevelDestination.Messages -> badges.unread
+                    TopLevelDestination.Votes -> badges.votes
                     else -> 0
                 }
                 DrawerItem(key = it.key, label = stringResource(it.label), icon = it.icon, badge = badge)
             }
+                // The Votes entry shows only with a vote or a connection to connect again (ANDROID-PLAN 0.1.102): no empty screen.
+                .filterNot { item -> item.key == TopLevelDestination.Votes.key && !badges.votesShown }
         }
 
 private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>): String? {
@@ -505,6 +522,7 @@ private fun visibleOf(e: NavBackStackEntry?): Visible? {
         d.hasRoute(ConversationRoute::class) -> Visible.Target(FeedTarget.Conversation(e.toRoute<ConversationRoute>().connectionId))
         d.hasRoute(ApprovalDetailRoute::class) -> Visible.Target(FeedTarget.ApprovalEntry(e.toRoute<ApprovalDetailRoute>().key))
         d.hasRoute(ConnectionDetailRoute::class) -> Visible.Target(FeedTarget.Connection(e.toRoute<ConnectionDetailRoute>().connectionId))
+        d.hasRoute(VoteRoute::class) -> e.toRoute<VoteRoute>().let { Visible.Target(FeedTarget.Vote(it.connectionId, it.proposalId)) }
         else -> null
     }
 }
@@ -516,10 +534,12 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget) {
         FeedTarget.History -> navigateTopLevel(HistoryRoute)
         FeedTarget.Security -> navigateTopLevel(SettingsRoute)
         FeedTarget.Approvals -> navigateTopLevel(ApprovalsRoute)
+        FeedTarget.VoteList -> navigateTopLevel(VotesRoute)
         else -> feedRoute(t)?.let { navigate(it) { launchSingleTop = true } }
     }
 }
 
+@Suppress("CyclomaticComplexMethod") // one route per target
 private fun feedRoute(t: FeedTarget): Any? = when (t) {
     is FeedTarget.ApprovalEntry -> ApprovalDetailRoute(t.key)
     is FeedTarget.Connection -> ConnectionDetailRoute(t.connectionId)
@@ -527,6 +547,7 @@ private fun feedRoute(t: FeedTarget): Any? = when (t) {
     is FeedTarget.SharedWithYou -> SharedWithYouRoute(t.connectionId)
     is FeedTarget.ShareRule -> RuleEditRoute(t.connectionId, t.ruleId)
     is FeedTarget.Item -> ItemDetailRoute(t.itemId)
+    is FeedTarget.Vote -> VoteRoute(t.connectionId, t.proposalId)
     FeedTarget.Devices -> VaultStatusRoute
     FeedTarget.DeviceList -> DevicesRoute
     FeedTarget.Pairing -> PairRoute(held = true)

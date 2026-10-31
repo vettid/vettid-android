@@ -124,6 +124,8 @@ data class ConnectionsHost(
     val onOpenShareRule: (String, String) -> Unit = { _, _ -> },
     /** Asking the connection for something (`grant.request`, items feature). */
     val onAskFor: (String) -> Unit = {},
+    /** The votes from a service connection (votes feature). */
+    val onOpenVotes: (String) -> Unit = {},
 )
 
 /** Registers the Connections destinations. */
@@ -187,6 +189,7 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onAskForSomething = { host.onAskFor(state.connectionId) },
                 onMuteAsks = vm::muteAsks,
                 onResumeAsks = vm::resumeAsks,
+                onOpenVotes = { host.onOpenVotes(state.connectionId) },
             ),
         )
     }

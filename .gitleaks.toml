@@ -13,7 +13,7 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "VAULT-MESSAGING §16 test vectors (test-only, public)"
 regexTarget = "match"
 regexes = [
@@ -42,4 +42,26 @@ regexes = [
   # :core:calls' FrameFormatDeviceTest.
   '''df487affce123283952f691628c1c2de''',
   '''e2637ed9e4ab88d26b3f34869104e58d355e1eb7b6c5b7d3aea521bda4fd83da''',
+]
+
+# §10.19 vote vectors (VAULT-MESSAGING 0.81.0 §16; vettid-vault testdata/vote/vectors.json, copied byte for byte to
+# core/crypto/src/test/resources/vectors/vote.json). Every value is a fixed TEST-ONLY seed, key, secret or hash printed in
+# the public spec; the generic rule takes `record_secret`, `seed` and `key` for credentials. Scoped, as in vettid-vault's own
+# .gitleaks.toml, to the generic-api-key rule, to this one file and to exactly these values.
+[[allowlists]]
+description = "vote vectors (test-only, public)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''^core/crypto/src/test/resources/vectors/vote\.json$''',
+]
+regexTarget = "match"
+regexes = [
+  '''05bcc4b66fad3a6fb7cd5b3e6567a56d4962d7680e1cba87bee0dc3aa2f85462''',
+  '''26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05''',
+  '''26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85''',
+  '''884b9988fa4ac36b9cbacf96c62fa3222ffc95e199f3ab3f49d4191687d0c9d1''',
+  '''9aa9db2fd2ea84364e930cd5d4e2543ab312bfdca4cc98d413b3300b3954557c''',
+  '''c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a''',
+  '''c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa''',
 ]

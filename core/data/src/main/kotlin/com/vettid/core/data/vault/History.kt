@@ -20,7 +20,8 @@ enum class AuditCategory(val id: String, val prefixes: List<String>) {
     /** 0.1.17: `audit` (`audit.exported`, a History export) belongs here. */
     SECURITY("security", listOf("credential", "identity", "recovery", "audit")),
     DEVICES("devices", listOf("device", "approval")),
-    CONNECTIONS("connections", listOf("connection", "intro", "profile")),
+    // 0.1.102: `vote.*` entries are the service connection's ("Votes" in ANDROID-PLAN §4 History).
+    CONNECTIONS("connections", listOf("connection", "intro", "profile", "vote")),
     MESSAGES("messages", listOf("message", "call")),
 
     /** "Vault (items, sharing, wallet)". */

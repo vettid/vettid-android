@@ -74,6 +74,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.feed.VoteTitles
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
@@ -575,7 +576,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("history_list")) {
         items(state.shown, key = { it.seq }) { e ->
-            EntryRow(e, RowNames(state.connectionNames, state.itemNames, state.deviceNames), actions.onOpen)
+            EntryRow(e, RowNames(state.connectionNames, state.itemNames, state.deviceNames, state.voteTitles), actions.onOpen)
         }
         item(key = "footer") {
             Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.l), contentAlignment = Alignment.Center) {
@@ -608,7 +609,12 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
 }
 
 /** What a row resolves its ids with: connection, item and device names (devices null while not known). */
-private data class RowNames(val connections: Map<String, String>, val items: Map<String, String>, val devices: Map<String, String>?)
+private data class RowNames(
+    val connections: Map<String, String>,
+    val items: Map<String, String>,
+    val devices: Map<String, String>?,
+    val votes: Map<String, String> = emptyMap(),
+)
 
 @Composable
 private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
@@ -629,7 +635,16 @@ private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
     // ANDROID-PLAN 0.1.52 §4 "Event titles": some titles name the connection, device or item.
     val itemName = AuditKinds.itemOf(e.kind, e.ref)?.let { names.items[it] }
     VettIdListRow(
-        title = HistoryText.title(e.kind, e.ref, EntryNames(e.connectionId?.let { names.connections[it] }, device, itemName)),
+        title = HistoryText.title(
+            e.kind,
+            e.ref,
+            EntryNames(
+                e.connectionId?.let { names.connections[it] },
+                device,
+                itemName,
+                AuditKinds.voteOf(e.kind, e.ref)?.let { names.votes[VoteTitles.key(e.connectionId, it)] }?.ifEmpty { null },
+            ),
+        ),
         supporting = HistoryDevice.supporting(listOf(item, connection, device), stringResource(AuditKinds.categoryLabel(e.category))),
         meta = e.at?.let { Times.short(it) },
         tileIcon = categoryIcon(e.category),

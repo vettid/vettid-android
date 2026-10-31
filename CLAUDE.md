@@ -188,6 +188,26 @@ The A2 exit test:
   Permissions (AA3), share rules (AA4) and Approvals for devices, including the pending pairing's entry (AA5), are later
   PRs; screens are in the catalog (`devices*`).
 
+- Votes (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes", item 5.1; VAULT-MESSAGING 0.81.3 §10.19; `:feature:votes`, `VotesManager` /
+  `VotesRepository` in `:core:data` `votes/`, `VoteApi.kt` in `:core:vault`, `VaultManager.votes`): the drawer entry after Approvals
+  (shown only when the vault answers `vote.list` and holds a vote or a `reconnect` connection; its badge counts open votes not yet
+  voted on), the list, a vote (the service's words as plain text, the choices as sent, the fixed disclosure, the confirm sheet, the
+  unlock window prompt when the window is closed, the states in words, the results only after the vault's check, **Save the proof**,
+  **Release** with the vault PIN, "Is this your vote?"), "Votes from <name>" and "Connect again to vote" on connections, the feed
+  items and History titles. A vote is identified by the pair (`connection_id`, `proposal_id`) everywhere (`VoteKeys`); memory only,
+  cleared at lock and hold with the devices list (`PhaseSteps.VOTES`). `VoteRules` (pure) maps what the vault decided to a chip and
+  to notes (`VoteNote`); every text of the plan's table is in `feature/votes/.../strings.xml` and `VoteTextsTest` holds the approved
+  ones word for word (a changed text is the owner's to approve; the strings under "Proposed" there are not yet approved). The
+  vote screen is `FLAG_SECURE`; the proof is written only where the member's "Save to…" points, only on their action, never to a
+  log, cache or share sheet. The app's work with votes.vettid.org (`VoteSite`, `VoteSync`, `VotesManager.startSync`: hourly while
+  the vault is open and unlocked, no cookies, session or identifier; `vote.site.sync` within the per-call limits, a request over
+  245,760 bytes as a claim-check blob; the member's row and its Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
+  in `:core:crypto` against vettid-vault's `vote.json` vectors) never decides anything: the vault checks all of it again.
+  `Endpoints.votesBase` is `https://votes.vettid.org` (production) or `https://votes.staging.vettid.org` (staging), none on the dev
+  stack. Screens: `votes`, `votes.notices`, `votes.empty`, `vote`, `vote.confirm`, `vote.password`, `vote.recorded`, `vote.sending`,
+  `vote.waiting`, `vote.results`, `vote.conflict_after_verified`, `vote.failed`, `vote.checking_clock`, `vote.checking_list`,
+  `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`.
+
 ## Device testing
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:

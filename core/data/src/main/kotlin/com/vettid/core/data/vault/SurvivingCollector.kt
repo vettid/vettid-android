@@ -132,6 +132,7 @@ internal class PhaseSteps private constructor(
         const val SHARING = "sharing"
         const val FEED = "feed"
         const val DEVICES = "devices"
+        const val VOTES = "votes"
         const val OWN_PROFILE = "own profile"
 
         /**
@@ -148,6 +149,7 @@ internal class PhaseSteps private constructor(
             clearSharing: () -> Unit,
             clearFeed: () -> Unit,
             clearDevices: () -> Unit,
+            clearVotes: () -> Unit,
             ownProfile: (AppPhase) -> Unit,
         ) = PhaseSteps(
             replay,
@@ -158,6 +160,7 @@ internal class PhaseSteps private constructor(
                 SHARING to clearSharing,
                 FEED to clearFeed,
                 DEVICES to clearDevices,
+                VOTES to clearVotes,
             ),
             ownProfile,
         )

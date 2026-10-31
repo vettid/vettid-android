@@ -6,6 +6,7 @@ import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.HowToVote
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Settings
@@ -20,6 +21,7 @@ import com.vettid.feature.items.ItemsRoute
 import com.vettid.feature.messages.MessagesRoute
 import com.vettid.feature.settings.HelpRoute
 import com.vettid.feature.settings.SettingsRoute
+import com.vettid.feature.votes.VotesRoute
 import kotlin.reflect.KClass
 
 /** Drawer destinations of v1 (ANDROID-PLAN §4), in drawer order and groups. */
@@ -32,6 +34,9 @@ enum class TopLevelDestination(
     Messages(MessagesRoute, Icons.Outlined.ChatBubbleOutline, R.string.nav_messages, group = 0),
     Connections(ConnectionsRoute, Icons.Outlined.People, R.string.nav_connections, group = 0),
     Approvals(ApprovalsRoute, Icons.Outlined.TaskAlt, R.string.nav_approvals, group = 0),
+    // Votes (ANDROID-PLAN 0.1.102), after Approvals: shown only when the vault answers `vote.list` and holds a vote or a
+    // connection to connect again (no empty screen); its badge counts open votes not yet voted on. Not in Approvals.
+    Votes(VotesRoute, Icons.Outlined.HowToVote, R.string.nav_votes, group = 0),
     // "Vault" in the UI (owner feedback 2026-10-07); the code keeps the Items names.
     Items(ItemsRoute, Icons.Outlined.Inventory2, R.string.nav_items, group = 1),
     // Paired agents and desktops (ANDROID-PLAN 0.1.53 AA1, decision 13): after Vault, before History. No badge: what a

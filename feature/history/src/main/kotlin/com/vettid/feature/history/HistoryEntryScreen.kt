@@ -116,7 +116,7 @@ private fun EntryDetail(
         val removedDevice = stringResource(R.string.history_device_removed)
         val deviceName = state.deviceName ?: removedDevice.takeIf { state.devicesKnown && !state.deviceUnnamed && e.deviceId != null }
         CenteredTitle(
-            HistoryText.title(e.kind, e.ref, EntryNames(state.connectionName, deviceName, itemName)),
+            HistoryText.title(e.kind, e.ref, EntryNames(state.connectionName, deviceName, itemName, state.voteTitle)),
             Modifier.testTag("history_entry_title"),
         )
         // ANDROID-PLAN 0.1.52 §4 "Event titles": the detail lines.
