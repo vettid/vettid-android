@@ -45,10 +45,9 @@ internal object DeviceText {
             return if (unnamed != null) stringResource(unnamed) else stringResource(R.string.devices_unnamed, role.lowercase())
         }
         // A self-asserted name that could pass for the phone itself or for VettID is shown with its role. Compared by a
-        // key, so inner spaces, NBSP, ZWJ or fillers cannot slip past.
+        // key, so inner spaces, NBSP, ZWJ, fillers or U+2800 cannot slip past.
         val phone = stringResource(R.string.devices_this_phone)
-        val key = AccountNames.lookalikeKey(shown)
-        return if (key == AccountNames.lookalikeKey(phone) || key == AccountNames.lookalikeKey("VettID")) {
+        return if (AccountNames.couldPassFor(shown, phone) || AccountNames.couldPassFor(shown, "VettID")) {
             stringResource(R.string.devices_name_with_role, shown, role)
         } else {
             shown

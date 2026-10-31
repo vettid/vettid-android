@@ -111,6 +111,12 @@ class DevicesScreenTest {
     fun lookalikeWithHangulFillerKeepsItsRole() = lookalike("This phone\u3164")
 
     @Test
+    fun lookalikeWithBrailleBlankKeepsItsRole() = lookalike("This\u2800phone")
+
+    @Test
+    fun lookalikeVettIdWithLeadingBrailleBlankKeepsItsRole() = lookalike("\u2800VettID")
+
+    @Test
     fun aNameThatCouldPassForThePhoneOrVettIdIsShownWithItsRole() {
         list(state(phone, agent.copy(id = "a8", name = "this PHONE", paused = false), desktop.copy(id = "d8", name = "VettID")))
         rule.onNodeWithText("this PHONE (Agent)").assertIsDisplayed()

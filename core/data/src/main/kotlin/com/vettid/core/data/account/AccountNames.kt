@@ -84,7 +84,8 @@ object AccountNames {
     /**
      * [isolateOrNull] without the isolation (an avatar's initial, a search key): steps 1-4 as one line (every break and
      * tab a space, Cc and Cf removed but ZWJ and ZWNJ, lone surrogates as U+FFFD, White_Space trimmed); null when nothing
-     * is left once Default_Ignorable_Code_Point and White_Space code points are set aside. Also strips an isolate it is given.
+     * is left once Default_Ignorable_Code_Point, White_Space and U+2800 code points are set aside. Also strips an isolate it
+     * is given.
      */
     fun cleaned(s: String?): String? = s?.let { scrub(it, keepLines = false, keepMarks = false) }?.takeUnless(::isEmptyText)
 
@@ -119,9 +120,22 @@ object AccountNames {
 
     /**
      * A comparison key for "could this pass for that name": Default_Ignorable code points removed, every run of White_Space
-     * one U+0020, NFKC, case-folded, trimmed.
+     * and U+2800 (it draws as a blank, 0.78.1) one U+0020, NFKC, case-folded, trimmed.
      */
-    fun lookalikeKey(s: String): String {
+    fun lookalikeKey(s: String): String = lookalikeKey(s, dropBrailleBlank = false)
+
+    /**
+     * True when [shown] could pass for the [reserved] name: their [lookalikeKey]s match with U+2800 read as a space, or
+     * with U+2800 dropped. So "VettID" with a U+2800 inside passes for "VettID", as "This phone" with U+2800 for its space
+     * passes for "This phone"; a plain "Vett ID" still does not. A false match only adds the role label; a miss lets a
+     * name pose as a reserved one.
+     */
+    fun couldPassFor(shown: String, reserved: String): Boolean {
+        val key = lookalikeKey(reserved)
+        return lookalikeKey(shown) == key || lookalikeKey(shown, dropBrailleBlank = true) == key
+    }
+
+    private fun lookalikeKey(s: String, dropBrailleBlank: Boolean): String {
         fun strip(t: String) = buildString {
             var i = 0
             var space = false
@@ -130,7 +144,8 @@ object AccountNames {
                 i += Character.charCount(cp)
                 when {
                     UCharacter.hasBinaryProperty(cp, UProperty.DEFAULT_IGNORABLE_CODE_POINT) -> Unit
-                    isWhiteSpace(cp) -> space = true
+                    dropBrailleBlank && cp == BRAILLE_PATTERN_BLANK -> Unit
+                    isBlank(cp) -> space = true
                     else -> {
                         if (space && isNotEmpty()) append(' ')
                         space = false
@@ -145,12 +160,14 @@ object AccountNames {
     /** [s] (already cleaned) with every line in its own isolate (an isolate ends at a line break, §10.8 step 5). */
     fun isolateLines(s: String): String = s.split('\n').joinToString("\n") { FSI + it + PDI }
 
-    /** True when [s] shows nothing: only Default_Ignorable_Code_Point and White_Space code points remain (step 4). */
+    /**
+     * True when [s] shows nothing: only Default_Ignorable_Code_Point, White_Space and U+2800 code points remain (step 4).
+     */
     fun isEmptyText(s: String): Boolean {
         var i = 0
         while (i < s.length) {
             val cp = s.codePointAt(i)
-            if (!isWhiteSpace(cp) && !UCharacter.hasBinaryProperty(cp, UProperty.DEFAULT_IGNORABLE_CODE_POINT)) return false
+            if (!isBlank(cp) && !UCharacter.hasBinaryProperty(cp, UProperty.DEFAULT_IGNORABLE_CODE_POINT)) return false
             i += Character.charCount(cp)
         }
         return true
@@ -202,6 +219,13 @@ object AccountNames {
         else -> false
     }
 
+    /**
+     * Step 4's blanks that are not Default_Ignorable_Code_Point: White_Space and U+2800 BRAILLE PATTERN BLANK (VAULT-MESSAGING
+     * 0.78.1, a symbol that draws as a blank). Only the blank decision and the lookalike key use it: trimming stays
+     * White_Space, so a U+2800 stays in the text that is shown.
+     */
+    private fun isBlank(cp: Int): Boolean = isWhiteSpace(cp) || cp == BRAILLE_PATTERN_BLANK
+
     /** Control and format characters (bidi, zero-width, BOM, tags), except ZWJ and ZWNJ. */
     private fun isInvisible(cp: Int): Boolean {
         val type = Character.getType(cp)
@@ -223,6 +247,7 @@ object AccountNames {
     private const val RLM = 0x200F
     private const val ALM = 0x061C
     private const val REPLACEMENT = '\uFFFD'
+    private const val BRAILLE_PATTERN_BLANK = 0x2800
     private val LINE_BREAKS = setOf(0x2028, 0x2029, 0x85)
 
     /** FIRST STRONG ISOLATE and POP DIRECTIONAL ISOLATE, by code point: lint rightly flags them as literals. */
