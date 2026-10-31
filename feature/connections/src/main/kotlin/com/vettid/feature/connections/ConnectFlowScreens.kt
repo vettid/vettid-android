@@ -113,7 +113,7 @@ fun InviteScreen(state: InviteUiState, actions: InviteActions, modifier: Modifie
         ) {}
         // The other member declined (0.10.5, §6.4).
         InviteStep.DECLINED -> FormScaffold(
-            title = peerDeclineText(outgoing = false, name = state.declinedName ?: state.request?.name),
+            title = peerDeclineText(outgoing = false, name = state.declinedName, fallback = state.request?.name),
             body = stringResource(R.string.connections_peer_declined_body),
             primaryLabel = stringResource(R.string.connections_done),
             onPrimary = actions.onBack,
@@ -374,13 +374,14 @@ fun ConnectionRequestContent(
         modifier = modifier.testTag("connection_request"),
     ) {
         Text(stringResource(R.string.connections_request_name_label), style = MaterialTheme.typography.labelLarge)
+        val shown = AccountNames.cleaned(name)
         Text(
-            name ?: stringResource(R.string.connections_request_no_name),
+            shown ?: stringResource(R.string.connections_request_no_name),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.testTag("request_name"),
         )
-        if (name != null) {
+        if (shown != null) {
             Text(
                 stringResource(R.string.connections_names_note),
                 style = MaterialTheme.typography.bodySmall,
@@ -435,7 +436,7 @@ fun ConnectionRequestContent(
 internal fun Connected(name: String?, onMessage: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier) {
     FormScaffold(
         title = stringResource(R.string.connections_connected_title),
-        body = name?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.connections_connected_body, it) }
+        body = AccountNames.isolateOrNull(name)?.let { stringResource(R.string.connections_connected_body, it) }
             ?: stringResource(R.string.connections_connected_body_unnamed),
         primaryLabel = stringResource(R.string.connections_send_message),
         onPrimary = onMessage,
@@ -473,7 +474,8 @@ data class AcceptActions(
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifier = Modifier) {
-    val who = AccountNames.isolateOrNull(state.name ?: state.connectionName) ?: stringResource(R.string.connections_request_them)
+    val who = AccountNames.isolateOrNull(state.name) ?: AccountNames.isolateOrNull(state.connectionName)
+        ?: stringResource(R.string.connections_request_them)
     when (state.step) {
         AcceptStep.INPUT, AcceptStep.ACCEPTING -> FormScaffold(
             title = stringResource(if (state.fromLink) R.string.connections_open_link_title else R.string.connections_accept_title),

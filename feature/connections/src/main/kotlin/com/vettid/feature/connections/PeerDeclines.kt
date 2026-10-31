@@ -21,10 +21,12 @@ import com.vettid.core.ui.components.NoticeKind
 internal fun peerDeclineRes(outgoing: Boolean): Int =
     if (outgoing) R.string.connections_peer_declined_outgoing else R.string.connections_peer_declined_incoming
 
-/** [peerDeclineRes] with the name the request showed, or "Someone" without one. */
+/** [peerDeclineRes] with [name], else [fallback] (the first that shows something), else "Someone". */
 @Composable
-internal fun peerDeclineText(outgoing: Boolean, name: String?): String =
-    stringResource(peerDeclineRes(outgoing), AccountNames.isolateOrNull(name) ?: stringResource(R.string.connections_peer_declined_someone))
+internal fun peerDeclineText(outgoing: Boolean, name: String?, fallback: String? = null): String = stringResource(
+    peerDeclineRes(outgoing),
+    AccountNames.isolateOrNull(name) ?: AccountNames.isolateOrNull(fallback) ?: stringResource(R.string.connections_peer_declined_someone),
+)
 
 /** A peer's decline, shown until the member dismisses it (once). */
 @Composable
