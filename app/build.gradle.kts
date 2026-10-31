@@ -62,6 +62,8 @@ android {
         // the way out of a wipe that did not finish (erase VettID's data on this phone).
         versionCode = 102
         versionName = "2.0.0-a2"
+        // The wallet's regtest chain server (ANDROID-PLAN §4 "The chain source"): none, except in devStack below.
+        buildConfigField("String", "WALLET_REGTEST_ESPLORA", "\"\"")
     }
 
     signingConfigs {
@@ -98,6 +100,13 @@ android {
             buildConfigField("String", "DEV_STACK_CTL", "\"http://127.0.0.1:18082\"")
             // The member the dev stack's member API stand-in knows this install as.
             buildConfigField("String", "DEV_STACK_GUID", "\"" + (providers.gradleProperty("devStackGuid").orNull ?: "android-devstack") + "\"")
+            // A local Esplora on regtest for the wallet, through `adb reverse` like the stack's ports (loopback only:
+            // ChainServerUrl.loopbackOrNull ignores anything else). The dev stack does not start one yet.
+            buildConfigField(
+                "String",
+                "WALLET_REGTEST_ESPLORA",
+                "\"" + (providers.gradleProperty("devStackEsplora").orNull ?: "http://127.0.0.1:18083") + "\"",
+            )
         }
         release {
             // A release with calls linked in (`-PvettidCallsInRelease=true`, CI's F-Droid-with-calls step) is a
@@ -212,6 +221,9 @@ android {
         val releaseCalls = providers.gradleProperty("vettidCallsInRelease").orNull == "true"
         for (type in listOf("debug", "devStack", "staging")) getByName(type).kotlin.srcDir("src/calls/kotlin")
         getByName("release").kotlin.srcDir(if (releaseCalls) "src/calls/kotlin" else "src/noCalls/kotlin")
+        // Wallet (ANDROID-PLAN §4 "Wallet"): `src/wallet` wires :core:chain into the builds that link it (see walletInRelease).
+        for (type in listOf("debug", "devStack", "staging")) getByName(type).kotlin.srcDir("src/wallet/kotlin")
+        if (providers.gradleProperty("vettidWalletInRelease").orNull == "true") getByName("release").kotlin.srcDir("src/wallet/kotlin")
         // Every build that is not production carries a marked launcher icon (src/nonProduction: the white band on
         // the icon's background; not part of the brand kit). Never `release`, so never the F-Droid build.
         listOf("debug", "devStack", "staging").forEach { getByName(it).res.srcDir("src/nonProduction/res") }
@@ -587,7 +599,7 @@ abstract class WalletApkCheck : DefaultTask() {
         )
 
         /** Type descriptors: ACINQ's libraries and :core:chain. */
-        val DEX = listOf("Lfr/acinq/", "Lcom/vettid/core/chain/")
+        val DEX = listOf("Lfr/acinq/", "Lcom/vettid/core/chain/", "Lcom/vettid/app/wallet/")
     }
 }
 

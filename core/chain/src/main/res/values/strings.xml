@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- ANDROID-PLAN §4 "The chain source", "Privacy note": shown under the Chain server setting and once before a wallet's first
+         look-up. Not shown anywhere yet: the screens come in W1c. -->
+    <string name="chain_privacy_note" tools:ignore="UnusedResources">To show your balance and send, VettID asks this server about your wallet\'s addresses. The server sees those addresses, and can tell they belong together, and it sees this phone\'s internet address and when you look. VettID\'s own servers see none of it. Use your own server to keep this to yourself.</string>
+</resources>
