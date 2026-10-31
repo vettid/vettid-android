@@ -256,4 +256,30 @@ class AccountNamesTest {
         }
         assertEquals(AccountNames.lookalikeKey("VettID"), AccountNames.lookalikeKey("Vett\u200DID\u200D"))
     }
+
+    @Test
+    fun brailleBlankIsBlankYetStaysInTheShownText() {
+        // VAULT-MESSAGING 0.78.1 \u00A710.8 step 4: U+2800 is not a Default_Ignorable_Code_Point but counts as blank.
+        assertTrue(AccountNames.isEmptyText("\u2800"))
+        assertTrue(AccountNames.isEmptyText("\u2800\u3164\u200D\u00A0 "))
+        assertNull(AccountNames.cleaned("\u2800\u2800"))
+        assertNull(AccountNames.isolateOrNull("\u2800 \u3164"))
+        assertNull(AccountNames.cleanedLines("\u2800\n\u200D"))
+        assertNull(AccountNames.cleanedCapped("\u2800", 64))
+        assertEquals("", AccountNames.cleanedMessage("\u2800 \u200D"))
+        assertNull(AccountNames.firstLineIsolated("\u2800\n\u3164"))
+        assertEquals("${fsi}real$pdi", AccountNames.firstLineIsolated("\u2800\nreal"))
+        // The text shown does not change: trimming stays White_Space only.
+        assertEquals("a\u2800", AccountNames.cleaned("a\u2800"))
+        assertEquals("\u2800a", AccountNames.cleaned("\u2800a"))
+    }
+
+    @Test
+    fun lookalikeKeyTakesBrailleBlankAsASpace() {
+        val vettid = AccountNames.lookalikeKey("VettID")
+        for (s in listOf("\u2800VettID\u2800", "VettID\u2800\u2800", "\u2800\u3164vettid")) {
+            assertEquals(s, vettid, AccountNames.lookalikeKey(s))
+        }
+        assertEquals(AccountNames.lookalikeKey("This phone"), AccountNames.lookalikeKey("This\u2800phone\u2800"))
+    }
 }
