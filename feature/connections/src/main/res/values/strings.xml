@@ -90,7 +90,7 @@
     <string name="connections_connected_title">You are connected</string>
     <string name="connections_connected_body">You and %1$s can now message each other through your vaults.</string>
     <string name="connections_connected_body_unnamed">You can now message each other through your vaults.</string>
-    <!-- Proposed (for the owner's approval): a service cannot message a member (release 25). -->
+    <!-- A service cannot message a member (release 25). Approved by the owner 2026-10-31 (vettid-android #237). -->
     <string name="connections_connected_body_service">You\'re connected to %1$s. It can ask you to sign in, vote and update your profile.</string>
     <string name="connections_connected_body_service_unnamed">You\'re connected. The service can ask you to sign in, vote and update your profile.</string>
     <string name="connections_send_message">Send a message</string>
