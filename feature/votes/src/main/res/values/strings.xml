@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes": every string of this file is in the plan's table, approved by the owner
+        2026-10-30, except those under "Proposed" below, which are listed in the PR for the owner's approval. `**x**` marks
+        bold text (the screen renders it; the asterisks are never shown).
+    -->
+    <string name="votes_title">Votes</string>
+    <string name="votes_section_open">Open</string>
+    <string name="votes_section_closed">Closed</string>
+    <string name="vote_row_closes">Closes %1$s</string>
+    <string name="vote_row_opens">Opens %1$s</string>
+    <string name="vote_row_closed">Closed %1$s</string>
+    <string name="vote_chip_not_voted">Not voted yet</string>
+    <string name="vote_chip_recorded">You voted</string>
+    <string name="vote_chip_waiting">Waiting for the service</string>
+    <string name="vote_chip_checking">Being checked</string>
+    <string name="vote_chip_results">Results are out</string>
+    <string name="vote_chip_problem">Needs your attention</string>
+    <string name="vote_chip_missed">You didn\'t vote</string>
+    <string name="vote_written_by">Written by %1$s</string>
+    <string name="vote_quorum_line">Quorum, as the service states it: %1$s</string>
+    <string name="vote_binding_yes">The service says this vote is binding.</string>
+    <string name="vote_binding_no">The service says this vote is not binding.</string>
+    <string name="vote_extended">The closing time was extended to %1$s.</string>
+    <string name="vote_choose">Choose one</string>
+    <string name="vote_cast_button">Cast your vote</string>
+    <string name="vote_disclosure">%1$s will see how you vote and keep that record. The published results show only an anonymous code for you.</string>
+    <string name="vote_final">Your vote can\'t be changed after you cast it.</string>
+    <string name="vote_confirm_title">Vote “%1$s”?</string>
+    <string name="vote_confirm_yes">Cast vote</string>
+    <string name="vote_confirm_back">Back</string>
+    <string name="vote_password_title">Confirm with your credential password</string>
+    <string name="vote_password_body">Your vote is signed with your credential. Enter your credential password.</string>
+    <string name="vote_state_sending">Sending your vote to %1$s…</string>
+    <string name="vote_state_waiting">Waiting for %1$s to confirm. Your vote is saved on your vault and is sent again until %1$s answers.</string>
+    <string name="vote_state_recorded">%1$s recorded your vote. It can\'t be changed.</string>
+    <string name="vote_state_in_results">The published results include your vote.</string>
+    <string name="vote_conflict_after_verified">**Your vote is in the published results.** %1$s also once showed a different vote under your code. Save the proof and show it to the organisation.</string>
+    <string name="vote_state_unconfirmed">Not confirmed. %1$s sent no receipt for your vote, and the published results don\'t settle whether it counted.</string>
+    <string name="vote_state_didnt_vote">You didn\'t vote in this one.</string>
+    <string name="vote_check_with_service">Check with the service</string>
+    <string name="vote_check_pending">VettID will check the published results against your vote.</string>
+    <string name="vote_check_gave_up_site">VettID could not reach the votes site for 7 days, so your vote has not been checked.</string>
+    <string name="vote_check_gave_up_unpublished">The results of this vote were not published within 7 days, so your vote has not been checked.</string>
+    <string name="vote_check_again">Check again</string>
+    <string name="vote_failed_title">The published results don\'t match your vote</string>
+    <string name="vote_failed_body">You can save the proof and show it to the organisation.</string>
+    <string name="vote_conflict_body">%1$s holds a different vote under your code than the one you cast. Save the proof and show it to the organisation.</string>
+    <string name="vote_state_late_pending">%1$s says the vote had closed. VettID is asking whether an earlier send arrived in time.</string>
+    <string name="vote_refused_late">The vote had closed when your vote arrived, so it was not counted.</string>
+    <string name="vote_refused_not_active">%1$s says you are no longer a member for this vote, so your vote was not counted.</string>
+    <string name="vote_refused_not_eligible">%1$s says you were not on the list for this vote. You can save the proof and show it to the organisation.</string>
+    <string name="vote_refused_bad_ballot">%1$s did not accept your vote. You can save the proof and show it to the organisation.</string>
+    <string name="vote_refused_ended">Your connection to %1$s ended before your vote was recorded.</string>
+    <string name="vote_not_signed_in">Before you can vote, sign in to %1$s once with VettID. This lets %1$s check that your vote is yours.</string>
+    <string name="vote_closing_soon">This vote closes in less than 2 minutes. It is too late to cast your vote from this phone.</string>
+    <string name="vote_not_open">This vote opens %1$s.</string>
+    <string name="vote_closed_banner">This vote has closed.</string>
+    <string name="vote_checking_list">VettID is checking this vote. It needs the list of services from votes.vettid.org. Check that this phone is online.</string>
+    <string name="vote_checking_site">VettID is checking this vote. It is waiting for the vote\'s documents from votes.vettid.org.</string>
+    <string name="vote_no_connection">You are no longer connected to %1$s, so you can\'t vote.</string>
+    <string name="vote_results_title">Results</string>
+    <string name="vote_results_turnout">%1$d of %2$d eligible members voted.</string>
+    <string name="vote_results_row">%1$s: %2$d</string>
+    <string name="vote_results_unhandled">%1$d messages sent to %2$s during the vote were not handled; any vote among them was not counted.</string>
+    <string name="vote_quorum_met">Enough votes were cast: %1$d, and the service asked for at least %2$d.</string>
+    <string name="vote_quorum_not_met">Not enough votes were cast: %1$d, and the service asked for at least %2$d.</string>
+    <string name="vote_save_proof">Save the proof</string>
+    <string name="vote_save_proof_warning">The file shows how you voted. Keep it private, and share it only with the organisation.</string>
+    <string name="vote_rejected_title">VettID set this vote aside</string>
+    <string name="vote_checking_trust">VettID can\'t finish checking this vote yet: its list of trusted logs may be out of date. Update VettID if this lasts.</string>
+    <string name="vote_checking_clock">VettID can\'t finish checking this vote yet because of a time check on VettID\'s side. It will try again.</string>
+    <string name="vote_checking_restore">VettID is asking %1$s what it recorded for you before you can vote.</string>
+    <string name="vote_not_published">This vote is not on the public site yet. You can still vote: VettID will compare it with the public copy when it appears.</string>
+    <string name="vote_site_unreachable">VettID could not reach the votes site to compare this vote with the public copy. You can still vote: VettID will compare it later.</string>
+    <string name="vote_dropped">%1$s has more votes under way than your vault can keep, so %2$d were not kept.</string>
+    <string name="vote_problems">%1$s has %2$d unresolved vote problems. Save the proof of each and release them to receive new votes from %1$s.</string>
+    <string name="vote_site_mismatch">The vote you received differs from the one published on the public site, so you can\'t vote in it. You can save the proof.</string>
+    <string name="vote_site_mismatch_after">The vote you voted on differs from the one published on the public site, so your vote may not count. Save the proof and show it to the organisation.</string>
+    <string name="vote_unpublished">This vote was never published on the public site. Your vote may not count. Save the proof.</string>
+    <string name="vote_not_listed_late">This vote is still not on the public site, which is unusual. You can vote, but keep the proof.</string>
+    <string name="vote_restore_title">Is this your vote?</string>
+    <string name="vote_restore_body">%1$s says it recorded this vote for you: “%2$s” on “%3$s”.</string>
+    <string name="vote_restore_yes">Yes, it\'s mine</string>
+    <string name="vote_restore_no">No, it isn\'t mine</string>
+    <string name="vote_reconnect_title">Connect again to vote</string>
+    <string name="vote_reconnect_body">%1$s is registered with VettID as a service. This connection was made before it said it was a service, so it can\'t take part in votes. Remove it and connect again from a new invitation from %1$s.</string>
+    <string name="vote_reconnect_open">Open the connection</string>
+    <string name="vote_connection_row">Votes from %1$s</string>
+    <string name="vote_remove_warning">You have a vote with %1$s that isn\'t finished. If you remove this connection you can\'t vote in it.</string>
+
+    <!--
+        Proposed (not in the plan's table): the plan names these places and says what they mean; the words are mine.
+        Listed in the PR under "Texts for owner approval".
+    -->
+    <string name="vote_check_results_problem">VettID could not check the published results of this vote yet. They may be incomplete or not valid. It will try again.</string>
+    <string name="vote_check_gave_up">VettID could not check the results of this vote within 7 days, so your vote has not been checked.</string>
+    <string name="vote_checking_other">VettID is still checking this vote. You can vote when the check is done.</string>
+    <string name="vote_cannot_cast_other">You can\'t vote in this one right now.</string>
+    <string name="vote_disputed_body">%1$s holds a vote under your code that you said is not yours. Save the proof and show it to the organisation.</string>
+    <string name="vote_rejected_signature">The service\'s signature on this vote did not check out.</string>
+    <string name="vote_rejected_anchor">The public record of this vote did not check out.</string>
+    <string name="vote_rejected_record">The list of members for this vote did not check out.</string>
+    <string name="vote_rejected_other">This vote could not be read as a valid vote from the service.</string>
+    <string name="vote_check_site_unreachable_now">VettID could not reach the votes site just now. It will try again.</string>
+    <string name="vote_check_not_published_now">The results of this vote are not on the votes site yet. VettID will try again.</string>
+    <string name="vote_service_fallback">The service</string>
+    <string name="vote_your_choice">Your choice: %1$s</string>
+    <string name="vote_service_label">Service</string>
+    <string name="vote_name_by_service">Name given by the service</string>
+    <string name="vote_closes_line">Closes %1$s</string>
+    <string name="vote_row_description">%1$s, from the service %2$s, %3$s</string>
+    <string name="votes_empty_title">No votes</string>
+    <string name="votes_empty_body">Votes from services you are connected to appear here.</string>
+    <string name="votes_error_title">Could not load your votes</string>
+    <string name="vote_error_title">Could not load this vote</string>
+    <string name="vote_gone_title">This vote is no longer here</string>
+    <string name="votes_retry">Try again</string>
+    <string name="vote_password_label">Credential password</string>
+    <string name="vote_password_confirm">Confirm</string>
+    <string name="vote_cast_failed_title">Your vote was not sent</string>
+    <string name="vote_cast_unknown_title">VettID got no answer</string>
+    <string name="vote_cast_unanswered">Your vote may have been sent. This screen shows it as sent once VettID knows. If it does not, you can cast again. If your first vote did arrive, it is the one that counts: a vote can\'t be changed.</string>
+    <string name="vote_already_voted">You had already voted: %1$s. Your vote can\'t be changed.</string>
+    <string name="vote_already_voted_any">You had already voted. Your vote can\'t be changed.</string>
+    <string name="vote_window_not_closed_title">The unlock window may still be open</string>
+    <plurals name="vote_window_not_closed">
+        <item quantity="one">VettID could not close the credential unlock window after your vote. It closes by itself once it has not been used for %1$d minute.</item>
+        <item quantity="other">VettID could not close the credential unlock window after your vote. It closes by itself once it has not been used for %1$d minutes.</item>
+    </plurals>
+    <string name="vote_window_not_closed_plain">VettID could not close the credential unlock window after your vote. It closes by itself.</string>
+    <string name="vote_window_close_now">Close it now</string>
+    <string name="vote_check_results_too_large">VettID can\'t check the published results of this vote: they are larger than your vault accepts. They may not be valid.</string>
+    <string name="vote_proof_saved">The proof was saved.</string>
+    <string name="vote_proof_failed">The proof could not be saved. Try again.</string>
+    <string name="vote_proof_save">Save</string>
+    <string name="vote_release">Release</string>
+    <string name="vote_release_title">Release this vote record?</string>
+    <string name="vote_release_body">This lets your vault keep new votes from %1$s. Every signed item that is not on the public site stays on your vault. Nothing is sent anywhere. Enter your vault PIN.</string>
+    <string name="vote_release_pin">Vault PIN</string>
+    <string name="vote_release_not_saved">Save the proof first: the record can be released only after it was saved.</string>
+    <string name="vote_released">The vote record was released.</string>
+</resources>

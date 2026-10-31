@@ -999,6 +999,7 @@ dependencies {
     implementation(projects.feature.items)
     implementation(projects.feature.history)
     implementation(projects.feature.devices)
+    implementation(projects.feature.votes)
     implementation(projects.feature.credential)
     implementation(projects.feature.settings)
     implementation(projects.feature.notifications)

@@ -35,6 +35,8 @@ class NotificationMappingTest {
             // ANDROID-PLAN 0.1.52 §4 "Event titles": the release R kinds, on Vault activity as every other kind.
             "device.secret_renewed", "recovery.completed", "recovery.attempt",
             "identity.rotation_failed", "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
+            // ANDROID-PLAN 0.1.102 "Votes": "The channel is Vault activity; no new channel."
+            "vote.open", "vote.closing", "vote.result", "vote.problem",
         ),
     )
 

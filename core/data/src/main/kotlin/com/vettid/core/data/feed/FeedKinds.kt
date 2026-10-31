@@ -56,6 +56,8 @@ data class FeedNames(
     val connections: Map<String, ConnectionInfo> = emptyMap(),
     val items: Map<String, String> = emptyMap(),
     val approvals: Map<String, Approval> = emptyMap(),
+    /** Vote titles from the Votes list in memory, by [VoteTitles.key] (cleaned, one line); the second line of a vote item. */
+    val votes: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -91,6 +93,12 @@ sealed interface FeedTarget {
 
     /** A device's page in Devices & agents (`device.paired` with its `device_id`). */
     data class Device(val deviceId: String) : FeedTarget
+
+    /** A vote's screen in Votes (ANDROID-PLAN 0.1.102): the pair names it, never the proposal id alone. */
+    data class Vote(val connectionId: String, val proposalId: String) : FeedTarget
+
+    /** The Votes list (a vote item without the ids that name its vote). */
+    data object VoteList : FeedTarget
 
     /** The clone alarm's screen. */
     data object Alarm : FeedTarget
@@ -134,6 +142,8 @@ object FeedKinds {
         "identity.rotation_failed", "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
         // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a `rollback` closure's urgent item.
         "recovery.generation_closed",
+        // VAULT-MESSAGING 0.81.0 §10.19.7 (ANDROID-PLAN 0.1.102 "Votes"): each carries `connection_id` with `ref` = `proposal_id`.
+        "vote.open", "vote.closing", "vote.result", "vote.problem",
     )
 
     /**
@@ -318,6 +328,10 @@ object FeedKinds {
             "recovery.counter_unavailable" -> FeedText(R.string.data_feed_counter_unavailable)
             // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): the vault makes this item only for `rollback`.
             "recovery.generation_closed" -> FeedText(R.string.data_feed_recovery_rollback)
+            "vote.open" -> FeedText(R.string.data_feed_vote_open)
+            "vote.closing" -> FeedText(R.string.data_feed_vote_closing)
+            "vote.result" -> FeedText(R.string.data_feed_vote_result)
+            "vote.problem" -> FeedText(R.string.data_feed_vote_problem)
             "identity.rotation_failed" -> FeedText(R.string.data_feed_rotation_failed)
             "identity.rotate_conflict" -> FeedText(R.string.data_feed_rotate_conflict, listOf(who))
             "leash.item.run", "leash.item.proxy" -> thing?.let { FeedText(R.string.data_feed_leash_item_used, listOf(it)) }
@@ -395,9 +409,23 @@ object FeedKinds {
         (item.count ?: 0) > 1 -> things(item.count ?: 0)
         item.kind == "guide" -> item.body?.takeIf { it.isNotBlank() }?.let { FeedText(literal = it.lineSequence().first()) }
         item.kind == "device.signer_changed" -> signerChange(item.ref)
+        item.kind in VOTE_NAMED -> voteLine(item, names)
+        item.kind == "vote.problem" -> FeedText(R.string.data_feed_vote_problem_body)
         item.kind == "connection.authenticate.requested" && authenticationPurpose(item, names) == AuthPurpose.SIGNIN ->
             FeedText(R.string.data_feed_authenticate_signin_body)
         else -> eventLine(item) ?: itemName(item, names)?.let { FeedText(literal = it) }
+    }
+
+    private val VOTE_NAMED = setOf("vote.open", "vote.closing", "vote.result")
+
+    /**
+     * A vote item's second line (ANDROID-PLAN 0.1.102 "Votes"): "<service>: <proposal title>", the title from the Votes list in
+     * memory; the service alone without it. Never the member's choice (no feed item has it).
+     */
+    private fun voteLine(item: FeedItem, names: FeedNames): FeedText? {
+        val who = connectionName(item, names)
+        val title = names.votes[VoteTitles.key(item.connectionId, item.ref)] ?: return who
+        return FeedText(R.string.data_feed_vote_line, listOf(who, title))
     }
 
     /** The second line of ANDROID-PLAN 0.1.52 §4 "Event titles", for the kinds that have one. */
@@ -434,6 +462,8 @@ object FeedKinds {
             "device.pair.pending" -> FeedTarget.Pairing
             "device.unlinked" -> FeedTarget.DeviceList
             "device.transferred", "device.replaced", "device.signer_changed" -> FeedTarget.Devices
+            "vote.open", "vote.closing", "vote.result", "vote.problem" ->
+                if (c != null && !ref.isNullOrEmpty()) FeedTarget.Vote(c, ref) else FeedTarget.VoteList
             "credential.alarm" -> FeedTarget.Alarm
             "credential.password_failed" -> FeedTarget.History
             "credential.rotated", "credential.reset" -> FeedTarget.Credential
@@ -463,4 +493,9 @@ object FeedKinds {
 
     /** `urgent` (the clone alarm, the ten-failure lock): Needs attention while unread, a red badge. */
     fun urgent(item: FeedItem): Boolean = item.priority == FeedManager.PRIORITY_URGENT
+}
+
+/** The key of a vote's title in [FeedNames.votes] and History's rows: the pair (0.81.2), never the proposal id alone. */
+object VoteTitles {
+    fun key(connectionId: String?, proposalId: String?): String = "${connectionId.orEmpty()}/${proposalId.orEmpty()}"
 }

@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.feed.VoteTitles
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.items.ItemsRepository
@@ -20,6 +21,8 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.RecoveryRefs
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
+import com.vettid.core.data.votes.NoVotes
+import com.vettid.core.data.votes.VotesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -57,6 +60,8 @@ data class HistoryUiState(
     val connectionNames: Map<String, String> = emptyMap(),
     /** id → name of the member's items (the Vault list), for the rows of item entries (§10.9). */
     val itemNames: Map<String, String> = emptyMap(),
+    /** The titles of the votes in memory by (connection, proposal) ([VoteTitles.key]), for the rows of vote entries. */
+    val voteTitles: Map<String, String> = emptyMap(),
     /** id → name of the vault's devices (`device.list`), for entries with a device; null while not known. */
     val deviceNames: Map<String, String>? = null,
     val loading: Boolean = true,
@@ -129,6 +134,7 @@ class HistoryViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val items: ItemsRepository,
     private val ownerCheck: OwnerCheckRepository,
+    private val votes: VotesRepository = NoVotes,
 ) : ViewModel() {
     private val state = MutableStateFlow(
         HistoryUiState(
@@ -166,6 +172,11 @@ class HistoryViewModel @Inject constructor(
                 state.update { it.copy(itemNames = l.associate { i -> i.itemId to AccountNames.cleaned(i.name).orEmpty() }) }
             } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
+        viewModelScope.launch {
+            votes.votes.collect { l ->
+                state.update { it.copy(voteTitles = l.associate { v -> VoteTitles.key(v.connectionId, v.proposalId) to v.title }) }
+            }
+        }
         loadDevices(refresh = false)
         reload()
         // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
@@ -183,6 +194,10 @@ class HistoryViewModel @Inject constructor(
         }
     }
 
+    /** A vote entry's vote title, from the list in memory by the pair (the entry's connection, the `ref`'s proposal id). */
+    private fun voteTitleOf(r: AuditRecord): String? =
+        AuditKinds.voteOf(r.kind, r.ref)?.let { state.value.voteTitles[VoteTitles.key(r.connectionId, it)] }?.ifEmpty { null }
+
     private fun names(list: List<ConnectionInfo>): Map<String, String> =
         list.associate { c -> c.id to (AccountNames.cleaned(c.displayName) ?: context.getString(R.string.history_connection_unnamed)) }
 
@@ -196,7 +211,13 @@ class HistoryViewModel @Inject constructor(
         val device = r.deviceId?.let { state.value.deviceNames?.get(it)?.ifEmpty { null } }
         return AuditFilter.kindText(r.kind) + listOfNotNull(
             // Without the isolation (FSI/PDI) around the name: a query across the name and the words around it must match.
-            HistoryText.title(context, r.kind, r.ref, EntryNames(c?.displayName?.ifEmpty { null }, device, item), isolate = false),
+            HistoryText.title(
+                context,
+                r.kind,
+                r.ref,
+                EntryNames(c?.displayName?.ifEmpty { null }, device, item, voteTitleOf(r)),
+                isolate = false,
+            ),
             // Cleaned like what is shown (§10.8 step 7); the entry is matched against these.
             AccountNames.cleaned(c?.name), AccountNames.cleaned(c?.firstName), AccountNames.cleaned(c?.lastName),
             AccountNames.cleaned(c?.accountName),
@@ -326,6 +347,8 @@ data class HistoryEntryUiState(
     /** The item the entry refers to (§10.9 item kinds): its current name, and whether it is still in the vault. */
     val itemName: String? = null,
     val itemExists: Boolean = false,
+    /** A vote entry's vote title, from the Votes list in memory (never its choice); null when not known. */
+    val voteTitle: String? = null,
     /** The entry's device (ANDROID-PLAN 0.1.27): its name while listed by `device.list`, null otherwise. */
     val deviceName: String? = null,
     /** The device list was read, so a device it does not hold was removed. */
@@ -360,6 +383,7 @@ class HistoryEntryViewModel @Inject constructor(
     private val history: HistoryRepository,
     private val connections: ConnectionsRepository,
     private val items: ItemsRepository,
+    private val votes: VotesRepository = NoVotes,
 ) : ViewModel() {
     private val seq = saved.toRoute<HistoryEntryRoute>().seq
     private val state = MutableStateFlow(HistoryEntryUiState())
@@ -383,6 +407,9 @@ class HistoryEntryViewModel @Inject constructor(
                         entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
                         asksMuted = c?.asks?.muted == true, connectionIsService = c?.service == true,
                         itemName = i?.name, itemExists = i != null,
+                        voteTitle = e?.let { r ->
+                            AuditKinds.voteOf(r.kind, r.ref)?.let { id -> votes.titleOf(r.connectionId.orEmpty(), id) }
+                        },
                         deviceName = e?.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } }, devicesKnown = devices != null,
                         deviceUnnamed = e?.deviceId?.let { id -> devices?.get(id)?.isEmpty() } == true,
                         thisDevice = e?.deviceId != null && e.deviceId == history.selfDeviceId(),

@@ -231,5 +231,12 @@
     <string name="data_feed_rotate_conflict_body">This connection\'s vault announced two different new keys. That can mean someone holds an old copy of their vault. Nothing is sent or received until you check.</string>
     <string name="data_feed_leash_item_used">An agent used %1$s</string>
     <string name="data_feed_leash_item_used_any">An agent used an item</string>
+    <!-- ANDROID-PLAN 0.1.102 "Votes": titles and second lines approved by the owner 2026-10-30. -->
+    <string name="data_feed_vote_open">A new vote</string>
+    <string name="data_feed_vote_closing">A vote closes soon</string>
+    <string name="data_feed_vote_result">Vote results are out</string>
+    <string name="data_feed_vote_problem">Check your vote</string>
+    <string name="data_feed_vote_problem_body">Something about your vote needs your attention.</string>
+    <string name="data_feed_vote_line">%1$s: %2$s</string>
     <string name="data_feed_unknown">Activity: %1$s</string>
 </resources>

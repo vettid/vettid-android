@@ -3,6 +3,7 @@ package com.vettid.feature.connections
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -87,6 +88,8 @@ data class DetailActions(
     val onMuteAsks: (Boolean) -> Unit = {},
     /** Resumes paused asks, or allows declined ones again (`connection.asks.resume`). */
     val onResumeAsks: () -> Unit = {},
+    /** The votes from this service connection (ANDROID-PLAN 0.1.102 "Votes"). */
+    val onOpenVotes: () -> Unit = {},
 )
 
 /**
@@ -151,6 +154,7 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, title: String, name: String, actions: DetailActions) {
     Column(
         Modifier
@@ -209,7 +213,31 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         val asks = AsksView.of(c.asks)?.takeIf { c.state == ConnectionState.ACTIVE }
         val asksName = sharingName(c)?.let { AccountNames.isolateOrNull(it) }
         if (asks?.prominent == true) AsksCard(asks, asksName, state.busy, actions.onMuteAsks, actions.onResumeAsks)
+        // A person connection that VettID's service list names as a service (made before it said so): it can't take part in
+        // votes, and the app changes nothing about it on its own (ANDROID-PLAN 0.1.102 "Votes", screen 8).
+        if (state.votes.reconnect) {
+            NoticeCard(
+                kind = NoticeKind.INFO,
+                title = stringResource(R.string.connections_vote_reconnect_title),
+                body = stringResource(R.string.connections_vote_reconnect_body, name),
+                modifier = Modifier.padding(horizontal = Spacing.s).testTag("vote_reconnect"),
+            )
+        }
         ProfileCard(c)
+        if (c.service && state.votes.count > 0) {
+            DetailCard(Modifier.testTag("detail_votes")) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = actions.onOpenVotes),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.connections_vote_row, name),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
         if (c.state == ConnectionState.ACTIVE) {
             // Two directions, two cards (owner request 2026-10-08): what goes out of the vault, what comes in.
             val first = sharingName(c)
@@ -344,7 +372,9 @@ private fun DetailDialogs(state: ConnectionDetailUiState, name: String, actions:
     when (state.confirm) {
         DetailConfirm.REMOVE -> ConfirmDialog(
             title = stringResource(R.string.connections_remove_title, name),
-            text = stringResource(R.string.connections_remove_body, name),
+            // A service with a vote that is not finished: the member is told first that removing it ends their part in it.
+            text = (if (state.votes.unfinished) stringResource(R.string.connections_vote_remove_warning, name) + "\n\n" else "") +
+                stringResource(R.string.connections_remove_body, name),
             confirmLabel = stringResource(R.string.connections_remove),
             onConfirm = actions.onConfirm,
             onDismiss = { actions.onAsk(null) },

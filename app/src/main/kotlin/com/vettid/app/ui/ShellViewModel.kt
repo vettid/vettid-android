@@ -17,6 +17,8 @@ import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.social.needsDecision
 import com.vettid.core.data.vault.ProfileRepository
+import com.vettid.core.data.votes.VoteRules
+import com.vettid.core.data.votes.VotesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -27,7 +29,13 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** The drawer's counts: approvals waiting, conversations with unread messages. */
-data class ShellBadges(val approvals: Int = 0, val unread: Int = 0)
+data class ShellBadges(
+    val approvals: Int = 0,
+    val unread: Int = 0,
+    /** Open votes not yet voted on (ANDROID-PLAN 0.1.102); the Votes entry shows only with [votesShown]. */
+    val votes: Int = 0,
+    val votesShown: Boolean = false,
+)
 
 /** The app shell (drawer badges, the Notifications bell, invitation links the app was opened with). */
 @HiltViewModel
@@ -40,6 +48,7 @@ class ShellViewModel @Inject constructor(
     private val prefs: PreferencesRepository,
     private val taps: NotificationOpenInbox,
     private val visibility: NotifyVisibility,
+    votes: VotesRepository,
 ) : ViewModel() {
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
@@ -95,8 +104,12 @@ class ShellViewModel @Inject constructor(
 
     fun inviteLinkTaken() = invites.consume()
 
-    val badges: StateFlow<ShellBadges> = combine(approvals.approvals, messages.conversations) { a, c ->
-        ShellBadges(approvals = a.count { it.needsDecision }, unread = c.count { it.unread > 0 })
+    val badges: StateFlow<ShellBadges> = combine(
+        approvals.approvals,
+        messages.conversations,
+        combine(votes.votes, votes.reconnect, votes.availability, VoteRules::entry),
+    ) { a, c, v ->
+        ShellBadges(approvals = a.count { it.needsDecision }, unread = c.count { it.unread > 0 }, votes = v.badge, votesShown = v.shown)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShellBadges())
 
     private companion object {

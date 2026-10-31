@@ -33,6 +33,9 @@ import com.vettid.core.data.devices.DevicesManager
 import com.vettid.core.data.devices.PairingManager
 import com.vettid.core.data.devices.VaultPairingOps
 import com.vettid.core.data.devices.VaultDevicesOps
+import com.vettid.core.data.votes.OkHttpVoteSite
+import com.vettid.core.data.votes.VaultVoteOps
+import com.vettid.core.data.votes.VotesManager
 import com.vettid.core.data.feed.FeedManager
 import com.vettid.core.data.feed.VaultFeedOps
 import com.vettid.core.data.wipe.LocalWipe
@@ -933,6 +936,21 @@ class VaultManager(
         onPaired = { devices.refreshQuietly() },
     )
 
+    /**
+     * The member's votes (VAULT-MESSAGING 0.81.3 §10.19, ANDROID-PLAN 0.1.108 "Votes"): the list, a vote, the cast, and the
+     * app's hourly work with the public votes site. Memory only, while the vault is open and not held; cleared with
+     * [devices].
+     */
+    val votes = VotesManager(
+        scope,
+        ops = { VaultVoteOps(openApi()) },
+        site = OkHttpVoteSite(env.endpoints.votesBase, http),
+        windowUntil = { windowFlow.value },
+        openWindow = { openUnlockWindow(it) },
+        closeWindow = { closeUnlockWindow() },
+        unlockTtl = { status().unlockTtlSeconds },
+    )
+
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(
         ops = { VaultAuditOps(openApi()) },
@@ -995,6 +1013,7 @@ class VaultManager(
                 clearSharing = { sharing.clear() },
                 clearFeed = { feed.clear() },
                 clearDevices = { devices.clear() },
+                clearVotes = { votes.clear() },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
                     when (OwnProfileStep.onPhase(p)) {
@@ -1018,6 +1037,7 @@ class VaultManager(
                     social.refreshAllQuietly()
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
                     items.refreshQuietly()
+                    votes.startSync() // the list, the public site and the results that are due: now, then every hour
                     feed.open()
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
@@ -1039,11 +1059,13 @@ class VaultManager(
                 if (now && !wasHeld) {
                     steps.step { feed.clear() }
                     steps.step { devices.clear() }
+                    steps.step { votes.clear() }
                     steps.step { social.forgetPending() } // pending approvals and requests: memory only, not while held
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     steps.step { feed.open() }
+                    steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
                     steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
                 }
                 // Nor the member's own names, full email or photo; read again after the passed check.
@@ -1415,6 +1437,7 @@ class VaultManager(
             steps.step { items.clear() }
             steps.step { feed.clear() }
             steps.step { devices.clear() }
+            steps.step { votes.clear() }
             steps.step { ownerCheck.clear() }
             steps.step { forgetOwnProfile() }
             steps.step { phoneSecrets.delete(local.phone) }
@@ -1473,6 +1496,7 @@ class VaultManager(
                     items.onEvent(m)
                     sharing.onEvent(m)
                     devices.onEvent(m)
+                    votes.onEvent(m)
                     pairing.onEvent(m)
                     social.onEvent(m)
                     attachments.onEvent(m.type, m.body)
@@ -2693,6 +2717,7 @@ class VaultManager(
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
         steps.step { devices.clear() }
+        steps.step { votes.clear() }
         steps.step { deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
@@ -2743,6 +2768,7 @@ class VaultManager(
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
         steps.step { devices.clear() }
+        steps.step { votes.clear() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
@@ -4319,6 +4345,7 @@ class VaultManager(
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
         steps.step { devices.clear() }
+        steps.step { votes.clear() }
         steps.step { canary.removeCanaryManifest() }
         openTransferId = null
         alarmFlow.value = null

@@ -129,4 +129,49 @@
     <string name="history_export_owner_check">Check now</string>
     <string name="history_device_removed">Removed device</string>
     <string name="history_export_summary">%1$s · %2$s</string>
+
+    <!-- ANDROID-PLAN 0.1.102 "Votes", History titles (approved by the owner 2026-10-30). The vote's title is shown in quotes; without it the quoted part goes. -->
+    <string name="history_kind_vote_cast">You cast a vote: “%1$s”</string>
+    <string name="history_kind_vote_cast_any">You cast a vote</string>
+    <string name="history_kind_vote_recorded">%1$s recorded your vote: “%2$s”</string>
+    <string name="history_kind_vote_recorded_any">%1$s recorded your vote</string>
+    <string name="history_kind_vote_refused">%1$s did not accept your vote: “%2$s” (%3$s)</string>
+    <string name="history_kind_vote_refused_any">%1$s did not accept your vote (%2$s)</string>
+    <string name="history_kind_vote_conflict">%1$s holds a different vote under your code: “%2$s”</string>
+    <string name="history_kind_vote_conflict_any">%1$s holds a different vote under your code</string>
+    <string name="history_kind_vote_receipt_rejected">A receipt for your vote could not be checked: “%1$s”</string>
+    <string name="history_kind_vote_receipt_rejected_any">A receipt for your vote could not be checked</string>
+    <string name="history_kind_vote_extended">The closing time of “%1$s” was extended</string>
+    <string name="history_kind_vote_extended_any">The closing time of a vote was extended</string>
+    <string name="history_kind_vote_extension_rejected">A change of closing time was not accepted: “%1$s”</string>
+    <string name="history_kind_vote_extension_rejected_any">A change of closing time was not accepted</string>
+    <string name="history_kind_vote_proposal_rejected">A vote from %1$s could not be checked and was set aside</string>
+    <string name="history_kind_vote_proposal_rejected_any">A vote could not be checked and was set aside</string>
+    <string name="history_kind_vote_site_mismatch">The vote from %1$s differs from the one published on the public site</string>
+    <string name="history_kind_vote_site_mismatch_any">A vote differs from the one published on the public site</string>
+    <string name="history_kind_vote_not_listed">A vote from %1$s is not on the public site yet</string>
+    <string name="history_kind_vote_not_listed_any">A vote is not on the public site yet</string>
+    <string name="history_kind_vote_unpublished">A vote from %1$s was never published on the public site</string>
+    <string name="history_kind_vote_unpublished_any">A vote was never published on the public site</string>
+    <string name="history_kind_vote_two_versions">%1$s sent two different versions of one vote</string>
+    <string name="history_kind_vote_two_versions_any">A service sent two different versions of one vote</string>
+    <string name="history_kind_vote_list_rejected">The list of services was not accepted</string>
+    <string name="history_kind_vote_check_ok">The published results include your vote: “%1$s”</string>
+    <string name="history_kind_vote_check_ok_any">The published results include your vote</string>
+    <string name="history_kind_vote_check_unconfirmed">Your vote could not be confirmed in the published results: “%1$s”</string>
+    <string name="history_kind_vote_check_unconfirmed_any">Your vote could not be confirmed in the published results</string>
+    <string name="history_kind_vote_check_failed">The published results do not match your vote: “%1$s”</string>
+    <string name="history_kind_vote_check_failed_any">The published results do not match your vote</string>
+    <string name="history_kind_vote_check_gave_up">The results of “%1$s” could not be checked</string>
+    <string name="history_kind_vote_check_gave_up_any">The results of a vote could not be checked</string>
+    <string name="history_kind_vote_released">Vote record released: “%1$s”</string>
+    <string name="history_kind_vote_released_any">Vote record released</string>
+    <string name="history_kind_vote_ignored">A vote message was ignored</string>
+    <!-- Not in the plan's table: wording proposed in the PR ("Texts for owner approval"). -->
+    <string name="history_vote_a_service">A service</string>
+    <string name="history_vote_reason_closed">the vote had closed</string>
+    <string name="history_vote_reason_not_active">you are no longer a member</string>
+    <string name="history_vote_reason_not_eligible">you were not on the list</string>
+    <string name="history_vote_reason_connection_ended">the connection ended</string>
+    <string name="history_vote_reason_not_accepted">not accepted</string>
 </resources>

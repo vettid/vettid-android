@@ -9,9 +9,16 @@ import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.scaledDurationText
 
 /** The names an entry's title may show (ANDROID-PLAN 0.1.52 §4 "Event titles"), as History resolves them for the row. */
-data class EntryNames(val connection: String? = null, val device: String? = null, val item: String? = null)
+data class EntryNames(
+    val connection: String? = null,
+    val device: String? = null,
+    val item: String? = null,
+    /** The title of the entry's vote, from the Votes list in memory (ANDROID-PLAN 0.1.102 "Votes"); null when not known. */
+    val vote: String? = null,
+)
 
 /** The member-facing title of an audit entry ([AuditKinds]), in Compose and from a [Context] (search, export). */
+@Suppress("SpreadOperator")
 object HistoryText {
     /** [isolate] false for a file (an export): the names are cleaned but carry no bidi controls at all. */
     fun title(
@@ -28,6 +35,7 @@ object HistoryText {
             is AuditKinds.Title.Unknown -> context.getString(R.string.history_kind_unknown, t.kind)
             is AuditKinds.Title.Counted -> context.getString(t.res, t.n, t.of)
             is AuditKinds.Title.Named -> named(context, t, names, isolate)
+            is AuditKinds.Title.Vote -> vote(t, names, isolate) { res, args -> context.getString(res, *args) }
         }
 
     @Composable
@@ -46,6 +54,44 @@ object HistoryText {
             val clean = AccountNames.isolateOrNull(name)
             if (clean != null) stringResource(t.res, clean) else stringResource(t.anyRes)
         }
+        is AuditKinds.Title.Vote -> {
+            val (hasTitle, args) = voteArgs(
+                t,
+                names,
+                isolate = true,
+                aService = stringResource(R.string.history_vote_a_service),
+                reason = t.reason?.let { stringResource(it) },
+            )
+            stringResource(if (hasTitle) t.res else t.anyRes, *args)
+        }
+    }
+
+    /**
+     * A title with the vote's name in curly quotes and, for some, the service and the reason of a refusal. Without the
+     * vote's title (the Votes list is not in memory, or the vote is gone) the title says "a vote" by dropping the quoted
+     * part; without the service's name it says "A service".
+     */
+    private fun vote(t: AuditKinds.Title.Vote, names: EntryNames, isolate: Boolean, get: (Int, Array<Any>) -> String): String {
+        val reason = t.reason?.let { get(it, emptyArray()) }
+        val (hasTitle, args) = voteArgs(t, names, isolate, get(R.string.history_vote_a_service, emptyArray()), reason)
+        return get(if (hasTitle) t.res else t.anyRes, args)
+    }
+
+    /** Whether the vote's title is known, and the arguments the text takes: the service, the title, the reason. */
+    private fun voteArgs(
+        t: AuditKinds.Title.Vote,
+        names: EntryNames,
+        isolate: Boolean,
+        aService: String,
+        reason: String?,
+    ): Pair<Boolean, Array<Any>> {
+        val clean = { s: String? -> if (isolate) AccountNames.isolateOrNull(s) else AccountNames.cleaned(s) }
+        val args = ArrayList<Any>()
+        if (t.service) args += clean(names.connection) ?: aService
+        val title = clean(names.vote)
+        if (title != null) args += title
+        if (reason != null) args += reason
+        return (title != null) to args.toTypedArray()
     }
 
     /** Without the name (gone or not known), the title drops it. */
