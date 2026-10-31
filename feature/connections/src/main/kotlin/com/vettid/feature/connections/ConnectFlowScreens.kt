@@ -435,7 +435,7 @@ fun ConnectionRequestContent(
 internal fun Connected(name: String?, onMessage: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier) {
     FormScaffold(
         title = stringResource(R.string.connections_connected_title),
-        body = name?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.connections_connected_body, it) }
+        body = AccountNames.isolateOrNull(name)?.let { stringResource(R.string.connections_connected_body, it) }
             ?: stringResource(R.string.connections_connected_body_unnamed),
         primaryLabel = stringResource(R.string.connections_send_message),
         onPrimary = onMessage,
@@ -473,7 +473,8 @@ data class AcceptActions(
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifier = Modifier) {
-    val who = AccountNames.isolateOrNull(state.name ?: state.connectionName) ?: stringResource(R.string.connections_request_them)
+    val who = AccountNames.isolateOrNull(state.name) ?: AccountNames.isolateOrNull(state.connectionName)
+        ?: stringResource(R.string.connections_request_them)
     when (state.step) {
         AcceptStep.INPUT, AcceptStep.ACCEPTING -> FormScaffold(
             title = stringResource(if (state.fromLink) R.string.connections_open_link_title else R.string.connections_accept_title),

@@ -276,8 +276,8 @@ private fun InfoLine(label: String, value: String) {
 private fun ProfileCard(c: ConnectionInfo) {
     DetailCard(Modifier.testTag("profile_card")) {
         CardTitle(stringResource(R.string.connections_detail_profile))
-        val account = c.accountName
-        if (account == null && c.name.isBlank() && c.sharedItems.isEmpty()) {
+        val account = AccountNames.cleaned(c.accountName)
+        if (account == null && AccountNames.cleaned(c.name) == null && c.sharedItems.isEmpty()) {
             Text(stringResource(R.string.connections_detail_profile_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (account != null) {
