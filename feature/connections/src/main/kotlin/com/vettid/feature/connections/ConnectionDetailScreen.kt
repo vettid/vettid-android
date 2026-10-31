@@ -277,7 +277,8 @@ private fun ProfileCard(c: ConnectionInfo) {
     DetailCard(Modifier.testTag("profile_card")) {
         CardTitle(stringResource(R.string.connections_detail_profile))
         val account = AccountNames.cleaned(c.accountName)
-        if (account == null && AccountNames.cleaned(c.name) == null && c.sharedItems.isEmpty()) {
+        val display = AccountNames.cleaned(c.name)
+        if (account == null && display == null && c.sharedItems.isEmpty()) {
             Text(stringResource(R.string.connections_detail_profile_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (account != null) {
@@ -289,8 +290,8 @@ private fun ProfileCard(c: ConnectionInfo) {
             )
             Spacer(Modifier.height(Spacing.s))
         }
-        if (c.name.isNotBlank() || c.sharedItems.isNotEmpty()) {
-            AccountNames.cleaned(c.name)?.let { InfoLine(stringResource(R.string.connections_detail_profile_name), it) }
+        if (display != null || c.sharedItems.isNotEmpty()) {
+            display?.let { InfoLine(stringResource(R.string.connections_detail_profile_name), it) }
             if (c.sharedItems.isNotEmpty()) {
                 Spacer(Modifier.height(Spacing.s))
                 Text(stringResource(R.string.connections_detail_shared_items), style = MaterialTheme.typography.labelLarge)

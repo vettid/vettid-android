@@ -23,13 +23,13 @@ class CallNameTest {
 
     @Test
     fun anAccountNameThatShowsNothingFallsBackToTheDisplayName() {
-        for (blank in listOf("⠀", "ㅤ")) {
+        for (blank in listOf("\u2800", "\u3164")) {
             assertEquals(blank, "Countess", callName(c("Countess", blank, blank)))
         }
     }
 
     @Test
     fun aDisplayNameThatShowsNothingIsNoName() {
-        for (blank in listOf("⠀", "ㅤ", " ⠀ ")) assertNull(blank, callName(c(blank)))
+        for (blank in listOf("\u2800", "\u3164", " \u2800 ")) assertNull(blank, callName(c(blank)))
     }
 }
