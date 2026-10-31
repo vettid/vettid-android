@@ -123,7 +123,7 @@ class FeedAuthPurposeTest {
         approvals = mapOf("auth:A1" to Approval.Authentication("A1", "c1", null, t, null, purpose = purpose)),
     )
 
-    private val isolated = "⁨Sam Lee⁩"
+    private val isolated = "\u2068Sam Lee\u2069"
 
     @Test
     fun signinReadsSignInToTheNameWithItsBody() {
@@ -200,9 +200,9 @@ class FeedAuthPurposeTest {
 
     @Test
     fun anAccountNameThatShowsNothingFallsBackToTheSender() {
-        // First and last both U+2800: the account name "⠀ ⠀" is valid raw text, but shows nothing.
+        // First and last both U+2800: the account name (U+2800, space, U+2800) is valid raw text, but shows nothing.
         val n = FeedNames(
-            connections = mapOf("c1" to ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "⠀", lastName = "⠀")),
+            connections = mapOf("c1" to ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "\u2800", lastName = "\u2800")),
             approvals = mapOf("auth:A1" to Approval.Authentication("A1", "c1", null, t, null, connectionName = "Sam Lee")),
         )
         assertEquals(FeedText(R.string.data_feed_authenticate, listOf(FeedText(literal = isolated))), FeedKinds.title(item(), n))
@@ -211,7 +211,7 @@ class FeedAuthPurposeTest {
     @Test
     fun aRequestNameThatShowsNothingFallsBackToItsDisplayName() {
         val request = FeedItem("i", 1, "connection.request", "2026-10-27T12:00:00Z", "active", "normal", ref = "P1")
-        for (blank in listOf("⠀", "⠀ ⠀")) {
+        for (blank in listOf("\u2800", "\u2800 \u2800")) {
             val n = FeedNames(
                 approvals = mapOf(
                     "connection:P1" to Approval.ConnectionRequest("P1", null, "", false, blank, null, t, null, displayName = "Sam Lee"),
