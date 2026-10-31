@@ -167,7 +167,7 @@ data class InviteUiState(
     val request: Approval.ConnectionRequest? = null,
     val connectionId: String? = null,
     val connectionName: String? = null,
-    /** [InviteStep.DECLINED]: the name the request showed. */
+    /** [InviteStep.DECLINED]: the name the decline carried (the screen falls back to the request's). */
     val declinedName: String? = null,
     val busy: Boolean = false,
     val confirmBlock: Boolean = false,
@@ -229,7 +229,7 @@ class InviteViewModel @Inject constructor(
                 if (s.step != InviteStep.REQUEST && s.step != InviteStep.CONNECTING) return@collect
                 val req = s.request ?: return@collect
                 val d = list.firstOrNull { !it.outgoing && it.requestId == req.pendingId } ?: return@collect
-                state.update { it.copy(step = InviteStep.DECLINED, declinedName = d.name ?: req.name, busy = false) }
+                state.update { it.copy(step = InviteStep.DECLINED, declinedName = d.name, busy = false) }
                 runCatching { approvals.dismissPeerDecline(d.requestId) }
             }
         }

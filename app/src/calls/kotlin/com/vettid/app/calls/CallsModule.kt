@@ -15,9 +15,11 @@ import com.vettid.core.calls.CallsController
 import com.vettid.core.calls.MediaConfig
 import com.vettid.core.calls.VaultCallGateway
 import com.vettid.core.calls.WebRtcMediaEngine
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.prefs.NotificationPreviews
 import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.VaultManager
@@ -38,6 +40,13 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import javax.inject.Singleton
+
+/**
+ * The name a call shows for a connection: the names on its VettID account, else its display name, each cleaned first
+ * (VAULT-MESSAGING §10.8), so a name that shows nothing (only U+2800, say) falls through to the next; null when neither
+ * shows anything.
+ */
+internal fun callName(c: ConnectionInfo): String? = AccountNames.cleaned(c.accountName) ?: AccountNames.cleaned(c.name)
 
 /**
  * Calls in the builds that have them (debug, devStack, staging; CALLS-PLAN 0.1.1 phase C1): the one
@@ -83,7 +92,7 @@ object CallsModule {
 
         override suspend fun fingerprint(connectionId: String): String? = connection(connectionId)?.keyFingerprint
 
-        override fun name(connectionId: String): String? = connection(connectionId)?.let { it.accountName ?: it.name.ifEmpty { null } }
+        override fun name(connectionId: String): String? = connection(connectionId)?.let(::callName)
 
         override fun notificationName(connectionId: String): String? = if (showNames.value) name(connectionId) else null
 
