@@ -24,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.lifecycle.SavedStateHandle
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.GrantAsk
 import com.vettid.core.data.items.GrantAskEntry
 import com.vettid.core.data.items.GrantDirection
@@ -42,6 +43,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -105,6 +107,16 @@ class ConnectionSharingCardsTest {
         rule.onNodeWithTag("sharing_out_count").assertContentDescriptionEquals("0 items shared")
         rule.onNodeWithTag("sharing_out_manage").assertDoesNotExist()
         rule.onNodeWithTag("sharing_in_open").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFirstNameThatShowsNothingFallsBackToTheAccountName() {
+        for (blank in listOf("\u2800", "\u3164", "\u2800\u3164")) {
+            val c = ConnectionInfo("c3", "", ConnectionState.ACTIVE, firstName = blank, lastName = "Lovelace")
+            assertEquals(blank, AccountNames.cleaned("$blank Lovelace"), sharingName(c))
+        }
+        // With nothing shown in either, the cards fall back to "this connection".
+        assertNull(sharingName(ConnectionInfo("c4", "", ConnectionState.ACTIVE, firstName = "\u2800")))
     }
 
     @Test

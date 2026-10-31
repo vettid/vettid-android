@@ -103,7 +103,7 @@ object DeviceWire {
             DeviceInfo(
                 id = id,
                 kind = kind,
-                name = cleanName(d.s("name")?.takeIf { it.isNotBlank() } ?: profileName),
+                name = cleanName(AccountNames.cleaned(d.s("name")) ?: profileName),
                 ik = d.s("ik")?.takeIf { it.isNotEmpty() },
                 createdAt = instant(d.s("created_at")),
                 lastActiveAt = instant(d.s("last_active_at")),
