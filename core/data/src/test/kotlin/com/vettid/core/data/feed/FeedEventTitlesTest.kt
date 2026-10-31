@@ -187,6 +187,41 @@ class FeedAuthPurposeTest {
     }
 
     @Test
+    fun aConnectionNameThatShowsNothingFallsBackToTheSender() {
+        // U+2800 only: this class runs without Robolectric, where android.icu does not know Default_Ignorable (U+3164).
+        for (blank in listOf("\u2800", "\u2800 \u2800")) {
+            val n = FeedNames(
+                connections = mapOf("c1" to ConnectionInfo("c1", blank, ConnectionState.ACTIVE)),
+                approvals = mapOf("auth:A1" to Approval.Authentication("A1", "c1", null, t, null, connectionName = "Sam Lee")),
+            )
+            assertEquals(blank, FeedText(R.string.data_feed_authenticate, listOf(FeedText(literal = isolated))), FeedKinds.title(item(), n))
+        }
+    }
+
+    @Test
+    fun anAccountNameThatShowsNothingFallsBackToTheSender() {
+        // First and last both U+2800: the account name "⠀ ⠀" is valid raw text, but shows nothing.
+        val n = FeedNames(
+            connections = mapOf("c1" to ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "⠀", lastName = "⠀")),
+            approvals = mapOf("auth:A1" to Approval.Authentication("A1", "c1", null, t, null, connectionName = "Sam Lee")),
+        )
+        assertEquals(FeedText(R.string.data_feed_authenticate, listOf(FeedText(literal = isolated))), FeedKinds.title(item(), n))
+    }
+
+    @Test
+    fun aRequestNameThatShowsNothingFallsBackToItsDisplayName() {
+        val request = FeedItem("i", 1, "connection.request", "2026-10-27T12:00:00Z", "active", "normal", ref = "P1")
+        for (blank in listOf("⠀", "⠀ ⠀")) {
+            val n = FeedNames(
+                approvals = mapOf(
+                    "connection:P1" to Approval.ConnectionRequest("P1", null, "", false, blank, null, t, null, displayName = "Sam Lee"),
+                ),
+            )
+            assertEquals(blank, FeedText(R.string.data_feed_connection_request, listOf(FeedText(literal = isolated))), FeedKinds.title(request, n))
+        }
+    }
+
+    @Test
     fun aPendingApprovalOfAnotherConnectionDoesNotCarryItsPurpose() {
         val n = names(AuthPurpose.SIGNIN)
         assertEquals(AuthPurpose.NONE, FeedKinds.authenticationPurpose(item(connectionId = "c9"), n))

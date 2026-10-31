@@ -42,6 +42,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -105,6 +106,17 @@ class ConnectionSharingCardsTest {
         rule.onNodeWithTag("sharing_out_count").assertContentDescriptionEquals("0 items shared")
         rule.onNodeWithTag("sharing_out_manage").assertDoesNotExist()
         rule.onNodeWithTag("sharing_in_open").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFirstNameThatShowsNothingFallsBackToTheAccountName() {
+        // The shown text keeps the blank: cleaning only decides that the first name alone shows nothing.
+        for ((blank, shown) in listOf("\u2800" to "\u2800 Lovelace", "\u3164" to "\u3164 Lovelace", "\u2800\u3164" to "\u2800\u3164 Lovelace")) {
+            val c = ConnectionInfo("c3", "", ConnectionState.ACTIVE, firstName = blank, lastName = "Lovelace")
+            assertEquals(blank, shown, sharingName(c))
+        }
+        // With nothing shown in either, the cards fall back to "this connection".
+        assertNull(sharingName(ConnectionInfo("c4", "", ConnectionState.ACTIVE, firstName = "\u2800")))
     }
 
     @Test

@@ -138,6 +138,15 @@ class DevicesManagerTest {
     }
 
     @Test
+    fun aNameThatShowsNothingFallsBackToTheProfileName() {
+        // U+2800 and U+3164 are not White_Space: the raw text is not blank, but it shows nothing (§10.8 step 4).
+        for (blank in listOf("\u2800", "\u3164", "\u2800 \u3164")) {
+            val body = obj("""{"devices":[{"id":"a1","kind":"agent","name":"$blank","profile":{"name":"Riley"}}]}""")
+            assertEquals(blank, "Riley", DeviceWire.devices(body, self = null).single().name)
+        }
+    }
+
+    @Test
     fun theSessionShownIsDroppedOncePast() {
         val d = DeviceWire.devices(list(dev("a", "agent", "A", session = "2026-10-21T15:40:00Z")), self = null).single()
         assertTrue(d.hasAccess(now))

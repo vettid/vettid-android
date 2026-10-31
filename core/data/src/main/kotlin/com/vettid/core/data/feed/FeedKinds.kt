@@ -184,7 +184,7 @@ object FeedKinds {
     private fun knownName(item: FeedItem, names: FeedNames): String? {
         val c = item.connectionId?.let { names.connections[it] }
         val sender = FeedAsks.approvalKey(item.kind, item.ref)?.let { names.approvals[it] }?.let { a -> senderOf(a) }
-        return AccountNames.isolateOrNull(c?.accountName ?: c?.name?.takeIf { it.isNotBlank() } ?: sender)
+        return AccountNames.isolateOrNull(AccountNames.cleaned(c?.accountName) ?: AccountNames.cleaned(c?.name) ?: sender)
     }
 
     /**
@@ -227,9 +227,9 @@ object FeedKinds {
     }
 
     private fun senderOf(a: Approval): String? = when (a) {
-        is Approval.ConnectionRequest -> a.name ?: a.displayName
-        else -> a.connectionName
-    }?.takeIf { it.isNotBlank() }
+        is Approval.ConnectionRequest -> AccountNames.cleaned(a.name) ?: AccountNames.cleaned(a.displayName)
+        else -> AccountNames.cleaned(a.connectionName)
+    }
 
     /** The item's name (never a value), when the item or the ask names one. */
     fun itemName(item: FeedItem, names: FeedNames): String? = when (item.kind) {
