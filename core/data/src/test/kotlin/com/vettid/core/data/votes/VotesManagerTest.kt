@@ -696,6 +696,36 @@ class VotesManagerTest {
     }
 
     @Test
+    fun anIndexElementThatIsNotStrictOrHasNoValidIdIsLeftOut() = runTest {
+        val (ops, site) = dueScenario()
+        val unheld = "01JBQZ0000000000000000000F"
+        // The held proposal's element has a duplicate name; another (not held) has a proposal_id that is not a ULID; a third is good.
+        site.answers["index.json"] = ok("""[{"proposal_id":"$OPEN_PID","service_id":"s","service_id":"t"},{"proposal_id":"bad id","service_id":"s"},{"proposal_id":"$unheld","service_id":"s","proposal_hash":"AAAA","opens_at":1,"closes_at":2,"extended":0,"published":true}]""")
+        manager(ops, site).syncOnce()
+        val byId = ops.entriesSent().associateBy { (it["proposal_id"] as JsonPrimitive).content }
+        assertNull(byId.getValue(OPEN_PID)["index"])
+        assertTrue(byId.getValue(unheld)["index"] is JsonObject)
+        assertFalse(byId.containsKey("bad id"))
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun aBundleThatIsNotStrictIsLeftOutAndAnExtensionsEndsTheList() = runTest {
+        val (ops, site) = dueScenario()
+        site.answers["p/$OPEN_PID/proposal.json.sigstore.json"] = ok("""{"a":1,"a":1}""")
+        for (n in 1..2) {
+            site.answers["p/$OPEN_PID/extension-$n.json"] = SiteAnswer.Found(ByteArray(10))
+            site.answers["p/$OPEN_PID/extension-$n.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            site.answers["p/$OPEN_PID/extension-$n.json.sigstore.json"] = ok(if (n == 1) "{}" else """{"x":{"b":1,"b":2}}""")
+        }
+        manager(ops, site).syncOnce()
+        val doc = ops.entriesSent().single { (it["proposal_id"] as JsonPrimitive).content == OPEN_PID }["document"] as JsonObject
+        assertNull(doc["bundle"])
+        assertEquals(1, (doc["extensions"] as JsonArray).size)
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
     fun aRefusedStageDoesNotStopTheNext() = runTest {
         val (ops, site) = dueScenario()
         // The vault refuses the list call: the entries and the results check go all the same, and the refusal is told after.

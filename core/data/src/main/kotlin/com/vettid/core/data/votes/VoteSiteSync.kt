@@ -262,18 +262,84 @@ object VoteSync {
     /** The request body as sent. */
     fun encoded(body: JsonElement): ByteArray = body.toString().toByteArray(Charsets.UTF_8)
 
-    /** A site JSON document that is an object, as one; null when it is not (the vault judges what it is sent). */
-    fun jsonObject(bytes: ByteArray): JsonObject? = try {
+    // (0.81.6) The vault parses the whole request strictly (StrictJson: valid UTF-8, no duplicate member names at any depth, nesting
+    // at most 32), and the site's own JSON is copied into it: each such value is parsed as strictly first, with the depth left where
+    // it sits in the request (the top-level body counts 1).
+
+    /** An `index` element: body > `entries` > entry > `index`. */
+    const val INDEX_DEPTH = StrictJson.MAX_DEPTH - 3
+
+    /** A proposal's `bundle`: body > `entries` > entry > `document` > `bundle`. */
+    const val BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 4
+
+    /** An extension's `bundle`: … `document` > `extensions` > extension > `bundle`. */
+    const val EXTENSION_BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 6
+
+    /** The results' `bundle` in `vote.results.submit`: body > `bundle`. */
+    const val RESULTS_BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 1
+
+    /**
+     * A site JSON document that is an object, as one, if it passes the vault's strict rules within [maxDepth]; null when it does
+     * not ("not an object", 0.81.6: a bundle is left out, the extensions end there).
+     */
+    fun jsonObject(bytes: ByteArray, maxDepth: Int = StrictJson.MAX_DEPTH): JsonObject? = try {
+        StrictJson.parseObject(bytes, maxDepth)
         Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as? JsonObject
+    } catch (_: CryptoException) {
+        null
     } catch (_: IllegalArgumentException) {
         null
     }
 
-    /** The index's elements (`index.json` is an array); an unreadable index yields none. */
-    fun indexOf(bytes: ByteArray): List<JsonObject> = try {
-        (Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-    } catch (_: IllegalArgumentException) {
-        emptyList()
+    /**
+     * The index's elements (`index.json` is an array), each judged on its own bytes: one that is not a strict object within
+     * [INDEX_DEPTH], or whose `proposal_id` is not a valid proposal id (a canonical ULID), is left out (0.81.6: not sent, and no
+     * entry for it). An index that is not an array yields none.
+     */
+    fun indexOf(bytes: ByteArray): List<JsonObject> = elements(bytes).mapNotNull { jsonObject(it, INDEX_DEPTH) }
+        .filter { e -> proposalIdOf(e)?.let(Ulid::isValid) == true }
+
+    /**
+     * The bytes of each element of a top-level JSON array, found by its structure only (strings and escapes skipped, brackets
+     * counted), so that one bad element does not hide the others; empty when [bytes] is not an array.
+     */
+    @Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "ReturnCount", "LoopWithTooManyJumpStatements")
+    internal fun elements(bytes: ByteArray): List<ByteArray> {
+        var i = 0
+        fun ws() {
+            while (i < bytes.size && bytes[i].toInt().toChar() in " \t\r\n") i++
+        }
+        ws()
+        if (i >= bytes.size || bytes[i] != '['.code.toByte()) return emptyList()
+        i++
+        val out = ArrayList<ByteArray>()
+        while (true) {
+            ws()
+            if (i >= bytes.size) return emptyList()
+            if (bytes[i] == ']'.code.toByte()) return out
+            val start = i
+            var depth = 0
+            var inString = false
+            while (i < bytes.size) {
+                val c = bytes[i].toInt().toChar()
+                if (inString) {
+                    if (c == '\\') i++ else if (c == '"') inString = false
+                } else {
+                    when (c) {
+                        '"' -> inString = true
+                        '{', '[' -> depth++
+                        '}', ']' -> if (depth == 0) break else depth--
+                        ',' -> if (depth == 0) break
+                    }
+                }
+                i++
+            }
+            if (i >= bytes.size || inString) return emptyList()
+            var end = i
+            while (end > start && bytes[end - 1].toInt().toChar() in " \t\r\n") end--
+            out += bytes.copyOfRange(start, end)
+            if (bytes[i] == ','.code.toByte()) i++
+        }
     }
 
     /** An index element's `proposal_id`. */

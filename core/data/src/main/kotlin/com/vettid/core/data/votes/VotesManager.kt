@@ -595,7 +595,7 @@ class VotesManager(
         val bundle = when (val a = site.get("p/$id/proposal.json.sigstore.json", BUNDLE_MAX)) {
             SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
             SiteAnswer.Absent -> null
-            is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes)
+            is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes, VoteSync.BUNDLE_DEPTH)
         }
         val extensions = ArrayList<VoteSync.Extension>()
         val count = VoteSync.extendedOf(index)?.coerceIn(0, VoteSync.MAX_EXTENSIONS) ?: VoteSync.MAX_EXTENSIONS
@@ -613,7 +613,7 @@ class VotesManager(
             val xb = when (val a = site.get("p/$id/extension-$n.json.sigstore.json", BUNDLE_MAX)) {
                 SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
                 SiteAnswer.Absent -> null
-                is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes)
+                is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes, VoteSync.EXTENSION_BUNDLE_DEPTH)
             }
             extensions += VoteSync.Extension(x, xs, xb)
         }
@@ -699,7 +699,7 @@ class VotesManager(
         }
         // (0.81.5) Results the vault would refuse as a whole are never submitted: the existing problem hint says so.
         if (!VoteSync.submittable(doc, sig)) return@withLock fail(key, ResultsOutcome.Problem)
-        val bundle = VoteSync.jsonObject(bundleBytes) ?: return@withLock fail(key, ResultsOutcome.Problem)
+        val bundle = VoteSync.jsonObject(bundleBytes, VoteSync.RESULTS_BUNDLE_DEPTH) ?: return@withLock fail(key, ResultsOutcome.Problem)
         val own = try {
             VoteRows.ownRow(doc, rows, tag)
         } catch (_: ResultsProblem) {

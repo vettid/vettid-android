@@ -197,4 +197,56 @@ class VoteSyncTest {
         assertFalse(VoteSync.submittable(ByteArray(0), ByteArray(64)))
         assertFalse(VoteSync.submittable(ByteArray(10), ByteArray(63)))
     }
+    // ---- Strict JSON and the proposal id (VAULT-MESSAGING 0.81.6 §10.19.8) ----
+
+    /** An object nested [depth] deep in all (the outer one counts 1). */
+    private fun nested(depth: Int): String = "{\"a\":".repeat(depth - 1) + "{}" + "}".repeat(depth - 1)
+
+    private val pid = "01JBQZ0000000000000000000A"
+
+    @Test
+    fun aSiteValueThatIsNotStrictJsonIsNotAnObject() {
+        assertTrue(VoteSync.jsonObject("""{"mediaType":"x","n":{"a":1}}""".toByteArray()) != null)
+        // A duplicate member name, at the top or deeper.
+        assertNull(VoteSync.jsonObject("""{"a":1,"a":2}""".toByteArray()))
+        assertNull(VoteSync.jsonObject("""{"x":{"b":1,"b":1}}""".toByteArray()))
+        // Invalid UTF-8.
+        assertNull(VoteSync.jsonObject(byteArrayOf('{'.code.toByte(), '"'.code.toByte(), 0xC3.toByte(), '"'.code.toByte(), ':'.code.toByte(), '1'.code.toByte(), '}'.code.toByte())))
+        // Too deep for where it goes.
+        assertTrue(VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH).toByteArray(), VoteSync.BUNDLE_DEPTH) != null)
+        assertNull(VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH + 1).toByteArray(), VoteSync.BUNDLE_DEPTH))
+    }
+
+    @Test
+    fun theDepthLeftIsWhereEachValueSitsInTheRequest() {
+        assertEquals(29, VoteSync.INDEX_DEPTH)
+        assertEquals(28, VoteSync.BUNDLE_DEPTH)
+        assertEquals(26, VoteSync.EXTENSION_BUNDLE_DEPTH)
+        assertEquals(31, VoteSync.RESULTS_BUNDLE_DEPTH)
+        // Values at exactly their budget, in a real request: the vault's strict parse of the whole body passes.
+        val bundle = VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH).toByteArray(), VoteSync.BUNDLE_DEPTH)!!
+        val extBundle = VoteSync.jsonObject(nested(VoteSync.EXTENSION_BUNDLE_DEPTH).toByteArray(), VoteSync.EXTENSION_BUNDLE_DEPTH)!!
+        val index = VoteSync.jsonObject(("{\"proposal_id\":\"$pid\",\"x\":" + nested(VoteSync.INDEX_DEPTH - 1) + "}").toByteArray(), VoteSync.INDEX_DEPTH)!!
+        val entry = VoteSync.entryJson(pid, index, VoteSync.Document.Found(ByteArray(10), ByteArray(64), bundle, listOf(VoteSync.Extension(ByteArray(10), ByteArray(64), extBundle))))
+        val body = VoteSync.entryCalls(listOf(entry)).single()
+        com.vettid.core.crypto.json.StrictJson.parseObject(VoteSync.encoded(body))
+    }
+
+    @Test
+    fun eachIndexElementIsJudgedOnItsOwn() {
+        val good = """{"proposal_id":"$pid","service_id":"s","note":"a ] , \" { inside"}"""
+        val index = """[ $good, {"proposal_id":"$pid","a":1,"a":2}, {"proposal_id":"not-a-ulid"}, 7, {"proposal_id":"01JBQZ0000000000000000000B"} ]"""
+        val out = VoteSync.indexOf(index.toByteArray())
+        assertEquals(listOf(pid, "01JBQZ0000000000000000000B"), out.map { VoteSync.proposalIdOf(it) })
+        // Not an array, or broken: none.
+        assertTrue(VoteSync.indexOf("{}".toByteArray()).isEmpty())
+        assertTrue(VoteSync.indexOf("[{\"proposal_id\":".toByteArray()).isEmpty())
+        assertTrue(VoteSync.indexOf("[]".toByteArray()).isEmpty())
+    }
+
+    @Test
+    fun theSplitterFindsEachElementsBytes() {
+        val parts = VoteSync.elements("""[{"a":"]"},[1,2], "x\"y" ,{}]""".toByteArray()).map { String(it) }
+        assertEquals(listOf("""{"a":"]"}""", "[1,2]", "\"x\\\"y\"", "{}"), parts)
+    }
 }
