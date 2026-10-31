@@ -65,9 +65,9 @@ class ChainServersFileTest {
     private fun servers() =
         ChainServers(WalletModule.settingsFile(store()), ChainDefaults.forBuild(BuildConfig.WALLET_REGTEST_ESPLORA), http)
 
-    private suspend fun saveOwnSignetServer() {
+    private suspend fun saveOwnSignetServer(s: ChainServers = servers()) {
         server.enqueue(MockResponse.Builder().code(200).body("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6").build())
-        assertTrue(servers().save(Network.SIGNET, own) is SaveResult.Saved)
+        assertTrue(s.save(Network.SIGNET, own) is SaveResult.Saved)
     }
 
     @Test
@@ -83,8 +83,10 @@ class ChainServersFileTest {
     }
 
     @Test
-    fun aWipeRemovesTheFile() = runBlocking {
-        saveOwnSignetServer()
+    fun aWipeRemovesTheFileAndLeavesNothingInMemory() = runBlocking {
+        // One instance throughout, as the app's singleton is.
+        val s = servers()
+        saveOwnSignetServer(s)
         val file = WalletModule.chainServersFile(context)
         assertTrue(file.exists())
         // The app's own wipe targets (its directories and marker), with a stand-in for the Keystore.
@@ -101,12 +103,16 @@ class ChainServersFileTest {
 
             override fun cancelNotifications() = Unit
         }
-        val wipe = LocalWipe(targets)
+        val wipe = LocalWipe(targets, hooks = listOf({ s.forgetChecks() }))
         wipe.begin()
+        wipe.resetMemory()
         assertTrue(wipe.erase())
         wipe.finish()
         assertFalse(file.exists())
-        assertEquals(ChainServer.Default(ChainDefaults.SIGNET), servers().server(Network.SIGNET))
+        // The same instance: the default, and a reset writes nothing back (the old server is not kept anywhere).
+        assertEquals(ChainServer.Default(ChainDefaults.SIGNET), s.server(Network.SIGNET))
+        assertTrue(s.reset(Network.SIGNET))
+        assertFalse(file.exists())
     }
 
     @Test

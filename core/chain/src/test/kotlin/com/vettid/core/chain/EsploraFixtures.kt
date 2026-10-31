@@ -1,5 +1,9 @@
 package com.vettid.core.chain
 
+import fr.acinq.bitcoin.Block
+import fr.acinq.bitcoin.Protocol
+import fr.acinq.bitcoin.Transaction
+
 /**
  * Answers in the form mempool.space's Esplora gives them (`/api/address/…`, `/txs`, `/utxo`, `/tx/…/hex`, `/fee-estimates`,
  * `POST /tx`), with this test's own address and txids.
@@ -46,5 +50,19 @@ internal object EsploraFixtures {
 
     const val FEES = """{"1":87.882,"2":87.882,"3":87.882,"6":68.285,"144":1.027,"1008":1.0}"""
 
-    const val RAW_HEX = "0200000001" + "ab" + "00"
+    /** A real transaction: the genesis block's coinbase, and its well-known txid. */
+    val RAW_TX: ByteArray = Transaction.write(Block.LivenetGenesisBlock.tx[0], Protocol.PROTOCOL_VERSION)
+    val RAW_HEX: String = RAW_TX.toHex()
+    const val RAW_TXID = "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+
+    /** An address's totals with [confirmedTxs] confirmed transactions (and 1,000 sats confirmed). */
+    fun summary(confirmedTxs: Int, confirmedSats: Long = 1_000, unconfirmedSats: Long = 0): String {
+        val funded = maxOf(confirmedSats, 0)
+        val spent = funded - confirmedSats
+        val mFunded = maxOf(unconfirmedSats, 0)
+        val mSpent = mFunded - unconfirmedSats
+        return """{"chain_stats":{"funded_txo_count":1,"funded_txo_sum":$funded,"spent_txo_count":0,"spent_txo_sum":$spent,
+            "tx_count":$confirmedTxs},"mempool_stats":{"funded_txo_count":0,"funded_txo_sum":$mFunded,"spent_txo_count":0,
+            "spent_txo_sum":$mSpent,"tx_count":0}}"""
+    }
 }

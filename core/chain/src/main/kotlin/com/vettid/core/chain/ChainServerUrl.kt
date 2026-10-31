@@ -44,8 +44,9 @@ class ChainServerUrl private constructor(internal val url: HttpUrl) {
         }
 
         /**
-         * A development build's regtest server (devStack's build config): `http` or `https` to a loopback host only, reached
-         * through `adb reverse`. Null for anything else, and for the empty value every other build has.
+         * A development build's regtest server (devStack's build config): `http` or `https` to `127.0.0.1` or `localhost` only (what
+         * devStack's network security config allows), reached through `adb reverse`. Null for anything else, and for the empty
+         * value every other build has.
          */
         fun loopbackOrNull(text: String?): ChainServerUrl? {
             val url = text?.trim()?.takeIf { it.isNotEmpty() }?.toHttpUrlOrNull() ?: return null
@@ -60,7 +61,7 @@ class ChainServerUrl private constructor(internal val url: HttpUrl) {
         /** Tests only: a local mock server, whatever its scheme. */
         internal fun forTest(url: HttpUrl): ChainServerUrl = ChainServerUrl(normalised(url))
 
-        private val LOOPBACK = setOf("127.0.0.1", "localhost", "::1")
+        private val LOOPBACK = setOf("127.0.0.1", "localhost")
 
         /** Without a trailing empty path segment, so that `…/api` and `…/api/` are one server. */
         private fun normalised(url: HttpUrl): HttpUrl {

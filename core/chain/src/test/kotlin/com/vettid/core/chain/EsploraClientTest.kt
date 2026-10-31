@@ -61,13 +61,27 @@ class EsploraClientTest {
         assertEquals(Genesis.of(Network.SIGNET), c.blockHash(0))
         assertEquals("/api/blocks/tip/height", server.takeRequest().url.encodedPath)
         assertEquals("/api/block-height/0", server.takeRequest().url.encodedPath)
+        // A server that writes the hash in upper case says the same.
+        server.enqueue(ok(Genesis.of(Network.SIGNET)!!.uppercase()))
+        assertEquals(Genesis.of(Network.SIGNET), c.blockHash(0))
     }
 
     @Test
     fun theBalanceIsConfirmedAndUnconfirmed() = runBlocking {
         server.enqueue(ok(EsploraFixtures.SUMMARY))
-        assertEquals(ChainSummary(confirmedSats = 100_000, unconfirmedSats = -7_500, txCount = 5), client().summary(ChainTarget.Address(ADDRESS)))
+        assertEquals(ChainSummary(100_000, -7_500, confirmedTxCount = 3, txCount = 5), client().summary(ChainTarget.Address(ADDRESS)))
         assertEquals("/api/address/$ADDRESS", server.takeRequest().url.encodedPath)
+    }
+
+    @Test
+    fun totalsThatSpendMoreThanWasReceivedAreMalformed() {
+        // Confirmed below zero, and unconfirmed spending more than the confirmed balance.
+        for (body in listOf(EsploraFixtures.summary(1, confirmedSats = -1), EsploraFixtures.summary(1, confirmedSats = 1_000, unconfirmedSats = -1_001))) {
+            server.enqueue(ok(body))
+            fails<ChainError.Malformed> { runBlocking { client().summary(ChainTarget.Address(ADDRESS)) } }
+        }
+        server.enqueue(ok(EsploraFixtures.summary(1, confirmedSats = 1_000, unconfirmedSats = -1_000)))
+        assertEquals(0L, runBlocking { client().summary(ChainTarget.Address(ADDRESS)) }.let { it.confirmedSats + it.unconfirmedSats })
     }
 
     @Test
@@ -90,17 +104,19 @@ class EsploraClientTest {
 
     @Test
     fun transactionsFollowEsplorasPaging() = runBlocking {
-        // The first page: 2 unconfirmed and 25 confirmed; then 25 confirmed; then 3, the last.
+        // The totals first (53 confirmed); the first page: 2 unconfirmed and 25 confirmed; then 25 confirmed; then 3, the last.
+        server.enqueue(ok(EsploraFixtures.summary(53)))
         server.enqueue(ok(page(tx(1, false), tx(2, false), *(10 until 35).map { tx(it, true) }.toTypedArray())))
         server.enqueue(ok(page(*(35 until 60).map { tx(it, true) }.toTypedArray())))
         server.enqueue(ok(page(*(60 until 63).map { tx(it, true) }.toTypedArray())))
         val all = client().transactions(ChainTarget.Address(ADDRESS))
         assertEquals(2 + 25 + 25 + 3, all.size)
         assertEquals(listOf(txid(1), txid(2)), all.filterNot { it.confirmed }.map { it.txid })
+        assertEquals("/api/address/$ADDRESS", server.takeRequest().url.encodedPath)
         assertEquals("/api/address/$ADDRESS/txs", server.takeRequest().url.encodedPath)
         assertEquals("/api/address/$ADDRESS/txs/chain/${txid(34)}", server.takeRequest().url.encodedPath)
         assertEquals("/api/address/$ADDRESS/txs/chain/${txid(59)}", server.takeRequest().url.encodedPath)
-        assertEquals(3, server.requestCount)
+        assertEquals(4, server.requestCount)
 
         val t = all.first { it.txid == txid(10) }
         assertEquals(200_010L, t.blockHeight)
@@ -113,13 +129,45 @@ class EsploraClientTest {
 
     @Test
     fun aShortFirstPageIsAll() = runBlocking {
+        server.enqueue(ok(EsploraFixtures.summary(2)))
         server.enqueue(ok(page(tx(1, true), tx(2, true))))
         assertEquals(2, client().transactions(ChainTarget.Address(ADDRESS)).size)
-        assertEquals(1, server.requestCount)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun aShortPageCannotEndThePagingEarly() {
+        // The totals count 30 confirmed transactions; the server lists 2 and stops.
+        server.enqueue(ok(EsploraFixtures.summary(30)))
+        server.enqueue(ok(page(tx(1, true), tx(2, true))))
+        fails<ChainError.Malformed> { runBlocking { client().transactions(ChainTarget.Address(ADDRESS)) } }
+    }
+
+    @Test
+    fun theWholeListHasOneByteBudget() {
+        server.enqueue(ok(EsploraFixtures.summary(60)))
+        repeat(3) { p -> server.enqueue(ok(page(*(p * 25 until p * 25 + 25).map { tx(it, true) }.toTypedArray()))) }
+        // A page is about 30 KB: the budget runs out on the second.
+        val limits = EsploraClient.Limits(transactionsBytes = 40_000)
+        fails<ChainError.TooLarge> { runBlocking { client(limits).transactions(ChainTarget.Address(ADDRESS)) } }
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun theWholeListHasOneDeadline() {
+        server.enqueue(ok(EsploraFixtures.summary(60)))
+        repeat(3) { p ->
+            val body = page(*(p * 25 until p * 25 + 25).map { tx(it, true) }.toTypedArray())
+            server.enqueue(MockResponse.Builder().code(200).body(body).headersDelay(400, TimeUnit.MILLISECONDS).build())
+        }
+        // Each call is well inside its own limit; together they are not.
+        val limits = EsploraClient.Limits(callTimeoutMs = 5_000, transactionsTimeoutMs = 700)
+        fails<ChainError.Timeout> { runBlocking { client(limits).transactions(ChainTarget.Address(ADDRESS)) } }
     }
 
     @Test
     fun aCoinbaseInputHasNoPreviousOutput() = runBlocking {
+        server.enqueue(ok(EsploraFixtures.summary(1)))
         server.enqueue(ok(page(EsploraFixtures.COINBASE_TX)))
         val input = client().transactions(ChainTarget.Address(ADDRESS)).single().inputs.single()
         assertEquals(ChainTxInput(null, null, null, null), input)
@@ -127,6 +175,7 @@ class EsploraClientTest {
 
     @Test
     fun aPageThatRepeatsATransactionStopsThePaging() {
+        server.enqueue(ok(EsploraFixtures.summary(50)))
         server.enqueue(ok(page(*(10 until 35).map { tx(it, true) }.toTypedArray())))
         server.enqueue(ok(page(*(34 until 59).map { tx(it, true) }.toTypedArray())))
         fails<ChainError.Malformed> { runBlocking { client().transactions(ChainTarget.Address(ADDRESS)) } }
@@ -134,15 +183,30 @@ class EsploraClientTest {
 
     @Test
     fun moreTransactionsThanTheLimitAreRefused() {
+        // Known from the totals: nothing is paged.
+        server.enqueue(ok(EsploraFixtures.summary(75)))
+        fails<ChainError.TooMany> { runBlocking { client(EsploraClient.Limits(maxTransactions = 60)).transactions(ChainTarget.Address(ADDRESS)) } }
+        assertEquals(1, server.requestCount)
+        // And from the pages, if the totals undercount.
+        server.enqueue(ok(EsploraFixtures.summary(10)))
         repeat(3) { p -> server.enqueue(ok(page(*(p * 25 until p * 25 + 25).map { tx(it, true) }.toTypedArray()))) }
         fails<ChainError.TooMany> { runBlocking { client(EsploraClient.Limits(maxTransactions = 60)).transactions(ChainTarget.Address(ADDRESS)) } }
     }
 
     @Test
     fun aRawTransaction() = runBlocking {
-        server.enqueue(ok(EsploraFixtures.RAW_HEX))
-        assertArrayEquals(EsploraFixtures.RAW_HEX.hexToBytes(), client().rawTransaction(txid(3)))
-        assertEquals("/api/tx/${txid(3)}/hex", server.takeRequest().url.encodedPath)
+        server.enqueue(ok(EsploraFixtures.RAW_HEX.uppercase()))
+        assertArrayEquals(EsploraFixtures.RAW_TX, client().rawTransaction(EsploraFixtures.RAW_TXID.uppercase()))
+        assertEquals("/api/tx/${EsploraFixtures.RAW_TXID}/hex", server.takeRequest().url.encodedPath)
+    }
+
+    @Test
+    fun aRawTransactionThatIsNotTheOneAskedForIsMalformed() {
+        // Another transaction's bytes, and the right bytes with one more after them.
+        for (body in listOf(EsploraFixtures.RAW_HEX, EsploraFixtures.RAW_HEX + "00")) {
+            server.enqueue(ok(body))
+            fails<ChainError.Malformed> { runBlocking { client().rawTransaction(if (body.length == EsploraFixtures.RAW_HEX.length) txid(3) else EsploraFixtures.RAW_TXID) } }
+        }
     }
 
     @Test
@@ -163,21 +227,41 @@ class EsploraClientTest {
 
     @Test
     fun badFeeEstimatesAreMalformed() {
-        for (body in listOf("""{"1":-1}""", """{"x":2.0}""", """{"1":"2.0"}""", "[]", "not json")) {
+        for (body in listOf("""{"1":-1}""", """{"x":2.0}""", """{"1":"2.0"}""", """{"1":10000.5}""", "[]", "not json")) {
             server.enqueue(ok(body))
             fails<ChainError.Malformed> { runBlocking { client().feeEstimates() } }
         }
+        // The ceiling itself is an estimate.
+        server.enqueue(ok("""{"1":10000}"""))
+        assertEquals(10_000.0, runBlocking { client().feeEstimates() }.getValue(1), 0.0)
     }
 
     @Test
     fun aBroadcastThatSucceeds() = runBlocking {
-        server.enqueue(ok(txid(42).uppercase()))
-        val raw = EsploraFixtures.RAW_HEX.hexToBytes()
-        assertEquals(txid(42), client().broadcast(raw))
+        server.enqueue(ok(EsploraFixtures.RAW_TXID.uppercase()))
+        val raw = EsploraFixtures.RAW_TX
+        assertEquals(EsploraFixtures.RAW_TXID, client().broadcast(raw))
         val r = server.takeRequest()
         assertEquals("POST", r.method)
         assertEquals("/api/tx", r.url.encodedPath)
         assertEquals(EsploraFixtures.RAW_HEX, r.body!!.utf8())
+    }
+
+    @Test
+    fun aBroadcastAnsweredWithAnotherTxidIsMalformed() {
+        server.enqueue(ok(txid(42)))
+        fails<ChainError.Malformed> { runBlocking { client().broadcast(EsploraFixtures.RAW_TX) } }
+    }
+
+    @Test
+    fun bytesThatAreNotATransactionAreNeverSent() {
+        try {
+            runBlocking { client().broadcast(byteArrayOf(1, 2, 3)) }
+            fail("sent")
+        } catch (_: IllegalArgumentException) {
+            // refused before any request
+        }
+        assertEquals(0, server.requestCount)
     }
 
     @Test
@@ -186,6 +270,7 @@ class EsploraClientTest {
             """sendrawtransaction RPC error: {"code":-26,"message":"min relay fee not met, 110 < 141"}""" to BroadcastRefusal.FEE_TOO_LOW,
             """sendrawtransaction RPC error: {"code":-25,"message":"bad-txns-inputs-missingorspent"}""" to BroadcastRefusal.INPUTS_MISSING_OR_SPENT,
             """sendrawtransaction RPC error: {"code":-27,"message":"Transaction already in block chain"}""" to BroadcastRefusal.ALREADY_KNOWN,
+            """sendrawtransaction RPC error: {"code":-27,"message":"Transaction outputs already in utxo set"}""" to BroadcastRefusal.ALREADY_KNOWN,
             """sendrawtransaction RPC error: {"code":-26,"message":"txn-mempool-conflict"}""" to BroadcastRefusal.CONFLICT,
             """sendrawtransaction RPC error: {"code":-26,"message":"dust"}""" to BroadcastRefusal.DUST,
             """sendrawtransaction RPC error: {"code":-26,"message":"mandatory-script-verify-flag-failed (Invalid Schnorr signature)"}""" to
@@ -195,7 +280,7 @@ class EsploraClientTest {
         )
         for ((text, kind) in cases) {
             server.enqueue(MockResponse.Builder().code(400).body(text).build())
-            val e = fails<ChainError.BroadcastRefused> { runBlocking { client().broadcast(byteArrayOf(1, 2)) } }
+            val e = fails<ChainError.BroadcastRefused> { runBlocking { client().broadcast(EsploraFixtures.RAW_TX) } }
             assertEquals(text, kind, e.reason)
             assertEquals(text, e.serverText)
             // The message is the kind only: the server's words stay out of logs and crash reports.
@@ -206,7 +291,7 @@ class EsploraClientTest {
     @Test
     fun aBroadcastAnsweredWithAServerErrorIsABadStatus() {
         server.enqueue(MockResponse.Builder().code(502).body("Bad gateway").build())
-        assertEquals(502, fails<ChainError.BadStatus> { runBlocking { client().broadcast(byteArrayOf(1)) } }.code)
+        assertEquals(502, fails<ChainError.BadStatus> { runBlocking { client().broadcast(EsploraFixtures.RAW_TX) } }.code)
     }
 
     @Test
@@ -253,7 +338,7 @@ class EsploraClientTest {
         server.enqueue(ok("abc"))
         fails<ChainError.Malformed> { runBlocking { c.rawTransaction(txid(1)) } }
         server.enqueue(ok("not-a-txid"))
-        fails<ChainError.Malformed> { runBlocking { c.broadcast(byteArrayOf(1)) } }
+        fails<ChainError.Malformed> { runBlocking { c.broadcast(EsploraFixtures.RAW_TX) } }
     }
 
     @Test

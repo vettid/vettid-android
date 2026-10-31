@@ -33,8 +33,14 @@ class ChainPrivacyTest {
         val errors = mutableListOf<Throwable>()
         val lines = captured { errors += scenario() }
         assertEquals(5, errors.size)
-        val text = lines + errors.map { it.toString() + it.stackTraceToString() } + ChainTarget.Address(ADDRESS).toString()
-        val secrets = listOf(ADDRESS, secretPath, "150000", "50000") + (1..5).map { txid(it) }
+        val values = listOf(
+            ChainTarget.Address(ADDRESS), ChainTarget.ScriptHash(txid(5)), ChainSummary(150_000, 50_000, 1, 2),
+            ChainUtxo(txid(1), 0, 50_000, true, 1), ChainTxInput(txid(2), 0, ADDRESS, 50_000), ChainTxOutput("0014", ADDRESS, 50_000),
+            ChainTx(txid(3), true, 1, 1, 150_000, listOf(ChainTxInput(txid(4), 0, ADDRESS, 50_000)), emptyList()),
+        )
+        // What a string template would print of each value that carries wallet data: its type name only.
+        val text = lines + errors.map { it.toString() + it.stackTraceToString() } + values.map { "$it" }
+        val secrets = listOf(ADDRESS, secretPath, "150000", "50000", EsploraFixtures.RAW_TXID) + (1..5).map { txid(it) }
         for (t in text) {
             for (s in secrets) assertFalse("'$s' in: $t", t.contains(s))
         }
@@ -47,7 +53,11 @@ class ChainPrivacyTest {
             server.start()
             val client = EsploraClient(server.url("/$secretPath/api"), OkHttpClient(), EsploraClient.Limits(callTimeoutMs = 300))
             val refused = """sendrawtransaction RPC error: {"code":-25,"message":"${txid(1)}"}"""
-            for (body in listOf(EsploraFixtures.SUMMARY, page(tx(1, true), tx(2, false)), EsploraFixtures.UTXO, EsploraFixtures.RAW_HEX)) {
+            val bodies = listOf(
+                EsploraFixtures.SUMMARY, EsploraFixtures.summary(1), page(tx(1, true), tx(2, false)),
+                EsploraFixtures.UTXO, EsploraFixtures.RAW_HEX,
+            )
+            for (body in bodies) {
                 server.enqueue(MockResponse.Builder().code(200).body(body).build())
             }
             server.enqueue(MockResponse.Builder().code(400).body(refused).build())
@@ -58,8 +68,8 @@ class ChainPrivacyTest {
                 { client.summary(ChainTarget.Address(ADDRESS)) },
                 { client.transactions(ChainTarget.Address(ADDRESS)) },
                 { client.unspent(ChainTarget.Address(ADDRESS)) },
-                { client.rawTransaction(txid(3)) },
-                { client.broadcast(byteArrayOf(1, 2, 3)) },
+                { client.rawTransaction(EsploraFixtures.RAW_TXID) },
+                { client.broadcast(EsploraFixtures.RAW_TX) },
                 { client.unspent(ChainTarget.Address(ADDRESS)) },
                 { client.rawTransaction(txid(4)) },
                 { client.summary(ChainTarget.ScriptHash(txid(5))) },
@@ -112,10 +122,14 @@ class ChainPrivacyTest {
 
     @Test
     fun theModuleHasNoLoggingCall() {
-        val sources = File("src/main/kotlin").walkTopDown().filter { it.extension == "kt" }.toList()
+        // This module, and the app's wallet wiring (`app/src/wallet`).
+        val dirs = listOf(File("src/main/kotlin"), File("../../app/src/wallet/kotlin"))
+        for (d in dirs) assertTrue("$d is missing", d.isDirectory)
+        val sources = dirs.flatMap { d -> d.walkTopDown().filter { it.extension == "kt" }.toList() }
         assertTrue(sources.size > 5)
         val banned = listOf(
             "android.util.Log", "Log.", "println(", "printStackTrace", "Timber", "HttpLoggingInterceptor", "System.out", "System.err",
+            "java.util.logging", "Logger", "stackTraceToString",
         )
         for (f in sources) {
             val code = f.readLines().filterNot { it.trimStart().startsWith("*") || it.trimStart().startsWith("//") }.joinToString("\n")

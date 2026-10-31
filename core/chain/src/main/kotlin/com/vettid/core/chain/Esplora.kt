@@ -33,11 +33,20 @@ sealed interface ChainTarget {
     }
 }
 
-/** An address's (or script hash's) totals in satoshis: confirmed, and the change the unconfirmed transactions make. */
-data class ChainSummary(val confirmedSats: Long, val unconfirmedSats: Long, val txCount: Long)
+// Every type below that carries wallet data prints its type name only: none of it may reach a log through a string template.
+
+/**
+ * An address's (or script hash's) totals in satoshis: confirmed, and the change the unconfirmed transactions make; the confirmed
+ * transactions and all of them.
+ */
+data class ChainSummary(val confirmedSats: Long, val unconfirmedSats: Long, val confirmedTxCount: Long, val txCount: Long) {
+    override fun toString(): String = "ChainSummary"
+}
 
 /** An unspent output. */
-data class ChainUtxo(val txid: String, val vout: Int, val valueSats: Long, val confirmed: Boolean, val blockHeight: Long?)
+data class ChainUtxo(val txid: String, val vout: Int, val valueSats: Long, val confirmed: Boolean, val blockHeight: Long?) {
+    override fun toString(): String = "ChainUtxo"
+}
 
 /** A transaction as the server lists it. */
 data class ChainTx(
@@ -48,12 +57,18 @@ data class ChainTx(
     val feeSats: Long?,
     val inputs: List<ChainTxInput>,
     val outputs: List<ChainTxOutput>,
-)
+) {
+    override fun toString(): String = "ChainTx"
+}
 
 /** An input: the output it spends, and that output's address and value when the server gives them (none for a coinbase). */
-data class ChainTxInput(val prevTxid: String?, val prevVout: Int?, val prevAddress: String?, val prevValueSats: Long?)
+data class ChainTxInput(val prevTxid: String?, val prevVout: Int?, val prevAddress: String?, val prevValueSats: Long?) {
+    override fun toString(): String = "ChainTxInput"
+}
 
-data class ChainTxOutput(val scriptHex: String, val address: String?, val valueSats: Long)
+data class ChainTxOutput(val scriptHex: String, val address: String?, val valueSats: Long) {
+    override fun toString(): String = "ChainTxOutput"
+}
 
 /** Why a broadcast was refused, from the server's (Bitcoin Core's) words. */
 enum class BroadcastRefusal {
@@ -112,8 +127,8 @@ sealed class ChainError(kind: String) : Exception(kind) {
     class TooMany : ChainError("too many transactions")
 
     /**
-     * The server refused the broadcast. [serverText] is its own words (capped), for the screen to choose a text by [reason];
-     * never logged.
+     * The server refused the broadcast, for [reason]. [serverText] is the server's own words (capped at 500 characters), kept for
+     * diagnosis in a debugger only: it is never shown to the member and never logged. The screen (W1c) chooses its text by [reason].
      */
     class BroadcastRefused(val reason: BroadcastRefusal, val serverText: String) : ChainError("broadcast refused: $reason")
 }
@@ -140,6 +155,8 @@ class EsploraClient internal constructor(
         val listBytes: Long = LIST_BYTES,
         val rawTxBytes: Long = RAW_TX_BYTES,
         val maxTransactions: Int = MAX_TRANSACTIONS,
+        val transactionsBytes: Long = TRANSACTIONS_BYTES,
+        val transactionsTimeoutMs: Long = TRANSACTIONS_TIMEOUT_MS,
     )
 
     private val client: OkHttpClient = http.newBuilder()
@@ -158,7 +175,7 @@ class EsploraClient internal constructor(
         ?: throw ChainError.Malformed()
 
     /** The hash of the block at [height], in display order. */
-    suspend fun blockHash(height: Long): String = text(listOf("block-height", height.toString()), limits.smallBytes).also {
+    suspend fun blockHash(height: Long): String = text(listOf("block-height", height.toString()), limits.smallBytes).lowercase().also {
         if (!isHash(it)) throw ChainError.Malformed()
     }
 
@@ -168,31 +185,48 @@ class EsploraClient internal constructor(
         val chain = o["chain_stats"].asObject()
         val mempool = o["mempool_stats"].asObject()
         fun balance(s: JsonObject) = s.sats("funded_txo_sum") - s.sats("spent_txo_sum")
-        return ChainSummary(
-            confirmedSats = balance(chain),
-            unconfirmedSats = balance(mempool),
-            txCount = chain.count("tx_count") + mempool.count("tx_count"),
-        )
+        val confirmed = balance(chain)
+        val unconfirmed = balance(mempool)
+        // Nothing can spend more than was received, confirmed or not.
+        if (confirmed < 0 || confirmed + unconfirmed < 0) throw ChainError.Malformed()
+        val confirmedTxs = chain.count("tx_count")
+        return ChainSummary(confirmed, unconfirmed, confirmedTxs, confirmedTxs + mempool.count("tx_count"))
     }
 
     /**
      * Every transaction of [target], newest first: the unconfirmed ones and the first confirmed page, then the next confirmed
-     * pages (`…/txs/chain/<last txid>`) until one is short. More than [Limits.maxTransactions] is a [ChainError.TooMany].
+     * pages (`…/txs/chain/<last txid>`) until one is short. The address's totals are read first: more confirmed transactions than
+     * [Limits.maxTransactions] is a [ChainError.TooMany], and paging that ends with fewer than the totals count is
+     * [ChainError.Malformed] (a short page cannot end it early). The whole read has one byte budget ([ChainError.TooLarge]) and one
+     * deadline ([ChainError.Timeout]).
      */
+    @Suppress("ThrowsCount")
     suspend fun transactions(target: ChainTarget): List<ChainTx> {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(limits.transactionsTimeoutMs)
+        fun remainingMs(): Long =
+            TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).also { if (it <= 0) throw ChainError.Timeout() }
+        val expected = summary(target).confirmedTxCount
+        if (expected > limits.maxTransactions) throw ChainError.TooMany()
         val all = ArrayList<ChainTx>()
         val seen = HashSet<String>()
+        var budget = limits.transactionsBytes
         var path = targetPath(target) + "txs"
         while (true) {
-            val page = json(path, limits.listBytes).asArray().map { parseTx(it) }
-            for (tx in page) {
+            if (budget <= 0) throw ChainError.TooLarge()
+            val (page, size) = jsonSized(path, minOf(limits.listBytes, budget), remainingMs())
+            budget -= size
+            val txs = page.asArray().map { parseTx(it) }
+            for (tx in txs) {
                 // A page that repeats a transaction would page forever.
                 if (!seen.add(tx.txid)) throw ChainError.Malformed()
                 all += tx
             }
             if (all.size > limits.maxTransactions) throw ChainError.TooMany()
-            val confirmed = page.filter { it.confirmed }
-            if (confirmed.size < CONFIRMED_PAGE) return all
+            val confirmed = txs.filter { it.confirmed }
+            if (confirmed.size < CONFIRMED_PAGE) {
+                if (all.count { it.confirmed } < expected) throw ChainError.Malformed()
+                return all
+            }
             path = targetPath(target) + listOf("txs", "chain", confirmed.last().txid)
         }
     }
@@ -210,31 +244,37 @@ class EsploraClient internal constructor(
         )
     }
 
-    /** The transaction's raw bytes (`GET /tx/<txid>/hex`); a [ChainError.NotFound] if the server does not know it. */
+    /**
+     * The transaction's raw bytes (`GET /tx/<txid>/hex`), checked to be that transaction (their txid is [txid]); a
+     * [ChainError.NotFound] if the server does not know it.
+     */
     suspend fun rawTransaction(txid: String): ByteArray {
-        require(isHash(txid)) { "not a txid" }
-        val hex = text(listOf("tx", txid, "hex"), limits.rawTxBytes)
+        val id = txid.lowercase()
+        require(isHash(id)) { "not a txid" }
+        val hex = text(listOf("tx", id, "hex"), limits.rawTxBytes).lowercase()
         if (hex.isEmpty() || hex.length % 2 != 0 || !hex.all { it in HEX }) throw ChainError.Malformed()
-        return hex.hexToBytes()
+        val bytes = hex.hexToBytes()
+        if (txidOf(bytes) != id) throw ChainError.Malformed()
+        return bytes
     }
 
     /** Fee estimates in sat/vB by confirmation target in blocks (`/fee-estimates`). */
     suspend fun feeEstimates(): Map<Int, Double> = json(listOf("fee-estimates"), limits.smallBytes).asObject().entries.associate { (k, v) ->
         val target = k.toIntOrNull()?.takeIf { it in 1..MAX_TARGET } ?: throw ChainError.Malformed()
-        val rate = (v as? JsonPrimitive)?.takeUnless { it.isString }?.doubleOrNull?.takeIf { it.isFinite() && it > 0 }
+        val rate = (v as? JsonPrimitive)?.takeUnless { it.isString }?.doubleOrNull?.takeIf { it.isFinite() && it > 0 && it <= MAX_FEE_RATE }
             ?: throw ChainError.Malformed()
         target to rate
     }
 
-    /** Broadcasts [tx] (`POST /tx`, the hex as the body); returns the txid the server answers. */
+    /** Broadcasts [tx] (`POST /tx`, the hex as the body); returns its txid, which the server's answer must be. */
     suspend fun broadcast(tx: ByteArray): String {
-        require(tx.isNotEmpty()) { "empty transaction" }
+        val txid = requireNotNull(txidOf(tx)) { "not a transaction" }
         val body = tx.toHex().toRequestBody(TEXT)
         val request = Request.Builder().url(url(listOf("tx"))).post(body).header("Accept", "text/plain").build()
         val (code, bytes) = call(request, limits.smallBytes)
         val text = bytes.decodeToString().trim()
         return when (code) {
-            HTTP_OK -> text.lowercase().takeIf(::isHash) ?: throw ChainError.Malformed()
+            HTTP_OK -> text.lowercase().takeIf { it == txid } ?: throw ChainError.Malformed()
             HTTP_BAD_REQUEST -> throw ChainError.BroadcastRefused(refusal(text), text.take(MAX_SERVER_TEXT))
             else -> throw status(code)
         }
@@ -246,11 +286,15 @@ class EsploraClient internal constructor(
         return bytes.decodeToString().trim()
     }
 
-    private suspend fun json(path: List<String>, max: Long): JsonElement {
-        val (code, bytes) = call(Request.Builder().url(url(path)).get().header("Accept", "application/json").build(), max)
+    private suspend fun json(path: List<String>, max: Long): JsonElement = jsonSized(path, max, limits.callTimeoutMs).first
+
+    /** The JSON answer and its size in bytes, within [timeoutMs]. */
+    private suspend fun jsonSized(path: List<String>, max: Long, timeoutMs: Long): Pair<JsonElement, Int> {
+        val request = Request.Builder().url(url(path)).get().header("Accept", "application/json").build()
+        val (code, bytes) = call(request, max, minOf(timeoutMs, limits.callTimeoutMs))
         if (code != HTTP_OK) throw status(code)
         return try {
-            Json.parseToJsonElement(bytes.decodeToString())
+            Json.parseToJsonElement(bytes.decodeToString()) to bytes.size
         } catch (_: IllegalArgumentException) {
             throw ChainError.Malformed()
         }
@@ -272,31 +316,34 @@ class EsploraClient internal constructor(
 
     /** One request: its status and its whole body, at most [max] bytes; redirects, timeouts and transport failures as [ChainError]. */
     @Suppress("ThrowsCount")
-    private suspend fun call(request: Request, max: Long): Pair<Int, ByteArray> = withContext(Dispatchers.IO) {
-        try {
-            client.newCall(request).execute().use { r ->
-                if (r.code in REDIRECTS) throw ChainError.Redirected()
-                val body = r.body
-                val declared = body.contentLength()
-                if (declared > max) throw ChainError.TooLarge()
-                val buf = okio.Buffer()
-                body.source().use { s ->
-                    while (buf.size <= max) {
-                        if (s.read(buf, READ_CHUNK) < 0) break
+    private suspend fun call(request: Request, max: Long, timeoutMs: Long = limits.callTimeoutMs): Pair<Int, ByteArray> =
+        withContext(Dispatchers.IO) {
+            try {
+                val c = client.newCall(request)
+                c.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+                c.execute().use { r ->
+                    if (r.code in REDIRECTS) throw ChainError.Redirected()
+                    val body = r.body
+                    val declared = body.contentLength()
+                    if (declared > max) throw ChainError.TooLarge()
+                    val buf = okio.Buffer()
+                    body.source().use { s ->
+                        while (buf.size <= max) {
+                            if (s.read(buf, READ_CHUNK) < 0) break
+                        }
                     }
+                    // Over the limit, or shorter than the body announced.
+                    if (buf.size > max || (declared >= 0 && buf.size != declared)) throw ChainError.TooLarge()
+                    r.code to buf.readByteArray()
                 }
-                // Over the limit, or shorter than the body announced.
-                if (buf.size > max || (declared >= 0 && buf.size != declared)) throw ChainError.TooLarge()
-                r.code to buf.readByteArray()
+            } catch (e: ChainError) {
+                throw e
+            } catch (_: InterruptedIOException) {
+                throw ChainError.Timeout()
+            } catch (_: IOException) {
+                throw ChainError.Unreachable()
             }
-        } catch (e: ChainError) {
-            throw e
-        } catch (_: InterruptedIOException) {
-            throw ChainError.Timeout()
-        } catch (_: IOException) {
-            throw ChainError.Unreachable()
         }
-    }
 
     private fun status(code: Int): ChainError = if (code == HTTP_NOT_FOUND) ChainError.NotFound() else ChainError.BadStatus(code)
 
@@ -346,6 +393,13 @@ class EsploraClient internal constructor(
 
         const val MAX_TRANSACTIONS = 10_000
 
+        /** One address's whole transaction list: every page together. */
+        const val TRANSACTIONS_BYTES = 32L * 1024 * 1024
+        const val TRANSACTIONS_TIMEOUT_MS = 120_000L
+
+        /** Far above any fee a network has asked for: a higher estimate is not one to pay. */
+        const val MAX_FEE_RATE = 10_000.0
+
         /** Esplora's confirmed page: a shorter one is the last. */
         const val CONFIRMED_PAGE = 25
 
@@ -367,7 +421,10 @@ class EsploraClient internal constructor(
         /** Bitcoin Core's reject reasons as Esplora passes them on, by kind; the first kind with a match wins. */
         private val REFUSALS: List<Pair<BroadcastRefusal, List<String>>> = listOf(
             BroadcastRefusal.ALREADY_KNOWN to
-                listOf("already in block chain", "txn-already-known", "txn-already-in-mempool", "already have transaction"),
+                listOf(
+                    "already in block chain", "txn-already-known", "txn-already-in-mempool", "already have transaction",
+                    "outputs already in utxo set",
+                ),
             BroadcastRefusal.INPUTS_MISSING_OR_SPENT to listOf("missingorspent", "missing-inputs", "missing inputs"),
             BroadcastRefusal.FEE_TOO_LOW to
                 listOf("min relay fee not met", "mempool min fee not met", "insufficient fee", "min-fee-not-met"),
@@ -400,8 +457,8 @@ class EsploraClient internal constructor(
         fun JsonObject.flag(key: String): Boolean = (this[key] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
             ?: throw ChainError.Malformed()
 
-        fun JsonObject.hash(key: String): String = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(::isHash)
-            ?: throw ChainError.Malformed()
+        fun JsonObject.hash(key: String): String =
+            (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.lowercase()?.takeIf(::isHash) ?: throw ChainError.Malformed()
 
         fun JsonObject.optString(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
     }

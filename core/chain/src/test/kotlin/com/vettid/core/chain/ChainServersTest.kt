@@ -7,7 +7,6 @@ import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -67,13 +66,71 @@ class ChainServersTest {
         assertEquals(ChainServer.Default(ChainDefaults.TESTNET4), s.server(Network.TESTNET4))
         assertEquals("https://mempool.space/signet/api", ChainDefaults.SIGNET.text)
         assertEquals("https://mempool.space/testnet4/api", ChainDefaults.TESTNET4.text)
-        // Mainnet's default comes with the production approval: not set, and nothing to look up.
-        assertEquals(ChainServer.NotSet, s.server(Network.MAINNET))
-        assertNull(s.client(Network.MAINNET))
+        // Mainnet is not offered yet (its server comes with the production approval); nothing to look up.
+        assertEquals(ChainServer.NotOffered, s.server(Network.MAINNET))
+        assertEquals(ChainAccess.NoServer(ChainServer.NotOffered), s.access(Network.MAINNET))
         // The app does not connect to testnet3; regtest only in devStack.
         assertEquals(ChainServer.NotOffered, s.server(Network.TESTNET))
         assertEquals(ChainServer.NotOffered, s.server(Network.REGTEST))
-        assertNotNull(s.client(Network.SIGNET))
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun block0IsCheckedOncePerSessionBeforeTheFirstLookup() = runBlocking {
+        val s = servers()
+        server.enqueue(genesis(Network.SIGNET))
+        assertTrue(s.access(Network.SIGNET) is ChainAccess.Ready)
+        assertTrue(s.access(Network.SIGNET) is ChainAccess.Ready)
+        assertEquals(1, server.requestCount)
+        // A new session checks again.
+        s.forgetChecks()
+        server.enqueue(genesis(Network.SIGNET))
+        assertTrue(s.access(Network.SIGNET) is ChainAccess.Ready)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun aServerThatChangedNetworkSinceItWasSavedIsNotUsed() = runBlocking {
+        val s = servers()
+        server.enqueue(genesis(Network.MAINNET))
+        assertEquals(ChainAccess.WrongNetwork(Network.MAINNET), s.access(Network.SIGNET))
+        // Not remembered as checked: asked again next time.
+        server.enqueue(genesis(Network.SIGNET))
+        assertTrue(s.access(Network.SIGNET) is ChainAccess.Ready)
+    }
+
+    @Test
+    fun aServerThatDoesNotAnswerTheCheckIsNotUsed() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(503).build())
+        assertTrue(servers().access(Network.SIGNET) is ChainAccess.Unchecked)
+    }
+
+    @Test
+    fun aSavedServerNeedsNoSecondCheckThisSession() = runBlocking {
+        val s = servers()
+        server.enqueue(genesis(Network.SIGNET))
+        assertTrue(s.save(Network.SIGNET, own) is SaveResult.Saved)
+        assertEquals(own, ((s.access(Network.SIGNET) as ChainAccess.Ready).server as ChainServer.Own).url.text)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun nothingOfTheSettingIsKeptInMemory() = runBlocking {
+        val s = servers()
+        server.enqueue(genesis(Network.SIGNET))
+        assertTrue(s.save(Network.SIGNET, own) is SaveResult.Saved)
+        // The file goes (a wipe): the same instance reads the default, and a reset writes nothing back.
+        file.bytes = null
+        val saves = file.saves
+        assertEquals(ChainServer.Default(ChainDefaults.SIGNET), s.server(Network.SIGNET))
+        assertTrue(s.reset(Network.SIGNET))
+        assertNull(file.bytes)
+        assertEquals(saves, file.saves)
+        // A passing read failure is not remembered either.
+        file.failLoad = true
+        assertEquals(ChainServer.Unreadable, s.server(Network.SIGNET))
+        file.failLoad = false
+        assertEquals(ChainServer.Default(ChainDefaults.SIGNET), s.server(Network.SIGNET))
     }
 
     @Test
@@ -167,14 +224,31 @@ class ChainServersTest {
 
     @Test
     fun anUnreadableSettingUsesNoServerUntilItIsSavedOrReset() = runBlocking {
-        file.failLoad = true
+        file.bytes = "garbage".encodeToByteArray()
         val s = servers()
         assertEquals(ChainServer.Unreadable, s.server(Network.SIGNET))
         // Not the default either: a member who chose their own server must not be sent to mempool.space.
-        assertNull(s.client(Network.SIGNET))
-        file.failLoad = false
+        assertEquals(ChainAccess.NoServer(ChainServer.Unreadable), s.access(Network.SIGNET))
+        assertEquals(0, server.requestCount)
+        // Resetting one network gives it its default; the other stays without a server until it is saved or reset.
         assertTrue(s.reset(Network.SIGNET))
         assertEquals(ChainServer.Default(ChainDefaults.SIGNET), s.server(Network.SIGNET))
+        assertEquals(ChainServer.NotSet, s.server(Network.TESTNET4))
+        assertEquals(ChainAccess.NoServer(ChainServer.NotSet), s.access(Network.TESTNET4))
+        assertEquals("""{"version":1,"servers":{"testnet4":null}}""", file.bytes!!.decodeToString())
+        assertEquals(ChainServer.NotSet, servers().server(Network.TESTNET4))
+        assertTrue(s.reset(Network.TESTNET4))
+        assertEquals(ChainServer.Default(ChainDefaults.TESTNET4), s.server(Network.TESTNET4))
+    }
+
+    @Test
+    fun aSaveOverAnUnreadableSettingLeavesTheOtherNetworksWithoutAServer() = runBlocking {
+        file.bytes = "garbage".encodeToByteArray()
+        server.enqueue(genesis(Network.SIGNET))
+        val s = servers()
+        assertTrue(s.save(Network.SIGNET, own) is SaveResult.Saved)
+        assertEquals(own, (s.server(Network.SIGNET) as ChainServer.Own).url.text)
+        assertEquals(ChainServer.NotSet, s.server(Network.TESTNET4))
     }
 
     @Test
@@ -192,7 +266,10 @@ class ChainServersTest {
         val s = servers()
         assertEquals(SaveResult.NotWritten, s.save(Network.SIGNET, own))
         assertEquals(ChainServer.Default(ChainDefaults.SIGNET), s.server(Network.SIGNET))
+        // A reset that has something to remove, and cannot write.
+        file.bytes = """{"version":1,"servers":{"signet":"$own"}}""".encodeToByteArray()
         assertFalse(s.reset(Network.SIGNET))
+        assertEquals(own, (s.server(Network.SIGNET) as ChainServer.Own).url.text)
     }
 
     @Test

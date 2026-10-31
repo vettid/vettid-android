@@ -60,7 +60,11 @@ class ChainServerUrlTest {
     fun theDevelopmentRegtestServerIsLoopbackOnly() {
         assertEquals("http://127.0.0.1:18083", ChainServerUrl.loopbackOrNull("http://127.0.0.1:18083")?.text)
         assertEquals("http://localhost:3002/api", ChainServerUrl.loopbackOrNull("http://localhost:3002/api/")?.text)
-        for (t in listOf(null, "", "http://192.168.1.2:3002", "https://mempool.space/api", "http://u:p@127.0.0.1:3002", "nonsense")) {
+        // Only what devStack's network security config allows: not ::1.
+        val refused = listOf(
+            null, "", "http://192.168.1.2:3002", "https://mempool.space/api", "http://u:p@127.0.0.1:3002", "nonsense", "http://[::1]:3002",
+        )
+        for (t in refused) {
             assertNull(t, ChainServerUrl.loopbackOrNull(t))
         }
     }
