@@ -362,9 +362,21 @@ class VoteScreenTest {
         var closed = 0
         show(state(summary()).copy(windowNotClosed = com.vettid.core.data.votes.WindowNotClosed(300)), VoteActions(onCloseWindow = { closed++ }))
         shown("The unlock window may still be open").assertIsDisplayed()
-        shown("It closes by itself once it has not been used for 300 seconds.", substring = true).assertIsDisplayed()
+        shown("It closes by itself once it has not been used for 5 minutes.", substring = true).assertIsDisplayed()
         rule.onNodeWithTag("vote_window_close").performClick()
         assertEquals(1, closed)
+    }
+
+    @Test
+    fun theUnlockTimeIsInWholeMinutesRoundedUp() {
+        show(state(summary()).copy(windowNotClosed = com.vettid.core.data.votes.WindowNotClosed(61)))
+        shown("It closes by itself once it has not been used for 2 minutes.", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun theUnlockTimeUpToAMinuteIsOneMinute() {
+        show(state(summary()).copy(windowNotClosed = com.vettid.core.data.votes.WindowNotClosed(30)))
+        shown("It closes by itself once it has not been used for 1 minute.", substring = true).assertIsDisplayed()
     }
 
     @Test
@@ -386,7 +398,7 @@ class VoteScreenTest {
     fun resultsTooLargeAreAProblemWithNoTryAgain() {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.PENDING), canCast = false)
         show(state(s, detail(s), hint = VoteHint(resultsProblem = true, resultsTooLarge = true)))
-        shown("VettID could not check the published results of this vote yet. They may be incomplete or not valid.").assertIsDisplayed()
+        shown("VettID can't check the published results of this vote: they are larger than your vault accepts. They may not be valid.").assertIsDisplayed()
         assertEquals(0, texts("It will try again"))
     }
 

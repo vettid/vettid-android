@@ -47,7 +47,7 @@ import java.time.Instant
 /** Whether the vault has the votes feature (VAULT-MESSAGING §10.19.1): learned from `vote.list`, asked again after an unlock. */
 enum class VotesAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
 
-/** The lock after a cast failed; [ttlSeconds] is how long the window stays open unused, when the app knows it. */
+/** The lock after a cast failed; [ttlSeconds] is the vault's `credential.unlock_ttl_seconds` (30–3,600), when the app knows it. */
 data class WindowNotClosed(val ttlSeconds: Long?)
 
 /** What the app knows about a vote that the vault's list does not say (memory only). */
@@ -220,6 +220,8 @@ class VotesManager(
     private val windowUntil: () -> Instant?,
     private val openWindow: suspend (String) -> Unit,
     private val closeWindow: suspend () -> Unit,
+    /** The vault setting `credential.unlock_ttl_seconds` (VaultSettings.unlockTtlSeconds); null when it can't be read. */
+    private val unlockTtl: suspend () -> Int? = { null },
     private val now: () -> Instant = Instant::now,
     private val syncEvery: Duration = SYNC_EVERY,
 ) : VotesRepository {
@@ -391,7 +393,7 @@ class VotesManager(
             return BallotState.of(((body["ballot"] as? JsonObject)?.let { VaultJson.str(it, "state") }))
         } finally {
             // A window this prompt opened does not stay open for its full length; one that was open is left as it was.
-            if (unlocked.toLock) closeOpenedWindow(unlocked.ttlSeconds)
+            if (unlocked.toLock) closeOpenedWindow()
         }
     }
 
@@ -402,8 +404,6 @@ class VotesManager(
     private suspend fun unlock(password: String, unlocked: Unlocked) {
         try {
             openWindow(password)
-            // How long the window stays open unused: from the end time the vault answered with.
-            unlocked.ttlSeconds = windowUntil()?.let { Duration.between(now(), it).seconds }?.takeIf { it > 0 }
         } catch (e: VaultFailure) {
             // Only a definite refusal opened nothing. Any other failure (no answer, an answer that did not read…) may have
             // come after the vault opened the window, so it is locked.
@@ -412,16 +412,17 @@ class VotesManager(
         }
     }
 
-    /** Whether the window this cast opened is to be locked, and how long it stays open when unused (null: not known). */
-    private class Unlocked(var toLock: Boolean, var ttlSeconds: Long? = null)
+    /** Whether the window this cast opened is to be locked. */
+    private class Unlocked(var toLock: Boolean)
 
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
-    private suspend fun closeOpenedWindow(ttlSeconds: Long?) {
+    private suspend fun closeOpenedWindow() {
         withContext(NonCancellable) {
             try {
                 closeWindow()
             } catch (e: Exception) {
-                windowNotClosedFlow.value = WindowNotClosed(ttlSeconds)
+                // The unlock time is the vault's setting; plain words when it can't be read.
+                windowNotClosedFlow.value = WindowNotClosed(runCatching { unlockTtl() }.getOrNull()?.toLong())
             }
         }
     }

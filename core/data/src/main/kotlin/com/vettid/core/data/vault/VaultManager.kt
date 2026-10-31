@@ -948,6 +948,7 @@ class VaultManager(
         windowUntil = { windowFlow.value },
         openWindow = { openUnlockWindow(it) },
         closeWindow = { closeUnlockWindow() },
+        unlockTtl = { status().unlockTtlSeconds },
     )
 
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */

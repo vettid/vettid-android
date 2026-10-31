@@ -125,10 +125,13 @@
     <string name="vote_already_voted">You had already voted: %1$s. Your vote can\'t be changed.</string>
     <string name="vote_already_voted_any">You had already voted. Your vote can\'t be changed.</string>
     <string name="vote_window_not_closed_title">The unlock window may still be open</string>
-    <string name="vote_window_not_closed">VettID could not close the credential unlock window after your vote. It closes by itself once it has not been used for %1$s.</string>
+    <plurals name="vote_window_not_closed">
+        <item quantity="one">VettID could not close the credential unlock window after your vote. It closes by itself once it has not been used for %1$d minute.</item>
+        <item quantity="other">VettID could not close the credential unlock window after your vote. It closes by itself once it has not been used for %1$d minutes.</item>
+    </plurals>
     <string name="vote_window_not_closed_plain">VettID could not close the credential unlock window after your vote. It closes by itself.</string>
     <string name="vote_window_close_now">Close it now</string>
-    <string name="vote_check_results_too_large">VettID could not check the published results of this vote yet. They may be incomplete or not valid.</string>
+    <string name="vote_check_results_too_large">VettID can\'t check the published results of this vote: they are larger than your vault accepts. They may not be valid.</string>
     <string name="vote_proof_saved">The proof was saved.</string>
     <string name="vote_proof_failed">The proof could not be saved. Try again.</string>
     <string name="vote_proof_save">Save</string>

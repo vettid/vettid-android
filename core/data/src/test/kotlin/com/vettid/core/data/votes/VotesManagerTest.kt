@@ -177,6 +177,7 @@ class VotesManagerTest {
             window.until = null
             window.closeFail?.let { f -> throw f }
         },
+        unlockTtl = { 300 },
         now = { clock },
     )
 

@@ -47,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -78,7 +79,6 @@ import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.SecureWindow
 import com.vettid.core.ui.format.Times
-import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -238,7 +238,11 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.vote_window_not_closed_title),
                     body = (
-                        w.ttlSeconds?.let { stringResource(R.string.vote_window_not_closed, durationText(it)) }
+                        w.ttlSeconds?.let {
+                            // Whole minutes, rounded up ("1 minute" up to 60 s).
+                            val minutes = ((it + SECONDS_PER_MINUTE - 1) / SECONDS_PER_MINUTE).coerceAtLeast(1).toInt()
+                            pluralStringResource(R.plurals.vote_window_not_closed, minutes, minutes)
+                        }
                             ?: stringResource(R.string.vote_window_not_closed_plain)
                         ) + (failure?.let { "\n$it" } ?: ""),
                     modifier = Modifier.testTag("vote_window_not_closed"),
@@ -692,3 +696,5 @@ private fun ReleaseDialog(state: VoteUiState, actions: VoteActions) {
         },
     )
 }
+
+private const val SECONDS_PER_MINUTE = 60L
