@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -377,5 +378,38 @@ class WalletsManagerTest {
         m.setTestNetwork(w.id, Network.TESTNET)
         assertTrue(m.lookup(w.id) is LookupResult.Done)
         assertTrue(ops.calls.count { it.startsWith("list:") } > lists)
+    }
+
+    @Test
+    fun aRevealThatAClearOvertookWipesThePhraseAndFails() = runBlocking {
+        lateinit var m: WalletsManager
+        var revealed: RevealedPhrase? = null
+        val gated = object : WalletOps by ops {
+            override suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase =
+                ops.revealPhrase(walletId, password).also {
+                    revealed = it
+                    m.clear()
+                }
+        }
+        m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
+        val e = runCatching { m.revealPhrase("01WALLET0000000000000000AA", "pw") }.exceptionOrNull() as VaultFailure
+        assertEquals(WalletsManager.CLEARED, e.code)
+        assertTrue(revealed!!.words().isEmpty())
+    }
+
+    @Test
+    fun aCloseAlwaysFinishesItsHook() = runBlocking {
+        val m = manager()
+        var done = false
+        val job = CoroutineScope(Dispatchers.Default).launch {
+            m.close {
+                delay(200)
+                done = true
+            }
+        }
+        delay(50)
+        job.cancel()
+        job.join()
+        assertTrue(done)
     }
 }

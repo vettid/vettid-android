@@ -163,7 +163,7 @@ class ChainServers(
         }
     }
 
-    /** Waits for a write in progress (a wipe's hook, after the generation moved): none that started before it is kept after. */
+    /** Waits for a write in progress (a wipe's hook, after the generation moved), so that none that started before the wipe is kept. */
     suspend fun fence() = lock.withLock { }
 
     /** A new session: every server's block 0 is checked again before its next lookup. */

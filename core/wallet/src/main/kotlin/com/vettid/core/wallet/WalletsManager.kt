@@ -14,6 +14,7 @@ import com.vettid.core.vault.ADDRESS_USED_MAX
 import com.vettid.core.vault.VaultJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import java.time.Instant
 
@@ -142,7 +144,8 @@ class WalletsManager(
     /** The vault is closed (locked, held, due): everything is forgotten, then [onClosed] runs (the servers' checks are reset). */
     suspend fun close(onClosed: suspend () -> Unit = {}) {
         clear()
-        onClosed()
+        // Not cancelled partway (a new value of `follow`'s flow): once cleared, the servers' checks are always reset too.
+        withContext(NonCancellable) { onClosed() }
     }
 
     /** Lock, hold, wipe: forget everything, at once. */
@@ -250,8 +253,19 @@ class WalletsManager(
         }
     }
 
-    /** The phrase again, for the check of a wallet that is not backed up yet: `item.reveal`, a credential operation. */
-    suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase = vaultGuard { ops().revealPhrase(walletId, password) }
+    /**
+     * The phrase again, for the check of a wallet that is not backed up yet: `item.reveal`, a credential operation. A clear that
+     * overtook it (a lock while it was answered): the phrase is wiped and a [VaultFailure] with [CLEARED] is thrown.
+     */
+    suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase {
+        val g = gen()
+        val phrase = vaultGuard { ops().revealPhrase(walletId, password) }
+        if (gen() != g) {
+            phrase.wipe()
+            throw VaultFailure(FailureKind.OTHER, CLEARED)
+        }
+        return phrase
+    }
 
     /** "Delete wallet": `item.delete` of its item with the password. */
     suspend fun delete(walletId: String, password: String) {

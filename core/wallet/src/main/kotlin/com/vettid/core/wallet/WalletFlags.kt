@@ -48,7 +48,7 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         return change { it.copy(testnet = it.testnet + (walletId to network)) }
     }
 
-    /** Waits for a write in progress (a wipe's hook, after the generation moved): no write starts after it that could be kept. */
+    /** Waits for a write in progress (a wipe's hook, after the generation moved), so that none that started before the wipe is kept. */
     suspend fun fence() = lock.withLock { }
 
     /** Forgets what is kept of a deleted wallet. */
