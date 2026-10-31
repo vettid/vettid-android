@@ -227,9 +227,9 @@ object FeedKinds {
     }
 
     private fun senderOf(a: Approval): String? = when (a) {
-        is Approval.ConnectionRequest -> a.name ?: a.displayName
-        else -> a.connectionName
-    }?.takeIf { it.isNotBlank() }
+        is Approval.ConnectionRequest -> AccountNames.cleaned(a.name) ?: AccountNames.cleaned(a.displayName)
+        else -> AccountNames.cleaned(a.connectionName)
+    }
 
     /** The item's name (never a value), when the item or the ask names one. */
     fun itemName(item: FeedItem, names: FeedNames): String? = when (item.kind) {

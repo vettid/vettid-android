@@ -24,7 +24,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.lifecycle.SavedStateHandle
-import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.GrantAsk
 import com.vettid.core.data.items.GrantAskEntry
 import com.vettid.core.data.items.GrantDirection
@@ -111,9 +110,10 @@ class ConnectionSharingCardsTest {
 
     @Test
     fun aFirstNameThatShowsNothingFallsBackToTheAccountName() {
-        for (blank in listOf("\u2800", "\u3164", "\u2800\u3164")) {
+        // The shown text keeps the blank: cleaning only decides that the first name alone shows nothing.
+        for ((blank, shown) in listOf("\u2800" to "\u2800 Lovelace", "\u3164" to "\u3164 Lovelace", "\u2800\u3164" to "\u2800\u3164 Lovelace")) {
             val c = ConnectionInfo("c3", "", ConnectionState.ACTIVE, firstName = blank, lastName = "Lovelace")
-            assertEquals(blank, AccountNames.cleaned("$blank Lovelace"), sharingName(c))
+            assertEquals(blank, shown, sharingName(c))
         }
         // With nothing shown in either, the cards fall back to "this connection".
         assertNull(sharingName(ConnectionInfo("c4", "", ConnectionState.ACTIVE, firstName = "\u2800")))
