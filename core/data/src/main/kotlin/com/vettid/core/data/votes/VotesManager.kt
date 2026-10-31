@@ -2,7 +2,6 @@ package com.vettid.core.data.votes
 
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.ClaimBlob
-import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.vote.ResultsProblem
 import com.vettid.core.crypto.vote.VoteRows
 import com.vettid.core.data.items.ListLoad
@@ -629,7 +628,12 @@ class VotesManager(
     private suspend fun send(body: JsonObject): JsonObject? {
         val bytes = VoteSync.encoded(body)
         if (bytes.size > VoteSync.BODY_MAX) return null
-        if (VoteSync.fitsInline(bytes)) return vaultGuard { ops().sync(body) }
+        when (VoteSync.inline(bytes)) {
+            VoteSync.Inline.FITS -> return vaultGuard { ops().sync(body) }
+            VoteSync.Inline.TOO_LARGE -> Unit // a claim-check blob, below
+            // Not an inner message at all (the strict body check failed): the vault would refuse it either way. Not sent.
+            VoteSync.Inline.OTHER -> return null
+        }
         val sealed = ClaimBlob.seal(bytes)
         try {
             val id = uploadWithRetry(sealed.blob) ?: return null
@@ -666,12 +670,10 @@ class VotesManager(
             if (due) {
                 try {
                     checkResults(v.connectionId, v.proposalId)
-                } catch (_: VaultFailure) {
-                    // told by the vote's own hint
-                } catch (_: ResultsProblem) {
-                    // the same
-                } catch (_: CryptoException) {
-                    // a row whose fields do not read: the same
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                    // Whatever it was (told by the vote's own hint where it can be), the other due votes are still checked.
                 }
             }
         }

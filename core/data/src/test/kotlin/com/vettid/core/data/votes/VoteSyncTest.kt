@@ -229,10 +229,10 @@ class VoteSyncTest {
         assertEquals(27, VoteSync.BUNDLE_DEPTH)
         assertEquals(25, VoteSync.EXTENSION_BUNDLE_DEPTH)
         assertEquals(30, VoteSync.RESULTS_BUNDLE_DEPTH)
-        fun entry(extra: Int): JsonObject {
-            val bundle = VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH + extra).toByteArray())!!
-            val extBundle = VoteSync.jsonObject(nested(VoteSync.EXTENSION_BUNDLE_DEPTH + extra).toByteArray())!!
-            val index = VoteSync.jsonObject(("{\"proposal_id\":\"$pid\",\"x\":" + nested(VoteSync.INDEX_DEPTH - 1 + extra) + "}").toByteArray())!!
+        fun entry(indexExtra: Int = 0, bundleExtra: Int = 0, extensionExtra: Int = 0): JsonObject {
+            val bundle = VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH + bundleExtra).toByteArray())!!
+            val extBundle = VoteSync.jsonObject(nested(VoteSync.EXTENSION_BUNDLE_DEPTH + extensionExtra).toByteArray())!!
+            val index = VoteSync.jsonObject(("{\"proposal_id\":\"$pid\",\"x\":" + nested(VoteSync.INDEX_DEPTH - 1 + indexExtra) + "}").toByteArray())!!
             // Built raw (not through entryJson), so that the over-deep case is sent as it is.
             return JsonObject(
                 mapOf(
@@ -248,10 +248,13 @@ class VoteSyncTest {
                 ),
             )
         }
+        fun body(e: JsonObject) = JsonObject(mapOf("entries" to JsonArray(listOf(e))))
         // Values at exactly their budget: the vault's strict parse of the whole inner message passes.
-        parseInner(JsonObject(mapOf("entries" to JsonArray(listOf(entry(0))))))
-        // One level more: it would refuse the call (so the budgets are not too generous).
-        assertTrue(runCatching { parseInner(JsonObject(mapOf("entries" to JsonArray(listOf(entry(1)))))) }.isFailure)
+        parseInner(body(entry()))
+        // Each one level more, on its own: it would refuse the call (so no budget is too generous).
+        assertTrue("index", runCatching { parseInner(body(entry(indexExtra = 1))) }.isFailure)
+        assertTrue("bundle", runCatching { parseInner(body(entry(bundleExtra = 1))) }.isFailure)
+        assertTrue("extension bundle", runCatching { parseInner(body(entry(extensionExtra = 1))) }.isFailure)
         // The results' bundle in vote.results.submit.
         parseInner(JsonObject(mapOf("bundle" to VoteSync.jsonObject(nested(VoteSync.RESULTS_BUNDLE_DEPTH).toByteArray())!!)))
         assertTrue(runCatching { parseInner(JsonObject(mapOf("bundle" to VoteSync.jsonObject(nested(VoteSync.RESULTS_BUNDLE_DEPTH + 1).toByteArray())!!))) }.isFailure)
