@@ -102,6 +102,7 @@ fun InviteScreen(state: InviteUiState, actions: InviteActions, modifier: Modifie
             onMessage = { state.connectionId?.let(actions.onMessage) },
             onDone = actions.onBack,
             modifier = modifier,
+            service = state.connectedService,
         )
         InviteStep.EXPIRED -> FormScaffold(
             title = stringResource(R.string.connections_invite_expired_title),
@@ -432,15 +433,24 @@ fun ConnectionRequestContent(
     }
 }
 
+/**
+ * "You are connected". A [service] (it declared itself one, VAULT-MESSAGING §6.4) cannot message a member (release 25): its
+ * sentence says what it can do instead, and there is no "Send a message".
+ */
 @Composable
-internal fun Connected(name: String?, onMessage: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier) {
+internal fun Connected(name: String?, onMessage: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier, service: Boolean = false) {
+    val shown = AccountNames.isolateOrNull(name)
     FormScaffold(
         title = stringResource(R.string.connections_connected_title),
-        body = AccountNames.isolateOrNull(name)?.let { stringResource(R.string.connections_connected_body, it) }
-            ?: stringResource(R.string.connections_connected_body_unnamed),
-        primaryLabel = stringResource(R.string.connections_send_message),
-        onPrimary = onMessage,
-        secondaryLabel = stringResource(R.string.connections_done),
+        body = when {
+            service && shown != null -> stringResource(R.string.connections_connected_body_service, shown)
+            service -> stringResource(R.string.connections_connected_body_service_unnamed)
+            shown != null -> stringResource(R.string.connections_connected_body, shown)
+            else -> stringResource(R.string.connections_connected_body_unnamed)
+        },
+        primaryLabel = stringResource(if (service) R.string.connections_done else R.string.connections_send_message),
+        onPrimary = if (service) onDone else onMessage,
+        secondaryLabel = if (service) null else stringResource(R.string.connections_done),
         onSecondary = onDone,
         modifier = modifier.testTag("connected"),
         header = {
@@ -552,6 +562,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             onMessage = { state.connectionId?.let(actions.onMessage) },
             onDone = actions.onBack,
             modifier = modifier,
+            service = state.connectedService,
         )
         AcceptStep.EXISTS -> FormScaffold(
             title = stringResource(R.string.connections_exists_title),
