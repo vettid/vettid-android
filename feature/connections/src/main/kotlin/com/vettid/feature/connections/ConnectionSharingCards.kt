@@ -70,7 +70,7 @@ import com.vettid.core.ui.theme.VettIdShape
  * whole account name; null before the names arrived ("Name not shared yet"), for which the cards say "this connection".
  */
 internal fun sharingName(c: ConnectionInfo): String? =
-    c.firstName?.trim()?.takeIf { it.isNotEmpty() } ?: c.accountName?.takeIf { it.isNotBlank() }
+    AccountNames.cleaned(c.firstName) ?: AccountNames.cleaned(c.accountName)
 
 /**
  * "You share with <First>": what goes out of the member's vault to this connection (VAULT-ITEMS §6, §10.12): every

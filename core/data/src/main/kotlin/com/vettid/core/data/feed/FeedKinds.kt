@@ -184,7 +184,7 @@ object FeedKinds {
     private fun knownName(item: FeedItem, names: FeedNames): String? {
         val c = item.connectionId?.let { names.connections[it] }
         val sender = FeedAsks.approvalKey(item.kind, item.ref)?.let { names.approvals[it] }?.let { a -> senderOf(a) }
-        return AccountNames.isolateOrNull(c?.accountName ?: c?.name?.takeIf { it.isNotBlank() } ?: sender)
+        return AccountNames.isolateOrNull(AccountNames.cleaned(c?.accountName) ?: AccountNames.cleaned(c?.name) ?: sender)
     }
 
     /**
