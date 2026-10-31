@@ -2,6 +2,7 @@ package com.vettid.core.data.votes
 
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.ClaimBlob
+import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.vote.ResultsProblem
 import com.vettid.core.crypto.vote.VoteRows
 import com.vettid.core.data.items.ListLoad
@@ -661,7 +662,18 @@ class VotesManager(
         for (v in votesFlow.value) {
             val c = v.check ?: continue
             val due = v.state == VoteState.CLOSED && c.state == CheckState.PENDING && !(c.dueAt != null && c.dueAt.isAfter(at))
-            if (due) runCatching { checkResults(v.connectionId, v.proposalId) }
+            // One vote's failure does not stop the others; a cancellation does (it is not caught).
+            if (due) {
+                try {
+                    checkResults(v.connectionId, v.proposalId)
+                } catch (_: VaultFailure) {
+                    // told by the vote's own hint
+                } catch (_: ResultsProblem) {
+                    // the same
+                } catch (_: CryptoException) {
+                    // a row whose fields do not read: the same
+                }
+            }
         }
     }
 
@@ -706,6 +718,8 @@ class VotesManager(
             return@withLock fail(key, ResultsOutcome.Problem)
         }
         val ballot = own.ballot
+        // (0.81.6) A choice id the vault would refuse (and with it the whole submission) is the site's problem: not submitted.
+        if (ballot != null && !VoteSync.validChoiceId(ballot.string("choice_id"))) return@withLock fail(key, ResultsOutcome.Problem)
         val body = buildJsonObject {
             put("connection_id", connectionId)
             put("proposal_id", proposalId)
@@ -739,7 +753,12 @@ class VotesManager(
             )
         }
         // Over the request limit: the vault could never take it.
-        if (!VoteSync.fitsInline(VoteSync.encoded(body))) return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
+        when (VoteSync.inline(VoteSync.encoded(body))) {
+            VoteSync.Inline.FITS -> Unit
+            // Over the request limit: the vault could never take it. Any other failure is a problem, not a size.
+            VoteSync.Inline.TOO_LARGE -> return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
+            VoteSync.Inline.OTHER -> return@withLock fail(key, ResultsOutcome.Problem)
+        }
         val answer = vaultGuard { ops().submit(body) }
         val check = answer["check"] as? JsonObject
         val state = CheckState.of(check?.let { VaultJson.str(it, "state") })

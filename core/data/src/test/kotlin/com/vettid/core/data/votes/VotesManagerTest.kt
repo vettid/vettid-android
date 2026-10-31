@@ -726,6 +726,27 @@ class VotesManagerTest {
     }
 
     @Test
+    fun aChoiceIdTheVaultWouldRefuseIsNotSubmitted() = runTest {
+        val (ops, site) = dueScenario()
+        // The member's own row (index 1) carries a ballot whose choice_id is not the vault's form (1-32 of [a-z0-9-]).
+        val tags = (1..3).map(::tagOf)
+        val vk = ByteArray(32) { 3 }
+        val sig = ByteArray(64) { 4 }
+        val choice = "Bad_Id"
+        fun lp(x: ByteArray) = Bytes.concat(Bytes.uintBE(x.size.toLong(), 2), x)
+        val leaves = listOf(tags[0], Bytes.concat(tags[1], lp(vk), lp(choice.toByteArray()), lp(sig)), tags[2])
+        val ballot = """{"vk":"${Base64s.encodeStd(vk)}","choice_id":"$choice","ballot_sig":"${Base64s.encodeStd(sig)}"}"""
+        val rowsJson = """{"proposal_id":"$PID","rows":[${tags.mapIndexed { n, t -> """{"ballot":${if (n == 1) ballot else "null"},"record_tag":"${Base64s.encodeStd(t)}"}""" }.joinToString(",")}]}"""
+        site.answers["p/$PID/rows.json"] = ok(rowsJson)
+        site.answers["p/$PID/results.json"] = ok(resultsFor(rowsJson, VoteMerkle.root(leaves), 3))
+        val m = manager(ops, site)
+        m.syncOnce()
+        assertTrue(ops.submitted.isEmpty())
+        assertTrue(m.hints.value.values.any { it.resultsProblem && !it.resultsTooLarge })
+        assertEquals(2, ops.entriesSent().size)
+    }
+
+    @Test
     fun aRefusedStageDoesNotStopTheNext() = runTest {
         val (ops, site) = dueScenario()
         // The vault refuses the list call: the entries and the results check go all the same, and the refusal is told after.

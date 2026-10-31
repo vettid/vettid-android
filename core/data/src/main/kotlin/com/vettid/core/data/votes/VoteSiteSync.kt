@@ -39,13 +39,29 @@ object VoteSync {
      * envelope (`v`, `id`, `type`, `ts`, `seq`…) and padded to its bucket, not the body alone. Measured through the real
      * encoder with the longest `seq` and ids; over the cap it goes as a claim-check blob.
      */
-    fun fitsInline(body: ByteArray): Boolean = try {
-        val inner = Inner(Ulid.new(), TYPE, Instant.now(), seq = StrictJson.MAX_SAFE_INTEGER, body = body)
-        Padding.paddedLen(inner.marshal(Mode.SESSION).size)
-        true
-    } catch (_: CryptoException) {
-        false
+    fun fitsInline(body: ByteArray): Boolean = inline(body) == Inline.FITS
+
+    /** Whether a body goes inline, is over the padded limit (a size failure), or cannot be put in an inner message at all. */
+    enum class Inline { FITS, TOO_LARGE, OTHER }
+
+    fun inline(body: ByteArray): Inline {
+        val marshalled = try {
+            Inner(Ulid.new(), TYPE, Instant.now(), seq = StrictJson.MAX_SAFE_INTEGER, body = body).marshal(Mode.SESSION)
+        } catch (_: CryptoException) {
+            return Inline.OTHER
+        }
+        return try {
+            Padding.paddedLen(marshalled.size)
+            Inline.FITS
+        } catch (_: CryptoException) {
+            Inline.TOO_LARGE
+        }
     }
+
+    /** The vault's `ValidChoiceID` (vettid-vault `vms/votewire`): 1 to 32 bytes of `[a-z0-9-]`. */
+    fun validChoiceId(id: String): Boolean = id.length in 1..MAX_CHOICE_ID && id.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
+
+    private const val MAX_CHOICE_ID = 32
 
     private const val TYPE = "vote.site.sync"
     const val MAX_ENTRIES = 8
@@ -263,20 +279,24 @@ object VoteSync {
     fun encoded(body: JsonElement): ByteArray = body.toString().toByteArray(Charsets.UTF_8)
 
     // (0.81.6) The vault parses the whole request strictly (StrictJson: valid UTF-8, no duplicate member names at any depth, nesting
-    // at most 32), and the site's own JSON is copied into it: each such value is parsed as strictly first, with the depth left where
-    // it sits in the request (the top-level body counts 1).
+    // at most 32): an inline request as the whole inner message (vms/envelope/inner.go), whose `body` is level 2. The site's own JSON
+    // is copied into it, so each such value is parsed as strictly first, with the depth left where it sits (the same budgets serve a
+    // claim-check blob, whose body is level 1: one level spare).
 
-    /** An `index` element: body > `entries` > entry > `index`. */
-    const val INDEX_DEPTH = StrictJson.MAX_DEPTH - 3
+    /** An `index` element: inner > body > `entries` > entry > `index`. */
+    const val INDEX_DEPTH = StrictJson.MAX_DEPTH - 4
 
-    /** A proposal's `bundle`: body > `entries` > entry > `document` > `bundle`. */
-    const val BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 4
+    /** A proposal's `bundle`: inner > body > `entries` > entry > `document` > `bundle`. */
+    const val BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 5
 
     /** An extension's `bundle`: … `document` > `extensions` > extension > `bundle`. */
-    const val EXTENSION_BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 6
+    const val EXTENSION_BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 7
 
-    /** The results' `bundle` in `vote.results.submit`: body > `bundle`. */
-    const val RESULTS_BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 1
+    /** The results' `bundle` in `vote.results.submit`: inner > body > `bundle`. */
+    const val RESULTS_BUNDLE_DEPTH = StrictJson.MAX_DEPTH - 2
+
+    /** An `index` element larger than this is left out before it is parsed (none comes near it; it bounds the parse's memory). */
+    const val INDEX_ELEMENT_MAX = 65_536
 
     /**
      * A site JSON document that is an object, as one, if it passes the vault's strict rules within [maxDepth]; null when it does
@@ -284,7 +304,10 @@ object VoteSync {
      */
     fun jsonObject(bytes: ByteArray, maxDepth: Int = StrictJson.MAX_DEPTH): JsonObject? = try {
         StrictJson.parseObject(bytes, maxDepth)
-        Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as? JsonObject
+        val o = Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as? JsonObject
+        // What is sent is the re-encoded value, so that is what must pass: re-encoding can merge names the strict parse kept apart
+        // (a lone surrogate, "\ud800", and "?" both come out "?").
+        o?.also { StrictJson.parseObject(encoded(it), maxDepth) }
     } catch (_: CryptoException) {
         null
     } catch (_: IllegalArgumentException) {
@@ -296,12 +319,14 @@ object VoteSync {
      * [INDEX_DEPTH], or whose `proposal_id` is not a valid proposal id (a canonical ULID), is left out (0.81.6: not sent, and no
      * entry for it). An index that is not an array yields none.
      */
-    fun indexOf(bytes: ByteArray): List<JsonObject> = elements(bytes).mapNotNull { jsonObject(it, INDEX_DEPTH) }
+    fun indexOf(bytes: ByteArray): List<JsonObject> = elements(bytes).filter { it.size <= INDEX_ELEMENT_MAX }
+        .mapNotNull { jsonObject(it, INDEX_DEPTH) }
         .filter { e -> proposalIdOf(e)?.let(Ulid::isValid) == true }
 
     /**
      * The bytes of each element of a top-level JSON array, found by its structure only (strings and escapes skipped, brackets
-     * counted), so that one bad element does not hide the others; empty when [bytes] is not an array.
+     * counted), so that one bad element does not hide the others; empty when [bytes] is not a well-formed array at that level (a
+     * stray `}` or `]`, an empty element, an unterminated string or array). Every step moves forward: it ends on any input.
      */
     @Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "ReturnCount", "LoopWithTooManyJumpStatements")
     internal fun elements(bytes: ByteArray): List<ByteArray> {
@@ -312,33 +337,41 @@ object VoteSync {
         ws()
         if (i >= bytes.size || bytes[i] != '['.code.toByte()) return emptyList()
         i++
+        ws()
+        if (i < bytes.size && bytes[i] == ']'.code.toByte()) return emptyList()
         val out = ArrayList<ByteArray>()
         while (true) {
             ws()
-            if (i >= bytes.size) return emptyList()
-            if (bytes[i] == ']'.code.toByte()) return out
             val start = i
             var depth = 0
             var inString = false
+            // To the end of this element: a `,` or `]` at depth 0.
             while (i < bytes.size) {
                 val c = bytes[i].toInt().toChar()
                 if (inString) {
                     if (c == '\\') i++ else if (c == '"') inString = false
-                } else {
-                    when (c) {
-                        '"' -> inString = true
-                        '{', '[' -> depth++
-                        '}', ']' -> if (depth == 0) break else depth--
-                        ',' -> if (depth == 0) break
+                } else if (c == '"') {
+                    inString = true
+                } else if (c == '{' || c == '[') {
+                    depth++
+                } else if (c == '}' || c == ']') {
+                    if (depth == 0) {
+                        if (c == '}') return emptyList() // a `}` that closes nothing
+                        break
                     }
+                    depth--
+                } else if (c == ',' && depth == 0) {
+                    break
                 }
                 i++
             }
             if (i >= bytes.size || inString) return emptyList()
             var end = i
             while (end > start && bytes[end - 1].toInt().toChar() in " \t\r\n") end--
+            if (end == start) return emptyList() // an empty element (`[,]`, `[1,]`)
             out += bytes.copyOfRange(start, end)
-            if (bytes[i] == ','.code.toByte()) i++
+            if (bytes[i] == ']'.code.toByte()) return out
+            i++ // past the `,`
         }
     }
 
