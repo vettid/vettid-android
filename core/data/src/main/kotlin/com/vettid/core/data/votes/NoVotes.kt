@@ -20,9 +20,9 @@ object NoVotes : VotesRepository {
     override val availability: StateFlow<VotesAvailability> = MutableStateFlow(VotesAvailability.UNSUPPORTED).asStateFlow()
     override val load: StateFlow<ListLoad> = MutableStateFlow(ListLoad.NOT_LOADED).asStateFlow()
     override val hints: StateFlow<Map<String, VoteHint>> = MutableStateFlow<Map<String, VoteHint>>(emptyMap()).asStateFlow()
-    override val windowNotClosed: StateFlow<Boolean> = MutableStateFlow(false).asStateFlow()
+    override val windowNotClosed: StateFlow<WindowNotClosed?> = MutableStateFlow<WindowNotClosed?>(null).asStateFlow()
 
-    override fun windowNoticeShown() = Unit
+    override suspend fun closeWindowNow() = Unit
 
     private fun unsupported(): Nothing = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 

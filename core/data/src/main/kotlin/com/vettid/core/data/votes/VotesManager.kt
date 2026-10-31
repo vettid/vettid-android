@@ -47,12 +47,17 @@ import java.time.Instant
 /** Whether the vault has the votes feature (VAULT-MESSAGING §10.19.1): learned from `vote.list`, asked again after an unlock. */
 enum class VotesAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
 
+/** The lock after a cast failed; [ttlSeconds] is how long the window stays open unused, when the app knows it. */
+data class WindowNotClosed(val ttlSeconds: Long?)
+
 /** What the app knows about a vote that the vault's list does not say (memory only). */
 data class VoteHint(
     /** Why the app's last attempt at the results failed (a `gave_up` check says which of two things). */
     val gaveUp: GaveUpWhy? = null,
     /** The app found a problem in the site's results (they could not be checked); kept until the next attempt. */
     val resultsProblem: Boolean = false,
+    /** The site's results are larger than the vault could ever take: no retry will help. */
+    val resultsTooLarge: Boolean = false,
     /** When the app first saw the vote missing from the public site. */
     val notListedSince: Instant? = null,
 ) {
@@ -97,9 +102,10 @@ interface VotesRepository {
     val hints: StateFlow<Map<String, VoteHint>>
 
     /** The lock of the unlock window a cast opened failed: the window stays open until it closes by itself. Told once. */
-    val windowNotClosed: StateFlow<Boolean>
+    val windowNotClosed: StateFlow<WindowNotClosed?>
 
-    fun windowNoticeShown()
+    /** **Close it now**: locks the window; the notice goes only when that went through, else the failure is thrown. */
+    suspend fun closeWindowNow()
 
     /** Reads `vote.list`. Throws the vault's failure. */
     suspend fun refresh()
@@ -225,7 +231,7 @@ class VotesManager(
     private val availabilityFlow = MutableStateFlow(VotesAvailability.UNKNOWN)
     private val loadState = MutableStateFlow(ListLoad.NOT_LOADED)
     private val hintsFlow = MutableStateFlow<Map<String, VoteHint>>(emptyMap())
-    private val windowNotClosedFlow = MutableStateFlow(false)
+    private val windowNotClosedFlow = MutableStateFlow<WindowNotClosed?>(null)
     private val reads = Mutex()
     private val syncs = Mutex()
     private val results = Mutex()
@@ -253,7 +259,7 @@ class VotesManager(
     override val availability: StateFlow<VotesAvailability> = availabilityFlow.asStateFlow()
     override val load: StateFlow<ListLoad> = loadState.asStateFlow()
     override val hints: StateFlow<Map<String, VoteHint>> = hintsFlow.asStateFlow()
-    override val windowNotClosed: StateFlow<Boolean> = windowNotClosedFlow.asStateFlow()
+    override val windowNotClosed: StateFlow<WindowNotClosed?> = windowNotClosedFlow.asStateFlow()
 
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
@@ -268,7 +274,7 @@ class VotesManager(
             droppedFlow.value = emptyList()
             problemsFlow.value = emptyList()
             hintsFlow.value = emptyMap()
-            windowNotClosedFlow.value = false
+            windowNotClosedFlow.value = null
             pendingAck.clear()
             listVersion = null
             listSha256 = null
@@ -377,15 +383,15 @@ class VotesManager(
         val held = votesFlow.value.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId }
         if (held?.confirmPending == true) throw VaultFailure(FailureKind.OTHER, "checking")
         // Set before the unlock is sent: an unlock whose answer was lost may still have opened the window, so it is locked.
-        val toLock = booleanArrayOf(password != null && !windowOpen())
+        val unlocked = Unlocked(password != null && !windowOpen())
         try {
-            if (password != null && toLock[0]) unlock(password, toLock)
+            if (password != null && unlocked.toLock) unlock(password, unlocked)
             val body = vaultGuard { ops().cast(connectionId, proposalId, choiceId) }
             refreshQuietly()
             return BallotState.of(((body["ballot"] as? JsonObject)?.let { VaultJson.str(it, "state") }))
         } finally {
             // A window this prompt opened does not stay open for its full length; one that was open is left as it was.
-            if (toLock[0]) closeOpenedWindow()
+            if (unlocked.toLock) closeOpenedWindow(unlocked.ttlSeconds)
         }
     }
 
@@ -393,29 +399,37 @@ class VotesManager(
      * The lock after a cast, which runs to its end even when the caller was cancelled (a screen that left); a lock that
      * failed is not swallowed: the member is told that the window stays open until it closes by itself.
      */
-    private suspend fun unlock(password: String, toLock: BooleanArray) {
+    private suspend fun unlock(password: String, unlocked: Unlocked) {
         try {
             openWindow(password)
+            // How long the window stays open unused: from the end time the vault answered with.
+            unlocked.ttlSeconds = windowUntil()?.let { Duration.between(now(), it).seconds }?.takeIf { it > 0 }
         } catch (e: VaultFailure) {
-            // A refusal of the vault (a wrong password…) opened nothing; no answer may have.
-            if (e.kind != FailureKind.NO_RESPONSE && e.kind != FailureKind.NETWORK) toLock[0] = false
+            // Only a definite refusal opened nothing. Any other failure (no answer, an answer that did not read…) may have
+            // come after the vault opened the window, so it is locked.
+            if (e.kind in DEFINITE_REFUSALS) unlocked.toLock = false
             throw e
         }
     }
 
+    /** Whether the window this cast opened is to be locked, and how long it stays open when unused (null: not known). */
+    private class Unlocked(var toLock: Boolean, var ttlSeconds: Long? = null)
+
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
-    private suspend fun closeOpenedWindow() {
+    private suspend fun closeOpenedWindow(ttlSeconds: Long?) {
         withContext(NonCancellable) {
             try {
                 closeWindow()
             } catch (e: Exception) {
-                windowNotClosedFlow.value = true
+                windowNotClosedFlow.value = WindowNotClosed(ttlSeconds)
             }
         }
     }
 
-    override fun windowNoticeShown() {
-        windowNotClosedFlow.value = false
+    override suspend fun closeWindowNow() {
+        // The notice goes only when the lock went through; a failure is the caller's to show.
+        withContext(NonCancellable) { closeWindow() }
+        windowNotClosedFlow.value = null
     }
 
     override suspend fun check(connectionId: String, proposalId: String) {
@@ -655,12 +669,12 @@ class VotesManager(
             }
         }
         val doc = fetch("results.json", RESULTS_MAX)
-        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem)
+        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
         if (doc == null) return@withLock unavailable(key, siteDown)
         val sig = fetch("results.json.sig", SIG_MAX)
         val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
         val rows = fetch("rows.json", ROWS_MAX)
-        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem)
+        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
         if (sig == null || bundleBytes == null || rows == null) {
             return@withLock unavailable(key, siteDown)
         }
@@ -708,7 +722,7 @@ class VotesManager(
         val state = CheckState.of(check?.let { VaultJson.str(it, "state") })
         // The vault alone judges; a submission it leaves pending (reason input) is the problem the screens say.
         val input = state == CheckState.PENDING && check?.let { c -> VaultJson.str(c, "reason") } == "input"
-        hint(key) { it.copy(gaveUp = null, resultsProblem = input) }
+        hint(key) { it.copy(gaveUp = null, resultsProblem = input, resultsTooLarge = false) }
         refreshQuietly()
         ResultsOutcome.Submitted(state)
     }
@@ -721,8 +735,10 @@ class VotesManager(
             fail(key, ResultsOutcome.NotPublished, GaveUpWhy.UNPUBLISHED)
         }
 
-    private fun fail(key: String, outcome: ResultsOutcome, why: GaveUpWhy? = null): ResultsOutcome {
-        hint(key) { it.copy(gaveUp = why ?: it.gaveUp, resultsProblem = outcome == ResultsOutcome.Problem) }
+    private fun fail(key: String, outcome: ResultsOutcome, why: GaveUpWhy? = null, tooLarge: Boolean = false): ResultsOutcome {
+        hint(key) {
+            it.copy(gaveUp = why ?: it.gaveUp, resultsProblem = outcome == ResultsOutcome.Problem, resultsTooLarge = tooLarge)
+        }
         return outcome
     }
 
@@ -733,7 +749,7 @@ class VotesManager(
         when (site.get("p/$proposalId/results.json", RESULTS_MAX)) {
             SiteAnswer.Absent -> hint(key) { it.copy(gaveUp = GaveUpWhy.UNPUBLISHED) }
             SiteAnswer.Unreachable -> hint(key) { it.copy(gaveUp = GaveUpWhy.SITE) }
-            SiteAnswer.TooLarge -> hint(key) { it.copy(resultsProblem = true) }
+            SiteAnswer.TooLarge -> hint(key) { it.copy(resultsProblem = true, resultsTooLarge = true) }
             is SiteAnswer.Found -> Unit // published: **Check again** hands them to the vault
         }
     }
@@ -742,6 +758,11 @@ class VotesManager(
         val SYNC_EVERY: Duration = Duration.ofHours(1)
         const val MAX_PAGES = 5
         const val TAG_LEN = 32
+        /** A failure that says the vault did not open the window (it refused); any other may have followed the opening. */
+        val DEFINITE_REFUSALS = setOf(
+            FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
+            FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
+        )
         const val CODE_TOO_LARGE = "payload_too_large"
         const val SIG_MAX = 256L
         const val BUNDLE_MAX = 64L * 1024

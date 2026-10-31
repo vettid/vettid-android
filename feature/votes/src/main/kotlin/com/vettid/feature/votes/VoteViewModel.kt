@@ -14,6 +14,7 @@ import com.vettid.core.data.votes.VoteDetail
 import com.vettid.core.data.votes.VoteHint
 import com.vettid.core.data.votes.VoteRules
 import com.vettid.core.data.votes.VoteSummary
+import com.vettid.core.data.votes.WindowNotClosed
 import com.vettid.core.data.votes.VotesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -53,8 +54,12 @@ data class VoteUiState(
     /** The end of a password backoff (`retry_after`). */
     val retryUntil: Instant? = null,
     val castProblem: VoteProblem? = null,
-    /** The lock of the unlock window this screen's cast opened failed (told once). */
-    val windowNotClosed: Boolean = false,
+    /** The lock of the unlock window a cast opened failed: told until it is closed (**Close it now**) or the vault locks. */
+    val windowNotClosed: WindowNotClosed? = null,
+    val windowClosing: Boolean = false,
+    val windowCloseProblem: VoteProblem? = null,
+    /** The vault answered `already_voted`: the vote is read again and the recorded choice is told, never silently. */
+    val alreadyVoted: Boolean = false,
     val checking: Boolean = false,
     val checkProblem: VoteProblem? = null,
     /** What the last **Check again** came to when it was not handed to the vault: the site had nothing, or could not be reached. */
@@ -160,6 +165,10 @@ class VoteViewModel @Inject constructor(
                 local.update { it.copy(loadError = problem(e), loaded = true) }
                 return@launch
             }
+            // The vault checks closed and closing before it checks for a repeat of the same choice: a retry may have been
+            // refused while the vote was recorded. A vote that holds a ballot is not "not sent".
+            val now = repo.votes.value.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId }
+            if (now?.ballot != null) local.update { it.copy(castProblem = null) }
             loadDetail()
             // The vote's own documents are fetched when its screen opens, so that the vault can compare it with the public copy.
             runCatching { repo.siteCheck(connectionId, proposalId) }
@@ -182,7 +191,8 @@ class VoteViewModel @Inject constructor(
         }
     }
 
-    fun select(choiceId: String) = local.update { if (it.cast == CastStep.NONE) it.copy(selected = choiceId, castProblem = null) else it }
+    fun select(choiceId: String) =
+        local.update { if (it.cast == CastStep.NONE) it.copy(selected = choiceId, castProblem = null, alreadyVoted = false) else it }
 
     /** Cast your vote: the confirm sheet, with the fixed disclosure. Nothing is sent. */
     fun askCast() {
@@ -233,8 +243,6 @@ class VoteViewModel @Inject constructor(
 
     private fun onCastFailure(e: VaultFailure) {
         val p = problem(e)
-        // Whatever failed, the vote is read again: a cast whose answer was lost may have been sent, and the list says so.
-        refresh()
         when (e.kind) {
             // The window was closed after all: the prompt, then the same request once.
             FailureKind.CREDENTIAL_LOCKED -> local.update { it.copy(cast = CastStep.PASSWORD, password = "", passwordError = null) }
@@ -247,14 +255,31 @@ class VoteViewModel @Inject constructor(
                 }
             else -> {
                 // A refusal of the vault (closed, closing, already voted…) or no answer: the screen says so and reads the vote again.
-                // `already_voted` is not a failure to tell: the re-read ballot says what was recorded.
-                val shown = p.takeUnless { it.code == "already_voted" }
-                local.update { it.copy(cast = CastStep.NONE, password = "", castProblem = shown) }
+                // `already_voted`: not a failure but a notice, with the choice the re-read ballot holds.
+                val voted = p.code == "already_voted"
+                local.update { it.copy(cast = CastStep.NONE, password = "", castProblem = p.takeUnless { voted }, alreadyVoted = voted) }
+            }
+        }
+        // Whatever failed, the vote is read again, after the screen's state is set: a cast whose answer was lost may have been
+        // sent, and the list says so.
+        refresh()
+    }
+
+    fun dismissAlreadyVoted() = local.update { it.copy(alreadyVoted = false) }
+
+    /** **Close it now** on the notice of a lock that failed: the notice goes only when this went through. */
+    fun closeWindowNow() {
+        if (local.value.windowClosing) return
+        local.update { it.copy(windowClosing = true, windowCloseProblem = null) }
+        viewModelScope.launch {
+            try {
+                repo.closeWindowNow()
+                local.update { it.copy(windowClosing = false) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(windowClosing = false, windowCloseProblem = problem(e)) }
             }
         }
     }
-
-    fun windowNoticeShown() = repo.windowNoticeShown()
 
     fun dismissCastProblem() = local.update { it.copy(castProblem = null) }
 

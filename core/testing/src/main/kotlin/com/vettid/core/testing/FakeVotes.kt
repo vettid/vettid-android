@@ -39,10 +39,11 @@ class FakeVotes : VotesRepository {
     override val availability = MutableStateFlow(VotesAvailability.AVAILABLE)
     override val load = MutableStateFlow(ListLoad.LOADED)
     override val hints = MutableStateFlow<Map<String, VoteHint>>(emptyMap())
-    override val windowNotClosed = MutableStateFlow(false)
+    override val windowNotClosed = MutableStateFlow<com.vettid.core.data.votes.WindowNotClosed?>(null)
 
-    override fun windowNoticeShown() {
-        windowNotClosed.value = false
+    override suspend fun closeWindowNow() {
+        call("closeWindowNow")
+        windowNotClosed.value = null
     }
 
     private fun call(name: String) {
@@ -50,7 +51,13 @@ class FakeVotes : VotesRepository {
         fail.remove(name)?.let { throw it }
     }
 
-    override suspend fun refresh() = call("refresh")
+    /** Runs when [refresh] is asked, before it answers (the vault's list changing meanwhile). */
+    var onRefresh: () -> Unit = {}
+
+    override suspend fun refresh() {
+        call("refresh")
+        onRefresh()
+    }
 
     override fun refreshQuietly() {
         calls += "refreshQuietly"

@@ -111,6 +111,14 @@ class VoteRulesTest {
     }
 
     @Test
+    fun resultsTooLargeAreAProblemWithoutATryAgain() {
+        val v = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.PENDING))
+        val notes = VoteRules.notes(v, resultsProblem = true, resultsTooLarge = true)
+        assertTrue(VoteNote.CHECK_RESULTS_TOO_LARGE in notes)
+        assertFalse(VoteNote.CHECK_RESULTS_PROBLEM in notes)
+    }
+
+    @Test
     fun aFailedCheckShowsTheMismatchAndTheProof() {
         val v = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.FAILED))
         assertTrue(VoteNote.FAILED in VoteRules.notes(v))

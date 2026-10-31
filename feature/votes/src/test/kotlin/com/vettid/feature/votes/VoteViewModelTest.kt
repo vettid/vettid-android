@@ -490,11 +490,58 @@ class VoteViewModelTest {
     fun aLockThatFailedIsPassedToTheScreen() = runTest {
         publish(summary())
         val vm = vm()
-        votes.windowNotClosed.value = true
+        votes.windowNotClosed.value = com.vettid.core.data.votes.WindowNotClosed(300)
         advanceUntilIdle()
-        assertTrue(vm.uiState.value.windowNotClosed)
-        vm.windowNoticeShown()
+        assertEquals(300L, vm.uiState.value.windowNotClosed?.ttlSeconds)
+        // Close it now: the notice stays when the lock fails and goes when it went through.
+        votes.fail["closeWindowNow"] = VaultFailure(FailureKind.NO_RESPONSE)
+        vm.closeWindowNow()
         advanceUntilIdle()
-        assertFalse(vm.uiState.value.windowNotClosed)
+        assertEquals(FailureKind.NO_RESPONSE, vm.uiState.value.windowCloseProblem?.kind)
+        assertEquals(300L, vm.uiState.value.windowNotClosed?.ttlSeconds)
+        vm.closeWindowNow()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.windowNotClosed)
+    }
+
+    @Test
+    fun aRefusalOfARetryWhileTheVoteIsRecordedIsNotShownAsNotSent() = runTest {
+        publish(summary())
+        votes.windowIsOpen = true
+        votes.fail["cast:$CONN/$PID:yes"] = VaultFailure(FailureKind.OTHER, "closing")
+        val vm = vm()
+        advanceUntilIdle()
+        // The vault checks closed/closing before a repeat of the same choice; meanwhile the ballot is held.
+        votes.onRefresh = { votes.votes.value = listOf(summary(ballot = VoteBallot(BallotState.SENDING))) }
+        vm.select("yes")
+        vm.askCast()
+        vm.confirmCast()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.castProblem)
+        assertEquals(BallotState.SENDING, vm.uiState.value.summary?.ballot?.state)
+    }
+
+    @Test
+    fun alreadyVotedIsToldWithTheRecordedChoice() = runTest {
+        val s = summary()
+        publish(s)
+        votes.windowIsOpen = true
+        votes.fail["cast:$CONN/$PID:no"] = VaultFailure(FailureKind.OTHER, "already_voted")
+        val vm = vm()
+        advanceUntilIdle()
+        votes.onRefresh = {
+            val held = summary(ballot = VoteBallot(BallotState.RECORDED))
+            votes.votes.value = listOf(held)
+            votes.details[held.key] = detail(held, choiceId = "yes")
+        }
+        vm.select("no")
+        vm.askCast()
+        vm.confirmCast()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.alreadyVoted)
+        assertNull(vm.uiState.value.castProblem)
+        assertEquals("Yes", vm.uiState.value.choiceLabel)
+        vm.dismissAlreadyVoted()
+        assertFalse(vm.uiState.value.alreadyVoted)
     }
 }

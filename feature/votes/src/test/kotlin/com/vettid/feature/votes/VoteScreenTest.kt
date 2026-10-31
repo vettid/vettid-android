@@ -343,6 +343,53 @@ class VoteScreenTest {
         shown("Save the proof").assertIsDisplayed()
     }
 
+    @Test
+    fun alreadyVotedIsNeverSilentAndNamesTheChoiceWhenKnown() {
+        val s = summary(ballot = VoteBallot(BallotState.RECORDED))
+        show(state(s, detail(s, choiceId = "yes")).copy(alreadyVoted = true))
+        shown("You had already voted: Yes. Your vote can't be changed.").assertIsDisplayed()
+    }
+
+    @Test
+    fun alreadyVotedWithoutAKnownChoiceFallsBack() {
+        val s = summary(ballot = VoteBallot(BallotState.SENDING))
+        show(state(s, detail(s)).copy(alreadyVoted = true))
+        shown("You had already voted. Your vote can't be changed.").assertIsDisplayed()
+    }
+
+    @Test
+    fun theUnlockWindowNoticeNamesTheTimeAndOffersToCloseIt() {
+        var closed = 0
+        show(state(summary()).copy(windowNotClosed = com.vettid.core.data.votes.WindowNotClosed(300)), VoteActions(onCloseWindow = { closed++ }))
+        shown("The unlock window may still be open").assertIsDisplayed()
+        shown("It closes by itself once it has not been used for 300 seconds.", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("vote_window_close").performClick()
+        assertEquals(1, closed)
+    }
+
+    @Test
+    fun theUnlockWindowNoticeWithoutAKnownTimeIsPlain() {
+        show(state(summary()).copy(windowNotClosed = com.vettid.core.data.votes.WindowNotClosed(null)))
+        shown("It closes by itself.", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun noAnswerSaysTheVoteMayHaveBeenSent() {
+        val p = VoteProblem(com.vettid.core.data.vault.FailureKind.NO_RESPONSE, null, null)
+        show(state(summary()).copy(castProblem = p))
+        shown("VettID got no answer").assertIsDisplayed()
+        shown("If your first vote did arrive, it is the one that counts: a vote can't be changed.", substring = true).assertIsDisplayed()
+        assertEquals(0, texts("Your vote was not sent"))
+    }
+
+    @Test
+    fun resultsTooLargeAreAProblemWithNoTryAgain() {
+        val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.PENDING), canCast = false)
+        show(state(s, detail(s), hint = VoteHint(resultsProblem = true, resultsTooLarge = true)))
+        shown("VettID could not check the published results of this vote yet. They may be incomplete or not valid.").assertIsDisplayed()
+        assertEquals(0, texts("It will try again"))
+    }
+
     // ---- The list ----
 
     private fun list(vararg v: VoteSummary) =

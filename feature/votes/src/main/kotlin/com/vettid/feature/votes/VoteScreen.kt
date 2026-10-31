@@ -78,6 +78,7 @@ import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.SecureWindow
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -106,7 +107,8 @@ data class VoteActions(
     val onPin: (String) -> Unit = {},
     val onConfirmRelease: () -> Unit = {},
     val onDismissCastProblem: () -> Unit = {},
-    val onWindowNoticeShown: () -> Unit = {},
+    val onCloseWindow: () -> Unit = {},
+    val onDismissAlreadyVoted: () -> Unit = {},
     val proofFileName: () -> String = { "vettid-vote.json" },
 )
 
@@ -221,6 +223,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             gaveUp = state.hint.gaveUp,
             resultsProblem = state.hint.resultsProblem,
             notListedLate = state.hint.notListedLate(now),
+            resultsTooLarge = state.hint.resultsTooLarge,
         )
         val time = s.opensAt?.let { Times.full(it) }.orEmpty()
         Column(
@@ -228,14 +231,36 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             verticalArrangement = Arrangement.spacedBy(Spacing.s),
         ) {
             for (n in notes) NoteView(n, resources, service, time, s.reason)
-            if (state.windowNotClosed) {
+            state.windowNotClosed?.let { w ->
+                // The lock after the cast failed: the window closes by itself once unused; **Close it now** tries again.
+                val failure = state.windowCloseProblem?.let { failureText(it.kind.messageRes(), it.kind.vaultCode(it.shownCode)) }
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.vote_window_not_closed_title),
-                    body = stringResource(R.string.vote_window_not_closed),
+                    body = (
+                        w.ttlSeconds?.let { stringResource(R.string.vote_window_not_closed, durationText(it)) }
+                            ?: stringResource(R.string.vote_window_not_closed_plain)
+                        ) + (failure?.let { "\n$it" } ?: ""),
                     modifier = Modifier.testTag("vote_window_not_closed"),
-                    actions = { TextButton(onClick = actions.onWindowNoticeShown) { Text(stringResource(R.string.vote_ok)) } },
+                    actions = {
+                        TextButton(
+                            onClick = actions.onCloseWindow,
+                            enabled = !state.windowClosing,
+                            modifier = Modifier.testTag("vote_window_close"),
+                        ) {
+                            Text(stringResource(R.string.vote_window_close_now))
+                        }
+                    },
                 )
+            }
+            if (state.alreadyVoted) {
+                val label = AccountNames.isolateOrNull(state.choiceLabel)
+                val text = when (label) {
+                    null -> stringResource(R.string.vote_already_voted_any)
+                    else -> stringResource(R.string.vote_already_voted, label)
+                }
+                NoteCard(VoteNote.Severity.INFO, null, text, Modifier.testTag("vote_already_voted"))
+                TextButton(onClick = actions.onDismissAlreadyVoted) { Text(stringResource(R.string.vote_confirm_back)) }
             }
             state.castProblem?.let { CastProblem(it, actions.onDismissCastProblem, resources, service, time) }
             state.checkProblem?.let { p ->

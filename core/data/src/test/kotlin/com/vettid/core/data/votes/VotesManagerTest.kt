@@ -684,7 +684,7 @@ class VotesManagerTest {
         job.join()
         // The lock ran to its end although its caller was cancelled (a screen that left).
         assertEquals(1, window.closed)
-        assertFalse(m.windowNotClosed.value)
+        assertNull(m.windowNotClosed.value)
     }
 
     @Test
@@ -722,9 +722,46 @@ class VotesManagerTest {
         val m = manager(ops, window = window)
         m.refresh()
         m.cast(CONN, PID, "yes", "pw")
-        assertTrue(m.windowNotClosed.value)
-        m.windowNoticeShown()
-        assertFalse(m.windowNotClosed.value)
+        // The notice knows how long the window stays open unused (the end time the unlock answered with).
+        assertEquals(WindowNotClosed(300), m.windowNotClosed.value)
+        // Close it now: the notice stays while the lock fails, and goes only when it went through.
+        try {
+            m.closeWindowNow()
+            fail()
+        } catch (_: VaultFailure) {
+        }
+        assertEquals(WindowNotClosed(300), m.windowNotClosed.value)
+        window.closeFail = null
+        m.closeWindowNow()
+        assertNull(m.windowNotClosed.value)
+    }
+
+    @Test
+    fun anUnlockThatFailsInAnyWayButARefusalIsStillLocked() = runTest {
+        for (failure in listOf(VaultFailure(FailureKind.OTHER, "unreadable_result"), VaultFailure(FailureKind.NETWORK))) {
+            val window = Window().apply { openFail = failure }
+            val m = manager(Ops(), window = window)
+            try {
+                m.cast(CONN, PID, "yes", "pw")
+                fail()
+            } catch (_: VaultFailure) {
+            }
+            assertEquals("${failure.kind}", 1, window.closed)
+        }
+        // Only a definite refusal opened nothing.
+        for (kind in listOf(
+            FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
+            FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
+        )) {
+            val window = Window().apply { openFail = VaultFailure(kind) }
+            val m = manager(Ops(), window = window)
+            try {
+                m.cast(CONN, PID, "yes", "pw")
+                fail()
+            } catch (_: VaultFailure) {
+            }
+            assertEquals("$kind", 0, window.closed)
+        }
     }
 
     // ---- Limits ----
@@ -761,6 +798,7 @@ class VotesManagerTest {
         val m = manager(ops, site)
         m.refresh()
         assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertTrue(m.hints.value.getValue("$CONN/$PID").resultsTooLarge)
         assertTrue(m.hints.value.getValue("$CONN/$PID").resultsProblem)
         assertTrue(ops.submitted.isEmpty())
     }

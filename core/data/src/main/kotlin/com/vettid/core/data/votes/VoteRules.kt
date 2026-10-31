@@ -22,6 +22,9 @@ enum class VoteNote(val severity: Severity) {
 
     /** A check the vault leaves `pending` with reason `input`, or the app's own check of the results failed: never "failed". */
     CHECK_RESULTS_PROBLEM(Severity.WARNING),
+
+    /** The same for results too large for the vault to ever take: nothing to try again. */
+    CHECK_RESULTS_TOO_LARGE(Severity.WARNING),
     CHECK_GAVE_UP_SITE(Severity.WARNING),
     CHECK_GAVE_UP_UNPUBLISHED(Severity.WARNING),
     CHECK_GAVE_UP(Severity.WARNING),
@@ -171,7 +174,13 @@ object VoteRules {
      * [notListedLate]: the app has seen the vote missing from the site for 10 minutes or more (the summary carries no age).
      */
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
-    fun notes(s: VoteSummary, gaveUp: GaveUpWhy? = null, resultsProblem: Boolean = false, notListedLate: Boolean = false): List<VoteNote> {
+    fun notes(
+        s: VoteSummary,
+        gaveUp: GaveUpWhy? = null,
+        resultsProblem: Boolean = false,
+        notListedLate: Boolean = false,
+        resultsTooLarge: Boolean = false,
+    ): List<VoteNote> {
         val out = ArrayList<VoteNote>()
         if (s.state == VoteState.CLOSED) out += VoteNote.CLOSED
         if (s.state == VoteState.REJECTED) out += VoteNote.REJECTED
@@ -180,7 +189,7 @@ object VoteRules {
         siteNotes(s, notListedLate, out)
         if (s.ballot == null && s.state != VoteState.CLOSED && s.state != VoteState.REJECTED) cannotCastNote(s)?.let { out += it }
         if (s.ballot == null && s.state == VoteState.CHECKING && out.none { it in CHECKING_NOTES }) out += checkingNote(s.reason)
-        return out
+        return if (resultsTooLarge) out.map { if (it == VoteNote.CHECK_RESULTS_PROBLEM) VoteNote.CHECK_RESULTS_TOO_LARGE else it } else out
     }
 
     private val CHECKING_NOTES = setOf(
