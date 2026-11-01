@@ -81,14 +81,17 @@ internal class RecordStore<T : Any>(
         true
     }
 
-    /** A record of its own ([f] of the one now): the writes still on their way for the one before are dropped. */
-    fun reset(f: (T) -> T): Boolean = synchronized(lock) {
-        if (closed) return false
+    /**
+     * A record of its own ([f] of the one now): the writes still on their way for the one before are dropped. Returns both
+     * counters as the reset left them, read under the lock (a wipe right after it already moved them), or null while shut.
+     */
+    fun reset(f: (T) -> T): ResetMarks? = synchronized(lock) {
+        if (closed) return null
         generation++
         recordGeneration++
         readable = true
         write(f(value))
-        true
+        ResetMarks(recordGeneration, generation)
     }
 
     /** The record read again from the phone; [readable]: it could be. Nothing is written. */
@@ -138,3 +141,9 @@ internal class RecordStore<T : Any>(
         const val UNBOUND = -1
     }
 }
+
+/**
+ * What a [RecordStore.reset] left: [recordGeneration] for the writes that belong to the new record, [generation] for a phase
+ * published after it ([PhaseGate.mark]). Both read under the store's lock, so a wipe or a lock after the reset moves them.
+ */
+data class ResetMarks(val recordGeneration: Int, val generation: Int)

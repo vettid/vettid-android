@@ -432,8 +432,9 @@ class VaultManager(
                     }
                 }
                 gateway.memberChanged(r.userGuid)
-                io { resetLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
-                phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+                val marks = io { resetLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
+                // The mark is the reset's own (read under the record's lock): a wipe or a lock after it wins over NEW_VAULT.
+                phaseGate.publishSetup(marks?.generation ?: PhaseGate.NO_MARK, AppPhase.Setup(SetupStage.NEW_VAULT))
                 return r.emailHint
             }
 
@@ -507,9 +508,12 @@ class VaultManager(
             private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
                 val s = session()
                 gateway.memberChanged(claimed.userGuid)
-                io { resetLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
-                // The claim's own record, just made: what the registration writes belongs to it.
-                val rec = record.recordGeneration
+                val claimedAccount = LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)
+                val marks = io { resetLocal(claimedAccount) }
+                // The claim's own record, just made: what the registration writes belongs to it. Both counters are the reset's
+                // own, read under the record's lock: a lock or a wipe after the reset (even before this line) wins over RECOVERING.
+                val rec = marks?.recordGeneration ?: record.recordGeneration
+                val gen = marks?.generation ?: PhaseGate.NO_MARK
                 // Each POST's attestation key, kept until that POST is settled not registered (ANDROID-PLAN §4 step 5).
                 val slot = slots.active
                 val posts = RegisterKeys()
@@ -549,7 +553,7 @@ class VaultManager(
                         RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
                     }
                     r.ok -> {
-                        phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+                        phaseGate.publishRecovering(gen)
                         RecoveryRegistration.Registered(claimed.emailHint)
                     }
                     else -> {
@@ -1173,10 +1177,14 @@ class VaultManager(
         }
     }
 
-    /** A record of its own ([a]: none, or a new setup's): the writes still on their way for the one before are dropped. */
-    private fun resetLocal(a: LocalAccount) {
-        record.reset(a)
+    /**
+     * A record of its own ([a]: none, or a new setup's): the writes still on their way for the one before are dropped. Returns
+     * the reset's counters ([ResetMarks]; null while the record is shut), for a flow that writes or publishes after it.
+     */
+    private fun resetLocal(a: LocalAccount): ResetMarks? {
+        val marks = record.reset(a)
         syncTimeScale()
+        return marks
     }
 
     // --- session ---
@@ -3575,6 +3583,8 @@ class VaultManager(
         if (!Rules.sameVault(local.vaultId, namedVault)) return RecoveryRegistration.Refused(CODE_OTHER_VAULT)
         var claimed: Claimed? = null
         var code: RecoveryCode? = null
+        // Nothing in this flow resets the record: a lock or a wipe from here wins over RECOVERING.
+        val gen = phaseGate.mark()
         val result = NewRecovery(
             object : NewRecovery.Ports {
                 override suspend fun claim(): ClaimAnswer = try {
@@ -3592,9 +3602,9 @@ class VaultManager(
                     }
                 }
 
-                override suspend fun pollEarlierOpen(): EarlierOpen = pollEarlier()
+                override suspend fun pollEarlierOpen(): EarlierOpen = pollEarlier(gen)
 
-                override suspend fun registerNew(): RegisterAnswer = registerNewIdentity(code!!, claimed!!)
+                override suspend fun registerNew(): RegisterAnswer = registerNewIdentity(code!!, claimed!!, gen)
 
                 override suspend fun lostOkDue() = markReuse { it.copy(lostOkDue = true, startNew = false, keyInUse = true) }
             },
@@ -3613,7 +3623,7 @@ class VaultManager(
      * decides it". Each is opened with its own identity's keys (a temporary device for the slot not in use). Never twice.
      */
     @Suppress("ReturnCount")
-    private suspend fun pollEarlier(): EarlierOpen {
+    private suspend fun pollEarlier(gen: Int): EarlierOpen {
         local.reuse ?: return EarlierOpen.Undecided
         for (o in Ledger.toPoll(local.sentOpens)) {
             val rec0 = record.recordGeneration
@@ -3631,7 +3641,7 @@ class VaultManager(
             if (res.ok) {
                 markReuse { it.copy(lostOkDue = false, startNew = false) }
                 switchIdentity(o.slot)
-                phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+                phaseGate.publishRecovering(gen)
                 return EarlierOpen.Ok
             }
         }
@@ -3683,7 +3693,7 @@ class VaultManager(
 
     /** The new identity in the other slot (made once, kept across a failed register), registered with the same K. */
     @Suppress("ReturnCount", "ThrowsCount", "CyclomaticComplexMethod", "LongMethod") // one branch per answer of the register
-    private suspend fun registerNewIdentity(code: RecoveryCode, claimed: Claimed): RegisterAnswer {
+    private suspend fun registerNewIdentity(code: RecoveryCode, claimed: Claimed, gen: Int): RegisterAnswer {
         var r = local.reuse ?: throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
         val slot = r.newSlot ?: slots.other(r.earlierSlot)
         if (r.newSlot == null) {
@@ -3764,7 +3774,7 @@ class VaultManager(
             posts.answered(e.status, e.code)
             forgetUnregistered(slot, posts, lastRefused = false)
             return when {
-                o == Rules.RegisterOutcome.MAYBE_REGISTERED -> maybeRegistered(s, code)
+                o == Rules.RegisterOutcome.MAYBE_REGISTERED -> maybeRegistered(s, code, gen)
                 o == Rules.RegisterOutcome.DROP_UNAUTHORIZED -> RegisterAnswer.Unauthorized
                 e.code == MemberApiException.RECOVERY_UNAVAILABLE -> RegisterAnswer.Refused(CODE_NO_BACKUP)
                 e.code == MemberApiException.RECOVERY_NOT_AVAILABLE -> RegisterAnswer.Refused(CODE_NOT_AVAILABLE)
@@ -3775,7 +3785,7 @@ class VaultManager(
             val o = fail(null, null)
             // No answer: this POST may have been queued, so its key stays.
             forgetUnregistered(slot, posts, lastRefused = false)
-            if (o == Rules.RegisterOutcome.MAYBE_REGISTERED) return maybeRegistered(s, code)
+            if (o == Rules.RegisterOutcome.MAYBE_REGISTERED) return maybeRegistered(s, code, gen)
             throw e
         }
         // A readable refusal settles its own POST: that POST's key was not recorded (the vault keeps an earlier one).
@@ -3783,7 +3793,7 @@ class VaultManager(
         if (res?.ok == true) {
             s.device.confirmRecoveryRegistration()
             markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
-            phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+            phaseGate.publishRecovering(gen)
             return RegisterAnswer.Registered
         }
         // A readable refusal settles its own POST only: after an earlier `202`, or a `used` to a repeat, N may be registered.
@@ -3791,7 +3801,7 @@ class VaultManager(
         // An earlier flow's POST for this code left N registered or maybe registered (memory-only [earlierAccepted] is gone).
         val priorRegistration = triedBefore && before.newRegistered && before.newRecoveryId == code.recoveryId
         if (Rules.registerRefusal(repeat, earlierAccepted || priorRegistration, res?.code) == Rules.RegisterOutcome.MAYBE_REGISTERED) {
-            return maybeRegistered(s, code)
+            return maybeRegistered(s, code, gen)
         }
         s.device.dropRecoveryRegistration()
         backToEarlier(before)
@@ -3802,7 +3812,7 @@ class VaultManager(
      * A repeat register for the same code was refused, but the first copy may have been recorded: the new registration is kept
      * (the prior one is not restored) and status signed with K decides, `registered` there meaning registered for this recovery.
      */
-    private suspend fun maybeRegistered(s: Session, code: RecoveryCode): RegisterAnswer {
+    private suspend fun maybeRegistered(s: Session, code: RecoveryCode, gen: Int): RegisterAnswer {
         val read = readStatusWithK(s) as? Rules.Read.Listed
         if (read?.registered != true) {
             // The recovery is active and not registered, and no open was ever sent for it: this identity's keys made for it
@@ -3815,7 +3825,7 @@ class VaultManager(
         }
         s.device.confirmRecoveryRegistration()
         markReuse { it.copy(newRegistered = true, newRecoveryId = code.recoveryId, startNew = false, lostOkDue = false) }
-        phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+        phaseGate.publishRecovering(gen)
         return RegisterAnswer.Registered
     }
 

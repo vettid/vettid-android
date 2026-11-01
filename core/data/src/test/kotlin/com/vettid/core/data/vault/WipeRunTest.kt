@@ -3,6 +3,7 @@ package com.vettid.core.data.vault
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -101,7 +102,7 @@ class WipeRunTest {
         // The old record was never erased: nothing is written or reset over it, and no session opens.
         assertTrue(f.record.eraseFailed)
         assertFalse(f.record.update(RecordStore.UNBOUND) { it.copy(movedIn = true) })
-        assertFalse(f.record.reset(LocalAccount()))
+        assertNull(f.record.reset(LocalAccount()))
         assertEquals(LocalAccount(userGuid = "u", vaultId = "v"), f.record.value)
         try {
             SessionGate.refuseWhileClosed(f.record)
