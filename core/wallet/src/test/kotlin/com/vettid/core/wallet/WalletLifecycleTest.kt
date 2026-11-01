@@ -16,6 +16,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 /** The wallets follow the vault (ANDROID-PLAN §4 "Local state"): read while open, forgotten at lock, hold and wipe. */
 class WalletLifecycleTest {
@@ -41,14 +42,14 @@ class WalletLifecycleTest {
     fun openReadsAndClosedForgets() = runBlocking {
         val w = WalletFixtures.wallet()
         ops.wallets[w.id] = w
-        val open = MutableStateFlow(false)
+        val open = MutableStateFlow<Int?>(null)
         val m = manager()
         m.follow(open, MutableSharedFlow())
-        open.value = true
+        open.value = 1
         eventually("read when open") { m.wallets.value.size == 1 }
         assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
         // Locked or held.
-        open.value = false
+        open.value = null
         eventually("forgotten when closed") { m.wallets.value.isEmpty() }
         assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
         scope.cancel()
@@ -56,7 +57,7 @@ class WalletLifecycleTest {
 
     @Test
     fun walletEventsReadTheListAgain() = runBlocking {
-        val open = MutableStateFlow(true)
+        val open = MutableStateFlow<Int?>(1)
         val events = MutableSharedFlow<Pair<String, JsonObject>>()
         val m = manager()
         m.follow(open, events)
@@ -70,6 +71,25 @@ class WalletLifecycleTest {
         events.emit("sync.event" to syncEvent("item.changed", w.id))
         delay(WalletsManager.EVENT_DEBOUNCE_MS * 2)
         assertEquals(reads, ops.calls.count { it == "list" })
+        scope.cancel()
+    }
+
+    @Test
+    fun aLockConflatedAwayStillForgetsTheSessionBefore() = runBlocking {
+        val w = WalletFixtures.wallet()
+        ops.wallets[w.id] = w
+        val open = MutableStateFlow<Int?>(1)
+        val closed = AtomicInteger()
+        val m = manager()
+        m.follow(open, MutableSharedFlow(), onClosed = { closed.incrementAndGet() })
+        eventually("first read") { m.wallets.value.size == 1 }
+        // A wallet the first read didn't have: seen only once the new session's read has answered (the call is recorded
+        // when it starts, before its answer is in the manager).
+        val second = WalletFixtures.wallet(id = "01WALLET0000000000000000AB")
+        ops.wallets[second.id] = second
+        // Locked and opened again so fast that the closed value never reached the follower: a new session all the same.
+        open.value = 2
+        eventually("closed and read again") { closed.get() == 1 && m.wallets.value.size == 2 }
         scope.cancel()
     }
 
@@ -94,14 +114,14 @@ class WalletLifecycleTest {
         val w = WalletFixtures.wallet()
         ops.wallets[w.id] = w
         ops.listGate = CompletableDeferred()
-        val open = MutableStateFlow(true)
-        var closed = 0
+        val open = MutableStateFlow<Int?>(1)
+        val closed = AtomicInteger()
         val m = manager()
-        m.follow(open, MutableSharedFlow(), onClosed = { closed++ })
+        m.follow(open, MutableSharedFlow(), onClosed = { closed.incrementAndGet() })
         eventually("the read started") { ops.calls.contains("list") }
         // The vault closes while `wallet.list` is unanswered: the close runs at once, and the late answer is dropped.
-        open.value = false
-        eventually("closed") { closed == 1 }
+        open.value = null
+        eventually("closed") { closed.get() == 1 }
         ops.listGate!!.complete(Unit)
         delay(100)
         assertTrue(m.wallets.value.isEmpty())
