@@ -219,7 +219,7 @@ The A2 exit test:
   `WalletAccess.shown`): the list (`wallet.list`, the test-network banner, "Not backed up" from this phone's flags, Try again),
   new wallet, the phrase and the check (both `SecureWindow()`, out of autofill and content capture; three words asked, any case; the
   words and any passphrase in `CharArray`s (`PhraseWords`), wiped when the flow ends or the vault closes; a wrong answer ends the
-  check; `NewWalletRoute` / `BackupRoute` are in `:core:data` (`WalletSecretRoutes`) and `navigateTopLevel` pops them, so state
+  check; `NewWalletRoute` / `BackupRoute` are in `:core:data` and `navigateTopLevel` pops them (`popWalletSecrets`), so state
   saving never keeps the words behind another screen),
   back up later from a row, the Credential screen's "Bitcoin wallet: <name>" rows (`WalletAccess.wallets`) and History's wallet
   titles. Texts in `feature/wallet/.../strings.xml` are marked draft (the plan's) or new; `WalletTextsTest` holds them. Catalog:
