@@ -140,6 +140,13 @@ class SpendingLimitsScreenTest {
     }
 
     @Test
+    fun aDuplicateWalletRefusalHasItsOwnText() {
+        show(state(error = FailureKind.OTHER, code = WalletsManager.DUPLICATE_WALLET))
+        rule.onNodeWithText("Your vault holds another copy of this wallet. Delete one copy before setting a limit.").assertExists()
+        rule.onNodeWithText("Nothing was changed. Your limits are as they were.").assertExists()
+    }
+
+    @Test
     fun aWrongPinIsOnThePinFieldAndTheLimitsAreSaidToBeUnchanged() {
         show(state(step = LimitsStep.CONFIRM_RAISE, raise = true, form = CapsEditForm(perTx = "600000"), error = FailureKind.BAD_PIN))
         rule.onNodeWithText("That PIN is not correct.").assertExists()

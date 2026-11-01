@@ -266,7 +266,7 @@ The A2 exit test:
   is shown). **Reset wallet settings on this phone** (`WalletsManager.resetSettings`, `WalletFlags.reset`: the one sanctioned overwrite
   of an unreadable `wallet-flags.bin`, offered only while it is unreadable, behind a `ConfirmDialog`, nothing sent to the vault; the
   local flags are forgotten, so wallets show "Not backed up"): an uncapped wallet of a vault with `caps` is then asked "Set a spending
-  limit?" before Receive (`ask_all_caps` and `answered_caps` in the flags, decided per wallet at Receive, `ReceiveResult.LimitsAsk`, `answerLimits`; limits pending in this session are carried into the fresh file); a limit goes through the pending path.
+  limit?" before Receive (`ask_caps` (the wallets the vault held at the reset; `ask_next` fills it from the first list read if none was loaded), `answered_caps` in the flags, decided per wallet at Receive, `ReceiveResult.LimitsAsk`, `answerLimits`; limits pending in this session are carried into the fresh file); a limit goes through the pending path.
   Catalog adds `wallet.limits`, `wallet.limits_none`, `wallet.limits_one`, `wallet.limits_unsupported`, `wallet.limits_lower`,
   `wallet.limits_lower_bad`, `wallet.limits_lower_confirm`, `wallet.limits_raise`, `wallet.limits_raise_confirm`,
   `wallet.limits_remove`, `wallet.limits_bad_pin`, `wallet.limits_backoff`, `wallet.limits_conflict`, `wallet.detail_reset`,

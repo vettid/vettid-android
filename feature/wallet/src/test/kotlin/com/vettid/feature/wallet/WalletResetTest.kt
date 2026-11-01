@@ -285,4 +285,47 @@ class WalletResetTest {
         rule.onNodeWithTag("limits_none").assertIsSelected()
         rule.onNodeWithText("Continue").assertIsEnabled()
     }
+
+    @Test
+    fun tryAgainOnTheUnreadableNoticeReadsTheFileAndLeadsToReceive() = runTest {
+        val w = ops.wallet(id)
+        ops.wallets[id] = w.copy(capped = true, perTxSats = 1000, perPeriodSats = 5000)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = mgr().also { it.open() }
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
+        // The file reads now (and the wallet is backed up there): Try again is Receive.
+        flagsFile.bytes = null
+        WalletFlags(flagsFile).setBackedUp(id)
+        vm.load()
+        eventually { vm.state.value.address != null }
+        assertEquals(null, vm.state.value.problem)
+    }
+
+    @Test
+    fun aResetOnAFileThatReadsAfterAllIsNotAFailureAndReceiveGoesOn() = runTest {
+        val w = ops.wallet(id)
+        ops.wallets[id] = w.copy(capped = true, perTxSats = 1000, perPeriodSats = 5000)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = mgr().also { it.open() }
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
+        vm.askReset()
+        flagsFile.bytes = null
+        WalletFlags(flagsFile).setBackedUp(id)
+        vm.resetSettings()
+        eventually { vm.state.value.address != null }
+        assertFalse(vm.state.value.resetFailed)
+    }
+
+    @Test
+    fun theReceiveScreenSaysWhyAPendingLimitIsRefusedAsADuplicate() {
+        rule.setContent {
+            ReceiveScreen(
+                ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.CAPS_DUPLICATE),
+                ReceiveActions(),
+            )
+        }
+        rule.onNodeWithText("Your vault holds another copy of this wallet. Delete one copy before setting a limit.").assertIsDisplayed()
+    }
 }

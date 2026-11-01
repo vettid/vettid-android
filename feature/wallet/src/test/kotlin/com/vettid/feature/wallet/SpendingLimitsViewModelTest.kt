@@ -331,4 +331,28 @@ class SpendingLimitsViewModelTest {
         assertTrue(sent("caps.").isEmpty())
         assertEquals("", vm.state.value.password)
     }
+
+    @Test
+    fun aDuplicateWalletRefusalOfASetOrARaiseIsNamedAndLeavesTheLimits() = runTest {
+        ops.capsSetFails = "duplicate_wallet"
+        val vm = vm()
+        vm.openLower()
+        vm.setPerTx("400000")
+        vm.next()
+        vm.confirmSet()
+        eventually { !vm.state.value.busy && vm.state.value.errorCode == WalletsManager.DUPLICATE_WALLET }
+        assertEquals(500_000L, vaultWallet().perTxSats)
+        ops.capsSetFails = null
+        ops.capsRaiseFails = "duplicate_wallet"
+        vm.back()
+        vm.back()
+        vm.openRaise()
+        vm.setPerTx("600000")
+        vm.next()
+        vm.setPin("123456")
+        vm.setPassword("pw")
+        vm.confirmRaise()
+        eventually { !vm.state.value.busy && vm.state.value.errorCode == WalletsManager.DUPLICATE_WALLET }
+        assertEquals(500_000L, vaultWallet().perTxSats)
+    }
 }

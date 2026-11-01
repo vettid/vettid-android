@@ -109,13 +109,21 @@ internal class FakeWallets : WalletOps {
         }
     }
 
+    /** Wallets whose reveal needs the PIN although the list shows no limit (a twin of a capped wallet). */
+    val needsPin = mutableSetOf<String>()
+
+    /** The reveal answers `pin_required` even with a PIN. */
+    var pinStubborn = false
+
     /** A vault error code for `wallet.caps.raise`, else none. */
     var capsRaiseFails: String? = null
 
     override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
         calls += "reveal:$walletId" + if (pin != null) ":pin" else ""
         revealCode?.let { throw VaultOpException("item.reveal", it) }
-        if (wallets[walletId]?.capped == true) {
+        // A wallet the list shows without a limit may still need the PIN (it matches a capped wallet or a twin): the app cannot know.
+        if (pinStubborn && pin != null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
+        if (wallets[walletId]?.capped == true || walletId in needsPin) {
             if (pin == null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
             if (pin != this.pin) throw VaultOpException("item.reveal", "bad_pin")
         }

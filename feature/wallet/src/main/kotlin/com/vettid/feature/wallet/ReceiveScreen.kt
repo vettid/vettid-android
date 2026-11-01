@@ -124,6 +124,7 @@ private fun ProblemScreen(state: ReceiveUiState, actions: ReceiveActions, modifi
         body = stringResource(
             when {
                 state.problem == ReceiveProblem.CAPS_PENDING -> R.string.wallet_receive_caps_pending
+                state.problem == ReceiveProblem.CAPS_DUPLICATE -> R.string.wallet_limits_duplicate
                 state.problem == ReceiveProblem.SETTINGS_UNREADABLE -> R.string.wallet_settings_unreadable
                 state.problem == ReceiveProblem.MISMATCH -> R.string.wallet_address_mismatch
                 state.network == com.vettid.core.chain.Network.TESTNET -> R.string.wallet_testnet3_unsupported
@@ -225,4 +226,4 @@ private fun AddressContent(state: ReceiveUiState, actions: ReceiveActions, modif
 }
 
 /** The problems whose way out is to try again from this screen. */
-private val RETRYABLE = setOf(ReceiveProblem.CAPS_PENDING, ReceiveProblem.SETTINGS_UNREADABLE)
+private val RETRYABLE = setOf(ReceiveProblem.CAPS_PENDING, ReceiveProblem.CAPS_DUPLICATE, ReceiveProblem.SETTINGS_UNREADABLE)

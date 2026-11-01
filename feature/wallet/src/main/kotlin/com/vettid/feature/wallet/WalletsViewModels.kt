@@ -187,6 +187,8 @@ data class BackupUiState(
     val capsNotSaved: Boolean = false,
     /** Backed up, but the chosen spending limit is not set yet (no Receive until it is): Try again ([BackupViewModel.retryCaps]). */
     val capsFailed: Boolean = false,
+    /** The limit was refused with `duplicate_wallet`: the vault holds another copy of this wallet. */
+    val capsDuplicate: Boolean = false,
     /** The vault closed (locked, held, due) during the flow: the words are gone and the flow leaves. */
     val closed: Boolean = false,
 ) {
@@ -469,6 +471,7 @@ class BackupViewModel internal constructor(
             mutable.update {
                 it.copy(
                     busy = false, step = BackupStep.DONE, backedUp = kept, saveFailed = !kept, capsFailed = capsFailed,
+                    capsDuplicate = capsFailed && id in wallets.capsDuplicate.value,
                     // Once the limit is set it no longer matters that this phone could not save it.
                     capsNotSaved = it.capsNotSaved && capsFailed,
                 )
@@ -492,7 +495,12 @@ class BackupViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             val ok = setCaps(id)
-            mutable.update { it.copy(busy = false, capsFailed = !ok, capsNotSaved = it.capsNotSaved && !ok) }
+            mutable.update {
+                it.copy(
+                    busy = false, capsFailed = !ok, capsNotSaved = it.capsNotSaved && !ok,
+                    capsDuplicate = !ok && id in wallets.capsDuplicate.value,
+                )
+            }
         }
     }
 

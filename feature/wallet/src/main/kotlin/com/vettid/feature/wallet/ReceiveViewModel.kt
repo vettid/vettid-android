@@ -33,6 +33,9 @@ enum class ReceiveProblem {
     /** This phone cannot read its wallet settings, so no wallet is known to be free of a limit to set: no address ("Try again"). */
     SETTINGS_UNREADABLE,
 
+    /** The pending limit was refused with `duplicate_wallet` (the vault holds another copy of this wallet): no address; Try again. */
+    CAPS_DUPLICATE,
+
     /** Wallet settings were reset on this phone and the vault shows no limit on this wallet: "Set a spending limit?" is asked first. */
     LIMITS_ASK,
 }
@@ -142,6 +145,8 @@ class ReceiveViewModel @Inject constructor(
     /** The address to show; from Try again too. */
     fun load() {
         viewModelScope.launch {
+            // Try again on the unreadable notice reads the file again first: it may read now.
+            wallets.rereadSettings()
             // Settings that cannot be read come first: with them "Not backed up" is only a guess, and the way out (the reset) is here.
             if (WalletsManager.UNKNOWN in wallets.capsPending.value) {
                 mutable.update {
@@ -179,6 +184,8 @@ class ReceiveViewModel @Inject constructor(
                         it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.CAPS_PENDING)
                     ReceiveResult.SettingsUnreadable ->
                         it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.SETTINGS_UNREADABLE)
+                    ReceiveResult.CapsDuplicate ->
+                        it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.CAPS_DUPLICATE)
                     ReceiveResult.LimitsAsk ->
                         it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.LIMITS_ASK)
                 }
@@ -232,8 +239,10 @@ class ReceiveViewModel @Inject constructor(
         mutable.update { it.copy(resetAsk = false) }
         viewModelScope.launch {
             val done = wallets.resetSettings()
-            mutable.update { it.copy(resetFailed = !done) }
-            if (done) load()
+            // A reset refused because the file reads after all is no failure: Receive goes on.
+            val stillUnreadable = WalletsManager.UNKNOWN in wallets.capsPending.value
+            mutable.update { it.copy(resetFailed = !done && stillUnreadable) }
+            load()
         }
     }
 

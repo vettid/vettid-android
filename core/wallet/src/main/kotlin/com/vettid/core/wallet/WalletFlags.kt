@@ -43,10 +43,13 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         val noteShown: Set<String> = emptySet(),
         val pendingCaps: Map<String, WalletCaps> = emptyMap(),
         /**
-         * After [reset]: every wallet is asked "Set a spending limit?" again before Receive, unless the vault already caps it (decided
-         * at Receive, from the vault's own view) or it was [answeredCaps] since.
+         * After [reset]: the wallets the vault held then, asked "Set a spending limit?" again before Receive (unless the vault already
+         * caps one, decided at Receive from the vault's own view). A wallet made or answered later is not in it.
          */
-        val askAllCaps: Boolean = false,
+        val askCaps: Set<String> = emptySet(),
+        /** The reset came before the wallets were listed: the first list read after it fills [askCaps] (less [answeredCaps]). */
+        val askNext: Boolean = false,
+        /** Answered or made while [askNext] was waiting: left out of [askCaps] when the list fills it. */
         val answeredCaps: Set<String> = emptySet(),
     )
 
@@ -96,34 +99,46 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     suspend fun forget(walletId: String): Boolean = change {
         Flags(
             it.backedUp - walletId, it.testnet - walletId, it.noteShown - walletId, it.pendingCaps - walletId,
-            it.askAllCaps, it.answeredCaps - walletId,
+            it.askCaps - walletId, it.askNext, it.answeredCaps - walletId,
         )
     }
 
     /**
-     * Whether [walletId]'s limit is to be asked before Receive (a [reset] left every wallet unanswered and it was not answered since;
+     * Whether [walletId]'s limit is to be asked before Receive (it was one of the wallets at a [reset] and was not answered since;
      * whether the vault already caps it is for the caller); null when the file cannot be read.
      */
-    suspend fun asksCaps(walletId: String): Boolean? = lock.withLock { read()?.let { it.askAllCaps && walletId !in it.answeredCaps } }
+    suspend fun asksCaps(walletId: String): Boolean? = lock.withLock { read()?.let { walletId in it.askCaps } }
+
+    /**
+     * The first wallet list read after a [reset] that came before the wallets were listed: those wallets (less the ones answered or
+     * made meanwhile) are the ones to ask, and from then on only those. Nothing when no reset waits; false if it could not be written.
+     */
+    suspend fun listed(ids: Set<String>): Boolean = change {
+        if (!it.askNext) it else it.copy(askCaps = ids - it.answeredCaps, askNext = false, answeredCaps = emptySet())
+    }
 
     /** [walletId]'s limit was answered (pending now, or "No limit"): not asked again; false if it could not be written. */
-    suspend fun clearAskCaps(walletId: String): Boolean = change { it.copy(answeredCaps = it.answeredCaps + walletId) }
+    suspend fun clearAskCaps(walletId: String): Boolean = change {
+        it.copy(askCaps = it.askCaps - walletId, answeredCaps = if (it.askNext) it.answeredCaps + walletId else it.answeredCaps)
+    }
 
     /**
      * Writes a **fresh** file over one that cannot be read: nothing of the old one is kept (backed up, test chains, privacy notes,
-     * pending limits except [pending], the ones chosen in this session and not yet sent, which are carried over), and every wallet's
-     * limit is asked again before Receive. The one sanctioned overwrite
+     * pending limits except [pending], the ones chosen in this session and not yet sent, which are carried over), and the limit of
+     * each wallet in [listed] (null: the wallets are not listed yet; the first list read fills it, [listed]) is asked again before
+     * Receive. The one sanctioned overwrite
      * (the member confirmed "Reset wallet settings on this phone"); false when the file reads fine (nothing is reset then), when
      * a wipe began meanwhile or when it could not be written.
      */
     @Suppress("TooGenericExceptionCaught")
-    suspend fun reset(pending: Map<String, WalletCaps> = emptyMap()): Boolean {
+    suspend fun reset(pending: Map<String, WalletCaps> = emptyMap(), listed: Set<String>? = null): Boolean {
         val started = generation()
         return lock.withLock {
             if (readResult() is Read.Loaded) return@withLock false
             if (generation() != started) return@withLock false
             try {
-                withContext(Dispatchers.IO) { file.save(encode(Flags(emptySet(), emptyMap(), pendingCaps = pending, askAllCaps = true))) }
+                val fresh = Flags(emptySet(), emptyMap(), pendingCaps = pending, askCaps = listed.orEmpty(), askNext = listed == null)
+                withContext(Dispatchers.IO) { file.save(encode(fresh)) }
                 true
             } catch (_: Exception) {
                 false
@@ -201,18 +216,20 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
             is JsonObject -> c.entries.associate { (id, v) -> id to (capsOf(v) ?: return null) }
             else -> return null
         }
-        // `ask_all_caps` and `answered_caps` came with the reset: a file without them reads as not asking.
-        val askAll = when (val a = o["ask_all_caps"]) {
+        // `ask_caps`, `ask_next` and `answered_caps` came with the reset: a file without them reads as not asking.
+        fun ids(key: String): Set<String>? = when (val a = o[key]) {
+            null -> emptySet()
+            is JsonArray -> a.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: return null }.toSet()
+            else -> null
+        }
+        val ask = ids("ask_caps") ?: return null
+        val answered = ids("answered_caps") ?: return null
+        val askNext = when (val a = o["ask_next"]) {
             null -> false
             is JsonPrimitive -> a.booleanOrNull ?: return null
             else -> return null
         }
-        val answered = when (val a = o["answered_caps"]) {
-            null -> emptySet()
-            is JsonArray -> a.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: return null }.toSet()
-            else -> return null
-        }
-        return Flags(backedUp, testnet, noteShown, pending, askAll, answered)
+        return Flags(backedUp, testnet, noteShown, pending, ask, askNext, answered)
     }
 
     /** A pending entry `{per_tx_sats?, per_period_sats?}`; null if it is not limits the vault would take (the file is then unreadable). */
@@ -231,7 +248,8 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         put("backed_up", JsonArray(f.backedUp.sorted().map(::JsonPrimitive)))
         put("testnet", buildJsonObject { f.testnet.entries.sortedBy { it.key }.forEach { put(it.key, it.value.vaultName) } })
         put("note_shown", JsonArray(f.noteShown.sorted().map(::JsonPrimitive)))
-        if (f.askAllCaps) put("ask_all_caps", true)
+        if (f.askCaps.isNotEmpty()) put("ask_caps", JsonArray(f.askCaps.sorted().map(::JsonPrimitive)))
+        if (f.askNext) put("ask_next", true)
         if (f.answeredCaps.isNotEmpty()) put("answered_caps", JsonArray(f.answeredCaps.sorted().map(::JsonPrimitive)))
         if (f.pendingCaps.isNotEmpty()) {
             put(

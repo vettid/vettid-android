@@ -141,6 +141,7 @@ private fun errorText(kind: FailureKind, code: String?): String = stringResource
         WalletsManager.CAPS_PENDING -> R.string.wallet_limits_pending_first
         WalletsManager.CAPS_SETTLED -> R.string.wallet_limits_settled
         WalletsManager.SETTINGS_UNREADABLE -> R.string.wallet_limits_unreadable
+        WalletsManager.DUPLICATE_WALLET -> R.string.wallet_limits_duplicate
         else -> kind.messageRes()
     },
 )

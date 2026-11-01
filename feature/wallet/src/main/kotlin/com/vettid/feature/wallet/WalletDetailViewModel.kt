@@ -51,6 +51,8 @@ data class WalletDetailUiState(
     val settingsUnreadable: Boolean = false,
     /** The wallet has a spending limit (`wallet.list`): its recovery phrase needs the PIN too. */
     val capped: Boolean = false,
+    /** The pending limit was refused because the vault holds another copy of this wallet (`duplicate_wallet`). */
+    val capsDuplicate: Boolean = false,
     /** The wallet's vault enforces spending limits: ⋯ → Spending limits is offered. */
     val capsSupported: Boolean = false,
     /** "Reset wallet settings on this phone" is asked about (its confirm is up). */
@@ -119,6 +121,9 @@ class WalletDetailViewModel @Inject constructor(
     )
 
     init {
+        viewModelScope.launch {
+            wallets.capsDuplicate.collect { d -> mutable.update { it.copy(capsDuplicate = walletId in d) } }
+        }
         viewModelScope.launch {
             combine(
                 wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged, wallets.capsPending,

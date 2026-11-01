@@ -113,6 +113,9 @@ sealed interface ReceiveResult {
     /** The spending limit the member chose has not been set yet (W1d): no Receive until `wallet.caps.set` has been answered. */
     data object CapsPending : ReceiveResult
 
+    /** The pending limit was refused with `duplicate_wallet` (the vault holds another copy of this wallet): no Receive, and the reason. */
+    data object CapsDuplicate : ReceiveResult
+
     /** This phone's wallet settings cannot be read, so no wallet is known to be free of a limit still to be set: no Receive. */
     data object SettingsUnreadable : ReceiveResult
 
@@ -155,7 +158,7 @@ data class Imported(
  * looks them up again. On disk only [WalletFlags] and the chain server setting. A [generation] guard drops whatever was read before
  * a clear.
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass") // one manager for the wallets, their limits and the flags
 class WalletsManager(
     private val scope: CoroutineScope,
     private val ops: () -> WalletOps,
@@ -195,6 +198,13 @@ class WalletsManager(
      * [UNKNOWN]: every wallet is then pending (use [isPending]).
      */
     val capsPending: StateFlow<Set<String>> = capsPendingFlow.asStateFlow()
+
+    /** The wallets whose pending `wallet.caps.set` the vault refused with `duplicate_wallet` (memory only). Under [lock]. */
+    private val duplicateSet = HashSet<String>()
+    private val duplicateFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The wallets whose pending limit was refused because the vault holds another copy of the wallet: the screens say so. */
+    val capsDuplicate: StateFlow<Set<String>> = duplicateFlow.asStateFlow()
 
     /** Wallets made in this session whose backup is under way: their pending limits wait for the check (the phrase needs no PIN). */
     private val held = HashSet<String>()
@@ -283,6 +293,8 @@ class WalletsManager(
             pendingUnknown = false
             publishPending()
             held.clear()
+            duplicateSet.clear()
+            duplicateFlow.value = emptySet()
         }
     }
 
@@ -343,6 +355,8 @@ class WalletsManager(
             // A wallet gone (deleted on another device): its look-up goes too.
             lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
         }
+        // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
+        flags.listed(list.map { it.id }.toSet())
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
@@ -460,6 +474,8 @@ class WalletsManager(
         // A vault that gives the new wallet no `caps` cannot enforce a limit: nothing is kept or sent for it.
         val unsupported = caps != null && !caps.none && !wallet.capsSupported
         val saved = keepCaps(wallet.id, caps.takeUnless { unsupported }, g, hold = true)
+        // The limit was chosen (or No limit) on the step before: a reset later does not ask this wallet's question again.
+        flags.clearAskCaps(wallet.id)
         val kept = publish(g) {
             walletsFlow.update { l -> l.filterNot { it.id == wallet.id } + wallet }
             availabilityFlow.value = WalletAvailability.AVAILABLE
@@ -498,6 +514,7 @@ class WalletsManager(
         val wallet = vaultGuard { ops().create(name, network.vaultName, password, WalletImport(words, passphrase)) }
         val unsupported = caps != null && !caps.none && !wallet.capsSupported
         val saved = keepCaps(wallet.id, caps.takeUnless { unsupported }, g, hold = false)
+        flags.clearAskCaps(wallet.id)
         // The words were typed, so the wallet starts backed up; a flag that cannot be written is tried once more and then said.
         val recorded = flags.setBackedUp(wallet.id) || flags.setBackedUp(wallet.id)
         flagsChangedFlow.update { it + 1 }
@@ -553,13 +570,27 @@ class WalletsManager(
             val g = gen()
             if (synchronized(lock) { pendingUnknown }) loadPending(g)
             val caps = synchronized(lock) { pendingMap[walletId] } ?: return
-            val version = sendPending(walletId, caps, g)
+            val version = try {
+                sendPending(walletId, caps, g)
+            } catch (e: VaultFailure) {
+                // The vault holds another copy of this wallet (`duplicate_wallet`): the limit stays pending, Receive stays off, and the
+                // screens say why. Not retried here; the next Try again or unlock sends it once more.
+                markDuplicate(walletId, e.code == DUPLICATE_WALLET)
+                throw e
+            }
+            markDuplicate(walletId, false)
             withContext(NonCancellable) {
                 if (version != null) {
                     publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }
                 }
                 done(walletId, g)
             }
+        }
+    }
+
+    private fun markDuplicate(walletId: String, duplicate: Boolean) {
+        synchronized(lock) {
+            if (if (duplicate) duplicateSet.add(walletId) else duplicateSet.remove(walletId)) duplicateFlow.value = duplicateSet.toSet()
         }
     }
 
@@ -686,6 +717,8 @@ class WalletsManager(
                 }
             }
         }
+        // The member set or removed the limits here: a reset later does not ask this wallet's question again.
+        flags.clearAskCaps(walletId)
     }
 
     /**
@@ -760,7 +793,11 @@ class WalletsManager(
         if (isCapsPending(walletId)) {
             attempt { settleFirst(walletId) }
             if (isCapsPending(walletId)) {
-                return if (synchronized(lock) { pendingUnknown }) ReceiveResult.SettingsUnreadable else ReceiveResult.CapsPending
+                return when {
+                    synchronized(lock) { pendingUnknown } -> ReceiveResult.SettingsUnreadable
+                    synchronized(lock) { walletId in duplicateSet } -> ReceiveResult.CapsDuplicate
+                    else -> ReceiveResult.CapsPending
+                }
             }
         }
         when (asksLimits(wallet)) {
@@ -801,8 +838,14 @@ class WalletsManager(
     suspend fun resetSettings(): Boolean {
         val g = gen()
         val pending = synchronized(lock) { HashMap(pendingMap) }
-        val done = flags.reset(pending)
-        if (!done) return false
+        // The wallets the vault holds now; none known yet (the list is not read): the first list read after the reset names them.
+        val listed = if (availabilityFlow.value == WalletAvailability.AVAILABLE) walletsFlow.value.map { it.id }.toSet() else null
+        val done = flags.reset(pending, listed)
+        if (!done) {
+            // The file may read after all: the unknown state ends with it, and Receive can go on.
+            loadPending(g)
+            return false
+        }
         publish(g) {
             pendingUnknown = false
             publishPending()
@@ -825,6 +868,9 @@ class WalletsManager(
         if (caps != null) settleCaps(walletId)
         return true
     }
+
+    /** Reads this phone's pending limits again (from "Try again" on the unreadable notice): the unknown state ends if the file reads. */
+    suspend fun rereadSettings() = loadPending(gen())
 
     /** Whether the limit chosen for [walletId] is not set yet. */
     fun isCapsPending(walletId: String): Boolean = synchronized(lock) { pendingUnknown || walletId in pendingMap }
@@ -1014,6 +1060,9 @@ class WalletsManager(
 
         /** Whether [walletId] is pending in [pending] (a set from [capsPending]): named in it, or nothing is known ([UNKNOWN]). */
         fun isPending(pending: Set<String>, walletId: String): Boolean = UNKNOWN in pending || walletId in pending
+
+        /** The vault's refusal of a limit on a wallet that shares its keys with another one (VAULT-MESSAGING 0.82.3). */
+        const val DUPLICATE_WALLET = "duplicate_wallet"
 
         /** What [raiseCaps] answers (a [VaultFailure] code) while this phone's wallet settings cannot be read. */
         const val SETTINGS_UNREADABLE = "settings_unreadable"

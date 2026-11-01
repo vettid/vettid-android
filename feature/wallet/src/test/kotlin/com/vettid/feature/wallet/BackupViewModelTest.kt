@@ -351,4 +351,44 @@ class BackupViewModelTest {
         assertEquals(WalletNames.Problem.CONTROL, WalletNames.problem("a${Char(7)}b"))
         assertEquals(null, WalletNames.problem("Savings"))
     }
+
+    @Test
+    fun anUncappedWalletWhoseRevealAnswersPinRequiredAsksForThePinAndSendsItOnce() = runTest {
+        val id = "01TWIN000000000000000000AA"
+        ops.wallet(id)
+        ops.needsPin += id
+        val vm = vm(SavedStateHandle(mapOf("walletId" to id)))
+        assertFalse(vm.state.value.capped)
+        vm.setPassword("pw")
+        vm.reveal()
+        eventually { vm.state.value.problem == BackupProblem.PIN_REQUIRED }
+        // The PIN field (with the existing text) is up and the password typed was wiped; the member types both again.
+        assertTrue(vm.state.value.capped)
+        assertEquals("", vm.state.value.password)
+        vm.setPassword("pw")
+        vm.setPin("123456")
+        vm.reveal()
+        eventually { vm.state.value.step == BackupStep.PHRASE }
+        assertEquals(listOf("reveal:$id", "reveal:$id:pin"), ops.calls.filter { it.startsWith("reveal:") })
+    }
+
+    @Test
+    fun aSecondPinRequiredEndsThereAndNeverLoops() = runTest {
+        val id = "01TWIN000000000000000000AA"
+        ops.wallet(id)
+        ops.needsPin += id
+        ops.pinStubborn = true
+        val vm = vm(SavedStateHandle(mapOf("walletId" to id)))
+        vm.setPassword("pw")
+        vm.reveal()
+        eventually { vm.state.value.problem == BackupProblem.PIN_REQUIRED }
+        vm.setPassword("pw")
+        vm.setPin("123456")
+        vm.reveal()
+        eventually { !vm.state.value.busy && vm.state.value.password.isEmpty() && ops.calls.count { it.startsWith("reveal:") } == 2 }
+        kotlinx.coroutines.delay(300)
+        assertEquals(2, ops.calls.count { it.startsWith("reveal:") })
+        assertEquals(BackupProblem.PIN_REQUIRED, vm.state.value.problem)
+        assertEquals("", vm.state.value.pin)
+    }
 }

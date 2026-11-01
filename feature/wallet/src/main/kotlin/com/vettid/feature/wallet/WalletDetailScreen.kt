@@ -182,10 +182,27 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
         Balance(state)
         LookupProblem(state, actions)
     }
-    // The spending limit chosen is sent first: no Receive until it is set.
+    CapsNotes(state, actions)
+    PrimaryButton(
+        stringResource(R.string.wallet_receive),
+        actions.onReceive,
+        Modifier.testTag("wallet_receive"),
+        enabled = state.lookup != LookupResult.AddressMismatch && !state.capsPending,
+    )
+}
+
+/** The spending limit chosen is sent first: no Receive until it is set (and the way out of unreadable settings); a failed reset. */
+@Composable
+private fun CapsNotes(state: WalletDetailUiState, actions: WalletDetailActions) {
     if (state.capsPending) {
         Text(
-            stringResource(if (state.settingsUnreadable) R.string.wallet_settings_unreadable else R.string.wallet_receive_caps_pending),
+            stringResource(
+                when {
+                    state.settingsUnreadable -> R.string.wallet_settings_unreadable
+                    state.capsDuplicate -> R.string.wallet_limits_duplicate
+                    else -> R.string.wallet_receive_caps_pending
+                },
+            ),
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("wallet_caps_pending"),
         )
@@ -206,12 +223,6 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
             modifier = Modifier.testTag("wallet_reset_failed"),
         )
     }
-    PrimaryButton(
-        stringResource(R.string.wallet_receive),
-        actions.onReceive,
-        Modifier.testTag("wallet_receive"),
-        enabled = state.lookup != LookupResult.AddressMismatch && !state.capsPending,
-    )
 }
 
 /** Confirmed, in bitcoin with satoshis underneath; "+ … incoming" (or "- … outgoing") while unconfirmed; the last look-up. */

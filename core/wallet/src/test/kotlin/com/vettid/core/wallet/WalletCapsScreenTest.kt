@@ -148,7 +148,7 @@ class WalletCapsScreenTest {
         assertEquals(emptyMap<String, WalletCaps>(), fresh.allPendingCaps())
         assertTrue(m.capsPending.value.isEmpty())
         assertEquals(true, fresh.asksCaps(id))
-        assertEquals(true, fresh.asksCaps("01ANYTHING"))
+        assertEquals(false, fresh.asksCaps("01ANYTHING"))
         assertFalse(m.resetSettings())
     }
 
@@ -196,7 +196,7 @@ class WalletCapsScreenTest {
         assertTrue(ops.calls.none { it.startsWith("caps.") })
         assertFalse(m.asksLimits(id))
         assertEquals(false, WalletFlags(flagsFile).asksCaps(id))
-        assertEquals(true, WalletFlags(flagsFile).asksCaps("01OTHER"))
+        assertEquals(false, WalletFlags(flagsFile).asksCaps("01OTHER"))
         assertTrue(m.receiveAddress(id) is ReceiveResult.Address)
     }
 
@@ -264,10 +264,10 @@ class WalletCapsScreenTest {
         kotlinx.coroutines.delay(300)
         assertTrue(m.wallets.value.isEmpty())
         assertTrue(m.resetSettings())
-        assertEquals(true, WalletFlags(flagsFile).asksCaps(id))
         wallet(id)
         ops.listGate!!.complete(Unit)
         opening.join()
+        assertEquals(true, WalletFlags(flagsFile).asksCaps(id))
         assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(id))
     }
 
@@ -286,5 +286,109 @@ class WalletCapsScreenTest {
         assertEquals(caps, WalletFlags(flagsFile).pendingCaps(pendingId))
         assertTrue(m.isCapsPending(pendingId))
         assertEquals(ReceiveResult.CapsPending, m.receiveAddress(pendingId))
+    }
+
+    @Test
+    fun aWalletMadeAfterTheResetOrLaterListedIsNotAsked() = runBlocking {
+        val old = "01WALLET0000000000000000AA"
+        wallet(old)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = manager()
+        m.open()
+        assertTrue(m.resetSettings())
+        assertEquals(true, WalletFlags(flagsFile).asksCaps(old))
+        // Made here with No limit: not asked, and its flag says so.
+        val made = m.create("New", Network.TESTNET4, "pw", null).wallet
+        assertEquals(false, WalletFlags(flagsFile).asksCaps(made.id))
+        assertTrue(m.receiveAddress(made.id) !is ReceiveResult.LimitsAsk)
+        // Made elsewhere after the reset: the list read later does not ask it either.
+        val elsewhere = "01WALLET000000000000000009"
+        wallet(elsewhere)
+        m.refresh()
+        assertEquals(false, WalletFlags(flagsFile).asksCaps(elsewhere))
+        assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(old))
+    }
+
+    @Test
+    fun aResetBeforeTheListIsReadAsksOnlyTheWalletsOfTheFirstListNotOnesMadeMeanwhile() = runBlocking {
+        val old = "01WALLET0000000000000000AA"
+        wallet(old)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        ops.listGate = kotlinx.coroutines.CompletableDeferred()
+        val m = manager()
+        val opening = CoroutineScope(Dispatchers.Default).launch { m.open() }
+        kotlinx.coroutines.delay(300)
+        assertTrue(m.resetSettings())
+        // A wallet made before the first list read.
+        val made = m.create("New", Network.TESTNET4, "pw", null).wallet
+        ops.listGate!!.complete(Unit)
+        opening.join()
+        assertEquals(true, WalletFlags(flagsFile).asksCaps(old))
+        assertEquals(false, WalletFlags(flagsFile).asksCaps(made.id))
+        assertFalse(m.asksLimits(made.id))
+    }
+
+    @Test
+    fun aWalletWhoseLimitsWereSetAndThenRemovedHereIsNotAskedAfterwards() = runBlocking {
+        val id = "01WALLET000000000000000001"
+        wallet(id)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = manager()
+        m.open()
+        assertTrue(m.resetSettings())
+        m.lowerCaps(id, 100_000, null)
+        m.raiseCaps(id, null, null, "123456", "pw")
+        assertFalse(m.wallets.value.single().capped)
+        assertEquals(false, WalletFlags(flagsFile).asksCaps(id))
+        assertTrue(m.receiveAddress(id) is ReceiveResult.Address)
+    }
+
+    @Test
+    fun tryAgainReadsTheSettingsFileAgainAndAFailedResetOnAReadableFileEndsTheUnknownState() = runBlocking {
+        val id = "01WALLET000000000000000001"
+        wallet(id, cappedAlready = true)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = manager()
+        m.open()
+        assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
+        // The file reads now: re-reading ends the unknown state.
+        flagsFile.bytes = null
+        m.rereadSettings()
+        assertTrue(m.capsPending.value.isEmpty())
+        assertTrue(m.receiveAddress(id) is ReceiveResult.Address)
+        // Unreadable again, then readable before the member confirms the reset: the reset is refused and the state is cleared.
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val other = manager()
+        other.open()
+        assertTrue(WalletsManager.UNKNOWN in other.capsPending.value)
+        flagsFile.bytes = null
+        assertFalse(other.resetSettings())
+        assertTrue(other.capsPending.value.isEmpty())
+        assertTrue(other.receiveAddress(id) is ReceiveResult.Address)
+    }
+
+    @Test
+    fun aPendingSetRefusedAsADuplicateStaysPendingNamesItAndIsNotRetriedByItself() = runBlocking {
+        val id = "01WALLET000000000000000001"
+        wallet(id)
+        WalletFlags(flagsFile).setPendingCaps(id, caps)
+        ops.capsSetFails = "duplicate_wallet"
+        val m = manager()
+        m.open()
+        assertEquals(1, ops.calls.count { it.startsWith("caps.set") })
+        assertTrue(m.isCapsPending(id))
+        assertEquals(setOf(id), m.capsDuplicate.value)
+        assertEquals(caps, WalletFlags(flagsFile).pendingCaps(id))
+        // Receive stays off, with the reason.
+        assertEquals(ReceiveResult.CapsDuplicate, m.receiveAddress(id))
+        // A raise is refused too, without a raise being sent.
+        val e = runCatching { m.raiseCaps(id, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        assertEquals(WalletsManager.DUPLICATE_WALLET, e.code)
+        assertTrue(ops.calls.none { it.startsWith("caps.raise") })
+        // The twin is deleted: the next try sets it and everything clears.
+        ops.capsSetFails = null
+        m.settleCaps(id)
+        assertFalse(m.isCapsPending(id))
+        assertTrue(m.capsDuplicate.value.isEmpty())
     }
 }
