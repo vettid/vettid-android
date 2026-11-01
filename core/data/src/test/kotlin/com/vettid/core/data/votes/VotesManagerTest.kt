@@ -42,11 +42,13 @@ private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObjec
 
 private const val CONN = "conn-1"
 private const val PID = "01JBQZ0000000000000000000A"
+private const val OPEN_PID = "01JBQZ0000000000000000000E"
 
 /** The votes list, the cast, the site sync and the results check (ANDROID-PLAN 0.1.108 "Votes"; VAULT-MESSAGING 0.81.3 §10.19.8). */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
+@Suppress("LargeClass") // one manager, one set of fakes: the cases read best side by side
 class VotesManagerTest {
     private var clock = Instant.parse("2026-11-01T12:00:00Z")
 
@@ -119,8 +121,12 @@ class VotesManagerTest {
 
         override suspend fun release(connectionId: String, proposalId: String, pin: String) = go("release:$connectionId/$proposalId")
 
+        /** A `vote.site.sync` body the vault refuses as a whole (`bad_request`), as it did before 0.81.5's checks. */
+        var refuseSync: (JsonObject) -> Boolean = { false }
+
         override suspend fun sync(body: JsonObject): JsonObject {
             go("sync")
+            if (refuseSync(body)) throw VaultOpException("vote.site.sync", "bad_request")
             synced += body
             return obj("""{"entries":[]}""")
         }
@@ -477,6 +483,8 @@ class VotesManagerTest {
             answers["index.json"] = ok("[]")
             answers["p/$PID/proposal.json"] = ok("""{"proposal_id":"$PID"}""")
             answers["p/$PID/extension-1.json"] = ok("""{"n":1}""")
+            answers["p/$PID/extension-1.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            answers["p/$PID/extension-1.json.sigstore.json"] = ok("{}")
         }
         val m = manager(ops, site)
         m.syncOnce()
@@ -529,15 +537,16 @@ class VotesManagerTest {
 
     @Test
     fun aRequestOverTheInlineLimitTravelsAsABlobAndOneOverTheBodyLimitIsNeverSent() = runTest {
-        val big = "x".repeat(250_000)
-        val ops = Ops().apply { list = listing(summary()) }
+        // Four proposals of 60,000 bytes (each within the vault's 65,536) are about 320 kB encoded together.
+        val ids = (1..4).map { "01JBQZ0000000000000000001$it" }
+        val ops = Ops().apply { list = listing(*ids.map { summary(id = it) }.toTypedArray()) }
         val site = Site().apply {
             answers["index.json"] = ok("[]")
-            answers["p/$PID/proposal.json"] = ok(big)
+            for (id in ids) answers["p/$id/proposal.json"] = ok("x".repeat(60_000))
         }
         val m = manager(ops, site)
         m.syncOnce()
-        // About 333 kB encoded: over 245,760, so a blob call; the inline call is not used for it.
+        // Over 245,760, so a blob call; the inline call is not used for it.
         assertEquals(1, ops.blobs.size)
         assertTrue(ops.blobs[0] > VoteSync.INLINE_MAX)
         assertTrue(ops.synced.isEmpty())
@@ -583,6 +592,183 @@ class VotesManagerTest {
         assertEquals(2, (proof["path"] as JsonArray).size)
         assertEquals("""{"ballot":null}""", (b["row"] as JsonObject).toString())
         assertNull("the vault checks the signature and the bundle itself", b["verdict"])
+    }
+
+    // ---- One bad site item stops nothing else (VAULT-MESSAGING 0.81.5 §10.19.8) ----
+
+    /** A vault with one open proposal (held) and one closed vote whose results check is due, and a site serving all of it. */
+    private fun dueScenario(): Pair<Ops, Site> {
+        val tags = (1..3).map(::tagOf)
+        val rowsJson = """{"proposal_id":"$PID","rows":[${tags.joinToString(",") { """{"ballot":null,"record_tag":"${Base64s.encodeStd(it)}"}""" }}]}"""
+        val ops = Ops().apply {
+            list = listing(closedWithPendingCheck(), summary(id = OPEN_PID))
+            detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed","record_tag":"${Base64s.encodeStd(tags[1])}","choice_id":"yes"}""")
+        }
+        val site = Site().apply {
+            answers["services.json"] = ok(servicesDoc)
+            answers["services.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            answers["index.json"] = ok("[]")
+            answers["p/$OPEN_PID/proposal.json"] = ok("""{"proposal_id":"$OPEN_PID"}""")
+            answers["p/$OPEN_PID/proposal.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            answers["p/$PID/results.json"] = ok(resultsFor(rowsJson, VoteMerkle.root(tags), 3))
+            answers["p/$PID/results.json.sig"] = SiteAnswer.Found(ByteArray(64) { 9 })
+            answers["p/$PID/results.json.sigstore.json"] = ok("""{"mediaType":"x"}""")
+            answers["p/$PID/rows.json"] = ok(rowsJson)
+        }
+        return ops to site
+    }
+
+    private fun Ops.entriesSent(): List<JsonObject> = synced.flatMap { (it["entries"] as? JsonArray).orEmpty().map { e -> e as JsonObject } }
+
+    private fun Ops.listsSent(): Int = synced.sumOf { (it["services"] as? JsonArray)?.size ?: 0 }
+
+    private fun JsonObject.status(): String = ((this["document"] as JsonObject)["status"] as JsonPrimitive).content
+
+    @Test
+    fun theWholeRunGoesWhenEverythingIsWellFormed() = runTest {
+        val (ops, site) = dueScenario()
+        manager(ops, site).syncOnce()
+        assertEquals(1, ops.listsSent())
+        assertEquals(2, ops.entriesSent().size)
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun aListWithABadSigOrAnEmptyDocIsNotSentAndTheRestGoes() = runTest {
+        for (bad in listOf<Pair<String, SiteAnswer>>("services.json.sig" to SiteAnswer.Found(ByteArray(63)), "services.json" to SiteAnswer.Found(ByteArray(0)))) {
+            val (ops, site) = dueScenario()
+            site.answers[bad.first] = bad.second
+            manager(ops, site).syncOnce()
+            assertEquals(bad.first, 0, ops.listsSent())
+            assertEquals(bad.first, 2, ops.entriesSent().size)
+            assertEquals(bad.first, 1, ops.submitted.size)
+        }
+    }
+
+    @Test
+    fun aProposalOverTheLimitGoesUnreachableAndTheRestGoes() = runTest {
+        val (ops, site) = dueScenario()
+        site.answers["p/$OPEN_PID/proposal.json"] = SiteAnswer.Found(ByteArray(VoteSync.PROPOSAL_MAX + 1))
+        manager(ops, site).syncOnce()
+        val e = ops.entriesSent().single { (it["proposal_id"] as JsonPrimitive).content == OPEN_PID }
+        assertEquals("unreachable", e.status())
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun anExtensionOverTheLimitEndsTheListAndTheEntryGoesWithTheOnesBefore() = runTest {
+        val (ops, site) = dueScenario()
+        for (n in 1..3) {
+            site.answers["p/$OPEN_PID/extension-$n.json"] = SiteAnswer.Found(ByteArray(if (n == 2) VoteSync.EXTENSION_MAX + 1 else 10))
+            site.answers["p/$OPEN_PID/extension-$n.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            site.answers["p/$OPEN_PID/extension-$n.json.sigstore.json"] = ok("{}")
+        }
+        manager(ops, site).syncOnce()
+        val e = ops.entriesSent().single { (it["proposal_id"] as JsonPrimitive).content == OPEN_PID }
+        assertEquals(1, ((e["document"] as JsonObject)["extensions"] as JsonArray).size)
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun anIndexElementWithANonStringServiceIdIsLeftOutAndTheEntryGoes() = runTest {
+        val (ops, site) = dueScenario()
+        site.answers["index.json"] = ok("""[{"proposal_id":"$OPEN_PID","service_id":7,"proposal_hash":"AAAA","opens_at":1,"closes_at":2,"extended":0,"published":true}]""")
+        manager(ops, site).syncOnce()
+        val e = ops.entriesSent().single { (it["proposal_id"] as JsonPrimitive).content == OPEN_PID }
+        assertNull(e["index"])
+        assertEquals("found", e.status())
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun resultsWithABadSigOrNothingInThemAreNotSubmittedAndShowTheProblem() = runTest {
+        for (bad in listOf<Pair<String, SiteAnswer>>("p/$PID/results.json.sig" to SiteAnswer.Found(ByteArray(63)), "p/$PID/results.json" to SiteAnswer.Found(ByteArray(0)))) {
+            val (ops, site) = dueScenario()
+            site.answers[bad.first] = bad.second
+            val m = manager(ops, site)
+            m.syncOnce()
+            assertTrue(bad.first, ops.submitted.isEmpty())
+            assertTrue(bad.first, m.hints.value.values.any { it.resultsProblem })
+            // The lists and the entries went all the same.
+            assertEquals(bad.first, 1, ops.listsSent())
+            assertEquals(bad.first, 2, ops.entriesSent().size)
+        }
+    }
+
+    @Test
+    fun anIndexElementThatIsNotStrictOrHasNoValidIdIsLeftOut() = runTest {
+        val (ops, site) = dueScenario()
+        val unheld = "01JBQZ0000000000000000000F"
+        // The held proposal's element has a duplicate name; another (not held) has a proposal_id that is not a ULID; a third is good.
+        site.answers["index.json"] = ok("""[{"proposal_id":"$OPEN_PID","service_id":"s","service_id":"t"},{"proposal_id":"bad id","service_id":"s"},{"proposal_id":"$unheld","service_id":"s","proposal_hash":"AAAA","opens_at":1,"closes_at":2,"extended":0,"published":true}]""")
+        manager(ops, site).syncOnce()
+        val byId = ops.entriesSent().associateBy { (it["proposal_id"] as JsonPrimitive).content }
+        assertNull(byId.getValue(OPEN_PID)["index"])
+        assertTrue(byId.getValue(unheld)["index"] is JsonObject)
+        assertFalse(byId.containsKey("bad id"))
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun aBundleThatIsNotStrictIsLeftOutAndAnExtensionsEndsTheList() = runTest {
+        val (ops, site) = dueScenario()
+        site.answers["p/$OPEN_PID/proposal.json.sigstore.json"] = ok("""{"a":1,"a":1}""")
+        for (n in 1..2) {
+            site.answers["p/$OPEN_PID/extension-$n.json"] = SiteAnswer.Found(ByteArray(10))
+            site.answers["p/$OPEN_PID/extension-$n.json.sig"] = SiteAnswer.Found(ByteArray(64))
+            site.answers["p/$OPEN_PID/extension-$n.json.sigstore.json"] = ok(if (n == 1) "{}" else """{"x":{"b":1,"b":2}}""")
+        }
+        manager(ops, site).syncOnce()
+        val doc = ops.entriesSent().single { (it["proposal_id"] as JsonPrimitive).content == OPEN_PID }["document"] as JsonObject
+        assertNull(doc["bundle"])
+        assertEquals(1, (doc["extensions"] as JsonArray).size)
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun aChoiceIdTheVaultWouldRefuseIsNotSubmitted() = runTest {
+        val (ops, site) = dueScenario()
+        // The member's own row (index 1) carries a ballot whose choice_id is not the vault's form (1-32 of [a-z0-9-]).
+        val tags = (1..3).map(::tagOf)
+        val vk = ByteArray(32) { 3 }
+        val sig = ByteArray(64) { 4 }
+        val choice = "Bad_Id"
+        fun lp(x: ByteArray) = Bytes.concat(Bytes.uintBE(x.size.toLong(), 2), x)
+        val leaves = listOf(tags[0], Bytes.concat(tags[1], lp(vk), lp(choice.toByteArray()), lp(sig)), tags[2])
+        val ballot = """{"vk":"${Base64s.encodeStd(vk)}","choice_id":"$choice","ballot_sig":"${Base64s.encodeStd(sig)}"}"""
+        val rowsJson = """{"proposal_id":"$PID","rows":[${tags.mapIndexed { n, t -> """{"ballot":${if (n == 1) ballot else "null"},"record_tag":"${Base64s.encodeStd(t)}"}""" }.joinToString(",")}]}"""
+        site.answers["p/$PID/rows.json"] = ok(rowsJson)
+        site.answers["p/$PID/results.json"] = ok(resultsFor(rowsJson, VoteMerkle.root(leaves), 3))
+        val m = manager(ops, site)
+        m.syncOnce()
+        assertTrue(ops.submitted.isEmpty())
+        assertTrue(m.hints.value.values.any { it.resultsProblem && !it.resultsTooLarge })
+        assertEquals(2, ops.entriesSent().size)
+    }
+
+    @Test
+    fun aRefusedStageDoesNotStopTheNext() = runTest {
+        val (ops, site) = dueScenario()
+        // The vault refuses the list call: the entries and the results check go all the same, and the refusal is told after.
+        ops.refuseSync = { it["services"] != null }
+        val e = runCatching { manager(ops, site).syncOnce() }.exceptionOrNull()
+        assertTrue("$e", e is VaultFailure)
+        assertEquals(2, ops.entriesSent().size)
+        assertEquals(1, ops.submitted.size)
+    }
+
+    @Test
+    fun aRefusedEntryCallDoesNotStopTheOtherCalls() = runTest {
+        val (ops, site) = dueScenario()
+        // More held proposals than one call carries: two entry calls; the vault refuses the first.
+        val ids = (1..VoteSync.MAX_ENTRIES + 2).map { "01JBQZ00000000000000000%03d".format(it) }
+        ops.list = listing(closedWithPendingCheck(), *ids.map { summary(id = it) }.toTypedArray())
+        var calls = 0
+        ops.refuseSync = { it["entries"] != null && calls++ == 0 }
+        runCatching { manager(ops, site).syncOnce() }
+        assertEquals(2, calls)
+        assertTrue(ops.entriesSent().isNotEmpty())
+        assertEquals(1, ops.submitted.size)
     }
 
     @Test
