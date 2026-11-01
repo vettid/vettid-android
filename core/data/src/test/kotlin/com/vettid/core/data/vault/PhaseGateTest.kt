@@ -147,6 +147,26 @@ class PhaseGateTest {
         assertEquals(AppPhase.Locked, f.phase.value)
     }
 
+    /**
+     * N1: a start with a pending lock (it holds the phone, and publishes no phase) whose `evaluate` failed says
+     * Unreachable: published, or the phase stays Starting with nothing retrying. SignedOut too; nothing that opens.
+     */
+    @Test
+    fun overAPendingLockOnlyWhatOpensIsRefused() {
+        for (v in listOf(AppPhase.Unreachable(FailureKind.NETWORK), AppPhase.SignedOut, AppPhase.Locked)) {
+            val f = Fixture(AppPhase.Starting)
+            f.lockPending = true
+            assertTrue("$v", f.gate.publishAfter(f.gate.mark(), v))
+            assertEquals(v, f.phase.value)
+        }
+        for (v in listOf(AppPhase.Unlocked, finishing, AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL))) {
+            val f = Fixture(AppPhase.Starting)
+            f.lockPending = true
+            assertFalse("$v", f.gate.publishAfter(f.gate.mark(), v))
+            assertEquals(AppPhase.Starting, f.phase.value)
+        }
+    }
+
     /** S1: FINISHING and the other setup stages only over a setup phase. */
     @Test
     fun setupStagesOnlyOverASetupPhase() {

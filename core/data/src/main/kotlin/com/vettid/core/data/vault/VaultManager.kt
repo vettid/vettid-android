@@ -1492,10 +1492,19 @@ class VaultManager(
                 // (0.1.78) A 410 without the vault's word: only the vault's own `vault_deleted` is taken, and it erases at once.
                 if (deletionEvents.take(m)) return@collectSurviving
                 // (#244 review B3) A vault.locking during an unlock: judged after it.
-                if (unlockNotices.hold(m) { takeEvent(m) }) return@collectSurviving
+                if (unlockNotices.hold(m) { takeHeldNotice(m) }) return@collectSurviving
                 takeEvent(m)
             }
         }
+    }
+
+    /**
+     * A `vault.locking` held during an unlock, taken after it (N5): only the stale check and [onEvent], as [takeState]
+     * does. It runs beside the collector, so nothing that expects one caller at a time (the feed, [heldBack]) is
+     * called; none of them takes `vault.locking`.
+     */
+    private suspend fun takeHeldNotice(m: VaultMessage) {
+        if (!lockNotices.stale(m)) onEvent(m)
     }
 
     /** One event from the vault, after the deletion check (and, for a `vault.locking` during an unlock, after it). */
@@ -1539,8 +1548,11 @@ class VaultManager(
 
     private fun lockedByNotice() {
         windowFlow.value = null
-        if (phaseGate.lockedByVault()) return
-        if (waking.get() > 0 && !lockedHere && phaseFlow.value !is AppPhase.SignedOut) {
+        // Read before the notice locks a start (N2): a process started by the lock's own wake shows "Your vault is locked".
+        val p = phaseFlow.value
+        phaseGate.lockedByVault()
+        val notOpen = p !is AppPhase.Unlocked && p !is AppPhase.Setup && p !is AppPhase.SignedOut
+        if (notOpen && waking.get() > 0 && !lockedHere) {
             // A process started by the lock's own wake (§14.2 trigger 3) never saw the vault open: the notice is live
             // (ephemeral, 60 s) and not this phone's lock, which sends no wake.
             lockedElsewhereFlow.value = true
@@ -2269,6 +2281,9 @@ class VaultManager(
         if (moved && !followMove) return StepOutcome(UnlockAttempt.Success, moved = true)
         // The vault is open as of the result's ts: a vault.locking from before it is stale (LockNotices).
         lockNotices.opened(r.at)
+        // (N4) `at` is the sealed result's inner `ts` (VaultDevice.openUnlockResult), so every vault release gives it. A
+        // result without it would move nothing: the unlock's own notice, judged against the previous opening, would not be
+        // stale and would overtake this unlock (fail secure: Locked, and the screen says the vault did not open).
         // Before the checks below: what came during the unlock, judged now (its own lock notice is stale; a later one
         // moves the generation, and this unlock is overtaken).
         takeHeldNotices(ticket)
@@ -2303,15 +2318,7 @@ class VaultManager(
             io { updateLocal(rec) { it.copy(finishMovePending = false) } }
             finishMoveFlow.value = false
         }
-        val attempt = when {
-            // (#244 review B3) Never Success when nothing opened: a lock (pending, or the vault's own) or a wipe came first.
-            !opened -> UnlockAttempt.Failed(
-                FailureKind.OTHER,
-                if (lockedSince) MoveRepository.CODE_LOCK_PENDING else MoveRepository.CODE_NOT_OPENED,
-            )
-            refused != null -> UnlockAttempt.UpdateRefused(refused.code ?: "refused")
-            else -> UnlockAttempt.Success
-        }
+        val attempt = UnlockEnd.attempt(opened, lockPending = lockedSince, refusedUpdate = refused?.let { it.code ?: "refused" })
         return StepOutcome(attempt, abandoned = r.update?.result == UPDATE_ABANDONED)
     }
 
@@ -4002,6 +4009,8 @@ class VaultManager(
     }
 
     override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
+        // Read before the unlock: a lock, a refusal or a wipe from here on keeps the phase it published (N3).
+        val gen = generation
         val r = unlockOnce(pin, approve, cancelRecovery = false)
         if (r != UnlockAttempt.Success) return r
         return try {
@@ -4010,8 +4019,11 @@ class VaultManager(
                 val d = session().device
                 if (d.deviceId == null) d.completeEnrollment()
             }
-            phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
-            UnlockAttempt.Success
+            if (phaseGate.publishAfter(gen, AppPhase.Setup(SetupStage.RECOVERING))) {
+                UnlockAttempt.Success
+            } else {
+                UnlockEnd.attempt(opened = false, lockPending = lockGuard.lockedWhatever(unlocked = true), refusedUpdate = null)
+            }
         } catch (e: VaultFailure) {
             UnlockAttempt.Failed(e.kind, e.code)
         }

@@ -19,12 +19,13 @@ internal class PhaseGate(
     fun mark(): Int = generation()
 
     /**
-     * [v], unless a lock, a refusal or a wipe came since [mark], or a lock is pending now and [v] is not Locked (Locked
-     * over a pending lock is what that lock wants): checked and published as one step. False when it was not published
-     * (the phase that came between stands).
+     * [v], unless a lock, a refusal or a wipe came since [mark], or a lock is pending now and [v] would open the vault
+     * here (Unlocked, a setup stage): checked and published as one step. Over a pending lock, Locked, Unreachable and
+     * SignedOut still go out (#244 re-review N1: a start whose `evaluate` failed would otherwise stay on Starting, with a
+     * pending lock that holds the phone and publishes no phase). False when it was not published.
      */
     fun publishAfter(mark: Int, v: AppPhase): Boolean =
-        phase.setIf(v) { mark == generation() && (v == AppPhase.Locked || !lockPending()) }
+        phase.setIf(v) { mark == generation() && (!opens(v) || !lockPending()) }
 
     /**
      * FINISHING at the end of setup steps that suspend (enrolment, a recovered credential, a transfer to this phone): as
@@ -58,9 +59,25 @@ internal class PhaseGate(
     private companion object {
         val FINISHING = AppPhase.Setup(SetupStage.FINISHING)
 
+        /** A phase that is the vault open here, or on its way to it: never over a pending lock. */
+        fun opens(p: AppPhase): Boolean = p is AppPhase.Unlocked || p is AppPhase.Setup
+
         fun closesOnNotice(p: AppPhase): Boolean = when (p) {
             AppPhase.Unlocked, AppPhase.Starting, is AppPhase.Setup, is AppPhase.Unreachable -> true
             AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Deleting -> false
         }
+    }
+}
+
+/** What an unlock whose vault call succeeded reports (#244 review B3): never Success when nothing opened here. */
+internal object UnlockEnd {
+    fun attempt(opened: Boolean, lockPending: Boolean, refusedUpdate: String?): UnlockAttempt = when {
+        // A lock (pending, or the vault's own) or a wipe came first: the phase it published stands, and the screen says so.
+        !opened -> UnlockAttempt.Failed(
+            FailureKind.OTHER,
+            if (lockPending) MoveRepository.CODE_LOCK_PENDING else MoveRepository.CODE_NOT_OPENED,
+        )
+        refusedUpdate != null -> UnlockAttempt.UpdateRefused(refusedUpdate)
+        else -> UnlockAttempt.Success
     }
 }
