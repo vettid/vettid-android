@@ -66,12 +66,15 @@ class WalletFlagsTest {
     }
 
     @Test
-    fun anUnreadableFileReadsAsNotBackedUpAndIsReplaced() = runBlocking {
+    fun anUnreadableFileReadsAsNotBackedUpAndIsNeverReplaced() = runBlocking {
         file.bytes = "garbage".encodeToByteArray()
         val f = WalletFlags(file)
         assertFalse(f.backedUp("W1"))
-        assertTrue(f.setBackedUp("W2"))
-        assertTrue(f.backedUp("W2"))
+        // Fail secure: it may hold pending limits, so no flag is written over it (none can be written until it reads again).
+        assertFalse(f.setBackedUp("W2"))
+        assertFalse(f.backedUp("W2"))
+        assertEquals("garbage", file.bytes!!.decodeToString())
+        assertNull(f.allPendingCaps())
         file.failLoad = true
         assertFalse(f.backedUp("W2"))
     }

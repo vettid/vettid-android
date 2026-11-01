@@ -322,4 +322,17 @@ class WalletDetailViewModelTest {
         assertTrue(vm.state.value.capped)
         assertTrue(ops.calls.none { it.startsWith("caps.raise") })
     }
+
+    @Test
+    fun anUnreadableSettingsFileIsSaidAndHoldsReceiveBack() = runTest {
+        ops.wallet(id)
+        flagsFile.failLoads = true
+        val vm = vm(noteShown = false)
+        eventually { vm.state.value.loaded && vm.state.value.capsPending }
+        assertTrue(vm.state.value.settingsUnreadable)
+        flagsFile.failLoads = false
+        vm.retryCaps()
+        eventually { !vm.state.value.capsPending }
+        assertFalse(vm.state.value.settingsUnreadable)
+    }
 }

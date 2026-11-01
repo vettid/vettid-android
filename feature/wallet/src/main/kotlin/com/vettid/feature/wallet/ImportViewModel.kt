@@ -113,7 +113,10 @@ data class ImportUiState(
     val capsFailed: Boolean = false,
     /** This phone could not record the imported wallet as backed up: it shows "Not backed up". */
     val notRecorded: Boolean = false,
-    /** The vault cannot enforce spending limits: the limits step was not asked, or the limits chosen were not kept or sent. */
+    /**
+     * The member chose a limit but the vault cannot enforce one (the imported wallet came back without `caps`): it was not kept or
+     * sent, and the notice says so. A limits step that was skipped (a listed wallet without `caps`) shows no notice.
+     */
     val capsUnsupported: Boolean = false,
     /** The limits step was asked: Back from the password returns to it. */
     val limitsAsked: Boolean = false,

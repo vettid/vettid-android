@@ -170,7 +170,7 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
     // The spending limit chosen is sent first: no Receive until it is set.
     if (state.capsPending) {
         Text(
-            stringResource(R.string.wallet_receive_caps_pending),
+            stringResource(if (state.settingsUnreadable) R.string.wallet_settings_unreadable else R.string.wallet_receive_caps_pending),
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("wallet_caps_pending"),
         )

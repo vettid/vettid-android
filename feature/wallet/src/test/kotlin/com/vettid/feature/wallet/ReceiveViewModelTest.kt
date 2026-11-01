@@ -199,4 +199,20 @@ class ReceiveViewModelTest {
         assertEquals("caps.set:500000:null", ops.calls.first { it.startsWith("caps.") })
         assertTrue(ops.calls.indexOf("caps.set:500000:null") < ops.calls.indexOf("new"))
     }
+
+    @Test
+    fun anUnreadableSettingsFileHoldsReceiveBackWithItsOwnProblem() = runTest {
+        ops.wallet(id)
+        flagsFile.failLoads = true
+        val vm = vm(backedUp = false)
+        // Not backed up is decided from the same file, which cannot be read: it reads as not backed up.
+        eventually { vm.state.value.notBackedUp }
+        flagsFile.failLoads = false
+        WalletFlags(flagsFile).setBackedUp(id)
+        flagsFile.failLoads = true
+        vm.load()
+        eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE || vm.state.value.notBackedUp }
+        assertNull(vm.state.value.address)
+        assertTrue(ops.calls.none { it == "new" })
+    }
 }

@@ -48,8 +48,9 @@
     <string name="wallet_limit_order">Most per payment can\'t be more than the most in any 24 hours.</string> <!-- new -->
     <string name="wallet_limit_need_one">Enter at least one limit, or choose No limit.</string> <!-- new -->
     <string name="wallet_caps_not_set">Your spending limit isn\'t set yet. Receiving stays off until it is.</string> <!-- new -->
-    <string name="wallet_caps_not_saved">This phone couldn\'t save your spending limit, so it is kept only until you close the app. Finish setting it up now.</string> <!-- new -->
+    <string name="wallet_caps_not_saved">This phone couldn\'t save your spending limit, so it is kept only until the app closes or your vault locks. Finish setting it up now.</string> <!-- new -->
     <string name="wallet_caps_unsupported">Your vault can\'t enforce spending limits yet, so this wallet has none. You can set one once your vault is updated.</string> <!-- new -->
+    <string name="wallet_settings_unreadable">This phone can\'t read its wallet settings. Receiving is off until it can.</string> <!-- new -->
     <string name="wallet_receive_caps_pending">Receiving is off until your spending limit is set.</string> <!-- new -->
 
     <!-- The phrase of a wallet with a spending limit -->
@@ -71,7 +72,7 @@
     <string name="wallet_import_passphrase_bad">Use only letters, digits and symbols from a standard keyboard, up to 256 characters.</string> <!-- new -->
     <string name="wallet_import_action">Import wallet</string> <!-- new -->
     <string name="wallet_import_exists">This wallet is already in your vault.</string> <!-- new -->
-    <string name="wallet_import_not_recorded">This phone couldn\'t record the wallet as backed up, so it may show Not backed up. You typed its words, so there is nothing to check.</string> <!-- new -->
+    <string name="wallet_import_not_recorded">This phone couldn\'t record the wallet as backed up, so it may show Not backed up. You can check the words again from its row.</string> <!-- new -->
     <string name="wallet_imported">Wallet imported</string> <!-- new -->
     <string name="wallet_open">Open wallet</string> <!-- new -->
 

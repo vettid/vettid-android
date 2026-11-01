@@ -94,14 +94,11 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     private suspend fun change(f: (Flags) -> Flags): Boolean {
         val started = generation()
         return lock.withLock {
-            // A file that cannot be loaded (cannot be decrypted, I/O error) is never written over: it may hold pending limits that
-            // would be lost with it, so the change fails. Content that loads but does not parse is replaced: losing a flag only
-            // shows "Not backed up" or asks the test chain again.
-            val now = when (val r = readResult()) {
-                is Read.Loaded -> r.flags
-                Read.Corrupt -> Flags(emptySet(), emptyMap())
-                Read.LoadFailed -> return@withLock false
-            }
+            // A file that cannot be read (cannot be decrypted, I/O error, or loads but is not a file this version parses: another
+            // `version` after a downgrade, a bad `pending_caps` entry) is never written over: it may hold pending limits that
+            // would be lost with it, which would open Receive, so the change fails. Fail secure: until it reads again, no flag
+            // can be written.
+            val now = (readResult() as? Read.Loaded)?.flags ?: return@withLock false
             val next = f(now)
             if (next == now) return@withLock true
             if (generation() != started) return@withLock false
@@ -118,11 +115,8 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     private sealed interface Read {
         class Loaded(val flags: Flags) : Read
 
-        /** The file loaded but is not a flags file this version reads. */
-        data object Corrupt : Read
-
-        /** The file could not be loaded at all (decryption, I/O). */
-        data object LoadFailed : Read
+        /** The file could not be read: it could not be loaded (decryption, I/O) or it loaded but this version cannot parse it. */
+        data object Unreadable : Read
     }
 
     /** The flags, or null when the file cannot be loaded or does not parse. */
@@ -133,12 +127,12 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         val bytes = try {
             file.load() ?: return@withContext Read.Loaded(Flags(emptySet(), emptyMap()))
         } catch (_: Exception) {
-            return@withContext Read.LoadFailed
+            return@withContext Read.Unreadable
         }
         try {
-            decode(bytes)?.let { Read.Loaded(it) } ?: Read.Corrupt
+            decode(bytes)?.let { Read.Loaded(it) } ?: Read.Unreadable
         } catch (_: IllegalArgumentException) {
-            Read.Corrupt
+            Read.Unreadable
         }
     }
 

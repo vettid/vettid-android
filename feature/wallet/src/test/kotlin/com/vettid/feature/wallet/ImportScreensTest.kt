@@ -347,6 +347,7 @@ class ImportScreensTest {
         }
         rule.onNodeWithText("Your vault can't enforce spending limits yet", substring = true).assertExists()
         rule.onNodeWithText("This phone couldn't record the wallet", substring = true).assertExists()
+        rule.onNodeWithText("You can check the words again from its row.", substring = true).assertExists()
         rule.onNodeWithText("Open wallet").performClick()
         assertEquals(1, open)
     }
@@ -355,5 +356,32 @@ class ImportScreensTest {
     fun theWordCountIsAPlural() {
         rule.setContent { ImportScreen(form.copy(typed = "legal", status = PhraseInput.analyse("legal ")), ImportActions()) }
         rule.onNodeWithText("1 word").assertExists()
+    }
+
+    @Test
+    fun anUnreadableSettingsFileHasItsOwnTextOnReceiveAndTheDetail() {
+        var retried = 0
+        rule.setContent {
+            ReceiveScreen(
+                ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.SETTINGS_UNREADABLE),
+                ReceiveActions(onRetry = { retried++ }),
+            )
+        }
+        rule.onNodeWithText("This phone can't read its wallet settings. Receiving is off until it can.").assertIsDisplayed()
+        rule.onNodeWithText("Receiving is off until your spending limit is set.").assertDoesNotExist()
+        rule.onNodeWithText("Try again").performClick()
+        assertEquals(1, retried)
+    }
+
+    @Test
+    fun theDetailSaysTheSettingsCannotBeRead() {
+        rule.setContent {
+            WalletDetailScreen(
+                WalletDetailUiState(loaded = true, name = "Savings", network = Network.TESTNET4, capsPending = true, settingsUnreadable = true),
+                WalletDetailActions(),
+            )
+        }
+        rule.onNodeWithText("This phone can't read its wallet settings. Receiving is off until it can.").assertExists()
+        rule.onNodeWithTag("wallet_receive").assertIsNotEnabled()
     }
 }

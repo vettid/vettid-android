@@ -47,6 +47,8 @@ data class WalletDetailUiState(
     val backedUp: Boolean = true,
     /** The spending limit the member chose is not set yet (W1d): Receive is not offered until it is. */
     val capsPending: Boolean = false,
+    /** This phone cannot read its wallet settings: no wallet is known to be free of a limit to set, so none has Receive. */
+    val settingsUnreadable: Boolean = false,
     /** The wallet has a spending limit (`wallet.list`): its recovery phrase needs the PIN too. */
     val capped: Boolean = false,
     /** The chain server's privacy note is to be acknowledged before the wallet's first look-up. */
@@ -107,6 +109,7 @@ class WalletDetailViewModel @Inject constructor(
         val network: Network?,
         val backedUp: Boolean,
         val capsPending: Boolean,
+        val settingsUnreadable: Boolean,
     )
 
     init {
@@ -114,11 +117,12 @@ class WalletDetailViewModel @Inject constructor(
             combine(
                 wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged, wallets.capsPending,
             ) { list, availability, lookups, _, pending ->
-                val pendingHere = WalletsManager.isPending(pending, walletId)
-                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId]) to pendingHere
-            }.mapLatest { (seen, pending) ->
+                val here = WalletsManager.isPending(pending, walletId) to (WalletsManager.UNKNOWN in pending)
+                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId]) to here
+            }.mapLatest { (seen, flagsState) ->
+                val (pending, unreadable) = flagsState
                 val (w, availability, last) = seen
-                Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId), pending)
+                Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId), pending, unreadable)
             }.collect { show(it) }
         }
     }
@@ -134,7 +138,7 @@ class WalletDetailViewModel @Inject constructor(
         mutable.update {
             it.copy(
                 loaded = true, name = w.name, network = s.network, addressType = w.addressType, backedUp = s.backedUp,
-                capsPending = s.capsPending, capped = w.capped, last = s.last ?: it.last,
+                capsPending = s.capsPending, settingsUnreadable = s.settingsUnreadable, capped = w.capped, last = s.last ?: it.last,
             )
         }
         if (!started) {

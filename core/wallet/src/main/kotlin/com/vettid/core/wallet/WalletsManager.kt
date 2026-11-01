@@ -112,6 +112,9 @@ sealed interface ReceiveResult {
 
     /** The spending limit the member chose has not been set yet (W1d): no Receive until `wallet.caps.set` has been answered. */
     data object CapsPending : ReceiveResult
+
+    /** This phone's wallet settings cannot be read, so no wallet is known to be free of a limit still to be set: no Receive. */
+    data object SettingsUnreadable : ReceiveResult
 }
 
 /** The result of [WalletsManager.create]. */
@@ -735,7 +738,9 @@ class WalletsManager(
         // if it cannot be, nothing is issued.
         if (isCapsPending(walletId)) {
             attempt { settleFirst(walletId) }
-            if (isCapsPending(walletId)) return ReceiveResult.CapsPending
+            if (isCapsPending(walletId)) {
+                return if (synchronized(lock) { pendingUnknown }) ReceiveResult.SettingsUnreadable else ReceiveResult.CapsPending
+            }
         }
         val network = networkOf(wallet) ?: return ReceiveResult.NeedsNetwork
         if (!offered(network)) return ReceiveResult.NotOffered

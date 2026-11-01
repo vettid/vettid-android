@@ -488,8 +488,8 @@ class WalletCapsTest {
         // Nobody knows which wallets have a limit to set: every wallet is held back, the existing pending text is shown.
         assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
         assertTrue(WalletsManager.isPending(m.capsPending.value, other.id))
-        assertEquals(ReceiveResult.CapsPending, m.receiveAddress(other.id))
-        assertEquals(ReceiveResult.CapsPending, m.receiveAddress(id))
+        assertEquals(ReceiveResult.SettingsUnreadable, m.receiveAddress(other.id))
+        assertEquals(ReceiveResult.SettingsUnreadable, m.receiveAddress(id))
         assertTrue(ops.calls.none { it == "new" || it.startsWith("list:") || it.startsWith("caps.") })
         // The file reads again: the pending limit is sent first, and Receive is offered.
         flagsFile.failLoad = false
@@ -608,5 +608,49 @@ class WalletCapsTest {
         val c = m.create("Savings", Network.TESTNET4, "pw", caps)
         assertFalse(c.capsUnsupported)
         assertEquals(setOf(c.wallet.id), m.capsPending.value)
+    }
+
+    // A file that decrypts but does not parse is kept too
+
+    private fun assertKeptAndHeld(content: String) = runBlocking {
+        val id = "01WALLET000000000000000007"
+        val wallet = WalletFixtures.wallet(id = id).also { ops.wallets[id] = it }
+        flagsFile.bytes = content.encodeToByteArray()
+        val saves = flagsFile.saves
+        val m = manager()
+        m.open()
+        // Unknown: no Receive for any wallet, said with its own result; nothing was sent for it.
+        assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
+        assertEquals(ReceiveResult.SettingsUnreadable, m.receiveAddress(wallet.id))
+        assertTrue(ops.calls.none { it == "new" || it.startsWith("list:") || it.startsWith("caps.") })
+        // No flag is written over it, by any change.
+        assertFalse(WalletFlags(flagsFile).setBackedUp(id))
+        assertFalse(m.confirmBackup(id))
+        assertEquals(saves, flagsFile.saves)
+        // Intact afterwards.
+        assertEquals(content, flagsFile.bytes!!.decodeToString())
+        assertEquals(ReceiveResult.SettingsUnreadable, m.receiveAddress(id))
+    }
+
+    @Test
+    fun aVersionMismatchAfterADowngradeIsNotOverwrittenAndReceiveStaysOff() {
+        assertKeptAndHeld("""{"version":2,"backed_up":[],"testnet":{},"note_shown":[],"pending_caps":{"W1":{"per_tx_sats":500}}}""")
+    }
+
+    @Test
+    fun aBadPendingEntryIsNotOverwrittenAndReceiveStaysOff() {
+        assertKeptAndHeld("""{"version":1,"backed_up":[],"testnet":{},"note_shown":[],"pending_caps":{"W1":{"per_tx_sats":0}}}""")
+    }
+
+    @Test
+    fun theFileReadingAgainFreesEveryWalletWithoutALimit() = runBlocking {
+        val w = WalletFixtures.wallet(id = "01WALLET000000000000000007").also { ops.wallets[it.id] = it }
+        flagsFile.bytes = """{"version":2}""".encodeToByteArray()
+        val m = manager()
+        m.open()
+        assertEquals(ReceiveResult.SettingsUnreadable, m.receiveAddress(w.id))
+        flagsFile.bytes = null
+        assertTrue(m.receiveAddress(w.id) is ReceiveResult.Address)
+        assertTrue(m.capsPending.value.isEmpty())
     }
 }

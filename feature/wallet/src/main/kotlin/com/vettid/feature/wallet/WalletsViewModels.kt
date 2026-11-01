@@ -176,7 +176,10 @@ data class BackupUiState(
     val backedUp: Boolean = false,
     /** The phrase was checked, but this phone could not record it: Try again ([BackupViewModel.saveAgain]). */
     val saveFailed: Boolean = false,
-    /** The vault cannot enforce spending limits: the limits step was not asked, or the limits chosen were not kept (the notice says so). */
+    /**
+     * The member chose a limit but the vault cannot enforce one (the new wallet came back without `caps`): it was not kept or sent,
+     * and the notice says so. A limits step that was skipped (a listed wallet without `caps`) shows no notice.
+     */
     val capsUnsupported: Boolean = false,
     /** The limits step was asked (the vault enforces limits as far as is known): Back from the password returns to it. */
     val limitsAsked: Boolean = false,
