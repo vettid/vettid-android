@@ -59,6 +59,7 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.ui.components.ConfirmDialog
+import com.vettid.core.ui.components.rememberConfirmedLeave
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -93,10 +94,12 @@ data class InviteActions(
  */
 @Composable
 fun InviteScreen(state: InviteUiState, actions: InviteActions, modifier: Modifier = Modifier) {
+    // The other member's request, while it is open: Back and the arrow ask first, and the request stays in Approvals.
+    val back = rememberLeaveRequest(state.step == InviteStep.REQUEST || state.step == InviteStep.CONNECTING, actions.onBack)
     when (state.step) {
         InviteStep.CHOOSE -> ChooseTtl(state, actions, modifier)
         InviteStep.SHOWING -> ShowInvite(state, actions, modifier)
-        InviteStep.REQUEST, InviteStep.CONNECTING -> Request(state, actions, modifier)
+        InviteStep.REQUEST, InviteStep.CONNECTING -> Request(state, actions, back, modifier)
         InviteStep.CONNECTED -> Connected(
             name = state.connectionName,
             onMessage = { state.connectionId?.let(actions.onMessage) },
@@ -287,7 +290,7 @@ private fun ShowInvite(state: InviteUiState, actions: InviteActions, modifier: M
 }
 
 @Composable
-private fun Request(state: InviteUiState, actions: InviteActions, modifier: Modifier) {
+private fun Request(state: InviteUiState, actions: InviteActions, back: () -> Unit, modifier: Modifier) {
     val req = state.request ?: return
     ConnectionRequestContent(
         name = req.name,
@@ -302,10 +305,24 @@ private fun Request(state: InviteUiState, actions: InviteActions, modifier: Modi
         onApprove = actions.onApprove,
         onDecline = actions.onDecline,
         onBlock = { actions.onAskBlock(true) },
-        onBack = actions.onBack,
+        onBack = back,
         modifier = modifier,
     )
 }
+
+/** The accept side's steps while the request is open: waiting for the code, comparing, approved and waiting for the inviter. */
+private val OPEN_ACCEPT_STEPS = setOf(AcceptStep.WAITING, AcceptStep.COMPARE, AcceptStep.APPROVED)
+
+/** Back from an open connection request ([rememberConfirmedLeave]): "Leave this request?", Stay or Leave. */
+@Composable
+private fun rememberLeaveRequest(open: Boolean, leave: () -> Unit): () -> Unit = rememberConfirmedLeave(
+    guarded = open,
+    title = stringResource(R.string.connections_leave_request_title),
+    text = stringResource(R.string.connections_leave_request_body),
+    leaveLabel = stringResource(R.string.connections_leave_request_leave),
+    stayLabel = stringResource(R.string.connections_leave_request_stay),
+    onLeave = leave,
+)
 
 /** The safety code, large, in a bordered box (§6.3); `sas` test tag. */
 @Composable
@@ -476,6 +493,8 @@ data class AcceptActions(
 fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifier = Modifier) {
     val who = AccountNames.isolateOrNull(state.name) ?: AccountNames.isolateOrNull(state.connectionName)
         ?: stringResource(R.string.connections_request_them)
+    // While the request is open, Back and the arrow ask first; the request stays in Approvals either way.
+    val back = rememberLeaveRequest(state.step in OPEN_ACCEPT_STEPS, actions.onBack)
     when (state.step) {
         AcceptStep.INPUT, AcceptStep.ACCEPTING -> FormScaffold(
             title = stringResource(if (state.fromLink) R.string.connections_open_link_title else R.string.connections_accept_title),
@@ -506,7 +525,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             body = stringResource(R.string.connections_waiting_body),
             primaryLabel = stringResource(R.string.connections_done),
             onPrimary = actions.onBack,
-            onBack = actions.onBack,
+            onBack = back,
             secondaryLabel = stringResource(R.string.connections_request_decline),
             onSecondary = actions.onDecline,
             busy = state.busy,
@@ -529,7 +548,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
                 },
                 primaryLabel = stringResource(if (approved) R.string.connections_done else R.string.connections_compare_approve),
                 onPrimary = if (approved) actions.onBack else actions.onApprove,
-                onBack = actions.onBack,
+                onBack = back,
                 busy = state.busy,
                 secondaryLabel = stringResource(R.string.connections_request_decline),
                 onSecondary = actions.onDecline,
