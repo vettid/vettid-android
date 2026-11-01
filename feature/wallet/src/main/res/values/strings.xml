@@ -79,7 +79,6 @@
     <string name="wallet_limits_pending_first">A spending limit you chose has not been set yet, so nothing was raised. Try again once it is set.</string> <!-- new -->
     <string name="wallet_limits_settled">A limit you chose earlier has just been set. Look at your limits, then try again.</string> <!-- new -->
     <string name="wallet_limits_unchanged">Nothing was changed. Your limits are as they were.</string> <!-- new -->
-    <string name="wallet_limits_loading">Reading your limits…</string> <!-- new -->
 
     <!-- Reset wallet settings on this phone (W1d-2, the lead's request) -->
     <string name="wallet_reset_settings">Reset wallet settings on this phone</string> <!-- new -->
