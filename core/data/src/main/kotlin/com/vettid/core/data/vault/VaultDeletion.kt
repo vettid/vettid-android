@@ -365,6 +365,18 @@ internal class PhaseHolder(initial: AppPhase) {
         if (ends && v != was) CredentialRequired.clear()
     }
 
+    /**
+     * [v] only if [still] holds, checked and published as one step under this holder's lock (#242): a lock that moves
+     * the generation and publishes Locked either comes before the check (which then fails) or publishes after [v], never
+     * between. [still] must take no other lock. False when [still] did not hold; while "being deleted" holds, [v] is
+     * dropped as by [value], and this says true.
+     */
+    fun setIf(v: AppPhase, still: () -> Boolean): Boolean = synchronized(this) {
+        if (!still()) return false
+        if (held == null) publish(v)
+        true
+    }
+
     /** Whether "being deleted" holds. */
     val deleting: Boolean @Synchronized get() = held != null
 
