@@ -209,8 +209,10 @@ class WalletDetailViewModelTest {
         eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
         vm.chooseTestNetwork(Network.TESTNET4)
         eventually { vm.state.value.lookup is LookupResult.NoServer }
-        assertEquals(Network.TESTNET4, vm.state.value.network)
-        assertEquals(1, opened)
+        // Messages that say what was seen, so a failure names its cause (it failed once, and didn't reproduce in 20 runs).
+        val s = vm.state.value
+        assertEquals("the network shown, with the look-up ${s.lookup} and askNetwork ${s.askNetwork}", Network.TESTNET4, s.network)
+        assertEquals("chain opens: one after the answer, none for the question (lookup ${s.lookup})", 1, opened)
     }
 
     @Test
