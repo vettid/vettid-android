@@ -150,6 +150,8 @@
     <string name="unlock_rollback_state_body">The vault\'s stored state is older than state this phone has already seen. Someone may have restored an old copy. Contact VettID support before you continue.</string>
     <string name="unlock_update_refused">The update was refused (%1$s). Your vault stayed on its current release.</string>
     <string name="unlock_no_user_guid">This phone cannot unlock your vault yet: it was moved here while your vault ran an older release. It can unlock once your vault is updated.</string>
+    <string name="unlock_not_opened">Your vault was locked while it was opening. Unlock it again.</string> <!-- new (#244): the vault locked itself during the unlock -->
+    <string name="unlock_lock_pending">Your vault is being locked, so it didn\'t open. Unlock it again once it\'s locked.</string> <!-- new (#244): a lock asked for during the unlock is still pending -->
     <string name="unlock_unreadable">Your vault did not recognise this phone. It may have been replaced by a recovery or a transfer.</string>
     <string name="unlock_not_recognised_title">Your vault did not recognise this phone</string>
     <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>

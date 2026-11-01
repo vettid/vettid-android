@@ -37,10 +37,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vettid.core.data.vault.LockNotice
-import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.LockNotice
+import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.UnlockAttempt
@@ -388,13 +389,20 @@ fun UnlockContent(
                     )
                     // An unreadable result is the "not recognised" notice below, with its erase action.
                     is UnlockMessage.Failed -> if (m.code != UnlockViewModel.CODE_UNREADABLE || !state.notRecognised) {
+                        // The service paused for maintenance or not there yet, or a lock that came first: temporary, not alarming.
+                        val passing = m.kind == FailureKind.SERVICE_PAUSED || m.kind == FailureKind.VAULT_UNAVAILABLE
                         NoticeCard(
-                            // The service paused for maintenance or not there yet: temporary, not alarming.
-                            if (m.kind == FailureKind.SERVICE_PAUSED || m.kind == FailureKind.VAULT_UNAVAILABLE) NoticeKind.WARNING
-                                else NoticeKind.URGENT,
+                            if (passing || openedThenLocked(m.code)) {
+                                NoticeKind.WARNING
+                            } else {
+                                NoticeKind.URGENT
+                            },
                             stringResource(R.string.unlock_title),
                             when {
                                 m.code == UnlockViewModel.CODE_UNREADABLE -> stringResource(R.string.unlock_unreadable)
+                                // A lock came first (#244): what happened and what to do, not "Something went wrong".
+                                m.code == MoveRepository.CODE_LOCK_PENDING -> stringResource(R.string.unlock_lock_pending)
+                                m.code == MoveRepository.CODE_NOT_OPENED -> stringResource(R.string.unlock_not_opened)
                                 m.code == UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
                                 // ANDROID-PLAN 0.1.54 point 6: still routed to release N after the retries.
                                 m.kind == FailureKind.ROUTE_PENDING ->
