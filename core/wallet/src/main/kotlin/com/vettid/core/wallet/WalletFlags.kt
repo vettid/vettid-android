@@ -7,10 +7,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /** Where the wallet flags are kept: the app's encrypted settings on this phone ([load] is null before the first save). */
@@ -23,7 +26,9 @@ interface WalletFlagsFile {
 /**
  * What the app keeps of its wallets on this phone (ANDROID-PLAN §4 "Local state"), in its encrypted settings, never sent to the
  * vault: the **backed-up** flag per `wallet_id` (the vault has none) and, for a legacy `testnet` wallet only, which test chain the
- * member said it is on (question 16), and whether the chain server's privacy note was shown for a wallet.
+ * member said it is on (question 16), whether the chain server's privacy note was shown for a wallet, and the **pending spending
+ * limits** (W1d): the limits chosen at creation, kept per `wallet_id` until `wallet.caps.set` has been answered (not a secret; the
+ * vault learns them only from that request).
  * Read from the file every time, nothing kept in memory. A write is refused when a wipe began
  * after the operation started ([generation] moved), so that a write in flight cannot bring the file back after it was erased.
  */
@@ -34,6 +39,7 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         val backedUp: Set<String>,
         val testnet: Map<String, Network>,
         val noteShown: Set<String> = emptySet(),
+        val pendingCaps: Map<String, WalletCaps> = emptyMap(),
     )
 
     /** Whether [walletId] was backed up (the phrase checked). False when the file cannot be read: "Not backed up" fails safe. */
@@ -59,11 +65,26 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     /** Records the privacy note as shown for [walletId]; false if it could not be written. */
     suspend fun setPrivacyNoteShown(walletId: String): Boolean = change { it.copy(noteShown = it.noteShown + walletId) }
 
+    /** The limits chosen for [walletId] that `wallet.caps.set` has not carried yet; null when none (or the file cannot be read). */
+    suspend fun pendingCaps(walletId: String): WalletCaps? = lock.withLock { read()?.pendingCaps?.get(walletId) }
+
+    /** Every wallet's pending limits. An unreadable file reads as none (the limits are lost with it; nothing else can be done). */
+    suspend fun allPendingCaps(): Map<String, WalletCaps> = lock.withLock { read()?.pendingCaps.orEmpty() }
+
+    /** Records the limits chosen for [walletId], to be set; false if it could not be written. */
+    suspend fun setPendingCaps(walletId: String, caps: WalletCaps): Boolean =
+        change { it.copy(pendingCaps = it.pendingCaps + (walletId to caps)) }
+
+    /** The limits of [walletId] were set (or are not wanted): forgotten; false if it could not be written. */
+    suspend fun clearPendingCaps(walletId: String): Boolean = change { it.copy(pendingCaps = it.pendingCaps - walletId) }
+
     /** Waits for a write in progress (a wipe's hook, after the generation moved), so that none that started before the wipe is kept. */
     suspend fun fence() = lock.withLock { }
 
     /** Forgets what is kept of a deleted wallet. */
-    suspend fun forget(walletId: String): Boolean = change { Flags(it.backedUp - walletId, it.testnet - walletId, it.noteShown - walletId) }
+    suspend fun forget(walletId: String): Boolean = change {
+        Flags(it.backedUp - walletId, it.testnet - walletId, it.noteShown - walletId, it.pendingCaps - walletId)
+    }
 
     @Suppress("TooGenericExceptionCaught")
     private suspend fun change(f: (Flags) -> Flags): Boolean {
@@ -115,7 +136,24 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
             is JsonArray -> n.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: return null }.toSet()
             else -> return null
         }
-        return Flags(backedUp, testnet, noteShown)
+        // `pending_caps` came with W1d: a file without it reads as none.
+        val pending = when (val c = o["pending_caps"]) {
+            null -> emptyMap()
+            is JsonObject -> c.entries.associate { (id, v) -> id to (capsOf(v) ?: return null) }
+            else -> return null
+        }
+        return Flags(backedUp, testnet, noteShown, pending)
+    }
+
+    /** A pending entry `{per_tx_sats?, per_period_sats?}`; null if it is not limits the vault would take (the file is then unreadable). */
+    private fun capsOf(e: JsonElement): WalletCaps? {
+        val o = e as? JsonObject ?: return null
+        fun member(k: String): Long? = when (val v = o[k]) {
+            null, JsonNull -> null
+            is JsonPrimitive -> v.takeUnless { it.isString }?.longOrNull ?: throw IllegalArgumentException(k)
+            else -> throw IllegalArgumentException(k)
+        }
+        return WalletCaps(member("per_tx_sats"), member("per_period_sats")).takeIf { CapsRules.problem(it) == null && !it.none }
     }
 
     private fun encode(f: Flags): ByteArray = buildJsonObject {
@@ -123,6 +161,22 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         put("backed_up", JsonArray(f.backedUp.sorted().map(::JsonPrimitive)))
         put("testnet", buildJsonObject { f.testnet.entries.sortedBy { it.key }.forEach { put(it.key, it.value.vaultName) } })
         put("note_shown", JsonArray(f.noteShown.sorted().map(::JsonPrimitive)))
+        if (f.pendingCaps.isNotEmpty()) {
+            put(
+                "pending_caps",
+                buildJsonObject {
+                    f.pendingCaps.entries.sortedBy { it.key }.forEach { (id, c) ->
+                        put(
+                            id,
+                            buildJsonObject {
+                                c.perTxSats?.let { put("per_tx_sats", it) }
+                                c.perPeriodSats?.let { put("per_period_sats", it) }
+                            },
+                        )
+                    }
+                },
+            )
+        }
     }.toString().encodeToByteArray()
 
     private companion object {

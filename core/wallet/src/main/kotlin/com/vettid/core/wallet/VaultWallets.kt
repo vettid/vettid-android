@@ -40,6 +40,10 @@ data class VaultWallet(
     val tags: List<String>,
     /** The wallet has a spending limit (`caps` with a per-payment or per-period value): showing its phrase needs the PIN (W1d). */
     val capped: Boolean = false,
+    /** `caps.per_tx_sats` (0.56.0): the most one payment may take out; null for no limit, or a vault without caps. */
+    val perTxSats: Long? = null,
+    /** `caps.per_period_sats`: the most in the rolling period (24 hours; an hour on staging); null for no limit. */
+    val perPeriodSats: Long? = null,
 ) {
     /** The chain, when the name alone says which; null for `testnet` (testnet3 or testnet4: ask, ANDROID-PLAN question 16). */
     val network: Network? get() = if (networkName == Network.TESTNET.vaultName) null else Network.fromVaultName(networkName)
@@ -75,6 +79,8 @@ internal object WalletWire {
 
     private fun JsonObject.isNumber(k: String): Boolean = (this[k] as? JsonPrimitive)?.let { !it.isString && it.content != "null" } == true
 
+    private fun JsonObject.number(k: String): Long? = if (isNumber(k)) (this[k] as JsonPrimitive).longOrNull else null
+
     fun wallets(o: JsonObject): List<VaultWallet> = (o["wallets"] as? JsonArray ?: throw WalletWireException("wallets")).map { wallet(it) }
 
     @Suppress("ThrowsCount") // one per field: the message names which
@@ -92,6 +98,8 @@ internal object WalletWire {
                 (t as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw WalletWireException("tags")
             } ?: emptyList(),
             capped = (o["caps"] as? JsonObject)?.let { c -> CAP_KEYS.any { k -> c.isNumber(k) } } == true,
+            perTxSats = (o["caps"] as? JsonObject)?.number("per_tx_sats"),
+            perPeriodSats = (o["caps"] as? JsonObject)?.number("per_period_sats"),
         )
     }
 

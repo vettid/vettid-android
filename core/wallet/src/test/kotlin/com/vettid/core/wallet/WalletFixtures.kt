@@ -9,6 +9,7 @@ import com.vettid.core.chain.ChainSummary
 import com.vettid.core.chain.Network
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.WalletImport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.CopyOnWriteArrayList
@@ -60,7 +61,18 @@ internal class FakeWalletOps : WalletOps {
     var conflict = false
     var nextLie: String? = null
 
-    private fun refuse(type: String, code: String): Nothing = throw VaultOpException(type, code)
+    private fun refuse(type: String, code: String, message: String = ""): Nothing = throw VaultOpException(type, code, message)
+
+    /** The words and passphrase of the last import (`wallet.create{item}`), as sent. */
+    var importedWords: String? = null
+    var importedPassphrase: String? = null
+
+    /** The PIN and password this vault takes for `wallet.caps.raise` and a capped reveal. */
+    var pin = "123456"
+
+    /** A vault error code for `wallet.caps.set` / `wallet.caps.raise`, else none. */
+    var capsSetFails: String? = null
+    var capsRaiseFails: String? = null
 
     override suspend fun list(): List<VaultWallet> {
         calls += "list"
@@ -76,18 +88,55 @@ internal class FakeWalletOps : WalletOps {
         return wallets[walletId] ?: refuse("wallet.get", "not_found")
     }
 
-    override suspend fun create(name: String, network: String, password: String): VaultWallet {
+    override suspend fun create(name: String, network: String, password: String, item: WalletImport?): VaultWallet {
         calls += "create:$network"
+        if (item != null) {
+            calls += "import"
+            importedWords = String(item.mnemonic)
+            importedPassphrase = item.passphrase?.let(::String)
+        }
         if (password != "pw") refuse("wallet.create", "bad_password")
         val w = WalletFixtures.wallet(id = "01WALLET%018d".format(++created), network = network, nextReceive = 0)
         wallets[w.id] = w
         return w
     }
 
-    override suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase {
+    override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
         calls += "reveal"
+        if (wallets[walletId]?.capped == true) {
+            // §10.18: the item of a capped wallet needs the PIN (`bad_request`, message `pin_required`); a wrong one is `bad_pin`.
+            if (pin == null) refuse("item.reveal", "bad_request", "pin_required")
+            if (pin != this.pin) refuse("item.reveal", "bad_pin")
+        }
         if (revealFails || password != "pw") refuse("item.reveal", "bad_password")
         return RevealedPhrase(List(24) { "abandon" }.joinToString(" ").toCharArray())
+    }
+
+    override suspend fun capsSet(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): Long {
+        calls += "caps.set:$perTx:$perPeriod"
+        capsSetFails?.let { refuse("wallet.caps.set", it) }
+        val w = wallets.getValue(walletId)
+        if (version != w.version) refuse("wallet.caps.set", "conflict")
+        // Lowers only: a value above the current one is `bad_request` (`use_wallet_caps_raise`).
+        if (perTx != null && w.perTxSats != null && perTx > w.perTxSats) refuse("wallet.caps.set", "bad_request", "use_wallet_caps_raise")
+        if (perPeriod != null && w.perPeriodSats != null && perPeriod > w.perPeriodSats) {
+            refuse("wallet.caps.set", "bad_request", "use_wallet_caps_raise")
+        }
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = true, perTxSats = perTx ?: w.perTxSats, perPeriodSats = perPeriod ?: w.perPeriodSats)
+        }
+    }
+
+    override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long {
+        calls += "caps.raise:$perTx:$perPeriod"
+        capsRaiseFails?.let { refuse("wallet.caps.raise", it) }
+        if (pin != this.pin) refuse("wallet.caps.raise", "bad_pin")
+        if (password != "pw") refuse("wallet.caps.raise", "bad_password")
+        val w = wallets.getValue(walletId)
+        if (version != w.version) refuse("wallet.caps.raise", "conflict")
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = perTx != null || perPeriod != null, perTxSats = perTx, perPeriodSats = perPeriod)
+        }
     }
 
     override suspend fun delete(walletId: String, password: String) {

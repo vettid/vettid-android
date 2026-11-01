@@ -1,10 +1,13 @@
 package com.vettid.core.vault
 
+import com.vettid.core.crypto.Base64s
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.security.MessageDigest
 
 /*
  * The wallet requests the app uses in W1c (VAULT-MESSAGING §10.18; ANDROID-PLAN §4 "Wallet"), beside [VaultApi] rather than in
@@ -21,19 +24,125 @@ suspend fun VaultApi.walletList(): JsonObject = device.op("wallet.list", buildJs
 suspend fun VaultApi.walletGet(walletId: String): JsonObject = device.op("wallet.get", buildJsonObject { put("wallet_id", walletId) })
 
 /**
- * `wallet.create{name, network, credential, utk_id, sealed{password}}`, a credential operation (§3.5.3) that makes a new phrase
- * (24 words) in the vault: `<wallet>` and the new credential, which [CredentialOps] keeps and acknowledges. No `item` (an import is
- * W1d), no `address_type` (P2TR by default) and no `caps` (spending limits are set after the backup, W1d). `limit` at 16 wallets.
+ * A phrase to import (`wallet.create`'s `item`, VAULT-MESSAGING §10.18): the BIP39 words in a [CharArray], separated by single
+ * spaces, and the optional passphrase (printable ASCII, at most 256 bytes). It takes the arrays as its own and never copies them;
+ * the caller wipes them. Prints its type name only.
  */
-suspend fun VaultApi.walletCreate(name: String, network: String, password: String): JsonObject =
+class WalletImport(val mnemonic: CharArray, val passphrase: CharArray? = null) {
+    override fun toString(): String = "WalletImport"
+}
+
+/**
+ * `wallet.create{name, network, credential, utk_id, sealed{password, item?}}`, a credential operation (§3.5.3) that makes a new
+ * phrase (24 words) in the vault, or, with [item], imports one: `<wallet>` and the new credential, which [CredentialOps] keeps and
+ * acknowledges. No `address_type` (P2TR by default) and no `caps` (the app sets spending limits after the backup, W1d, with
+ * [walletCapsSet]). `limit` at 16 wallets; `exists` for an import whose account keys equal an existing wallet's.
+ */
+suspend fun VaultApi.walletCreate(name: String, network: String, password: String, item: WalletImport? = null): JsonObject =
     credentialOps.credOp(
         "wallet.create",
-        { put("password", password) },
+        { createSealed(password, item).forEach { (k, v) -> put(k, v) } },
         extra = {
             put("name", name)
             put("network", network)
         },
     ).first
+
+/** The sealed payload of `wallet.create`: the password and, for an import, `item: {mnemonic, passphrase?}`. */
+internal fun createSealed(password: String, item: WalletImport?): JsonObject = buildJsonObject {
+    put("password", password)
+    if (item != null) {
+        put(
+            "item",
+            buildJsonObject {
+                put("mnemonic", String(item.mnemonic))
+                // An empty passphrase is no passphrase: the member's "Advanced" left blank.
+                item.passphrase?.takeIf { it.isNotEmpty() }?.let { put("passphrase", String(it)) }
+            },
+        )
+    }
+}
+
+/** The most a spending limit can be, in satoshis (VAULT-MESSAGING §10.18: 1 to 2,100,000,000,000,000). */
+const val CAPS_MAX_SATS = 2_100_000_000_000_000L
+
+/**
+ * `wallet.caps.set{wallet_id, version, per_tx_sats?, per_period_sats?}` (0.56.0): `{version}`, the new one. A normal versioned
+ * change that may only **lower** (set a limit where there was none, or a smaller one); a member that is null is absent, so
+ * unchanged. A larger value or a removal is [walletCapsRaise]'s. `conflict` on a stale [version].
+ */
+suspend fun VaultApi.walletCapsSet(walletId: String, version: Long, perTxSats: Long?, perPeriodSats: Long?): JsonObject =
+    device.op("wallet.caps.set", capsSetBody(walletId, version, perTxSats, perPeriodSats))
+
+internal fun capsSetBody(walletId: String, version: Long, perTxSats: Long?, perPeriodSats: Long?): JsonObject {
+    require(perTxSats == null || perTxSats in 1..CAPS_MAX_SATS) { "per_tx_sats" }
+    require(perPeriodSats == null || perPeriodSats in 1..CAPS_MAX_SATS) { "per_period_sats" }
+    return buildJsonObject {
+        put("wallet_id", walletId)
+        put("version", version)
+        perTxSats?.let { put("per_tx_sats", it) }
+        perPeriodSats?.let { put("per_period_sats", it) }
+    }
+}
+
+/**
+ * `wallet.caps.raise{wallet_id, version, per_tx_sats, per_period_sats, credential, utk_id, sealed{pin, password, item_id,
+ * payload_sha256}}` (0.56.0), a credential operation of the holder: raises or removes a limit. [perTx] and [perPeriod] are the
+ * values the wallet will have after the request (null: no limit), both always sent, and both bound by `payload_sha256`
+ * ([WalletCapsBinding]); `{version, ...}` is the answer. The PIN and the password authorise these numbers on this wallet only.
+ * A wrong one is `bad_pin` / `bad_password` and changes nothing.
+ */
+suspend fun VaultApi.walletCapsRaise(
+    walletId: String,
+    version: Long,
+    perTx: Long?,
+    perPeriod: Long?,
+    pin: String,
+    password: String,
+): JsonObject =
+    credentialOps.credOp(
+        "wallet.caps.raise",
+        { capsRaiseSealed(walletId, version, perTx, perPeriod, pin, password).forEach { (k, v) -> put(k, v) } },
+        extra = { capsRaiseOuter(walletId, version, perTx, perPeriod).forEach { (k, v) -> put(k, v) } },
+    ).first
+
+/** The sealed payload of `wallet.caps.raise`: `{pin, password, item_id, payload_sha256}` (the hash in standard base64). */
+internal fun capsRaiseSealed(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): JsonObject =
+    buildJsonObject {
+        put("pin", pin)
+        put("password", password)
+        put("item_id", walletId)
+        put("payload_sha256", Base64s.encodeStd(WalletCapsBinding.payloadSha256(walletId, version, perTx, perPeriod)))
+    }
+
+/** The members of `wallet.caps.raise` outside the sealed payload; a limit removed is a JSON `null`. */
+internal fun capsRaiseOuter(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): JsonObject {
+    require(perTx == null || perTx in 1..CAPS_MAX_SATS) { "per_tx_sats" }
+    require(perPeriod == null || perPeriod in 1..CAPS_MAX_SATS) { "per_period_sats" }
+    return buildJsonObject {
+        put("wallet_id", walletId)
+        put("version", version)
+        put("per_tx_sats", perTx?.let(::JsonPrimitive) ?: JsonNull)
+        put("per_period_sats", perPeriod?.let(::JsonPrimitive) ?: JsonNull)
+    }
+}
+
+/**
+ * What `wallet.caps.raise` binds the password and PIN to (VAULT-MESSAGING §10.18, the §16 vector): the SHA-256 of
+ * `"vettid/wallet.caps/1" 0x00 wallet_id 0x00 version 0x00 per_tx 0x00 per_period`, each field in UTF-8, `0x00` between them and
+ * none after the last; `version` in decimal ASCII; `per_tx` and `per_period` the values the wallet will have after the request,
+ * decimal ASCII or the literal `none`.
+ */
+object WalletCapsBinding {
+    private const val LABEL = "vettid/wallet.caps/1"
+    private const val NONE = "none"
+
+    fun payloadSha256(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): ByteArray {
+        val parts = listOf(LABEL, walletId, version.toString(), perTx?.toString() ?: NONE, perPeriod?.toString() ?: NONE)
+        val preimage = parts.joinToString("\u0000").toByteArray(Charsets.UTF_8)
+        return MessageDigest.getInstance("SHA-256").digest(preimage)
+    }
+}
 
 /**
  * `wallet.update{wallet_id, version, address_type}`: `{version}`, the new one. [version] is the one the app last read (`conflict`
