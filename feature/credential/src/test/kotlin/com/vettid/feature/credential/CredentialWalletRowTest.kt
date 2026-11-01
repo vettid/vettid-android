@@ -41,19 +41,19 @@ class CredentialWalletRowTest {
     )
 
     @Test
-    fun eachWalletIsARowThatOpensTheWallets() {
-        var opened = 0
+    fun eachWalletIsARowThatOpensThatWallet() {
+        val opened = mutableListOf<String>()
         val wallets = listOf(WalletLabel("w1", "Savings"), WalletLabel("w2", "Spending"))
         compose.setContent {
             CredentialContent(
                 CredentialUiState(loading = false, status = status, wallets = wallets),
                 ShellChrome("Sam", {}, {}),
-                CredentialActions(openWallets = { opened++ }),
+                CredentialActions(openWallet = { opened += it }),
             )
         }
         compose.onNodeWithText("Bitcoin wallet: Savings").assertExists()
         compose.onNodeWithTag("credential_wallet_w2").performScrollTo().performClick()
-        assertEquals(1, opened)
+        assertEquals(listOf("w2"), opened)
     }
 
     @Test

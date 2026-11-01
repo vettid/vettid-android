@@ -102,6 +102,7 @@ data class ExportContext(
     val filter: AuditFilter,
     val connectionNames: Map<String, String> = emptyMap(),
     val itemNames: Map<String, String> = emptyMap(),
+    val walletItems: Set<String> = emptySet(),
 )
 
 /**
@@ -226,6 +227,7 @@ class HistoryExportViewModel @Inject constructor(
                 connection = r.connectionId?.let { c.connectionNames[it] },
                 device = r.deviceId?.let { id -> devices?.get(id)?.ifEmpty { null } },
                 item = AuditKinds.itemOf(r.kind, r.ref)?.let { c.itemNames[it] },
+                wallet = AuditKinds.itemOf(r.kind, r.ref) in c.walletItems,
             ),
             isolate = false,
         ),

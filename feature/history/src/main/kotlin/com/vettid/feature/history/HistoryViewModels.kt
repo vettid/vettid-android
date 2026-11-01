@@ -60,6 +60,8 @@ data class HistoryUiState(
     val connectionNames: Map<String, String> = emptyMap(),
     /** id → name of the member's items (the Vault list), for the rows of item entries (§10.9). */
     val itemNames: Map<String, String> = emptyMap(),
+    /** The ids of the items that are wallets' (template `wallet.btc`), for the title of their `item.revealed`. */
+    val walletItems: Set<String> = emptySet(),
     /** The titles of the votes in memory by (connection, proposal) ([VoteTitles.key]), for the rows of vote entries. */
     val voteTitles: Map<String, String> = emptyMap(),
     /** id → name of the vault's devices (`device.list`), for entries with a device; null while not known. */
@@ -169,7 +171,12 @@ class HistoryViewModel @Inject constructor(
         }
         viewModelScope.launch { runCatching { connections.refresh() } }
         viewModelScope.launch { items.items.collect { l ->
-                state.update { it.copy(itemNames = l.associate { i -> i.itemId to AccountNames.cleaned(i.name).orEmpty() }) }
+                state.update {
+                    it.copy(
+                        itemNames = l.associate { i -> i.itemId to AccountNames.cleaned(i.name).orEmpty() },
+                        walletItems = l.filter { i -> i.template == HistoryText.WALLET_TEMPLATE }.map { i -> i.itemId }.toSet(),
+                    )
+                }
             } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         viewModelScope.launch {
@@ -215,7 +222,13 @@ class HistoryViewModel @Inject constructor(
                 context,
                 r.kind,
                 r.ref,
-                EntryNames(c?.displayName?.ifEmpty { null }, device, item, voteTitleOf(r)),
+                EntryNames(
+                    c?.displayName?.ifEmpty { null },
+                    device,
+                    item,
+                    voteTitleOf(r),
+                    wallet = AuditKinds.itemOf(r.kind, r.ref) in state.value.walletItems,
+                ),
                 isolate = false,
             ),
             // Cleaned like what is shown (§10.8 step 7); the entry is matched against these.
@@ -347,6 +360,8 @@ data class HistoryEntryUiState(
     /** The item the entry refers to (§10.9 item kinds): its current name, and whether it is still in the vault. */
     val itemName: String? = null,
     val itemExists: Boolean = false,
+    /** The item is a wallet's (template `wallet.btc`). */
+    val itemIsWallet: Boolean = false,
     /** A vote entry's vote title, from the Votes list in memory (never its choice); null when not known. */
     val voteTitle: String? = null,
     /** The entry's device (ANDROID-PLAN 0.1.27): its name while listed by `device.list`, null otherwise. */
@@ -406,7 +421,7 @@ class HistoryEntryViewModel @Inject constructor(
                     it.copy(
                         entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
                         asksMuted = c?.asks?.muted == true, connectionIsService = c?.service == true,
-                        itemName = i?.name, itemExists = i != null,
+                        itemName = i?.name, itemExists = i != null, itemIsWallet = i?.template == HistoryText.WALLET_TEMPLATE,
                         voteTitle = e?.let { r ->
                             AuditKinds.voteOf(r.kind, r.ref)?.let { id -> votes.titleOf(r.connectionId.orEmpty(), id) }
                         },

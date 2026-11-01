@@ -36,6 +36,20 @@ suspend fun VaultApi.walletCreate(name: String, network: String, password: Strin
     ).first
 
 /**
+ * `wallet.update{wallet_id, version, address_type}`: `{version}`, the new one. [version] is the one the app last read (`conflict`
+ * if the wallet changed meanwhile); [addressType] is `p2tr` or `p2wpkh`.
+ */
+suspend fun VaultApi.walletUpdate(walletId: String, version: Long, addressType: String): JsonObject =
+    device.op(
+        "wallet.update",
+        buildJsonObject {
+            put("wallet_id", walletId)
+            put("version", version)
+            put("address_type", addressType)
+        },
+    )
+
+/**
  * `wallet.address.new{wallet_id, type?, change?}`: the next address of an account's chain, `<address>`; without `type` the
  * receiving account's. `limit` at 2,000 addresses per wallet.
  */

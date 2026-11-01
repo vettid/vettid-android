@@ -102,6 +102,8 @@
     <string name="history_kind_wallet_deleted">Wallet deleted</string>
     <string name="history_kind_wallet_address_issued_named">Address given to %1$s</string>
     <string name="history_kind_wallet_address_issued">Address given to a connection</string>
+    <string name="history_kind_wallet_phrase_shown_named">Recovery phrase shown: %1$s</string>
+    <string name="history_kind_wallet_phrase_shown">Recovery phrase shown</string>
     <string name="history_kind_wallet_signed">Bitcoin payment signed</string>
     <string name="history_kind_wallet_cap_refused_request">Payment request from %1$s refused by a spending limit</string>
     <string name="history_kind_wallet_cap_refused_named">Payment refused by a spending limit: %1$s</string>

@@ -55,6 +55,8 @@ internal class FakeWalletOps : WalletOps {
     var lie: ((WalletAddress) -> WalletAddress)? = null
     var listGate: CompletableDeferred<Unit>? = null
     var created = 0
+    var conflict = false
+    var nextLie: String? = null
 
     private fun refuse(type: String, code: String): Nothing = throw VaultOpException(type, code)
 
@@ -65,7 +67,12 @@ internal class FakeWalletOps : WalletOps {
         return wallets.values.toList()
     }
 
-    override suspend fun get(walletId: String): VaultWallet = wallets[walletId] ?: refuse("wallet.get", "not_found")
+    var gets = 0
+
+    override suspend fun get(walletId: String): VaultWallet {
+        gets++
+        return wallets[walletId] ?: refuse("wallet.get", "not_found")
+    }
 
     override suspend fun create(name: String, network: String, password: String): VaultWallet {
         calls += "create:$network"
@@ -87,12 +94,33 @@ internal class FakeWalletOps : WalletOps {
         wallets.remove(walletId)
     }
 
+    override suspend fun setAddressType(walletId: String, version: Long, type: String): Long {
+        calls += "update:$version:$type"
+        val w = wallets.getValue(walletId)
+        // Like the vault: a version that is not the wallet's current one is a conflict.
+        if (conflict || version != w.version) refuse("wallet.update", "conflict")
+        return (version + 1).also { wallets[walletId] = w.copy(addressType = type, version = it) }
+    }
+
+    /** Holds `wallet.address.new` until completed (a lock while the vault answers); [newStarted] says it was asked. */
+    var newGate: CompletableDeferred<Unit>? = null
+    val newStarted = CompletableDeferred<Unit>()
+
     override suspend fun newAddress(walletId: String): WalletAddress {
         calls += "new"
+        newStarted.complete(Unit)
+        newGate?.await()
         val w = wallets.getValue(walletId)
         val chain = AddressChain(w.addressType, false)
         val list = issued.getOrPut(walletId to chain) { mutableListOf() }
-        return WalletFixtures.address(chain, list.size).also { list += it }
+        return WalletFixtures.address(chain, list.size).let { a -> nextLie?.let { a.copy(address = it) } ?: a }.also {
+            list += it
+            // The vault's version and next index move with every address it issues.
+            wallets[walletId] = w.copy(
+                version = w.version + 1,
+                accounts = w.accounts.map { a -> if (a.type == chain.type) a.copy(nextReceive = list.size) else a },
+            )
+        }
     }
 
     override suspend fun addresses(walletId: String, chain: AddressChain, after: Int?, limit: Int): AddressPage {
@@ -102,8 +130,12 @@ internal class FakeWalletOps : WalletOps {
         return AddressPage(page, if (all.size > limit) page.last().index else null)
     }
 
-    override suspend fun markUsed(walletId: String, addresses: List<String>) {
+    override suspend fun markUsed(walletId: String, addresses: List<String>): Int {
+        // As the vault: only addresses not marked before count, and only then does the version move.
+        val fresh = addresses.filterNot { a -> marked.any { a in it } }
         marked += addresses
+        if (fresh.isNotEmpty()) wallets[walletId]?.let { wallets[walletId] = it.copy(version = it.version + 1) }
+        return fresh.size
     }
 }
 

@@ -26,8 +26,10 @@ class WalletPrivacyTest {
             w, w.accounts[0], a, AddressPage(listOf(a), null), RevealedPhrase("abandon ability".toCharArray()),
             WalletLookup(Instant.EPOCH, "node.example", 123_456, 789, setOf(a.address)),
             ChainOpen.Ready("node.example") { error("unused") }, LookupResult.NoServer(ChainServer.NotSet),
+            LookupResult.ServerFailed(RuntimeException("https://secret.example/key")),
+            LookupResult.VaultFailed(com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.OTHER, "secret.example")),
         )
-        val secrets = listOf(a.address, WalletFixtures.TPUB86, WalletFixtures.TPUB84, "abandon", "123456", "Savings", "node.example")
+        val secrets = listOf(a.address, WalletFixtures.TPUB86, WalletFixtures.TPUB84, "abandon", "123456", "Savings", "node.example", "secret.example")
         for (v in values) {
             for (s in secrets) assertFalse("'$s' in $v", "$v".contains(s))
         }

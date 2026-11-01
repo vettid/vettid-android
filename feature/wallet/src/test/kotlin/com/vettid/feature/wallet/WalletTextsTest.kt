@@ -36,9 +36,46 @@ class WalletTextsTest {
             R.string.wallet_row_not_backed_up to "Not backed up",
             R.string.wallet_backed_up to "Backed up",
             R.string.wallet_check_show_again to "Show the words again",
+            R.string.wallet_network_ask to "Which test network is this wallet on?",
+            R.string.wallet_address_mismatch to "This wallet's addresses don't match your vault's. Nothing was sent.",
+            R.string.wallet_server_failed to "That server didn't answer.",
+            R.string.wallet_privacy_note to "To show your balance and send, VettID asks this server about your wallet's addresses. The server sees those addresses, and can tell they belong together, and it sees this phone's internet address and when you look. VettID's own servers see none of it. Use your own server to keep this to yourself.",
+            R.string.wallet_testnet3_unsupported to "VettID's staging app does not connect to testnet3.",
+            R.string.wallet_network_not_offered to "This version of VettID doesn't connect to this network.",
+            R.string.wallet_server_saved to "Saved. VettID now uses this server.",
+            R.string.wallet_looking_up to "Looking up…",
+            R.string.wallet_amount_bad to "Enter an amount above 0, with at most 8 decimal places.",
+            R.string.wallet_delete_password to "Enter your VettID password to delete %1\$s.",
+            // The screens table's words.
+            R.string.wallet_menu_address_type to "Receiving address type",
+            R.string.wallet_type_taproot to "Taproot (recommended)",
+            R.string.wallet_type_segwit to "Native SegWit",
+            R.string.wallet_menu_chain_server to "Chain server",
+            R.string.wallet_menu_details to "Details",
+            R.string.wallet_menu_delete to "Delete wallet",
+            R.string.wallet_account_p2tr to "Taproot address",
+            R.string.wallet_new_address to "New address",
+            R.string.wallet_server_use_own to "Use my own server",
+            R.string.wallet_server_reset to "Reset to default",
         )
         for ((res, text) in drafts) assertEquals(text, r.getString(res))
         assertEquals("Which is word 4?", r.getString(R.string.wallet_check_which, 4))
         assertEquals("That's not word 11. Look at your paper again.", r.getString(R.string.wallet_check_wrong, 11))
+        assertEquals("That server isn't on Signet.", r.getString(R.string.wallet_server_wrong_network, "Signet"))
+        assertEquals("Only send Signet bitcoin to this address.", r.getString(R.string.wallet_only_send, "Signet"))
+        assertEquals("Using mempool.space", r.getString(R.string.wallet_details_using, "mempool.space"))
+        assertEquals("+ 0.001 incoming", r.getString(R.string.wallet_incoming, "0.001"))
+        assertEquals("− 0.001 outgoing", r.getString(R.string.wallet_outgoing, "0.001"))
+    }
+
+    @Test
+    fun theDeleteWarningIsThePlansTextInTwoParts() {
+        // The plan's one text: "Delete {name}? Your vault forgets this wallet and its recovery phrase. Coins on it are lost unless you have the recovery phrase written down."
+        assertEquals(
+            "Delete Savings? Your vault forgets this wallet and its recovery phrase. Coins on it are lost unless you have the recovery phrase written down.",
+            r.getString(R.string.wallet_delete_title, "Savings") + " " + r.getString(R.string.wallet_delete_body),
+        )
+        assertEquals("0.00123 BTC", r.getString(R.string.wallet_balance_btc, BtcFormat.btc(123_000)))
+        assertEquals("123,000 sats", r.getString(R.string.wallet_balance_sats, BtcFormat.sats(123_000, java.util.Locale.US)))
     }
 }

@@ -50,4 +50,15 @@ class HistoryWalletTitlesTest {
             assertEquals(k, "01WALLET0000000000000000AA", AuditKinds.itemOf(k, "01WALLET0000000000000000AA"))
         }
     }
+
+    @Test
+    fun theRevealOfAWalletsItemNamesTheWallet() {
+        val wallet = EntryNames(item = "Savings", wallet = true)
+        assertEquals("Recovery phrase shown: Savings", title("item.revealed", wallet))
+        assertEquals("Recovery phrase shown", title("item.revealed", EntryNames(wallet = true)))
+        // Any other item keeps its title.
+        assertEquals("Critical item revealed", title("item.revealed", EntryNames(item = "Savings")))
+        // Only item.revealed changes.
+        assertEquals("Wallet created: Savings", title("wallet.created", wallet))
+    }
 }

@@ -9,6 +9,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.NewWalletRoute
+import com.vettid.core.data.wallet.WalletOpenRoute
 import com.vettid.core.data.wallet.WalletRoute
 import com.vettid.core.ui.components.ShellChrome
 
@@ -29,11 +30,12 @@ fun NavGraphBuilder.walletDestination(chrome: ShellChrome, host: WalletHost) {
             chrome,
             WalletsActions(
                 onNew = { host.navigate(NewWalletRoute) },
-                onOpen = { row -> if (!row.backedUp) host.navigate(BackupRoute(row.id)) },
+                onOpen = { row -> host.navigate(WalletOpenRoute(row.id)) },
                 onRetry = vm::refresh,
             ),
         )
     }
+    walletDetailDestinations(host)
     composable<NewWalletRoute> { entry -> BackupDestination(host, entry.id) }
     composable<BackupRoute> { entry -> BackupDestination(host, entry.id) }
 }

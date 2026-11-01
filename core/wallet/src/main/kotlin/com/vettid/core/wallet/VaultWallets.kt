@@ -109,6 +109,8 @@ internal object WalletWire {
         )
     }
 
+    fun version(o: JsonObject): Long = o.long("version")
+
     fun address(e: JsonElement): WalletAddress {
         val o = e as? JsonObject ?: throw WalletWireException("address")
         return WalletAddress(
