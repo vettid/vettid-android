@@ -391,4 +391,29 @@ class WalletCapsScreenTest {
         assertFalse(m.isCapsPending(id))
         assertTrue(m.capsDuplicate.value.isEmpty())
     }
+
+    @Test
+    fun aWalletMadeAfterAFailedListDoesNotStandInForTheListAtTheReset() = runBlocking {
+        val older = "01WALLET0000000000000000AA"
+        wallet(older)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        // The list fails at unlock; the member then creates a wallet, and resets from it.
+        ops.unsupported = false
+        val m = manager()
+        ops.listGate = kotlinx.coroutines.CompletableDeferred()
+        val opening = CoroutineScope(Dispatchers.Default).launch { runCatching { m.open() } }
+        kotlinx.coroutines.delay(300)
+        val made = m.create("New", Network.TESTNET4, "pw", null).wallet
+        assertEquals(listOf(made.id), m.wallets.value.map { it.id })
+        assertTrue(m.resetSettings())
+        // The older wallet is not in the file's ask list yet; the first real list fills it (the new wallet existed at the reset too).
+        assertEquals(false, WalletFlags(flagsFile).asksCaps(older))
+        ops.listGate!!.complete(Unit)
+        opening.join()
+        assertEquals(true, WalletFlags(flagsFile).asksCaps(older))
+        assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(older))
+        // A wallet made after the reset is still not asked.
+        val later = m.create("Later", Network.TESTNET4, "pw", null).wallet
+        assertEquals(false, WalletFlags(flagsFile).asksCaps(later.id))
+    }
 }

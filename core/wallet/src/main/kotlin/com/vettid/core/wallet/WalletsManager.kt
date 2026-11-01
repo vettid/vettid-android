@@ -218,6 +218,9 @@ class WalletsManager(
     private var generation = 0L
     private var open = false
 
+    /** A `wallet.list` was published since the vault opened (a created or imported wallet alone does not count). Under [lock]. */
+    private var listRead = false
+
     /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
     private val checked = HashMap<Pair<String, Network>, Wallet>()
     private var pendingRefresh: Job? = null
@@ -287,6 +290,7 @@ class WalletsManager(
             pendingRefresh = null
             availabilityFlow.value = WalletAvailability.UNKNOWN
             walletsFlow.value = emptyList()
+            listRead = false
             lookupsFlow.value = emptyMap()
             checked.clear()
             pendingMap.clear()
@@ -349,14 +353,15 @@ class WalletsManager(
             if (e.kind == FailureKind.NOT_SUPPORTED) publish(g) { availabilityFlow.value = WalletAvailability.UNSUPPORTED }
             throw e
         }
-        publish(g) {
+        val published = publish(g) {
             walletsFlow.value = list
             availabilityFlow.value = WalletAvailability.AVAILABLE
+            listRead = true
             // A wallet gone (deleted on another device): its look-up goes too.
             lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
         }
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
-        flags.listed(list.map { it.id }.toSet())
+        if (published) flags.listed(list.map { it.id }.toSet())
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
@@ -838,8 +843,8 @@ class WalletsManager(
     suspend fun resetSettings(): Boolean {
         val g = gen()
         val pending = synchronized(lock) { HashMap(pendingMap) }
-        // The wallets the vault holds now; none known yet (the list is not read): the first list read after the reset names them.
-        val listed = if (availabilityFlow.value == WalletAvailability.AVAILABLE) walletsFlow.value.map { it.id }.toSet() else null
+        // The wallets the vault listed; if no list was read since open (a created wallet alone is not a list), the first one names them.
+        val listed = if (synchronized(lock) { listRead }) walletsFlow.value.map { it.id }.toSet() else null
         val done = flags.reset(pending, listed)
         if (!done) {
             // The file may read after all: the unknown state ends with it, and Receive can go on.

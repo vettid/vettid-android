@@ -8,9 +8,9 @@
 
     <!-- Drawer, list -->
     <string name="wallet_title">Wallet</string> <!-- screens table -->
-    <string name="wallet_empty_title">No wallets yet</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_empty_body">Keep bitcoin in your vault. Payments need your VettID password.</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_test_banner">Test network: these coins have no value.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_empty_title">No wallets yet</string> <!-- draft -->
+    <string name="wallet_empty_body">Keep bitcoin in your vault. Payments need your VettID password.</string> <!-- draft, revised: "VettID password" -->
+    <string name="wallet_test_banner">Test network: these coins have no value.</string> <!-- draft -->
     <string name="wallet_row_not_backed_up">Not backed up</string> <!-- screens table -->
     <string name="wallet_new">New wallet</string> <!-- screens table -->
     <string name="wallet_network_signet">Signet</string> <!-- screens table -->
@@ -27,19 +27,19 @@
     <string name="wallet_name_too_long">That name is too long.</string> <!-- new (lead's wording) -->
     <string name="wallet_name_control">That name has a character that can\'t be used.</string> <!-- new -->
     <string name="wallet_network_label">Network</string> <!-- new -->
-    <string name="wallet_password_body">Enter your VettID password. It protects this wallet: you will need it for every payment.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_password_body">Enter your VettID password. It protects this wallet: you will need it for every payment.</string> <!-- draft, revised: the existing VettID password, not a new one -->
     <string name="wallet_password_label">VettID password</string> <!-- new -->
     <string name="wallet_create">Create wallet</string> <!-- new -->
     <string name="wallet_created_reveal_failed">Your wallet was created, but its recovery phrase couldn\'t be shown. Tap it in your wallets to back it up.</string> <!-- new -->
     <string name="wallet_limit">Your vault holds 16 wallets, the most it can.</string> <!-- screens table -->
 
     <!-- Spending limits at creation and import (W1d; ANDROID-PLAN §4 "Spending limits") -->
-    <string name="wallet_limits_title">Set a spending limit?</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_body">Your vault will refuse any payment above it. You can lower it any time; raising it needs your PIN and password.</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_none">No limit</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_limits_title">Set a spending limit?</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_body">Your vault will refuse any payment above it. You can lower it any time; raising it needs your PIN and password.</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_none">No limit</string> <!-- approved 2026-10-24 (vettid.org #406) -->
     <string name="wallet_limits_set">Set a limit</string> <!-- new: the other choice beside "No limit" -->
-    <string name="wallet_limit_per_tx">Most per payment</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limit_per_period">Most in any 24 hours</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_limit_per_tx">Most per payment</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limit_per_period">Most in any 24 hours</string> <!-- approved 2026-10-24 (vettid.org #406) -->
     <string name="wallet_unit_sats">sats</string> <!-- new -->
     <string name="wallet_unit_btc">BTC</string> <!-- new -->
     <string name="wallet_limits_show_btc">Show in BTC</string> <!-- new: the toggle ("a toggle shows BTC") -->
@@ -55,15 +55,15 @@
 
 
     <!-- The Spending limits screen (W1d-2; ANDROID-PLAN §4 "Spending limits", "Texts (drafts)") -->
-    <string name="wallet_menu_limits">Spending limits</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_used">Used in the last 24 hours: %1$s of %2$s</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_lower_button">Lower a limit</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_raise_button">Raise or remove a limit</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_lower_title">Lower the limit to %1$s?</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_raise_title">Raise the limit from %1$s to %2$s?</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_limits_remove_title">Remove the limit?</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_menu_limits">Spending limits</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_used">Used in the last 24 hours: %1$s of %2$s</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_lower_button">Lower a limit</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_raise_button">Raise or remove a limit</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_lower_title">Lower the limit to %1$s?</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_raise_title">Raise the limit from %1$s to %2$s?</string> <!-- approved 2026-10-24 (vettid.org #406) -->
+    <string name="wallet_limits_remove_title">Remove the limit?</string> <!-- approved 2026-10-24 (vettid.org #406) -->
     <string name="wallet_limits_remove_title_both">Remove the limits?</string> <!-- new: both limits removed -->
-    <string name="wallet_limits_enter_secrets">Enter your PIN and password.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_limits_enter_secrets">Enter your PIN and password.</string> <!-- approved 2026-10-24 (vettid.org #406) -->
     <string name="wallet_limits_phrase_tx">%1$s per payment</string> <!-- new: how a limit is named in the questions -->
     <string name="wallet_limits_phrase_period">%1$s in any 24 hours</string> <!-- new -->
     <string name="wallet_limits_and">%1$s and %2$s</string> <!-- new -->
@@ -93,7 +93,7 @@
     <string name="wallet_limits_ask_reset">Your wallet settings were reset on this phone. Your vault shows no limit on this wallet. If you chose one before, choose it again, or choose No limit.</string> <!-- new -->
 
     <!-- The phrase of a wallet with a spending limit -->
-    <string name="wallet_pin_too">To protect your spending limit, enter your PIN too.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_pin_too">To protect your spending limit, enter your PIN too.</string> <!-- approved 2026-10-24 (vettid.org #406) -->
     <string name="wallet_pin_label">PIN</string> <!-- new -->
 
     <!-- Import a wallet -->
@@ -105,7 +105,7 @@
         <item quantity="other">%1$d words</item>
     </plurals>
     <string name="wallet_import_unknown_word">Word %1$d isn\'t in the recovery word list.</string> <!-- new -->
-    <string name="wallet_import_invalid">These words aren\'t a valid recovery phrase. Check each word and the order.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_import_invalid">These words aren\'t a valid recovery phrase. Check each word and the order.</string> <!-- draft -->
     <string name="wallet_import_advanced">Advanced</string> <!-- screens table -->
     <string name="wallet_import_passphrase_note">Only if you set one when the wallet was made. Letters, digits and symbols from a standard keyboard only.</string> <!-- screens table -->
     <string name="wallet_import_passphrase_bad">Use only letters, digits and symbols from a standard keyboard, up to 256 characters.</string> <!-- new -->
@@ -117,14 +117,14 @@
 
     <!-- Recovery phrase and check -->
     <string name="wallet_phrase_title">Recovery phrase</string> <!-- screens table -->
-    <string name="wallet_phrase_body">Write these words on paper, in order, and keep them somewhere safe. Anyone with them can take your coins. VettID never shows them to anyone else.</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_phrase_no_screenshots">This screen is hidden from screenshots and the app switcher.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_phrase_body">Write these words on paper, in order, and keep them somewhere safe. Anyone with them can take your coins. VettID never shows them to anyone else.</string> <!-- draft -->
+    <string name="wallet_phrase_no_screenshots">This screen is hidden from screenshots and the app switcher.</string> <!-- draft, revised (lead) -->
     <string name="wallet_phrase_passphrase">Passphrase</string> <!-- the vault's field label -->
     <string name="wallet_phrase_passphrase_note">You need this passphrase as well as the words to recover this wallet.</string> <!-- new (lead's wording) -->
     <string name="wallet_continue">Continue</string> <!-- screens table -->
     <string name="wallet_check_title">Check the phrase</string> <!-- screens table -->
-    <string name="wallet_check_which">Which is word %1$d?</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_check_wrong">That\'s not word %1$d. Look at your paper again.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_check_which">Which is word %1$d?</string> <!-- draft -->
+    <string name="wallet_check_wrong">That\'s not word %1$d. Look at your paper again.</string> <!-- draft (the check ends here, ANDROID-PLAN 0.1.112) -->
     <string name="wallet_check_type">Or type it</string> <!-- new -->
     <string name="wallet_check_show_again">Show the words again</string> <!-- screens table -->
     <string name="wallet_backed_up">Backed up</string> <!-- screens table -->
@@ -134,7 +134,7 @@
 
     <!-- Back up a wallet that is not backed up yet -->
     <string name="wallet_backup_title">Back up this wallet</string> <!-- new -->
-    <string name="wallet_backup_body">Not backed up. If your vault is lost, these coins are lost too.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_backup_body">Not backed up. If your vault is lost, these coins are lost too.</string> <!-- draft -->
     <string name="wallet_backup_password">Enter your VettID password to show the recovery phrase.</string> <!-- new -->
     <string name="wallet_backup_show">Show the recovery phrase</string> <!-- new -->
 
@@ -156,21 +156,21 @@
     <string name="wallet_cancel">Cancel</string> <!-- new -->
 
     <!-- Wallet detail: the look-up's states -->
-    <string name="wallet_network_ask">Which test network is this wallet on?</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_network_ask">Which test network is this wallet on?</string> <!-- draft -->
     <string name="wallet_network_testnet3">Testnet3</string> <!-- new; also the chip of a wallet the member said is on testnet3 -->
-    <string name="wallet_testnet3_unsupported">VettID\'s staging app does not connect to testnet3.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_testnet3_unsupported">VettID\'s staging app does not connect to testnet3.</string> <!-- draft (Networks), revised: with the full stop -->
     <string name="wallet_network_not_offered">This version of VettID doesn\'t connect to this network.</string> <!-- new, revised: the one wording for a network not offered -->
     <string name="wallet_network_save_failed">This phone couldn\'t record your answer. Try again.</string> <!-- new -->
     <string name="wallet_server_not_set">No chain server is set for this network.</string> <!-- new -->
     <string name="wallet_server_unreadable">Your chain server setting couldn\'t be read.</string> <!-- new -->
-    <string name="wallet_server_wrong_network">That server isn\'t on %1$s.</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_server_failed">That server didn\'t answer.</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_address_mismatch">This wallet\'s addresses don\'t match your vault\'s. Nothing was sent.</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_privacy_note">To show your balance and send, VettID asks this server about your wallet\'s addresses. The server sees those addresses, and can tell they belong together, and it sees this phone\'s internet address and when you look. VettID\'s own servers see none of it. Use your own server to keep this to yourself.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_server_wrong_network">That server isn\'t on %1$s.</string> <!-- draft -->
+    <string name="wallet_server_failed">That server didn\'t answer.</string> <!-- draft -->
+    <string name="wallet_address_mismatch">This wallet\'s addresses don\'t match your vault\'s. Nothing was sent.</string> <!-- draft -->
+    <string name="wallet_privacy_note">To show your balance and send, VettID asks this server about your wallet\'s addresses. The server sees those addresses, and can tell they belong together, and it sees this phone\'s internet address and when you look. VettID\'s own servers see none of it. Use your own server to keep this to yourself.</string> <!-- draft -->
 
     <!-- Delete -->
-    <string name="wallet_delete_title">Delete %1$s?</string> <!-- approved 2026-10-24 -->
-    <string name="wallet_delete_body">Your vault forgets this wallet and its recovery phrase. Coins on it are lost unless you have the recovery phrase written down.</string> <!-- approved 2026-10-24 -->
+    <string name="wallet_delete_title">Delete %1$s?</string> <!-- draft: the first sentence of the plan\'s Delete text -->
+    <string name="wallet_delete_body">Your vault forgets this wallet and its recovery phrase. Coins on it are lost unless you have the recovery phrase written down.</string> <!-- draft: the rest of the Delete text -->
     <string name="wallet_delete_password">Enter your VettID password to delete %1$s.</string> <!-- new, revised: "VettID password" -->
 
     <!-- Receive -->
