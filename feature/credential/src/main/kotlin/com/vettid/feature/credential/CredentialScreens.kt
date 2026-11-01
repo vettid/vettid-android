@@ -60,7 +60,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.titleRes
 import com.vettid.core.data.vault.vaultCode
-import com.vettid.core.data.wallet.WalletRoute
+import com.vettid.core.data.wallet.WalletOpenRoute
 import com.vettid.core.data.R as DataR
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
@@ -137,7 +137,7 @@ fun NavGraphBuilder.credentialDestination(
                 changePassword = { navigate(CredentialPasswordRoute) },
                 rotate = { navigate(CredentialRotateRoute) },
                 reviewAlarm = { navigate(CredentialAlarmRoute) },
-                openWallets = { navigate(WalletRoute) },
+                openWallet = { navigate(WalletOpenRoute(it)) },
                 newCredential = { if (NEW_CREDENTIAL_SHOWN) navigate(CredentialNewRoute) },
             ),
         )
@@ -195,8 +195,8 @@ data class CredentialActions(
     val reviewAlarm: () -> Unit = {},
     /** A new credential (`credential.reset`, 0.15.2): the old one and every critical item are destroyed. */
     val newCredential: () -> Unit = {},
-    /** A wallet's row: the wallets (W1c-2a; the wallet itself once its screen is in, W1c-2b). */
-    val openWallets: () -> Unit = {},
+    /** A wallet's row: the wallets (W1c-2b: opens the wallet). */
+    val openWallet: (walletId: String) -> Unit = {},
 )
 
 private val TTL_OPTIONS = listOf(30, 60, 300, 900, 3600)
@@ -319,7 +319,7 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             SettingsDivider()
                             SettingsRow(
                                 stringResource(R.string.credential_wallet, w.name),
-                                actions.openWallets,
+                                { actions.openWallet(w.id) },
                                 icon = Icons.Outlined.AccountBalanceWallet,
                                 modifier = Modifier.testTag("credential_wallet_${w.id}"),
                             )

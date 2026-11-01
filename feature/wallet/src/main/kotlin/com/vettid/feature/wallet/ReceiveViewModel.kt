@@ -1,0 +1,112 @@
+package com.vettid.feature.wallet
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.navigation.toRoute
+import com.vettid.core.chain.Network
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.wallet.WalletAddress
+import com.vettid.core.wallet.WalletAvailability
+import com.vettid.core.wallet.WalletsManager
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/** Receive: the address the vault issued, the optional amount, and what is encoded. Prints its type name only. */
+data class ReceiveUiState(
+    val loading: Boolean = true,
+    /** The phrase is not confirmed: the check is offered instead of an address. */
+    val notBackedUp: Boolean = false,
+    val network: Network? = null,
+    val address: WalletAddress? = null,
+    /** The amount field as typed (bitcoin). */
+    val amountText: String = "",
+    val busy: Boolean = false,
+    val error: FailureKind? = null,
+    val closed: Boolean = false,
+) {
+    val amount: BtcFormat.Amount get() = BtcFormat.parse(amountText)
+
+    /** The QR code's content: a BIP21 URI; an amount that is not valid is left out. */
+    val uri: String? get() = address?.let { Bip21.uri(it.address, (amount as? BtcFormat.Amount.Valid)?.sats) }
+
+    override fun toString(): String = "ReceiveUiState"
+}
+
+/**
+ * Receive (ANDROID-PLAN §4 screens table): the newest unused address of the receiving account ([WalletsManager.receiveAddress]), as
+ * a QR code and as text; "New address" asks the vault for the next one. A wallet whose phrase is not confirmed asks for no address.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+@HiltViewModel
+class ReceiveViewModel @Inject constructor(
+    saved: SavedStateHandle,
+    private val wallets: WalletsManager,
+) : ViewModel() {
+    val walletId: String = saved.toRoute<ReceiveRoute>().walletId
+    private val mutable = MutableStateFlow(ReceiveUiState())
+    val state: StateFlow<ReceiveUiState> = mutable.asStateFlow()
+
+    private var started = false
+    private var seen = false
+
+    init {
+        viewModelScope.launch {
+            combine(wallets.wallets, wallets.availability, wallets.flagsChanged) { list, availability, _ ->
+                list.firstOrNull { it.id == walletId } to availability
+            }.mapLatest { (w, availability) ->
+                Triple(w, availability, w?.let { wallets.networkOf(it) })
+            }.collect { (w, availability, network) ->
+                if (w == null) {
+                    if (seen || availability == WalletAvailability.AVAILABLE) mutable.update { it.copy(closed = true) }
+                } else {
+                    seen = true
+                    mutable.update { it.copy(network = network) }
+                    if (!started) {
+                        started = true
+                        load()
+                    }
+                }
+            }
+        }
+    }
+
+    /** The address to show; from Try again too. */
+    fun load() {
+        viewModelScope.launch {
+            mutable.update { it.copy(loading = true, error = null) }
+            if (!wallets.backedUp(walletId)) {
+                mutable.update { it.copy(loading = false, notBackedUp = true) }
+                return@launch
+            }
+            ask { wallets.receiveAddress(walletId) }
+        }
+    }
+
+    /** "New address". */
+    fun newAddress() {
+        if (mutable.value.busy || mutable.value.closed) return
+        viewModelScope.launch { ask { wallets.newAddress(walletId) } }
+    }
+
+    private suspend fun ask(get: suspend () -> WalletAddress) {
+        mutable.update { it.copy(busy = true, error = null) }
+        try {
+            val a = get()
+            mutable.update { it.copy(loading = false, busy = false, address = a) }
+        } catch (e: VaultFailure) {
+            mutable.update { it.copy(loading = false, busy = false, error = e.kind) }
+        }
+    }
+
+    fun setAmount(text: String) = mutable.update { it.copy(amountText = BtcFormat.filter(text)) }
+}

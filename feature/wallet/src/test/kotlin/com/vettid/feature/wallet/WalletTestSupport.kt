@@ -5,6 +5,7 @@ import com.vettid.core.vault.VaultOpException
 import com.vettid.core.wallet.AddressChain
 import com.vettid.core.wallet.AddressPage
 import com.vettid.core.wallet.ChainOpen
+import com.vettid.core.wallet.ChainSource
 import com.vettid.core.wallet.RevealedPhrase
 import com.vettid.core.wallet.VaultWallet
 import com.vettid.core.wallet.WalletAddress
@@ -26,6 +27,7 @@ internal class FakeWallets : WalletOps {
     var passphrase: String? = null
     var listFails = false
     var deleteFails = false
+    var addressesFail = false
     var conflict = false
     var words = List(24) { i -> "word${'a' + (i % 26)}$i" }
 
@@ -73,7 +75,10 @@ internal class FakeWallets : WalletOps {
         return WalletAddress("tb1p$issued", "p2tr", issued, false, false).also { issued++ }
     }
 
-    override suspend fun addresses(walletId: String, chain: AddressChain, after: Int?, limit: Int) = AddressPage(emptyList(), null)
+    override suspend fun addresses(walletId: String, chain: AddressChain, after: Int?, limit: Int): AddressPage {
+        if (addressesFail) throw VaultOpException("wallet.address.list", "internal")
+        return AddressPage(emptyList(), null)
+    }
 
     override suspend fun markUsed(walletId: String, addresses: List<String>) = Unit
 }
@@ -93,10 +98,24 @@ internal class MemoryFlags : WalletFlagsFile {
     }
 }
 
-internal fun manager(scope: CoroutineScope, ops: FakeWallets, flags: WalletFlags = WalletFlags(MemoryFlags())) = WalletsManager(
+internal fun manager(
+    scope: CoroutineScope,
+    ops: FakeWallets,
+    flags: WalletFlags = WalletFlags(MemoryFlags()),
+    chain: ChainSource = ChainSource { ChainOpen.NoServer(com.vettid.core.chain.ChainServer.NotSet) },
+) = WalletsManager(
     scope,
     { ops },
-    { ChainOpen.NoServer(com.vettid.core.chain.ChainServer.NotSet) },
+    chain,
     flags,
     { it == Network.SIGNET || it == Network.TESTNET4 },
 )
+
+/** The vault calls run on the IO dispatcher: waits for [cond] in real time. */
+internal suspend fun eventually(cond: () -> Boolean) {
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        kotlinx.coroutines.withTimeout(5_000) {
+            while (!cond()) kotlinx.coroutines.delay(10)
+        }
+    }
+}

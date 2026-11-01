@@ -23,7 +23,8 @@ interface WalletFlagsFile {
 /**
  * What the app keeps of its wallets on this phone (ANDROID-PLAN §4 "Local state"), in its encrypted settings, never sent to the
  * vault: the **backed-up** flag per `wallet_id` (the vault has none) and, for a legacy `testnet` wallet only, which test chain the
- * member said it is on (question 16), and whether the chain server's privacy note was shown for a wallet. Read from the file every time, nothing kept in memory. A write is refused when a wipe began
+ * member said it is on (question 16), and whether the chain server's privacy note was shown for a wallet.
+ * Read from the file every time, nothing kept in memory. A write is refused when a wipe began
  * after the operation started ([generation] moved), so that a write in flight cannot bring the file back after it was erased.
  */
 class WalletFlags(private val file: WalletFlagsFile, private val generation: () -> Long = { 0 }) {

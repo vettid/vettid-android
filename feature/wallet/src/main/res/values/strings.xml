@@ -56,4 +56,78 @@
     <string name="wallet_backup_body">Not backed up. If your vault is lost, these coins are lost too.</string> <!-- draft -->
     <string name="wallet_backup_password">Enter your VettID password to show the recovery phrase.</string> <!-- new -->
     <string name="wallet_backup_show">Show the recovery phrase</string> <!-- new -->
+
+    <!-- Wallet detail (W1c-2b) -->
+    <string name="wallet_balance_btc">%1$s BTC</string> <!-- new: the unit after the amount -->
+    <string name="wallet_balance_sats">%1$s sats</string> <!-- new -->
+    <string name="wallet_incoming">+ %1$s incoming</string> <!-- screens table -->
+    <string name="wallet_outgoing">- %1$s outgoing</string> <!-- new: the negative twin of "incoming" -->
+    <string name="wallet_last_lookup">Looked up %1$s from %2$s</string> <!-- new -->
+    <string name="wallet_not_looked_up">Not looked up yet</string> <!-- new -->
+    <string name="wallet_receive">Receive</string> <!-- screens table -->
+    <string name="wallet_menu">More</string> <!-- new: the menu button's description -->
+    <string name="wallet_menu_address_type">Receiving address type</string> <!-- screens table -->
+    <string name="wallet_menu_chain_server">Chain server</string> <!-- screens table -->
+    <string name="wallet_menu_details">Details</string> <!-- screens table -->
+    <string name="wallet_menu_delete">Delete wallet</string> <!-- screens table -->
+    <string name="wallet_type_taproot">Taproot (recommended)</string> <!-- screens table -->
+    <string name="wallet_type_segwit">Native SegWit</string> <!-- screens table -->
+    <string name="wallet_cancel">Cancel</string> <!-- new -->
+
+    <!-- Wallet detail: the look-up's states -->
+    <string name="wallet_network_ask">Which test network is this wallet on?</string> <!-- draft -->
+    <string name="wallet_network_testnet3">Testnet3</string> <!-- new -->
+    <string name="wallet_testnet3_unsupported">VettID\'s staging app does not connect to testnet3</string> <!-- draft (Networks) -->
+    <string name="wallet_network_not_offered">This version of VettID does not connect to this network.</string> <!-- new -->
+    <string name="wallet_network_save_failed">This phone couldn\'t record your answer. Try again.</string> <!-- new -->
+    <string name="wallet_server_not_set">No chain server is set for this network.</string> <!-- new -->
+    <string name="wallet_server_unreadable">Your chain server setting couldn\'t be read.</string> <!-- new -->
+    <string name="wallet_server_wrong_network">That server isn\'t on %1$s.</string> <!-- draft -->
+    <string name="wallet_server_failed">That server didn\'t answer.</string> <!-- draft -->
+    <string name="wallet_address_mismatch">This wallet\'s addresses don\'t match your vault\'s. Nothing was sent.</string> <!-- draft -->
+    <string name="wallet_privacy_note">To show your balance and send, VettID asks this server about your wallet\'s addresses. The server sees those addresses, and can tell they belong together, and it sees this phone\'s internet address and when you look. VettID\'s own servers see none of it. Use your own server to keep this to yourself.</string> <!-- draft -->
+
+    <!-- Delete -->
+    <string name="wallet_delete_title">Delete %1$s?</string> <!-- draft: the first sentence of the plan\'s Delete text -->
+    <string name="wallet_delete_body">Your vault forgets this wallet and its recovery phrase. Coins on it are lost unless you have the recovery phrase written down.</string> <!-- draft: the rest of the Delete text -->
+    <string name="wallet_delete_password">Enter your password to delete %1$s.</string> <!-- new -->
+
+    <!-- Receive -->
+    <string name="wallet_copy">Copy</string> <!-- screens table -->
+    <string name="wallet_share">Share</string> <!-- screens table -->
+    <string name="wallet_share_title">Share address</string> <!-- new: the chooser\'s title -->
+    <string name="wallet_clip_label">Bitcoin address</string> <!-- new: the clipboard\'s label -->
+    <string name="wallet_qr_description">QR code of the address</string> <!-- new -->
+    <string name="wallet_amount_label">Amount in BTC (optional)</string> <!-- screens table: "an optional amount" -->
+    <string name="wallet_amount_bad">Use more than 0, with up to 8 decimals.</string> <!-- new -->
+    <string name="wallet_new_address">New address</string> <!-- screens table -->
+    <string name="wallet_account_p2tr">Taproot address</string> <!-- screens table -->
+    <string name="wallet_account_p2wpkh">Native SegWit address</string> <!-- new: the twin of "Taproot address" -->
+    <string name="wallet_only_send">Only send %1$s bitcoin to this address.</string> <!-- screens table -->
+
+    <!-- Chain server -->
+    <string name="wallet_server_default">Default server: %1$s</string> <!-- new -->
+    <string name="wallet_server_own">Your own server: %1$s</string> <!-- new -->
+    <string name="wallet_server_not_offered">VettID doesn\'t connect to this network in this version.</string> <!-- new -->
+    <string name="wallet_server_use_own">Use my own server</string> <!-- screens table -->
+    <string name="wallet_server_url_label">Server address (https)</string> <!-- new -->
+    <string name="wallet_server_save">Save</string> <!-- new -->
+    <string name="wallet_server_checking">Checking…</string> <!-- new -->
+    <string name="wallet_server_saved">Saved. This server was checked and is now used.</string> <!-- new -->
+    <string name="wallet_server_reset">Reset to default</string> <!-- screens table -->
+    <string name="wallet_server_not_written">The server answered, but this phone couldn\'t save the setting. Try again.</string> <!-- new -->
+    <string name="wallet_server_reset_failed">This phone couldn\'t reset the setting. Try again.</string> <!-- new -->
+    <string name="wallet_url_not_a_url">That isn\'t a web address.</string> <!-- new -->
+    <string name="wallet_url_not_https">Use an address that starts with https://.</string> <!-- new -->
+    <string name="wallet_url_credentials">Leave the user name and password out of the address.</string> <!-- new -->
+    <string name="wallet_url_query">Leave out anything after ? or #: use the server\'s base address.</string> <!-- new -->
+
+    <!-- Details -->
+    <string name="wallet_details_fingerprint">Fingerprint</string> <!-- new -->
+    <string name="wallet_details_network">Network</string> <!-- new -->
+    <string name="wallet_details_path">Path</string> <!-- new -->
+    <string name="wallet_details_receive_descriptor">Receive descriptor</string> <!-- new -->
+    <string name="wallet_details_change_descriptor">Change descriptor</string> <!-- new -->
+    <string name="wallet_details_using">Using %1$s</string> <!-- screens table: "Using mempool.space" -->
+    <string name="wallet_details_copy">Copy %1$s</string> <!-- new: a copy button\'s description -->
 </resources>

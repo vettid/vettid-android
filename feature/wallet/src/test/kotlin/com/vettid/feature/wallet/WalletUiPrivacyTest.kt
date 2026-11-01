@@ -20,17 +20,21 @@ class WalletUiPrivacyTest {
         val values = listOf(
             row,
             WalletsUiState(loading = false, rows = listOf(row)),
+            WalletDetailUiState(loaded = true, name = "Savings", password = "hunter2", last = com.vettid.core.wallet.WalletLookup(java.time.Instant.EPOCH, "orbit.example", 4242, 0, setOf("maple"))),
+            ReceiveUiState(loading = false, address = com.vettid.core.wallet.WalletAddress("orbit1address", "p2tr", 0, false, false), amountText = "4242"),
+            ChainServerUiState(Network.SIGNET, com.vettid.core.chain.ChainServer.NotSet, text = "https://orbit.example/maple"),
+            WalletDetailsUiState(loaded = true, fingerprint = "orbit", accounts = listOf(AccountDetails("p2tr", "orbit", "maple", "orb"))),
             BackupUiState(BackupStep.CHECK, name = "Savings", password = "hunter2", words = PhraseWords(listOf("orbit".toCharArray(), "maple".toCharArray())), typed = "orb", candidates = listOf(1)),
         )
         for (v in values) {
-            for (s in listOf("Savings", "hunter2", "orbit", "maple", "orb", "01WALLET")) assertFalse("'$s' in $v", "$v".contains(s))
+            for (s in listOf("Savings", "hunter2", "orbit", "maple", "orb", "01WALLET", "4242")) assertFalse("'$s' in $v", "$v".contains(s))
         }
     }
 
     @Test
     fun theModuleHasNoLoggingCallAndKeepsNothingInSavedState() {
         val sources = File("src/main/kotlin").walkTopDown().filter { it.extension == "kt" }.toList()
-        assertTrue(sources.size >= 3)
+        assertTrue(sources.size >= 9)
         val banned = listOf(
             "android.util.Log", "Log.", "println(", "printStackTrace", "Timber", "System.out", "System.err",
             "java.util.logging", "Logger", "stackTraceToString", "rememberSaveable", "saved[", "saved.set", "getStateFlow",
