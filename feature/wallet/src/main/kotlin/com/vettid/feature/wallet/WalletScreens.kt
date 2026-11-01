@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -26,6 +28,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -38,6 +44,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import com.vettid.core.chain.Network
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.ExcludeScreenFromAutofill
@@ -53,7 +60,12 @@ import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.theme.Spacing
 
-data class WalletsActions(val onNew: () -> Unit = {}, val onOpen: (WalletRow) -> Unit = {}, val onRetry: () -> Unit = {})
+data class WalletsActions(
+    val onNew: () -> Unit = {},
+    val onImport: () -> Unit = {},
+    val onOpen: (WalletRow) -> Unit = {},
+    val onRetry: () -> Unit = {},
+)
 
 /** The chip of a wallet's chain ("Signet", "Testnet4"); none on mainnet (screens table). */
 @Composable
@@ -85,12 +97,29 @@ fun WalletsScreen(state: WalletsUiState, chrome: ShellChrome, actions: WalletsAc
         modifier = modifier.testTag(WALLET_SCREENS_MARKER),
         overlay = {
             if (!state.loading && state.failed == null) {
-                VettIdFab(
-                    Icons.Outlined.Add,
-                    stringResource(R.string.wallet_new),
-                    actions.onNew,
-                    Modifier.align(Alignment.BottomEnd).padding(Spacing.l).testTag("wallet_new"),
-                )
+                // The floating action button: New wallet / Import a wallet (screens table).
+                var menu by remember { mutableStateOf(false) }
+                Box(Modifier.align(Alignment.BottomEnd).padding(Spacing.l)) {
+                    VettIdFab(Icons.Outlined.Add, stringResource(R.string.wallet_add), { menu = true }, Modifier.testTag("wallet_new"))
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.wallet_new)) },
+                            onClick = {
+                                menu = false
+                                actions.onNew()
+                            },
+                            modifier = Modifier.testTag("wallet_new_item"),
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.wallet_import)) },
+                            onClick = {
+                                menu = false
+                                actions.onImport()
+                            },
+                            modifier = Modifier.testTag("wallet_import_item"),
+                        )
+                    }
+                }
             }
         },
     ) {
@@ -156,6 +185,16 @@ data class BackupActions(
     val onName: (String) -> Unit = {},
     val onNetwork: (Network) -> Unit = {},
     val onPassword: (String) -> Unit = {},
+    val onPin: (String) -> Unit = {},
+    /** "Continue" from the name and network, and from the limits. */
+    val onNext: () -> Unit = {},
+    /** One step back inside making a wallet (the limits, the password). */
+    val onPrevious: () -> Unit = {},
+    val onChoice: (Boolean) -> Unit = {},
+    val onPerTx: (String) -> Unit = {},
+    val onPerPeriod: (String) -> Unit = {},
+    val onToggleUnit: () -> Unit = {},
+    val onRetryCaps: () -> Unit = {},
     val onCreate: () -> Unit = {},
     val onReveal: () -> Unit = {},
     val onContinue: () -> Unit = {},
@@ -177,6 +216,16 @@ fun BackupScreen(state: BackupUiState, actions: BackupActions, modifier: Modifie
     }
     when (state.step) {
         BackupStep.FORM -> NewWalletForm(state, actions, modifier)
+        BackupStep.LIMITS -> LimitsStep(
+            state.limits,
+            state.limitsParse,
+            LimitsActions(actions.onChoice, actions.onPerTx, actions.onPerPeriod, actions.onToggleUnit),
+            actions.onNext,
+            actions.onPrevious,
+            state.busy,
+            modifier.testTag("wallet_new_limits"),
+        )
+        BackupStep.CREATE -> CreateStep(state, actions, modifier)
         BackupStep.PASSWORD -> PasswordStep(state, actions, modifier)
         BackupStep.PHRASE -> PhraseStep(state, actions, modifier)
         BackupStep.CHECK -> CheckStep(state, actions, modifier)
@@ -184,27 +233,45 @@ fun BackupScreen(state: BackupUiState, actions: BackupActions, modifier: Modifie
     }
 }
 
-/** A wallet that is not backed up yet: the password, to show the phrase again. */
+/**
+ * A wallet that is not backed up yet: the password, to show the phrase again; for a wallet that has a spending limit the PIN as well
+ * ("To protect your spending limit, enter your PIN too.").
+ */
 @Composable
 private fun PasswordStep(state: BackupUiState, actions: BackupActions, modifier: Modifier) {
     FormScaffold(
         title = stringResource(R.string.wallet_backup_title),
         body = stringResource(R.string.wallet_backup_body),
-        // A wallet with a spending limit: no button (its phrase needs the PIN, which comes in a later version).
-        primaryLabel = if (state.capped) null else stringResource(R.string.wallet_backup_show),
+        primaryLabel = stringResource(R.string.wallet_backup_show),
         onPrimary = actions.onReveal,
-        primaryEnabled = state.password.isNotEmpty(),
+        primaryEnabled = state.password.isNotEmpty() && state.pinReady,
         busy = state.busy,
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_backup_password"),
     ) {
+        Text(stringResource(R.string.wallet_backup_password))
         if (state.capped) {
-            Text(stringResource(R.string.wallet_pin_required), modifier = Modifier.testTag("wallet_pin_later"))
-        } else {
-            Text(stringResource(R.string.wallet_backup_password))
-            Password(state, actions)
+            Text(stringResource(R.string.wallet_pin_too), modifier = Modifier.testTag("wallet_pin_too"))
+            SecretField(
+                value = state.pin,
+                onValueChange = actions.onPin,
+                label = stringResource(R.string.wallet_pin_label),
+                isPin = true,
+                error = state.error?.takeIf { it == FailureKind.BAD_PIN }?.let { stringResource(it.messageRes()) },
+                modifier = Modifier.fillMaxWidth().testTag("wallet_pin"),
+            )
         }
+        Password(state, actions)
     }
+}
+
+/** The line under [DoneStep]'s title; the chosen spending limit that could not be set says that Receive stays off until it is. */
+private fun doneBody(state: BackupUiState): Int? = when {
+    state.revealFailed -> R.string.wallet_created_reveal_failed
+    state.saveFailed -> R.string.wallet_save_failed
+    state.capsFailed -> R.string.wallet_caps_not_set
+    state.backedUp -> null
+    else -> R.string.wallet_backup_body
 }
 
 /** The end: "Backed up", or why not (the reveal failed, or the check passed but could not be recorded: Try again). */
@@ -215,26 +282,38 @@ private fun DoneStep(state: BackupUiState, actions: BackupActions, modifier: Mod
         state.saveFailed -> R.string.wallet_not_recorded
         else -> R.string.wallet_backup_title
     }
-    val body = when {
-        state.revealFailed -> R.string.wallet_created_reveal_failed
-        state.saveFailed -> R.string.wallet_save_failed
-        state.backedUp -> null
-        else -> R.string.wallet_backup_body
-    }
+    val again = state.saveFailed || state.capsFailed
     FormScaffold(
         title = stringResource(title),
-        body = body?.let { stringResource(it) },
-        primaryLabel = stringResource(if (state.saveFailed) R.string.wallet_try_again else R.string.wallet_done),
-        onPrimary = if (state.saveFailed) actions.onSaveAgain else actions.onBack,
+        body = doneBody(state)?.let { stringResource(it) },
+        primaryLabel = stringResource(if (again) R.string.wallet_try_again else R.string.wallet_done),
+        onPrimary = if (state.saveFailed) actions.onSaveAgain else if (state.capsFailed) actions.onRetryCaps else actions.onBack,
         busy = state.busy,
-        secondaryLabel = if (state.saveFailed) stringResource(R.string.wallet_done) else null,
+        secondaryLabel = if (again) stringResource(R.string.wallet_done) else null,
         onSecondary = actions.onBack,
         modifier = modifier.testTag("wallet_backup_done"),
     ) {}
 }
 
+/** New wallet, first step: the name and the network; the limits step and the password follow. */
 @Composable
 private fun NewWalletForm(state: BackupUiState, actions: BackupActions, modifier: Modifier) {
+    FormScaffold(
+        title = stringResource(R.string.wallet_new_title),
+        primaryLabel = stringResource(R.string.wallet_continue),
+        onPrimary = actions.onNext,
+        primaryEnabled = state.nameValid && state.network != null,
+        busy = state.busy,
+        onBack = actions.onBack,
+        modifier = modifier.testTag("wallet_new_form"),
+    ) {
+        NameAndNetwork(state.name, state.nameProblem, state.network, state.networks, actions.onName, actions.onNetwork)
+    }
+}
+
+/** New wallet, last step: the password, and the wallet is created (without limits; the ones chosen follow the phrase check). */
+@Composable
+private fun CreateStep(state: BackupUiState, actions: BackupActions, modifier: Modifier) {
     FormScaffold(
         title = stringResource(R.string.wallet_new_title),
         body = stringResource(R.string.wallet_password_body),
@@ -242,41 +321,9 @@ private fun NewWalletForm(state: BackupUiState, actions: BackupActions, modifier
         onPrimary = actions.onCreate,
         primaryEnabled = state.nameValid && state.network != null && state.password.isNotEmpty(),
         busy = state.busy,
-        onBack = actions.onBack,
-        modifier = modifier.testTag("wallet_new_form"),
+        onBack = actions.onPrevious,
+        modifier = modifier.testTag("wallet_new_password"),
     ) {
-        OutlinedTextField(
-            value = state.name,
-            onValueChange = actions.onName,
-            label = { Text(stringResource(R.string.wallet_name_label)) },
-            isError = state.nameProblem != null,
-            supportingText = state.nameProblem?.let { p ->
-                {
-                    Text(
-                        stringResource(
-                            when (p) {
-                                WalletNames.Problem.BLANK -> R.string.wallet_name_blank
-                                WalletNames.Problem.TOO_LONG -> R.string.wallet_name_too_long
-                                WalletNames.Problem.CONTROL -> R.string.wallet_name_control
-                            },
-                        ),
-                    )
-                }
-            },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("wallet_name"),
-        )
-        Text(stringResource(R.string.wallet_network_label), style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-            for (n in state.networks) {
-                FilterChip(
-                    selected = n == state.network,
-                    onClick = { actions.onNetwork(n) },
-                    label = { Text(networkLabel(n).orEmpty()) },
-                    modifier = Modifier.testTag("wallet_network_${n.vaultName}"),
-                )
-            }
-        }
         Password(state, actions)
     }
 }
@@ -290,9 +337,10 @@ private fun Password(state: BackupUiState, actions: BackupActions) {
         error = when (state.problem) {
             BackupProblem.LIMIT -> stringResource(R.string.wallet_limit)
             BackupProblem.PIN_REQUIRED -> null
-            null -> state.error?.let { stringResource(it.messageRes()) }
+            // A wrong PIN is shown on the PIN field.
+            null -> state.error?.takeIf { it != FailureKind.BAD_PIN }?.let { stringResource(it.messageRes()) }
         },
-        onImeAction = { if (state.step == BackupStep.FORM) actions.onCreate() else actions.onReveal() },
+        onImeAction = { if (state.step == BackupStep.CREATE) actions.onCreate() else actions.onReveal() },
         modifier = Modifier.fillMaxWidth().testTag("wallet_password"),
     )
 }
@@ -434,7 +482,7 @@ private object NoTextToolbar : TextToolbar {
  * autofill, so the hold is on its parent).
  */
 @Composable
-private fun HiddenFromCapture() {
+internal fun HiddenFromCapture() {
     ExcludeScreenFromAutofill()
     val view = LocalView.current
     val capture = LocalContext.current.getSystemService(ContentCaptureManager::class.java)

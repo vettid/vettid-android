@@ -315,13 +315,17 @@ class BackupViewModelTest {
         assertEquals("", back.state.value.password)
     }
     @Test
-    fun aWalletWithASpendingLimitOffersNoRevealYet() = runTest {
+    fun aWalletWithASpendingLimitSendsNothingUntilThePinIsTyped() = runTest {
         ops.wallets["01CAPPED00000000000000000A"] = ops.wallet("01CAPPED00000000000000000A").copy(capped = true)
         val vm = vm(SavedStateHandle(mapOf("walletId" to "01CAPPED00000000000000000A")))
         assertTrue(vm.state.value.capped)
         vm.setPassword("pw")
         vm.reveal()
         assertFalse(vm.state.value.busy)
+        assertFalse(ops.calls.any { it.startsWith("reveal:") })
+        // A PIN too short for the vault's 6 to 32 digits is not sent either.
+        vm.setPin("12345")
+        vm.reveal()
         assertFalse(ops.calls.any { it.startsWith("reveal:") })
     }
 

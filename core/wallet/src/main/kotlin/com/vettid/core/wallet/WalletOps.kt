@@ -55,6 +55,7 @@ class RevealedPhrase(private val chars: CharArray, private val pass: CharArray? 
 }
 
 /** The vault side of the wallet (VAULT-MESSAGING §10.18), behind an interface for the manager's tests. */
+@Suppress("TooManyFunctions")
 interface WalletOps {
     suspend fun list(): List<VaultWallet>
 
@@ -101,6 +102,7 @@ interface WalletOps {
 }
 
 /** [WalletOps] over the open vault's client. */
+@Suppress("TooManyFunctions")
 class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     override suspend fun list(): List<VaultWallet> = WalletWire.wallets(api().walletList())
 

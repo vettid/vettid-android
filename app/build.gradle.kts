@@ -851,7 +851,7 @@ val callsMarkers = listOf(
  */
 val walletMarkers = listOf(
     "wallet.list", "wallet.get", "wallet.update", "wallet.address.new", "wallet.address.list", "wallet.address.used",
-    "wallet.caps.set", "wallet.caps.raise", "vettid_wallet_screens",
+    "wallet.caps.set", "vettid_wallet_screens",
 )
 
 /**
@@ -859,7 +859,7 @@ val walletMarkers = listOf(
  * the ones the app reaches (R8 removes the rest). W1c-1 reaches `wallet.list` (the list read while the vault is open). W1c-2a's
  * screens add `wallet.create`, which is in neither list: the check matches substrings, and History's `wallet.created` label (which
  * stays in release) contains it; `Lcom/vettid/feature/wallet/` in the DEX check covers those screens. W1c-2b's screens reach
- * `wallet.update` (the receiving address type) and the address requests (Receive, the look-up), and `wallet.get` (the wallet is read again after this phone issued or marked addresses). W1d's screens reach `wallet.caps.set` (the limits chosen at creation or import); `wallet.caps.raise` has no screen yet, so R8 removes it and it is in `walletMarkers` only.
+ * `wallet.update` (the receiving address type) and the address requests (Receive, the look-up), and `wallet.get` (the wallet is read again after this phone issued or marked addresses). W1d's screens reach `wallet.caps.set` (the limits chosen at creation or import); `wallet.caps.raise` is not a marker: `Guard.kt` (in every build) already names it among the credential operations that count a failed check.
  * `vettid_wallet_screens` is the screens' own marker (`WALLET_SCREENS_MARKER` in :feature:wallet, the list's test tag): R8 keeps the
  * string whatever it renames.
  */

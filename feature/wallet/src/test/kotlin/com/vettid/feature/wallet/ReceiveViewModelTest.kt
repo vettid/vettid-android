@@ -179,4 +179,24 @@ class ReceiveViewModelTest {
         eventually { vm.state.value.closed }
         assertFalse(vm.state.value.toString().contains("tb1"))
     }
+
+    @Test
+    fun aPendingLimitHoldsReceiveBackUntilItIsSet() = runTest {
+        ops.wallet(id)
+        // The limit chosen at creation was never sent (a restart, a failed send): it is first in line, and fails again.
+        WalletFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(500_000, null))
+        ops.capsSetFails = "internal"
+        val vm = vm()
+        eventually { vm.state.value.problem == ReceiveProblem.CAPS_PENDING }
+        assertNull(vm.state.value.address)
+        assertTrue(ops.calls.none { it == "new" })
+        assertTrue(ops.calls.none { it.startsWith("caps.raise") })
+        // Try again with the vault back: the set goes first, then the address.
+        ops.capsSetFails = null
+        vm.load()
+        eventually { vm.state.value.address != null }
+        assertNull(vm.state.value.problem)
+        assertEquals("caps.set:500000:null", ops.calls.first { it.startsWith("caps.") })
+        assertTrue(ops.calls.indexOf("caps.set:500000:null") < ops.calls.indexOf("new"))
+    }
 }

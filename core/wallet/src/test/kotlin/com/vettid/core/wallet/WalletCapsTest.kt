@@ -35,7 +35,6 @@ class WalletCapsTest {
         }
     }
     private val caps = WalletCaps(500_000, 2_000_000)
-    private val receive = AddressChain("p2tr", false)
 
     private fun manager() = WalletsManager(
         CoroutineScope(SupervisorJob() + Dispatchers.Default),
@@ -45,8 +44,6 @@ class WalletCapsTest {
         { it == Network.SIGNET || it == Network.TESTNET4 },
         { Instant.parse("2026-10-31T20:00:00Z") },
     )
-
-    private suspend fun accessible(m: WalletsManager, id: String) = m.receiveAddress(id)
 
     // The rules
 

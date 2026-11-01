@@ -498,6 +498,7 @@ class WalletsManager(
     }
 
     /** The wallet's new version after `wallet.caps.set`; null when the wallet already has limits as strict as [caps]. */
+    @Suppress("ThrowsCount", "NestedBlockDepth")
     private suspend fun sendPending(walletId: String, caps: WalletCaps, g: Long): Long? {
         var reloaded = false
         while (true) {
@@ -514,6 +515,8 @@ class WalletsManager(
             }
         }
     }
+
+    private fun noWallet(): Nothing = throw VaultFailure(FailureKind.OTHER, "no_wallet")
 
     private suspend fun sendCaps(walletId: String, caps: WalletCaps, g: Long): Long {
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
@@ -558,14 +561,13 @@ class WalletsManager(
         val g = gen()
         val caps = WalletCaps(perTx, perPeriod)
         val send = suspend {
-            val w = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
+            val w = walletsFlow.value.firstOrNull { it.id == walletId } ?: noWallet()
             vaultGuard { ops().capsSet(walletId, w.version, perTx, perPeriod) }
         }
         val version = try {
             send()
         } catch (e: VaultFailure) {
-            if (e.kind != FailureKind.CONFLICT) throw e
-            reload(walletId, g)
+            if (e.kind == FailureKind.CONFLICT) reload(walletId, g)
             throw e
         }
         publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }

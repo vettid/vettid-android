@@ -32,6 +32,7 @@ interface WalletFlagsFile {
  * Read from the file every time, nothing kept in memory. A write is refused when a wipe began
  * after the operation started ([generation] moved), so that a write in flight cannot bring the file back after it was erased.
  */
+@Suppress("TooManyFunctions")
 class WalletFlags(private val file: WalletFlagsFile, private val generation: () -> Long = { 0 }) {
     private val lock = Mutex()
 
@@ -118,7 +119,7 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         }
     }
 
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     private fun decode(bytes: ByteArray): Flags? {
         val o = Json.parseToJsonElement(bytes.decodeToString()) as? JsonObject ?: return null
         if ((o["version"] as? JsonPrimitive)?.intOrNull != VERSION) return null

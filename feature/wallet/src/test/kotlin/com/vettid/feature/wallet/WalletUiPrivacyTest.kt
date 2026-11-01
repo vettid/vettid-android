@@ -24,6 +24,12 @@ class WalletUiPrivacyTest {
             ReceiveUiState(loading = false, address = com.vettid.core.wallet.WalletAddress("orbit1address", "p2tr", 0, false, false), amountText = "4242"),
             ChainServerUiState(Network.SIGNET, com.vettid.core.chain.ChainServer.NotSet, text = "https://orbit.example/maple"),
             WalletDetailsUiState(loaded = true, fingerprint = "orbit", accounts = listOf(AccountDetails("p2tr", "orbit", "maple", "orb"))),
+            ImportUiState(
+                typed = "orbit maple", passphrase = "hunter2", password = "hunter2", name = "Savings",
+                status = PhraseStatus(2, null, true), limits = LimitsForm(true, "4242", "9999"),
+            ),
+            LimitsForm(true, "4242", "9999"),
+            BackupUiState(BackupStep.LIMITS, name = "Savings", pin = "424242", limits = LimitsForm(true, "4242", "9999")),
             BackupUiState(BackupStep.CHECK, name = "Savings", password = "hunter2", words = PhraseWords(listOf("orbit".toCharArray(), "maple".toCharArray())), typed = "orb", candidates = listOf(1)),
         )
         for (v in values) {
@@ -34,7 +40,7 @@ class WalletUiPrivacyTest {
     @Test
     fun theModuleHasNoLoggingCallAndKeepsNothingInSavedState() {
         val sources = File("src/main/kotlin").walkTopDown().filter { it.extension == "kt" }.toList()
-        assertTrue(sources.size >= 9)
+        assertTrue(sources.size >= 11)
         val banned = listOf(
             "android.util.Log", "Log.", "println(", "printStackTrace", "Timber", "System.out", "System.err",
             "java.util.logging", "Logger", "stackTraceToString", "rememberSaveable", "saved[", "saved.set", "getStateFlow",

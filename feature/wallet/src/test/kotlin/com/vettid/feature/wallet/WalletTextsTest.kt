@@ -57,6 +57,17 @@ class WalletTextsTest {
             R.string.wallet_new_address to "New address",
             R.string.wallet_server_use_own to "Use my own server",
             R.string.wallet_server_reset to "Reset to default",
+            // Spending limits and Import (W1d): the plan's Texts (drafts), the screens table and the 0.1.74 spending limits.
+            R.string.wallet_limits_title to "Set a spending limit?",
+            R.string.wallet_limits_body to "Your vault will refuse any payment above it. You can lower it any time; raising it needs your PIN and password.",
+            R.string.wallet_limits_none to "No limit",
+            R.string.wallet_limit_per_tx to "Most per payment",
+            R.string.wallet_limit_per_period to "Most in any 24 hours",
+            R.string.wallet_pin_too to "To protect your spending limit, enter your PIN too.",
+            R.string.wallet_import to "Import a wallet",
+            R.string.wallet_import_invalid to "These words aren't a valid recovery phrase. Check each word and the order.",
+            R.string.wallet_import_advanced to "Advanced",
+            R.string.wallet_import_passphrase_note to "Only if you set one when the wallet was made. Letters, digits and symbols from a standard keyboard only.",
         )
         for ((res, text) in drafts) assertEquals(text, r.getString(res))
         assertEquals("Which is word 4?", r.getString(R.string.wallet_check_which, 4))

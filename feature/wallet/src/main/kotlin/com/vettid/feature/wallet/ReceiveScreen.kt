@@ -62,13 +62,15 @@ fun ReceiveScreen(state: ReceiveUiState, actions: ReceiveActions, modifier: Modi
             title = title,
             body = stringResource(
                 when {
+                    state.problem == ReceiveProblem.CAPS_PENDING -> R.string.wallet_receive_caps_pending
                     state.problem == ReceiveProblem.MISMATCH -> R.string.wallet_address_mismatch
                     state.network == com.vettid.core.chain.Network.TESTNET -> R.string.wallet_testnet3_unsupported
                     else -> R.string.wallet_network_not_offered
                 },
             ),
-            primaryLabel = null,
-            onPrimary = {},
+            // The limit chosen is sent again from here; the other problems have no way out on this screen.
+            primaryLabel = if (state.problem == ReceiveProblem.CAPS_PENDING) stringResource(R.string.wallet_try_again) else null,
+            onPrimary = actions.onRetry,
             onBack = actions.onBack,
             modifier = modifier.testTag("wallet_receive_problem"),
         ) {}

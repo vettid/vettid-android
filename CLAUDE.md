@@ -237,6 +237,25 @@ The A2 exit test:
   `wallet.chain_server_bad_url`, `wallet.chain_server_not_https`, `wallet.chain_server_credentials`, `wallet.chain_server_query`,
   `wallet.chain_server_failed`, `wallet.chain_server_wrong_network`, `wallet.chain_server_not_written`, `wallet.details`
   (`WalletCatalog.kt`).
+  W1d (spending limits at creation, import; VAULT-MESSAGING §10.18 0.56.0): `WalletApi.kt` adds `walletCapsSet` (a normal op, a null
+  member absent), `walletCapsRaise` (a credential operation, sealed `{pin, password, item_id, payload_sha256}`; the hash is
+  `WalletCapsBinding`, tested against the §16 vector, a mismatch is a stop-and-report item), `wallet.create{item}` (`WalletImport`) and
+  `item.reveal{pin}`; the names are in `walletMarkers`. `Bip39` in `:core:chain` (bitcoin-kmp's list and checksum). The limits chosen at
+  creation are **pending per `wallet_id` in `WalletFlags`** (`pending_caps`, optional so old files read): the wallet is created without
+  caps, the phrase shown and checked, and only then `wallet.caps.set` is sent (`settleCaps`); after a restart `open()` sends it first,
+  and until it is set the wallet has no Receive (`capsPending`, `ReceiveResult.CapsPending`) and nothing else is asked of it before the
+  send. **Fail secure**: the pending retry only ever sends `wallet.caps.set`; `raiseCaps` (PIN and password, one credential operation)
+  changes nothing here until the vault answers `ok`, and a `conflict` is not retried with the typed secrets. Screens: "Set a spending
+  limit?" after the name and network for New wallet and Import (`LimitsForm`, `LimitsInput`: sats with a thousands separator, a toggle
+  to BTC, "No limit" the default, nothing suggested), **Import a wallet** from the list's floating button (`ImportWalletRoute`, popped
+  like `NewWalletRoute`; `ImportViewModel`: words checked against the BIP39 list as typed and the checksum before anything is sent,
+  passphrase behind "Advanced", words in `CharArray`s, `SecureWindow`, password class with no learning, no saved state), and the PIN
+  field beside the password for the phrase of a capped wallet. Catalog adds `wallet.new_limits`, `wallet.new_limits_set`,
+  `wallet.new_limits_btc`, `wallet.new_limits_bad`, `wallet.new_password`, `wallet.password_bad_pin`, `wallet.done_caps_failed`,
+  `wallet.import`, `wallet.import_words`, `wallet.import_unknown_word`, `wallet.import_invalid`, `wallet.import_advanced`,
+  `wallet.import_bad_passphrase`, `wallet.import_limits`, `wallet.import_password`, `wallet.import_exists`,
+  `wallet.import_done_caps_failed`, `wallet.receive_caps_pending`, `wallet.detail_caps_pending`. The Spending limits screen (lower,
+  raise or remove) and the review of a send are later.
 
 ## Device testing
 
