@@ -84,6 +84,7 @@ data class AuditRecord(
         val ITEM_REF_KINDS = setOf(
             "item.added", "item.updated", "item.deleted", "item.sensitivity_changed", "item.revealed",
             "share.included", "share.declined", "share.withdrawn", "wallet.created", "wallet.deleted", "wallet.address_issued",
+            "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised",
         )
     }
 }

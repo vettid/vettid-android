@@ -3,6 +3,7 @@ package com.vettid.app.ui
 import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.History
@@ -17,6 +18,7 @@ import com.vettid.feature.approvals.ApprovalsRoute
 import com.vettid.feature.connections.ConnectionsRoute
 import com.vettid.feature.devices.DevicesRoute
 import com.vettid.feature.history.HistoryRoute
+import com.vettid.core.data.wallet.WalletRoute
 import com.vettid.feature.items.ItemsRoute
 import com.vettid.feature.messages.MessagesRoute
 import com.vettid.feature.settings.HelpRoute
@@ -39,6 +41,9 @@ enum class TopLevelDestination(
     Votes(VotesRoute, Icons.Outlined.HowToVote, R.string.nav_votes, group = 0),
     // "Vault" in the UI (owner feedback 2026-10-07); the code keeps the Items names.
     Items(ItemsRoute, Icons.Outlined.Inventory2, R.string.nav_items, group = 1),
+    // Bitcoin wallets (ANDROID-PLAN §4 "Wallet"): after Vault (Items). Shown while the vault is open unless it answered that it has
+    // no wallets (`WalletAccess.shown`); never in a build without the wallet (`NoWalletAccess`).
+    Wallet(WalletRoute, Icons.Outlined.AccountBalanceWallet, R.string.nav_wallet, group = 1),
     // Paired agents and desktops (ANDROID-PLAN 0.1.53 AA1, decision 13): after Vault, before History. No badge: what a
     // device asks for waits in Approvals.
     Devices(DevicesRoute, Icons.Outlined.Devices, R.string.nav_devices, group = 1),

@@ -189,7 +189,7 @@ internal fun HistoryContent(
         onBack = onBack,
         actions = HistoryActions(
             // ANDROID-PLAN 0.1.17: exactly what the list shows (its category, connection, dates and search).
-            onExport = { exportVm.start(ExportContext(state.filter, state.connectionNames, state.itemNames)) },
+            onExport = { exportVm.start(ExportContext(state.filter, state.connectionNames, state.itemNames, state.walletItems)) },
             onOpen = { host.navigate(HistoryEntryRoute(it)) },
             onQuery = vm::setQuery,
             onCategory = vm::setCategory,
@@ -576,7 +576,8 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("history_list")) {
         items(state.shown, key = { it.seq }) { e ->
-            EntryRow(e, RowNames(state.connectionNames, state.itemNames, state.deviceNames, state.voteTitles), actions.onOpen)
+            val names = RowNames(state.connectionNames, state.itemNames, state.deviceNames, state.voteTitles, state.walletItems)
+            EntryRow(e, names, actions.onOpen)
         }
         item(key = "footer") {
             Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.l), contentAlignment = Alignment.Center) {
@@ -614,6 +615,7 @@ private data class RowNames(
     val items: Map<String, String>,
     val devices: Map<String, String>?,
     val votes: Map<String, String> = emptyMap(),
+    val walletItems: Set<String> = emptySet(),
 )
 
 @Composable
@@ -643,6 +645,7 @@ private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
                 device,
                 itemName,
                 AuditKinds.voteOf(e.kind, e.ref)?.let { names.votes[VoteTitles.key(e.connectionId, it)] }?.ifEmpty { null },
+                wallet = AuditKinds.itemOf(e.kind, e.ref) in names.walletItems,
             ),
         ),
         supporting = HistoryDevice.supporting(listOf(item, connection, device), stringResource(AuditKinds.categoryLabel(e.category))),
