@@ -568,6 +568,11 @@ class VaultManager(
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
     private val phaseFlow = PhaseHolder(AppPhase.Starting)
 
+    /** A lock not made here, and the phases published after vault calls (#242): [PhaseGate]. */
+    private val phaseGate by lazy {
+        PhaseGate(phaseFlow, { generation }, { record.bumpGeneration() }, { lockGuard.lockedWhatever(unlocked = true) })
+    }
+
     /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") The re-reads of the status after `device.unlinked{vault_deleted}`,
      * through the member API alone (the app key, kept until the vault is gone): no session is opened meanwhile.
@@ -806,7 +811,7 @@ class VaultManager(
     /** Refused deposits to the vault: the open app goes to the unlock screen (never a wipe, [RefusalWatch]). */
     private val refusals = RefusalWatch {
         windowFlow.value = null
-        phaseFlow.value = AppPhase.Locked
+        phaseGate.refused()
     }
     override val refusedByVault: StateFlow<Boolean> = refusals.suspected
 
@@ -1522,10 +1527,8 @@ class VaultManager(
 
     private fun lockedByNotice() {
         windowFlow.value = null
-        val p = phaseFlow.value
-        if (p is AppPhase.Unlocked || p is AppPhase.Setup) {
-            phaseFlow.value = AppPhase.Locked
-        } else if (waking.get() > 0 && !lockedHere && p !is AppPhase.SignedOut) {
+        if (phaseGate.lockedByVault()) return
+        if (waking.get() > 0 && !lockedHere && phaseFlow.value !is AppPhase.SignedOut) {
             // A process started by the lock's own wake (§14.2 trigger 3) never saw the vault open: the notice is live
             // (ephemeral, 60 s) and not this phone's lock, which sends no wake.
             lockedElsewhereFlow.value = true
@@ -1977,6 +1980,8 @@ class VaultManager(
         onStep: (EnrollStep) -> Unit,
         pin: String?,
     ) = guard {
+        // Read before the vault's calls: a lock, a refusal or a wipe from here on keeps the phase it published.
+        val gen = generation
         val s = session()
         if (s.device.deviceId == null) {
             onStep(EnrollStep.HANDSHAKE)
@@ -1988,7 +1993,16 @@ class VaultManager(
         setSetting(s, KEY_BACKUP, JsonPrimitive(backup))
         onStep(EnrollStep.CONFIRM)
         s.openApi.enrollConfirm()
-        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        publishFinishing(gen)
+    }
+
+    /**
+     * FINISHING after setup steps that suspend (the end of enrolment, a recovered credential, a transfer to this phone):
+     * not over what a lock, a refusal or a wipe since [gen] published, nor while a lock is pending (#242). FinishSetupGate
+     * would otherwise open the app from it over a locked vault.
+     */
+    private fun publishFinishing(gen: Int) {
+        phaseGate.publishAfter(gen, AppPhase.Setup(SetupStage.FINISHING))
     }
 
     /**
@@ -2028,7 +2042,7 @@ class VaultManager(
         io { updateLocal(rec) { it.copy(setupComplete = true, movedIn = false) } }
         // Both checks after the write, which suspends: the generation (a lock or a wipe meanwhile) and the guard (a lock
         // pending now), with the publish as one step (#242).
-        return phaseFlow.setIf(AppPhase.Unlocked) { gen == generation && !lockGuard.lockedWhatever(unlocked = true) }
+        return phaseGate.publishAfter(gen, AppPhase.Unlocked)
     }
 
     override suspend fun preflight(): PreflightInfo {
@@ -2252,7 +2266,7 @@ class VaultManager(
             val p = afterUnlocked(s)
             // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now),
             // with the publish as one step (#242).
-            phaseFlow.setIf(p) { gen == generation && !lockGuard.lockedWhatever(unlocked = true) }
+            phaseGate.publishAfter(gen, p)
         }
         try {
             if (before == null) {
@@ -3963,6 +3977,8 @@ class VaultManager(
     }
 
     override suspend fun recoverCredential(password: String): RecoverOutcome = guard {
+        // Read before the vault's call: a lock, a refusal or a wipe from here on keeps the phase it published.
+        val gen = generation
         val s = session()
         val outcome = try {
             s.openApi.credentialRecover(password)
@@ -3975,7 +3991,7 @@ class VaultManager(
                 else -> throw e
             }
         }
-        if (outcome == RecoverOutcome.RECOVERED) phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        if (outcome == RecoverOutcome.RECOVERED) publishFinishing(gen)
         outcome
     }
 
@@ -4045,6 +4061,8 @@ class VaultManager(
      * which the vault would answer `exists`).
      */
     private suspend fun completeTransferIn(s: Session, rec: Int, guid: String?): Boolean = transferInLock.withLock {
+        // Read before the vault's calls: a lock, a refusal or a wipe from here on keeps the phase it published.
+        val gen = generation
         if (s.device.transferInPending == null && s.device.credentialVersion != null) return@withLock guid != null
         // §6.7.1 (0.17.0): the member's user_guid from device.paired, kept as an enrolled phone keeps the redeem's, so
         // that this phone unlocks later (§11.4). A vault release before 0.17.0 sends none: the transfer is still
@@ -4063,7 +4081,7 @@ class VaultManager(
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.openApi.credentialTakeOver()
         s.device.finishTransferIn()
-        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        publishFinishing(gen)
         guid != null
     }
 
