@@ -45,6 +45,12 @@ data class WalletDetailUiState(
     /** The receiving account's type, `p2tr` or `p2wpkh`. */
     val addressType: String = AddressTypes.TAPROOT,
     val backedUp: Boolean = true,
+    /** The spending limit the member chose is not set yet (W1d): Receive is not offered until it is. */
+    val capsPending: Boolean = false,
+    /** This phone cannot read its wallet settings: no wallet is known to be free of a limit to set, so none has Receive. */
+    val settingsUnreadable: Boolean = false,
+    /** The wallet has a spending limit (`wallet.list`): its recovery phrase needs the PIN too. */
+    val capped: Boolean = false,
     /** The chain server's privacy note is to be acknowledged before the wallet's first look-up. */
     val noteNeeded: Boolean = false,
     /** The chain server this wallet's network uses now (its host), named on the privacy note; null when none is set. */
@@ -102,14 +108,21 @@ class WalletDetailViewModel @Inject constructor(
         val last: WalletLookup?,
         val network: Network?,
         val backedUp: Boolean,
+        val capsPending: Boolean,
+        val settingsUnreadable: Boolean,
     )
 
     init {
         viewModelScope.launch {
-            combine(wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged) { list, availability, lookups, _ ->
-                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId])
-            }.mapLatest { (w, availability, last) ->
-                Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId))
+            combine(
+                wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged, wallets.capsPending,
+            ) { list, availability, lookups, _, pending ->
+                val here = WalletsManager.isPending(pending, walletId) to (WalletsManager.UNKNOWN in pending)
+                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId]) to here
+            }.mapLatest { (seen, flagsState) ->
+                val (pending, unreadable) = flagsState
+                val (w, availability, last) = seen
+                Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId), pending, unreadable)
             }.collect { show(it) }
         }
     }
@@ -125,7 +138,7 @@ class WalletDetailViewModel @Inject constructor(
         mutable.update {
             it.copy(
                 loaded = true, name = w.name, network = s.network, addressType = w.addressType, backedUp = s.backedUp,
-                last = s.last ?: it.last,
+                capsPending = s.capsPending, settingsUnreadable = s.settingsUnreadable, capped = w.capped, last = s.last ?: it.last,
             )
         }
         if (!started) {
@@ -226,6 +239,18 @@ class WalletDetailViewModel @Inject constructor(
             val kept = wallets.setTestNetwork(walletId, network)
             mutable.update { it.copy(networkSaveFailed = !kept, askNetwork = !kept && it.askNetwork) }
             if (kept) lookUp()
+        }
+    }
+
+    /** "Try again" on the note that Receive is off: the pending `wallet.caps.set`, and nothing else. */
+    fun retryCaps() {
+        if (!mutable.value.capsPending || !mutable.value.idle) return
+        viewModelScope.launch {
+            try {
+                wallets.settleCaps(walletId)
+            } catch (_: VaultFailure) {
+                // It stays pending; the note stays.
+            }
         }
     }
 

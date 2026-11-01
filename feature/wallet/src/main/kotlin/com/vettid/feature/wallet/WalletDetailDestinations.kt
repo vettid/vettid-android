@@ -40,6 +40,7 @@ private fun DetailDestination(host: WalletHost, leave: () -> Unit) {
             onRefresh = vm::refresh,
             onReceive = { host.navigate(ReceiveRoute(id)) },
             onBackUp = { host.navigate(BackupRoute(id)) },
+            onRetryCaps = vm::retryCaps,
             onAcknowledge = vm::acknowledgeNote,
             onChooseNetwork = vm::chooseTestNetwork,
             onChainServer = { state.network?.let { host.navigate(ChainServerRoute(it.vaultName)) } },

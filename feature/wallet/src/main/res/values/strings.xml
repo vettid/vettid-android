@@ -32,7 +32,49 @@
     <string name="wallet_create">Create wallet</string> <!-- new -->
     <string name="wallet_created_reveal_failed">Your wallet was created, but its recovery phrase couldn\'t be shown. Tap it in your wallets to back it up.</string> <!-- new -->
     <string name="wallet_limit">Your vault holds 16 wallets, the most it can.</string> <!-- screens table -->
-    <string name="wallet_pin_required">This wallet has a spending limit, so showing its recovery phrase needs your PIN too. That comes in a later version of the app.</string> <!-- new -->
+
+    <!-- Spending limits at creation and import (W1d; ANDROID-PLAN §4 "Spending limits") -->
+    <string name="wallet_limits_title">Set a spending limit?</string> <!-- draft -->
+    <string name="wallet_limits_body">Your vault will refuse any payment above it. You can lower it any time; raising it needs your PIN and password.</string> <!-- draft -->
+    <string name="wallet_limits_none">No limit</string> <!-- draft -->
+    <string name="wallet_limits_set">Set a limit</string> <!-- new: the other choice beside "No limit" -->
+    <string name="wallet_limit_per_tx">Most per payment</string> <!-- draft -->
+    <string name="wallet_limit_per_period">Most in any 24 hours</string> <!-- draft -->
+    <string name="wallet_unit_sats">sats</string> <!-- new -->
+    <string name="wallet_unit_btc">BTC</string> <!-- new -->
+    <string name="wallet_limits_show_btc">Show in BTC</string> <!-- new: the toggle ("a toggle shows BTC") -->
+    <string name="wallet_limits_show_sats">Show in sats</string> <!-- new -->
+    <string name="wallet_limit_out_of_range">Enter an amount from 1 sat to %1$s sats.</string> <!-- new -->
+    <string name="wallet_limit_order">Most per payment can\'t be more than the most in any 24 hours.</string> <!-- new -->
+    <string name="wallet_limit_need_one">Enter at least one limit, or choose No limit.</string> <!-- new -->
+    <string name="wallet_caps_not_set">Your spending limit isn\'t set yet. Receiving stays off until it is.</string> <!-- new -->
+    <string name="wallet_caps_not_saved">This phone couldn\'t save your spending limit, so it is kept only until the app closes or your vault locks. Finish setting it up now.</string> <!-- new -->
+    <string name="wallet_caps_unsupported">Your vault can\'t enforce spending limits yet, so this wallet has none. You can set one once your vault is updated.</string> <!-- new -->
+    <string name="wallet_settings_unreadable">This phone can\'t read its wallet settings. Receiving is off until it can.</string> <!-- new -->
+    <string name="wallet_receive_caps_pending">Receiving is off until your spending limit is set.</string> <!-- new -->
+
+    <!-- The phrase of a wallet with a spending limit -->
+    <string name="wallet_pin_too">To protect your spending limit, enter your PIN too.</string> <!-- draft -->
+    <string name="wallet_pin_label">PIN</string> <!-- new -->
+
+    <!-- Import a wallet -->
+    <string name="wallet_add">Add a wallet</string> <!-- new: the floating button's description -->
+    <string name="wallet_import">Import a wallet</string> <!-- screens table -->
+    <string name="wallet_import_words_hint">Type or paste the 12, 15, 18, 21 or 24 words, in order.</string> <!-- new -->
+    <plurals name="wallet_import_count"> <!-- new -->
+        <item quantity="one">%1$d word</item>
+        <item quantity="other">%1$d words</item>
+    </plurals>
+    <string name="wallet_import_unknown_word">Word %1$d isn\'t in the recovery word list.</string> <!-- new -->
+    <string name="wallet_import_invalid">These words aren\'t a valid recovery phrase. Check each word and the order.</string> <!-- draft -->
+    <string name="wallet_import_advanced">Advanced</string> <!-- screens table -->
+    <string name="wallet_import_passphrase_note">Only if you set one when the wallet was made. Letters, digits and symbols from a standard keyboard only.</string> <!-- screens table -->
+    <string name="wallet_import_passphrase_bad">Use only letters, digits and symbols from a standard keyboard, up to 256 characters.</string> <!-- new -->
+    <string name="wallet_import_action">Import wallet</string> <!-- new -->
+    <string name="wallet_import_exists">This wallet is already in your vault.</string> <!-- new -->
+    <string name="wallet_import_not_recorded">This phone couldn\'t record the wallet as backed up, so it may show Not backed up. You can check the words again from its row.</string> <!-- new -->
+    <string name="wallet_imported">Wallet imported</string> <!-- new -->
+    <string name="wallet_open">Open wallet</string> <!-- new -->
 
     <!-- Recovery phrase and check -->
     <string name="wallet_phrase_title">Recovery phrase</string> <!-- screens table -->

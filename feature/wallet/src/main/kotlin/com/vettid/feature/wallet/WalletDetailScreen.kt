@@ -59,6 +59,7 @@ data class WalletDetailActions(
     val onRefresh: () -> Unit = {},
     val onReceive: () -> Unit = {},
     val onBackUp: () -> Unit = {},
+    val onRetryCaps: () -> Unit = {},
     val onAcknowledge: () -> Unit = {},
     val onChooseNetwork: (Network) -> Unit = {},
     val onChainServer: () -> Unit = {},
@@ -166,11 +167,22 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
         Balance(state)
         LookupProblem(state, actions)
     }
+    // The spending limit chosen is sent first: no Receive until it is set.
+    if (state.capsPending) {
+        Text(
+            stringResource(if (state.settingsUnreadable) R.string.wallet_settings_unreadable else R.string.wallet_receive_caps_pending),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("wallet_caps_pending"),
+        )
+        TextButton(onClick = actions.onRetryCaps, modifier = Modifier.testTag("wallet_caps_retry")) {
+            Text(stringResource(R.string.wallet_try_again))
+        }
+    }
     PrimaryButton(
         stringResource(R.string.wallet_receive),
         actions.onReceive,
         Modifier.testTag("wallet_receive"),
-        enabled = state.lookup != LookupResult.AddressMismatch,
+        enabled = state.lookup != LookupResult.AddressMismatch && !state.capsPending,
     )
 }
 

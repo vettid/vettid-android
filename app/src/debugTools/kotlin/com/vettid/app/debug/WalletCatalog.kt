@@ -34,6 +34,13 @@ import com.vettid.feature.wallet.ChainServerActions
 import com.vettid.feature.wallet.ChainServerScreen
 import com.vettid.feature.wallet.ChainServerUiState
 import com.vettid.feature.wallet.DeleteStep
+import com.vettid.feature.wallet.ImportActions
+import com.vettid.feature.wallet.ImportProblem
+import com.vettid.feature.wallet.ImportScreen
+import com.vettid.feature.wallet.ImportStep
+import com.vettid.feature.wallet.ImportUiState
+import com.vettid.feature.wallet.LimitsForm
+import com.vettid.feature.wallet.PhraseInput
 import com.vettid.feature.wallet.PhraseWords
 import com.vettid.feature.wallet.ReceiveActions
 import com.vettid.feature.wallet.ReceiveProblem
@@ -84,6 +91,19 @@ internal object WalletCatalog {
     @Composable
     private fun Backup(state: BackupUiState) = BackupScreen(state, BackupActions())
 
+    /** A public BIP39 test phrase (not a wallet of anyone). */
+    private const val IMPORT_WORDS = "legal winner thank year wave sausage worth useful legal winner thank yellow"
+
+    private val importForm = ImportUiState(
+        networks = listOf(Network.SIGNET, Network.TESTNET4), network = Network.SIGNET, name = "Old wallet",
+        typed = IMPORT_WORDS, status = PhraseInput.analyse(IMPORT_WORDS),
+    )
+    private val someLimits = LimitsForm(limit = true, perTx = "500000", perPeriod = "2000000")
+
+    // Not secure here: the catalog is screenshotted.
+    @Composable
+    private fun Import(state: ImportUiState) = ImportScreen(state, ImportActions(), secure = false)
+
     private val credential = CredentialStatus(true, 7, "Jk4m2Qx9TzA1", "2026-10-04T14:12:00Z", null, true, 300, 3)
 
     private val lookup = WalletLookup(Instant.parse("2026-10-31T20:00:00Z"), "mempool.space", 123_000, 0, emptySet())
@@ -111,12 +131,24 @@ internal object WalletCatalog {
         "wallet" to { WalletsScreen(WalletsUiState(loading = false, rows = rows), chrome, WalletsActions()) },
         "wallet.empty" to { WalletsScreen(WalletsUiState(loading = false, testBuild = true), chrome, WalletsActions()) },
         "wallet.failed" to { WalletsScreen(WalletsUiState(loading = false, failed = FailureKind.NETWORK), chrome, WalletsActions()) },
-        "wallet.new" to { Backup(form.copy(name = "Savings", password = "secret")) },
-        "wallet.new_bad_name" to { Backup(form.copy(name = "x".repeat(129), password = "secret")) },
-        "wallet.new_limit" to { Backup(form.copy(name = "Savings", problem = BackupProblem.LIMIT)) },
-        "wallet.new_bad_password" to { Backup(form.copy(name = "Savings", error = FailureKind.BAD_PASSWORD)) },
+        "wallet.new" to { Backup(form.copy(name = "Savings")) },
+        "wallet.new_bad_name" to { Backup(form.copy(name = "x".repeat(129))) },
+        "wallet.new_limits" to { Backup(form.copy(step = BackupStep.LIMITS, name = "Savings")) },
+        "wallet.new_limits_set" to { Backup(form.copy(step = BackupStep.LIMITS, name = "Savings", limits = someLimits)) },
+        "wallet.new_limits_btc" to {
+            Backup(form.copy(step = BackupStep.LIMITS, name = "Savings", limits = LimitsForm(true, "0.005", "0.02", btc = true)))
+        },
+        "wallet.new_limits_bad" to {
+            Backup(form.copy(step = BackupStep.LIMITS, name = "Savings", limits = LimitsForm(true, "3000000", "2000000")))
+        },
+        "wallet.new_password" to { Backup(form.copy(step = BackupStep.CREATE, name = "Savings", password = "secret")) },
+        "wallet.new_limit" to { Backup(form.copy(step = BackupStep.CREATE, name = "Savings", problem = BackupProblem.LIMIT)) },
+        "wallet.new_bad_password" to { Backup(form.copy(step = BackupStep.CREATE, name = "Savings", error = FailureKind.BAD_PASSWORD)) },
         "wallet.password" to { Backup(BackupUiState(BackupStep.PASSWORD, password = "secret")) },
-        "wallet.password_pin_required" to { Backup(BackupUiState(BackupStep.PASSWORD, capped = true)) },
+        "wallet.password_pin_required" to { Backup(BackupUiState(BackupStep.PASSWORD, capped = true, pin = "123456", password = "secret")) },
+        "wallet.password_bad_pin" to {
+            Backup(BackupUiState(BackupStep.PASSWORD, capped = true, pin = "123456", password = "secret", error = FailureKind.BAD_PIN))
+        },
         "wallet.phrase" to { Backup(BackupUiState(BackupStep.PHRASE, words = words())) },
         "wallet.phrase_passphrase" to { Backup(BackupUiState(BackupStep.PHRASE, words = words(passphrase = "Correct Horse"))) },
         "wallet.check" to { Backup(check()) },
@@ -124,6 +156,24 @@ internal object WalletCatalog {
         "wallet.done" to { Backup(BackupUiState(BackupStep.DONE, backedUp = true)) },
         "wallet.done_save_failed" to { Backup(BackupUiState(BackupStep.DONE, saveFailed = true)) },
         "wallet.done_reveal_failed" to { Backup(BackupUiState(BackupStep.DONE, revealFailed = true)) },
+        "wallet.done_caps_failed" to { Backup(BackupUiState(BackupStep.DONE, backedUp = true, capsFailed = true)) },
+        "wallet.import" to { Import(importForm.copy(typed = "", status = PhraseInput.analyse(""), name = "")) },
+        "wallet.import_words" to { Import(importForm) },
+        "wallet.import_unknown_word" to {
+            Import(importForm.copy(typed = "legal winnr thank", status = PhraseInput.analyse("legal winnr thank")))
+        },
+        "wallet.import_invalid" to {
+            val bad = "legal winner thank year wave sausage worth useful legal winner yellow thank"
+            Import(importForm.copy(typed = bad, status = PhraseInput.analyse(bad), invalidPhrase = true))
+        },
+        "wallet.import_advanced" to { Import(importForm.copy(advanced = true, passphrase = "Correct Horse")) },
+        "wallet.import_bad_passphrase" to { Import(importForm.copy(advanced = true, passphrase = "Caf\u00e9")) },
+        "wallet.import_limits" to { Import(importForm.copy(step = ImportStep.LIMITS, limits = someLimits)) },
+        "wallet.import_password" to { Import(importForm.copy(step = ImportStep.PASSWORD, password = "secret")) },
+        "wallet.import_exists" to { Import(importForm.copy(step = ImportStep.PASSWORD, problem = ImportProblem.EXISTS)) },
+        "wallet.import_done_caps_failed" to {
+            Import(importForm.copy(step = ImportStep.DONE, typed = "", importedId = "01W", capsFailed = true))
+        },
         "wallet.detail" to { Detail(detail) },
         "wallet.detail_incoming" to { Detail(detail.copy(last = lookup.copy(unconfirmedSats = 100_000))) },
         "wallet.detail_needs_network" to { Detail(noLookup.copy(network = null, lookup = LookupResult.NeedsNetwork)) },
@@ -136,6 +186,7 @@ internal object WalletCatalog {
         "wallet.detail_vault_failed" to { Detail(noLookup.copy(lookup = LookupResult.VaultFailed(VaultFailure(FailureKind.NETWORK, "x")))) },
         "wallet.detail_privacy_note" to { Detail(noLookup.copy(lookup = null, noteNeeded = true)) },
         "wallet.detail_not_backed_up" to { Detail(detail.copy(backedUp = false)) },
+        "wallet.detail_caps_pending" to { Detail(detail.copy(capsPending = true)) },
         "wallet.address_type" to { AddressTypeDialog(AddressTypes.TAPROOT, onPick = {}, onDismiss = {}) },
         "wallet.delete_confirm" to { Detail(detail.copy(delete = DeleteStep.CONFIRM)) },
         "wallet.delete_password" to { Detail(detail.copy(delete = DeleteStep.PASSWORD, password = "secret")) },
@@ -143,6 +194,7 @@ internal object WalletCatalog {
         "wallet.receive" to { Receive(receive) },
         "wallet.receive_amount" to { Receive(receive.copy(amountText = "0.00123")) },
         "wallet.receive_not_offered" to { Receive(ReceiveUiState(loading = false, network = Network.TESTNET, problem = ReceiveProblem.NOT_OFFERED)) },
+        "wallet.receive_caps_pending" to { Receive(ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.CAPS_PENDING)) },
         "wallet.receive_mismatch" to { Receive(ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.MISMATCH)) },
         "wallet.detail_change_network" to { Detail(noLookup.copy(network = Network.TESTNET, lookup = LookupResult.NetworkNotOffered, askNetwork = true)) },
         "wallet.receive_not_backed_up" to { Receive(ReceiveUiState(loading = false, notBackedUp = true)) },

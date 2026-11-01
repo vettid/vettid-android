@@ -23,7 +23,16 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** Why Receive shows no address, besides a failure and the backup gate. */
-enum class ReceiveProblem { NOT_OFFERED, MISMATCH }
+enum class ReceiveProblem {
+    NOT_OFFERED,
+    MISMATCH,
+
+    /** The spending limit the member chose is not set yet (W1d): no address until it is ("Try again" sends it). */
+    CAPS_PENDING,
+
+    /** This phone cannot read its wallet settings, so no wallet is known to be free of a limit to set: no address ("Try again"). */
+    SETTINGS_UNREADABLE,
+}
 
 /** Receive: the address the vault issued, the optional amount, and what is encoded. Prints its type name only. */
 data class ReceiveUiState(
@@ -143,6 +152,10 @@ class ReceiveViewModel @Inject constructor(
                     ReceiveResult.NeedsNetwork -> it.copy(loading = false, busy = false, needsNetwork = true)
                     ReceiveResult.NotOffered -> it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.NOT_OFFERED)
                     ReceiveResult.Mismatch -> it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.MISMATCH)
+                    ReceiveResult.CapsPending ->
+                        it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.CAPS_PENDING)
+                    ReceiveResult.SettingsUnreadable ->
+                        it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.SETTINGS_UNREADABLE)
                 }
             }
         } catch (e: VaultFailure) {

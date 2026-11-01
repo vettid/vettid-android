@@ -22,6 +22,13 @@ data class WalletOpenRoute(val walletId: String)
 @Serializable
 data object NewWalletRoute
 
+/**
+ * Import a wallet from its recovery phrase (W1d). It holds the words the member types: never saved with the back stack, as
+ * [NewWalletRoute] (the drawer and a notification pop it).
+ */
+@Serializable
+data object ImportWalletRoute
+
 /** Back up a wallet that is not backed up yet (from its row). */
 @Serializable
 data class BackupRoute(val walletId: String)

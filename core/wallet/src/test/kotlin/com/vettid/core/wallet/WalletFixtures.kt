@@ -9,6 +9,7 @@ import com.vettid.core.chain.ChainSummary
 import com.vettid.core.chain.Network
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.WalletImport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.CopyOnWriteArrayList
@@ -25,15 +26,18 @@ internal object WalletFixtures {
     /** The vault's own first P2WPKH receive address of this wallet on testnet4 (AccountTest). */
     const val FIRST_P2WPKH = "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl"
 
-    fun walletJson(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1, nextChange: Int = 0, fingerprint: String = FP, path86: String = "m/86'/1'/0'") = """
+    fun walletJson(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1, nextChange: Int = 0, fingerprint: String = FP, path86: String = "m/86'/1'/0'", caps: String? = DEFAULT_CAPS) = """
         {"wallet_id":"$id","version":4,"name":"Savings","network":"$network","fingerprint":"$fingerprint","address_type":"p2tr",
          "accounts":[
           {"type":"p2tr","path":"$path86","xpub":"$TPUB86","descriptors":{"receive":"tr([$FP/86'/1'/0']$TPUB86/0/*)","change":"tr([$FP/86'/1'/0']$TPUB86/1/*)"},"next_receive":$nextReceive,"next_change":$nextChange},
           {"type":"p2wpkh","path":"m/84'/1'/0'","xpub":"$TPUB84","descriptors":{"receive":"wpkh([$FP/84'/1'/0']$TPUB84/0/*)","change":"wpkh([$FP/84'/1'/0']$TPUB84/1/*)"},"next_receive":0,"next_change":0}],
-         "tags":[],"created_at":"2026-10-31T12:00:00Z"}"""
+         "tags":[],${caps?.let { "\"caps\":$it," } ?: ""}"created_at":"2026-10-31T12:00:00Z"}"""
 
-    fun wallet(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1): VaultWallet =
-        WalletWire.wallet(VaultJson.parseObject(walletJson(id, network, nextReceive).encodeToByteArray()))
+    /** A vault with spending limits (release 26) always gives `caps`; none are set. */
+    const val DEFAULT_CAPS = """{"period_seconds":86400,"spent_sats":0}"""
+
+    fun wallet(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1, caps: String? = DEFAULT_CAPS): VaultWallet =
+        WalletWire.wallet(VaultJson.parseObject(walletJson(id, network, nextReceive, caps = caps).encodeToByteArray()))
 
     fun account(type: String): Account = if (type == "p2tr") {
         Account.fromDescriptors("tr([$FP/86'/1'/0']$TPUB86/0/*)", "tr([$FP/86'/1'/0']$TPUB86/1/*)", Network.TESTNET4)
@@ -57,10 +61,24 @@ internal class FakeWalletOps : WalletOps {
     var lie: ((WalletAddress) -> WalletAddress)? = null
     var listGate: CompletableDeferred<Unit>? = null
     var created = 0
+
+    /** A vault before release 26: its wallets have no `caps`. */
+    var noCaps = false
     var conflict = false
     var nextLie: String? = null
 
-    private fun refuse(type: String, code: String): Nothing = throw VaultOpException(type, code)
+    private fun refuse(type: String, code: String, message: String = ""): Nothing = throw VaultOpException(type, code, message)
+
+    /** The words and passphrase of the last import (`wallet.create{item}`), as sent. */
+    var importedWords: String? = null
+    var importedPassphrase: String? = null
+
+    /** The PIN and password this vault takes for `wallet.caps.raise` and a capped reveal. */
+    var pin = "123456"
+
+    /** A vault error code for `wallet.caps.set` / `wallet.caps.raise`, else none. */
+    var capsSetFails: String? = null
+    var capsRaiseFails: String? = null
 
     override suspend fun list(): List<VaultWallet> {
         calls += "list"
@@ -76,18 +94,57 @@ internal class FakeWalletOps : WalletOps {
         return wallets[walletId] ?: refuse("wallet.get", "not_found")
     }
 
-    override suspend fun create(name: String, network: String, password: String): VaultWallet {
+    override suspend fun create(name: String, network: String, password: String, item: WalletImport?): VaultWallet {
         calls += "create:$network"
+        if (item != null) {
+            calls += "import"
+            importedWords = String(item.mnemonic)
+            importedPassphrase = item.passphrase?.let(::String)
+        }
         if (password != "pw") refuse("wallet.create", "bad_password")
-        val w = WalletFixtures.wallet(id = "01WALLET%018d".format(++created), network = network, nextReceive = 0)
+        val w = WalletFixtures.wallet(
+            id = "01WALLET%018d".format(++created), network = network, nextReceive = 0, caps = WalletFixtures.DEFAULT_CAPS.takeUnless { noCaps },
+        )
         wallets[w.id] = w
         return w
     }
 
-    override suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase {
+    override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
         calls += "reveal"
+        if (wallets[walletId]?.capped == true) {
+            // §10.18: the item of a capped wallet needs the PIN (`bad_request`, message `pin_required`); a wrong one is `bad_pin`.
+            if (pin == null) refuse("item.reveal", "bad_request", "pin_required")
+            if (pin != this.pin) refuse("item.reveal", "bad_pin")
+        }
         if (revealFails || password != "pw") refuse("item.reveal", "bad_password")
         return RevealedPhrase(List(24) { "abandon" }.joinToString(" ").toCharArray())
+    }
+
+    override suspend fun capsSet(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): Long {
+        calls += "caps.set:$perTx:$perPeriod"
+        capsSetFails?.let { refuse("wallet.caps.set", it) }
+        val w = wallets.getValue(walletId)
+        if (version != w.version) refuse("wallet.caps.set", "conflict")
+        // Lowers only: a value above the current one is `bad_request` (`use_wallet_caps_raise`).
+        if (perTx != null && w.perTxSats != null && perTx > w.perTxSats) refuse("wallet.caps.set", "bad_request", "use_wallet_caps_raise")
+        if (perPeriod != null && w.perPeriodSats != null && perPeriod > w.perPeriodSats) {
+            refuse("wallet.caps.set", "bad_request", "use_wallet_caps_raise")
+        }
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = true, perTxSats = perTx ?: w.perTxSats, perPeriodSats = perPeriod ?: w.perPeriodSats)
+        }
+    }
+
+    override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long {
+        calls += "caps.raise:$perTx:$perPeriod"
+        capsRaiseFails?.let { refuse("wallet.caps.raise", it) }
+        if (pin != this.pin) refuse("wallet.caps.raise", "bad_pin")
+        if (password != "pw") refuse("wallet.caps.raise", "bad_password")
+        val w = wallets.getValue(walletId)
+        if (version != w.version) refuse("wallet.caps.raise", "conflict")
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = perTx != null || perPeriod != null, perTxSats = perTx, perPeriodSats = perPeriod)
+        }
     }
 
     override suspend fun delete(walletId: String, password: String) {
