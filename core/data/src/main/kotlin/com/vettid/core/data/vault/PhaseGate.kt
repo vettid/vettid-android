@@ -35,6 +35,17 @@ internal class PhaseGate(
         mark == generation() && !lockPending() && phase.value is AppPhase.Setup
     }
 
+    /**
+     * RECOVERING after a recovery registration's vault calls (#244 nit N3): only while the phase is still the onboarding's
+     * (signed out or a setup stage, where the recovery flow runs), no lock is pending, and nothing moved the generation since
+     * [mark]. The registration that resets the record takes its mark after that reset, so its own reset never refuses it; a
+     * lock, a wipe or another reset during its vault calls does. The flow's answer is not changed: a phase left as the lock or
+     * wipe set it is what the screens follow, and the recovery's unlock checks again (`recoveryUnlock`).
+     */
+    fun publishRecovering(mark: Int): Boolean = phase.setIf(RECOVERING) {
+        mark == generation() && !lockPending() && onboarding(phase.value)
+    }
+
     /** Another setup stage during enrolment ([v]): only while the phase is still a setup one. */
     fun setupStage(v: AppPhase.Setup): Boolean = phase.setIf(v) { phase.value is AppPhase.Setup }
 
@@ -58,6 +69,10 @@ internal class PhaseGate(
 
     private companion object {
         val FINISHING = AppPhase.Setup(SetupStage.FINISHING)
+        val RECOVERING = AppPhase.Setup(SetupStage.RECOVERING)
+
+        /** Where the onboarding (and so the recovery flow) is shown: signed out, or a setup stage. */
+        fun onboarding(p: AppPhase): Boolean = p == AppPhase.SignedOut || p is AppPhase.Setup
 
         /** A phase that is the vault open here, or on its way to it: never over a pending lock. */
         fun opens(p: AppPhase): Boolean = p is AppPhase.Unlocked || p is AppPhase.Setup
