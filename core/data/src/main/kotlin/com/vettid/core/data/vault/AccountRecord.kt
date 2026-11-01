@@ -247,7 +247,7 @@ internal class AccountRecord(
         store.update(since, generation) { cur -> f(cur)?.withLockOf(cur) }
 
     /** A record of its own ([a]: none, or a new setup's): the writes still on their way are dropped. */
-    fun reset(a: LocalAccount): Boolean = store.reset { cur ->
+    fun reset(a: LocalAccount): ResetMarks? = store.reset { cur ->
         // Nothing of the lock's legacy fields goes into the new record; whether the lock's file is in use stays.
         a.copy(lockAskedAtMs = null, relayLockUntilMs = null, lockFileInUse = cur.lockFileInUse)
     }.also { pinMoved() }
