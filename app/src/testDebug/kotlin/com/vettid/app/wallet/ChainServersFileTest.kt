@@ -13,6 +13,7 @@ import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.wipe.AndroidWipeTargets
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.data.wipe.WipeTargets
+import com.vettid.core.wallet.WalletFlags
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -116,8 +117,38 @@ class ChainServersFileTest {
     }
 
     @Test
+    fun theWalletFlagsAreSealedReadBackAndWiped() = runBlocking {
+        val flags = { WalletFlags(WalletModule.flagsFile(KeystoreFileStore(WalletModule.walletFlagsFile(context), WalletModule.WALLET_FLAGS_PURPOSE) { key })) }
+        assertTrue(flags().setBackedUp("01WALLET0000000000000000AA"))
+        val file = WalletModule.walletFlagsFile(context)
+        assertEquals(context.noBackupFilesDir.canonicalFile, file.parentFile!!.canonicalFile)
+        assertEquals(1.toByte(), file.readBytes()[0])
+        assertFalse(String(file.readBytes(), Charsets.ISO_8859_1).contains("01WALLET"))
+        assertTrue(flags().backedUp("01WALLET0000000000000000AA"))
+        val wipe = LocalWipe(object : WipeTargets {
+            private val real = AndroidWipeTargets(context)
+            override val marker = real.marker
+            override val dirs = real.dirs
+
+            override fun keyAliases(): List<String> = emptyList()
+
+            override fun deleteKey(alias: String) = Unit
+
+            override fun clearSharedPreferences() = Unit
+
+            override fun cancelNotifications() = Unit
+        })
+        wipe.begin()
+        assertTrue(wipe.erase())
+        wipe.finish()
+        assertFalse(file.exists())
+        assertFalse(flags().backedUp("01WALLET0000000000000000AA"))
+    }
+
+    @Test
     fun onlyDevStackHasARegtestServer() {
         // This test runs in the debug build: no regtest server, so regtest is not offered.
-        assertNull(ChainDefaults.forBuild(BuildConfig.WALLET_REGTEST_ESPLORA).regtest)
+        assertFalse(BuildConfig.WALLET_REGTEST)
+        assertNull(WalletModule.chainDefaults().regtest)
     }
 }

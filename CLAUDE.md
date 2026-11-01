@@ -211,6 +211,14 @@ The A2 exit test:
   `vote.waiting`, `vote.results`, `vote.conflict_after_verified`, `vote.failed`, `vote.checking_clock`, `vote.checking_list`,
   `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`.
 
+- Wallet (ANDROID-PLAN §4 "Wallet", W1; VAULT-MESSAGING §10.18): **not in production builds**, laid out like calls. `:core:chain` (bitcoin-kmp
+  behind the module, PSBT, the Esplora client, `ChainServers`: the chain server per network in `chain-servers.bin`, block 0 checked
+  once per session), `WalletApi.kt` in `:core:vault` (reached only from `:core:wallet`; `walletMarkers` in app/build.gradle.kts fail a
+  release APK that carries its type names), `:core:wallet` (`WalletsManager`, memory only; `AddressCheck` before any look-up;
+  `WalletFlags` in `wallet-flags.bin`), `WalletAccess` / `NoWalletAccess` in `:core:data` (`app/src/wallet` / `app/src/noWallet`),
+  multibound `WipeHook`s (`WalletWipe`) that run before a wipe erases anything. Nothing of a wallet in a log: every wallet type
+  prints its type name only, and `ChainPrivacyTest` / `WalletPrivacyTest` scan for logging calls.
+
 ## Device testing
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:

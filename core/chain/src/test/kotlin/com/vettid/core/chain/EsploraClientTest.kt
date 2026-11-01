@@ -144,6 +144,30 @@ class EsploraClientTest {
     }
 
     @Test
+    fun missingUnconfirmedTransactionsAreMalformed() {
+        // The totals count 3 unconfirmed; the server lists 1.
+        server.enqueue(ok(EsploraFixtures.summary(1, unconfirmedTxs = 3)))
+        server.enqueue(ok(page(tx(1, false), tx(2, true))))
+        fails<ChainError.Malformed> { runBlocking { client().transactions(ChainTarget.Address(ADDRESS)) } }
+    }
+
+    @Test
+    fun aTransactionThatConfirmsWhileTheListIsReadIsNoMismatch() = runBlocking {
+        // The totals saw 1 confirmed and 1 unconfirmed; by the time of the page both are confirmed.
+        server.enqueue(ok(EsploraFixtures.summary(1, unconfirmedTxs = 1)))
+        server.enqueue(ok(page(tx(1, true), tx(2, true))))
+        assertEquals(2, client().transactions(ChainTarget.Address(ADDRESS)).size)
+    }
+
+    @Test
+    fun moreThanFiftyUnconfirmedListsTheNewestFifty() = runBlocking {
+        // Esplora lists at most 50 unconfirmed transactions: 60 in the totals, 50 on the page, is the whole answer.
+        server.enqueue(ok(EsploraFixtures.summary(1, unconfirmedTxs = 60)))
+        server.enqueue(ok(page(*(1..50).map { tx(it, false) }.toTypedArray(), tx(100, true))))
+        assertEquals(51, client().transactions(ChainTarget.Address(ADDRESS)).size)
+    }
+
+    @Test
     fun theWholeListHasOneByteBudget() {
         server.enqueue(ok(EsploraFixtures.summary(60)))
         repeat(3) { p -> server.enqueue(ok(page(*(p * 25 until p * 25 + 25).map { tx(it, true) }.toTypedArray()))) }

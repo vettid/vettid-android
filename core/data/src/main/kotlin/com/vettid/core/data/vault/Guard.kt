@@ -26,10 +26,11 @@ import java.io.IOException
  * answer `credential_required` also raises "This phone can't use your vault" ([CredentialRequired]). [resend]: only for
  * an idempotent read that carries no PIN or password, whose **Try again** runs [block] again. By default nothing is
  * kept: Try again closes the screen, and the screen that sent the request (its secret fields empty) sends it again, so
- * that no secret is ever held for a resend and no write is repeated unseen.
+ * that no secret is ever held for a resend and no write is repeated unseen. Public for the modules linked outside
+ * `:core:data` that talk to the vault (`:core:wallet`), so that their failures read as every other screen's.
  */
 @Suppress("CyclomaticComplexMethod", "ThrowsCount")
-internal suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T = try {
+suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T = try {
     withContext(Dispatchers.IO) { counted(block) }
 } catch (e: VaultFailure) {
     throw e
