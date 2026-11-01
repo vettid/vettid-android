@@ -134,6 +134,32 @@ class SpendingLimitsViewModelTest {
         assertEquals(600_000L, vm.state.value.perTx)
     }
 
+    /** (#248 review) The question is fixed when it opens: limits that moved before the confirm send nothing, as a conflict. */
+    @Test
+    fun aRaiseConfirmedAfterTheLimitsMovedSendsNothing() = runTest {
+        ops.wallets[id] = ops.wallet(id).copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000, periodSeconds = 86_400)
+        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        m.open()
+        val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.loaded }
+        vm.openRaise()
+        vm.setPerTx("600000")
+        vm.next()
+        assertEquals(LimitsStep.CONFIRM_RAISE, vm.state.value.step)
+        // Another device lowers the 24-hour limit, and this phone reads the wallet before the member confirms.
+        ops.wallets[id] = vaultWallet().copy(version = vaultWallet().version + 1, perPeriodSats = 1_500_000)
+        m.refresh()
+        eventually { vm.state.value.perPeriod == 1_500_000L }
+        vm.setPin("123456")
+        vm.setPassword("pw")
+        vm.confirmRaise()
+        eventually { !vm.state.value.busy && vm.state.value.step == LimitsStep.OVERVIEW }
+        assertEquals(FailureKind.CONFLICT, vm.state.value.error)
+        assertTrue(sent("caps.raise").isEmpty())
+        assertEquals(1_500_000L, vaultWallet().perPeriodSats)
+        assertEquals("", vm.state.value.pin)
+    }
+
     @Test
     fun aRaiseFormThatOnlyLowersIsSentAsSetAndOneThatDoesBothAsRaiseWithTheLoweredValueInIt() = runTest {
         val onlyLower = vm()

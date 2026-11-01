@@ -7,6 +7,7 @@ import androidx.navigation.toRoute
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.wallet.SpendingLimitsRoute
+import com.vettid.core.wallet.CapsSeen
 import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -47,6 +48,10 @@ data class SpendingLimitsUiState(
     val supported: Boolean = true,
     val perTx: Long? = null,
     val perPeriod: Long? = null,
+    /** The wallet's version as this phone holds it, with [perTx] and [perPeriod]. */
+    val version: Long = 0,
+    /** What the raise question was asked against, fixed when it opened ([WalletsManager.raiseCaps] refuses if it moved since). */
+    val raiseSeen: CapsSeen? = null,
     /** `caps.spent_sats`: what the period holds; null when the vault did not say. */
     val spent: Long? = null,
     /** A limit chosen at creation has not reached the vault yet. */
@@ -109,7 +114,7 @@ class SpendingLimitsViewModel @Inject constructor(
                 mutable.update {
                     it.copy(
                         loaded = true, name = w.name, supported = w.capsSupported, perTx = w.perTxSats, perPeriod = w.perPeriodSats,
-                        spent = w.spentSats, capsPending = pending,
+                        version = w.version, spent = w.spentSats, capsPending = pending,
                     )
                 }
             }
@@ -150,7 +155,7 @@ class SpendingLimitsViewModel @Inject constructor(
             when (it.step) {
                 LimitsStep.CONFIRM_SET, LimitsStep.CONFIRM_RAISE -> it.copy(
                     step = if (it.raiseForm) LimitsStep.RAISE else LimitsStep.LOWER,
-                    pin = "", password = "", error = null, errorCode = null,
+                    pin = "", password = "", error = null, errorCode = null, raiseSeen = null,
                 )
                 LimitsStep.LOWER, LimitsStep.RAISE -> it.copy(step = LimitsStep.OVERVIEW, form = CapsEditForm())
                 LimitsStep.OVERVIEW -> it
@@ -184,6 +189,7 @@ class SpendingLimitsViewModel @Inject constructor(
             it.copy(
                 step = if (plan.action == CapsAction.SET) LimitsStep.CONFIRM_SET else LimitsStep.CONFIRM_RAISE,
                 pin = "", password = "", error = null, errorCode = null,
+                raiseSeen = if (plan.action == CapsAction.SET) null else CapsSeen(it.version, it.perTx, it.perPeriod),
             )
         }
     }
@@ -209,14 +215,15 @@ class SpendingLimitsViewModel @Inject constructor(
     fun confirmRaise() {
         val s = mutable.value
         val plan = s.plan
+        val seen = s.raiseSeen
         val ready = s.step == LimitsStep.CONFIRM_RAISE && plan.action == CapsAction.RAISE && s.secretsReady
-        if (!s.idle || !ready) return
+        if (!s.idle || !ready || seen == null) return
         val pin = s.pin
         val password = s.password
         mutable.update { it.copy(busy = true, pin = "", password = "", error = null, errorCode = null) }
         viewModelScope.launch {
             val failure = try {
-                wallets.raiseCaps(walletId, plan.newPerTx, plan.newPerPeriod, pin, password)
+                wallets.raiseCaps(walletId, seen, plan.newPerTx, plan.newPerPeriod, pin, password)
                 null
             } catch (e: VaultFailure) {
                 e
@@ -233,7 +240,9 @@ class SpendingLimitsViewModel @Inject constructor(
      */
     private suspend fun finish(failure: VaultFailure?, from: LimitsStep) {
         if (failure == null) {
-            mutable.update { it.copy(busy = false, step = LimitsStep.OVERVIEW, form = CapsEditForm(), pin = "", password = "") }
+            mutable.update {
+                it.copy(busy = false, step = LimitsStep.OVERVIEW, form = CapsEditForm(), pin = "", password = "", raiseSeen = null)
+            }
             return
         }
         readAgain()
@@ -244,6 +253,7 @@ class SpendingLimitsViewModel @Inject constructor(
                 busy = false, error = failure.kind, errorCode = failure.code, pin = "", password = "",
                 step = if (stale) LimitsStep.OVERVIEW else from,
                 form = if (stale) CapsEditForm() else it.form,
+                raiseSeen = if (stale) null else it.raiseSeen,
             )
         }
     }
