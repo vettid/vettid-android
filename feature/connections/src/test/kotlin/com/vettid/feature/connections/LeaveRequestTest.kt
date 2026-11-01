@@ -2,6 +2,9 @@ package com.vettid.feature.connections
 
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -10,6 +13,7 @@ import androidx.compose.ui.test.performClick
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.RequestState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,9 +33,17 @@ class LeaveRequestTest {
     private var left = 0
     private lateinit var dispatcher: OnBackPressedDispatcher
 
-    private fun accept(step: AcceptStep) = rule.setContent {
-        dispatcher = LocalOnBackPressedDispatcherOwner.current!!.onBackPressedDispatcher
-        AcceptScreen(AcceptUiState(step = step, connectionId = "c1", name = "Sam Lee", sas = "123 456"), AcceptActions(onBack = { left++ }))
+    private var acceptStep by mutableStateOf(AcceptStep.INPUT)
+
+    private fun accept(step: AcceptStep) {
+        acceptStep = step
+        rule.setContent {
+            dispatcher = LocalOnBackPressedDispatcherOwner.current!!.onBackPressedDispatcher
+            AcceptScreen(
+                AcceptUiState(step = acceptStep, connectionId = "c1", name = "Sam Lee", sas = "123 456", input = "link"),
+                AcceptActions(onBack = { left++ }),
+            )
+        }
     }
 
     private val request = Approval.ConnectionRequest(
@@ -94,6 +106,52 @@ class LeaveRequestTest {
     fun withNoOpenRequestBackLeavesAtOnce() {
         accept(AcceptStep.ENDED)
         rule.onNodeWithContentDescription("Back").performClick()
+        rule.onNodeWithTag("confirm_leave").assertDoesNotExist()
+        assertEquals(1, left)
+    }
+
+    @Test
+    fun sendingTheRequestAsksFirst() {
+        accept(AcceptStep.ACCEPTING)
+        backAsksThenStayAndLeave()
+    }
+
+    @Test
+    fun systemBackThenLeaveGoes() {
+        accept(AcceptStep.COMPARE)
+        systemBack()
+        rule.onNodeWithText("Leave").performClick()
+        assertEquals(1, left)
+    }
+
+    @Test
+    fun withNoOpenRequestSystemBackIsNotTaken() {
+        accept(AcceptStep.INPUT)
+        // Nothing on the screen takes Back: the app's NavHost pops it, as for any screen.
+        rule.runOnIdle { assertFalse(dispatcher.hasEnabledCallbacks()) }
+        systemBack()
+        rule.onNodeWithTag("confirm_leave").assertDoesNotExist()
+    }
+
+    @Test
+    fun aStepThatEndsTheRequestDropsTheQuestionAndBackLeaves() {
+        accept(AcceptStep.COMPARE)
+        systemBack()
+        rule.onNodeWithTag("confirm_leave").assertExists()
+        acceptStep = AcceptStep.CONNECTED
+        rule.waitForIdle()
+        rule.onNodeWithTag("confirm_leave").assertDoesNotExist()
+        // Back is no longer taken by the guard (the NavHost pops the screen), and the question does not come back.
+        rule.runOnIdle { assertFalse(dispatcher.hasEnabledCallbacks()) }
+        systemBack()
+        rule.onNodeWithTag("confirm_leave").assertDoesNotExist()
+        assertEquals(0, left)
+    }
+
+    @Test
+    fun doneAfterApprovingLeavesWithoutTheQuestion() {
+        accept(AcceptStep.APPROVED)
+        rule.onNodeWithText("Done").performClick()
         rule.onNodeWithTag("confirm_leave").assertDoesNotExist()
         assertEquals(1, left)
     }

@@ -2,6 +2,7 @@ package com.vettid.core.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -25,6 +26,8 @@ fun rememberConfirmedLeave(
     onLeave: () -> Unit,
 ): () -> Unit {
     var asking by rememberSaveable { mutableStateOf(false) }
+    // A step that is no longer guarded drops a question left open (it never comes back by itself on a later guarded step).
+    LaunchedEffect(guarded) { if (!guarded) asking = false }
     BackHandler(enabled = guarded) { asking = true }
     if (asking && guarded) {
         ConfirmDialog(

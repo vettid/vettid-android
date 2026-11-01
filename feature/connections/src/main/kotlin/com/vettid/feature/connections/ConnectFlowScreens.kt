@@ -310,8 +310,11 @@ private fun Request(state: InviteUiState, actions: InviteActions, back: () -> Un
     )
 }
 
-/** The accept side's steps while the request is open: waiting for the code, comparing, approved and waiting for the inviter. */
-private val OPEN_ACCEPT_STEPS = setOf(AcceptStep.WAITING, AcceptStep.COMPARE, AcceptStep.APPROVED)
+/**
+ * The accept side's steps while the request is open, or may be: sending it (the vault may have it already), waiting for the code,
+ * comparing, approved and waiting for the inviter.
+ */
+private val OPEN_ACCEPT_STEPS = setOf(AcceptStep.ACCEPTING, AcceptStep.WAITING, AcceptStep.COMPARE, AcceptStep.APPROVED)
 
 /** Back from an open connection request ([rememberConfirmedLeave]): "Leave this request?", Stay or Leave. */
 @Composable
@@ -503,7 +506,8 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             onPrimary = actions.onAccept,
             primaryEnabled = state.input.isNotBlank(),
             busy = state.step == AcceptStep.ACCEPTING,
-            onBack = actions.onBack,
+            // Unguarded while the member types (INPUT); guarded while the request is being sent (ACCEPTING).
+            onBack = back,
             secondaryLabel = stringResource(R.string.connections_accept_scan_instead),
             onSecondary = actions.onScan,
             modifier = modifier,
