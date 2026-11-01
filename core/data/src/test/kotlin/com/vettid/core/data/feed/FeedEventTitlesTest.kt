@@ -244,4 +244,33 @@ class FeedAuthPurposeTest {
         val t = FeedKinds.title(item(count = 3), n)
         assertEquals(FeedText(literal = "\u2068Bank\u2069"), t.args.first())
     }
+
+    /** ANDROID-PLAN 0.1.74 "Notifications": a spending limit's items, each opening that wallet's Spending limits. */
+    @Test
+    fun theSpendingLimitKindsHaveTitlesAndOpenTheWalletsLimits() {
+        val named = FeedNames(items = mapOf("01WAL" to "Savings"))
+        fun item(kind: String, ref: String? = null, priority: String = "normal") =
+            FeedItem("i", 1, kind, "2026-10-19T12:00:00Z", "active", priority, ref = ref)
+        fun t(i: FeedItem, details: Boolean = true) = FeedKinds.title(i, named, details)
+        assertEquals(FeedText(R.string.data_feed_wallet_cap_refused), t(item("wallet.cap_refused", "01WAL")))
+        assertEquals(FeedText(R.string.data_feed_wallet_cap_refused), t(item("wallet.cap_refused", "01WAL"), details = false))
+        assertEquals(
+            FeedText(R.string.data_feed_wallet_caps_raised, listOf(FeedText(literal = "\u2068Savings\u2069"))),
+            t(item("wallet.caps_raised", "01WAL", "high")),
+        )
+        assertEquals(FeedText(R.string.data_feed_wallet_caps_raised_any), t(item("wallet.caps_raised", "01WAL", "high"), details = false))
+        assertEquals(
+            FeedText(R.string.data_feed_wallet_caps_lowered, listOf(FeedText(literal = "\u2068Savings\u2069"))),
+            t(item("wallet.caps_lowered", "01WAL")),
+        )
+        assertEquals(
+            FeedText(R.string.data_feed_wallet_caps_raised, listOf(FeedText(R.string.data_feed_deleted_item))),
+            t(item("wallet.caps_raised", "01GONE")),
+        )
+        for (k in listOf("wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised")) {
+            assertTrue(FeedKinds.known(k))
+            assertEquals(FeedTarget.WalletLimits("01WAL"), FeedKinds.target(item(k, "01WAL")))
+            assertEquals(FeedTarget.Sheet, FeedKinds.target(item(k)))
+        }
+    }
 }

@@ -2532,6 +2532,28 @@ class VaultDeviceTest {
     }
 
     /**
+     * §11.14.9 step 2 (and §10.18, 0.56.0): `wallet.caps.raise` is a credential operation, so while a change (a `credential.reset`
+     * included) is unresolved the same gate refuses it with nothing sent, and lets it through once the change is decided.
+     */
+    @Test
+    fun theGateStopsWalletCapsRaiseBeforeItIsSent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            var undecided = true
+            api.setCredentialGate { _ -> if (undecided) throw VaultStateException("change undecided") }
+            val wallet = "01HXZ3N5Q8R2T4V6W9Y0B1C2D3"
+            assertTrue(runCatching { api.walletCapsRaise(wallet, 3, null, 2_000_000, "123456", "password one") }.exceptionOrNull() is VaultStateException)
+            assertNull("nothing sent, not even a UTK request", deposits.poll(300, TimeUnit.MILLISECONDS))
+            undecided = false
+            val raise = async(Dispatchers.IO) { runCatching { api.walletCapsRaise(wallet, 3, null, 2_000_000, "123456", "password one") } }
+            assertEquals("credential.utk.get", v.open(nextDeposit().second).type)
+            raise.cancel()
+        }
+    }
+
+    /**
      * §11.14.9 step 1: the vault's clock as last seen is the newest answer's `ts` carried forward on the phone's monotonic
      * clock; `credential.version` comes with its answer's `ts`.
      */

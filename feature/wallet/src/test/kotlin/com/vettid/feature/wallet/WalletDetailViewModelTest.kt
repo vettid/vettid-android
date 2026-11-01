@@ -308,4 +308,33 @@ class WalletDetailViewModelTest {
         m.clear()
         eventually { vm.state.value.closed }
     }
+
+    @Test
+    fun aPendingLimitIsSaidAndSentFirstAndTryAgainSendsOnlyTheSet() = runTest {
+        ops.wallet(id)
+        WalletFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(null, 2_000_000))
+        ops.capsSetFails = "internal"
+        val vm = vm()
+        eventually { vm.state.value.loaded && vm.state.value.capsPending }
+        assertTrue(vm.state.value.capsPending)
+        ops.capsSetFails = null
+        vm.retryCaps()
+        eventually { !vm.state.value.capsPending }
+        assertFalse(vm.state.value.capsPending)
+        assertTrue(vm.state.value.capped)
+        assertTrue(ops.calls.none { it.startsWith("caps.raise") })
+    }
+
+    @Test
+    fun anUnreadableSettingsFileIsSaidAndHoldsReceiveBack() = runTest {
+        ops.wallet(id)
+        flagsFile.failLoads = true
+        val vm = vm(noteShown = false)
+        eventually { vm.state.value.loaded && vm.state.value.capsPending }
+        assertTrue(vm.state.value.settingsUnreadable)
+        flagsFile.failLoads = false
+        vm.retryCaps()
+        eventually { !vm.state.value.capsPending }
+        assertFalse(vm.state.value.settingsUnreadable)
+    }
 }

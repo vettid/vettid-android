@@ -339,12 +339,14 @@ class VaultApi(
      * A `critical` item's values, sealed by the vault to a one-time reply key
      * (§3.5.4): `{"fields": [{field_id, value}], "notes"?}`. Wipe it after use.
      */
-    suspend fun itemRevealCritical(password: String, itemId: String): Revealed {
+    suspend fun itemRevealCritical(password: String, itemId: String, pin: String? = null): Revealed {
         val (o, rk, id) = cred.credOp(
             "item.reveal",
             {
                 put("password", password)
                 put("item_id", itemId)
+                // (0.56.0, §10.18) The item of a wallet that has a spending limit: the PIN with the password (`pin_required`).
+                pin?.let { put("pin", it) }
             },
             reply = true,
             extra = { put("item_id", itemId) },

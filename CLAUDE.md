@@ -237,6 +237,40 @@ The A2 exit test:
   `wallet.chain_server_bad_url`, `wallet.chain_server_not_https`, `wallet.chain_server_credentials`, `wallet.chain_server_query`,
   `wallet.chain_server_failed`, `wallet.chain_server_wrong_network`, `wallet.chain_server_not_written`, `wallet.details`
   (`WalletCatalog.kt`).
+  W1d (spending limits at creation, import; VAULT-MESSAGING §10.18 0.56.0): `WalletApi.kt` adds `walletCapsSet` (a normal op, a null
+  member absent), `walletCapsRaise` (a credential operation, sealed `{pin, password, item_id, payload_sha256}`; the hash is
+  `WalletCapsBinding`, tested against the §16 vector, a mismatch is a stop-and-report item), `wallet.create{item}` (`WalletImport`) and
+  `item.reveal{pin}`; the names are in `walletMarkers`. `Bip39` in `:core:chain` (bitcoin-kmp's list and checksum). The limits chosen at
+  creation are **pending per `wallet_id` in `WalletFlags`** (`pending_caps`, optional so old files read): the wallet is created without
+  caps, the phrase shown and checked, and only then `wallet.caps.set` is sent (`settleCaps`); after a restart `open()` sends it first,
+  and until it is set the wallet has no Receive (`capsPending`, `ReceiveResult.CapsPending`) and nothing else is asked of it before the
+  send. **Fail secure**: the pending retry only ever sends `wallet.caps.set`; `raiseCaps` (PIN and password, one credential operation)
+  changes nothing here until the vault answers `ok`, and a `conflict` is not retried with the typed secrets. Screens: "Set a spending
+  limit?" after the name and network for New wallet and Import (`LimitsForm`, `LimitsInput`: sats with a thousands separator, a toggle
+  to BTC, "No limit" the default, nothing suggested), **Import a wallet** from the list's floating button (`ImportWalletRoute`, popped
+  like `NewWalletRoute`; `ImportViewModel`: words checked against the BIP39 list as typed and the checksum before anything is sent,
+  passphrase behind "Advanced", words in `CharArray`s, `SecureWindow`, password class with no learning, no saved state), and the PIN
+  field beside the password for the phrase of a capped wallet. Catalog adds `wallet.new_limits`, `wallet.new_limits_set`,
+  `wallet.new_limits_btc`, `wallet.new_limits_bad`, `wallet.new_password`, `wallet.password_bad_pin`, `wallet.done_caps_failed`,
+  `wallet.import`, `wallet.import_words`, `wallet.import_unknown_word`, `wallet.import_invalid`, `wallet.import_advanced`,
+  `wallet.import_bad_passphrase`, `wallet.import_limits`, `wallet.import_password`, `wallet.import_exists`,
+  `wallet.import_done_caps_failed`, `wallet.receive_caps_pending`, `wallet.detail_caps_pending`.
+  W1d-2 (Spending limits screen): wallet ⋯ → **Spending limits** (`SpendingLimitsRoute` in `:core:data`, shown only when `capsSupported`;
+  `SpendingLimitsViewModel`, `CapsEdit` pure rules): the two limits in sats or "No limit", "Used in the last 24 hours" from
+  `caps.spent_sats` (`VaultWallet.spentSats`; the plan says "last hour" on staging, the owner kept "24 hours" there too), **Lower a
+  limit** (only lower, or a limit where there was none; `wallet.caps.set`, confirm, no password) and **Raise or remove a limit**
+  (PIN and password, `wallet.caps.raise`; a form that only lowers is sent as `set`, one that raises or does both as `raise` with the
+  lowered value in it). Any error leaves the limits and the wallet is read again. `raiseCaps` never goes over a pending `set`: it sends
+  the set and then refuses (`CAPS_SETTLED`, the form was chosen against the old limits), or refuses (`CAPS_PENDING`). Feed titles and
+  `FeedTarget.WalletLimits` for `wallet.cap_refused|caps_lowered|caps_raised` (a notification opens the screen while the Wallet entry
+  is shown). **Reset wallet settings on this phone** (`WalletsManager.resetSettings`, `WalletFlags.reset`: the one sanctioned overwrite
+  of an unreadable `wallet-flags.bin`, offered only while it is unreadable, behind a `ConfirmDialog`, nothing sent to the vault; the
+  local flags are forgotten, so wallets show "Not backed up"): an uncapped wallet of a vault with `caps` is then asked "Set a spending
+  limit?" before Receive (`ask_caps` (the wallets the vault held at the reset; `ask_next` fills it from the first list read if none was loaded), `answered_caps` in the flags, decided per wallet at Receive, `ReceiveResult.LimitsAsk`, `answerLimits`; limits pending in this session are carried into the fresh file); a limit goes through the pending path.
+  Catalog adds `wallet.limits`, `wallet.limits_none`, `wallet.limits_one`, `wallet.limits_unsupported`, `wallet.limits_lower`,
+  `wallet.limits_lower_bad`, `wallet.limits_lower_confirm`, `wallet.limits_raise`, `wallet.limits_raise_confirm`,
+  `wallet.limits_remove`, `wallet.limits_bad_pin`, `wallet.limits_backoff`, `wallet.limits_conflict`, `wallet.detail_reset`,
+  `wallet.detail_reset_confirm`, `wallet.receive_reset`, `wallet.receive_limits_ask`. The review of a send is later.
 
 ## Device testing
 

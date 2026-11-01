@@ -45,6 +45,20 @@ data class WalletDetailUiState(
     /** The receiving account's type, `p2tr` or `p2wpkh`. */
     val addressType: String = AddressTypes.TAPROOT,
     val backedUp: Boolean = true,
+    /** The spending limit the member chose is not set yet (W1d): Receive is not offered until it is. */
+    val capsPending: Boolean = false,
+    /** This phone cannot read its wallet settings: no wallet is known to be free of a limit to set, so none has Receive. */
+    val settingsUnreadable: Boolean = false,
+    /** The wallet has a spending limit (`wallet.list`): its recovery phrase needs the PIN too. */
+    val capped: Boolean = false,
+    /** The pending limit was refused because the vault holds another copy of this wallet (`duplicate_wallet`). */
+    val capsDuplicate: Boolean = false,
+    /** The wallet's vault enforces spending limits: ⋯ → Spending limits is offered. */
+    val capsSupported: Boolean = false,
+    /** "Reset wallet settings on this phone" is asked about (its confirm is up). */
+    val resetAsk: Boolean = false,
+    /** The reset could not be written on this phone. */
+    val resetFailed: Boolean = false,
     /** The chain server's privacy note is to be acknowledged before the wallet's first look-up. */
     val noteNeeded: Boolean = false,
     /** The chain server this wallet's network uses now (its host), named on the privacy note; null when none is set. */
@@ -102,14 +116,24 @@ class WalletDetailViewModel @Inject constructor(
         val last: WalletLookup?,
         val network: Network?,
         val backedUp: Boolean,
+        val capsPending: Boolean,
+        val settingsUnreadable: Boolean,
     )
 
     init {
         viewModelScope.launch {
-            combine(wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged) { list, availability, lookups, _ ->
-                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId])
-            }.mapLatest { (w, availability, last) ->
-                Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId))
+            wallets.capsDuplicate.collect { d -> mutable.update { it.copy(capsDuplicate = walletId in d) } }
+        }
+        viewModelScope.launch {
+            combine(
+                wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged, wallets.capsPending,
+            ) { list, availability, lookups, _, pending ->
+                val here = WalletsManager.isPending(pending, walletId) to (WalletsManager.UNKNOWN in pending)
+                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId]) to here
+            }.mapLatest { (seen, flagsState) ->
+                val (pending, unreadable) = flagsState
+                val (w, availability, last) = seen
+                Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId), pending, unreadable)
             }.collect { show(it) }
         }
     }
@@ -125,6 +149,7 @@ class WalletDetailViewModel @Inject constructor(
         mutable.update {
             it.copy(
                 loaded = true, name = w.name, network = s.network, addressType = w.addressType, backedUp = s.backedUp,
+                capsPending = s.capsPending, settingsUnreadable = s.settingsUnreadable, capped = w.capped, capsSupported = w.capsSupported,
                 last = s.last ?: it.last,
             )
         }
@@ -226,6 +251,36 @@ class WalletDetailViewModel @Inject constructor(
             val kept = wallets.setTestNetwork(walletId, network)
             mutable.update { it.copy(networkSaveFailed = !kept, askNetwork = !kept && it.askNetwork) }
             if (kept) lookUp()
+        }
+    }
+
+    /** "Try again" on the note that Receive is off: the pending `wallet.caps.set`, and nothing else. */
+    fun retryCaps() {
+        if (!mutable.value.capsPending || !mutable.value.idle) return
+        viewModelScope.launch {
+            try {
+                wallets.settleCaps(walletId)
+            } catch (_: VaultFailure) {
+                // It stays pending; the note stays.
+            }
+        }
+    }
+
+    /** "Reset wallet settings on this phone": the confirm, only while the flags file cannot be read. */
+    fun askReset() {
+        if (mutable.value.settingsUnreadable && mutable.value.idle) mutable.update { it.copy(resetAsk = true, resetFailed = false) }
+    }
+
+    fun cancelReset() = mutable.update { it.copy(resetAsk = false) }
+
+    /** The reset confirmed: the local flags only, a fresh file; nothing is sent to the vault. */
+    fun resetSettings() {
+        val s = mutable.value
+        if (!s.resetAsk || !s.settingsUnreadable || !s.idle) return
+        mutable.update { it.copy(resetAsk = false) }
+        viewModelScope.launch {
+            val done = wallets.resetSettings()
+            mutable.update { it.copy(resetFailed = !done) }
         }
     }
 

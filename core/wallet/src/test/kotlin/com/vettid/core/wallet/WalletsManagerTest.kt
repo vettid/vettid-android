@@ -9,6 +9,7 @@ import com.vettid.core.chain.ChainSummary
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.vault.WalletImport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -445,8 +446,8 @@ class WalletsManagerTest {
         lateinit var m: WalletsManager
         // The vault is locked while the create is answered.
         val gated = object : WalletOps by ops {
-            override suspend fun create(name: String, network: String, password: String): VaultWallet =
-                ops.create(name, network, password).also { m.clear() }
+            override suspend fun create(name: String, network: String, password: String, item: WalletImport?): VaultWallet =
+                ops.create(name, network, password, item).also { m.clear() }
         }
         m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
         m.open()
@@ -508,8 +509,8 @@ class WalletsManagerTest {
         lateinit var m: WalletsManager
         var revealed: RevealedPhrase? = null
         val gated = object : WalletOps by ops {
-            override suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase =
-                ops.revealPhrase(walletId, password).also {
+            override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase =
+                ops.revealPhrase(walletId, password, pin).also {
                     revealed = it
                     m.clear()
                 }

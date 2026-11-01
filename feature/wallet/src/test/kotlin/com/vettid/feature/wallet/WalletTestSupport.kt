@@ -6,6 +6,7 @@ package com.vettid.feature.wallet
 import com.vettid.core.chain.Account
 import com.vettid.core.chain.Network
 import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.WalletImport
 import com.vettid.core.wallet.AddressChain
 import com.vettid.core.wallet.AddressPage
 import com.vettid.core.wallet.ChainOpen
@@ -59,16 +60,73 @@ internal class FakeWallets : WalletOps {
 
     override suspend fun get(walletId: String) = wallets.getValue(walletId)
 
-    override suspend fun create(name: String, network: String, password: String): VaultWallet {
+    /** The words and passphrase of the last import, as sent. */
+    var importedWords: String? = null
+    var importedPassphrase: String? = null
+
+    /** A vault error code for `wallet.caps.set`, else none. */
+    var capsSetFails: String? = null
+
+    /** A vault before release 26: the wallet `create` answers has no `caps`. */
+    var noCaps = false
+
+    /** The PIN this vault takes. */
+    var pin = "123456"
+
+    override suspend fun create(name: String, network: String, password: String, item: WalletImport?): VaultWallet {
         calls += "create:$name:$network:${password.isNotEmpty()}"
+        if (item != null) {
+            calls += "import"
+            importedWords = String(item.mnemonic)
+            importedPassphrase = item.passphrase?.let(::String)
+        }
         createFails?.let { throw VaultOpException("wallet.create", it) }
         if (password != "pw") throw VaultOpException("wallet.create", "bad_password")
-        return wallet("01NEW000000000000000000000", name, network)
+        return wallet("01NEW000000000000000000000", name, network).let { w ->
+            if (noCaps) w.copy(capsSupported = false).also { wallets[w.id] = it } else w
+        }
     }
 
-    override suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase {
-        calls += "reveal:$walletId"
+    override suspend fun capsSet(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): Long {
+        calls += "caps.set:$perTx:$perPeriod"
+        capsSetFails?.let { throw VaultOpException("wallet.caps.set", it) }
+        val w = wallets.getValue(walletId)
+        if (version != w.version) throw VaultOpException("wallet.caps.set", "conflict")
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = true, perTxSats = perTx ?: w.perTxSats, perPeriodSats = perPeriod ?: w.perPeriodSats)
+        }
+    }
+
+    override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long {
+        calls += "caps.raise:$perTx:$perPeriod"
+        capsRaiseFails?.let { throw VaultOpException("wallet.caps.raise", it) }
+        if (pin != this.pin) throw VaultOpException("wallet.caps.raise", "bad_pin")
+        if (password != "pw") throw VaultOpException("wallet.caps.raise", "bad_password")
+        val w = wallets.getValue(walletId)
+        if (version != w.version) throw VaultOpException("wallet.caps.raise", "conflict")
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = perTx != null || perPeriod != null, perTxSats = perTx, perPeriodSats = perPeriod)
+        }
+    }
+
+    /** Wallets whose reveal needs the PIN although the list shows no limit (a twin of a capped wallet). */
+    val needsPin = mutableSetOf<String>()
+
+    /** The reveal answers `pin_required` even with a PIN. */
+    var pinStubborn = false
+
+    /** A vault error code for `wallet.caps.raise`, else none. */
+    var capsRaiseFails: String? = null
+
+    override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
+        calls += "reveal:$walletId" + if (pin != null) ":pin" else ""
         revealCode?.let { throw VaultOpException("item.reveal", it) }
+        // A wallet the list shows without a limit may still need the PIN (it matches a capped wallet or a twin): the app cannot know.
+        if (pinStubborn && pin != null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
+        if (wallets[walletId]?.capped == true || walletId in needsPin) {
+            if (pin == null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
+            if (pin != this.pin) throw VaultOpException("item.reveal", "bad_pin")
+        }
         if (revealFails || password != "pw") throw VaultOpException("item.reveal", "bad_password")
         return RevealedPhrase(words.joinToString(" ").toCharArray(), passphrase?.toCharArray())
     }
@@ -112,8 +170,12 @@ internal class FakeWallets : WalletOps {
 
 internal class MemoryFlags : WalletFlagsFile {
     var bytes: ByteArray? = null
+    var failLoads = false
 
-    override fun load(): ByteArray? = bytes
+    override fun load(): ByteArray? {
+        if (failLoads) throw java.io.IOException("cannot decrypt")
+        return bytes
+    }
 
     var saves = 0
     var failSaves = false

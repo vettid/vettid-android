@@ -14,6 +14,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.wallet.BackupRoute
+import com.vettid.core.data.wallet.SpendingLimitsRoute
 import com.vettid.core.data.wallet.WalletOpenRoute
 import com.vettid.core.ui.components.SecureClipboard
 
@@ -23,6 +24,34 @@ internal fun NavGraphBuilder.walletDetailDestinations(host: WalletHost) {
     composable<ReceiveRoute> { entry -> ReceiveDestination(host) { host.leave(entry.id) } }
     composable<ChainServerRoute> { entry -> ChainServerDestination { host.leave(entry.id) } }
     composable<WalletDetailsRoute> { entry -> DetailsDestination(host) { host.leave(entry.id) } }
+    composable<SpendingLimitsRoute> { entry -> LimitsDestination { host.leave(entry.id) } }
+}
+
+@Composable
+private fun LimitsDestination(leave: () -> Unit) {
+    val vm: SpendingLimitsViewModel = hiltViewModel()
+    val state by vm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.closed) { if (state.closed) leave() }
+    SpendingLimitsScreen(
+        state,
+        SpendingLimitsActions(
+            onBack = leave,
+            onLower = vm::openLower,
+            onRaise = vm::openRaise,
+            onPerTx = vm::setPerTx,
+            onPerPeriod = vm::setPerPeriod,
+            onRemoveTx = vm::setRemoveTx,
+            onRemovePeriod = vm::setRemovePeriod,
+            onToggleUnit = vm::toggleUnit,
+            onNext = vm::next,
+            onConfirmSet = vm::confirmSet,
+            onConfirmRaise = vm::confirmRaise,
+            onPin = vm::setPin,
+            onPassword = vm::setPassword,
+            onDismissError = vm::dismissError,
+            onStepBack = vm::back,
+        ),
+    )
 }
 
 @Composable
@@ -40,11 +69,16 @@ private fun DetailDestination(host: WalletHost, leave: () -> Unit) {
             onRefresh = vm::refresh,
             onReceive = { host.navigate(ReceiveRoute(id)) },
             onBackUp = { host.navigate(BackupRoute(id)) },
+            onRetryCaps = vm::retryCaps,
             onAcknowledge = vm::acknowledgeNote,
             onChooseNetwork = vm::chooseTestNetwork,
             onChainServer = { state.network?.let { host.navigate(ChainServerRoute(it.vaultName)) } },
             onAddressType = vm::setAddressType,
             onDetails = { host.navigate(WalletDetailsRoute(id)) },
+            onLimits = { host.navigate(SpendingLimitsRoute(id)) },
+            onAskReset = vm::askReset,
+            onCancelReset = vm::cancelReset,
+            onReset = vm::resetSettings,
             onAskDelete = vm::askDelete,
             onCancelDelete = vm::cancelDelete,
             onContinueDelete = vm::continueDelete,
@@ -78,6 +112,11 @@ private fun ReceiveDestination(host: WalletHost, leave: () -> Unit) {
             onBackUp = { host.navigate(BackupRoute(vm.walletId)) },
             onRetry = vm::load,
             onChooseNetwork = vm::chooseTestNetwork,
+            onLimitsContinue = vm::answerLimits,
+            limits = LimitsActions(vm::setLimitChoice, vm::setPerTx, vm::setPerPeriod, vm::toggleUnit),
+            onAskReset = vm::askReset,
+            onCancelReset = vm::cancelReset,
+            onReset = vm::resetSettings,
         ),
     )
 }
