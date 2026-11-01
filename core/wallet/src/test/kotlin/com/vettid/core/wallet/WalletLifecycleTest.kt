@@ -16,6 +16,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 /** The wallets follow the vault (ANDROID-PLAN §4 "Local state"): read while open, forgotten at lock, hold and wipe. */
 class WalletLifecycleTest {
@@ -78,15 +79,17 @@ class WalletLifecycleTest {
         val w = WalletFixtures.wallet()
         ops.wallets[w.id] = w
         val open = MutableStateFlow<Int?>(1)
-        var closed = 0
+        val closed = AtomicInteger()
         val m = manager()
-        m.follow(open, MutableSharedFlow(), onClosed = { closed++ })
+        m.follow(open, MutableSharedFlow(), onClosed = { closed.incrementAndGet() })
         eventually("first read") { m.wallets.value.size == 1 }
-        val reads = ops.calls.count { it == "list" }
+        // A wallet the first read didn't have: seen only once the new session's read has answered (the call is recorded
+        // when it starts, before its answer is in the manager).
+        val second = WalletFixtures.wallet(id = "01WALLET0000000000000000AB")
+        ops.wallets[second.id] = second
         // Locked and opened again so fast that the closed value never reached the follower: a new session all the same.
         open.value = 2
-        eventually("closed and read again") { closed == 1 && ops.calls.count { it == "list" } == reads + 1 }
-        assertEquals(1, m.wallets.value.size)
+        eventually("closed and read again") { closed.get() == 1 && m.wallets.value.size == 2 }
         scope.cancel()
     }
 
@@ -112,13 +115,13 @@ class WalletLifecycleTest {
         ops.wallets[w.id] = w
         ops.listGate = CompletableDeferred()
         val open = MutableStateFlow<Int?>(1)
-        var closed = 0
+        val closed = AtomicInteger()
         val m = manager()
-        m.follow(open, MutableSharedFlow(), onClosed = { closed++ })
+        m.follow(open, MutableSharedFlow(), onClosed = { closed.incrementAndGet() })
         eventually("the read started") { ops.calls.contains("list") }
         // The vault closes while `wallet.list` is unanswered: the close runs at once, and the late answer is dropped.
         open.value = null
-        eventually("closed") { closed == 1 }
+        eventually("closed") { closed.get() == 1 }
         ops.listGate!!.complete(Unit)
         delay(100)
         assertTrue(m.wallets.value.isEmpty())

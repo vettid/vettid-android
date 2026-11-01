@@ -1,10 +1,8 @@
 package com.vettid.core.data.vault
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -36,13 +34,13 @@ class PhaseOpensTest {
     fun anOpeningIsCountedBeforeThePhaseShowsIt() = runBlocking {
         val phase = PhaseHolder(AppPhase.Locked)
         val seen = mutableListOf<Int>()
-        val job = launch(Dispatchers.Default) {
-            phase.asStateFlow().first { it == AppPhase.Unlocked }
-            seen += phase.opens.value
+        // Unconfined: the collector runs inside the phase's publish, the moment the new phase is set, so it reads the count
+        // before publish returns. Counted after the phase was set, it would read 0 here.
+        val job = launch(Dispatchers.Unconfined) {
+            phase.asStateFlow().collect { if (it == AppPhase.Unlocked) seen += phase.opens.value }
         }
         phase.value = AppPhase.Unlocked
-        withTimeout(5_000) { job.join() }
-        // A reader of the phase that then reads the count sees the new count (a combine may lag by one value: see PhaseHolder).
         assertEquals(listOf(1), seen)
+        job.cancel()
     }
 }
