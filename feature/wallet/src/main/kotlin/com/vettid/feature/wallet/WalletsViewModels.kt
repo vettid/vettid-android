@@ -176,6 +176,12 @@ data class BackupUiState(
     val backedUp: Boolean = false,
     /** The phrase was checked, but this phone could not record it: Try again ([BackupViewModel.saveAgain]). */
     val saveFailed: Boolean = false,
+    /** The vault cannot enforce spending limits: the limits step was not asked, or the limits chosen were not kept (the notice says so). */
+    val capsUnsupported: Boolean = false,
+    /** The limits step was asked (the vault enforces limits as far as is known): Back from the password returns to it. */
+    val limitsAsked: Boolean = false,
+    /** The limits chosen could not be saved on this phone: they are kept for this session only, so the backup should be finished now. */
+    val capsNotSaved: Boolean = false,
     /** Backed up, but the chosen spending limit is not set yet (no Receive until it is): Try again ([BackupViewModel.retryCaps]). */
     val capsFailed: Boolean = false,
     /** The vault closed (locked, held, due) during the flow: the words are gone and the flow leaves. */
@@ -293,7 +299,13 @@ class BackupViewModel internal constructor(
     /** "Continue" from the name and network: the limits step. */
     fun toLimits() {
         val s = mutable.value
-        if (s.step == BackupStep.FORM && s.idle && s.formReady) mutable.update { it.copy(step = BackupStep.LIMITS) }
+        if (s.step != BackupStep.FORM || !s.idle || !s.formReady) return
+        // A vault whose wallets give no `caps` cannot enforce a limit: no question, nothing chosen, nothing pending.
+        if (wallets.capsOffered) {
+            mutable.update { it.copy(step = BackupStep.LIMITS, limitsAsked = true) }
+        } else {
+            mutable.update { it.copy(step = BackupStep.CREATE, limitsAsked = false, limits = LimitsForm()) }
+        }
     }
 
     /** "Continue" from the limits: the password (only with limits the vault would take). */
@@ -307,7 +319,10 @@ class BackupViewModel internal constructor(
         mutable.update {
             when (it.step) {
                 BackupStep.LIMITS -> it.copy(step = BackupStep.FORM)
-                BackupStep.CREATE -> it.copy(step = BackupStep.LIMITS, password = "", error = null, errorCode = null, problem = null)
+                BackupStep.CREATE -> it.copy(
+                    step = if (it.limitsAsked) BackupStep.LIMITS else BackupStep.FORM,
+                    password = "", error = null, errorCode = null, problem = null,
+                )
                 else -> it
             }
         }
@@ -335,6 +350,7 @@ class BackupViewModel internal constructor(
                 // Created without limits; the ones chosen are kept as pending and sent once the phrase is checked.
                 val c = wallets.create(s.name, network, pw, parse.caps)
                 walletId = c.wallet.id
+                mutable.update { it.copy(capsNotSaved = c.capsNotSaved, capsUnsupported = c.capsUnsupported) }
                 val p = c.phrase
                 if (p == null) {
                     mutable.update { it.copy(busy = false, step = BackupStep.DONE, revealFailed = true) }
@@ -447,7 +463,13 @@ class BackupViewModel internal constructor(
                 forgetWords()
             }
             val capsFailed = !setCaps(id)
-            mutable.update { it.copy(busy = false, step = BackupStep.DONE, backedUp = kept, saveFailed = !kept, capsFailed = capsFailed) }
+            mutable.update {
+                it.copy(
+                    busy = false, step = BackupStep.DONE, backedUp = kept, saveFailed = !kept, capsFailed = capsFailed,
+                    // Once the limit is set it no longer matters that this phone could not save it.
+                    capsNotSaved = it.capsNotSaved && capsFailed,
+                )
+            }
         }
     }
 
@@ -467,7 +489,7 @@ class BackupViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             val ok = setCaps(id)
-            mutable.update { it.copy(busy = false, capsFailed = !ok) }
+            mutable.update { it.copy(busy = false, capsFailed = !ok, capsNotSaved = it.capsNotSaved && !ok) }
         }
     }
 

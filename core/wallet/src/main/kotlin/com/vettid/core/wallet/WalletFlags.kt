@@ -69,8 +69,11 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     /** The limits chosen for [walletId] that `wallet.caps.set` has not carried yet; null when none (or the file cannot be read). */
     suspend fun pendingCaps(walletId: String): WalletCaps? = lock.withLock { read()?.pendingCaps?.get(walletId) }
 
-    /** Every wallet's pending limits. An unreadable file reads as none (the limits are lost with it; nothing else can be done). */
-    suspend fun allPendingCaps(): Map<String, WalletCaps> = lock.withLock { read()?.pendingCaps.orEmpty() }
+    /**
+     * Every wallet's pending limits, or null when the file cannot be read: then **nobody knows** which wallets have a limit still to
+     * be set, and the caller must not offer Receive for any wallet until the file reads again (fail secure).
+     */
+    suspend fun allPendingCaps(): Map<String, WalletCaps>? = lock.withLock { read()?.pendingCaps }
 
     /** Records the limits chosen for [walletId], to be set; false if it could not be written. */
     suspend fun setPendingCaps(walletId: String, caps: WalletCaps): Boolean =
@@ -91,8 +94,14 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     private suspend fun change(f: (Flags) -> Flags): Boolean {
         val started = generation()
         return lock.withLock {
-            // An unreadable file is replaced: losing a flag only shows "Not backed up" or asks the test chain again.
-            val now = read() ?: Flags(emptySet(), emptyMap())
+            // A file that cannot be loaded (cannot be decrypted, I/O error) is never written over: it may hold pending limits that
+            // would be lost with it, so the change fails. Content that loads but does not parse is replaced: losing a flag only
+            // shows "Not backed up" or asks the test chain again.
+            val now = when (val r = readResult()) {
+                is Read.Loaded -> r.flags
+                Read.Corrupt -> Flags(emptySet(), emptyMap())
+                Read.LoadFailed -> return@withLock false
+            }
             val next = f(now)
             if (next == now) return@withLock true
             if (generation() != started) return@withLock false
@@ -105,17 +114,31 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         }
     }
 
+    /** What reading the file found. */
+    private sealed interface Read {
+        class Loaded(val flags: Flags) : Read
+
+        /** The file loaded but is not a flags file this version reads. */
+        data object Corrupt : Read
+
+        /** The file could not be loaded at all (decryption, I/O). */
+        data object LoadFailed : Read
+    }
+
+    /** The flags, or null when the file cannot be loaded or does not parse. */
+    private suspend fun read(): Flags? = (readResult() as? Read.Loaded)?.flags
+
     @Suppress("TooGenericExceptionCaught", "ReturnCount")
-    private suspend fun read(): Flags? = withContext(Dispatchers.IO) {
+    private suspend fun readResult(): Read = withContext(Dispatchers.IO) {
         val bytes = try {
-            file.load() ?: return@withContext Flags(emptySet(), emptyMap())
+            file.load() ?: return@withContext Read.Loaded(Flags(emptySet(), emptyMap()))
         } catch (_: Exception) {
-            return@withContext null
+            return@withContext Read.LoadFailed
         }
         try {
-            decode(bytes)
+            decode(bytes)?.let { Read.Loaded(it) } ?: Read.Corrupt
         } catch (_: IllegalArgumentException) {
-            null
+            Read.Corrupt
         }
     }
 

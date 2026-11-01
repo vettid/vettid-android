@@ -114,7 +114,8 @@ class WalletDetailViewModel @Inject constructor(
             combine(
                 wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged, wallets.capsPending,
             ) { list, availability, lookups, _, pending ->
-                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId]) to (walletId in pending)
+                val pendingHere = WalletsManager.isPending(pending, walletId)
+                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId]) to pendingHere
             }.mapLatest { (seen, pending) ->
                 val (w, availability, last) = seen
                 Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId), pending)

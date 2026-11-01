@@ -27,10 +27,18 @@ class WalletCapsTest {
     private val chain = FakeChain()
     private val flagsFile = object : WalletFlagsFile {
         var bytes: ByteArray? = null
+        var failLoad = false
+        var failSave = false
+        var saves = 0
 
-        override fun load(): ByteArray? = bytes
+        override fun load(): ByteArray? {
+            check(!failLoad) { "cannot decrypt" }
+            return bytes
+        }
 
         override fun save(bytes: ByteArray) {
+            check(!failSave) { "disk full" }
+            saves++
             this.bytes = bytes
         }
     }
@@ -75,12 +83,12 @@ class WalletCapsTest {
         val again = WalletFlags(flagsFile)
         assertEquals(caps, again.pendingCaps("W1"))
         assertEquals(WalletCaps(null, 9), again.pendingCaps("W2"))
-        assertEquals(setOf("W1", "W2"), again.allPendingCaps().keys)
+        assertEquals(setOf("W1", "W2"), again.allPendingCaps()!!.keys)
         assertTrue(again.backedUp("W1"))
         assertTrue(again.clearPendingCaps("W1"))
         assertNull(again.pendingCaps("W1"))
         assertTrue(again.forget("W2"))
-        assertTrue(again.allPendingCaps().isEmpty())
+        assertTrue(again.allPendingCaps()!!.isEmpty())
         // Nothing pending: the file is as it was before W1d.
         assertEquals("""{"version":1,"backed_up":["W1"],"testnet":{},"note_shown":[]}""", flagsFile.bytes!!.decodeToString())
     }
@@ -133,7 +141,7 @@ class WalletCapsTest {
         val none = m.create("Savings", Network.TESTNET4, "pw")
         val alsoNone = m.create("Spending", Network.TESTNET4, "pw", WalletCaps(null, null))
         assertTrue(m.capsPending.value.isEmpty())
-        assertTrue(WalletFlags(flagsFile).allPendingCaps().isEmpty())
+        assertTrue(WalletFlags(flagsFile).allPendingCaps()!!.isEmpty())
         m.settleCaps(none.wallet.id)
         m.settleCaps(alsoNone.wallet.id)
         assertFalse(ops.calls.any { it.startsWith("caps.") })
@@ -309,7 +317,7 @@ class WalletCapsTest {
         val e = runCatching { m.import("Old", Network.TESTNET4, "wrong", "a b c".toCharArray(), null, caps) }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.BAD_PASSWORD, e.kind)
         assertTrue(m.capsPending.value.isEmpty())
-        assertTrue(WalletFlags(flagsFile).allPendingCaps().isEmpty())
+        assertTrue(WalletFlags(flagsFile).allPendingCaps()!!.isEmpty())
         assertTrue(m.wallets.value.isEmpty())
     }
 
@@ -424,11 +432,181 @@ class WalletCapsTest {
 
     @Test
     fun theWalletsLimitsComeFromTheVaultsList() {
-        val json = WalletFixtures.walletJson().replace(""""tags":[]""", """"tags":[],"caps":{"per_tx_sats":500000,"period_seconds":86400,"spent_sats":0}""")
+        val json = WalletFixtures.walletJson(caps = """{"per_tx_sats":500000,"period_seconds":86400,"spent_sats":0}""")
         val w = WalletWire.wallet(com.vettid.core.vault.VaultJson.parseObject(json.encodeToByteArray()))
         assertTrue(w.capped)
         assertEquals(500_000L, w.perTxSats)
         assertNull(w.perPeriodSats)
         assertFalse(WalletFixtures.wallet().capped)
+    }
+
+    // A flags file that fails to load or to save (fail secure)
+
+    @Test
+    fun aFileThatCannotBeLoadedIsNeverWrittenOverAndItsLimitsStayUnknown() = runBlocking {
+        val f = WalletFlags(flagsFile)
+        assertTrue(f.setPendingCaps("W1", caps))
+        assertTrue(f.setBackedUp("W1"))
+        val before = flagsFile.bytes!!.decodeToString()
+        val saves = flagsFile.saves
+        flagsFile.failLoad = true
+        // Nothing can be changed, and nothing is written: the pending limits are still in the file.
+        assertFalse(f.setBackedUp("W2"))
+        assertFalse(f.setPendingCaps("W2", caps))
+        assertFalse(f.clearPendingCaps("W1"))
+        assertFalse(f.forget("W1"))
+        assertEquals(saves, flagsFile.saves)
+        // Unknown, not empty.
+        assertNull(f.allPendingCaps())
+        flagsFile.failLoad = false
+        assertEquals(before, flagsFile.bytes!!.decodeToString())
+        assertEquals(caps, f.allPendingCaps()!!["W1"])
+        assertTrue(f.setBackedUp("W2"))
+    }
+
+    @Test
+    fun aFileThatCannotBeSavedSaysSoAndKeepsWhatItHad() = runBlocking {
+        val f = WalletFlags(flagsFile)
+        assertTrue(f.setPendingCaps("W1", caps))
+        flagsFile.failSave = true
+        assertFalse(f.setPendingCaps("W2", caps))
+        assertFalse(f.clearPendingCaps("W1"))
+        flagsFile.failSave = false
+        assertEquals(setOf("W1"), f.allPendingCaps()!!.keys)
+    }
+
+    @Test
+    fun anUnreadableFlagsFileMeansNoReceiveForAnyWalletUntilItReads() = runBlocking {
+        val first = manager()
+        first.open()
+        val id = first.create("Savings", Network.TESTNET4, "pw", caps).wallet.id
+        val other = WalletFixtures.wallet(id = "01WALLET000000000000000009", network = "testnet4").also { ops.wallets[it.id] = it }
+        ops.calls.clear()
+        flagsFile.failLoad = true
+        val m = manager()
+        m.open()
+        // Nobody knows which wallets have a limit to set: every wallet is held back, the existing pending text is shown.
+        assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
+        assertTrue(WalletsManager.isPending(m.capsPending.value, other.id))
+        assertEquals(ReceiveResult.CapsPending, m.receiveAddress(other.id))
+        assertEquals(ReceiveResult.CapsPending, m.receiveAddress(id))
+        assertTrue(ops.calls.none { it == "new" || it.startsWith("list:") || it.startsWith("caps.") })
+        // The file reads again: the pending limit is sent first, and Receive is offered.
+        flagsFile.failLoad = false
+        assertTrue(m.receiveAddress(other.id) is ReceiveResult.Address)
+        // Only the wallet that has a limit to set stays held back.
+        assertEquals(setOf(id), m.capsPending.value)
+        assertTrue(m.receiveAddress(id) is ReceiveResult.Address)
+        assertTrue(m.capsPending.value.isEmpty())
+        assertEquals("caps.set:500000:2000000", ops.calls.first { it.startsWith("caps.") })
+        assertTrue(ops.calls.none { it.startsWith("caps.raise") })
+    }
+
+    @Test
+    fun limitsThatCouldNotBeSavedAreSaidAndStillSetInThisSession() = runBlocking {
+        val m = manager()
+        m.open()
+        flagsFile.failSave = true
+        val c = m.create("Savings", Network.TESTNET4, "pw", caps)
+        assertTrue(c.capsNotSaved)
+        assertNull(c.revealFailure)
+        assertEquals(setOf(c.wallet.id), m.capsPending.value)
+        assertEquals(ReceiveResult.CapsPending, m.receiveAddress(c.wallet.id))
+        m.settleCaps(c.wallet.id)
+        assertEquals("caps.set:500000:2000000", ops.calls.last())
+        assertTrue(m.capsPending.value.isEmpty())
+        // A save that works says nothing.
+        flagsFile.failSave = false
+        assertFalse(m.create("Spending", Network.TESTNET4, "pw", caps).capsNotSaved)
+    }
+
+    @Test
+    fun anImportWhoseBackedUpFlagCannotBeWrittenSaysSo() = runBlocking {
+        val m = manager()
+        m.open()
+        flagsFile.failSave = true
+        val r = m.import("Old", Network.TESTNET4, "pw", "a b c".toCharArray(), null)
+        assertTrue(r.notRecorded)
+        assertFalse(r.capsNotSaved)
+        flagsFile.failSave = false
+        assertFalse(m.import("Older", Network.TESTNET4, "pw", "a b c".toCharArray(), null).notRecorded)
+    }
+
+    @Test
+    fun theLimitJustSetMakesThePhraseNeedThePinBeforeAnythingIsSent() = runBlocking {
+        val first = manager()
+        first.open()
+        val id = first.create("Savings", Network.TESTNET4, "pw", caps).wallet.id
+        ops.calls.clear()
+        // A restart: the pending limit is first in line (it fails once), then Back up asks for the phrase without a PIN.
+        ops.capsSetFails = "internal"
+        val m = manager()
+        m.open()
+        ops.capsSetFails = null
+        val e = runCatching { m.revealPhrase(id, "pw") }.exceptionOrNull() as VaultFailure
+        assertEquals(WalletsManager.PIN_REQUIRED, e.code)
+        assertTrue("the password was not sent", ops.calls.none { it == "reveal" })
+        assertTrue(m.wallets.value.single { it.id == id }.capped)
+        assertEquals(24, m.revealPhrase(id, "pw", "123456").wordCount)
+    }
+
+    // A vault before release 26: no `caps` on its wallets
+
+    @Test
+    fun aListedWalletWithoutCapsMeansTheLimitsAreNotOffered() = runBlocking {
+        val m = manager()
+        m.open()
+        assertTrue("no wallets yet: asked as usual", m.capsOffered)
+        val old = WalletFixtures.wallet(id = "01OLD00000000000000000000A", caps = null)
+        ops.wallets[old.id] = old
+        m.refresh()
+        assertFalse(m.wallets.value.single().capsSupported)
+        assertFalse(m.capsOffered)
+        // With caps present, even an empty object, it is offered.
+        ops.wallets.clear()
+        ops.wallets["01NEW"] = WalletFixtures.wallet(id = "01NEW00000000000000000000A", caps = "{}")
+        m.refresh()
+        assertTrue(m.wallets.value.single().capsSupported)
+        assertTrue(m.capsOffered)
+    }
+
+    @Test
+    fun aCreateAnswerWithoutCapsKeepsNothingPendingAndSendsNoSet() = runBlocking {
+        ops.noCaps = true
+        val m = manager()
+        m.open()
+        val c = m.create("Savings", Network.TESTNET4, "pw", caps)
+        assertTrue(c.capsUnsupported)
+        assertFalse(c.capsNotSaved)
+        assertTrue(m.capsPending.value.isEmpty())
+        assertTrue(WalletFlags(flagsFile).allPendingCaps()!!.isEmpty())
+        // Receive is not gated, the check goes on, and no set is ever sent.
+        assertTrue(m.receiveAddress(c.wallet.id) is ReceiveResult.Address)
+        m.settleCaps(c.wallet.id)
+        assertTrue(ops.calls.none { it.startsWith("caps.") })
+        // Nothing chosen: nothing to say.
+        assertFalse(m.create("Spending", Network.TESTNET4, "pw").capsUnsupported)
+    }
+
+    @Test
+    fun anImportAnswerWithoutCapsKeepsNothingPendingAndSendsNoSet() = runBlocking {
+        ops.noCaps = true
+        val m = manager()
+        m.open()
+        val r = m.import("Old", Network.TESTNET4, "pw", "a b c".toCharArray(), null, caps)
+        assertTrue(r.capsUnsupported)
+        assertNull(r.capsFailure)
+        assertTrue(m.capsPending.value.isEmpty())
+        assertTrue(ops.calls.none { it.startsWith("caps.") })
+        assertTrue(m.receiveAddress(r.wallet.id) is ReceiveResult.Address)
+    }
+
+    @Test
+    fun withCapsInTheAnswerTheLimitsAreKeptAndSetAsBefore() = runBlocking {
+        val m = manager()
+        m.open()
+        val c = m.create("Savings", Network.TESTNET4, "pw", caps)
+        assertFalse(c.capsUnsupported)
+        assertEquals(setOf(c.wallet.id), m.capsPending.value)
     }
 }

@@ -266,12 +266,13 @@ private fun PasswordStep(state: BackupUiState, actions: BackupActions, modifier:
 }
 
 /** The line under [DoneStep]'s title; the chosen spending limit that could not be set says that Receive stays off until it is. */
-private fun doneBody(state: BackupUiState): Int? = when {
-    state.revealFailed -> R.string.wallet_created_reveal_failed
-    state.saveFailed -> R.string.wallet_save_failed
-    state.capsFailed -> R.string.wallet_caps_not_set
-    state.backedUp -> null
-    else -> R.string.wallet_backup_body
+private fun doneBody(state: BackupUiState): List<Int> = buildList {
+    if (state.revealFailed) add(R.string.wallet_created_reveal_failed)
+    if (state.saveFailed) add(R.string.wallet_save_failed)
+    if (state.capsFailed) add(R.string.wallet_caps_not_set)
+    if (state.capsNotSaved) add(R.string.wallet_caps_not_saved)
+    if (state.capsUnsupported) add(R.string.wallet_caps_unsupported)
+    if (isEmpty() && !state.backedUp) add(R.string.wallet_backup_body)
 }
 
 /** The end: "Backed up", or why not (the reveal failed, or the check passed but could not be recorded: Try again). */
@@ -285,7 +286,8 @@ private fun DoneStep(state: BackupUiState, actions: BackupActions, modifier: Mod
     val again = state.saveFailed || state.capsFailed
     FormScaffold(
         title = stringResource(title),
-        body = doneBody(state)?.let { stringResource(it) },
+        // Every line that applies, not only the first.
+        body = doneBody(state).map { stringResource(it) }.joinToString("\n\n").ifEmpty { null },
         primaryLabel = stringResource(if (again) R.string.wallet_try_again else R.string.wallet_done),
         onPrimary = if (state.saveFailed) actions.onSaveAgain else if (state.capsFailed) actions.onRetryCaps else actions.onBack,
         busy = state.busy,
@@ -377,6 +379,16 @@ private fun PhraseStep(state: BackupUiState, actions: BackupActions, modifier: M
                 Text(words.passphrase(), fontWeight = FontWeight.SemiBold)
                 Text(stringResource(R.string.wallet_phrase_passphrase_note), style = MaterialTheme.typography.bodySmall)
             }
+        }
+        if (state.capsNotSaved) {
+            Text(
+                stringResource(R.string.wallet_caps_not_saved),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("phrase_caps_not_saved"),
+            )
+        }
+        if (state.capsUnsupported) {
+            Text(stringResource(R.string.wallet_caps_unsupported), modifier = Modifier.testTag("phrase_caps_unsupported"))
         }
         Text(
             stringResource(R.string.wallet_phrase_no_screenshots),

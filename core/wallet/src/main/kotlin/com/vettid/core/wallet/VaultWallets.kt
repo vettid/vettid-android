@@ -44,6 +44,11 @@ data class VaultWallet(
     val perTxSats: Long? = null,
     /** `caps.per_period_sats`: the most in the rolling period (24 hours; an hour on staging); null for no limit. */
     val perPeriodSats: Long? = null,
+    /**
+     * The vault knows spending limits: the wallet object carries a `caps` object, even an empty one (VAULT-MESSAGING §10.18, 0.56.0;
+     * release 26). A vault before that has none, and cannot enforce a limit.
+     */
+    val capsSupported: Boolean = true,
 ) {
     /** The chain, when the name alone says which; null for `testnet` (testnet3 or testnet4: ask, ANDROID-PLAN question 16). */
     val network: Network? get() = if (networkName == Network.TESTNET.vaultName) null else Network.fromVaultName(networkName)
@@ -100,6 +105,7 @@ internal object WalletWire {
             capped = (o["caps"] as? JsonObject)?.let { c -> CAP_KEYS.any { k -> c.isNumber(k) } } == true,
             perTxSats = (o["caps"] as? JsonObject)?.number("per_tx_sats"),
             perPeriodSats = (o["caps"] as? JsonObject)?.number("per_period_sats"),
+            capsSupported = o["caps"] is JsonObject,
         )
     }
 

@@ -288,4 +288,89 @@ class ImportViewModelTest {
         for (s in listOf("legal", "winner", "hunter2", "pw-secret", "Old wallet")) assertFalse("'$s' in $printed", printed.contains(s))
         assertFalse(PhraseStatus(12, null, true).toString().contains("legal"))
     }
+
+    @Test
+    fun foldingAdvancedAwayForgetsThePassphrase() = runTest {
+        val vm = vm()
+        vm.fill()
+        vm.toggleAdvanced()
+        vm.setPassphrase("Correct Horse")
+        vm.toggleAdvanced()
+        assertEquals("", vm.state.value.passphrase)
+        assertFalse(vm.state.value.advanced)
+        vm.toLimits()
+        vm.toPassword()
+        vm.setPassword("pw")
+        vm.import()
+        eventually { vm.state.value.importedId != null }
+        assertNull(ops.importedPassphrase)
+    }
+
+    @Test
+    fun theChecksumIsCheckedAgainInsideImportBeforeAnythingIsSent() = runTest {
+        val vm = vm()
+        vm.fill()
+        vm.toLimits()
+        vm.toPassword()
+        // The words change behind the steps (not reachable from the screens): nothing is sent for them.
+        vm.setWords(badSum)
+        vm.setPassword("pw")
+        vm.import()
+        assertEquals(ImportStep.FORM, vm.state.value.step)
+        assertTrue(vm.state.value.invalidPhrase)
+        assertEquals("", vm.state.value.password)
+        assertTrue(ops.calls.none { it.startsWith("create") })
+    }
+
+    @Test
+    fun aListedWalletWithoutCapsSkipsTheLimitsStep() = runTest {
+        ops.wallets["01OLD00000000000000000000A"] = ops.wallet("01OLD00000000000000000000A").copy(capsSupported = false)
+        val vm = vm()
+        vm.fill()
+        vm.toLimits()
+        assertEquals(ImportStep.PASSWORD, vm.state.value.step)
+        assertFalse(vm.state.value.limitsAsked)
+        vm.previous()
+        assertEquals(ImportStep.FORM, vm.state.value.step)
+        vm.toLimits()
+        vm.setPassword("pw")
+        vm.import()
+        eventually { vm.state.value.importedId != null }
+        assertTrue(ops.calls.none { it.startsWith("caps.") })
+        assertTrue(wallets.capsPending.value.isEmpty())
+        assertEquals(ImportStep.PASSWORD, vm.state.value.step)
+    }
+
+    @Test
+    fun aCreateAnswerWithoutCapsDropsTheLimitAndSaysSo() = runTest {
+        ops.noCaps = true
+        val vm = vm()
+        vm.fill()
+        vm.toLimits()
+        vm.setLimitChoice(true)
+        vm.setPerTx("500000")
+        vm.toPassword()
+        vm.setPassword("pw")
+        vm.import()
+        eventually { vm.state.value.importedId != null }
+        assertEquals(ImportStep.DONE, vm.state.value.step)
+        assertTrue(vm.state.value.capsUnsupported)
+        assertFalse(vm.state.value.capsFailed)
+        assertTrue(wallets.capsPending.value.isEmpty())
+        assertTrue(ops.calls.none { it.startsWith("caps.") })
+    }
+
+    @Test
+    fun aBackedUpFlagThatCannotBeWrittenIsSaid() = runTest {
+        val vm = vm()
+        vm.fill()
+        vm.toLimits()
+        vm.toPassword()
+        vm.setPassword("pw")
+        flagsFile.failSaves = true
+        vm.import()
+        eventually { vm.state.value.importedId != null }
+        assertTrue(vm.state.value.notRecorded)
+        assertEquals(ImportStep.DONE, vm.state.value.step)
+    }
 }

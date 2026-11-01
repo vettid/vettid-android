@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -122,7 +123,7 @@ private fun Words(state: ImportUiState, actions: ImportActions) {
                     Text(
                         when {
                             unknown != null -> stringResource(R.string.wallet_import_unknown_word, unknown)
-                            count > 0 -> stringResource(R.string.wallet_import_count, count)
+                            count > 0 -> pluralStringResource(R.plurals.wallet_import_count, count, count)
                             else -> stringResource(R.string.wallet_import_words_hint)
                         },
                         Modifier.testTag("import_words_status"),
@@ -189,13 +190,20 @@ private fun ImportPassword(state: ImportUiState, actions: ImportActions, modifie
 /** Imported, but the spending limit chosen is not set yet: no Receive until it is. */
 @Composable
 private fun ImportDone(state: ImportUiState, actions: ImportActions, modifier: Modifier) {
+    // Every line that applies: the limit not set, that it was not saved on this phone, that the wallet was not recorded as backed up.
+    val lines = buildList {
+        if (state.capsFailed) add(R.string.wallet_caps_not_set)
+        if (state.capsNotSaved) add(R.string.wallet_caps_not_saved)
+        if (state.notRecorded) add(R.string.wallet_import_not_recorded)
+        if (state.capsUnsupported) add(R.string.wallet_caps_unsupported)
+    }
     FormScaffold(
         title = stringResource(R.string.wallet_imported),
-        body = stringResource(R.string.wallet_caps_not_set),
-        primaryLabel = stringResource(R.string.wallet_try_again),
-        onPrimary = actions.onRetryCaps,
+        body = lines.map { stringResource(it) }.joinToString("\n\n"),
+        primaryLabel = stringResource(if (state.capsFailed) R.string.wallet_try_again else R.string.wallet_open),
+        onPrimary = if (state.capsFailed) actions.onRetryCaps else actions.onOpen,
         busy = state.busy,
-        secondaryLabel = stringResource(R.string.wallet_open),
+        secondaryLabel = if (state.capsFailed) stringResource(R.string.wallet_open) else null,
         onSecondary = actions.onOpen,
         modifier = modifier.testTag("wallet_import_done"),
     ) {}

@@ -67,6 +67,9 @@ internal class FakeWallets : WalletOps {
     /** A vault error code for `wallet.caps.set`, else none. */
     var capsSetFails: String? = null
 
+    /** A vault before release 26: the wallet `create` answers has no `caps`. */
+    var noCaps = false
+
     /** The PIN this vault takes. */
     var pin = "123456"
 
@@ -79,7 +82,9 @@ internal class FakeWallets : WalletOps {
         }
         createFails?.let { throw VaultOpException("wallet.create", it) }
         if (password != "pw") throw VaultOpException("wallet.create", "bad_password")
-        return wallet("01NEW000000000000000000000", name, network)
+        return wallet("01NEW000000000000000000000", name, network).let { w ->
+            if (noCaps) w.copy(capsSupported = false).also { wallets[w.id] = it } else w
+        }
     }
 
     override suspend fun capsSet(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): Long {
@@ -147,8 +152,12 @@ internal class FakeWallets : WalletOps {
 
 internal class MemoryFlags : WalletFlagsFile {
     var bytes: ByteArray? = null
+    var failLoads = false
 
-    override fun load(): ByteArray? = bytes
+    override fun load(): ByteArray? {
+        if (failLoads) throw java.io.IOException("cannot decrypt")
+        return bytes
+    }
 
     var saves = 0
     var failSaves = false

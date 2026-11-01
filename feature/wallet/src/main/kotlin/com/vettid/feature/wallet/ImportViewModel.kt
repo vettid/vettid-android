@@ -75,7 +75,7 @@ enum class ImportStep {
     /** The VettID password; the wallet is imported. */
     PASSWORD,
 
-    /** Imported, but the chosen limit could not be set yet. */
+    /** Imported, but the chosen limit could not be set yet, or this phone could not record the wallet as backed up. */
     DONE,
 }
 
@@ -89,8 +89,8 @@ enum class ImportProblem {
 }
 
 /**
- * The state of the Import flow. The words and the passphrase as typed are in it for the field to draw (Compose draws a `String`; the
- * view model's own copy is a [CharArray], wiped with it); both are blank once the flow ends. Prints its step only.
+ * The state of the Import flow. The words and the passphrase as typed are in it for the fields to draw (Compose draws a `String`);
+ * both are blank once the flow ends. Prints its step only.
  */
 data class ImportUiState(
     val step: ImportStep = ImportStep.FORM,
@@ -111,6 +111,14 @@ data class ImportUiState(
     /** The wallet was imported ([ImportStep.DONE] when its limit is still to be set, else the flow leaves for it). */
     val importedId: String? = null,
     val capsFailed: Boolean = false,
+    /** This phone could not record the imported wallet as backed up: it shows "Not backed up". */
+    val notRecorded: Boolean = false,
+    /** The vault cannot enforce spending limits: the limits step was not asked, or the limits chosen were not kept or sent. */
+    val capsUnsupported: Boolean = false,
+    /** The limits step was asked: Back from the password returns to it. */
+    val limitsAsked: Boolean = false,
+    /** The limits chosen could not be saved on this phone (kept for this session only), and the send failed. */
+    val capsNotSaved: Boolean = false,
     /** The vault closed (locked, held, due) during the flow: the words are gone and the flow leaves. */
     val closed: Boolean = false,
 ) {
@@ -119,6 +127,9 @@ data class ImportUiState(
     val passphraseValid: Boolean get() = PassphraseRule.valid(passphrase)
     val limitsParse: LimitsParse get() = LimitsInput.parse(limits)
     val idle: Boolean get() = !busy && !closed
+
+    /** Imported with nothing left to say or do here (no limit to retry, no notice): the flow goes on to the wallet. */
+    val finished: Boolean get() = importedId != null && !capsFailed && !notRecorded && !capsUnsupported
 
     /** Nothing in progress, a password is typed and the limits are ones the vault would take. */
     val passwordReady: Boolean get() = idle && password.isNotEmpty() && limitsParse.ok
@@ -133,14 +144,15 @@ data class ImportUiState(
  * Import a wallet ([ImportWalletRoute][com.vettid.core.data.wallet.ImportWalletRoute]; ANDROID-PLAN §4 "Wallet", screens table):
  * name, network, the words (each checked against the BIP39 English list as typed, then the checksum before anything is sent) and an
  * optional passphrase; then the limits step and the password; `wallet.create` with the words as `item`, and the chosen limits set
- * at once (an imported wallet starts backed up). The words and passphrase are kept in [CharArray]s, wiped when the flow ends, when
- * the vault closes and in [onCleared]; none of it is in saved state (this view model takes no `SavedStateHandle`), a log, or the
- * clipboard.
+ * at once (an imported wallet starts backed up); the checksum is checked again inside [import], before anything is sent. The words
+ * live as the text the field draws (Compose needs a `String`, blank once the flow ends); the array sent is made from it at the send
+ * and wiped as soon as it is answered. The passphrase is also kept in a [CharArray], wiped when the flow ends, when "Advanced" is
+ * folded away, when the vault closes and in [onCleared]. None of it is in saved state (this view model takes no
+ * `SavedStateHandle`), a log, or the clipboard.
  */
 @Suppress("TooManyFunctions")
 @HiltViewModel
 class ImportViewModel @Inject constructor(private val wallets: WalletsManager) : ViewModel() {
-    private var words = CharArray(0)
     private var pass = CharArray(0)
 
     private val mutable = MutableStateFlow(ImportUiState(networks = wallets.creatable, network = wallets.creatable.firstOrNull()))
@@ -165,14 +177,21 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
 
     fun setNetwork(n: Network) = mutable.update { it.copy(network = n) }
 
-    /** The words as typed: the array is the view model's copy; the state keeps the text for the field. */
+    /** The words as typed: the state keeps the text for the field; the array that is sent is made from it at the send ([import]). */
     fun setWords(text: String) {
-        words.fill(Char(0))
-        words = text.toCharArray()
         mutable.update { it.copy(typed = text, status = PhraseInput.analyse(text), invalidPhrase = false, error = null, problem = null) }
     }
 
-    fun toggleAdvanced() = mutable.update { it.copy(advanced = !it.advanced) }
+    /** "Advanced": folding it away also forgets the passphrase typed there (it is not sent behind a closed section). */
+    fun toggleAdvanced() {
+        if (mutable.value.advanced) {
+            pass.fill(Char(0))
+            pass = CharArray(0)
+            mutable.update { it.copy(advanced = false, passphrase = "") }
+        } else {
+            mutable.update { it.copy(advanced = true) }
+        }
+    }
 
     fun setPassphrase(text: String) {
         pass.fill(Char(0))
@@ -195,7 +214,12 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
         val s = mutable.value
         if (s.step != ImportStep.FORM || !s.idle || !s.formReady) return
         if (PhraseInput.checksumOk(s.typed)) {
-            mutable.update { it.copy(step = ImportStep.LIMITS, invalidPhrase = false) }
+            // A vault whose wallets give no `caps` cannot enforce a limit: no question, nothing chosen, nothing pending.
+            if (wallets.capsOffered) {
+                mutable.update { it.copy(step = ImportStep.LIMITS, limitsAsked = true, invalidPhrase = false) }
+            } else {
+                mutable.update { it.copy(step = ImportStep.PASSWORD, limitsAsked = false, limits = LimitsForm(), invalidPhrase = false) }
+            }
         } else {
             mutable.update { it.copy(invalidPhrase = true) }
         }
@@ -211,7 +235,9 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
         mutable.update {
             when (it.step) {
                 ImportStep.LIMITS -> it.copy(step = ImportStep.FORM)
-                ImportStep.PASSWORD -> it.copy(step = ImportStep.LIMITS, password = "", error = null, problem = null)
+                ImportStep.PASSWORD -> it.copy(
+                    step = if (it.limitsAsked) ImportStep.LIMITS else ImportStep.FORM, password = "", error = null, problem = null,
+                )
                 else -> it
             }
         }
@@ -222,6 +248,11 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
         val s = mutable.value
         val network = s.network
         if (s.step != ImportStep.PASSWORD || !s.passwordReady || network == null) return
+        // The checksum again, whatever the steps before did: nothing is sent for words that do not fit it.
+        if (!s.status.ready || !PhraseInput.checksumOk(s.typed)) {
+            mutable.update { it.copy(step = ImportStep.FORM, invalidPhrase = true, password = "") }
+            return
+        }
         val pw = s.password
         mutable.update { it.copy(busy = true, password = "", error = null, problem = null) }
         viewModelScope.launch {
@@ -229,10 +260,13 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
             try {
                 val r = wallets.import(s.name, network, pw, phrase, pass.takeIf { it.isNotEmpty() }, s.limitsParse.caps)
                 wipe()
+                val notice = r.capsFailure != null || r.notRecorded || r.capsUnsupported
                 mutable.update {
                     it.copy(
                         busy = false, typed = "", passphrase = "", status = PhraseStatus(), importedId = r.wallet.id,
-                        capsFailed = r.capsFailure != null, step = if (r.capsFailure != null) ImportStep.DONE else it.step,
+                        capsFailed = r.capsFailure != null, notRecorded = r.notRecorded, capsNotSaved = r.capsNotSaved,
+                        capsUnsupported = r.capsUnsupported,
+                        step = if (notice) ImportStep.DONE else it.step,
                     )
                 }
             } catch (e: VaultFailure) {
@@ -270,9 +304,7 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
     }
 
     private fun wipe() {
-        words.fill(Char(0))
         pass.fill(Char(0))
-        words = CharArray(0)
         pass = CharArray(0)
     }
 

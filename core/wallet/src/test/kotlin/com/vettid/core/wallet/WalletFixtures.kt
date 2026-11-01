@@ -26,15 +26,18 @@ internal object WalletFixtures {
     /** The vault's own first P2WPKH receive address of this wallet on testnet4 (AccountTest). */
     const val FIRST_P2WPKH = "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl"
 
-    fun walletJson(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1, nextChange: Int = 0, fingerprint: String = FP, path86: String = "m/86'/1'/0'") = """
+    fun walletJson(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1, nextChange: Int = 0, fingerprint: String = FP, path86: String = "m/86'/1'/0'", caps: String? = DEFAULT_CAPS) = """
         {"wallet_id":"$id","version":4,"name":"Savings","network":"$network","fingerprint":"$fingerprint","address_type":"p2tr",
          "accounts":[
           {"type":"p2tr","path":"$path86","xpub":"$TPUB86","descriptors":{"receive":"tr([$FP/86'/1'/0']$TPUB86/0/*)","change":"tr([$FP/86'/1'/0']$TPUB86/1/*)"},"next_receive":$nextReceive,"next_change":$nextChange},
           {"type":"p2wpkh","path":"m/84'/1'/0'","xpub":"$TPUB84","descriptors":{"receive":"wpkh([$FP/84'/1'/0']$TPUB84/0/*)","change":"wpkh([$FP/84'/1'/0']$TPUB84/1/*)"},"next_receive":0,"next_change":0}],
-         "tags":[],"created_at":"2026-10-31T12:00:00Z"}"""
+         "tags":[],${caps?.let { "\"caps\":$it," } ?: ""}"created_at":"2026-10-31T12:00:00Z"}"""
 
-    fun wallet(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1): VaultWallet =
-        WalletWire.wallet(VaultJson.parseObject(walletJson(id, network, nextReceive).encodeToByteArray()))
+    /** A vault with spending limits (release 26) always gives `caps`; none are set. */
+    const val DEFAULT_CAPS = """{"period_seconds":86400,"spent_sats":0}"""
+
+    fun wallet(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1, caps: String? = DEFAULT_CAPS): VaultWallet =
+        WalletWire.wallet(VaultJson.parseObject(walletJson(id, network, nextReceive, caps = caps).encodeToByteArray()))
 
     fun account(type: String): Account = if (type == "p2tr") {
         Account.fromDescriptors("tr([$FP/86'/1'/0']$TPUB86/0/*)", "tr([$FP/86'/1'/0']$TPUB86/1/*)", Network.TESTNET4)
@@ -58,6 +61,9 @@ internal class FakeWalletOps : WalletOps {
     var lie: ((WalletAddress) -> WalletAddress)? = null
     var listGate: CompletableDeferred<Unit>? = null
     var created = 0
+
+    /** A vault before release 26: its wallets have no `caps`. */
+    var noCaps = false
     var conflict = false
     var nextLie: String? = null
 
@@ -96,7 +102,9 @@ internal class FakeWalletOps : WalletOps {
             importedPassphrase = item.passphrase?.let(::String)
         }
         if (password != "pw") refuse("wallet.create", "bad_password")
-        val w = WalletFixtures.wallet(id = "01WALLET%018d".format(++created), network = network, nextReceive = 0)
+        val w = WalletFixtures.wallet(
+            id = "01WALLET%018d".format(++created), network = network, nextReceive = 0, caps = WalletFixtures.DEFAULT_CAPS.takeUnless { noCaps },
+        )
         wallets[w.id] = w
         return w
     }

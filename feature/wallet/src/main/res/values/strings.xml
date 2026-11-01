@@ -48,6 +48,8 @@
     <string name="wallet_limit_order">Most per payment can\'t be more than the most in any 24 hours.</string> <!-- new -->
     <string name="wallet_limit_need_one">Enter at least one limit, or choose No limit.</string> <!-- new -->
     <string name="wallet_caps_not_set">Your spending limit isn\'t set yet. Receiving stays off until it is.</string> <!-- new -->
+    <string name="wallet_caps_not_saved">This phone couldn\'t save your spending limit, so it is kept only until you close the app. Finish setting it up now.</string> <!-- new -->
+    <string name="wallet_caps_unsupported">Your vault can\'t enforce spending limits yet, so this wallet has none. You can set one once your vault is updated.</string> <!-- new -->
     <string name="wallet_receive_caps_pending">Receiving is off until your spending limit is set.</string> <!-- new -->
 
     <!-- The phrase of a wallet with a spending limit -->
@@ -58,14 +60,18 @@
     <string name="wallet_add">Add a wallet</string> <!-- new: the floating button's description -->
     <string name="wallet_import">Import a wallet</string> <!-- screens table -->
     <string name="wallet_import_words_hint">Type or paste the 12, 15, 18, 21 or 24 words, in order.</string> <!-- new -->
-    <string name="wallet_import_count">%1$d words</string> <!-- new -->
-    <string name="wallet_import_unknown_word">Word %1$d isn\'t a recovery word.</string> <!-- new -->
+    <plurals name="wallet_import_count"> <!-- new -->
+        <item quantity="one">%1$d word</item>
+        <item quantity="other">%1$d words</item>
+    </plurals>
+    <string name="wallet_import_unknown_word">Word %1$d isn\'t in the recovery word list.</string> <!-- new -->
     <string name="wallet_import_invalid">These words aren\'t a valid recovery phrase. Check each word and the order.</string> <!-- draft -->
     <string name="wallet_import_advanced">Advanced</string> <!-- screens table -->
     <string name="wallet_import_passphrase_note">Only if you set one when the wallet was made. Letters, digits and symbols from a standard keyboard only.</string> <!-- screens table -->
     <string name="wallet_import_passphrase_bad">Use only letters, digits and symbols from a standard keyboard, up to 256 characters.</string> <!-- new -->
     <string name="wallet_import_action">Import wallet</string> <!-- new -->
     <string name="wallet_import_exists">This wallet is already in your vault.</string> <!-- new -->
+    <string name="wallet_import_not_recorded">This phone couldn\'t record the wallet as backed up, so it may show Not backed up. You typed its words, so there is nothing to check.</string> <!-- new -->
     <string name="wallet_imported">Wallet imported</string> <!-- new -->
     <string name="wallet_open">Open wallet</string> <!-- new -->
 

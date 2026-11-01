@@ -242,4 +242,83 @@ class BackupLimitsViewModelTest {
         assertFalse(vm.state.value.toString().contains("987654"))
         assertFalse(LimitsForm(true, "424242", "7").toString().contains("424242"))
     }
+
+    // A vault before release 26
+
+    @Test
+    fun aListedWalletWithoutCapsSkipsTheLimitsStepAndNothingIsPendingOrGated() = runTest {
+        ops.wallets["01OLD00000000000000000000A"] = ops.wallet("01OLD00000000000000000000A").copy(capsSupported = false)
+        val vm = vm()
+        vm.setName("Savings")
+        vm.toLimits()
+        assertEquals(BackupStep.CREATE, vm.state.value.step)
+        assertFalse(vm.state.value.limitsAsked)
+        // Back goes to the name, not to a step that was never shown.
+        vm.previous()
+        assertEquals(BackupStep.FORM, vm.state.value.step)
+        vm.toLimits()
+        vm.setPassword("pw")
+        vm.create()
+        vm.checkAll()
+        assertTrue(vm.state.value.backedUp)
+        assertTrue(ops.calls.none { it.startsWith("caps.") })
+        assertTrue(wallets.capsPending.value.isEmpty())
+        assertFalse(vm.state.value.capsUnsupported)
+    }
+
+    @Test
+    fun aCreateAnswerWithoutCapsDropsTheChosenLimitAndSaysSo() = runTest {
+        ops.noCaps = true
+        val vm = vm()
+        vm.toCreate {
+            setLimitChoice(true)
+            setPerTx("500000")
+        }
+        vm.setPassword("pw")
+        vm.create()
+        eventually { vm.state.value.step == BackupStep.PHRASE }
+        assertTrue(vm.state.value.capsUnsupported)
+        assertTrue(wallets.capsPending.value.isEmpty())
+        assertTrue(WalletFlags(flagsFile).allPendingCaps()!!.isEmpty())
+        vm.startCheck()
+        for (at in vm.state.value.asked) vm.answer(ops.words[at])
+        eventually { vm.state.value.step == BackupStep.DONE && !vm.state.value.busy }
+        assertTrue(vm.state.value.backedUp)
+        assertTrue(vm.state.value.capsUnsupported)
+        assertFalse(vm.state.value.capsFailed)
+        assertTrue(ops.calls.none { it.startsWith("caps.") })
+    }
+
+    @Test
+    fun limitsThatCouldNotBeSavedOnThisPhoneAreSaidAndClearedOnceSet() = runTest {
+        val vm = vm()
+        vm.toCreate {
+            setLimitChoice(true)
+            setPerTx("500000")
+        }
+        vm.setPassword("pw")
+        flagsFile.failSaves = true
+        vm.create()
+        eventually { vm.state.value.step == BackupStep.PHRASE }
+        assertTrue(vm.state.value.capsNotSaved)
+        flagsFile.failSaves = false
+        vm.startCheck()
+        for (at in vm.state.value.asked) vm.answer(ops.words[at])
+        eventually { vm.state.value.step == BackupStep.DONE && !vm.state.value.busy }
+        assertEquals("caps.set:500000:null", ops.calls.last())
+        assertFalse(vm.state.value.capsNotSaved)
+    }
+
+    @Test
+    fun anUnreadableFlagsFileHoldsReceiveBackForTheWalletDetail() = runTest {
+        val id = "01WALLET0000000000000000AA"
+        ops.wallet(id)
+        flagsFile.failLoads = true
+        wallets = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        wallets.open()
+        assertTrue(WalletsManager.isPending(wallets.capsPending.value, id))
+        flagsFile.failLoads = false
+        wallets.settleCaps(id)
+        assertFalse(WalletsManager.isPending(wallets.capsPending.value, id))
+    }
 }

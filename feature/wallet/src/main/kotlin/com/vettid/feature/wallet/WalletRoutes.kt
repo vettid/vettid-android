@@ -52,9 +52,9 @@ private fun ImportDestination(host: WalletHost, entryId: String) {
     // The vault closed during the flow: its words are gone, and the flow leaves.
     LaunchedEffect(state.closed) { if (state.closed) leave() }
     // Imported with its limit set (or none chosen): on to the wallet, where its history is looked for.
-    LaunchedEffect(state.importedId, state.capsFailed) {
+    LaunchedEffect(state.finished) {
         val id = state.importedId
-        if (id != null && !state.capsFailed) {
+        if (id != null && state.finished) {
             leave()
             host.navigate(WalletOpenRoute(id))
         }

@@ -231,7 +231,7 @@ class ImportScreensTest {
     fun anUnknownWordIsNamedAndTheChecksumMessageIsThePlansText() {
         var state by mutableStateOf(form.copy(typed = "legal winnr", status = PhraseInput.analyse("legal winnr")))
         rule.setContent { ImportScreen(state, ImportActions()) }
-        rule.onNodeWithText("Word 2 isn't a recovery word.").assertIsDisplayed()
+        rule.onNodeWithText("Word 2 isn't in the recovery word list.").assertIsDisplayed()
         rule.onNodeWithText("Continue").assertIsNotEnabled()
         state = form.copy(invalidPhrase = true)
         rule.onNodeWithText("These words aren't a valid recovery phrase. Check each word and the order.").performScrollTo().assertIsDisplayed()
@@ -308,5 +308,52 @@ class ImportScreensTest {
         rule.onNodeWithTag("wallet_caps_pending").assertDoesNotExist()
         rule.onNodeWithTag("wallet_receive").assertIsEnabled().performClick()
         assertEquals(1, received)
+    }
+
+    @Test
+    fun theDoneStepSaysEveryLineThatApplies() {
+        rule.setContent {
+            BackupScreen(
+                BackupUiState(BackupStep.DONE, backedUp = false, saveFailed = true, capsFailed = true, capsNotSaved = true, capsUnsupported = true),
+                BackupActions(),
+            )
+        }
+        rule.onNodeWithText("Your check passed", substring = true).assertExists()
+        rule.onNodeWithText("Your spending limit isn't set yet", substring = true).assertExists()
+        rule.onNodeWithText("This phone couldn't save your spending limit", substring = true).assertExists()
+        rule.onNodeWithText("Your vault can't enforce spending limits yet, so this wallet has none.", substring = true).assertExists()
+    }
+
+    @Test
+    fun theNoticesShowUnderThePhrase() {
+        rule.setContent {
+            BackupScreen(
+                BackupUiState(BackupStep.PHRASE, words = PhraseWords(List(12) { "w$it".toCharArray() }), capsNotSaved = true, capsUnsupported = true),
+                BackupActions(),
+            )
+        }
+        rule.onNodeWithTag("phrase_caps_not_saved").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("phrase_caps_unsupported").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun anImportedWalletOnAVaultWithoutLimitsOffersOpenAndSaysSo() {
+        var open = 0
+        rule.setContent {
+            ImportScreen(
+                form.copy(step = ImportStep.DONE, importedId = "W", capsUnsupported = true, notRecorded = true),
+                ImportActions(onOpen = { open++ }),
+            )
+        }
+        rule.onNodeWithText("Your vault can't enforce spending limits yet", substring = true).assertExists()
+        rule.onNodeWithText("This phone couldn't record the wallet", substring = true).assertExists()
+        rule.onNodeWithText("Open wallet").performClick()
+        assertEquals(1, open)
+    }
+
+    @Test
+    fun theWordCountIsAPlural() {
+        rule.setContent { ImportScreen(form.copy(typed = "legal", status = PhraseInput.analyse("legal ")), ImportActions()) }
+        rule.onNodeWithText("1 word").assertExists()
     }
 }
