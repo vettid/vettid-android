@@ -55,6 +55,7 @@ internal class FakeWalletOps : WalletOps {
     var lie: ((WalletAddress) -> WalletAddress)? = null
     var listGate: CompletableDeferred<Unit>? = null
     var created = 0
+    var conflict = false
 
     private fun refuse(type: String, code: String): Nothing = throw VaultOpException(type, code)
 
@@ -85,6 +86,13 @@ internal class FakeWalletOps : WalletOps {
         calls += "delete"
         if (password != "pw") refuse("item.delete", "bad_password")
         wallets.remove(walletId)
+    }
+
+    override suspend fun setAddressType(walletId: String, version: Long, type: String): Long {
+        calls += "update:$version:$type"
+        if (conflict) refuse("wallet.update", "conflict")
+        val w = wallets.getValue(walletId)
+        return (version + 1).also { wallets[walletId] = w.copy(addressType = type, version = it) }
     }
 
     override suspend fun newAddress(walletId: String): WalletAddress {

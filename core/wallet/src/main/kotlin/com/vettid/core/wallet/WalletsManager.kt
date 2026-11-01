@@ -242,6 +242,31 @@ class WalletsManager(
 
     suspend fun backedUp(walletId: String): Boolean = flags.backedUp(walletId)
 
+    /** Whether the chain server's privacy note was shown for [walletId]. */
+    suspend fun privacyNoteShown(walletId: String): Boolean = flags.privacyNoteShown(walletId)
+
+    /** The note acknowledged: false if the flag could not be written (the note shows again). */
+    suspend fun setPrivacyNoteShown(walletId: String): Boolean =
+        flags.setPrivacyNoteShown(walletId).also { flagsChangedFlow.update { it + 1 } }
+
+    /**
+     * "Receiving address type": `wallet.update{address_type}` at the wallet's current version. On success the wallet shows the new type
+     * and version; on a `conflict` (changed on another device) the list is read again and the failure is thrown.
+     */
+    suspend fun setAddressType(walletId: String, type: String) {
+        val g = gen()
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
+        val version = try {
+            vaultGuard { ops().setAddressType(walletId, wallet.version, type) }
+        } catch (e: VaultFailure) {
+            if (e.kind == FailureKind.CONFLICT) runCatching { refresh() }
+            throw e
+        }
+        publish(g) {
+            walletsFlow.update { l -> l.map { if (it.id == walletId) it.copy(addressType = type, version = version) else it } }
+        }
+    }
+
     /** The phrase checked: "Backed up". False if the flag could not be written (it shows "Not backed up" again). */
     suspend fun confirmBackup(walletId: String): Boolean = flags.setBackedUp(walletId).also { flagsChangedFlow.update { it + 1 } }
 

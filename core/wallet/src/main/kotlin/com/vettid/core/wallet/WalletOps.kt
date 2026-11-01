@@ -8,6 +8,7 @@ import com.vettid.core.vault.walletAddressUsed
 import com.vettid.core.vault.walletCreate
 import com.vettid.core.vault.walletGet
 import com.vettid.core.vault.walletList
+import com.vettid.core.vault.walletUpdate
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -65,6 +66,9 @@ interface WalletOps {
     /** `item.delete` of the wallet's item, a credential operation: the vault forgets the wallet and its phrase. */
     suspend fun delete(walletId: String, password: String)
 
+    /** `wallet.update{address_type}` at [version]: the wallet's new version. `conflict` if the wallet changed meanwhile. */
+    suspend fun setAddressType(walletId: String, version: Long, type: String): Long
+
     /** `wallet.address.new` on the receiving account's receive chain. */
     suspend fun newAddress(walletId: String): WalletAddress
 
@@ -98,6 +102,9 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     }
 
     override suspend fun delete(walletId: String, password: String) = api().itemDelete(walletId, password)
+
+    override suspend fun setAddressType(walletId: String, version: Long, type: String): Long =
+        WalletWire.version(api().walletUpdate(walletId, version, type))
 
     override suspend fun newAddress(walletId: String): WalletAddress = WalletWire.address(api().walletAddressNew(walletId))
 

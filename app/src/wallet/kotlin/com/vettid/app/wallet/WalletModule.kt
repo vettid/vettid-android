@@ -14,6 +14,8 @@ import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.wallet.WalletAccess
 import com.vettid.core.data.wallet.WalletLabel
 import com.vettid.core.data.wipe.WipeHook
+import com.vettid.core.wallet.ChainServerSettings
+import com.vettid.core.wallet.ServersChainSettings
 import com.vettid.core.wallet.ServersChainSource
 import com.vettid.core.wallet.VaultWalletOps
 import com.vettid.core.wallet.WalletAvailability
@@ -68,6 +70,11 @@ object WalletModule {
         http,
         generation = { wipe.generation },
     )
+
+    /** The Chain server screen's view of the setting (a small interface so that its ViewModel is tested without HTTP). */
+    @Provides
+    @Singleton
+    fun chainServerSettings(servers: ChainServers): ChainServerSettings = ServersChainSettings(servers)
 
     /** The defaults; a regtest server only in devStack (the branch is compiled away elsewhere: no loopback host in any other APK). */
     internal fun chainDefaults(): ChainDefaults =

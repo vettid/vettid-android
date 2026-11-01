@@ -25,6 +25,8 @@ internal class FakeWallets : WalletOps {
     var createFails: String? = null
     var passphrase: String? = null
     var listFails = false
+    var deleteFails = false
+    var conflict = false
     var words = List(24) { i -> "word${'a' + (i % 26)}$i" }
 
     fun wallet(id: String, name: String = "Savings", network: String = "testnet4") =
@@ -52,9 +54,24 @@ internal class FakeWallets : WalletOps {
         return RevealedPhrase(words.joinToString(" ").toCharArray(), passphrase?.toCharArray())
     }
 
-    override suspend fun delete(walletId: String, password: String) = Unit
+    override suspend fun delete(walletId: String, password: String) {
+        calls += "delete:$walletId"
+        if (deleteFails || password != "pw") throw VaultOpException("item.delete", "bad_password")
+        wallets.remove(walletId)
+    }
 
-    override suspend fun newAddress(walletId: String): WalletAddress = error("not in these screens")
+    override suspend fun setAddressType(walletId: String, version: Long, type: String): Long {
+        calls += "update:$version:$type"
+        if (conflict) throw VaultOpException("wallet.update", "conflict")
+        return (version + 1).also { wallets[walletId] = wallets.getValue(walletId).copy(addressType = type, version = it) }
+    }
+
+    var issued = 0
+
+    override suspend fun newAddress(walletId: String): WalletAddress {
+        calls += "new"
+        return WalletAddress("tb1p$issued", "p2tr", issued, false, false).also { issued++ }
+    }
 
     override suspend fun addresses(walletId: String, chain: AddressChain, after: Int?, limit: Int) = AddressPage(emptyList(), null)
 

@@ -412,4 +412,56 @@ class WalletsManagerTest {
         job.join()
         assertTrue(done)
     }
+
+    @Test
+    fun theReceivingAddressTypeIsSetAtTheCurrentVersionAndPublished() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        m.setAddressType(w.id, "p2wpkh")
+        assertEquals("update:${w.version}:p2wpkh", ops.calls.last())
+        val now = m.wallets.value.single()
+        assertEquals("p2wpkh", now.addressType)
+        assertEquals(w.version + 1, now.version)
+    }
+
+    @Test
+    fun aConflictOnTheAddressTypeReadsTheListAgainAndThrows() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        ops.conflict = true
+        // Changed on another device meanwhile.
+        ops.wallets[w.id] = w.copy(version = w.version + 5, name = "Renamed")
+        val e = runCatching { m.setAddressType(w.id, "p2wpkh") }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.CONFLICT, e.kind)
+        assertEquals(2, ops.calls.count { it == "list" })
+        assertEquals("Renamed", m.wallets.value.single().name)
+        assertEquals("p2tr", m.wallets.value.single().addressType)
+    }
+
+    @Test
+    fun theAddressTypeIsNotPublishedAfterAClear() = runBlocking {
+        val w = withWallet()
+        lateinit var m: WalletsManager
+        val gated = object : WalletOps by ops {
+            override suspend fun setAddressType(walletId: String, version: Long, type: String): Long =
+                ops.setAddressType(walletId, version, type).also { m.clear() }
+        }
+        m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
+        m.open()
+        m.setAddressType(w.id, "p2wpkh")
+        assertTrue(m.wallets.value.isEmpty())
+    }
+
+    @Test
+    fun thePrivacyNoteIsKeptAndBumpsTheFlagsSignal() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        assertFalse(m.privacyNoteShown(w.id))
+        val before = m.flagsChanged.value
+        assertTrue(m.setPrivacyNoteShown(w.id))
+        assertTrue(m.privacyNoteShown(w.id))
+        assertEquals(before + 1, m.flagsChanged.value)
+    }
 }
