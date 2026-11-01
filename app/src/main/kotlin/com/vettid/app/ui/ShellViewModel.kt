@@ -19,6 +19,7 @@ import com.vettid.core.data.social.needsDecision
 import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.votes.VoteRules
 import com.vettid.core.data.votes.VotesRepository
+import com.vettid.core.data.wallet.WalletAccess
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -35,10 +36,13 @@ data class ShellBadges(
     /** Open votes not yet voted on (ANDROID-PLAN 0.1.102); the Votes entry shows only with [votesShown]. */
     val votes: Int = 0,
     val votesShown: Boolean = false,
+    /** The vault has wallets (ANDROID-PLAN §4 "Wallet"; never in a build without the wallet): the Wallet entry shows (W1c-2). */
+    val walletShown: Boolean = false,
 )
 
 /** The app shell (drawer badges, the Notifications bell, invitation links the app was opened with). */
 @HiltViewModel
+@Suppress("LongParameterList") // injected: what the shell shows comes from each of these
 class ShellViewModel @Inject constructor(
     private val approvals: ApprovalsRepository,
     messages: MessagesRepository,
@@ -49,6 +53,7 @@ class ShellViewModel @Inject constructor(
     private val taps: NotificationOpenInbox,
     private val visibility: NotifyVisibility,
     votes: VotesRepository,
+    wallet: WalletAccess,
 ) : ViewModel() {
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
@@ -108,8 +113,15 @@ class ShellViewModel @Inject constructor(
         approvals.approvals,
         messages.conversations,
         combine(votes.votes, votes.reconnect, votes.availability, VoteRules::entry),
-    ) { a, c, v ->
-        ShellBadges(approvals = a.count { it.needsDecision }, unread = c.count { it.unread > 0 }, votes = v.badge, votesShown = v.shown)
+        wallet.shown,
+    ) { a, c, v, w ->
+        ShellBadges(
+            approvals = a.count { it.needsDecision },
+            unread = c.count { it.unread > 0 },
+            votes = v.badge,
+            votesShown = v.shown,
+            walletShown = w,
+        )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShellBadges())
 
     private companion object {
