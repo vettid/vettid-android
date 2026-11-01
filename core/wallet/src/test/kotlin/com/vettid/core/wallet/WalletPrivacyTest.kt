@@ -52,6 +52,21 @@ class WalletPrivacyTest {
     }
 
     @Test
+    fun thePassphraseIsKeptExactlyAndAnEmptyOneIsNone() {
+        val words = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+        fun item(pass: String) = VaultJson.parseObject(
+            """{"fields":[{"field_id":"f1","value":"$words"},{"field_id":"f2","value":"$pass"}]}""".encodeToByteArray(),
+        )
+        // Spaces and case are part of a BIP39 passphrase: nothing is trimmed or folded.
+        assertEquals(" Correct  Horse ", String(VaultWalletOps.phraseOf(item(" Correct  Horse "), "f1", "f2").passphrase()!!))
+        assertEquals(null, VaultWalletOps.phraseOf(item(""), "f1", "f2").passphrase())
+        assertEquals(null, VaultWalletOps.phraseOf(item("x"), "f1", null).passphrase())
+        val p = VaultWalletOps.phraseOf(item("secret"), "f1", "f2")
+        p.wipe()
+        assertEquals(null, p.passphrase())
+    }
+
+    @Test
     fun theModuleHasNoLoggingCall() {
         val sources = File("src/main/kotlin").walkTopDown().filter { it.extension == "kt" }.toList()
         assertTrue(sources.size >= 5)

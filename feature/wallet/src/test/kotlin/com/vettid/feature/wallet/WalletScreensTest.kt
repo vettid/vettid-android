@@ -79,7 +79,7 @@ class WalletScreensTest {
                 BackupActions(onShowAgain = { again++ }),
             )
         }
-        rule.onNodeWithText("That isn't word 11. Look at your copy again.").assertIsDisplayed()
+        rule.onNodeWithText("That's not word 11. Look at your paper again.").assertIsDisplayed()
         rule.onNodeWithTag("check_typed").assertDoesNotExist()
         rule.onNodeWithTag("check_candidate_10").assertDoesNotExist()
         rule.onNodeWithTag("check_show_again").performClick()
@@ -106,7 +106,7 @@ class WalletScreensTest {
     fun anEmptyListSaysNoWalletsYet() {
         rule.setContent { WalletsScreen(WalletsUiState(loading = false), chrome, WalletsActions()) }
         rule.onNodeWithText("No wallets yet").assertIsDisplayed()
-        rule.onNodeWithText("Keep bitcoin in your vault. Payments need your password.").assertIsDisplayed()
+        rule.onNodeWithText("Keep bitcoin in your vault. Payments need your VettID password.").assertIsDisplayed()
     }
 
     @Test

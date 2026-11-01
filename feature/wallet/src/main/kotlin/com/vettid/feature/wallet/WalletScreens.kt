@@ -189,15 +189,20 @@ private fun PasswordStep(state: BackupUiState, actions: BackupActions, modifier:
     FormScaffold(
         title = stringResource(R.string.wallet_backup_title),
         body = stringResource(R.string.wallet_backup_body),
-        primaryLabel = stringResource(R.string.wallet_backup_show),
+        // A wallet with a spending limit: no button (its phrase needs the PIN, which comes in a later version).
+        primaryLabel = if (state.capped) null else stringResource(R.string.wallet_backup_show),
         onPrimary = actions.onReveal,
         primaryEnabled = state.password.isNotEmpty(),
         busy = state.busy,
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_backup_password"),
     ) {
-        Text(stringResource(R.string.wallet_backup_password))
-        Password(state, actions)
+        if (state.capped) {
+            Text(stringResource(R.string.wallet_pin_required), modifier = Modifier.testTag("wallet_pin_later"))
+        } else {
+            Text(stringResource(R.string.wallet_backup_password))
+            Password(state, actions)
+        }
     }
 }
 
@@ -243,11 +248,19 @@ private fun NewWalletForm(state: BackupUiState, actions: BackupActions, modifier
             value = state.name,
             onValueChange = actions.onName,
             label = { Text(stringResource(R.string.wallet_name_label)) },
-            isError = state.name.isNotEmpty() && !state.nameValid,
-            supportingText = if (state.name.isNotEmpty() && !state.nameValid) {
-                { Text(stringResource(R.string.wallet_name_error)) }
-            } else {
-                null
+            isError = state.nameProblem != null,
+            supportingText = state.nameProblem?.let { p ->
+                {
+                    Text(
+                        stringResource(
+                            when (p) {
+                                WalletNames.Problem.BLANK -> R.string.wallet_name_blank
+                                WalletNames.Problem.TOO_LONG -> R.string.wallet_name_too_long
+                                WalletNames.Problem.CONTROL -> R.string.wallet_name_control
+                            },
+                        ),
+                    )
+                }
             },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("wallet_name"),
@@ -275,7 +288,7 @@ private fun Password(state: BackupUiState, actions: BackupActions) {
         label = stringResource(R.string.wallet_password_label),
         error = when (state.problem) {
             BackupProblem.LIMIT -> stringResource(R.string.wallet_limit)
-            BackupProblem.PIN_REQUIRED -> stringResource(R.string.wallet_pin_required)
+            BackupProblem.PIN_REQUIRED -> null
             null -> state.error?.let { stringResource(it.messageRes()) }
         },
         onImeAction = { if (state.step == BackupStep.FORM) actions.onCreate() else actions.onReveal() },
@@ -313,6 +326,7 @@ private fun PhraseStep(state: BackupUiState, actions: BackupActions, modifier: M
             Column(Modifier.testTag("phrase_passphrase")) {
                 Text(stringResource(R.string.wallet_phrase_passphrase), style = MaterialTheme.typography.labelLarge)
                 Text(words.passphrase(), fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.wallet_phrase_passphrase_note), style = MaterialTheme.typography.bodySmall)
             }
         }
         Text(

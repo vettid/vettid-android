@@ -38,6 +38,8 @@ data class VaultWallet(
     val addressType: String,
     val accounts: List<VaultAccount>,
     val tags: List<String>,
+    /** The wallet has a spending limit (`caps` with a per-payment or per-period value): showing its phrase needs the PIN (W1d). */
+    val capped: Boolean = false,
 ) {
     /** The chain, when the name alone says which; null for `testnet` (testnet3 or testnet4: ask, ANDROID-PLAN question 16). */
     val network: Network? get() = if (networkName == Network.TESTNET.vaultName) null else Network.fromVaultName(networkName)
@@ -68,6 +70,11 @@ class WalletWireException(field: String) : IllegalStateException("wallet answer:
 
 /** Reads the §10.18 answers. Strict: a missing or mistyped field is a [WalletWireException]. */
 internal object WalletWire {
+    /** A wallet's spending limits (0.56.0): either one set makes it capped; `null` is no limit. */
+    private val CAP_KEYS = listOf("per_tx_sats", "per_period_sats")
+
+    private fun JsonObject.isNumber(k: String): Boolean = (this[k] as? JsonPrimitive)?.let { !it.isString && it.content != "null" } == true
+
     fun wallets(o: JsonObject): List<VaultWallet> = (o["wallets"] as? JsonArray ?: throw WalletWireException("wallets")).map { wallet(it) }
 
     @Suppress("ThrowsCount") // one per field: the message names which
@@ -84,6 +91,7 @@ internal object WalletWire {
             tags = (o["tags"] as? JsonArray)?.map { t ->
                 (t as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw WalletWireException("tags")
             } ?: emptyList(),
+            capped = (o["caps"] as? JsonObject)?.let { c -> CAP_KEYS.any { k -> c.isNumber(k) } } == true,
         )
     }
 

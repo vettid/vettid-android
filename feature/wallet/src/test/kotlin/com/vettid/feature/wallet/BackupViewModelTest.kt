@@ -311,6 +311,40 @@ class BackupViewModelTest {
         back.reveal()
         eventually { back.state.value.problem != null }
         assertEquals(BackupProblem.PIN_REQUIRED, back.state.value.problem)
+        assertTrue(back.state.value.capped)
         assertEquals("", back.state.value.password)
+    }
+    @Test
+    fun aWalletWithASpendingLimitOffersNoRevealYet() = runTest {
+        ops.wallets["01CAPPED00000000000000000A"] = ops.wallet("01CAPPED00000000000000000A").copy(capped = true)
+        val vm = vm(SavedStateHandle(mapOf("walletId" to "01CAPPED00000000000000000A")))
+        assertTrue(vm.state.value.capped)
+        vm.setPassword("pw")
+        vm.reveal()
+        assertFalse(vm.state.value.busy)
+        assertFalse(ops.calls.any { it.startsWith("reveal:") })
+    }
+
+    @Test
+    fun typingNeverReopensAnEndedCheck() = runTest {
+        val vm = vm()
+        vm.setName("Savings")
+        vm.setPassword("pw")
+        vm.create()
+        eventually { vm.state.value.step == BackupStep.PHRASE }
+        vm.startCheck()
+        val at = vm.state.value.asked[0]
+        vm.answer("nope")
+        vm.setTyped(ops.words[at])
+        assertEquals(at, vm.state.value.wrong)
+        assertEquals("", vm.state.value.typed)
+    }
+
+    @Test
+    fun theNameSaysWhatIsWrong() {
+        assertEquals(WalletNames.Problem.BLANK, WalletNames.problem("  "))
+        assertEquals(WalletNames.Problem.TOO_LONG, WalletNames.problem("é".repeat(65)))
+        assertEquals(WalletNames.Problem.CONTROL, WalletNames.problem("a${Char(7)}b"))
+        assertEquals(null, WalletNames.problem("Savings"))
     }
 }

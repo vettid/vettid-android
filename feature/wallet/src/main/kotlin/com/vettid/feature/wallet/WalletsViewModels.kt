@@ -158,6 +158,11 @@ data class BackupUiState(
     val wrong: Int? = null,
     /** Why the vault refused the last request, when it has its own text ([BackupProblem]); else [error]. */
     val problem: BackupProblem? = null,
+    /**
+     * The wallet has a spending limit: showing its phrase needs the PIN, which this version cannot ask for yet (W1d). The password
+     * step says so and offers no button (no dead end: nothing is sent that the vault would refuse).
+     */
+    val capped: Boolean = false,
     /** The wallet was made, but its phrase could not be shown: the member backs it up from its row. */
     val revealFailed: Boolean = false,
     /** Done with the phrase checked. */
@@ -168,6 +173,9 @@ data class BackupUiState(
     val closed: Boolean = false,
 ) {
     val nameValid: Boolean get() = WalletNames.valid(name)
+
+    /** What is wrong with a typed name, for its text; null when it is fine or nothing is typed yet. */
+    val nameProblem: WalletNames.Problem? get() = if (name.isEmpty()) null else WalletNames.problem(name)
 
     /** Nothing in progress, and the vault still open: an action may start. */
     val idle: Boolean get() = !busy && !closed
@@ -194,8 +202,16 @@ enum class BackupProblem {
 object WalletNames {
     const val MAX_BYTES = 128
 
-    fun valid(name: String): Boolean = name.isNotBlank() && name.toByteArray(Charsets.UTF_8).size <= MAX_BYTES &&
-        name.codePoints().noneMatch { Character.getType(it) == Character.CONTROL.toInt() }
+    enum class Problem { BLANK, TOO_LONG, CONTROL }
+
+    fun problem(name: String): Problem? = when {
+        name.isBlank() -> Problem.BLANK
+        name.toByteArray(Charsets.UTF_8).size > MAX_BYTES -> Problem.TOO_LONG
+        name.codePoints().anyMatch { Character.getType(it) == Character.CONTROL.toInt() } -> Problem.CONTROL
+        else -> null
+    }
+
+    fun valid(name: String): Boolean = problem(name) == null
 }
 
 /**
@@ -221,7 +237,7 @@ class BackupViewModel internal constructor(
         if (walletId == null) {
             BackupUiState(BackupStep.FORM, networks = wallets.creatable, network = wallets.creatable.firstOrNull())
         } else {
-            BackupUiState(BackupStep.PASSWORD)
+            BackupUiState(BackupStep.PASSWORD, capped = wallets.wallets.value.firstOrNull { it.id == walletId }?.capped == true)
         },
     )
     val state: StateFlow<BackupUiState> = mutable.asStateFlow()
@@ -274,7 +290,7 @@ class BackupViewModel internal constructor(
     fun reveal() {
         val id = walletId ?: return
         val s = mutable.value
-        if (!s.idle || s.password.isEmpty()) return
+        if (!s.idle || s.capped || s.password.isEmpty()) return
         val pw = s.password
         mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null, problem = null) }
         viewModelScope.launch {
@@ -292,7 +308,16 @@ class BackupViewModel internal constructor(
             e.code == "pin_required" -> BackupProblem.PIN_REQUIRED
             else -> null
         }
-        mutable.update { it.copy(busy = false, error = e.kind.takeIf { problem == null }, errorCode = e.code, problem = problem) }
+        mutable.update {
+            it.copy(
+                busy = false,
+                error = e.kind.takeIf { problem == null },
+                errorCode = e.code,
+                problem = problem,
+                // A limit set since the list was read: the same note, and no button.
+                capped = it.capped || problem == BackupProblem.PIN_REQUIRED,
+            )
+        }
     }
 
     /** The words are copied out of [p], which is wiped at once: only [words] holds them from here. */
@@ -317,7 +342,8 @@ class BackupViewModel internal constructor(
         mutable.update { it.copy(step = BackupStep.CHECK, asked = asked, askIndex = 0, wrong = null, typed = "", candidates = offered) }
     }
 
-    fun setTyped(v: String) = mutable.update { it.copy(typed = v, wrong = null) }
+    /** Typing never reopens a check a wrong answer ended. */
+    fun setTyped(v: String) = mutable.update { if (!it.answering) it else it.copy(typed = v) }
 
     /** The typed word for the position asked now (any case and spacing). */
     fun answer(typed: String) = check { w, at -> w.matches(at, typed) }

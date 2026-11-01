@@ -22,12 +22,14 @@ class WalletTextsTest {
     fun theDraftsAreTheSpecsWords() {
         val drafts = listOf(
             R.string.wallet_empty_title to "No wallets yet",
-            R.string.wallet_empty_body to "Keep bitcoin in your vault. Payments need your password.",
             R.string.wallet_test_banner to "Test network: these coins have no value.",
             R.string.wallet_password_body to "Enter your VettID password. It protects this wallet: you will need it for every payment.",
             R.string.wallet_limit to "Your vault holds 16 wallets, the most it can.",
             R.string.wallet_not_recorded to "Not recorded yet",
-            R.string.wallet_name_error to "Use 1 to 128 characters.",
+            R.string.wallet_name_blank to "Enter a name.",
+            R.string.wallet_name_too_long to "That name is too long.",
+            R.string.wallet_phrase_passphrase_note to "You need this passphrase as well as the words to recover this wallet.",
+            R.string.wallet_empty_body to "Keep bitcoin in your vault. Payments need your VettID password.",
             R.string.wallet_phrase_body to "Write these words on paper, in order, and keep them somewhere safe. Anyone with them can take your coins. VettID never shows them to anyone else.",
             R.string.wallet_phrase_no_screenshots to "This screen is hidden from screenshots and the app switcher.",
             R.string.wallet_backup_body to "Not backed up. If your vault is lost, these coins are lost too.",
@@ -37,6 +39,6 @@ class WalletTextsTest {
         )
         for ((res, text) in drafts) assertEquals(text, r.getString(res))
         assertEquals("Which is word 4?", r.getString(R.string.wallet_check_which, 4))
-        assertEquals("That isn't word 11. Look at your copy again.", r.getString(R.string.wallet_check_wrong, 11))
+        assertEquals("That's not word 11. Look at your paper again.", r.getString(R.string.wallet_check_wrong, 11))
     }
 }
