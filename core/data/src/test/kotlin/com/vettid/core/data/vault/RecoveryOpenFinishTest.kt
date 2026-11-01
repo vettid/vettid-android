@@ -39,6 +39,16 @@ class RecoveryOpenFinishTest {
             this.phase = phase
         }
 
+        /** Run in [publishUnlessOvertaken], before its check: a lock asked for between the last check and the publish. */
+        var onPublish: () -> Unit = {}
+
+        override fun publishUnlessOvertaken(phase: AppPhase): Boolean {
+            onPublish()
+            if (overtaken != RecoveryOpenFinish.Overtaken.NO) return false
+            publish(phase)
+            return true
+        }
+
         /** Run while the account record is written, after the gate passed: a lock asked for during the write. */
         var onRecordWrite: () -> Unit = {}
 
@@ -95,6 +105,27 @@ class RecoveryOpenFinishTest {
         assertEquals(MoveRepository.CODE_LOCK_PENDING, e.code)
         assertEquals(listOf("afterUnlocked", "publish ${AppPhase.Locked}"), p.steps)
         assertEquals(AppPhase.Locked, p.phase)
+    }
+
+    /** A lock asked for between the last check and the publish (#242): checked with the publish, so Locked stands. */
+    @Test
+    fun aLockAtThePublishIsNotOverwritten() {
+        val p = Ports(unlocked = finishing)
+        p.onPublish = { p.overtaken = RecoveryOpenFinish.Overtaken.LOCK_PENDING }
+        val e = failure(p)
+        assertEquals(MoveRepository.CODE_LOCK_PENDING, e.code)
+        assertEquals(listOf("afterUnlocked", "publish ${AppPhase.Locked}"), p.steps)
+        assertEquals(AppPhase.Locked, p.phase)
+    }
+
+    /** A wipe or a confirmed lock at the publish: nothing published over what it set, and a failure. */
+    @Test
+    fun aWipeAtThePublishPublishesNothing() {
+        val p = Ports(unlocked = finishing)
+        p.onPublish = { p.overtaken = RecoveryOpenFinish.Overtaken.OTHER }
+        val e = failure(p)
+        assertEquals(MoveRepository.CODE_NOT_OPENED, e.code)
+        assertEquals(listOf("afterUnlocked"), p.steps)
     }
 
     /** A lock asked for after the phase and before the finish: the gate refuses, the phone is Locked, and it says so. */
