@@ -6,6 +6,7 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.LockNotice
+import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
@@ -15,6 +16,8 @@ import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Instant
+import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,8 +26,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.time.Instant
-import javax.inject.Inject
 
 /** A message under the PIN field. */
 sealed interface UnlockMessage {
@@ -52,7 +53,19 @@ private val TRANSIENT_FAILURES = setOf(
  * failure that is not temporary means its own keys no longer open the vault (`device_secret`, an unreadable answer, …).
  */
 internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean): UnlockMessage =
-    if (keptTransfer && r.kind !in TRANSIENT_FAILURES) UnlockMessage.MoveBackFailed else UnlockMessage.Failed(r.kind, r.code)
+    if (keptTransfer && r.kind !in TRANSIENT_FAILURES && !openedThenLocked(r.kind, r.code)) {
+        UnlockMessage.MoveBackFailed
+    } else {
+        UnlockMessage.Failed(r.kind, r.code)
+    }
+
+/**
+ * The vault took the unlock, but a lock came first here (#244): [MoveRepository.CODE_LOCK_PENDING] while that lock is
+ * pending, [MoveRepository.CODE_NOT_OPENED] after the vault's own lock. This phone's keys worked, so never "the move back
+ * failed"; the unlock screen says what happened (`unlock_lock_pending`, `unlock_not_opened`).
+ */
+internal fun openedThenLocked(kind: FailureKind, code: String?): Boolean =
+    kind == FailureKind.OTHER && (code == MoveRepository.CODE_LOCK_PENDING || code == MoveRepository.CODE_NOT_OPENED)
 
 /** Immutable UI state of the unlock screen. */
 private const val KEPT_MS_PER_SECOND = 1_000L

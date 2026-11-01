@@ -64,16 +64,46 @@ sealed interface LookupResult {
     data class ServerWrongNetwork(val found: Network?) : LookupResult
 
     /** The server did not answer, or answered what Esplora does not ([error]). */
-    data class ServerFailed(val error: Exception) : LookupResult
+    data class ServerFailed(val error: Exception) : LookupResult {
+        // The error's message could name the server's URL.
+        override fun toString(): String = "ServerFailed"
+    }
 
     /** The app's derivation differs from the vault's addresses: "This wallet's addresses don't match your vault's. Nothing was sent." */
     data object AddressMismatch : LookupResult
 
     /** The vault could not be asked ([failure]). */
-    data class VaultFailed(val failure: VaultFailure) : LookupResult
+    data class VaultFailed(val failure: VaultFailure) : LookupResult {
+        override fun toString(): String = "VaultFailed"
+    }
+
+    /**
+     * The chain server's privacy note was not shown for this wallet: nothing is sent to the server before it is (the screens show it
+     * first; this is the check behind them).
+     */
+    data object NoteNeeded : LookupResult {
+        override fun toString(): String = "NoteNeeded"
+    }
 
     /** The vault was closed (locked, held, wiped) while the look-up ran: nothing of it is kept, nothing more was asked. */
     data object Cleared : LookupResult
+}
+
+/** The outcome of [WalletsManager.receiveAddress] and [WalletsManager.newReceiveAddress]. */
+sealed interface ReceiveResult {
+    /** The vault's address, which the app's own derivation also gives at that index. */
+    data class Address(val address: WalletAddress) : ReceiveResult {
+        override fun toString(): String = "Address"
+    }
+
+    /** A legacy `testnet` wallet whose test chain was not said yet. */
+    data object NeedsNetwork : ReceiveResult
+
+    /** The app does not connect to this wallet's network in this build: no address is given. */
+    data object NotOffered : ReceiveResult
+
+    /** The app's derivation differs from the vault's: no address is shown. */
+    data object Mismatch : ReceiveResult
 }
 
 /** The result of [WalletsManager.create]. */
@@ -103,8 +133,16 @@ class WalletsManager(
     private val availabilityFlow = MutableStateFlow(WalletAvailability.UNKNOWN)
     val availability: StateFlow<WalletAvailability> = availabilityFlow.asStateFlow()
 
+    /** Whether the vault is open for the wallets (unlocked, not held or due): the drawer entry is shown while it is. */
+    private val openFlow = MutableStateFlow(false)
+    val isOpen: StateFlow<Boolean> = openFlow.asStateFlow()
+
     private val walletsFlow = MutableStateFlow<List<VaultWallet>>(emptyList())
     val wallets: StateFlow<List<VaultWallet>> = walletsFlow.asStateFlow()
+
+    /** Moves at every change of this phone's flags (backed up, the legacy test chain): the screens that show them read them again. */
+    private val flagsChangedFlow = MutableStateFlow(0)
+    val flagsChanged: StateFlow<Int> = flagsChangedFlow.asStateFlow()
 
     private val lookupsFlow = MutableStateFlow<Map<String, WalletLookup>>(emptyMap())
     val lookups: StateFlow<Map<String, WalletLookup>> = lookupsFlow.asStateFlow()
@@ -150,7 +188,10 @@ class WalletsManager(
 
     /** The vault is open: the wallets are read. */
     suspend fun open() {
-        synchronized(lock) { open = true }
+        synchronized(lock) {
+            open = true
+            openFlow.value = true
+        }
         refresh()
     }
 
@@ -166,6 +207,7 @@ class WalletsManager(
         synchronized(lock) {
             generation++
             open = false
+            openFlow.value = false
             pendingRefresh?.cancel()
             pendingRefresh = null
             availabilityFlow.value = WalletAvailability.UNKNOWN
@@ -229,15 +271,72 @@ class WalletsManager(
         }
     }
 
+    /** Whether the build connects to [network] (signet and testnet4; regtest in devStack). */
+    fun offers(network: Network): Boolean = offered(network)
+
+    /** The networks a new wallet can be made on in this build, in the order offered. */
+    val creatable: List<Network> get() = listOf(Network.SIGNET, Network.TESTNET4, Network.REGTEST).filter(offered)
+
     /** The chain [wallet] is on: by its name, or for a legacy `testnet` wallet by what the member said; null: ask. */
     suspend fun networkOf(wallet: VaultWallet): Network? = wallet.network ?: flags.testnetLabel(wallet.id)
 
-    suspend fun setTestNetwork(walletId: String, network: Network): Boolean = flags.setTestnetLabel(walletId, network)
+    suspend fun setTestNetwork(walletId: String, network: Network): Boolean =
+        flags.setTestnetLabel(walletId, network).also { flagsChangedFlow.update { it + 1 } }
 
     suspend fun backedUp(walletId: String): Boolean = flags.backedUp(walletId)
 
+    /** Whether the chain server's privacy note was shown for [walletId]. */
+    suspend fun privacyNoteShown(walletId: String): Boolean = flags.privacyNoteShown(walletId)
+
+    /** The note acknowledged: false if the flag could not be written (the note shows again). */
+    suspend fun setPrivacyNoteShown(walletId: String): Boolean =
+        flags.setPrivacyNoteShown(walletId).also { flagsChangedFlow.update { it + 1 } }
+
+    /**
+     * "Receiving address type": `wallet.update{address_type}` at the wallet's current version. On success the wallet shows the new type
+     * and version; on a `conflict` (changed on another device) the list is read again and the failure is thrown.
+     */
+    suspend fun setAddressType(walletId: String, type: String) {
+        val g = gen()
+        val before = walletsFlow.value.firstOrNull { it.id == walletId }?.addressType
+        val version = try {
+            updateType(walletId, type)
+        } catch (e: VaultFailure) {
+            if (e.kind != FailureKind.CONFLICT) throw e
+            // The wallet moved on (an address issued or used elsewhere): read it again. Already the type asked for: done. Another
+            // type chosen elsewhere meanwhile: the conflict stands, nothing is overwritten. Otherwise ask once more.
+            refresh()
+            val now = walletsFlow.value.firstOrNull { it.id == walletId }?.addressType
+            if (now == type) return
+            if (now != before) throw e
+            updateType(walletId, type)
+        }
+        publish(g) {
+            walletsFlow.update { l -> l.map { if (it.id == walletId) it.copy(addressType = type, version = version) else it } }
+        }
+    }
+
+    private suspend fun updateType(walletId: String, type: String): Long {
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
+        return vaultGuard { ops().setAddressType(walletId, wallet.version, type) }
+    }
+
+    /**
+     * Takes the wallet's new state in after this phone issued or marked addresses (`wallet.get`): the vault's `version` and
+     * `next_receive` / `next_change` moved, and a stale one would make the next `wallet.update` a conflict and a look-up skip an
+     * address just issued. Best effort: a failed read leaves what was there.
+     */
+    private suspend fun reload(walletId: String, g: Long) {
+        try {
+            val w = vaultGuard { ops().get(walletId) }
+            publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) w else it } } }
+        } catch (_: VaultFailure) {
+            // Kept as it was.
+        }
+    }
+
     /** The phrase checked: "Backed up". False if the flag could not be written (it shows "Not backed up" again). */
-    suspend fun confirmBackup(walletId: String): Boolean = flags.setBackedUp(walletId)
+    suspend fun confirmBackup(walletId: String): Boolean = flags.setBackedUp(walletId).also { flagsChangedFlow.update { it + 1 } }
 
     /**
      * New wallet (ANDROID-PLAN §4 "Creating and backing up", 1): [password] once, for `wallet.create` and at once after its answer
@@ -283,29 +382,64 @@ class WalletsManager(
     /** "Delete wallet": `item.delete` of its item with the password. */
     suspend fun delete(walletId: String, password: String) {
         val g = gen()
-        vaultGuard { ops().delete(walletId, password) }
-        publish(g) {
-            walletsFlow.update { l -> l.filterNot { it.id == walletId } }
-            lookupsFlow.update { it - walletId }
-            checked.keys.removeAll { it.first == walletId }
+        // Not cancelled partway: once the request is sent, the vault's answer and what is kept here are taken in together
+        // (a caller that leaves must not leave the deleted wallet shown).
+        withContext(NonCancellable) {
+            vaultGuard { ops().delete(walletId, password) }
+            publish(g) {
+                walletsFlow.update { l -> l.filterNot { it.id == walletId } }
+                lookupsFlow.update { it - walletId }
+                checked.keys.removeAll { it.first == walletId }
+            }
+            flags.forget(walletId)
         }
-        flags.forget(walletId)
     }
 
     /**
      * Receive (ANDROID-PLAN §4 "The chain source", "Receive"): the newest address the vault issued on the receiving account that has
-     * not been used (by the vault's marks and the last look-up); a new one only when there is none such.
+     * not been used (by the vault's marks and the last look-up); a new one only when there is none such. Like a look-up, it first
+     * checks the app's derivation against the vault's (vault only, so before the privacy note too), and the address given must be
+     * the one the app derives at its index. A network the build does not connect to gives no address.
      */
-    suspend fun receiveAddress(walletId: String): WalletAddress {
+    suspend fun receiveAddress(walletId: String): ReceiveResult = receive(walletId, fresh = false)
+
+    /** "New address" on Receive: the next address of the receiving account, checked like [receiveAddress]. */
+    suspend fun newReceiveAddress(walletId: String): ReceiveResult = receive(walletId, fresh = true)
+
+    @Suppress("ReturnCount")
+    private suspend fun receive(walletId: String, fresh: Boolean): ReceiveResult {
+        val g = gen()
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
-        val newest = vaultGuard { issued(walletId, AddressChain(wallet.addressType, false), all = true) }.maxByOrNull { it.index }
-        val funded = lookupsFlow.value[walletId]?.funded.orEmpty()
-        if (newest != null && !newest.used && newest.address !in funded) return newest
-        return newAddress(walletId)
+        val network = networkOf(wallet) ?: return ReceiveResult.NeedsNetwork
+        if (!offered(network)) return ReceiveResult.NotOffered
+        val derived = checkedWallet(wallet, network, g) ?: return ReceiveResult.Mismatch
+        val now = walletsFlow.value.firstOrNull { it.id == walletId } ?: wallet
+        val address = if (fresh) newAddress(walletId) else unusedAddress(now)
+        // A lock (a clear) while the vault answered: nothing of the wallet is shown after it.
+        if (gen() != g) throw VaultFailure(FailureKind.OTHER, CLEARED)
+        return if (derives(derived, address)) ReceiveResult.Address(address) else ReceiveResult.Mismatch
     }
 
-    /** "New address": `wallet.address.new` on the receiving account. */
-    suspend fun newAddress(walletId: String): WalletAddress = vaultGuard { ops().newAddress(walletId) }
+    private suspend fun unusedAddress(wallet: VaultWallet): WalletAddress {
+        val newest = vaultGuard { issued(wallet.id, AddressChain(wallet.addressType, false), all = true) }.maxByOrNull { it.index }
+        val funded = lookupsFlow.value[wallet.id]?.funded.orEmpty()
+        if (newest != null && !newest.used && newest.address !in funded) return newest
+        return newAddress(wallet.id)
+    }
+
+    /** The address is a receive address the app's own derivation gives at the same index. */
+    private fun derives(derived: Wallet, a: WalletAddress): Boolean {
+        val type = AccountType.fromVaultName(a.type) ?: return false
+        return !a.change && a.index in 0 until Account.MAX_INDEX && derived.account(type).address(false, a.index) == a.address
+    }
+
+    /** `wallet.address.new` on the receiving account (unchecked: Receive uses [newReceiveAddress]); the wallet is read again after. */
+    suspend fun newAddress(walletId: String): WalletAddress {
+        val g = gen()
+        val a = vaultGuard { ops().newAddress(walletId) }
+        reload(walletId, g)
+        return a
+    }
 
     /**
      * A look-up (ANDROID-PLAN §4 "The chain source", "How the app uses it with the vault"): the server for the wallet's network, the
@@ -321,6 +455,7 @@ class WalletsManager(
             ?: return LookupResult.VaultFailed(VaultFailure(FailureKind.OTHER, "no_wallet"))
         val network = networkOf(wallet) ?: return LookupResult.NeedsNetwork
         if (!offered(network)) return LookupResult.NetworkNotOffered
+        if (!flags.privacyNoteShown(walletId)) return LookupResult.NoteNeeded
         val ready = when (val open = chain.open(network)) {
             is ChainOpen.Ready -> open
             is ChainOpen.NoServer -> return LookupResult.NoServer(open.server)
@@ -333,17 +468,30 @@ class WalletsManager(
             return LookupResult.VaultFailed(e)
         }
         if (gen() != g) return LookupResult.Cleared
+        // The check may have issued the first address: the wallet as it is now.
+        val now = walletsFlow.value.firstOrNull { it.id == walletId } ?: wallet
         val scan = try {
-            scan(wallet, derived, ready, g) ?: return LookupResult.Cleared
+            scan(now, derived, ready, g) ?: return LookupResult.Cleared
         } catch (e: ChainError) {
             return LookupResult.ServerFailed(e)
         }
         val lookup = WalletLookup(clock(), ready.host, scan.confirmed, scan.unconfirmed, scan.funded.map { it.address }.toSet())
-        if (!publish(g) { lookupsFlow.update { it + (walletId to lookup) } }) return LookupResult.Cleared
+        // Only while the wallet is still listed: a look-up that ends after a delete must not bring it back.
+        var listed = false
+        if (!publish(g) {
+                listed = walletsFlow.value.any { it.id == walletId }
+                if (listed) lookupsFlow.update { it + (walletId to lookup) }
+            }
+        ) {
+            return LookupResult.Cleared
+        }
+        if (!listed) return LookupResult.VaultFailed(VaultFailure(FailureKind.OTHER, "no_wallet"))
         try {
-            for (chunk in reportable(wallet, scan.funded).chunked(ADDRESS_USED_MAX)) {
+            for (chunk in reportable(now, scan.funded).chunked(ADDRESS_USED_MAX)) {
                 if (gen() != g) return LookupResult.Cleared
-                vaultGuard { ops().markUsed(walletId, chunk) }
+                val marked = vaultGuard { ops().markUsed(walletId, chunk) }
+                // `wallet.address.used` moves the wallet's version when it marked something: only then is it read again.
+                if (marked > 0) reload(walletId, g)
             }
         } catch (e: VaultFailure) {
             // The balance stands; the marks go again with the next look-up.
@@ -370,7 +518,9 @@ class WalletsManager(
         if (vaultGuard { issued(wallet.id, receiving, all = false) }.isEmpty()) newAddress(wallet.id)
         val issued = CHAINS.associateWith { c -> vaultGuard { issued(wallet.id, c, all = false) } }
         return when (val r = AddressCheck.check(wallet, network, issued)) {
-            is AddressCheckResult.Match -> r.wallet.also { publish(g) { checked[key] = it } }
+            is AddressCheckResult.Match -> r.wallet.also {
+                publish(g) { if (walletsFlow.value.any { w -> w.id == wallet.id }) checked[key] = it }
+            }
             AddressCheckResult.Mismatch -> null
         }
     }

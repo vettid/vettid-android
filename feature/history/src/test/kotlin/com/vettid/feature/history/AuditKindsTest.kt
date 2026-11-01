@@ -117,14 +117,22 @@ class AuditKindsTest {
     @Test
     fun everySpecKindHasATitleAndAGroup() {
         for (k in specKinds) {
-            assertTrue(k, AuditKinds.title(k) is AuditKinds.Title.Known)
+            // A fixed title, or one that names the entry's item or connection (the wallet's, ANDROID-PLAN §4 "Wallet").
+            val t = AuditKinds.title(k)
+            assertTrue(k, t is AuditKinds.Title.Known || t is AuditKinds.Title.Named)
             assertTrue(k, AuditCategory.of(k) != AuditCategory.OTHER)
         }
     }
 
     @Test
     fun theTitlesAreDistinct() {
-        val res = specKinds.map { (AuditKinds.title(it) as AuditKinds.Title.Known).res }
+        val res = specKinds.map {
+            when (val t = AuditKinds.title(it)) {
+                is AuditKinds.Title.Known -> t.res
+                is AuditKinds.Title.Named -> t.res
+                else -> error("$it")
+            }
+        }
         assertEquals(res.size, res.toSet().size)
     }
 

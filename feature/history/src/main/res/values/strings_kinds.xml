@@ -96,10 +96,22 @@
     <string name="history_kind_critical_secret_used">Critical item used</string>
     <string name="history_kind_critical_secret_use_denied">Use of a critical item denied</string>
     <string name="history_kind_critical_secret_use_result">Critical item use answered</string>
+    <!-- The wallet (ANDROID-PLAN 0.1.111 §4 "Wallet", "History"; W1c-2a): proposed, for the owner's approval. -->
+    <string name="history_kind_wallet_created_named">Wallet created: %1$s</string>
     <string name="history_kind_wallet_created">Wallet created</string>
     <string name="history_kind_wallet_deleted">Wallet deleted</string>
-    <string name="history_kind_wallet_address_issued">Wallet address issued</string>
-    <string name="history_kind_wallet_signed">Transaction signed</string>
+    <string name="history_kind_wallet_address_issued_named">Address given to %1$s</string>
+    <string name="history_kind_wallet_address_issued">Address given to a connection</string>
+    <string name="history_kind_wallet_phrase_shown_named">Recovery phrase shown: %1$s</string>
+    <string name="history_kind_wallet_phrase_shown">Recovery phrase shown</string>
+    <string name="history_kind_wallet_signed">Bitcoin payment signed</string>
+    <string name="history_kind_wallet_cap_refused_request">Payment request from %1$s refused by a spending limit</string>
+    <string name="history_kind_wallet_cap_refused_named">Payment refused by a spending limit: %1$s</string>
+    <string name="history_kind_wallet_cap_refused">Payment refused by a spending limit</string>
+    <string name="history_kind_wallet_caps_lowered_named">Spending limit lowered: %1$s</string>
+    <string name="history_kind_wallet_caps_lowered">Spending limit lowered</string>
+    <string name="history_kind_wallet_caps_raised_named">Spending limit raised or removed: %1$s</string>
+    <string name="history_kind_wallet_caps_raised">Spending limit raised or removed</string>
     <string name="history_kind_message_sent">Message sent</string>
     <string name="history_kind_message_received">Message received</string>
     <string name="history_kind_photo_sent">Photo sent</string>

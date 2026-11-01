@@ -1,12 +1,15 @@
 package com.vettid.core.ui.components
 
 import android.view.View
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentDataType
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.SemanticsModifierNode
 import androidx.compose.ui.node.requireView
 import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.contentDataType
 import java.util.WeakHashMap
@@ -58,6 +61,21 @@ private class ExcludeFromAutofillNode : Modifier.Node(), SemanticsModifierNode {
     override fun onDetach() {
         host?.let(AutofillExclusion::release)
         host = null
+    }
+}
+
+/**
+ * A whole screen kept out of autofill while it is shown (a wallet's recovery phrase and its check, ANDROID-PLAN §4 "Creating and
+ * backing up", 3): the same hold on the compose view's parent as a secret field's ([excludeFromAutofill]), counted with theirs, so
+ * neither gives the other's back early.
+ */
+@Composable
+fun ExcludeScreenFromAutofill() {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val host = view.parent as? View
+        host?.let(AutofillExclusion::acquire)
+        onDispose { host?.let(AutofillExclusion::release) }
     }
 }
 

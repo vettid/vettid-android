@@ -217,7 +217,26 @@ The A2 exit test:
   release APK that carries its type names), `:core:wallet` (`WalletsManager`, memory only; `AddressCheck` before any look-up;
   `WalletFlags` in `wallet-flags.bin`), `WalletAccess` / `NoWalletAccess` in `:core:data` (`app/src/wallet` / `app/src/noWallet`),
   multibound `WipeHook`s (`WalletWipe`) that run before a wipe erases anything. Nothing of a wallet in a log: every wallet type
-  prints its type name only, and `ChainPrivacyTest` / `WalletPrivacyTest` scan for logging calls.
+  prints its type name only, and `ChainPrivacyTest` / `WalletPrivacyTest` scan for logging calls (`WalletUiPrivacyTest` in `:feature:wallet`).
+  Screens (W1c-2a; `:feature:wallet`, `walletDestinations` in `app/src/wallet`, the drawer entry after Vault shown only while
+  `WalletAccess.shown`): the list (`wallet.list`, the test-network banner, "Not backed up" from this phone's flags, Try again),
+  new wallet, the phrase and the check (both `SecureWindow()`, out of autofill and content capture; three words asked, any case; the
+  words and any passphrase in `CharArray`s (`PhraseWords`), wiped when the flow ends or the vault closes; a wrong answer ends the
+  check; `NewWalletRoute` / `BackupRoute` are in `:core:data` and `navigateTopLevel` pops them (`popWalletSecrets`), so state
+  saving never keeps the words behind another screen),
+  back up later from a row, the Credential screen's "Bitcoin wallet: <name>" rows (`WalletAccess.wallets`) and History's wallet
+  titles. Texts in `feature/wallet/.../strings.xml` are marked draft (the plan's) or new; `WalletTextsTest` holds them. Catalog:
+  `wallet`, `wallet.empty`, `wallet.failed`, `wallet.new`, `wallet.new_bad_name`, `wallet.new_limit`, `wallet.new_bad_password`,
+  `wallet.password`, `wallet.password_pin_required`, `wallet.phrase`, `wallet.phrase_passphrase`, `wallet.check`, `wallet.check_wrong`, `wallet.done`, `wallet.done_save_failed`, `wallet.done_reveal_failed`,
+  `credential.wallets`; W1c-2b adds `wallet.detail`, `wallet.detail_incoming`, `wallet.detail_needs_network`, `wallet.detail_testnet3`,
+  `wallet.detail_no_server`, `wallet.detail_server_unreadable`, `wallet.detail_wrong_network`, `wallet.detail_server_failed`,
+  `wallet.detail_mismatch`, `wallet.detail_vault_failed`, `wallet.detail_privacy_note`, `wallet.detail_not_backed_up`,
+  `wallet.address_type`, `wallet.delete_confirm`, `wallet.delete_password`, `wallet.delete_wrong_password`, `wallet.receive`,
+  `wallet.receive_amount`, `wallet.receive_not_backed_up`, `wallet.receive_not_offered`, `wallet.receive_mismatch`, `wallet.detail_change_network`, `wallet.chain_server`, `wallet.chain_server_own`,
+  `wallet.chain_server_not_set`, `wallet.chain_server_unreadable`, `wallet.chain_server_checking`, `wallet.chain_server_saved`,
+  `wallet.chain_server_bad_url`, `wallet.chain_server_not_https`, `wallet.chain_server_credentials`, `wallet.chain_server_query`,
+  `wallet.chain_server_failed`, `wallet.chain_server_wrong_network`, `wallet.chain_server_not_written`, `wallet.details`
+  (`WalletCatalog.kt`).
 
 ## Device testing
 

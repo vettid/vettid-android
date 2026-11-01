@@ -82,4 +82,24 @@ class SecureClipboardTest {
         SecureClipboard.onFocus(context, t0 + 600_000)
         assertEquals("Sam", text())
     }
+
+    /** A receive address (the owner's decision 2a): hidden from previews, but never cleared, not at 60 s and not at a lock. */
+    @Test
+    fun aHiddenCopyIsMarkedSensitiveButNeverCleared() {
+        SecureClipboard.copyHidden(context, "Bitcoin address", "tb1qaddress")
+        val extras = cm.primaryClipDescription!!.extras!!
+        assertTrue(extras.getBoolean(CLIP_EXTRA_IS_SENSITIVE))
+        assertTrue(!extras.containsKey(SecureClipboard.EXTRA_CLEAR_AT))
+        SecureClipboard.onFocus(context, System.currentTimeMillis() + 600_000)
+        SecureClipboard.vaultClosed(context)
+        assertEquals("tb1qaddress", text())
+    }
+
+    @Test
+    fun aHiddenCopyAfterASecretIsNotClearedByTheSecretsTime() {
+        SecureClipboard.copy(context, "Password", "hunter2", sensitive = true, nowMs = t0)
+        SecureClipboard.copyHidden(context, "Bitcoin address", "tb1qaddress")
+        SecureClipboard.onFocus(context, t0 + 60_000)
+        assertEquals("tb1qaddress", text())
+    }
 }

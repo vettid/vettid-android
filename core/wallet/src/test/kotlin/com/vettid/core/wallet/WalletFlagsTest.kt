@@ -37,7 +37,23 @@ class WalletFlagsTest {
         assertFalse(f.backedUp("W2"))
         assertTrue(f.forget("W1"))
         assertFalse(f.backedUp("W1"))
-        assertEquals("""{"version":1,"backed_up":[],"testnet":{}}""", file.bytes!!.decodeToString())
+        assertEquals("""{"version":1,"backed_up":[],"testnet":{},"note_shown":[]}""", file.bytes!!.decodeToString())
+    }
+
+    @Test
+    fun theNoteShownIsKeptPerWalletReadsAbsentAsEmptyAndIsForgotten() = runBlocking {
+        // A file from before `note_shown` (same version 1) still reads, with the note not shown.
+        file.bytes = """{"version":1,"backed_up":["W1"],"testnet":{}}""".encodeToByteArray()
+        val f = WalletFlags(file)
+        assertTrue(f.backedUp("W1"))
+        assertFalse(f.privacyNoteShown("W1"))
+        assertTrue(f.setPrivacyNoteShown("W1"))
+        assertTrue(WalletFlags(file).privacyNoteShown("W1"))
+        assertFalse(f.privacyNoteShown("W2"))
+        assertTrue(f.backedUp("W1"))
+        assertTrue(f.forget("W1"))
+        assertFalse(f.privacyNoteShown("W1"))
+        assertEquals("""{"version":1,"backed_up":[],"testnet":{},"note_shown":[]}""", file.bytes!!.decodeToString())
     }
 
     @Test

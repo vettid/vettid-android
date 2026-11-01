@@ -6,6 +6,7 @@ import com.vettid.core.chain.ChainSettingsFile
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
+import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletFlagsFile
 import com.vettid.core.wallet.WalletWipe
@@ -27,6 +28,15 @@ class WalletWiringTest {
         assertFalse(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.DUE)))
         assertFalse(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.HELD)))
         assertFalse(WalletModule.openOf(AppPhase.Starting, null))
+    }
+
+    @Test
+    fun theDrawerEntryIsShownWhileOpenUnlessTheVaultHasNoWallets() {
+        // A read that failed at the unlock (still UNKNOWN) keeps the entry: the list shows the failure and Try again.
+        assertTrue(WalletModule.shownOf(true, WalletAvailability.UNKNOWN))
+        assertTrue(WalletModule.shownOf(true, WalletAvailability.AVAILABLE))
+        assertFalse(WalletModule.shownOf(true, WalletAvailability.UNSUPPORTED))
+        assertFalse(WalletModule.shownOf(false, WalletAvailability.AVAILABLE))
     }
 
     @Test

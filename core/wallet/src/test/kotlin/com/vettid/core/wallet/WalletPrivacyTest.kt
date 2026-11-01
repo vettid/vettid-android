@@ -26,8 +26,10 @@ class WalletPrivacyTest {
             w, w.accounts[0], a, AddressPage(listOf(a), null), RevealedPhrase("abandon ability".toCharArray()),
             WalletLookup(Instant.EPOCH, "node.example", 123_456, 789, setOf(a.address)),
             ChainOpen.Ready("node.example") { error("unused") }, LookupResult.NoServer(ChainServer.NotSet),
+            LookupResult.ServerFailed(RuntimeException("https://secret.example/key")),
+            LookupResult.VaultFailed(com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.OTHER, "secret.example")),
         )
-        val secrets = listOf(a.address, WalletFixtures.TPUB86, WalletFixtures.TPUB84, "abandon", "123456", "Savings", "node.example")
+        val secrets = listOf(a.address, WalletFixtures.TPUB86, WalletFixtures.TPUB84, "abandon", "123456", "Savings", "node.example", "secret.example")
         for (v in values) {
             for (s in secrets) assertFalse("'$s' in $v", "$v".contains(s))
         }
@@ -49,6 +51,21 @@ class WalletPrivacyTest {
         assertTrue(e is WalletWireException)
         assertFalse(e.message!!.contains("abandon"))
         assertTrue(runCatching { VaultWalletOps.phraseOf(o, "f9") }.exceptionOrNull() is WalletWireException)
+    }
+
+    @Test
+    fun thePassphraseIsKeptExactlyAndAnEmptyOneIsNone() {
+        val words = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+        fun item(pass: String) = VaultJson.parseObject(
+            """{"fields":[{"field_id":"f1","value":"$words"},{"field_id":"f2","value":"$pass"}]}""".encodeToByteArray(),
+        )
+        // Spaces and case are part of a BIP39 passphrase: nothing is trimmed or folded.
+        assertEquals(" Correct  Horse ", String(VaultWalletOps.phraseOf(item(" Correct  Horse "), "f1", "f2").passphrase()!!))
+        assertEquals(null, VaultWalletOps.phraseOf(item(""), "f1", "f2").passphrase())
+        assertEquals(null, VaultWalletOps.phraseOf(item("x"), "f1", null).passphrase())
+        val p = VaultWalletOps.phraseOf(item("secret"), "f1", "f2")
+        p.wipe()
+        assertEquals(null, p.passphrase())
     }
 
     @Test

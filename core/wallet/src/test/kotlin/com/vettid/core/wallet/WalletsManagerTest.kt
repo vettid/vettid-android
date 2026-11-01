@@ -16,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -58,6 +59,8 @@ class WalletsManagerTest {
         val w = WalletFixtures.wallet(network = network, nextReceive = issuedReceive)
         ops.wallets[w.id] = w
         ops.issued[w.id to receive] = (0 until issuedReceive).map { WalletFixtures.address(receive, it) }.toMutableList()
+        // The privacy note was shown (the look-up itself refuses to send before it).
+        runBlocking { WalletFlags(flagsFile).setPrivacyNoteShown(w.id) }
         return w
     }
 
@@ -87,6 +90,19 @@ class WalletsManagerTest {
         // A new unlock asks again.
         m.clear()
         assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
+    }
+
+    @Test
+    fun aSecondLookupThatMarksNothingNewDoesNotReadTheWalletAgain() = runBlocking {
+        val w = withWallet()
+        funded(receive, 0, 50_000)
+        val m = manager()
+        m.open()
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        val gets = ops.gets
+        // The same funded address again: the vault marks nothing, so its version did not move and nothing is read.
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        assertEquals(gets, ops.gets)
     }
 
     @Test
@@ -198,17 +214,124 @@ class WalletsManagerTest {
         val w = withWallet(issuedReceive = 3)
         val m = manager()
         m.open()
-        assertEquals(2, m.receiveAddress(w.id).index)
+        assertEquals(2, m.receiveAddress(w.id).addressIndex())
         assertEquals(0, ops.calls.count { it == "new" })
         // Funded, as the last look-up saw it: a new one.
         funded(receive, 2, 1_000)
         m.lookup(w.id)
-        assertEquals(3, m.receiveAddress(w.id).index)
+        assertEquals(3, m.receiveAddress(w.id).addressIndex())
         // Marked used by the vault: a new one too.
         ops.issued.getValue(w.id to receive)[3] = WalletFixtures.address(receive, 3, used = true)
-        assertEquals(4, m.receiveAddress(w.id).index)
+        assertEquals(4, m.receiveAddress(w.id).addressIndex())
         // "New address".
-        assertEquals(5, m.newAddress(w.id).index)
+        assertEquals(5, m.newReceiveAddress(w.id).addressIndex())
+    }
+
+    @Test
+    fun aLockWhileTheVaultGivesTheAddressShowsNone() = runBlocking {
+        val w = withWallet(issuedReceive = 1)
+        val m = manager()
+        m.open()
+        ops.newGate = CompletableDeferred()
+        val r = async { runCatching { m.newReceiveAddress(w.id) } }
+        // Waits for the call itself (not by reading the call list, which the call is writing to).
+        withTimeout(5_000) { ops.newStarted.await() }
+        // The vault locks while it answers.
+        m.clear()
+        ops.newGate!!.complete(Unit)
+        val e = r.await().exceptionOrNull()
+        assertTrue(e is VaultFailure && e.code == WalletsManager.CLEARED)
+    }
+
+    private fun ReceiveResult.addressIndex(): Int = (this as ReceiveResult.Address).address.index
+
+    @Test
+    fun receiveChecksTheDerivationBeforeGivingAnAddressAndShowsNoneOnAMismatch() = runBlocking {
+        val w = withWallet(issuedReceive = 2)
+        ops.lie = { a -> if (a.index == 1 && !a.change && a.type == "p2tr") a.copy(address = WalletFixtures.address(receive, 7).address) else a }
+        val m = manager()
+        m.open()
+        assertEquals(ReceiveResult.Mismatch, m.receiveAddress(w.id))
+        assertEquals(ReceiveResult.Mismatch, m.newReceiveAddress(w.id))
+    }
+
+    @Test
+    fun anAddressTheVaultIssuesThatTheAppDoesNotDeriveIsNotShown() = runBlocking {
+        val w = withWallet(issuedReceive = 1)
+        val m = manager()
+        m.open()
+        // The vault's next address is not the one the app derives at that index (the check passed on the first ones).
+        ops.nextLie = WalletFixtures.address(receive, 9).address
+        assertEquals(ReceiveResult.Mismatch, m.newReceiveAddress(w.id))
+    }
+
+    @Test
+    fun receiveAsksNothingOfAnUnofferedNetworkOrAnUnlabelledLegacyWallet() = runBlocking {
+        val legacy = withWallet(network = "testnet")
+        val m = manager()
+        m.open()
+        assertEquals(ReceiveResult.NeedsNetwork, m.receiveAddress(legacy.id))
+        assertTrue(m.setTestNetwork(legacy.id, Network.TESTNET))
+        assertEquals(ReceiveResult.NotOffered, m.receiveAddress(legacy.id))
+        assertEquals(ReceiveResult.NotOffered, m.newReceiveAddress(legacy.id))
+        assertTrue(ops.calls.none { it == "new" })
+    }
+
+    @Test
+    fun aLookupBeforeThePrivacyNoteIsAcknowledgedSendsNothing() = runBlocking {
+        val w = withWallet()
+        val file = object : WalletFlagsFile {
+            override fun load(): ByteArray? = null
+
+            override fun save(bytes: ByteArray) = Unit
+        }
+        val m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { ops }, { n -> chain.open(n) }, WalletFlags(file), { it in offered }, { now })
+        m.open()
+        assertEquals(LookupResult.NoteNeeded, m.lookup(w.id))
+        assertEquals("NoteNeeded", LookupResult.NoteNeeded.toString())
+        assertTrue(chain.asked.isEmpty())
+    }
+
+    @Test
+    fun aLookupThatEndsAfterADeleteDoesNotBringTheWalletBack() = runBlocking {
+        val w = withWallet()
+        funded(receive, 0, 1_000)
+        val gate = CompletableDeferred<Unit>()
+        chain.gate = gate
+        val m = manager()
+        m.open()
+        val running = async(Dispatchers.Default) { m.lookup(w.id) }
+        delay(200)
+        m.delete(w.id, "pw")
+        gate.complete(Unit)
+        val r = running.await()
+        assertFalse(r is LookupResult.Done)
+        assertTrue(m.lookups.value.isEmpty())
+        assertTrue(m.wallets.value.isEmpty())
+    }
+
+    @Test
+    fun aConflictWhereTheTypeIsAlreadyTheOneAskedForIsDone() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        // Another device already set it, and moved the version.
+        ops.wallets[w.id] = w.copy(addressType = "p2wpkh", version = w.version + 2)
+        m.setAddressType(w.id, "p2wpkh")
+        assertEquals(1, ops.calls.count { it.startsWith("update") })
+        assertEquals("p2wpkh", m.wallets.value.single().addressType)
+    }
+
+    @Test
+    fun aConflictWhereAnotherDeviceChoseAnotherTypeIsShownNotOverwritten() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        ops.wallets[w.id] = w.copy(addressType = "p2wpkh", version = w.version + 2)
+        val e = runCatching { m.setAddressType(w.id, "p2tr") }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.CONFLICT, e.kind)
+        assertEquals(1, ops.calls.count { it.startsWith("update") })
+        assertEquals("p2wpkh", m.wallets.value.single().addressType)
     }
 
     @Test
@@ -411,5 +534,121 @@ class WalletsManagerTest {
         job.cancel()
         job.join()
         assertTrue(done)
+    }
+
+    @Test
+    fun theReceivingAddressTypeIsSetAtTheCurrentVersionAndPublished() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        m.setAddressType(w.id, "p2wpkh")
+        assertEquals("update:${w.version}:p2wpkh", ops.calls.last())
+        val now = m.wallets.value.single()
+        assertEquals("p2wpkh", now.addressType)
+        assertEquals(w.version + 1, now.version)
+    }
+
+    @Test
+    fun aConflictOnTheAddressTypeReadsTheListAgainAndThrows() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        ops.conflict = true
+        // Changed on another device meanwhile.
+        ops.wallets[w.id] = w.copy(version = w.version + 5, name = "Renamed")
+        val e = runCatching { m.setAddressType(w.id, "p2wpkh") }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.CONFLICT, e.kind)
+        // The retry with the fresh version conflicts again (the flag): refreshed once, asked twice, then thrown.
+        assertEquals(2, ops.calls.count { it == "list" })
+        assertEquals(2, ops.calls.count { it.startsWith("update") })
+        assertEquals("Renamed", m.wallets.value.single().name)
+        assertEquals("p2tr", m.wallets.value.single().addressType)
+    }
+
+    @Test
+    fun aStaleVersionIsRefreshedAndTheChoiceAskedOnceMore() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        // Changed elsewhere (an address used on another device): the app's version is stale.
+        ops.wallets[w.id] = w.copy(version = w.version + 3)
+        m.setAddressType(w.id, "p2wpkh")
+        assertEquals(listOf("update:${w.version}:p2wpkh", "update:${w.version + 3}:p2wpkh"), ops.calls.filter { it.startsWith("update") })
+        assertEquals("p2wpkh", m.wallets.value.single().addressType)
+        assertEquals(w.version + 4, m.wallets.value.single().version)
+    }
+
+    @Test
+    fun aLookupAndANewAddressLeaveTheVersionCurrentForTheAddressType() = runBlocking {
+        val w = withWallet(issuedReceive = 0)
+        funded(receive, 0, 50_000)
+        val m = manager()
+        m.open()
+        // The first look-up issues the first address (the check) and reports the funded one used.
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        assertTrue(ops.marked.isNotEmpty())
+        m.newAddress(w.id)
+        m.setAddressType(w.id, "p2wpkh")
+        // No conflict: the version was taken in after each of this phone's own changes.
+        assertEquals(1, ops.calls.count { it.startsWith("update") })
+        assertEquals("p2wpkh", m.wallets.value.single().addressType)
+    }
+
+    @Test
+    fun anAddressJustIssuedIsReportedByTheSameLookup() = runBlocking {
+        // The vault knows no address yet: the check issues index 0, which the server shows funded.
+        val w = withWallet(issuedReceive = 0)
+        funded(receive, 0, 70_000)
+        val m = manager()
+        m.open()
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        assertEquals(listOf(WalletFixtures.address(receive, 0).address), ops.marked.flatten())
+    }
+
+    @Test
+    fun aDeleteCancelledAfterTheVaultAnsweredStillForgetsTheWallet() = runBlocking {
+        val w = withWallet()
+        val file = flagsFile
+        WalletFlags(file).setBackedUp(w.id)
+        lateinit var job: kotlinx.coroutines.Job
+        val gated = object : WalletOps by ops {
+            override suspend fun delete(walletId: String, password: String) {
+                ops.delete(walletId, password)
+                job.cancel()
+            }
+        }
+        val m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(file), { it in offered }, { now })
+        m.open()
+        job = CoroutineScope(Dispatchers.Default).launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { m.delete(w.id, "pw") }
+        job.start()
+        job.join()
+        assertTrue(m.wallets.value.isEmpty())
+        assertFalse(WalletFlags(file).backedUp(w.id))
+    }
+
+    @Test
+    fun theAddressTypeIsNotPublishedAfterAClear() = runBlocking {
+        val w = withWallet()
+        lateinit var m: WalletsManager
+        val gated = object : WalletOps by ops {
+            override suspend fun setAddressType(walletId: String, version: Long, type: String): Long =
+                ops.setAddressType(walletId, version, type).also { m.clear() }
+        }
+        m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
+        m.open()
+        m.setAddressType(w.id, "p2wpkh")
+        assertTrue(m.wallets.value.isEmpty())
+    }
+
+    @Test
+    fun thePrivacyNoteIsKeptAndBumpsTheFlagsSignal() = runBlocking {
+        withWallet()
+        val other = "01OTHER"
+        val m = manager()
+        assertFalse(m.privacyNoteShown(other))
+        val before = m.flagsChanged.value
+        assertTrue(m.setPrivacyNoteShown(other))
+        assertTrue(m.privacyNoteShown(other))
+        assertEquals(before + 1, m.flagsChanged.value)
     }
 }

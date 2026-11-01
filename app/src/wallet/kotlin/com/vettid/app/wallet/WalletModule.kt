@@ -12,7 +12,10 @@ import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.wallet.WalletAccess
+import com.vettid.core.data.wallet.WalletLabel
 import com.vettid.core.data.wipe.WipeHook
+import com.vettid.core.wallet.ChainServerSettings
+import com.vettid.core.wallet.ServersChainSettings
 import com.vettid.core.wallet.ServersChainSource
 import com.vettid.core.wallet.VaultWalletOps
 import com.vettid.core.wallet.WalletAvailability
@@ -68,6 +71,11 @@ object WalletModule {
         generation = { wipe.generation },
     )
 
+    /** The Chain server screen's view of the setting (a small interface so that its ViewModel is tested without HTTP). */
+    @Provides
+    @Singleton
+    fun chainServerSettings(servers: ChainServers): ChainServerSettings = ServersChainSettings(servers)
+
     /** The defaults; a regtest server only in devStack (the branch is compiled away elsewhere: no loopback host in any other APK). */
     internal fun chainDefaults(): ChainDefaults =
         if (BuildConfig.WALLET_REGTEST) ChainDefaults.forBuild(BuildConfig.WALLET_REGTEST_ESPLORA) else ChainDefaults()
@@ -109,9 +117,17 @@ object WalletModule {
     @Provides
     @Singleton
     fun walletAccess(m: WalletsManager, @AppScope scope: CoroutineScope): WalletAccess = object : WalletAccess {
-        override val shown: StateFlow<Boolean> =
-            m.availability.map { it == WalletAvailability.AVAILABLE }.stateIn(scope, SharingStarted.Eagerly, false)
+        override val shown: StateFlow<Boolean> = combine(m.isOpen, m.availability, ::shownOf).stateIn(scope, SharingStarted.Eagerly, false)
+
+        override val wallets: StateFlow<List<WalletLabel>> =
+            m.wallets.map { list -> list.map { WalletLabel(it.id, it.name) } }.stateIn(scope, SharingStarted.Eagerly, emptyList())
     }
+
+    /**
+     * The drawer's Wallet entry: while the vault is open, unless it answered that it has no wallets. A read that failed at the unlock
+     * leaves the entry there, and the list's Try again reads it again (nothing fails silently).
+     */
+    internal fun shownOf(open: Boolean, availability: WalletAvailability): Boolean = open && availability != WalletAvailability.UNSUPPORTED
 
     /** The open session's identity ([opens], the vault's openings) while the wallets may be held ([openOf]); null while not. */
     internal fun sessionOf(phase: AppPhase, check: OwnerCheckView?, opens: Int): Int? = opens.takeIf { openOf(phase, check) }

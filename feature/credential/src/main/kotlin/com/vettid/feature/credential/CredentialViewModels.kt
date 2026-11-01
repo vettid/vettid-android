@@ -12,6 +12,9 @@ import com.vettid.core.data.vault.CredentialStatus
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
+import com.vettid.core.data.wallet.NoWalletAccess
+import com.vettid.core.data.wallet.WalletAccess
+import com.vettid.core.data.wallet.WalletLabel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,6 +46,11 @@ data class CredentialUiState(
     val windowPassword: String = "",
     val windowError: FailureKind? = null,
     val windowErrorCode: String? = null,
+    /**
+     * The vault's wallets, each a critical item listed by name (ANDROID-PLAN §4 "The wallet's item elsewhere"); none without the
+     * wallet.
+     */
+    val wallets: List<WalletLabel> = emptyList(),
 ) {
     override fun toString(): String = "CredentialUiState(loading=$loading, busy=$busy, error=$error, alarm=${alarm?.state})"
 }
@@ -53,10 +61,13 @@ data class CredentialUiState(
  * clone alarm (§3.5.9), which links to [AlarmViewModel].
  */
 @HiltViewModel
-class CredentialViewModel @Inject constructor(private val repo: CredentialRepository) : ViewModel() {
+class CredentialViewModel @Inject constructor(
+    private val repo: CredentialRepository,
+    wallet: WalletAccess = NoWalletAccess,
+) : ViewModel() {
     private val local = MutableStateFlow(CredentialUiState())
-    val uiState: StateFlow<CredentialUiState> = combine(local, repo.alarm, repo.unlockWindow) { s, a, w ->
-        s.copy(alarm = a, windowUntil = w)
+    val uiState: StateFlow<CredentialUiState> = combine(local, repo.alarm, repo.unlockWindow, wallet.wallets) { s, a, w, wallets ->
+        s.copy(alarm = a, windowUntil = w, wallets = wallets)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, CredentialUiState())
 
     init {

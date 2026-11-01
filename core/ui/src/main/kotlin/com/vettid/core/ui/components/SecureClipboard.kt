@@ -58,6 +58,21 @@ object SecureClipboard {
     }
 
     /**
+     * Puts [text] on the clipboard marked sensitive (hidden in the clipboard preview and keyboards' suggestions) but without
+     * this app's clear mark, so it is never cleared: for what is private but not a secret, such as a receive address the member
+     * is about to paste elsewhere (the owner's decision 2a, 2026-11-01). Any timer for an earlier secret goes, as with [copy]:
+     * that secret is no longer on the clipboard.
+     */
+    @Synchronized
+    fun copyHidden(context: Context, label: String, text: String) {
+        val cm = context.getSystemService(ClipboardManager::class.java) ?: return
+        cm.setPrimaryClip(textClip(label, text, sensitive = true))
+        closedPending = false
+        scheduled?.let { handler.removeCallbacks(it) }
+        scheduled = null
+    }
+
+    /**
      * The vault is no longer open (locked, held, wiped) or this process started without one: this app's clip leaves
      * the clipboard now, or as soon as the app has the focus.
      */

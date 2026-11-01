@@ -109,4 +109,21 @@ class ConnectFlowNamesTest {
             assertEquals(b, 0, rule.onAllNodesWithText("They chose this themselves", substring = true).fetchSemanticsNodes().size)
         }
     }
+
+    @Test
+    fun aServiceIsConnectedWithoutAnOfferToMessageIt() {
+        rule.setContent { Connected(name = "VettID Member Service", onMessage = {}, onDone = {}, service = true) }
+        val text = "You're connected to \u2068VettID Member Service\u2069. It can ask you to sign in, vote and update your profile."
+        rule.onNodeWithText(text).assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Send a message").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("message each other", substring = true).fetchSemanticsNodes().size)
+        rule.onNodeWithText("Done").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPersonIsStillOfferedAMessage() {
+        rule.setContent { Connected(name = "Sam Lee", onMessage = {}, onDone = {}) }
+        rule.onNodeWithText("Send a message").assertIsDisplayed()
+        rule.onNodeWithText("You and \u2068Sam Lee\u2069 can now message each other through your vaults.").assertIsDisplayed()
+    }
 }
