@@ -335,11 +335,12 @@ class WalletCapsTest {
             Triple("000000", "pw", FailureKind.BAD_PIN),
             Triple("123456", "wrong", FailureKind.BAD_PASSWORD),
         )) {
-            val e = runCatching { m.raiseCaps(w.id, null, 3_000_000, pin, password) }.exceptionOrNull() as VaultFailure
+            val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, pin, password) }.exceptionOrNull() as VaultFailure
             assertEquals(code, e.kind)
         }
         ops.capsRaiseFails = "backoff"
-        assertEquals(FailureKind.BACKOFF, (runCatching { m.raiseCaps(w.id, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure).kind)
+        val again = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, "123456", "pw") }.exceptionOrNull()
+        assertEquals(FailureKind.BACKOFF, (again as VaultFailure).kind)
         // The vault's wallet and the app's are as they were.
         val vault = ops.wallets.getValue(w.id)
         assertEquals(500_000L, vault.perTxSats)
@@ -360,14 +361,14 @@ class WalletCapsTest {
         val w = capped()
         val m = manager()
         m.open()
-        m.raiseCaps(w.id, null, 2_000_000, "123456", "pw")
+        m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 2_000_000, "123456", "pw")
         assertEquals("caps.raise:null:2000000", ops.calls.last())
         var mine = m.wallets.value.single()
         assertNull(mine.perTxSats)
         assertEquals(2_000_000L, mine.perPeriodSats)
         assertTrue(mine.capped)
         assertEquals(w.version + 1, mine.version)
-        m.raiseCaps(w.id, null, null, "123456", "pw")
+        m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, null, "123456", "pw")
         mine = m.wallets.value.single()
         assertFalse(mine.capped)
         assertNull(mine.perPeriodSats)
@@ -379,7 +380,7 @@ class WalletCapsTest {
         val m = manager()
         m.open()
         ops.wallets[w.id] = ops.wallets.getValue(w.id).copy(version = 8)
-        val e = runCatching { m.raiseCaps(w.id, null, 2_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 2_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.CONFLICT, e.kind)
         assertEquals(1, ops.calls.count { it.startsWith("caps.raise") })
         assertEquals(8L, m.wallets.value.single().version)
@@ -391,7 +392,9 @@ class WalletCapsTest {
         val w = capped()
         val m = manager()
         runBlocking { m.open() }
-        assertTrue(runCatching { runBlocking { m.raiseCaps(w.id, 3_000_000, 2_000_000, "123456", "pw") } }.exceptionOrNull() is IllegalArgumentException)
+        val seen = m.capsSeen(w.id)!!
+        val bad = runCatching { runBlocking { m.raiseCaps(w.id, seen, 3_000_000, 2_000_000, "123456", "pw") } }.exceptionOrNull()
+        assertTrue(bad is IllegalArgumentException)
         assertTrue(ops.calls.none { it.startsWith("caps.") })
     }
 

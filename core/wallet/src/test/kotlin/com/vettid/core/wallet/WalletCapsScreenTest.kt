@@ -4,6 +4,7 @@
 package com.vettid.core.wallet
 
 import com.vettid.core.chain.Network
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -79,7 +80,7 @@ class WalletCapsScreenTest {
         assertTrue(m.isCapsPending(w.id))
         ops.calls.clear()
         // The set fails again: the raise is not sent at all.
-        val e = runCatching { m.raiseCaps(w.id, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
         assertEquals("internal", e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.raise") })
         assertNull(ops.wallets.getValue(w.id).perTxSats)
@@ -87,16 +88,42 @@ class WalletCapsScreenTest {
         // The set goes through: it is sent, and the raise, chosen against the limits before it, is not sent with it.
         ops.capsSetFails = null
         ops.calls.clear()
-        val settled = runCatching { m.raiseCaps(w.id, 100_000, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val seenNow = m.capsSeen(w.id)!!
+        val settled = runCatching { m.raiseCaps(w.id, seenNow, 100_000, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.CAPS_SETTLED, settled.code)
         assertEquals(listOf("caps.set:100000:null"), ops.calls.filter { it.startsWith("caps.") })
         assertFalse(m.isCapsPending(w.id))
         assertNull(WalletFlags(flagsFile).pendingCaps(w.id))
         assertEquals(100_000L, m.wallets.value.single().perTxSats)
         // Asked again against the limits as they now are, it is raised.
-        m.raiseCaps(w.id, 100_000, 3_000_000, "123456", "pw")
+        m.raiseCaps(w.id, m.capsSeen(w.id)!!, 100_000, 3_000_000, "123456", "pw")
         assertEquals("caps.raise:100000:3000000", ops.calls.last())
         assertEquals(3_000_000L, m.wallets.value.single().perPeriodSats)
+    }
+
+    /** (#248 review) A raise chosen against limits that moved since (another device) sends nothing: the PIN and password stay here. */
+    @Test
+    fun aRaiseChosenAgainstLimitsThatMovedSendsNothing() = runBlocking {
+        val w = wallet("01WALLET000000000000000003", cappedAlready = true)
+        val m = manager()
+        m.open()
+        val seen = m.capsSeen(w.id)!!
+        // Another device lowers the per-payment limit; this phone reads the wallet again before the member confirms.
+        ops.wallets[w.id] = ops.wallets.getValue(w.id).copy(version = w.version + 1, perTxSats = 100_000)
+        m.refresh()
+        ops.calls.clear()
+        val e = runCatching { m.raiseCaps(w.id, seen, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.CONFLICT, e.kind)
+        assertEquals(WalletsManager.CAPS_CHANGED, e.code)
+        assertTrue(ops.calls.none { it.startsWith("caps.raise") })
+        assertEquals(100_000L, m.wallets.value.single().perTxSats)
+        // A version moved alone refuses too.
+        val now = m.capsSeen(w.id)!!
+        ops.wallets[w.id] = ops.wallets.getValue(w.id).copy(version = w.version + 2)
+        m.refresh()
+        val v = runCatching { m.raiseCaps(w.id, now, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        assertEquals(WalletsManager.CAPS_CHANGED, v.code)
+        assertTrue(ops.calls.none { it.startsWith("caps.raise") })
     }
 
     @Test
@@ -107,7 +134,7 @@ class WalletCapsScreenTest {
         m.open()
         assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
         ops.calls.clear()
-        val e = runCatching { m.raiseCaps(w.id, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.SETTINGS_UNREADABLE, e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.") })
         assertEquals(500_000L, ops.wallets.getValue(w.id).perTxSats)
@@ -337,7 +364,7 @@ class WalletCapsScreenTest {
         m.open()
         assertTrue(m.resetSettings())
         m.lowerCaps(id, 100_000, null)
-        m.raiseCaps(id, null, null, "123456", "pw")
+        m.raiseCaps(id, m.capsSeen(id)!!, null, null, "123456", "pw")
         assertFalse(m.wallets.value.single().capped)
         assertEquals(false, WalletFlags(flagsFile).asksCaps(id))
         assertTrue(m.receiveAddress(id) is ReceiveResult.Address)
@@ -382,7 +409,7 @@ class WalletCapsScreenTest {
         // Receive stays off, with the reason.
         assertEquals(ReceiveResult.CapsDuplicate, m.receiveAddress(id))
         // A raise is refused too, without a raise being sent.
-        val e = runCatching { m.raiseCaps(id, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(id, m.capsSeen(id)!!, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.DUPLICATE_WALLET, e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.raise") })
         // The twin is deleted: the next try sets it and everything clears.
