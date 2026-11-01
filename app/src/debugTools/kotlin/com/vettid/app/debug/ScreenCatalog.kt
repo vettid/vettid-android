@@ -666,6 +666,26 @@ object ScreenCatalog {
                 NoUnlock,
             )
         },
+        // #244: the vault took the unlock, but a lock came first: the vault's own, or one still pending here.
+        "unlock.not_opened" to {
+            UnlockContent(
+                UnlockUiState(
+                    loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null),
+                    message = UnlockMessage.Failed(FailureKind.OTHER, com.vettid.core.data.vault.MoveRepository.CODE_NOT_OPENED),
+                ),
+                NoUnlock,
+            )
+        },
+        "unlock.lock_pending" to {
+            UnlockContent(
+                UnlockUiState(
+                    loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null),
+                    message = UnlockMessage.Failed(FailureKind.OTHER, com.vettid.core.data.vault.MoveRepository.CODE_LOCK_PENDING),
+                    lock = com.vettid.core.data.vault.LockNotice.Unconfirmed(java.time.Instant.parse("2026-10-12T10:00:00Z"), 0),
+                ),
+                NoUnlock,
+            )
+        },
         "unlock.paused_preflight" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.SERVICE_PAUSED, serviceWaitSeconds = 300), NoUnlock)
         },
