@@ -250,13 +250,15 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         extra: JsonObjectBuilder.() -> Unit = {},
         /** The wallet a `wallet.sign` is for: the request is then durably marked outstanding until it is decided ([SignMark]). */
         walletId: String? = null,
+        /** Called right before the request is first sent: an exception from before it means nothing reached the vault. */
+        onSending: (() -> Unit)? = null,
     ): JsonObject = serialized(payload, null) {
         try {
-            sendKeptOnce(type, payload, extra, walletId)
+            sendKeptOnce(type, payload, extra, walletId, onSending)
         } catch (e: VaultOpException) {
             // [settle] already fetched the latest blob.
             if (e.code != CODE_STALE) throw e
-            sendKeptOnce(type, payload, extra, walletId)
+            sendKeptOnce(type, payload, extra, walletId, onSending)
         }
     }
 
@@ -265,6 +267,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         payload: JsonObjectBuilder.() -> Unit,
         extra: JsonObjectBuilder.() -> Unit,
         walletId: String?,
+        onSending: (() -> Unit)?,
     ): JsonObject {
         val utk = takeUtk()
         var stored = false
@@ -279,6 +282,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             // Nothing was sent: the UTK goes back to the pool.
             if (!stored) d.returnUtk(utk)
         }
+        onSending?.invoke()
         @Suppress("TooGenericExceptionCaught")
         val r = try {
             d.sendKept(kept, CHANGE_SENDS)
@@ -306,7 +310,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         if (r.inner.status != Inner.STATUS_OK) return settle(kept, r)
         d.dropKept(kept)
         try {
-            keepIfNewer(r.body)
+            keepIfNewer(r.body, kept.sentVersion)
         } catch (_: java.io.IOException) {
             // The operation applied; the blob is fetched by the next operation that finds it stale.
         }
@@ -314,14 +318,14 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     }
 
     /**
-     * Keeps what a (possibly cached, possibly late) answer carries: the UTKs always, the blob and its acknowledgement only when its
-     * `credential_version` is above the one held. Another credential operation may have moved the credential on while this
-     * answer was awaited; storing the older blob would present a version the vault has passed, which it freezes as a clone.
+     * Keeps what a (possibly cached, possibly late) answer carries: the UTKs always, the blob and its acknowledgement only when the
+     * credential held is **still the one the request was sent at** ([sentVersion]) and the answer's `credential_version` is above
+     * it. Another credential operation (or a reset) may have moved the credential on while this answer was awaited; storing the
+     * blob then would present a version the vault has passed, which it freezes as a clone.
      */
-    private suspend fun keepIfNewer(o: JsonObject) {
-        val held = d.credentialVersion
+    private suspend fun keepIfNewer(o: JsonObject, sentVersion: Long) {
         val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
-        if (held == null || v == null || v > held) {
+        if (d.credentialVersion == sentVersion && (v == null || v > sentVersion)) {
             keep(o)
         } else {
             keep(JsonObject(o.filterKeys { it != "credential" }))

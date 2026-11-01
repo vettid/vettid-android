@@ -1315,25 +1315,30 @@ class WalletsManager(
     }
 
     /**
-     * The payment is consumed the moment the request goes out; only a refusal that counts nothing at the vault gives it back
-     * (`credential_locked`, `cap_exceeded`, `invalid_psbt`, `bad_password`, `backoff`, `stale_credential`). Anything else, an answer
-     * that does not read included, leaves it consumed: the vault may have signed.
+     * The payment is consumed the moment the request goes out. It is given back by the vault's refusal, whatever its code (final,
+     * and it counts nothing, §10.18), and by a failure from before the request was sent ([SignNotSent]). It stays consumed when the
+     * request may have reached the vault without a definite answer (no answer, a network failure after the send) and when the
+     * answer was `ok`, an unreadable one included: the vault may have signed.
      */
+    @Suppress("TooGenericExceptionCaught")
     private suspend fun signOnce(prepared: PreparedSend, password: String): Outcome {
         synchronized(lock) { consumed += prepared.unsignedTxid }
         return try {
             Outcome.Answered(vaultGuard { ops().sign(prepared.walletId, prepared.psbtBase64, password) })
-        } catch (e: VaultFailure) {
-            val result = signFailure(e)
-            if (countsNothing(e, result)) synchronized(lock) { consumed -= prepared.unsignedTxid }
-            Outcome.Failed(result ?: throw e)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (givesBack(e)) synchronized(lock) { consumed -= prepared.unsignedTxid }
+            Outcome.Failed((e as? VaultFailure)?.let(::signFailure) ?: throw e)
         }
     }
 
-    /** A definite refusal that counted nothing against the wallet's limits. */
-    private fun countsNothing(e: VaultFailure, result: SendResult?): Boolean =
-        result is SendResult.CredentialLocked || result is SendResult.CapExceeded || result is SendResult.Refused ||
-            (e.cause is VaultOpException && e.code in NOTHING_COUNTED)
+    /** The vault refused (an answer, final) or the request never went out: the signing counted nothing. */
+    private fun givesBack(e: Throwable): Boolean =
+        (e as? VaultFailure)?.cause is VaultOpException || generateSequence(e) { it.cause }.take(CAUSE_DEPTH).any { t ->
+            // Coroutine stack recovery may copy an exception on its way out of a dispatcher: the marker is searched down the causes.
+            t.suppressed.any { it is SignNotSent }
+        }
 
     /** Whether a `wallet.sign` of this wallet may still apply at the vault, after a lock, an unlock or a restart. */
     private suspend fun signHeld(walletId: String): Boolean = walletId in vaultGuard { ops().signsOutstanding() }
@@ -1424,7 +1429,7 @@ class WalletsManager(
                 val result = if (e.cause is VaultOpException) signFailure(e) else null
                 if (result == null && e.cause !is VaultOpException) throw e
                 publish(g) {
-                    if (countsNothing(e, result)) consumed -= p.unsignedTxid
+                    if (givesBack(e)) consumed -= p.unsignedTxid
                     pendingSigns.remove(walletId)
                     publishUnsent()
                 }
@@ -1504,8 +1509,7 @@ class WalletsManager(
             FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
         )
 
-        /** Vault codes of a signing that was refused before anything was counted. */
-        val NOTHING_COUNTED = setOf("bad_password", "backoff", "stale_credential")
+        private const val CAUSE_DEPTH = 6
 
         /** BIP44's gap: addresses past the last used one that are looked at before a chain is taken as ended. */
         const val GAP = 20

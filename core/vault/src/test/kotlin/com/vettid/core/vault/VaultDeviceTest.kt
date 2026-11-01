@@ -2577,6 +2577,45 @@ class VaultDeviceTest {
         }
     }
 
+    /** The blob is kept only while the credential held is still the one the request was sent at: a moved credential keeps its own. */
+    @Test
+    fun aWalletSignAnswerHigherThanAMovedCredentialStillDoesNotReplaceIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e4", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            (1..3).map { v.open(nextDeposit().second) }
+            val e = sign.await().exceptionOrNull() as ChangeUnansweredException
+            // A reset (or another operation) moved the credential to 5; the answer's 6 is higher still, but not this credential's.
+            d.keepCredential("TkVXNQ==", 5)
+            val again = async(Dispatchers.IO) { api.walletSignResend(e.kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"txid":"ab","tx":"0200","credential":"TkVXNg==","credential_version":6,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            assertEquals("0200", VaultJson.str(again.await()!!, "tx"))
+            assertEquals(5L, d.credentialVersion)
+            assertEquals("TkVXNQ==", d.credentialBlob())
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** `onSending` says the request is about to go out; a failure before it (here the change gate) never calls it. */
+    @Test
+    fun walletSignSaysWhenTheRequestIsAboutToGoOut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            api.setCredentialGate { _ -> throw VaultStateException("change undecided") }
+            var sending = false
+            assertTrue(runCatching { api.walletSign(signWallet, signPsbt, "pw") { sending = true } }.exceptionOrNull() is VaultStateException)
+            assertFalse(sending)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
     /**
      * An unanswered `wallet.sign` is outstanding across a restart (the mark is durable) and is decided by `credential.version`: at
      * the version it was sent at it may still apply; past it, it applied or never will, and the hold ends.

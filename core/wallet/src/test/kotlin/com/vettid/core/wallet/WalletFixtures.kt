@@ -212,6 +212,9 @@ internal class FakeWalletOps : WalletOps {
     var cap: SpendCap? = SpendCap(true, null, null, null)
     val inspected = mutableListOf<String>()
 
+    /** A failure of `wallet.sign` that is not the vault's answer (before the send, or after it without an answer). */
+    var signFailure: Exception? = null
+
     /** An error for `wallet.sign`, thrown as the vault's answer. */
     var signError: VaultOpException? = null
 
@@ -248,6 +251,7 @@ internal class FakeWalletOps : WalletOps {
         signs += psbtBase64
         signPasswords += password
         if (!windowOpen()) refuse("wallet.sign", "credential_locked")
+        signFailure?.let { throw it }
         signError?.let { throw it }
         if (password != "pw") refuse("wallet.sign", "bad_password")
         val signed = signedTx(psbtBase64)

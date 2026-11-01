@@ -316,3 +316,6 @@ object FeeTargets {
     /** "This fee is much higher than needed right now": above twice the Fast rate. */
     fun muchHigher(rate: Double, fast: Double): Boolean = rate > 2 * fast
 }
+
+/** Added as a suppressed exception to a failure of `wallet.sign` from before its request was sent: nothing reached the vault. */
+class SignNotSent : Exception("wallet.sign: not sent")

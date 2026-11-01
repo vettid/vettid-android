@@ -174,10 +174,17 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
 
     override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer {
         val a = api()
+        var sent = false
         return try {
-            SignAnswer.Signed(WalletWire.signed(a.walletSign(walletId, psbtBase64, password)))
+            SignAnswer.Signed(WalletWire.signed(a.walletSign(walletId, psbtBase64, password) { sent = true }))
         } catch (e: ChangeUnansweredException) {
             unanswered(a, e.kept)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Before the request went out nothing reached the vault: said to the manager, which then gives the payment back.
+            if (!sent) e.addSuppressed(SignNotSent())
+            throw e
         }
     }
 

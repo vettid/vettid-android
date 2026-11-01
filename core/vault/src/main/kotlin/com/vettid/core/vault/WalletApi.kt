@@ -247,7 +247,12 @@ suspend fun VaultApi.walletPsbtInspect(walletId: String, psbtBase64: String): Js
  * wallet's spending limit. Errors: `credential_locked` (open the unlock window and sign again), `invalid_psbt`, `cap_exceeded`
  * (before the password is tried; the UTK is spent), `bad_password`, `backoff`.
  */
-suspend fun VaultApi.walletSign(walletId: String, psbtBase64: String, password: String): JsonObject =
+suspend fun VaultApi.walletSign(
+    walletId: String,
+    psbtBase64: String,
+    password: String,
+    onSending: (() -> Unit)? = null,
+): JsonObject =
     credentialOps.credOpKept(
         "wallet.sign",
         { signSealed(walletId, psbtBase64, password).forEach { (k, v) -> put(k, v) } },
@@ -256,6 +261,7 @@ suspend fun VaultApi.walletSign(walletId: String, psbtBase64: String, password: 
             put("psbt", psbtBase64)
         },
         walletId = walletId,
+        onSending = onSending,
     )
 
 /**

@@ -639,13 +639,43 @@ class WalletSendTest {
     }
 
     @Test
-    fun aRefusalThatMayHaveCountedKeepsTheApproveClosed() = runBlocking {
+    fun anyVaultRefusalIsFinalAndGivesTheApproveBack() = runBlocking {
         val (m, w) = opened()
         val p = ready(m, w)
         ops.signError = refusal("duplicate_wallet")
         assertEquals(SendResult.DuplicateWallet, m.approveSend(p, "pw"))
+        // A code the app has never heard of: thrown, and still the vault's final word.
+        ops.signError = refusal("something_new")
+        assertTrue(runCatching { m.approveSend(p, "pw") }.exceptionOrNull() is VaultFailure)
         ops.signError = null
+        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+        assertEquals(3, ops.signs.size)
         assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+    }
+
+    @Test
+    fun aFailureBeforeTheRequestWentOutGivesTheApproveBack() = runBlocking {
+        val (m, w) = opened()
+        val p = ready(m, w)
+        ops.signFailure = java.io.IOException("no UTK").also { it.addSuppressed(SignNotSent()) }
+        assertTrue(runCatching { m.approveSend(p, "pw") }.exceptionOrNull() is VaultFailure)
+        ops.signFailure = com.vettid.core.vault.CredentialUnsettledException().also { it.addSuppressed(SignNotSent()) }
+        val second = runCatching { m.approveSend(p, "pw") }
+        val e = second.exceptionOrNull() as? VaultFailure ?: error("second: ${second.getOrNull()}")
+        assertEquals(FailureKind.CREDENTIAL_UNSETTLED, e.kind)
+        ops.signFailure = null
+        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+    }
+
+    @Test
+    fun aFailureAfterTheSendWithoutAnAnswerKeepsTheApproveClosed() = runBlocking {
+        val (m, w) = opened()
+        val p = ready(m, w)
+        ops.signFailure = java.io.IOException("relay dropped")
+        assertTrue(runCatching { m.approveSend(p, "pw") }.exceptionOrNull() is VaultFailure)
+        ops.signFailure = null
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+        assertEquals(1, ops.signs.size)
     }
 
     // --- 1: a signing that may still apply holds new sends ---
