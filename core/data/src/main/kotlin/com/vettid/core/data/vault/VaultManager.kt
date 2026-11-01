@@ -569,6 +569,13 @@ class VaultManager(
     private val phaseFlow = PhaseHolder(AppPhase.Starting)
 
     /**
+     * Every opening of the vault on this phone, counted ([PhaseHolder.opens]): a follower of [phase] that sees it open twice in a row
+     * tells from it whether it was closed between (a close and an open fast enough to be conflated away). The wallet's open flow
+     * uses it (ANDROID-PLAN §4 "Local state": nothing of a wallet outlives a lock).
+     */
+    val opens: StateFlow<Int> get() = phaseFlow.opens
+
+    /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") The re-reads of the status after `device.unlinked{vault_deleted}`,
      * through the member API alone (the app key, kept until the vault is gone): no session is opened meanwhile.
      */

@@ -332,6 +332,17 @@ internal class PhaseHolder(initial: AppPhase) {
     private val flow = MutableStateFlow(initial)
     private var held: AppPhase.Deleting? = null
 
+    private val opensFlow = MutableStateFlow(0)
+
+    /**
+     * Counts every move into [AppPhase.Unlocked] from another phase, whatever closed the vault before (the member's lock, the
+     * vault's `vault.locking`, a refusal, a status read, a wipe): a follower that sees the vault open twice in a row tells from it
+     * whether it was closed between, even when the closed value was conflated away. Moved before the phase is published: a reader
+     * of both sees the new count with the new phase. A follower that combines the two flows (collected apart) may still see the
+     * new phase with the old count for a moment, then the new count: at worst one more close and read, never an old session kept.
+     */
+    val opens: StateFlow<Int> = opensFlow.asStateFlow()
+
     var value: AppPhase
         get() = flow.value
         set(v) = synchronized(this) {
@@ -345,6 +356,7 @@ internal class PhaseHolder(initial: AppPhase) {
      */
     private fun publish(v: AppPhase) {
         val was = flow.value
+        if (v is AppPhase.Unlocked && was !is AppPhase.Unlocked) opensFlow.value += 1
         flow.value = v
         val ends = when (v) {
             AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true
