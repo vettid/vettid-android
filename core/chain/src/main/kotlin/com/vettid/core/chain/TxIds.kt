@@ -19,3 +19,15 @@ internal fun txidOf(bytes: ByteArray): String? {
     val stripped = Transaction.write(tx, Protocol.PROTOCOL_VERSION or Transaction.SERIALIZE_TRANSACTION_NO_WITNESS)
     return Crypto.hash256(stripped).toDisplayHex()
 }
+
+/** A serialised transaction, for the modules that must not see bitcoin-kmp: its id and its hex form. */
+object Tx {
+    /** The txid in display order; null when [bytes] are not exactly one transaction. */
+    fun id(bytes: ByteArray): String? = txidOf(bytes)
+
+    fun toHex(bytes: ByteArray): String = bytes.toHex()
+
+    /** The bytes of lower or upper case hex; null for text that is not hex of even length. */
+    fun fromHex(hex: String): ByteArray? =
+        if (hex.isEmpty() || hex.length % 2 != 0 || !hex.all { it in "0123456789abcdefABCDEF" }) null else hex.hexToBytes()
+}

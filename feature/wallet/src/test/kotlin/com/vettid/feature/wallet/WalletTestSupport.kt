@@ -11,13 +11,16 @@ import com.vettid.core.wallet.AddressChain
 import com.vettid.core.wallet.AddressPage
 import com.vettid.core.wallet.ChainOpen
 import com.vettid.core.wallet.ChainSource
+import com.vettid.core.wallet.PsbtInspection
 import com.vettid.core.wallet.RevealedPhrase
+import com.vettid.core.wallet.SignAnswer
 import com.vettid.core.wallet.VaultAccount
 import com.vettid.core.wallet.VaultWallet
 import com.vettid.core.wallet.WalletAddress
 import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletFlagsFile
 import com.vettid.core.wallet.WalletOps
+import com.vettid.core.wallet.WalletTx
 import com.vettid.core.wallet.WalletsManager
 import kotlinx.coroutines.CoroutineScope
 
@@ -166,6 +169,13 @@ internal class FakeWallets : WalletOps {
     }
 
     override suspend fun markUsed(walletId: String, addresses: List<String>) = 0
+
+    // Sending (W2-1) has no screen yet: nothing here asks for it.
+    override suspend fun inspect(walletId: String, psbtBase64: String): PsbtInspection = error("no screen sends yet")
+
+    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer = error("no screen sends yet")
+
+    override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = emptyList()
 }
 
 internal class MemoryFlags : WalletFlagsFile {

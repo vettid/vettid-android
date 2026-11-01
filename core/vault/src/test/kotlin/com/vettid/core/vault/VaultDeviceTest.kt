@@ -2457,6 +2457,126 @@ class VaultDeviceTest {
         }
     }
 
+    private val signWallet = "01HXZ3N5Q8R2T4V6W9Y0B1C2D3"
+    private val signPsbtBytes = ByteArray(300) { (it * 7).toByte() }
+    private val signPsbt = java.util.Base64.getEncoder().encodeToString(signPsbtBytes)
+
+    /**
+     * W2-1 (ANDROID-PLAN §4 "Sending" step 5; VAULT-MESSAGING §10.18): `wallet.sign` is one credential operation whose lost answer
+     * is retried as **the same request**. The sealed body is built once: three sends with one inner id and one body, a resend
+     * after "no answer" with the same id and body again (the vault answers from its cache, so a spending limit counts it once),
+     * never a second UTK request or a new id; the cached answer settles it and the new credential is kept and acknowledged.
+     * The sealed payload is `{password, item_id, payload_sha256}` over the PSBT's decoded bytes, and no `broadcast` member.
+     */
+    @Test
+    fun aLostWalletSignIsResentAsTheSameRequestAndNeverBuiltAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(400))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val utk = KemPrivateKey.generate()
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d1", utk)}]}""", re = get.id, status = Inner.STATUS_OK))
+            val sends = (1..3).map { v.open(nextDeposit().second) }
+            val e = sign.await().exceptionOrNull() as ChangeUnansweredException
+            assertEquals("wallet.sign", e.kept.type)
+            val id = sends[0].id
+            for (r in sends) {
+                assertEquals("one inner id for every send", id, r.id)
+                assertEquals("wallet.sign", r.type)
+                org.junit.Assert.assertArrayEquals(sends[0].body, r.body)
+            }
+            val outer = StrictJson.parseObject(sends[0].body)
+            assertEquals(signWallet, outer.string("wallet_id"))
+            assertEquals(signPsbt, outer.string("psbt"))
+            assertNull("the vault never broadcasts", outer["broadcast"])
+            val sealed = StrictJson.parseObject(
+                com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, "00112233445566d1", "wallet.sign", id, outer.base64("sealed")),
+            )
+            assertEquals(setOf("password", "item_id", "payload_sha256"), sealed.members.keys)
+            assertEquals("password one", sealed.string("password"))
+            assertEquals(signWallet, sealed.string("item_id"))
+            // The hash of the decoded PSBT, not of the base64 text.
+            assertEquals(
+                Base64s.encodeStd(java.security.MessageDigest.getInstance("SHA-256").digest(signPsbtBytes)),
+                sealed.string("payload_sha256"),
+            )
+            org.junit.Assert.assertNotEquals(
+                Base64s.encodeStd(java.security.MessageDigest.getInstance("SHA-256").digest(signPsbt.toByteArray())),
+                sealed.string("payload_sha256"),
+            )
+
+            val again = async(Dispatchers.IO) { api.walletSignResend(e.kept) }
+            val r = v.open(nextDeposit().second)
+            assertEquals("the same inner id", id, r.id)
+            assertEquals("wallet.sign", r.type)
+            org.junit.Assert.assertArrayEquals("the same body", sends[0].body, r.body)
+            d.handle(v.seal(r.type, """{"txid":"ab","tx":"0200","credential":"TkVX","credential_version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            assertEquals("0200", VaultJson.str(answer, "tx"))
+            assertEquals(4L, d.credentialVersion)
+            assertEquals("TkVX", d.credentialBlob())
+            assertNull("nothing else was sent: no new UTK, no new id", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** An answer to the first send that comes late is taken by the resend without sending anything. */
+    @Test
+    fun aLateWalletSignAnswerIsTakenWithoutSendingAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d2", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val first = (1..3).map { v.open(nextDeposit().second) }.first()
+            val e = sign.await().exceptionOrNull() as ChangeUnansweredException
+            d.handle(v.seal(first.type, """{"txid":"ab","tx":"0200","credential":"TkVX","credential_version":4,"utks":[]}""", re = first.id, status = Inner.STATUS_OK))
+            val resent = async(Dispatchers.IO) { api.walletSignResend(e.kept) }
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            assertEquals("0200", VaultJson.str(resent.await()!!, "tx"))
+            assertNull("the same request was not sent a fourth time", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** `cap_exceeded` (checked before the password is tried) is thrown as the vault's error with its body; nothing is kept to resend. */
+    @Test
+    fun aRefusedWalletSignThrowsTheVaultsErrorWithItsBody() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            val req = v.open(nextDeposit().second)
+            d.handle(
+                v.msg(
+                    v.keyring.current()!!.seal(
+                        Inner(
+                            id = Ulid.new(), type = req.type, ts = Instant.now(), re = req.id, status = Inner.STATUS_ERROR,
+                            error = com.vettid.core.crypto.envelope.InnerError("cap_exceeded", "per_tx"),
+                            body = """{"reason":"per_tx","limit_sats":500}""".toByteArray(),
+                        ),
+                    ),
+                ),
+            )
+            val e = sign.await().exceptionOrNull() as VaultOpException
+            assertEquals("cap_exceeded", e.code)
+            assertEquals("per_tx", e.detail)
+            assertEquals("per_tx", VaultJson.str(e.body!!, "reason"))
+            assertTrue("a refusal settles the operation", d.credentialSettled())
+        }
+    }
+
     /**
      * §11.14.9 step 4: `stale_credential` to a change is never retried with the typed secrets (it would spend an attempt
      * with what may be the old PIN): the latest blob is fetched and the refusal thrown, and nothing else is sent.

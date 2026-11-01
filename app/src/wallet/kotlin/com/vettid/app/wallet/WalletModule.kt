@@ -101,6 +101,10 @@ object WalletModule {
         chain = ServersChainSource(servers),
         flags = flags,
         offered = servers.defaults::offered,
+        // Spending needs the credential's unlock window (W2): the app's own path, as a vote's cast uses it.
+        windowOpen = { manager.unlockWindow.value?.isAfter(java.time.Instant.now()) == true },
+        openWindow = { password -> manager.openUnlockWindow(password) },
+        closeWindow = { manager.closeUnlockWindow() },
     ).also { m ->
         wipe.register(m::clear)
         // The member's own lock, before it reaches the vault; every other way the vault closes is the `open` flow below.

@@ -2,9 +2,25 @@ package com.vettid.core.wallet
 
 import com.vettid.core.chain.Account
 import com.vettid.core.chain.AccountType
+import com.vettid.core.chain.BroadcastRefusal
+import com.vettid.core.chain.BuildCoin
+import com.vettid.core.chain.BuildException
+import com.vettid.core.chain.BuildOutput
 import com.vettid.core.chain.ChainError
 import com.vettid.core.chain.ChainServer
+import com.vettid.core.chain.CoinSelection
+import com.vettid.core.chain.InspectResult
 import com.vettid.core.chain.Network
+import com.vettid.core.chain.Payee
+import com.vettid.core.chain.PayeeCheck
+import com.vettid.core.chain.PsbtBase64
+import com.vettid.core.chain.PsbtBuilder
+import com.vettid.core.chain.PsbtInspector
+import com.vettid.core.chain.PsbtReasons
+import com.vettid.core.chain.Selection
+import com.vettid.core.chain.Spendable
+import com.vettid.core.chain.SummaryCompare
+import com.vettid.core.chain.Tx
 import com.vettid.core.chain.Wallet
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -33,6 +49,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 
 /** Whether the vault has wallets (it answers `wallet.list`); asked once per unlock. */
@@ -167,6 +184,12 @@ class WalletsManager(
     /** Whether the build connects to [Network]: signet and testnet4 (regtest in devStack). */
     private val offered: (Network) -> Boolean,
     private val clock: () -> Instant = Instant::now,
+    /** The credential's unlock window (VAULT-MESSAGING §3.5.3) as this app knows it: open now (W2: spending needs it). */
+    private val windowOpen: () -> Boolean = { false },
+    /** `credential.unlock` with the password, the app's own path ([com.vettid.core.data.vault.VaultRepository.openUnlockWindow]). */
+    private val openWindow: suspend (String) -> Unit = {},
+    /** `credential.lock`: closes a window this manager opened for a send. */
+    private val closeWindow: suspend () -> Unit = {},
 ) {
     private val availabilityFlow = MutableStateFlow(WalletAvailability.UNKNOWN)
     val availability: StateFlow<WalletAvailability> = availabilityFlow.asStateFlow()
@@ -209,6 +232,24 @@ class WalletsManager(
     /** Wallets made in this session whose backup is under way: their pending limits wait for the check (the phrase needs no PIN). */
     private val held = HashSet<String>()
     private val capsLock = Mutex()
+
+    /** One send at a time (build, sign, broadcast, and the tries again). */
+    private val sendLock = Mutex()
+
+    /** The signed transactions not yet broadcast, per wallet: **memory only**, never on disk, dropped at lock. Under [lock]. */
+    private val keptTx = HashMap<String, KeptTx>()
+    private val unsentFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The wallets with a signing whose answer has not come (resent as the same request), per wallet. Under [lock]. */
+    private val pendingSigns = HashMap<String, PendingSign>()
+
+    /** The wallets holding a signed transaction that is not broadcast yet, or a signing still unanswered: Try again is offered. */
+    val unsent: StateFlow<Set<String>> = unsentFlow.asStateFlow()
+
+    private val windowNotClosedFlow = MutableStateFlow(false)
+
+    /** A send opened the credential's unlock window and could not close it: it stays open until it closes by itself. */
+    val windowNotClosed: StateFlow<Boolean> = windowNotClosedFlow.asStateFlow()
 
     /**
      * Guards [generation], [open], [checked] and every publish: a [clear] moves the generation and resets everything at once, and
@@ -299,6 +340,9 @@ class WalletsManager(
             held.clear()
             duplicateSet.clear()
             duplicateFlow.value = emptySet()
+            keptTx.clear()
+            pendingSigns.clear()
+            unsentFlow.value = emptySet()
         }
     }
 
@@ -1043,7 +1087,392 @@ class WalletsManager(
         Scan(confirmed, unconfirmed, funded)
     }
 
+    // --- Sending (W2-1; ANDROID-PLAN §4 "Sending", VAULT-MESSAGING §10.18) ---
+
+    /** A signed transaction waiting to be broadcast (memory only). [unsignedTxid] is the reviewed one it must equal. */
+    private class KeptTx(val network: Network, val signed: SignedTx)
+
+    /** A `wallet.sign` whose answer has not come: [resend] sends the same request again. */
+    private class PendingSign(val network: Network, val unsignedTxid: String, val resend: suspend () -> SignAnswer)
+
+    /** Whether the wallet's pending limit holds a send back, as it holds Receive: it is sent first; null when nothing holds it. */
+    @Suppress("ReturnCount")
+    private suspend fun holdFor(walletId: String): SendHold? {
+        if (!isCapsPending(walletId)) return null
+        attempt { settleFirst(walletId) }
+        if (!isCapsPending(walletId)) return null
+        return when {
+            synchronized(lock) { pendingUnknown } -> SendHold.SETTINGS_UNREADABLE
+            synchronized(lock) { walletId in duplicateSet } -> SendHold.CAPS_DUPLICATE
+            else -> SendHold.CAPS_PENDING
+        }
+    }
+
+    /**
+     * Steps 1 to 4 of a send, with no password and nothing signed: the checks (the limit still to be set first, the address for the
+     * network, the fee rate), the coins of both accounts from the chain server, the selection ([CoinSelection]), the PSBT
+     * ([PsbtBuilder], with the full previous transactions and the derivations), `wallet.psbt.inspect`, and the **compare** of the vault's
+     * summary with what was built and entered ([SummaryCompare]): any difference is [PrepareResult.Different] and nothing goes on. The
+     * review shows [PreparedSend.vault], the vault's summary.
+     */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongMethod")
+    suspend fun prepareSend(walletId: String, request: SendRequest): PrepareResult = sendLock.withLock {
+        val g = gen()
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: noWallet()
+        holdFor(walletId)?.let { return PrepareResult.Held(it) }
+        val network = networkOf(wallet) ?: return PrepareResult.NeedsNetwork
+        if (!offered(network)) return PrepareResult.NotOffered
+        val payee = when (val c = Payee.check(network, request.address)) {
+            is PayeeCheck.Ok -> c
+            else -> return PrepareResult.BadAddress(c)
+        }
+        if (request.feeRate !in CoinSelection.MIN_FEE_RATE..CoinSelection.MAX_FEE_RATE) return PrepareResult.BadFeeRate
+        val derived = checkedWallet(wallet, network, g) ?: return PrepareResult.AddressMismatch
+        if (!flags.privacyNoteShown(walletId)) return PrepareResult.NoteNeeded
+        val spend = when (val open = chain.open(network)) {
+            is ChainOpen.Ready -> open.spend?.let { open to it } ?: return PrepareResult.NoChain(open)
+            else -> return PrepareResult.NoChain(open)
+        }
+        if (gen() != g) return PrepareResult.Cleared
+        // The wallet as the vault has it now: its next change index is where the change goes.
+        reload(walletId, g)
+        val now = walletsFlow.value.firstOrNull { it.id == walletId } ?: wallet
+        val noAccount = PrepareResult.Refused(PsbtReasons.NO_ACCOUNT, alarm = false, byVault = false)
+        val changeType = AccountType.fromVaultName(now.addressType) ?: return noAccount
+        val changeIndex = now.account(now.addressType)?.nextChange ?: return noAccount
+        val selected = try {
+            val coins = collectCoins(now, derived, spend.first, spend.second, g) ?: return PrepareResult.Cleared
+            val s = CoinSelection.select(
+                coins, payee.scriptSize, request.amountSats, request.feeRate, changeType, request.includeUnconfirmed,
+            )
+            when (s) {
+                is Selection.Selected -> s
+                is Selection.NotEnough -> return PrepareResult.NotEnough(s.availableSats, s.neededSats)
+                Selection.BadFeeRate -> return PrepareResult.BadFeeRate
+                Selection.BadAmount -> return PrepareResult.BadAmount
+                Selection.TooManyInputs -> return PrepareResult.TooManyInputs
+            }
+        } catch (e: ChainError) {
+            return PrepareResult.ServerFailed(e)
+        }
+        val buildCoins = try {
+            val prev = HashMap<String, ByteArray>()
+            for (c in selected.coins) if (c.txid !in prev) prev[c.txid] = spend.second.rawTransaction(c.txid)
+            selected.coins.map { c -> BuildCoin(c.accountType, c.change, c.index, prev.getValue(c.txid), c.vout) }
+        } catch (e: ChainError) {
+            return PrepareResult.ServerFailed(e)
+        }
+        val outputs = buildList<BuildOutput> {
+            add(BuildOutput.Pay(request.address, selected.payeeSats))
+            if (selected.changeSats > 0) add(BuildOutput.Own(changeType, true, changeIndex, selected.changeSats))
+        }
+        val psbt = try {
+            PsbtBuilder.build(derived, buildCoins, outputs)
+        } catch (e: BuildException) {
+            return PrepareResult.Refused(e.reason, alarm = false, byVault = false)
+        }
+        val built = when (val r = PsbtInspector.inspect(derived, psbt)) {
+            is InspectResult.Ok -> r.summary
+            is InspectResult.Refused -> return PrepareResult.Refused(r.reason, alarm = false, byVault = false)
+        }
+        val psbtBase64 = PsbtBase64.encode(psbt)
+        val inspection = try {
+            vaultGuard { ops().inspect(walletId, psbtBase64) }
+        } catch (e: VaultFailure) {
+            val reason = invalidPsbtReason(e) ?: throw e
+            return PrepareResult.Refused(reason, alarm = reason == SendCodes.WRONG_SEED, byVault = true)
+        }
+        val kinds = SummaryCompare.differences(request.address, selected.payeeSats, built, inspection.summary)
+        if (kinds.isNotEmpty()) return PrepareResult.Different(kinds)
+        val prepared = PreparedSend(
+            walletId, network, request.address, inspection.summary, inspection.cap, selected.payeeSats, selected.changeSats,
+            selected.feeSats, selected.vsize, selected.toFeeSats, selected.sendAll, selected.leftBehind, psbtBase64, built.txid, g,
+        )
+        return if (gen() == g) PrepareResult.Ready(prepared) else PrepareResult.Cleared
+    }
+
+    /** Both accounts' receive and change chains as [scan] walks them, reading the unspent outputs of the addresses with funds. */
+    @Suppress("NestedBlockDepth")
+    private suspend fun collectCoins(
+        vault: VaultWallet,
+        wallet: Wallet,
+        ready: ChainOpen.Ready,
+        spend: SpendAccess,
+        g: Long,
+    ): List<Spendable>? =
+        coroutineScope {
+            val out = ArrayList<Spendable>()
+            for (type in AccountType.entries) {
+                val account = wallet.account(type)
+                val stated = vault.account(type.vaultName)
+                for (change in listOf(false, true)) {
+                    val next = if (change) stated?.nextChange ?: 0 else stated?.nextReceive ?: 0
+                    var lastUsed = -1
+                    var index = 0
+                    while (index < maxOf(next, lastUsed + 1) + GAP && index < Account.MAX_INDEX) {
+                        if (gen() != g) return@coroutineScope null
+                        val batch = (index until minOf(index + BATCH, maxOf(next, lastUsed + 1) + GAP)).toList()
+                        val found = batch.map { i ->
+                            async {
+                                val address = account.address(change, i)
+                                val s = ready.summary(address)
+                                val utxos = if (s.confirmedSats > 0 || s.unconfirmedSats > 0) spend.unspent(address) else emptyList()
+                                Triple(i, s.txCount, utxos.map { Spendable(it.txid, it.vout, it.valueSats, type, change, i, it.confirmed) })
+                            }
+                        }.awaitAll()
+                        for ((i, txCount, coins) in found) {
+                            out += coins
+                            if (txCount > 0) lastUsed = maxOf(lastUsed, i)
+                        }
+                        index += batch.size
+                    }
+                }
+            }
+            out
+        }
+
+    /** The fee rates the chain server gives for the wallet's network (sat/vB by confirmation target), for Slow, Normal and Fast. */
+    @Suppress("ReturnCount")
+    suspend fun feeEstimates(walletId: String): FeeEstimates {
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: noWallet()
+        val network = networkOf(wallet) ?: return FeeEstimates.NoChain(ChainOpen.NoServer(ChainServer.NotSet))
+        val open = chain.open(network)
+        val spend = (open as? ChainOpen.Ready)?.spend ?: return FeeEstimates.NoChain(open)
+        return try {
+            FeeEstimates.Done(spend.feeEstimates())
+        } catch (e: ChainError) {
+            FeeEstimates.Failed(e)
+        }
+    }
+
+    /**
+     * Steps 5 and 6: the password, typed once. When the unlock window is closed `credential.unlock` first (the app's own path), then
+     * `wallet.sign` over the PSBT [prepared] (a window the app opened is closed again once the signing is over), then `POST /tx`. A
+     * `credential_locked` after all (the window closed in between) opens it and signs once more; a wrong password and the like are
+     * thrown as [VaultFailure]. The signed transaction is kept **in memory only**; a failed broadcast is [SendResult.BroadcastFailed]
+     * and [retryBroadcast] sends the same bytes. An answer that does not come is [SendResult.Unanswered] and [retrySign] sends the
+     * same request. Not cancelled once begun.
+     */
+    suspend fun approveSend(prepared: PreparedSend, password: String): SendResult = withContext(NonCancellable) {
+        sendLock.withLock {
+            if (gen() != prepared.generation) return@withLock SendResult.Cleared
+            holdFor(prepared.walletId)?.let { return@withLock SendResult.Held(it) }
+            // An unanswered signing is decided first (retrySign): a new one would build the payment again and count again.
+            if (synchronized(lock) { prepared.walletId in pendingSigns }) return@withLock SendResult.Unanswered
+            var toLock = false
+            try {
+                if (!windowOpen()) toLock = openForSend(password)
+                var outcome = signOnce(prepared, password)
+                if (outcome is Outcome.Failed && outcome.result === SendResult.CredentialLocked && !toLock) {
+                    // The window closed between the check and the vault's: opened now, and asked once more.
+                    toLock = openForSend(password)
+                    outcome = signOnce(prepared, password)
+                }
+                finishSign(prepared.walletId, prepared.network, prepared.unsignedTxid, prepared.generation, outcome)
+            } finally {
+                if (toLock) closeOpened()
+            }
+        }
+    }
+
+    private suspend fun openForSend(password: String): Boolean {
+        try {
+            openWindow(password)
+        } catch (e: VaultFailure) {
+            // Only a definite refusal opened nothing; any other failure may have come after the vault opened the window.
+            if (e.kind in DEFINITE_REFUSALS) throw e
+            closeOpened()
+            throw e
+        }
+        return true
+    }
+
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun closeOpened() {
+        try {
+            closeWindow()
+            windowNotClosedFlow.value = false
+        } catch (e: Exception) {
+            windowNotClosedFlow.value = true
+        }
+    }
+
+    /** What one signing came to: the vault's answer, or a refusal the pipeline names. */
+    private sealed interface Outcome {
+        class Answered(val answer: SignAnswer) : Outcome
+
+        class Failed(val result: SendResult) : Outcome
+    }
+
+    private suspend fun signOnce(prepared: PreparedSend, password: String): Outcome = try {
+        Outcome.Answered(vaultGuard { ops().sign(prepared.walletId, prepared.psbtBase64, password) })
+    } catch (e: VaultFailure) {
+        Outcome.Failed(signFailure(e) ?: throw e)
+    }
+
+    /** A signing answered or not: the signed transaction kept and broadcast, an answer awaited, or the refusal. */
+    private suspend fun finishSign(walletId: String, network: Network, unsignedTxid: String, g: Long, outcome: Outcome): SendResult =
+        when (outcome) {
+            is Outcome.Failed -> outcome.result
+            is Outcome.Answered -> when (val a = outcome.answer) {
+                is SignAnswer.Unanswered -> awaitAnswer(walletId, PendingSign(network, unsignedTxid, a.resend), g)
+                is SignAnswer.Signed -> keepAndBroadcast(walletId, KeptTx(network, a.signed), unsignedTxid, g)
+            }
+        }
+
+    private fun awaitAnswer(walletId: String, pending: PendingSign, g: Long): SendResult {
+        val kept = publish(g) {
+            pendingSigns[walletId] = pending
+            publishUnsent()
+        }
+        return if (kept) SendResult.Unanswered else SendResult.Cleared
+    }
+
+    private suspend fun keepAndBroadcast(walletId: String, kept: KeptTx, unsignedTxid: String, g: Long): SendResult {
+        // Not the payment that was reviewed (a txid commits to every input and output): never broadcast.
+        val same = kept.signed.txid == unsignedTxid
+        val stored = publish(g) {
+            pendingSigns.remove(walletId)
+            if (same) keptTx[walletId] = kept
+            publishUnsent()
+        }
+        return when {
+            !stored -> SendResult.Cleared
+            !same -> SendResult.SignedDiffers
+            else -> broadcastKept(walletId, g)
+        }
+    }
+
+    /** Under [lock]. */
+    private fun publishUnsent() {
+        unsentFlow.value = keptTx.keys + pendingSigns.keys
+    }
+
+    /**
+     * `POST /tx` of the kept transaction: the server is opened afresh each time (so Try again also works after another server was
+     * chosen), the bytes are the same. Success drops the transaction; a server that already has it is success too.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun broadcastKept(walletId: String, g: Long): SendResult {
+        val kept = synchronized(lock) { keptTx[walletId] } ?: return SendResult.NothingToSend
+        val open = chain.open(kept.network)
+        val spend = (open as? ChainOpen.Ready)?.spend ?: return SendResult.BroadcastFailed(BroadcastCause.NoChain(open))
+        var alreadyKnown = false
+        val txid = try {
+            spend.broadcast(kept.signed.tx)
+        } catch (e: ChainError.BroadcastRefused) {
+            if (e.reason != BroadcastRefusal.ALREADY_KNOWN) return SendResult.BroadcastFailed(BroadcastCause.Refused(e.reason))
+            alreadyKnown = true
+            kept.signed.txid
+        } catch (e: ChainError) {
+            return SendResult.BroadcastFailed(BroadcastCause.Server(e))
+        }
+        publish(g) {
+            keptTx.remove(walletId)
+            publishUnsent()
+        }
+        return SendResult.Sent(txid, alreadyKnown)
+    }
+
+    /** "Try again" after a failed broadcast: the same transaction, to the chain server as it is now. */
+    suspend fun retryBroadcast(walletId: String): SendResult = withContext(NonCancellable) {
+        sendLock.withLock { broadcastKept(walletId, gen()) }
+    }
+
+    /**
+     * "Try again" after a signing whose answer did not come: **the same request** (same inner id and body) once more, which the vault
+     * answers from its cache, so a spending limit counts it once. Nothing is built or asked of the member again.
+     */
+    suspend fun retrySign(walletId: String): SendResult = withContext(NonCancellable) {
+        sendLock.withLock {
+            val g = gen()
+            val p = synchronized(lock) { pendingSigns[walletId] } ?: return@withLock SendResult.NothingToSend
+            val outcome = try {
+                Outcome.Answered(vaultGuard { p.resend() })
+            } catch (e: VaultFailure) {
+                // The vault's refusal is an answer and decides it; any other failure is still no answer: the request stays.
+                val result = if (e.cause is VaultOpException) signFailure(e) else null
+                if (result == null && e.cause !is VaultOpException) throw e
+                publish(g) {
+                    pendingSigns.remove(walletId)
+                    publishUnsent()
+                }
+                Outcome.Failed(result ?: throw e)
+            }
+            finishSign(walletId, p.network, p.unsignedTxid, g, outcome)
+        }
+    }
+
+    /** Whether a signed transaction is waiting to be broadcast, or a signing waits for its answer: the screen offers Try again. */
+    fun hasUnsent(walletId: String): Boolean = synchronized(lock) { walletId in keptTx || walletId in pendingSigns }
+
+    /**
+     * The member gives up on the unsent transaction or the unanswered signing of [walletId]: dropped from memory. Coins are not
+     * lost; but an unanswered signing may have counted against the wallet's spending limit at the vault.
+     */
+    fun discardUnsent(walletId: String) {
+        synchronized(lock) {
+            keptTx.remove(walletId)
+            pendingSigns.remove(walletId)
+            publishUnsent()
+        }
+    }
+
+    /** `wallet.history`: what this vault signed, newest first. */
+    suspend fun history(walletId: String, limit: Int? = null): List<WalletTx> {
+        settleFirst(walletId)
+        return vaultGuard { ops().history(walletId, limit) }
+    }
+
+    /** The vault's refusal to sign as the pipeline names it; null: not one it names (the [VaultFailure] stands). */
+    private fun signFailure(e: VaultFailure): SendResult? {
+        val op = e.cause as? VaultOpException ?: return null
+        return when (op.code) {
+            SendCodes.CAP_EXCEEDED -> capExceeded(op)
+            SendCodes.INVALID_PSBT -> invalidPsbtReason(e)?.let { SendResult.Refused(it, it == SendCodes.WRONG_SEED) }
+            SendCodes.CREDENTIAL_LOCKED -> SendResult.CredentialLocked
+            SendCodes.DUPLICATE_WALLET -> SendResult.DuplicateWallet
+            else -> null
+        }
+    }
+
+    /** `cap_exceeded` (§10.18): the body `{reason, limit_sats, remaining_sats?, allowed_after?}`; the message is the reason too. */
+    private fun capExceeded(op: VaultOpException): SendResult.CapExceeded {
+        val body = op.body
+        val reason = when (body?.let { VaultJson.str(it, "reason") } ?: op.detail) {
+            "per_tx" -> CapReason.PER_TX
+            "per_period" -> CapReason.PER_PERIOD
+            else -> CapReason.OTHER
+        }
+        fun n(k: String) = body?.let { b -> (b[k] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull() }
+        return SendResult.CapExceeded(
+            reason,
+            limitSats = n("limit_sats") ?: n("limit"),
+            remainingSats = if (reason == CapReason.PER_PERIOD) n("remaining_sats") else null,
+            allowedAfter = if (reason == CapReason.PER_PERIOD) {
+                body?.let { VaultJson.str(it, "allowed_after") }?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            } else {
+                null
+            },
+        )
+    }
+
+    /** `invalid_psbt`'s reason (the error's message); null for any other failure. */
+    @Suppress("ReturnCount")
+    private fun invalidPsbtReason(e: VaultFailure): String? {
+        val op = e.cause as? VaultOpException ?: return null
+        if (op.code != SendCodes.INVALID_PSBT) return null
+        return op.detail.ifEmpty { op.body?.let { VaultJson.str(it, "reason") } ?: "unknown" }
+    }
+
+
     companion object {
+        /** Refusals that opened nothing: the unlock window is still closed after them. */
+        val DEFINITE_REFUSALS = setOf(
+            FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
+            FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
+        )
+
         /** BIP44's gap: addresses past the last used one that are looked at before a chain is taken as ended. */
         const val GAP = 20
 

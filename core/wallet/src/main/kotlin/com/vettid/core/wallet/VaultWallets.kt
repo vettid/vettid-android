@@ -1,11 +1,14 @@
 package com.vettid.core.wallet
 
+import com.vettid.core.chain.InspectSummary
 import com.vettid.core.chain.Network
+import com.vettid.core.chain.Tx
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.time.Instant
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.longOrNull
 
@@ -146,6 +149,53 @@ internal object WalletWire {
         addresses = (o["addresses"] as? JsonArray ?: throw WalletWireException("addresses")).map { address(it) },
         next = o["next"]?.takeUnless { it is JsonNull }?.let { o.index("next") },
     )
+
+    /** `wallet.psbt.inspect`'s answer: the summary (strictly read) and the optional `cap`. */
+    @Suppress("SwallowedException") // the field name is the message; the parser's text could carry the vault's data
+    fun inspection(o: JsonObject): PsbtInspection {
+        val summary = try {
+            InspectSummary.fromJson(o.toString())
+        } catch (e: IllegalArgumentException) {
+            throw WalletWireException("summary")
+        }
+        val cap = (o["cap"] as? JsonObject)?.let { c ->
+            SpendCap(
+                ok = c.bool("ok"),
+                reason = (c["reason"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
+                remainingSats = c.number("remaining_sats"),
+                allowedAfter = c.instant("allowed_after"),
+            )
+        }
+        return PsbtInspection(summary, cap)
+    }
+
+    /** `wallet.sign`'s answer: `tx` (hex) and `txid`; the transaction must be exactly one transaction with that id. */
+    fun signed(o: JsonObject): SignedTx {
+        val txid = o.str("txid").lowercase()
+        val tx = Tx.fromHex(o.str("tx")) ?: throw WalletWireException("tx")
+        if (Tx.id(tx) != txid) throw WalletWireException("tx")
+        return SignedTx(tx, txid)
+    }
+
+    fun history(o: JsonObject): List<WalletTx> = (o["transactions"] as? JsonArray ?: throw WalletWireException("transactions")).map { e ->
+        val t = e as? JsonObject ?: throw WalletWireException("transaction")
+        WalletTx(
+            txid = t.str("txid"),
+            at = t.instant("at"),
+            sendingSats = t.long("sending_sats"),
+            changeSats = t.long("change_sats"),
+            feeSats = t.long("fee_sats"),
+            payees = (t["payees"] as? JsonArray ?: throw WalletWireException("payees")).map { p ->
+                val po = p as? JsonObject ?: throw WalletWireException("payee")
+                WalletPayee(po.str("address"), po.long("amount_sats"))
+            },
+            connectionId = (t["connection_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
+            invocationId = (t["invocation_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
+        )
+    }
+
+    private fun JsonObject.instant(key: String): Instant? =
+        (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
     private fun JsonObject.str(key: String): String =
         (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() } ?: throw WalletWireException(key)

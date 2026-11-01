@@ -216,3 +216,86 @@ const val ADDRESS_USED_MAX = 256
 
 /** The most addresses one `wallet.address.list` page holds. */
 const val ADDRESS_LIST_MAX = 500
+
+/** The most `wallet.history` returns in one answer (VAULT-MESSAGING §10.18: 1–200, default 50). */
+const val HISTORY_LIMIT_MAX = 200
+
+/**
+ * `wallet.psbt.inspect{wallet_id, psbt}` (§10.18), without the credential: the vault's `<summary>` of the PSBT it would sign, and
+ * (0.56.0) `cap: {ok, reason?, remaining_sats?, allowed_after?}` when it implements spending limits. [psbtBase64] is standard base64
+ * of at most 65,536 bytes. `invalid_psbt` (the reason is the error's message) means the vault would not sign it; the app shows the
+ * vault's summary, never its own figures, and compares the two before it asks for the password.
+ */
+suspend fun VaultApi.walletPsbtInspect(walletId: String, psbtBase64: String): JsonObject =
+    device.op(
+        "wallet.psbt.inspect",
+        buildJsonObject {
+            put("wallet_id", walletId)
+            put("psbt", psbtBase64)
+        },
+    )
+
+/**
+ * `wallet.sign{wallet_id, psbt, credential, utk_id, sealed{password, item_id, payload_sha256}}` (§10.18), one credential operation:
+ * `<summary>` and `{tx, credential, credential_version, utks}`, `tx` the signed transaction in hex. **No `broadcast` member**: the
+ * vault never broadcasts, the app does (`POST /tx`).
+ *
+ * `item_id` is the wallet and `payload_sha256` the SHA-256 of the PSBT's **decoded bytes** ([WalletSignBinding]), so the password
+ * authorises this PSBT of this wallet only. The request is sent as [CredentialOps.credOpKept] sends one: a lost or late answer is
+ * [ChangeUnansweredException], carrying the request, and [walletSignResend] sends **the same request** (same inner id and body),
+ * which the vault answers from its cache; it is never built again, as a new inner id would count a second time against the
+ * wallet's spending limit. Errors: `credential_locked` (open the unlock window and sign again), `invalid_psbt`, `cap_exceeded`
+ * (before the password is tried; the UTK is spent), `bad_password`, `backoff`.
+ */
+suspend fun VaultApi.walletSign(walletId: String, psbtBase64: String, password: String): JsonObject =
+    credentialOps.credOpKept(
+        "wallet.sign",
+        { signSealed(walletId, psbtBase64, password).forEach { (k, v) -> put(k, v) } },
+        extra = {
+            put("wallet_id", walletId)
+            put("psbt", psbtBase64)
+        },
+    )
+
+/**
+ * The same `wallet.sign` again after [ChangeUnansweredException] ([kept]): the answer, or null when there is still none. The vault's
+ * cached answer (or its refusal) is taken as the first answer would have been.
+ */
+suspend fun VaultApi.walletSignResend(kept: KeptChange): JsonObject? = credentialOps.resendKept(kept)
+
+/** The sealed payload of `wallet.sign`: `{password, item_id, payload_sha256}` (the hash in standard base64). */
+internal fun signSealed(walletId: String, psbtBase64: String, password: String): JsonObject = buildJsonObject {
+    put("password", password)
+    put("item_id", walletId)
+    put("payload_sha256", Base64s.encodeStd(WalletSignBinding.payloadSha256(psbtBase64)))
+}
+
+/**
+ * What `wallet.sign` binds the password to (§10.18 "Spending is a critical action"): `payload_sha256` is the SHA-256 of the PSBT's
+ * **bytes**, that is, of the base64 text decoded, not of the text. The text must be standard base64, as the vault reads it.
+ */
+object WalletSignBinding {
+    fun payloadSha256(psbtBase64: String): ByteArray {
+        val bytes = try {
+            java.util.Base64.getDecoder().decode(psbtBase64)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalArgumentException("psbt is not base64", e)
+        }
+        return MessageDigest.getInstance("SHA-256").digest(bytes)
+    }
+}
+
+/**
+ * `wallet.history{wallet_id, limit?}` (§10.18): `{transactions: [{txid, at, sending_sats, change_sats, fee_sats, payees: [{address,
+ * amount_sats}], connection_id?, invocation_id?}]}`, newest first; what this vault signed (the latest 200). [limit] 1–200 (default 50).
+ */
+suspend fun VaultApi.walletHistory(walletId: String, limit: Int? = null): JsonObject {
+    require(limit == null || limit in 1..HISTORY_LIMIT_MAX) { "limit" }
+    return device.op(
+        "wallet.history",
+        buildJsonObject {
+            put("wallet_id", walletId)
+            limit?.let { put("limit", it) }
+        },
+    )
+}
