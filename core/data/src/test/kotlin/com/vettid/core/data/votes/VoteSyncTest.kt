@@ -71,7 +71,8 @@ class VoteSyncTest {
     fun atMostEightEntriesACallAndNoEntryThatCouldNeverBeSent() {
         val entries = (1..10).map { entry("P$it", 10) }
         assertEquals(listOf(8, 2), VoteSync.entryCalls(entries).map { (it["entries"] as JsonArray).size })
-        val huge = entry("HUGE", VoteSync.BODY_MAX)
+        // An entry body that alone passes the limit (built raw: through entryJson a proposal this big is sent unreachable).
+        val huge = JsonObject(mapOf("proposal_id" to JsonPrimitive("HUGE"), "pad" to JsonPrimitive("x".repeat(VoteSync.BODY_MAX))))
         val calls = VoteSync.entryCalls(listOf(entry("A", 10), huge, entry("B", 10)))
         assertEquals(listOf(2), calls.map { (it["entries"] as JsonArray).size })
         assertTrue(calls.all { VoteSync.encoded(it).size <= VoteSync.BODY_MAX })
@@ -120,5 +121,189 @@ class VoteSyncTest {
         assertTrue(body(n).size < VoteSync.INLINE_MAX + 400)
         // A body under the old limit by less than the envelope no longer goes inline when the inner would not fit.
         assertFalse(VoteSync.fitsInline(body(VoteSync.INLINE_MAX - 5)))
+    }
+    // ---- Shape checks before sending (VAULT-MESSAGING 0.81.5 §10.19.8) ----
+
+    private fun found(proposal: Int = 100, bundle: JsonObject? = JsonObject(emptyMap()), extensions: List<VoteSync.Extension> = emptyList()) =
+        VoteSync.Document.Found(ByteArray(proposal), ByteArray(64), bundle, extensions)
+
+    private fun ext(size: Int = 10, sig: Int? = 64, bundle: JsonObject? = JsonObject(emptyMap())) =
+        VoteSync.Extension(ByteArray(size), sig?.let { ByteArray(it) }, bundle)
+
+    private fun bigBundle(bytes: Int) = JsonObject(mapOf("x" to JsonPrimitive("a".repeat(bytes))))
+
+    @Test
+    fun theShapeLimitsAreTheVaults() {
+        assertEquals(64, VoteSync.SIG_BYTES)
+        assertEquals(65_536, VoteSync.PROPOSAL_MAX)
+        assertEquals(65_536, VoteSync.BUNDLE_MAX)
+        assertEquals(4_096, VoteSync.EXTENSION_MAX)
+        assertEquals(24, VoteSync.MAX_EXTENSIONS)
+    }
+
+    @Test
+    fun aListWithAnEmptyDocOrABadSigIsNotSentAndTheCatchUpStopsThere() {
+        val badSig = VoteSync.ServedList(ByteArray(10), ByteArray(63), 2)
+        val empty = VoteSync.ServedList(ByteArray(0), ByteArray(64), 2)
+        for (bad in listOf(badSig, empty)) {
+            assertFalse(VoteSync.sendable(bad))
+            assertEquals(listOf(1), VoteSync.listCalls(listOf(list(1), bad, list(3))).map(::services))
+            assertTrue(VoteSync.listCalls(listOf(bad)).isEmpty())
+        }
+    }
+
+    @Test
+    fun aProposalOverTheLimitIsSentUnreachable() {
+        assertEquals(VoteSync.Document.Unreachable, VoteSync.shaped(found(proposal = 65_537)))
+        assertTrue(VoteSync.shaped(found(proposal = 65_536)) is VoteSync.Document.Found)
+        // Absent and unreachable stay as they are.
+        assertEquals(VoteSync.Document.Absent, VoteSync.shaped(VoteSync.Document.Absent))
+    }
+
+    @Test
+    fun aBundleOverTheLimitIsLeftOut() {
+        val d = VoteSync.shaped(found(bundle = bigBundle(70_000))) as VoteSync.Document.Found
+        assertNull(d.bundle)
+        assertTrue((VoteSync.shaped(found()) as VoteSync.Document.Found).bundle != null)
+    }
+
+    @Test
+    fun theExtensionsEndBeforeTheFirstBadOne() {
+        val cases = listOf(ext(size = 4_097), ext(sig = 63), ext(sig = null), ext(bundle = null), ext(bundle = bigBundle(70_000)))
+        for (bad in cases) {
+            val d = VoteSync.shaped(found(extensions = listOf(ext(), ext(), bad, ext()))) as VoteSync.Document.Found
+            assertEquals(2, d.extensions.size)
+        }
+        // At most 24.
+        val many = VoteSync.shaped(found(extensions = List(30) { ext() })) as VoteSync.Document.Found
+        assertEquals(24, many.extensions.size)
+    }
+
+    @Test
+    fun anIndexElementWithANonStringServiceIdIsLeftOut() {
+        val bad = JsonObject(mapOf("proposal_id" to JsonPrimitive("P"), "service_id" to JsonPrimitive(7)))
+        val good = JsonObject(mapOf("proposal_id" to JsonPrimitive("P"), "service_id" to JsonPrimitive("s")))
+        val none = JsonObject(mapOf("proposal_id" to JsonPrimitive("P")))
+        assertNull(VoteSync.shapedIndex(bad))
+        assertEquals(good, VoteSync.shapedIndex(good))
+        assertEquals(none, VoteSync.shapedIndex(none))
+        // The entry goes without it.
+        assertNull(VoteSync.entryJson("P", bad, VoteSync.Document.Absent)["index"])
+    }
+
+    @Test
+    fun resultsAreSubmittableOnlyWithAnythingInThemAndA64ByteSig() {
+        assertTrue(VoteSync.submittable(ByteArray(10), ByteArray(64)))
+        assertFalse(VoteSync.submittable(ByteArray(0), ByteArray(64)))
+        assertFalse(VoteSync.submittable(ByteArray(10), ByteArray(63)))
+    }
+    // ---- Strict JSON and the proposal id (VAULT-MESSAGING 0.81.6 §10.19.8) ----
+
+    /** An object nested [depth] deep in all (the outer one counts 1). */
+    private fun nested(depth: Int): String = "{\"a\":".repeat(depth - 1) + "{}" + "}".repeat(depth - 1)
+
+    private val pid = "01JBQZ0000000000000000000A"
+
+    @Test
+    fun aSiteValueThatIsNotStrictJsonIsNotAnObject() {
+        assertTrue(VoteSync.jsonObject("""{"mediaType":"x","n":{"a":1}}""".toByteArray()) != null)
+        // A duplicate member name, at the top or deeper.
+        assertNull(VoteSync.jsonObject("""{"a":1,"a":2}""".toByteArray()))
+        assertNull(VoteSync.jsonObject("""{"x":{"b":1,"b":1}}""".toByteArray()))
+        // Invalid UTF-8.
+        assertNull(VoteSync.jsonObject(byteArrayOf('{'.code.toByte(), '"'.code.toByte(), 0xC3.toByte(), '"'.code.toByte(), ':'.code.toByte(), '1'.code.toByte(), '}'.code.toByte())))
+        // Too deep for where it goes.
+        assertTrue(VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH).toByteArray(), VoteSync.BUNDLE_DEPTH) != null)
+        assertNull(VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH + 1).toByteArray(), VoteSync.BUNDLE_DEPTH))
+    }
+
+    /** The inner message an inline request travels as, parsed as strictly as the vault parses it (vms/envelope/inner.go). */
+    private fun parseInner(body: JsonObject) = com.vettid.core.crypto.json.StrictJson.parseObject(
+        com.vettid.core.crypto.envelope.Inner(com.vettid.core.crypto.envelope.Ulid.new(), "vote.site.sync", java.time.Instant.now(), seq = 1, body = VoteSync.encoded(body))
+            .marshal(com.vettid.core.crypto.envelope.Mode.SESSION),
+    )
+
+    @Test
+    fun theDepthLeftIsWhereEachValueSitsInTheRequest() {
+        assertEquals(28, VoteSync.INDEX_DEPTH)
+        assertEquals(27, VoteSync.BUNDLE_DEPTH)
+        assertEquals(25, VoteSync.EXTENSION_BUNDLE_DEPTH)
+        assertEquals(30, VoteSync.RESULTS_BUNDLE_DEPTH)
+        fun entry(indexExtra: Int = 0, bundleExtra: Int = 0, extensionExtra: Int = 0): JsonObject {
+            val bundle = VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH + bundleExtra).toByteArray())!!
+            val extBundle = VoteSync.jsonObject(nested(VoteSync.EXTENSION_BUNDLE_DEPTH + extensionExtra).toByteArray())!!
+            val index = VoteSync.jsonObject(("{\"proposal_id\":\"$pid\",\"x\":" + nested(VoteSync.INDEX_DEPTH - 1 + indexExtra) + "}").toByteArray())!!
+            // Built raw (not through entryJson), so that the over-deep case is sent as it is.
+            return JsonObject(
+                mapOf(
+                    "proposal_id" to JsonPrimitive(pid),
+                    "index" to index,
+                    "document" to JsonObject(
+                        mapOf(
+                            "status" to JsonPrimitive("found"),
+                            "bundle" to bundle,
+                            "extensions" to JsonArray(listOf(JsonObject(mapOf("bundle" to extBundle)))),
+                        ),
+                    ),
+                ),
+            )
+        }
+        fun body(e: JsonObject) = JsonObject(mapOf("entries" to JsonArray(listOf(e))))
+        // Values at exactly their budget: the vault's strict parse of the whole inner message passes.
+        parseInner(body(entry()))
+        // Each one level more, on its own: it would refuse the call (so no budget is too generous).
+        assertTrue("index", runCatching { parseInner(body(entry(indexExtra = 1))) }.isFailure)
+        assertTrue("bundle", runCatching { parseInner(body(entry(bundleExtra = 1))) }.isFailure)
+        assertTrue("extension bundle", runCatching { parseInner(body(entry(extensionExtra = 1))) }.isFailure)
+        // The results' bundle in vote.results.submit.
+        parseInner(JsonObject(mapOf("bundle" to VoteSync.jsonObject(nested(VoteSync.RESULTS_BUNDLE_DEPTH).toByteArray())!!)))
+        assertTrue(runCatching { parseInner(JsonObject(mapOf("bundle" to VoteSync.jsonObject(nested(VoteSync.RESULTS_BUNDLE_DEPTH + 1).toByteArray())!!))) }.isFailure)
+        // And the app's own check refuses what is one level too deep for its place.
+        assertNull(VoteSync.jsonObject(nested(VoteSync.BUNDLE_DEPTH + 1).toByteArray(), VoteSync.BUNDLE_DEPTH))
+    }
+
+    @Test
+    fun theSplitterEndsOnBrokenArraysWithNothing() {
+        for (bad in listOf("[}]", "[1}", "[{]}", "[,]", "[1,]", "[", "[\"x]", "[{\"a\":1}")) {
+            assertEquals(bad, emptyList<ByteArray>(), VoteSync.elements(bad.toByteArray()))
+        }
+    }
+
+    @Test
+    fun namesThatReencodingWouldMergeAreNotAnObject() {
+        // "?" and a lone surrogate are two names to the strict parse, one after re-encoding.
+        assertNull(VoteSync.jsonObject("{\"?\":1,\"\\ud800\":2}".toByteArray()))
+        assertTrue(VoteSync.jsonObject("{\"?\":1,\"b\":2}".toByteArray()) != null)
+    }
+
+    @Test
+    fun anOversizedIndexElementIsLeftOutBeforeItIsParsed() {
+        val big = "{\"proposal_id\":\"$pid\",\"pad\":\"" + "x".repeat(VoteSync.INDEX_ELEMENT_MAX) + "\"}"
+        val small = "{\"proposal_id\":\"01JBQZ0000000000000000000B\"}"
+        assertEquals(listOf("01JBQZ0000000000000000000B"), VoteSync.indexOf("[$big,$small]".toByteArray()).map { VoteSync.proposalIdOf(it) })
+    }
+
+    @Test
+    fun choiceIdsAreTheVaults() {
+        for (good in listOf("yes", "no", "abstain", "option-2", "a".repeat(32))) assertTrue(good, VoteSync.validChoiceId(good))
+        for (bad in listOf("", "Yes", "a b", "a_b", "a".repeat(33), "é")) assertFalse(bad, VoteSync.validChoiceId(bad))
+    }
+
+    @Test
+    fun eachIndexElementIsJudgedOnItsOwn() {
+        val good = """{"proposal_id":"$pid","service_id":"s","note":"a ] , \" { inside"}"""
+        val index = """[ $good, {"proposal_id":"$pid","a":1,"a":2}, {"proposal_id":"not-a-ulid"}, 7, {"proposal_id":"01JBQZ0000000000000000000B"} ]"""
+        val out = VoteSync.indexOf(index.toByteArray())
+        assertEquals(listOf(pid, "01JBQZ0000000000000000000B"), out.map { VoteSync.proposalIdOf(it) })
+        // Not an array, or broken: none.
+        assertTrue(VoteSync.indexOf("{}".toByteArray()).isEmpty())
+        assertTrue(VoteSync.indexOf("[{\"proposal_id\":".toByteArray()).isEmpty())
+        assertTrue(VoteSync.indexOf("[]".toByteArray()).isEmpty())
+    }
+
+    @Test
+    fun theSplitterFindsEachElementsBytes() {
+        val parts = VoteSync.elements("""[{"a":"]"},[1,2], "x\"y" ,{}]""".toByteArray()).map { String(it) }
+        assertEquals(listOf("""{"a":"]"}""", "[1,2]", "\"x\\\"y\"", "{}"), parts)
     }
 }

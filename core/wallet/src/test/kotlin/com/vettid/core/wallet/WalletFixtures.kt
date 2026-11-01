@@ -11,6 +11,7 @@ import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonObject
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The vault's testnet4 vector wallet (vettid-vault `features/wallet`, as in :core:chain's `wallet-inspect-vault-214b88f.json`): the
@@ -49,7 +50,8 @@ internal class FakeWalletOps : WalletOps {
     val wallets = linkedMapOf<String, VaultWallet>()
     val issued = mutableMapOf<Pair<String, AddressChain>, MutableList<WalletAddress>>()
     val marked = mutableListOf<List<String>>()
-    val calls = mutableListOf<String>()
+    /** What was asked, in order. Thread-safe to read while a call on another thread adds to it. */
+    val calls: MutableList<String> = CopyOnWriteArrayList()
     var unsupported = false
     var revealFails = false
     var lie: ((WalletAddress) -> WalletAddress)? = null

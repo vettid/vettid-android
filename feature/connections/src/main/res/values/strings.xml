@@ -266,4 +266,9 @@
     <string name="connections_vote_remove_warning">You have a vote with %1$s that isn\'t finished. If you remove this connection you can\'t vote in it.</string>
     <string name="connections_vote_reconnect_title">Connect again to vote</string>
     <string name="connections_vote_reconnect_body">%1$s is registered with VettID as a service. This connection was made before it said it was a service, so it can\'t take part in votes. Remove it and connect again from a new invitation from %1$s.</string>
+    <!-- Leaving an open connection request (2026-11-01, lead's option (a)): proposed, for the owner's approval. -->
+    <string name="connections_leave_request_title">Leave this request?</string>
+    <string name="connections_leave_request_body">It stays in Approvals, where you can finish it.</string>
+    <string name="connections_leave_request_leave">Leave</string>
+    <string name="connections_leave_request_stay">Stay</string>
 </resources>
