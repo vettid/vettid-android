@@ -47,6 +47,18 @@ data class ReceiveUiState(
     /** The QR code's content: a BIP21 URI; an amount that is not valid is left out. */
     val uri: String? get() = address?.let { Bip21.uri(it.address, (amount as? BtcFormat.Amount.Valid)?.sats) }
 
+    /**
+     * What Share sends ([Bip21.share]): the URI with the amount, or the plain address when none is typed; null while the amount
+     * is not valid (Share is off then, rather than silently dropping what was typed).
+     */
+    val shareText: String? get() = address?.let { a ->
+        when (val m = amount) {
+            BtcFormat.Amount.None -> Bip21.share(a.address)
+            is BtcFormat.Amount.Valid -> Bip21.share(a.address, m.sats)
+            BtcFormat.Amount.Invalid -> null
+        }
+    }
+
     override fun toString(): String = "ReceiveUiState"
 }
 

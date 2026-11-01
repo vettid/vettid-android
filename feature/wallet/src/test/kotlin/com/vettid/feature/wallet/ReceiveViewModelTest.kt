@@ -71,6 +71,21 @@ class ReceiveViewModelTest {
     }
 
     @Test
+    fun shareCarriesTheAmountWhenTypedAndIsOffWhileItIsNotValid() = runTest {
+        ops.wallet(id)
+        val vm = vm()
+        eventually { vm.state.value.address != null }
+        val a = derive("p2tr", 0)
+        assertEquals(a, vm.state.value.shareText)
+        vm.setAmount("0.00123")
+        assertEquals("bitcoin:$a?amount=0.00123", vm.state.value.shareText)
+        vm.setAmount("0.123456789")
+        assertNull(vm.state.value.shareText)
+        vm.setAmount("")
+        assertEquals(a, vm.state.value.shareText)
+    }
+
+    @Test
     fun aVaultFailureIsShownAndTriedAgain() = runTest {
         ops.wallet(id)
         ops.addressesFail = true

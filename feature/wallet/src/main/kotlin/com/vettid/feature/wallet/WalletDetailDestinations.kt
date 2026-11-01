@@ -63,14 +63,16 @@ private fun ReceiveDestination(host: WalletHost, leave: () -> Unit) {
     val context = LocalContext.current
     LaunchedEffect(state.closed) { if (state.closed) leave() }
     val address = state.address?.address.orEmpty()
+    val shareText = state.shareText
     val clipLabel = stringResource(R.string.wallet_clip_label)
     val shareTitle = stringResource(R.string.wallet_share_title)
     ReceiveScreen(
         state,
         ReceiveActions(
             onBack = leave,
-            onCopy = { copySensitive(context, clipLabel, address) },
-            onShare = { share(context, address, shareTitle) },
+            // A receive address is not a secret (the owner's decision 2a): hidden from previews, but left for the member to paste.
+            onCopy = { SecureClipboard.copyHidden(context, clipLabel, address) },
+            onShare = { shareText?.let { share(context, it, shareTitle) } },
             onAmount = vm::setAmount,
             onNewAddress = vm::newAddress,
             onBackUp = { host.navigate(BackupRoute(vm.walletId)) },
@@ -109,9 +111,9 @@ private fun DetailsDestination(host: WalletHost, leave: () -> Unit) {
 private fun copySensitive(context: Context, label: String, text: String) =
     SecureClipboard.copy(context, label, text, sensitive = true)
 
-/** Share: the address as plain text, through the system's chooser. */
-private fun share(context: Context, address: String, title: String) {
-    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, address)
+/** Share: [text] ([ReceiveUiState.shareText]) as plain text, through the system's chooser. */
+private fun share(context: Context, text: String, title: String) {
+    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
     val chooser = Intent.createChooser(send, title)
     context.startActivity(chooser)
 }

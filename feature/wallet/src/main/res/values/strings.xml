@@ -131,6 +131,6 @@
     <string name="wallet_details_copy">Copy %1$s</string> <!-- new: a copy button\'s description -->
     <string name="wallet_looking_up">Looking up…</string> <!-- new: the detail\'s first look-up -->
     <string name="wallet_network_change">Change</string> <!-- new: the testnet3 answer, back to the question -->
-    <string name="wallet_privacy_server">This wallet uses %1$s.</string> <!-- new: the note names the server -->
+    <string name="wallet_privacy_server">This network\'s server is %1$s.</string> <!-- new: the note names the server (the owner's wording, 2026-11-01) -->
     <string name="wallet_dismiss">Dismiss</string> <!-- new -->
 </resources>

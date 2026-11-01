@@ -76,6 +76,14 @@ object Bip21 {
         return if (sats != null) "$base?amount=${BtcFormat.btc(sats)}" else base
     }
 
+    /**
+     * What Share sends (the owner's decision 1a, 2026-11-01): with an amount, the BIP21 URI `bitcoin:<address>?amount=<btc>`, so the
+     * amount travels with the address and shows in the shared text; without one, the plain address. The address is kept as the vault
+     * gave it (lower case for bech32): this is text for people and apps, not a QR code.
+     */
+    fun share(address: String, sats: Long? = null): String =
+        if (sats != null) "bitcoin:$address?amount=${BtcFormat.btc(sats)}" else address
+
     /** The address as text in groups of four, separated by spaces. */
     fun groups(address: String): String = address.chunked(GROUP).joinToString(" ")
 

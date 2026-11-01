@@ -207,6 +207,19 @@ class WalletDetailScreensTest {
     }
 
     @Test
+    fun receiveShareIsOffWhileTheAmountIsNotValid() {
+        val address = WalletAddress("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx", "p2wpkh", 0, false, false)
+        var current by mutableStateOf(
+            ReceiveUiState(loading = false, network = Network.TESTNET4, address = address, amountText = "0.123456789"),
+        )
+        rule.setContent { ReceiveScreen(current, ReceiveActions()) }
+        rule.onNodeWithTag("wallet_receive_share").performScrollTo().assertIsNotEnabled()
+        current = current.copy(amountText = "0.5")
+        rule.waitForIdle()
+        rule.onNodeWithTag("wallet_receive_share").performScrollTo().assertIsEnabled()
+    }
+
+    @Test
     fun backDuringTheDeletePasswordCancelsThePasswordStepAndDoesNothingWhileDeleting() {
         var cancelled = 0
         var current by mutableStateOf(detail().copy(delete = DeleteStep.PASSWORD))
@@ -253,7 +266,7 @@ class WalletDetailScreensTest {
     fun thePrivacyNoteNamesTheServerAndOffersTheChainServer() {
         var chain = 0
         show(detail(last = null, result = null, noteNeeded = true).copy(serverHost = "mempool.space"), WalletDetailActions(onChainServer = { chain++ }))
-        rule.onNodeWithText("This wallet uses mempool.space.", substring = true).assertExists()
+        rule.onNodeWithText("This network's server is mempool.space.", substring = true).assertExists()
         rule.onNodeWithTag("wallet_privacy_chain_server").performScrollTo().performClick()
         assertEquals(1, chain)
     }

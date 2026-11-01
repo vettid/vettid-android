@@ -41,7 +41,8 @@ data class ReceiveActions(
 
 /**
  * Receive (ANDROID-PLAN §4 screens table): the address as a QR code (a BIP21 URI in upper case) and as text in groups of four; Copy
- * (the clipboard marked sensitive), Share; an optional amount; "New address"; the account and "Only send … bitcoin to this address."
+ * (the address, marked sensitive, not cleared), Share (with the amount when one is typed; off while it is not valid); an optional
+ * amount; "New address"; the account and "Only send … bitcoin to this address."
  * A wallet whose phrase is not confirmed shows the way to the check instead.
  */
 @Composable
@@ -129,7 +130,11 @@ private fun AddressContent(state: ReceiveUiState, actions: ReceiveActions, modif
                 OutlinedButton(onClick = actions.onCopy, modifier = Modifier.testTag("wallet_receive_copy")) {
                     Text(stringResource(R.string.wallet_copy))
                 }
-                OutlinedButton(onClick = actions.onShare, modifier = Modifier.testTag("wallet_receive_share")) {
+                OutlinedButton(
+                    onClick = actions.onShare,
+                    enabled = state.shareText != null,
+                    modifier = Modifier.testTag("wallet_receive_share"),
+                ) {
                     Text(stringResource(R.string.wallet_share))
                 }
             }

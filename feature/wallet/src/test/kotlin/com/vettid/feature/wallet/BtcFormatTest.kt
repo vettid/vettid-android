@@ -75,6 +75,15 @@ class BtcFormatTest {
         assertEquals("BITCOIN:mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn?amount=0.5", Bip21.uri("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn", 50_000_000))
     }
 
+    /** The owner's decision 1a: with an amount, Share sends the URI so the amount shows; without one, the address alone. */
+    @Test
+    fun shareSendsTheUriWithTheAmountAndThePlainAddressWithout() {
+        val a = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+        assertEquals(a, Bip21.share(a))
+        assertEquals("bitcoin:$a?amount=0.00123", Bip21.share(a, 123_000))
+        assertEquals("bitcoin:mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn?amount=0.5", Bip21.share("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn", 50_000_000))
+    }
+
     @Test
     fun theTextIsInGroupsOfFour() {
         assertEquals("tb1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k xpjz sx", Bip21.groups("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"))
