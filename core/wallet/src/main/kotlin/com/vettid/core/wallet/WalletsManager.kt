@@ -679,15 +679,20 @@ class WalletsManager(
         publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }
     }
 
+    /** The wallet's version and limits as this phone holds them now: what a raise form is chosen against ([raiseCaps]). */
+    fun capsSeen(walletId: String): CapsSeen? =
+        walletsFlow.value.firstOrNull { it.id == walletId }?.let { CapsSeen(it.version, it.perTxSats, it.perPeriodSats) }
+
     /**
      * "Raise or remove a limit": `wallet.caps.raise`, one credential operation with [pin] and [password], bound to the values the
      * wallet will have ([perTx], [perPeriod]; null: no limit). A pending `wallet.caps.set` is sent first and the raise is then
      * refused ([CAPS_SETTLED]), or refused as it is ([CAPS_PENDING]). **Fail secure**: on any error the limits stay as they were (nothing
      * here is changed before the vault has answered `ok`), a `conflict` reads the wallet again and is thrown (the typed secrets are
-     * not sent a second time), and the pending `wallet.caps.set` of [settleCaps] is a different request that never raises.
+     * not sent a second time), and the pending `wallet.caps.set` of [settleCaps] is a different request that never raises. [seen] is
+     * what the member's form was chosen against: if the wallet's version or limits moved since, nothing is sent ([CAPS_CHANGED]).
      */
-    @Suppress("ThrowsCount") // a pending limit, no wallet
-    suspend fun raiseCaps(walletId: String, perTx: Long?, perPeriod: Long?, pin: String, password: String) {
+    @Suppress("ThrowsCount") // a pending limit, no wallet, limits that moved since the form
+    suspend fun raiseCaps(walletId: String, seen: CapsSeen, perTx: Long?, perPeriod: Long?, pin: String, password: String) {
         require(CapsRules.problem(perTx, perPeriod) == null) { "limits" }
         val g = gen()
         // The pending limits cannot be known while the settings file is unreadable: say so (the reset is on the wallet's screen).
@@ -704,8 +709,14 @@ class WalletsManager(
             throw VaultFailure(FailureKind.OTHER, if (isCapsPending(walletId)) CAPS_PENDING else CAPS_SETTLED)
         }
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
+        // (#248 review) The values were chosen against [seen]. If the wallet moved since (another device, a read in between), the PIN
+        // and password are not sent: the member sees the limits as they now are, as after a `conflict`.
+        if (CapsSeen(wallet.version, wallet.perTxSats, wallet.perPeriodSats) != seen) {
+            reload(walletId, g)
+            throw VaultFailure(FailureKind.CONFLICT, CAPS_CHANGED)
+        }
         val version = try {
-            withContext(NonCancellable) { vaultGuard { ops().capsRaise(walletId, wallet.version, perTx, perPeriod, pin, password) } }
+            withContext(NonCancellable) { vaultGuard { ops().capsRaise(walletId, seen.version, perTx, perPeriod, pin, password) } }
         } catch (e: VaultFailure) {
             if (e.kind == FailureKind.CONFLICT) reload(walletId, g)
             throw e
@@ -1078,6 +1089,9 @@ class WalletsManager(
         /** What [raiseCaps] answers when it just sent the wallet's pending `wallet.caps.set` instead: nothing was raised. */
         const val CAPS_SETTLED = "caps_settled"
 
+        /** [raiseCaps]: the wallet's version or limits moved since the form was chosen; nothing was sent. */
+        const val CAPS_CHANGED = "caps_changed"
+
         /** The vault's `bad_request` (VAULT-MESSAGING §10.1). */
         const val BAD_REQUEST = "bad_request"
 
@@ -1088,3 +1102,6 @@ class WalletsManager(
         val CHAINS = AccountType.entries.flatMap { t -> listOf(AddressChain(t.vaultName, false), AddressChain(t.vaultName, true)) }
     }
 }
+
+/** A wallet's version and limits as a raise form was chosen against them ([WalletsManager.raiseCaps]). */
+data class CapsSeen(val version: Long, val perTx: Long?, val perPeriod: Long?)

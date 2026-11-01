@@ -40,6 +40,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.CouldNotTell
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.CameraPermission
@@ -482,7 +483,15 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                     modifier = Modifier.testTag("recover_pin"),
                 )
             }
-            if (state.error != null) Failure(state.error, shownCode = state.errorShown)
+            // A lock that came first (#245 review): the unlock screen's own words, not "Something went wrong".
+            val lockFirst = state.error?.let { k ->
+                when {
+                    !openedThenLocked(k, state.errorCode) -> null
+                    state.errorCode == MoveRepository.CODE_LOCK_PENDING -> stringResource(R.string.unlock_lock_pending)
+                    else -> stringResource(R.string.unlock_not_opened)
+                }
+            }
+            if (state.error != null) Failure(state.error, lockFirst, shownCode = state.errorShown)
         }
     }
 }
