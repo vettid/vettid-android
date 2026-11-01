@@ -604,7 +604,7 @@ abstract class WalletApkCheck : DefaultTask() {
         )
 
         /** Type descriptors: ACINQ's libraries and :core:chain. */
-        val DEX = listOf("Lfr/acinq/", "Lcom/vettid/core/chain/", "Lcom/vettid/core/wallet/", "Lcom/vettid/app/wallet/")
+        val DEX = listOf("Lfr/acinq/", "Lcom/vettid/core/chain/", "Lcom/vettid/core/wallet/", "Lcom/vettid/app/wallet/", "Lcom/vettid/feature/wallet/")
     }
 }
 
@@ -853,8 +853,10 @@ val walletMarkers = listOf("wallet.list", "wallet.get", "wallet.address.new", "w
 
 /**
  * Those that a release built with `-PvettidWalletInRelease=true` must contain, so that the check is seen to see what it looks for:
- * the ones the app reaches (R8 removes the rest). W1c-1 reaches `wallet.list` (the list read while the vault is open); the screens
- * (W1c-2) reach the others and add them here.
+ * the ones the app reaches (R8 removes the rest). W1c-1 reaches `wallet.list` (the list read while the vault is open). W1c-2a's
+ * screens add `wallet.create`, which is in neither list: the check matches substrings, and History's `wallet.created` label (which
+ * stays in release) contains it; `Lcom/vettid/feature/wallet/` in the DEX check covers those screens. W1c-2b's screens reach
+ * `wallet.get` and the address requests and add them here.
  */
 val walletMarkersReached = listOf("wallet.list")
 
@@ -1012,10 +1014,12 @@ dependencies {
     for (type in listOf("debug", "devStack", "staging")) {
         "${type}Implementation"(projects.core.chain)
         "${type}Implementation"(projects.core.wallet)
+        "${type}Implementation"(projects.feature.wallet)
     }
     if (walletInRelease) {
         "releaseImplementation"(projects.core.chain)
         "releaseImplementation"(projects.core.wallet)
+        "releaseImplementation"(projects.feature.wallet)
     }
     if (callsInRelease) {
         "releaseImplementation"(projects.core.calls)

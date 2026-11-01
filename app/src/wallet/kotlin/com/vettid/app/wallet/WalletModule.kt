@@ -12,6 +12,7 @@ import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.wallet.WalletAccess
+import com.vettid.core.data.wallet.WalletLabel
 import com.vettid.core.data.wipe.WipeHook
 import com.vettid.core.wallet.ServersChainSource
 import com.vettid.core.wallet.VaultWalletOps
@@ -110,6 +111,9 @@ object WalletModule {
     fun walletAccess(m: WalletsManager, @AppScope scope: CoroutineScope): WalletAccess = object : WalletAccess {
         override val shown: StateFlow<Boolean> =
             m.availability.map { it == WalletAvailability.AVAILABLE }.stateIn(scope, SharingStarted.Eagerly, false)
+
+        override val wallets: StateFlow<List<WalletLabel>> =
+            m.wallets.map { list -> list.map { WalletLabel(it.id, it.name) } }.stateIn(scope, SharingStarted.Eagerly, emptyList())
     }
 
     /** Whether the wallets may be held: the vault unlocked and not held or due (§3.6.3: nothing of them is kept or shown then). */

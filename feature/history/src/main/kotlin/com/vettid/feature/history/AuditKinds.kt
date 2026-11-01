@@ -16,6 +16,8 @@ object AuditKinds {
         "share.included", "share.declined", "share.withdrawn", "leash.item.read", "leash.item.used",
         // ANDROID-PLAN 0.1.52 §4 "Event titles" (VAULT-MESSAGING 0.42.0 §10.9: `ref` = `item_id`).
         "leash.item.run", "leash.item.proxy", "leash.item.changed",
+        // VAULT-MESSAGING §10.18 "Audit and feed": a wallet's entries name it (`ref` = `wallet_id`, its item's id).
+        "wallet.created", "wallet.address_issued", "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised",
     )
 
     /** The item an entry refers to, if any. */
@@ -103,7 +105,14 @@ object AuditKinds {
     }
 
     /** Whose name a [Title.Named] shows. */
-    enum class Who { CONNECTION, DEVICE, ITEM }
+    enum class Who {
+        CONNECTION,
+        DEVICE,
+        ITEM,
+
+        /** The connection's name when the entry has one (a connection's request), else the item's. */
+        CONNECTION_ELSE_ITEM,
+    }
 
     /**
      * How the entry of [kind] with [ref] reads (ANDROID-PLAN 0.1.52 §4 "Event titles"): titles that depend on `ref`
@@ -334,6 +343,17 @@ object AuditKinds {
 
     /** The titles that name the entry's connection, device or item (ANDROID-PLAN 0.1.52 §4 "Event titles"). */
     private val NAMED: Map<String, Title.Named> = mapOf(
+        // The wallet (ANDROID-PLAN §4 "Wallet", "History"): by the wallet's name, or its connection's for an address issued.
+        "wallet.created" to Title.Named(R.string.history_kind_wallet_created_named, R.string.history_kind_wallet_created, Who.ITEM),
+        "wallet.address_issued" to
+            Title.Named(R.string.history_kind_wallet_address_issued_named, R.string.history_kind_wallet_address_issued, Who.CONNECTION),
+        "wallet.cap_refused" to
+            // "with the connection's name for a request" (the plan's History paragraph).
+            Title.Named(R.string.history_kind_wallet_cap_refused_named, R.string.history_kind_wallet_cap_refused, Who.CONNECTION_ELSE_ITEM),
+        "wallet.caps_lowered" to
+            Title.Named(R.string.history_kind_wallet_caps_lowered_named, R.string.history_kind_wallet_caps_lowered, Who.ITEM),
+        "wallet.caps_raised" to
+            Title.Named(R.string.history_kind_wallet_caps_raised_named, R.string.history_kind_wallet_caps_raised, Who.ITEM),
         "identity.rotate_conflict" to
             Title.Named(R.string.history_kind_rotate_conflict, R.string.history_kind_rotate_conflict_any, Who.CONNECTION),
         "identity.rotate_resolved" to
@@ -465,9 +485,7 @@ object AuditKinds {
         "critical-secret.used" to R.string.history_kind_critical_secret_used,
         "critical-secret.use.denied" to R.string.history_kind_critical_secret_use_denied,
         "critical-secret.use.result" to R.string.history_kind_critical_secret_use_result,
-        "wallet.created" to R.string.history_kind_wallet_created,
         "wallet.deleted" to R.string.history_kind_wallet_deleted,
-        "wallet.address_issued" to R.string.history_kind_wallet_address_issued,
         "wallet.signed" to R.string.history_kind_wallet_signed,
         "message.sent" to R.string.history_kind_message_sent,
         "message.received" to R.string.history_kind_message_received,

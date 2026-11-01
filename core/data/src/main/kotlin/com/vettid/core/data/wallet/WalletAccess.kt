@@ -12,9 +12,22 @@ import kotlinx.coroutines.flow.asStateFlow
 interface WalletAccess {
     /** Whether the open vault has wallets (it answered `wallet.list`): the drawer's Wallet entry is shown only then. */
     val shown: StateFlow<Boolean>
+
+    /**
+     * The open vault's wallets, by id and name (empty while closed): the Credential screen lists each, as the critical item it is
+     * ("Bitcoin wallet: <name>", ANDROID-PLAN §4 "The wallet's item elsewhere").
+     */
+    val wallets: StateFlow<List<WalletLabel>>
+}
+
+/** A wallet as other screens name it: its id and the name the member gave it. Prints its type name only. */
+data class WalletLabel(val id: String, val name: String) {
+    override fun toString(): String = "WalletLabel"
 }
 
 /** A build without the wallet: no Wallet entry, nothing of wallets asked of the vault. */
 object NoWalletAccess : WalletAccess {
     override val shown: StateFlow<Boolean> = MutableStateFlow(false).asStateFlow()
+
+    override val wallets: StateFlow<List<WalletLabel>> = MutableStateFlow(emptyList<WalletLabel>()).asStateFlow()
 }

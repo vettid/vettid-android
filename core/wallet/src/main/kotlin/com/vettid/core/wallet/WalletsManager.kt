@@ -106,6 +106,10 @@ class WalletsManager(
     private val walletsFlow = MutableStateFlow<List<VaultWallet>>(emptyList())
     val wallets: StateFlow<List<VaultWallet>> = walletsFlow.asStateFlow()
 
+    /** Moves at every change of this phone's flags (backed up, the legacy test chain): the screens that show them read them again. */
+    private val flagsChangedFlow = MutableStateFlow(0)
+    val flagsChanged: StateFlow<Int> = flagsChangedFlow.asStateFlow()
+
     private val lookupsFlow = MutableStateFlow<Map<String, WalletLookup>>(emptyMap())
     val lookups: StateFlow<Map<String, WalletLookup>> = lookupsFlow.asStateFlow()
 
@@ -216,15 +220,22 @@ class WalletsManager(
         }
     }
 
+    /** Whether the build connects to [network] (signet and testnet4; regtest in devStack). */
+    fun offers(network: Network): Boolean = offered(network)
+
+    /** The networks a new wallet can be made on in this build, in the order offered. */
+    val creatable: List<Network> get() = listOf(Network.SIGNET, Network.TESTNET4, Network.REGTEST).filter(offered)
+
     /** The chain [wallet] is on: by its name, or for a legacy `testnet` wallet by what the member said; null: ask. */
     suspend fun networkOf(wallet: VaultWallet): Network? = wallet.network ?: flags.testnetLabel(wallet.id)
 
-    suspend fun setTestNetwork(walletId: String, network: Network): Boolean = flags.setTestnetLabel(walletId, network)
+    suspend fun setTestNetwork(walletId: String, network: Network): Boolean =
+        flags.setTestnetLabel(walletId, network).also { flagsChangedFlow.update { it + 1 } }
 
     suspend fun backedUp(walletId: String): Boolean = flags.backedUp(walletId)
 
     /** The phrase checked: "Backed up". False if the flag could not be written (it shows "Not backed up" again). */
-    suspend fun confirmBackup(walletId: String): Boolean = flags.setBackedUp(walletId)
+    suspend fun confirmBackup(walletId: String): Boolean = flags.setBackedUp(walletId).also { flagsChangedFlow.update { it + 1 } }
 
     /**
      * New wallet (ANDROID-PLAN §4 "Creating and backing up", 1): [password] once, for `wallet.create` and at once after its answer

@@ -18,6 +18,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.LockClock
@@ -59,6 +60,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.titleRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.data.wallet.WalletRoute
 import com.vettid.core.data.R as DataR
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
@@ -135,6 +137,7 @@ fun NavGraphBuilder.credentialDestination(
                 changePassword = { navigate(CredentialPasswordRoute) },
                 rotate = { navigate(CredentialRotateRoute) },
                 reviewAlarm = { navigate(CredentialAlarmRoute) },
+                openWallets = { navigate(WalletRoute) },
                 newCredential = { if (NEW_CREDENTIAL_SHOWN) navigate(CredentialNewRoute) },
             ),
         )
@@ -192,6 +195,8 @@ data class CredentialActions(
     val reviewAlarm: () -> Unit = {},
     /** A new credential (`credential.reset`, 0.15.2): the old one and every critical item are destroyed. */
     val newCredential: () -> Unit = {},
+    /** A wallet's row: the wallets (W1c-2a; the wallet itself once its screen is in, W1c-2b). */
+    val openWallets: () -> Unit = {},
 )
 
 private val TTL_OPTIONS = listOf(30, 60, 300, 900, 3600)
@@ -309,6 +314,16 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             st.criticalItems?.toString() ?: stringResource(R.string.credential_unknown),
                             icon = Icons.Outlined.Password,
                         )
+                        // ANDROID-PLAN §4 "The wallet's item elsewhere": each wallet is a critical item, listed by name.
+                        for (w in state.wallets) {
+                            SettingsDivider()
+                            SettingsRow(
+                                stringResource(R.string.credential_wallet, w.name),
+                                actions.openWallets,
+                                icon = Icons.Outlined.AccountBalanceWallet,
+                                modifier = Modifier.testTag("credential_wallet_${w.id}"),
+                            )
+                        }
                     }
                     SettingsSectionHeader(stringResource(R.string.credential_section_window))
                     SettingsGroup {

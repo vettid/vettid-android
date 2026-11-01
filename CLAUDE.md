@@ -214,7 +214,17 @@ The A2 exit test:
   release APK that carries its type names), `:core:wallet` (`WalletsManager`, memory only; `AddressCheck` before any look-up;
   `WalletFlags` in `wallet-flags.bin`), `WalletAccess` / `NoWalletAccess` in `:core:data` (`app/src/wallet` / `app/src/noWallet`),
   multibound `WipeHook`s (`WalletWipe`) that run before a wipe erases anything. Nothing of a wallet in a log: every wallet type
-  prints its type name only, and `ChainPrivacyTest` / `WalletPrivacyTest` scan for logging calls.
+  prints its type name only, and `ChainPrivacyTest` / `WalletPrivacyTest` scan for logging calls (`WalletUiPrivacyTest` in `:feature:wallet`).
+  Screens (W1c-2a; `:feature:wallet`, `walletDestinations` in `app/src/wallet`, the drawer entry after Vault shown only while
+  `WalletAccess.shown`): the list (`wallet.list`, the test-network banner, "Not backed up" from this phone's flags, Try again),
+  new wallet, the phrase and the check (both `SecureWindow()`, out of autofill and content capture; three words asked, any case; the
+  words in `CharArray`s (`PhraseWords`), wiped when the flow ends or the vault closes),
+  back up later from a row, the Credential screen's "Bitcoin wallet: <name>" rows (`WalletAccess.wallets`) and History's wallet
+  titles. Texts in `feature/wallet/.../strings.xml` are marked draft (the plan's) or new; `WalletTextsTest` holds them. Catalog:
+  `wallet`, `wallet.empty`, `wallet.failed`, `wallet.new`, `wallet.new_bad_name`, `wallet.new_bad_password`, `wallet.password`,
+  `wallet.phrase`, `wallet.check`, `wallet.check_wrong`, `wallet.done`, `wallet.done_save_failed`, `wallet.done_reveal_failed`,
+  `credential.wallets`
+  (`WalletCatalog.kt`).
 
 ## Device testing
 

@@ -1,0 +1,360 @@
+package com.vettid.feature.wallet
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.navigation.toRoute
+import com.vettid.core.chain.Network
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.wallet.RevealedPhrase
+import com.vettid.core.wallet.WalletAvailability
+import com.vettid.core.wallet.WalletsManager
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.nio.CharBuffer
+import javax.inject.Inject
+import kotlin.random.Random
+
+/** One row of the list: what the vault says of the wallet, and what this phone knows (backed up, the legacy test chain). */
+data class WalletRow(val id: String, val name: String, val network: Network?, val networkName: String, val backedUp: Boolean) {
+    override fun toString(): String = "WalletRow"
+}
+
+data class WalletsUiState(
+    val loading: Boolean = true,
+    val rows: List<WalletRow> = emptyList(),
+    /** The last read failed (shown with Try again: a read that failed at the unlock is not tried again by itself). */
+    val failed: FailureKind? = null,
+) {
+    /** "Test network: these coins have no value." Every wallet the staging app holds is on one. */
+    val testNetwork: Boolean get() = rows.any { it.network != Network.MAINNET }
+}
+
+/** The Wallet list (ANDROID-PLAN §4 "Wallet", screens table): `wallet.list`, with this phone's backed-up flags. */
+@OptIn(ExperimentalCoroutinesApi::class)
+@HiltViewModel
+class WalletsViewModel @Inject constructor(private val wallets: WalletsManager) : ViewModel() {
+    private val failure = MutableStateFlow<FailureKind?>(null)
+
+    // The flags are this phone's (backed up, the legacy test chain): a change of them (a check just passed) reads the rows again.
+    val state: StateFlow<WalletsUiState> = combine(
+        wallets.wallets,
+        wallets.availability,
+        failure,
+        wallets.flagsChanged,
+    ) { list, availability, failed, _ -> Triple(list, availability, failed) }.mapLatest { (list, availability, failed) ->
+        WalletsUiState(
+            loading = availability == WalletAvailability.UNKNOWN && failed == null,
+            rows = list.map { w -> WalletRow(w.id, w.name, wallets.networkOf(w), w.networkName, wallets.backedUp(w.id)) },
+            failed = failed,
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, WalletsUiState())
+
+    /** Reads the list again: on opening the screen, and from Try again. */
+    fun refresh() {
+        viewModelScope.launch {
+            failure.value = null
+            try {
+                wallets.refresh()
+            } catch (e: VaultFailure) {
+                failure.value = e.kind
+            }
+        }
+    }
+}
+
+/** The steps of making a wallet and backing it up (ANDROID-PLAN §4 "Creating and backing up"). */
+enum class BackupStep {
+    /** New wallet: name, network, password. */
+    FORM,
+
+    /** A wallet that is not backed up yet: the password, to show the phrase again. */
+    PASSWORD,
+
+    /** The words, `FLAG_SECURE`. */
+    PHRASE,
+
+    /** Three words asked back, `FLAG_SECURE`. */
+    CHECK,
+
+    DONE,
+}
+
+/**
+ * The phrase's words while they are shown or checked (ANDROID-PLAN §4 "Creating and backing up", 3): `CharArray`s, wiped when the
+ * flow ends. A word becomes a `String` only to be drawn ([word]); the check compares the arrays ([matches], [same]). Prints its type
+ * name only; equal only to itself.
+ */
+class PhraseWords(private val words: List<CharArray>) {
+    val size: Int get() = words.size
+
+    /** The word at [i], for drawing it. */
+    fun word(i: Int): String = String(words[i])
+
+    /** Whether [typed] is the word at [i], in any case, spaces around it ignored. */
+    fun matches(i: Int, typed: CharSequence): Boolean = equalIgnoringCase(words[i], typed.trim())
+
+    /** Whether the words at [i] and [j] are the same word, in any case. */
+    fun same(i: Int, j: Int): Boolean = equalIgnoringCase(words[i], CharBuffer.wrap(words[j]))
+
+    fun wipe() = words.forEach { it.fill(Char(0)) }
+
+    override fun toString(): String = "PhraseWords"
+
+    private companion object {
+        fun equalIgnoringCase(w: CharArray, t: CharSequence): Boolean =
+            w.size == t.length && w.indices.all { k -> w[k].lowercaseChar() == t[k].lowercaseChar() }
+    }
+}
+
+/**
+ * The state of the create / back-up flow. It holds the phrase ([words]) only while it is shown or checked, and never prints it or
+ * the password ([toString]); nothing of it is put in saved state.
+ */
+data class BackupUiState(
+    val step: BackupStep,
+    val name: String = "",
+    val networks: List<Network> = emptyList(),
+    val network: Network? = null,
+    val password: String = "",
+    val busy: Boolean = false,
+    val error: FailureKind? = null,
+    val errorCode: String? = null,
+    /** The words, in order, while the phrase or the check is shown. */
+    val words: PhraseWords? = null,
+    /** The three positions asked (0-based), in order, and which of them is asked now. */
+    val asked: List<Int> = emptyList(),
+    val askIndex: Int = 0,
+    /** The positions of the four words offered for the position asked now (the right one and three others), shuffled. */
+    val candidates: List<Int> = emptyList(),
+    val typed: String = "",
+    /** The position last answered wrong (0-based), for "That's not word n". */
+    val wrong: Int? = null,
+    /** The wallet was made, but its phrase could not be shown: the member backs it up from its row. */
+    val revealFailed: Boolean = false,
+    /** Done with the phrase checked. */
+    val backedUp: Boolean = false,
+    /** The phrase was checked, but this phone could not record it: Try again ([BackupViewModel.saveAgain]). */
+    val saveFailed: Boolean = false,
+    /** The vault closed (locked, held, due) during the flow: the words are gone and the flow leaves. */
+    val closed: Boolean = false,
+) {
+    val nameValid: Boolean get() = WalletNames.valid(name)
+
+    /** Nothing in progress, and the vault still open: an action may start. */
+    val idle: Boolean get() = !busy && !closed
+
+    override fun toString(): String = "BackupUiState(step=$step)"
+}
+
+/** The rule for a wallet's name (ANDROID-PLAN §4 screens table): 1–128 characters, no control characters. */
+object WalletNames {
+    const val MAX = 128
+
+    fun valid(name: String): Boolean {
+        val n = name.codePointCount(0, name.length)
+        return n in 1..MAX && name.codePoints().noneMatch { Character.getType(it) == Character.CONTROL.toInt() }
+    }
+}
+
+/**
+ * Make a wallet and back it up ([NewWalletRoute]), or back up one that is not yet ([BackupRoute]): the password is typed once (for
+ * `wallet.create` and the `item.reveal` right after, or for the reveal alone), the words shown, three asked back, and the wallet
+ * marked backed up on this phone. The phrase is wiped when the flow ends ([onCleared]) and when the vault closes during it.
+ */
+// One function per action of the flow's screens (the steps share the state and the wipe).
+@Suppress("TooManyFunctions")
+@HiltViewModel
+class BackupViewModel internal constructor(
+    saved: SavedStateHandle,
+    private val wallets: WalletsManager,
+    private val random: Random,
+) : ViewModel() {
+    @Inject constructor(saved: SavedStateHandle, wallets: WalletsManager) : this(saved, wallets, Random.Default)
+
+    /** The wallet being backed up; null while a new one is being made. */
+    private var walletId: String? = runCatching { saved.toRoute<BackupRoute>().walletId }.getOrNull()
+    private var words: PhraseWords? = null
+
+    private val mutable = MutableStateFlow(
+        if (walletId == null) {
+            BackupUiState(BackupStep.FORM, networks = wallets.creatable, network = wallets.creatable.firstOrNull())
+        } else {
+            BackupUiState(BackupStep.PASSWORD)
+        },
+    )
+    val state: StateFlow<BackupUiState> = mutable.asStateFlow()
+
+    init {
+        // §3.6.3, "Local state": nothing of a wallet is kept or shown once the vault closes (a clear makes the wallets UNKNOWN again).
+        viewModelScope.launch {
+            var seen = false
+            wallets.availability.collect { a ->
+                if (a == WalletAvailability.AVAILABLE) {
+                    seen = true
+                } else if (seen && a == WalletAvailability.UNKNOWN) {
+                    forgetWords()
+                    mutable.update { it.copy(closed = true, password = "", busy = false) }
+                }
+            }
+        }
+    }
+
+    fun setName(v: String) = mutable.update { it.copy(name = v, error = null) }
+
+    fun setNetwork(n: Network) = mutable.update { it.copy(network = n) }
+
+    fun setPassword(v: String) = mutable.update { it.copy(password = v, error = null, errorCode = null) }
+
+    /** "Create wallet": `wallet.create`, then the reveal with the same password; the password is blanked at once. */
+    fun create() {
+        val s = mutable.value
+        val network = s.network ?: return
+        if (!s.idle || !s.nameValid || s.password.isEmpty()) return
+        val pw = s.password
+        mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null) }
+        viewModelScope.launch {
+            try {
+                val c = wallets.create(s.name, network, pw)
+                walletId = c.wallet.id
+                val p = c.phrase
+                if (p == null) {
+                    mutable.update { it.copy(busy = false, step = BackupStep.DONE, revealFailed = true) }
+                } else {
+                    show(p)
+                }
+            } catch (e: VaultFailure) {
+                mutable.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+            }
+        }
+    }
+
+    /** "Show the recovery phrase" of a wallet that is not backed up yet. */
+    fun reveal() {
+        val id = walletId ?: return
+        val s = mutable.value
+        if (!s.idle || s.password.isEmpty()) return
+        val pw = s.password
+        mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null) }
+        viewModelScope.launch {
+            try {
+                show(wallets.revealPhrase(id, pw))
+            } catch (e: VaultFailure) {
+                mutable.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+            }
+        }
+    }
+
+    /** The words are copied out of [p], which is wiped at once: only [words] holds them from here. */
+    private fun show(p: RevealedPhrase) {
+        val w = PhraseWords(p.words())
+        p.wipe()
+        if (mutable.value.closed) {
+            w.wipe()
+            return
+        }
+        words?.wipe()
+        words = w
+        mutable.update { it.copy(busy = false, step = BackupStep.PHRASE, words = w) }
+    }
+
+    /** "Continue" from the words: three positions, at random, asked in order. */
+    fun startCheck() {
+        val w = words ?: return
+        if (w.size < ASKED) return
+        val asked = (0 until w.size).shuffled(random).take(ASKED).sorted()
+        val offered = candidates(w, asked[0], random)
+        mutable.update { it.copy(step = BackupStep.CHECK, asked = asked, askIndex = 0, wrong = null, typed = "", candidates = offered) }
+    }
+
+    fun setTyped(v: String) = mutable.update { it.copy(typed = v, wrong = null) }
+
+    /** The typed word for the position asked now (any case and spacing). */
+    fun answer(typed: String) = check { w, at -> w.matches(at, typed) }
+
+    /** A candidate tapped: the word at [position] for the position asked now. */
+    fun pick(position: Int) = check { w, at -> w.same(at, position) }
+
+    private inline fun check(right: (PhraseWords, Int) -> Boolean) {
+        val s = mutable.value
+        val w = words
+        if (s.step != BackupStep.CHECK || !s.idle || w == null) return
+        val at = s.asked[s.askIndex]
+        val next = s.askIndex + 1
+        when {
+            !right(w, at) -> mutable.update { it.copy(wrong = at, typed = "") }
+            next < s.asked.size -> mutable.update {
+                it.copy(askIndex = next, wrong = null, typed = "", candidates = candidates(w, s.asked[next], random))
+            }
+            else -> {
+                mutable.update { it.copy(busy = true, wrong = null, typed = "") }
+                save()
+            }
+        }
+    }
+
+    /** All three right: the words are wiped whatever happens; "Backed up" is shown only once this phone recorded it. */
+    private fun save() {
+        val id = walletId ?: return
+        viewModelScope.launch {
+            var kept = false
+            try {
+                kept = wallets.confirmBackup(id)
+            } finally {
+                forgetWords()
+                mutable.update { it.copy(busy = false, step = BackupStep.DONE, backedUp = kept, saveFailed = !kept) }
+            }
+        }
+    }
+
+    /** "Try again" after the phrase was checked but could not be recorded (the check is not asked again). */
+    fun saveAgain() {
+        val s = mutable.value
+        if (s.step != BackupStep.DONE || !s.saveFailed || !s.idle) return
+        mutable.update { it.copy(busy = true) }
+        save()
+    }
+
+    /** "Show the words again" from the check. */
+    fun showAgain() {
+        if (mutable.value.busy || words == null) return
+        mutable.update { it.copy(step = BackupStep.PHRASE, wrong = null, typed = "") }
+    }
+
+    private fun forgetWords() {
+        words?.wipe()
+        words = null
+        mutable.update { it.copy(words = null, candidates = emptyList(), typed = "") }
+    }
+
+    override fun onCleared() {
+        forgetWords()
+        super.onCleared()
+    }
+
+    private companion object {
+        const val ASKED = 3
+    }
+}
+
+private const val CANDIDATES = 4
+
+/** The right word's position [at] and three others of the phrase (none the same word as another), shuffled. */
+internal fun candidates(w: PhraseWords, at: Int, random: Random): List<Int> {
+    val others = mutableListOf<Int>()
+    for (i in (0 until w.size).shuffled(random)) {
+        if (others.size == CANDIDATES - 1) break
+        if (i != at && !w.same(i, at) && others.none { w.same(it, i) }) others += i
+    }
+    return (others + at).shuffled(random)
+}

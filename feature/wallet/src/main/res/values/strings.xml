@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The wallet's texts (ANDROID-PLAN 0.1.111 §4 "Wallet", W1c-2a). None is approved yet: each line says where it comes from,
+  "draft" (the plan's "Texts (drafts)"), "screens table" (the plan's screens table) or "new" (proposed here). The owner
+  approves all of them before merge (the PR's texts table).
+-->
+<resources>
+
+    <!-- Drawer, list -->
+    <string name="wallet_title">Wallet</string> <!-- screens table -->
+    <string name="wallet_empty_title">No wallets yet</string> <!-- draft -->
+    <string name="wallet_empty_body">Keep bitcoin in your vault. Payments need your password.</string> <!-- draft -->
+    <string name="wallet_test_banner">Test network: these coins have no value.</string> <!-- draft -->
+    <string name="wallet_row_not_backed_up">Not backed up</string> <!-- screens table -->
+    <string name="wallet_new">New wallet</string> <!-- screens table -->
+    <string name="wallet_network_signet">Signet</string> <!-- screens table -->
+    <string name="wallet_network_testnet4">Testnet4</string> <!-- screens table -->
+    <string name="wallet_network_testnet">Testnet</string> <!-- new: a legacy testnet wallet's chip -->
+    <string name="wallet_network_regtest">Regtest</string> <!-- new: devStack only -->
+    <string name="wallet_list_failed">Your wallets couldn\'t be read.</string> <!-- new -->
+    <string name="wallet_try_again">Try again</string> <!-- new -->
+
+    <!-- Create -->
+    <string name="wallet_new_title">New wallet</string> <!-- screens table -->
+    <string name="wallet_name_label">Name</string> <!-- new -->
+    <string name="wallet_name_error">Use 1 to 128 characters, with no control characters.</string> <!-- new -->
+    <string name="wallet_network_label">Network</string> <!-- new -->
+    <string name="wallet_password_body">Your password protects this wallet. You will need it for every payment.</string> <!-- draft -->
+    <string name="wallet_password_label">Password</string> <!-- new -->
+    <string name="wallet_create">Create wallet</string> <!-- new -->
+    <string name="wallet_created_reveal_failed">Your wallet was created, but its recovery phrase couldn\'t be shown. Open the wallet to back it up.</string> <!-- new -->
+
+    <!-- Recovery phrase and check -->
+    <string name="wallet_phrase_title">Recovery phrase</string> <!-- screens table -->
+    <string name="wallet_phrase_body">Write these words on paper, in order, and keep them somewhere safe. Anyone with them can take your coins. VettID never shows them to anyone else.</string> <!-- draft -->
+    <string name="wallet_phrase_no_screenshots">No screenshots: this screen is hidden from screenshots and the app switcher.</string> <!-- draft -->
+    <string name="wallet_continue">Continue</string> <!-- screens table -->
+    <string name="wallet_check_title">Check the phrase</string> <!-- screens table -->
+    <string name="wallet_check_which">Which is word %1$d?</string> <!-- draft -->
+    <string name="wallet_check_wrong">That\'s not word %1$d. Look at your paper again.</string> <!-- draft -->
+    <string name="wallet_check_type">Or type it</string> <!-- new -->
+    <string name="wallet_check_show_again">Show the words again</string> <!-- screens table -->
+    <string name="wallet_backed_up">Backed up</string> <!-- screens table -->
+    <string name="wallet_done">Done</string> <!-- new -->
+    <string name="wallet_save_failed">Your check passed, but this phone couldn\'t record it. Try again.</string> <!-- new -->
+
+    <!-- Back up a wallet that is not backed up yet -->
+    <string name="wallet_backup_title">Back up this wallet</string> <!-- new -->
+    <string name="wallet_backup_body">Not backed up. If your vault is lost, these coins are lost too.</string> <!-- draft -->
+    <string name="wallet_backup_password">Enter your password to show the recovery phrase.</string> <!-- new -->
+    <string name="wallet_backup_show">Show the recovery phrase</string> <!-- new -->
+</resources>

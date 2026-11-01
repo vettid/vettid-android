@@ -75,6 +75,7 @@ import com.vettid.feature.votes.VoteRoute
 import com.vettid.feature.votes.VotesHost
 import com.vettid.feature.votes.VotesRoute
 import com.vettid.feature.votes.votesDestination
+import com.vettid.app.walletui.walletDestinations
 import com.vettid.feature.history.ConnectionHistoryRoute
 import com.vettid.feature.history.DeviceHistoryRoute
 import com.vettid.feature.history.HistoryHost
@@ -333,6 +334,7 @@ fun AppShell(
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back, onLeaveDetail = navController::leaveApprovalDetail)
+                        walletDestinations(chrome, navigate = navigate, onBack = back)
                         votesDestination(
                             chrome,
                             VotesHost(
@@ -503,6 +505,8 @@ private fun drawerSections(badges: ShellBadges): List<List<DrawerItem>> =
             }
                 // The Votes entry shows only with a vote or a connection to connect again (ANDROID-PLAN 0.1.102): no empty screen.
                 .filterNot { item -> item.key == TopLevelDestination.Votes.key && !badges.votesShown }
+                // The Wallet entry only when the vault has wallets (never in a build without the wallet).
+                .filterNot { item -> item.key == TopLevelDestination.Wallet.key && !badges.walletShown }
         }
 
 private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>): String? {
