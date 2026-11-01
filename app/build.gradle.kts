@@ -64,6 +64,8 @@ android {
         versionName = "2.0.0-a2"
         // The wallet's regtest chain server (ANDROID-PLAN §4 "The chain source"): none, except in devStack below.
         buildConfigField("String", "WALLET_REGTEST_ESPLORA", "\"\"")
+        // Whether this build has a regtest server at all: a constant, so that the other builds compile the loopback rule away.
+        buildConfigField("boolean", "WALLET_REGTEST", "false")
     }
 
     signingConfigs {
@@ -107,6 +109,7 @@ android {
                 "WALLET_REGTEST_ESPLORA",
                 "\"" + (providers.gradleProperty("devStackEsplora").orNull ?: "http://127.0.0.1:18083") + "\"",
             )
+            buildConfigField("boolean", "WALLET_REGTEST", "true")
         }
         release {
             // A release with calls linked in (`-PvettidCallsInRelease=true`, CI's F-Droid-with-calls step) is a
@@ -223,7 +226,9 @@ android {
         getByName("release").kotlin.srcDir(if (releaseCalls) "src/calls/kotlin" else "src/noCalls/kotlin")
         // Wallet (ANDROID-PLAN §4 "Wallet"): `src/wallet` wires :core:chain into the builds that link it (see walletInRelease).
         for (type in listOf("debug", "devStack", "staging")) getByName(type).kotlin.srcDir("src/wallet/kotlin")
-        if (providers.gradleProperty("vettidWalletInRelease").orNull == "true") getByName("release").kotlin.srcDir("src/wallet/kotlin")
+        getByName("release").kotlin.srcDir(
+            if (providers.gradleProperty("vettidWalletInRelease").orNull == "true") "src/wallet/kotlin" else "src/noWallet/kotlin",
+        )
         // Every build that is not production carries a marked launcher icon (src/nonProduction: the white band on
         // the icon's background; not part of the brand kit). Never `release`, so never the F-Droid build.
         listOf("debug", "devStack", "staging").forEach { getByName(it).res.srcDir("src/nonProduction/res") }
@@ -599,7 +604,7 @@ abstract class WalletApkCheck : DefaultTask() {
         )
 
         /** Type descriptors: ACINQ's libraries and :core:chain. */
-        val DEX = listOf("Lfr/acinq/", "Lcom/vettid/core/chain/", "Lcom/vettid/app/wallet/")
+        val DEX = listOf("Lfr/acinq/", "Lcom/vettid/core/chain/", "Lcom/vettid/core/wallet/", "Lcom/vettid/app/wallet/")
     }
 }
 
@@ -840,6 +845,19 @@ val callsMarkers = listOf(
     "vettid-media-suites", "vettid-media-suite", "call.start", "call.ringing", "call.ice", "call.list",
 )
 
+/**
+ * The wallet's vault request types (`WalletApi.kt`, :core:vault): a release APK must not contain them, so that no code that ships in
+ * release can reach the wallet (the feed and History labels such as `wallet.signed` stay; these names are in no label).
+ */
+val walletMarkers = listOf("wallet.list", "wallet.get", "wallet.address.new", "wallet.address.list", "wallet.address.used")
+
+/**
+ * Those that a release built with `-PvettidWalletInRelease=true` must contain, so that the check is seen to see what it looks for:
+ * the ones the app reaches (R8 removes the rest). W1c-1 reaches `wallet.list` (the list read while the vault is open); the screens
+ * (W1c-2) reach the others and add them here.
+ */
+val walletMarkersReached = listOf("wallet.list")
+
 val productionPins = listOf(
     "https://account.vettid.org",
     "https://vettid.org/.well-known/vettid/pcr-manifest.json",
@@ -933,9 +951,10 @@ androidComponents {
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(
                         stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")) +
-                            (if (callsInRelease) emptyList() else callsMarkers) + CallsTestCheck.MARKER + "calltest_",
+                            (if (callsInRelease) emptyList() else callsMarkers) + CallsTestCheck.MARKER + "calltest_" +
+                            (if (walletInRelease) emptyList() else walletMarkers),
                     )
-                    required.set(productionPins)
+                    required.set(productionPins + (if (walletInRelease) walletMarkersReached else emptyList()))
                 }
                 if (foss) {
                     val runtime = configurations.named("${v.name}RuntimeClasspath")
@@ -992,9 +1011,11 @@ dependencies {
     // Wallet (ANDROID-PLAN §4 "Wallet", W1): not in production builds until it is promoted (see walletInRelease above).
     for (type in listOf("debug", "devStack", "staging")) {
         "${type}Implementation"(projects.core.chain)
+        "${type}Implementation"(projects.core.wallet)
     }
     if (walletInRelease) {
         "releaseImplementation"(projects.core.chain)
+        "releaseImplementation"(projects.core.wallet)
     }
     if (callsInRelease) {
         "releaseImplementation"(projects.core.calls)

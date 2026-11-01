@@ -43,4 +43,20 @@ class TxIdsTest {
         assertNull(txidOf(byteArrayOf(1, 2, 3)))
         assertNull(txidOf(ByteArray(0)))
     }
+
+    @Test
+    fun aSegwitMarkerWithEveryWitnessEmptyHasNone() {
+        // version || 00 01 (marker, flag) || the inputs and outputs || one empty witness || lock time: not canonical, as Core reads it.
+        val hex = EsploraFixtures.RAW_HEX
+        val marked = hex.substring(0, 8) + "0001" + hex.substring(8, hex.length - 8) + "00" + hex.substring(hex.length - 8)
+        assertNull(txidOf(marked.hexToBytes()))
+    }
+
+    @Test
+    fun aNonCanonicalVarintHasNone() {
+        // The input count, 1, written as 0xfd 0x01 0x00 instead of 0x01.
+        val hex = EsploraFixtures.RAW_HEX
+        check(hex.substring(8, 10) == "01")
+        assertNull(txidOf((hex.substring(0, 8) + "fd0100" + hex.substring(10)).hexToBytes()))
+    }
 }
