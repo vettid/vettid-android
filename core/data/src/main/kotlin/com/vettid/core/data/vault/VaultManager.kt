@@ -1644,7 +1644,7 @@ class VaultManager(
             val after = local.unreachableAfterMs ?: StuckScreens.LONG_UNREACHABLE.toMillis()
             AppPhase.Unreachable(kind, StuckScreens.longUnreachable(kind, last, System.currentTimeMillis(), after), after / MS_PER_SECOND)
         }
-        if (gen == generation) phaseFlow.value = p // a wipe meanwhile already said SignedOut
+        phaseFlow.setIf(p) { gen == generation } // a wipe meanwhile already said SignedOut
     }
 
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one phase per state of the device
@@ -2027,10 +2027,8 @@ class VaultManager(
         if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.holdsPhone, finishingMove = finishingMove.value)) return false
         io { updateLocal(rec) { it.copy(setupComplete = true, movedIn = false) } }
         // Both checks after the write, which suspends: the generation (a lock or a wipe meanwhile) and the guard (a lock
-        // pending now).
-        if (gen != generation || lockGuard.lockedWhatever(unlocked = true)) return false
-        phaseFlow.value = AppPhase.Unlocked
-        return true
+        // pending now), with the publish as one step (#242).
+        return phaseFlow.setIf(AppPhase.Unlocked) { gen == generation && !lockGuard.lockedWhatever(unlocked = true) }
     }
 
     override suspend fun preflight(): PreflightInfo {
@@ -2252,8 +2250,9 @@ class VaultManager(
     private suspend fun openAfterUnlock(s: Session, gen: Int, before: (suspend () -> Unit)?) {
         val openApp: suspend () -> Unit = {
             val p = afterUnlocked(s)
-            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
-            if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
+            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now),
+            // with the publish as one step (#242).
+            phaseFlow.setIf(p) { gen == generation && !lockGuard.lockedWhatever(unlocked = true) }
         }
         try {
             if (before == null) {
@@ -3916,6 +3915,9 @@ class VaultManager(
                 override fun publish(phase: AppPhase) {
                     phaseFlow.value = phase
                 }
+
+                override fun publishUnlessOvertaken(phase: AppPhase): Boolean =
+                    phaseFlow.setIf(phase) { overtaken() == RecoveryOpenFinish.Overtaken.NO }
 
                 // Under guard: the failures it knows (an IOException of the account record's write, among others)
                 // become a VaultFailure; anything else (an IllegalStateException) is caught by the view model's openApp.
