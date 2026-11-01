@@ -2,6 +2,7 @@ package com.vettid.core.data.vault
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,7 +37,7 @@ class RecordStoreTest {
         f.erase()
         // An update lands now, before the fresh record is in memory: it would write the old record back.
         assertFalse(f.store.update(RecordStore.UNBOUND) { it.copy(rotateOffered = true) })
-        assertFalse(f.store.reset { Record(vault = "new") })
+        assertNull(f.store.reset { Record(vault = "new") })
         assertNull(f.disk)
         f.store.endWipe(complete = true)
         assertNull(f.disk)
@@ -85,7 +86,7 @@ class RecordStoreTest {
         val f = Fixture()
         val since = f.store.recordGeneration
         // Forgotten (a setup code, a missing or deleted vault, a recovery): a record of its own.
-        assertTrue(f.store.reset { Record() })
+        assertNotNull(f.store.reset { Record() })
         assertFalse(f.opened(since, at = 42))
         assertEquals(Record(), f.disk)
     }
@@ -117,7 +118,7 @@ class RecordStoreTest {
         f.erase()
         f.store.endWipe(complete = true)
         // A setup code redeemed (or a recovery claimed) after the wipe: a record of its own, written.
-        assertTrue(f.store.reset { Record(vault = "new") })
+        assertNotNull(f.store.reset { Record(vault = "new") })
         assertEquals(Record(vault = "new"), f.disk)
         assertTrue(f.opened(f.store.recordGeneration, at = 7))
         assertTrue(f.offer(f.store.generation))
@@ -129,7 +130,7 @@ class RecordStoreTest {
         val f = Fixture()
         val gen = f.store.generation
         // Forgotten (a deleted vault) and set up again before the offer is written: not into the new record.
-        assertTrue(f.store.reset { Record(vault = "new") })
+        assertNotNull(f.store.reset { Record(vault = "new") })
         assertFalse(f.offer(gen))
         assertEquals(Record(vault = "new"), f.disk)
     }
@@ -152,7 +153,7 @@ class RecordStoreTest {
     fun aResetReplacesARecordThatCouldNotBeRead() {
         var disk: Record? = Record(vault = "unreadable on disk")
         val store = RecordStore(Record(), readable = false, empty = { Record() }, persist = { disk = it })
-        assertTrue(store.reset { Record() }) // the member chose to start over
+        assertNotNull(store.reset { Record() }) // the member chose to start over
         assertTrue(store.update(store.recordGeneration) { it.copy(lastOpened = 1) })
         assertEquals(Record(lastOpened = 1), disk)
     }
@@ -166,14 +167,14 @@ class RecordStoreTest {
         assertTrue(f.store.failed)
         assertTrue(f.store.closed)
         assertFalse(f.store.update(RecordStore.UNBOUND) { it.copy(rotateOffered = true) })
-        assertFalse(f.store.reset { Record() })
+        assertNull(f.store.reset { Record() })
         assertEquals(Record(vault = "old"), f.disk)
         // A wipe that completes opens it on the fresh record.
         f.store.beginWipe()
         f.erase()
         f.store.endWipe(complete = true)
         assertFalse(f.store.closed)
-        assertTrue(f.store.reset { Record(vault = "new") })
+        assertNotNull(f.store.reset { Record(vault = "new") })
         assertEquals(Record(vault = "new"), f.disk)
     }
 
@@ -181,8 +182,20 @@ class RecordStoreTest {
     fun aMarkerLeftOverAtTheStartKeepsTheRecordShut() {
         var disk: Record? = Record(vault = "old")
         val store = RecordStore(disk!!, readable = true, empty = { Record() }, persist = { disk = it }, failed = true)
-        assertFalse(store.reset { Record() })
+        assertNull(store.reset { Record() })
         assertFalse(store.update(RecordStore.UNBOUND) { it.copy(lastOpened = 1) })
         assertEquals(Record(vault = "old"), disk)
+    }
+
+    /** The reset hands back both counters as it left them, read under its lock (#246 review): a lock after it moves them. */
+    @Test
+    fun aResetReturnsTheCountersItLeft() {
+        val f = Fixture()
+        val before = f.store.generation to f.store.recordGeneration
+        val marks = f.store.reset { Record(vault = "new") }!!
+        assertEquals(ResetMarks(before.second + 1, before.first + 1), marks)
+        f.store.bumpGeneration() // a lock right after
+        assertTrue(marks.generation != f.store.generation)
+        assertEquals(marks.recordGeneration, f.store.recordGeneration)
     }
 }

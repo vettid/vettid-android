@@ -42,7 +42,13 @@ internal class PhaseGate(
      * lock, a wipe or another reset during its vault calls does. The flow's answer is not changed: a phase left as the lock or
      * wipe set it is what the screens follow, and the recovery's unlock checks again (`recoveryUnlock`).
      */
-    fun publishRecovering(mark: Int): Boolean = phase.setIf(RECOVERING) {
+    fun publishRecovering(mark: Int): Boolean = publishSetup(mark, RECOVERING)
+
+    /**
+     * [v], a setup stage that a flow of the onboarding publishes after its vault calls (RECOVERING, and NEW_VAULT after a setup
+     * code's redeem): as [publishRecovering]. [NO_MARK] (the flow's reset found the record shut) never matches.
+     */
+    fun publishSetup(mark: Int, v: AppPhase.Setup): Boolean = phase.setIf(v) {
         mark == generation() && !lockPending() && onboarding(phase.value)
     }
 
@@ -67,9 +73,12 @@ internal class PhaseGate(
         return phase.setIf(AppPhase.Locked) { closesOnNotice(phase.value) }
     }
 
-    private companion object {
+    companion object {
         val FINISHING = AppPhase.Setup(SetupStage.FINISHING)
         val RECOVERING = AppPhase.Setup(SetupStage.RECOVERING)
+
+        /** A mark no generation equals (the generation only counts up from 0): what publishes nothing. */
+        const val NO_MARK = -1
 
         /** Where the onboarding (and so the recovery flow) is shown: signed out, or a setup stage. */
         fun onboarding(p: AppPhase): Boolean = p == AppPhase.SignedOut || p is AppPhase.Setup

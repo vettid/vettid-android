@@ -432,8 +432,9 @@ class VaultManager(
                     }
                 }
                 gateway.memberChanged(r.userGuid)
-                io { resetLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
-                phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+                val marks = io { resetLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
+                // The mark is the reset's own (read under the record's lock): a wipe or a lock after it wins over NEW_VAULT.
+                phaseGate.publishSetup(marks?.generation ?: PhaseGate.NO_MARK, AppPhase.Setup(SetupStage.NEW_VAULT))
                 return r.emailHint
             }
 
@@ -507,11 +508,12 @@ class VaultManager(
             private suspend fun registerClaimed(code: RecoveryCode, claimed: Claimed): RecoveryRegistration {
                 val s = session()
                 gateway.memberChanged(claimed.userGuid)
-                io { resetLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
-                // The claim's own record, just made: what the registration writes belongs to it.
-                val rec = record.recordGeneration
-                // Taken after this flow's own reset (which moves the generation): a lock or a wipe from here wins over RECOVERING.
-                val gen = phaseGate.mark()
+                val claimedAccount = LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)
+                val marks = io { resetLocal(claimedAccount) }
+                // The claim's own record, just made: what the registration writes belongs to it. Both counters are the reset's
+                // own, read under the record's lock: a lock or a wipe after the reset (even before this line) wins over RECOVERING.
+                val rec = marks?.recordGeneration ?: record.recordGeneration
+                val gen = marks?.generation ?: PhaseGate.NO_MARK
                 // Each POST's attestation key, kept until that POST is settled not registered (ANDROID-PLAN §4 step 5).
                 val slot = slots.active
                 val posts = RegisterKeys()
@@ -1175,10 +1177,14 @@ class VaultManager(
         }
     }
 
-    /** A record of its own ([a]: none, or a new setup's): the writes still on their way for the one before are dropped. */
-    private fun resetLocal(a: LocalAccount) {
-        record.reset(a)
+    /**
+     * A record of its own ([a]: none, or a new setup's): the writes still on their way for the one before are dropped. Returns
+     * the reset's counters ([ResetMarks]; null while the record is shut), for a flow that writes or publishes after it.
+     */
+    private fun resetLocal(a: LocalAccount): ResetMarks? {
+        val marks = record.reset(a)
         syncTimeScale()
+        return marks
     }
 
     // --- session ---

@@ -91,4 +91,29 @@ class PhaseGateRecoveringTest {
             assertEquals(p, f.phase.value)
         }
     }
+
+    /** A setup code's NEW_VAULT (#246 review) goes through the same gate, with the reset's own mark. */
+    @Test
+    fun newVaultAfterTheRedeemIsGatedTheSameWay() {
+        val newVault = AppPhase.Setup(SetupStage.NEW_VAULT)
+        val f = Fixture(AppPhase.SignedOut)
+        f.generation++ // the redeem's reset
+        val mark = f.generation // as RecordStore.reset returns it
+        assertTrue(f.gate.publishSetup(mark, newVault))
+        assertEquals(newVault, f.phase.value)
+        // A wipe after the reset, even before the publish was reached.
+        val g = Fixture(AppPhase.SignedOut)
+        val gMark = ++g.generation
+        g.generation++
+        assertFalse(g.gate.publishSetup(gMark, newVault))
+        assertEquals(AppPhase.SignedOut, g.phase.value)
+    }
+
+    @Test
+    fun noMarkNeverPublishes() {
+        val f = Fixture(AppPhase.SignedOut)
+        assertFalse(f.gate.publishRecovering(PhaseGate.NO_MARK))
+        assertFalse(f.gate.publishSetup(PhaseGate.NO_MARK, AppPhase.Setup(SetupStage.NEW_VAULT)))
+        assertEquals(AppPhase.SignedOut, f.phase.value)
+    }
 }
