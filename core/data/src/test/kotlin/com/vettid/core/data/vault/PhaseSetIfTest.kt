@@ -28,10 +28,15 @@ class PhaseSetIfTest {
         assertTrue(checking.await(5, TimeUnit.SECONDS))
         // The lock lands after the check passed and before the publish: it waits for the publish, and comes after it.
         val locker = thread { phase.value = AppPhase.Locked }
-        Thread.sleep(LOCK_TRIES_MS)
+        // Blocked on the holder's lock (without it, the lock would have published at once and finished).
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (locker.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.onSpinWait()
+        assertEquals(Thread.State.BLOCKED, locker.state)
         release.countDown()
         opener.join(5_000)
         locker.join(5_000)
+        assertFalse(opener.isAlive)
+        assertFalse(locker.isAlive)
         assertEquals(AppPhase.Locked, phase.value)
     }
 
@@ -51,10 +56,5 @@ class PhaseSetIfTest {
         phase.deleting(d)
         assertTrue(phase.setIf(AppPhase.Unlocked) { true })
         assertEquals(d, phase.value)
-    }
-
-    private companion object {
-        /** Long enough for the lock's thread to reach the holder's lock (it would publish at once without it). */
-        const val LOCK_TRIES_MS = 200L
     }
 }
