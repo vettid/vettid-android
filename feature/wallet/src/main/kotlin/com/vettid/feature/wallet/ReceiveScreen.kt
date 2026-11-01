@@ -57,6 +57,20 @@ fun ReceiveScreen(state: ReceiveUiState, actions: ReceiveActions, modifier: Modi
         ) {
             NetworkQuestion(state.networkSaveFailed, actions.onChooseNetwork)
         }
+        state.problem != null -> FormScaffold(
+            title = title,
+            body = stringResource(
+                when {
+                    state.problem == ReceiveProblem.MISMATCH -> R.string.wallet_address_mismatch
+                    state.network == com.vettid.core.chain.Network.TESTNET -> R.string.wallet_testnet3_unsupported
+                    else -> R.string.wallet_network_not_offered
+                },
+            ),
+            primaryLabel = null,
+            onPrimary = {},
+            onBack = actions.onBack,
+            modifier = modifier.testTag("wallet_receive_problem"),
+        ) {}
         state.notBackedUp -> FormScaffold(
             title = title,
             body = stringResource(R.string.wallet_backup_body),

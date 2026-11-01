@@ -38,10 +38,10 @@ class ReceiveViewModelTest {
         ops.wallet(id)
         val vm = vm()
         eventually { vm.state.value.address != null }
-        assertEquals("tb1p0", vm.state.value.address?.address)
-        assertEquals("BITCOIN:TB1P0", vm.state.value.uri)
+        assertEquals(derive("p2tr", 0), vm.state.value.address?.address)
+        assertEquals("BITCOIN:" + derive("p2tr", 0).uppercase(), vm.state.value.uri)
         vm.newAddress()
-        eventually { vm.state.value.address?.address == "tb1p1" }
+        eventually { vm.state.value.address?.address == derive("p2tr", 1) }
         assertEquals(2, ops.calls.count { it == "new" })
     }
 
@@ -62,10 +62,10 @@ class ReceiveViewModelTest {
         eventually { vm.state.value.address != null }
         vm.setAmount("0.0012x3")
         assertEquals("0.00123", vm.state.value.amountText)
-        assertEquals("BITCOIN:TB1P0?amount=0.00123", vm.state.value.uri)
+        assertEquals("BITCOIN:" + derive("p2tr", 0).uppercase() + "?amount=0.00123", vm.state.value.uri)
         vm.setAmount("0.123456789")
         assertEquals(BtcFormat.Amount.Invalid, vm.state.value.amount)
-        assertEquals("BITCOIN:TB1P0", vm.state.value.uri)
+        assertEquals("BITCOIN:" + derive("p2tr", 0).uppercase(), vm.state.value.uri)
         vm.setAmount("")
         assertEquals(BtcFormat.Amount.None, vm.state.value.amount)
     }
@@ -110,6 +110,41 @@ class ReceiveViewModelTest {
     }
 
     @Test
+    fun aDifferenceFromTheVaultsAddressesShowsNoAddress() = runTest {
+        ops.wallet(id)
+        ops.lie = true
+        val vm = vm()
+        eventually { vm.state.value.problem == ReceiveProblem.MISMATCH }
+        assertNull(vm.state.value.address)
+        assertNull(vm.state.value.uri)
+    }
+
+    @Test
+    fun aNetworkTheBuildDoesNotOfferGivesNoAddress() = runTest {
+        ops.wallet(id, network = "testnet")
+        val flags = WalletFlags(flagsFile)
+        flags.setBackedUp(id)
+        flags.setTestnetLabel(id, com.vettid.core.chain.Network.TESTNET)
+        val m = manager(backgroundScope, ops, flags)
+        m.open()
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.problem == ReceiveProblem.NOT_OFFERED }
+        assertNull(vm.state.value.address)
+        assertTrue(ops.calls.none { it == "new" })
+    }
+
+    @Test
+    fun aMismatchOnNewAddressKeepsNoAddress() = runTest {
+        ops.wallet(id)
+        val vm = vm()
+        eventually { vm.state.value.address != null }
+        ops.nextLie = derive("p2tr", 9)
+        vm.newAddress()
+        eventually { vm.state.value.problem == ReceiveProblem.MISMATCH }
+        assertNull(vm.state.value.address)
+    }
+
+    @Test
     fun aVaultWithoutWalletsClosesTheScreen() = runTest {
         ops.unsupported = true
         val m = manager(backgroundScope, ops)
@@ -127,6 +162,6 @@ class ReceiveViewModelTest {
         eventually { vm.state.value.address != null }
         m.clear()
         eventually { vm.state.value.closed }
-        assertFalse(vm.state.value.toString().contains("tb1p"))
+        assertFalse(vm.state.value.toString().contains("tb1"))
     }
 }

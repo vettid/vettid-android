@@ -59,6 +59,18 @@ class WalletDetailsViewModelTest {
     }
 
     @Test
+    fun theHostIsReadAgainWhenTheScreenIsInFrontAgain() = runTest {
+        ops.wallet(id)
+        val m = manager(backgroundScope, ops)
+        m.open()
+        val vm = WalletDetailsViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
+        eventually { vm.state.value.host == "mempool.space" }
+        settings.server = ChainServer.NotSet
+        vm.resumed()
+        eventually { vm.state.value.host == null }
+    }
+
+    @Test
     fun aVaultWithoutWalletsClosesTheScreen() = runTest {
         ops.unsupported = true
         val m = manager(backgroundScope, ops)

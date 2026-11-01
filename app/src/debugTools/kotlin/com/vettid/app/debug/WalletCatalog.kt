@@ -36,6 +36,7 @@ import com.vettid.feature.wallet.ChainServerUiState
 import com.vettid.feature.wallet.DeleteStep
 import com.vettid.feature.wallet.PhraseWords
 import com.vettid.feature.wallet.ReceiveActions
+import com.vettid.feature.wallet.ReceiveProblem
 import com.vettid.feature.wallet.ReceiveScreen
 import com.vettid.feature.wallet.ReceiveUiState
 import com.vettid.feature.wallet.ServerProblem
@@ -141,6 +142,9 @@ internal object WalletCatalog {
         "wallet.delete_wrong_password" to { Detail(detail.copy(delete = DeleteStep.PASSWORD, deleteError = FailureKind.BAD_PASSWORD)) },
         "wallet.receive" to { Receive(receive) },
         "wallet.receive_amount" to { Receive(receive.copy(amountText = "0.00123")) },
+        "wallet.receive_not_offered" to { Receive(ReceiveUiState(loading = false, network = Network.TESTNET, problem = ReceiveProblem.NOT_OFFERED)) },
+        "wallet.receive_mismatch" to { Receive(ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.MISMATCH)) },
+        "wallet.detail_change_network" to { Detail(noLookup.copy(network = Network.TESTNET, lookup = LookupResult.NetworkNotOffered, askNetwork = true)) },
         "wallet.receive_not_backed_up" to { Receive(ReceiveUiState(loading = false, notBackedUp = true)) },
         "wallet.chain_server" to { Server(defaultServer) },
         "wallet.chain_server_own" to { Server(defaultServer.copy(server = ChainServer.Own(own))) },

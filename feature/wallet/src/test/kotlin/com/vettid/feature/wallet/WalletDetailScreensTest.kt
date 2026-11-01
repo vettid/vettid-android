@@ -7,6 +7,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -68,7 +70,7 @@ class WalletDetailScreensTest {
     @Test
     fun aNegativeUnconfirmedAmountIsOutgoing() {
         show(detail(last = lookup.copy(unconfirmedSats = -100_000)))
-        rule.onNodeWithText("- 0.001 outgoing").assertExists()
+        rule.onNodeWithText("− 0.001 outgoing").assertExists()
     }
 
     @Test
@@ -106,7 +108,7 @@ class WalletDetailScreensTest {
     @Test
     fun testnet3SaysTheStagingAppDoesNotConnect() {
         show(detail(last = null, result = LookupResult.NetworkNotOffered).copy(network = Network.TESTNET))
-        rule.onNodeWithText("VettID's staging app does not connect to testnet3").assertExists()
+        rule.onNodeWithText("VettID's staging app does not connect to testnet3.").assertExists()
     }
 
     @Test
@@ -233,6 +235,76 @@ class WalletDetailScreensTest {
         rule.onNodeWithText("Which test network is this wallet on?").assertIsDisplayed()
         rule.onNodeWithTag("wallet_choose_testnet3").performClick()
         assertEquals(listOf(Network.TESTNET), chosen)
+    }
+
+    @Test
+    fun receiveIsOffOnAnAddressMismatchAndOnWhenTheLookupIsFine() {
+        var current by mutableStateOf(detail(result = LookupResult.AddressMismatch))
+        var receive = 0
+        rule.setContent { WalletDetailScreen(current, WalletDetailActions(onReceive = { receive++ })) }
+        rule.onNodeWithTag("wallet_receive").performScrollTo().assertIsNotEnabled()
+        current = detail()
+        rule.waitForIdle()
+        rule.onNodeWithTag("wallet_receive").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, receive)
+    }
+
+    @Test
+    fun thePrivacyNoteNamesTheServerAndOffersTheChainServer() {
+        var chain = 0
+        show(detail(last = null, result = null, noteNeeded = true).copy(serverHost = "mempool.space"), WalletDetailActions(onChainServer = { chain++ }))
+        rule.onNodeWithText("This wallet uses mempool.space.", substring = true).assertExists()
+        rule.onNodeWithTag("wallet_privacy_chain_server").performScrollTo().performClick()
+        assertEquals(1, chain)
+    }
+
+    @Test
+    fun testnet3OffersChangeThatAsksTheQuestionAgain() {
+        var changed = 0
+        var current by mutableStateOf(detail(last = null, result = LookupResult.NetworkNotOffered).copy(network = Network.TESTNET))
+        rule.setContent { WalletDetailScreen(current, WalletDetailActions(onChangeNetwork = { changed++ })) }
+        rule.onNodeWithText("Change").performScrollTo().performClick()
+        assertEquals(1, changed)
+        current = current.copy(askNetwork = true)
+        rule.waitForIdle()
+        rule.onNodeWithText("Which test network is this wallet on?").assertExists()
+    }
+
+    @Test
+    fun theFirstLookupSaysLookingUpAndNoLookupSaysSo() {
+        var current by mutableStateOf(detail(last = null, result = null).copy(lookingUp = true))
+        rule.setContent { WalletDetailScreen(current, WalletDetailActions()) }
+        rule.onNodeWithText("Looking up…").assertExists()
+        current = current.copy(lookingUp = false, lookup = LookupResult.NoServer(ChainServer.NotSet))
+        rule.waitForIdle()
+        rule.onNodeWithText("Not looked up yet").assertExists()
+    }
+
+    @Test
+    fun theAddressTypeShowsProgressAndAFailureCanBeDismissed() {
+        var dismissed = 0
+        var current by mutableStateOf(detail().copy(typeBusy = true))
+        rule.setContent { WalletDetailScreen(current, WalletDetailActions(onDismissTypeError = { dismissed++ })) }
+        rule.onNodeWithTag("wallet_type_busy").assertExists()
+        current = current.copy(typeBusy = false, typeError = FailureKind.CONFLICT)
+        rule.waitForIdle()
+        rule.onNodeWithTag("wallet_type_busy").assertDoesNotExist()
+        rule.onNodeWithTag("wallet_type_error_dismiss").performScrollTo().performClick()
+        assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun receiveSaysWhyThereIsNoAddress() {
+        var current by mutableStateOf(ReceiveUiState(loading = false, network = Network.TESTNET, problem = ReceiveProblem.NOT_OFFERED))
+        rule.setContent { ReceiveScreen(current, ReceiveActions()) }
+        rule.onNodeWithText("VettID's staging app does not connect to testnet3.").assertIsDisplayed()
+        current = current.copy(network = Network.MAINNET)
+        rule.waitForIdle()
+        rule.onNodeWithText("This version of VettID doesn't connect to this network.").assertIsDisplayed()
+        current = current.copy(problem = ReceiveProblem.MISMATCH)
+        rule.waitForIdle()
+        rule.onNodeWithText("This wallet's addresses don't match your vault's. Nothing was sent.").assertIsDisplayed()
+        rule.onNodeWithTag("wallet_receive_qr").assertDoesNotExist()
     }
 
     @Test

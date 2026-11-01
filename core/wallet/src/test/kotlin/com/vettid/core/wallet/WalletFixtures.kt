@@ -56,6 +56,7 @@ internal class FakeWalletOps : WalletOps {
     var listGate: CompletableDeferred<Unit>? = null
     var created = 0
     var conflict = false
+    var nextLie: String? = null
 
     private fun refuse(type: String, code: String): Nothing = throw VaultOpException(type, code)
 
@@ -106,7 +107,7 @@ internal class FakeWalletOps : WalletOps {
         val w = wallets.getValue(walletId)
         val chain = AddressChain(w.addressType, false)
         val list = issued.getOrPut(walletId to chain) { mutableListOf() }
-        return WalletFixtures.address(chain, list.size).also {
+        return WalletFixtures.address(chain, list.size).let { a -> nextLie?.let { a.copy(address = it) } ?: a }.also {
             list += it
             // The vault's version and next index move with every address it issues.
             wallets[walletId] = w.copy(

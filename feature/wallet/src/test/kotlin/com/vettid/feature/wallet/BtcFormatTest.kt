@@ -1,3 +1,6 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.feature.wallet
 
 import org.junit.Assert.assertEquals
@@ -60,6 +63,16 @@ class BtcFormatTest {
         assertEquals("BITCOIN:TB1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KXPJZSX", Bip21.uri(a))
         assertEquals("BITCOIN:TB1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KXPJZSX?amount=0.00123", Bip21.uri(a, 123_000))
         assertEquals("BITCOIN:TB1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KXPJZSX?amount=1", Bip21.uri(a, 100_000_000))
+    }
+
+    @Test
+    fun onlyBech32AddressesAreUpperCased() {
+        assertEquals("BITCOIN:BCRT1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KYGT080", Bip21.uri("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"))
+        assertEquals("BITCOIN:BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4", Bip21.uri("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"))
+        assertEquals("BITCOIN:TB1P5CYXNUXMEUWUVKWFEM96LXX9WEX2A5QE0L8E37J0SY6V6PXD0P6SXT3UKD?amount=1", Bip21.uri("tb1p5cyxnuxmeuwuvkwfem96lxx9wex2a5qe0l8e37j0sy6v6pxd0p6sxt3ukd", 100_000_000))
+        // Base58 is case-sensitive: kept as it is.
+        assertEquals("BITCOIN:1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", Bip21.uri("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"))
+        assertEquals("BITCOIN:mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn?amount=0.5", Bip21.uri("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn", 50_000_000))
     }
 
     @Test

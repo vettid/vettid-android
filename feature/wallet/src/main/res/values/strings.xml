@@ -61,7 +61,7 @@
     <string name="wallet_balance_btc">%1$s BTC</string> <!-- new: the unit after the amount -->
     <string name="wallet_balance_sats">%1$s sats</string> <!-- new -->
     <string name="wallet_incoming">+ %1$s incoming</string> <!-- screens table -->
-    <string name="wallet_outgoing">- %1$s outgoing</string> <!-- new: the negative twin of "incoming" -->
+    <string name="wallet_outgoing">− %1$s outgoing</string> <!-- new, revised: the minus sign U+2212 -->
     <string name="wallet_last_lookup">Looked up %1$s from %2$s</string> <!-- new -->
     <string name="wallet_not_looked_up">Not looked up yet</string> <!-- new -->
     <string name="wallet_receive">Receive</string> <!-- screens table -->
@@ -77,8 +77,8 @@
     <!-- Wallet detail: the look-up's states -->
     <string name="wallet_network_ask">Which test network is this wallet on?</string> <!-- draft -->
     <string name="wallet_network_testnet3">Testnet3</string> <!-- new; also the chip of a wallet the member said is on testnet3 -->
-    <string name="wallet_testnet3_unsupported">VettID\'s staging app does not connect to testnet3</string> <!-- draft (Networks) -->
-    <string name="wallet_network_not_offered">This version of VettID does not connect to this network.</string> <!-- new -->
+    <string name="wallet_testnet3_unsupported">VettID\'s staging app does not connect to testnet3.</string> <!-- draft (Networks), revised: with the full stop -->
+    <string name="wallet_network_not_offered">This version of VettID doesn\'t connect to this network.</string> <!-- new, revised: the one wording for a network not offered -->
     <string name="wallet_network_save_failed">This phone couldn\'t record your answer. Try again.</string> <!-- new -->
     <string name="wallet_server_not_set">No chain server is set for this network.</string> <!-- new -->
     <string name="wallet_server_unreadable">Your chain server setting couldn\'t be read.</string> <!-- new -->
@@ -99,7 +99,7 @@
     <string name="wallet_clip_label">Bitcoin address</string> <!-- new: the clipboard\'s label -->
     <string name="wallet_qr_description">QR code of the address</string> <!-- new -->
     <string name="wallet_amount_label">Amount in BTC (optional)</string> <!-- screens table: "an optional amount" -->
-    <string name="wallet_amount_bad">Use more than 0, with up to 8 decimals.</string> <!-- new -->
+    <string name="wallet_amount_bad">Enter an amount above 0, with at most 8 decimal places.</string> <!-- new, revised -->
     <string name="wallet_new_address">New address</string> <!-- screens table -->
     <string name="wallet_account_p2tr">Taproot address</string> <!-- screens table -->
     <string name="wallet_account_p2wpkh">Native SegWit address</string> <!-- new: the twin of "Taproot address" -->
@@ -108,12 +108,11 @@
     <!-- Chain server -->
     <string name="wallet_server_default">Default server: %1$s</string> <!-- new -->
     <string name="wallet_server_own">Your own server: %1$s</string> <!-- new -->
-    <string name="wallet_server_not_offered">VettID doesn\'t connect to this network in this version.</string> <!-- new -->
     <string name="wallet_server_use_own">Use my own server</string> <!-- screens table -->
     <string name="wallet_server_url_label">Server address (https)</string> <!-- new -->
     <string name="wallet_server_save">Save</string> <!-- new -->
     <string name="wallet_server_checking">Checking…</string> <!-- new -->
-    <string name="wallet_server_saved">Saved. This server was checked and is now used.</string> <!-- new -->
+    <string name="wallet_server_saved">Saved. VettID now uses this server.</string> <!-- new, revised -->
     <string name="wallet_server_reset">Reset to default</string> <!-- screens table -->
     <string name="wallet_server_not_written">The server answered, but this phone couldn\'t save the setting. Try again.</string> <!-- new -->
     <string name="wallet_server_reset_failed">This phone couldn\'t reset the setting. Try again.</string> <!-- new -->
@@ -130,4 +129,8 @@
     <string name="wallet_details_change_descriptor">Change descriptor</string> <!-- new -->
     <string name="wallet_details_using">Using %1$s</string> <!-- screens table: "Using mempool.space" -->
     <string name="wallet_details_copy">Copy %1$s</string> <!-- new: a copy button\'s description -->
+    <string name="wallet_looking_up">Looking up…</string> <!-- new: the detail\'s first look-up -->
+    <string name="wallet_network_change">Change</string> <!-- new: the testnet3 answer, back to the question -->
+    <string name="wallet_privacy_server">This wallet uses %1$s.</string> <!-- new: the note names the server -->
+    <string name="wallet_dismiss">Dismiss</string> <!-- new -->
 </resources>

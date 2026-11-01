@@ -51,6 +51,7 @@ private fun DetailDestination(host: WalletHost, leave: () -> Unit) {
             onPassword = vm::setPassword,
             onDelete = vm::delete,
             onDismissTypeError = vm::dismissTypeError,
+            onChangeNetwork = vm::changeNetwork,
         ),
     )
 }
@@ -93,6 +94,7 @@ private fun DetailsDestination(host: WalletHost, leave: () -> Unit) {
     val context = LocalContext.current
     val detailsLabel = stringResource(R.string.wallet_menu_details)
     LaunchedEffect(state.closed) { if (state.closed) leave() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.resumed() }
     WalletDetailsScreen(
         state,
         WalletDetailsActions(

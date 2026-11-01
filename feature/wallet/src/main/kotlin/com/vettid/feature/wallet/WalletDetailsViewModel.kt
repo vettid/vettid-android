@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -75,6 +76,14 @@ class WalletDetailsViewModel @Inject constructor(
                     networkName = networkAndHost.first?.vaultName,
                 )
             }
+        }
+    }
+
+    /** The screen is in front again (after Chain server): the host is read again. */
+    fun resumed() {
+        viewModelScope.launch {
+            val network = mutable.value.network ?: return@launch
+            mutable.update { it.copy(host = host(network)) }
         }
     }
 

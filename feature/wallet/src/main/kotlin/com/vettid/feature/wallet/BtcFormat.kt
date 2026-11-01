@@ -71,7 +71,8 @@ object Bip21 {
      * are valid in either case, never mixed), then `?amount=<btc>` when an amount is given. The key stays lower case.
      */
     fun uri(address: String, sats: Long? = null): String {
-        val base = "BITCOIN:" + address.uppercase()
+        // Upper case only for bech32 / bech32m (QR's alphanumeric mode); a base58 address is case-sensitive and kept as it is.
+        val base = "BITCOIN:" + if (BECH32.matches(address)) address.uppercase() else address
         return if (sats != null) "$base?amount=${BtcFormat.btc(sats)}" else base
     }
 
@@ -79,4 +80,7 @@ object Bip21 {
     fun groups(address: String): String = address.chunked(GROUP).joinToString(" ")
 
     private const val GROUP = 4
+
+    /** An hrp (`bc`, `tb`, `bcrt`), the separator `1`, then bech32 data characters, all lower case as the vault gives them. */
+    private val BECH32 = Regex("(bc|tb|bcrt)1[ac-hj-np-z02-9]+")
 }

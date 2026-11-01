@@ -7,6 +7,7 @@ import androidx.navigation.toRoute
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.wallet.ReceiveResult
 import com.vettid.core.wallet.WalletAddress
 import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
@@ -20,6 +21,9 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+/** Why Receive shows no address, besides a failure and the backup gate. */
+enum class ReceiveProblem { NOT_OFFERED, MISMATCH }
 
 /** Receive: the address the vault issued, the optional amount, and what is encoded. Prints its type name only. */
 data class ReceiveUiState(
@@ -36,6 +40,7 @@ data class ReceiveUiState(
     /** A legacy `testnet` wallet whose test chain was not said yet: asked before any address. */
     val needsNetwork: Boolean = false,
     val networkSaveFailed: Boolean = false,
+    val problem: ReceiveProblem? = null,
 ) {
     val amount: BtcFormat.Amount get() = BtcFormat.parse(amountText)
 
@@ -113,14 +118,21 @@ class ReceiveViewModel @Inject constructor(
     /** "New address". */
     fun newAddress() {
         if (mutable.value.busy || mutable.value.closed) return
-        viewModelScope.launch { ask { wallets.newAddress(walletId) } }
+        viewModelScope.launch { ask { wallets.newReceiveAddress(walletId) } }
     }
 
-    private suspend fun ask(get: suspend () -> WalletAddress) {
-        mutable.update { it.copy(busy = true, error = null) }
+    private suspend fun ask(get: suspend () -> ReceiveResult) {
+        mutable.update { it.copy(busy = true, error = null, problem = null) }
         try {
-            val a = get()
-            mutable.update { it.copy(loading = false, busy = false, address = a) }
+            val r = get()
+            mutable.update {
+                when (r) {
+                    is ReceiveResult.Address -> it.copy(loading = false, busy = false, address = r.address)
+                    ReceiveResult.NeedsNetwork -> it.copy(loading = false, busy = false, needsNetwork = true)
+                    ReceiveResult.NotOffered -> it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.NOT_OFFERED)
+                    ReceiveResult.Mismatch -> it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.MISMATCH)
+                }
+            }
         } catch (e: VaultFailure) {
             mutable.update { it.copy(loading = false, busy = false, error = e.kind) }
         }

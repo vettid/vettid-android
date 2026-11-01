@@ -4,10 +4,12 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
+import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.wallet.WalletOpenRoute
+import com.vettid.core.wallet.ChainServerSettings
 import com.vettid.core.wallet.LookupResult
 import com.vettid.core.wallet.VaultWallet
 import com.vettid.core.wallet.WalletAvailability
@@ -45,6 +47,10 @@ data class WalletDetailUiState(
     val backedUp: Boolean = true,
     /** The chain server's privacy note is to be acknowledged before the wallet's first look-up. */
     val noteNeeded: Boolean = false,
+    /** The chain server this wallet's network uses now (its host), named on the privacy note; null when none is set. */
+    val serverHost: String? = null,
+    /** "Change" on the testnet3 answer: the test-network question is asked again. */
+    val askNetwork: Boolean = false,
     val lookingUp: Boolean = false,
     /** The last look-up that succeeded (its time, host and totals): kept while a later one fails or runs. */
     val last: WalletLookup? = null,
@@ -78,6 +84,7 @@ data class WalletDetailUiState(
 class WalletDetailViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val wallets: WalletsManager,
+    private val settings: ChainServerSettings,
 ) : ViewModel() {
     val walletId: String = saved.toRoute<WalletOpenRoute>().walletId
     private val mutable = MutableStateFlow(WalletDetailUiState())
@@ -85,6 +92,9 @@ class WalletDetailViewModel @Inject constructor(
 
     private var started = false
     private var seen = false
+
+    /** The server setting at the last look-up: another one now (changed on Chain server) means the balance is out of date. */
+    private var serverAtLookup: ChainServer? = null
 
     private class Seen(
         val wallet: VaultWallet?,
@@ -129,7 +139,7 @@ class WalletDetailViewModel @Inject constructor(
         if (wallets.privacyNoteShown(walletId)) {
             lookUp()
         } else {
-            mutable.update { it.copy(noteNeeded = true) }
+            mutable.update { it.copy(noteNeeded = true, serverHost = hostNow()) }
         }
     }
 
@@ -153,41 +163,68 @@ class WalletDetailViewModel @Inject constructor(
     private suspend fun lookUp() {
         if (mutable.value.lookingUp) return
         mutable.update { it.copy(lookingUp = true) }
+        serverAtLookup = serverNow()
         val result = wallets.lookup(walletId)
         mutable.update {
             it.copy(
                 lookingUp = false,
-                lookup = result,
+                noteNeeded = it.noteNeeded || result == LookupResult.NoteNeeded,
+                lookup = result.takeUnless { r -> r == LookupResult.NoteNeeded },
                 last = (result as? LookupResult.Done)?.lookup ?: it.last,
                 closed = it.closed || result is LookupResult.Cleared,
             )
         }
     }
 
+    private suspend fun serverNow(): ChainServer? = mutable.value.network?.let { settings.server(it) }
+
+    private suspend fun hostNow(): String? = when (val s = serverNow()) {
+        is ChainServer.Default -> s.url.host
+        is ChainServer.Own -> s.url.host
+        else -> null
+    }
+
     /**
-     * The screen is in front again (after Chain server, or the app): a look-up that ended in a problem is made again, so that a
-     * fixed server clears the old message. A balance, the note and the network question are left as they are.
+     * The screen is in front again (after Chain server, or the app). A chain server that is not the one of the last look-up (changed
+     * on Chain server) means the balance is out of date, even after a good look-up: it is looked up again. A look-up that ended in a
+     * server problem is made again too (the server may be back). A mismatch, a network not offered or a vault failure are not
+     * changed by coming back; the network question waits for its answer (or looks up once it was answered on Receive).
      */
     fun resumed() {
-        when (mutable.value.lookup) {
-            // What the member may have changed elsewhere: the chain server, or a server that was down.
-            is LookupResult.NoServer, is LookupResult.ServerWrongNetwork, is LookupResult.ServerFailed -> refresh()
-            // The test network answered elsewhere (Receive asks too): the look-up once it is known.
-            LookupResult.NeedsNetwork -> viewModelScope.launch {
-                val w = wallets.wallets.value.firstOrNull { it.id == walletId } ?: return@launch
-                if (wallets.networkOf(w) != null) lookUp()
+        viewModelScope.launch {
+            val s = mutable.value
+            if (s.closed || s.lookingUp) return@launch
+            if (s.noteNeeded) {
+                mutable.update { it.copy(serverHost = hostNow()) }
+                return@launch
             }
-            // A mismatch, a network not offered, a vault failure, a balance: coming back changes none of them.
-            else -> Unit
+            val changed = s.lookup != null && serverNow() != serverAtLookup
+            when (s.lookup) {
+                null -> Unit
+                LookupResult.NeedsNetwork -> if (networkKnown()) lookUp()
+                is LookupResult.NoServer, is LookupResult.ServerWrongNetwork, is LookupResult.ServerFailed -> lookUp()
+                else -> if (changed) lookUp()
+            }
         }
+    }
+
+    private suspend fun networkKnown(): Boolean {
+        val w = wallets.wallets.value.firstOrNull { it.id == walletId } ?: return false
+        return wallets.networkOf(w) != null
+    }
+
+    /** "Change" on the testnet3 answer: back to the question. */
+    fun changeNetwork() {
+        if (mutable.value.lookup is LookupResult.NetworkNotOffered) mutable.update { it.copy(askNetwork = true) }
     }
 
     /** "Which test network is this wallet on?": the answer is kept on this phone, then the look-up again. */
     fun chooseTestNetwork(network: Network) {
-        if (mutable.value.lookup !is LookupResult.NeedsNetwork) return
+        val s = mutable.value
+        if (s.lookup !is LookupResult.NeedsNetwork && !s.askNetwork) return
         viewModelScope.launch {
             val kept = wallets.setTestNetwork(walletId, network)
-            mutable.update { it.copy(networkSaveFailed = !kept) }
+            mutable.update { it.copy(networkSaveFailed = !kept, askNetwork = !kept && it.askNetwork) }
             if (kept) lookUp()
         }
     }

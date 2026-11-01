@@ -40,7 +40,12 @@ class WalletTextsTest {
             R.string.wallet_address_mismatch to "This wallet's addresses don't match your vault's. Nothing was sent.",
             R.string.wallet_server_failed to "That server didn't answer.",
             R.string.wallet_privacy_note to "To show your balance and send, VettID asks this server about your wallet's addresses. The server sees those addresses, and can tell they belong together, and it sees this phone's internet address and when you look. VettID's own servers see none of it. Use your own server to keep this to yourself.",
-            R.string.wallet_testnet3_unsupported to "VettID's staging app does not connect to testnet3",
+            R.string.wallet_testnet3_unsupported to "VettID's staging app does not connect to testnet3.",
+            R.string.wallet_network_not_offered to "This version of VettID doesn't connect to this network.",
+            R.string.wallet_server_saved to "Saved. VettID now uses this server.",
+            R.string.wallet_looking_up to "Looking up…",
+            R.string.wallet_amount_bad to "Enter an amount above 0, with at most 8 decimal places.",
+            R.string.wallet_delete_password to "Enter your VettID password to delete %1\$s.",
             // The screens table's words.
             R.string.wallet_menu_address_type to "Receiving address type",
             R.string.wallet_type_taproot to "Taproot (recommended)",
@@ -60,6 +65,7 @@ class WalletTextsTest {
         assertEquals("Only send Signet bitcoin to this address.", r.getString(R.string.wallet_only_send, "Signet"))
         assertEquals("Using mempool.space", r.getString(R.string.wallet_details_using, "mempool.space"))
         assertEquals("+ 0.001 incoming", r.getString(R.string.wallet_incoming, "0.001"))
+        assertEquals("− 0.001 outgoing", r.getString(R.string.wallet_outgoing, "0.001"))
     }
 
     @Test

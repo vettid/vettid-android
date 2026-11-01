@@ -20,6 +20,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -69,6 +70,7 @@ data class WalletDetailActions(
     val onPassword: (String) -> Unit = {},
     val onDelete: () -> Unit = {},
     val onDismissTypeError: () -> Unit = {},
+    val onChangeNetwork: () -> Unit = {},
 )
 
 /**
@@ -129,20 +131,32 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
             }
         }
     }
+    if (state.typeBusy) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("wallet_type_busy"))
     state.typeError?.let { e ->
-        Text(
-            stringResource(e.messageRes()),
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.testTag("wallet_detail_type_error"),
-        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(e.messageRes()),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.weight(1f).testTag("wallet_detail_type_error"),
+            )
+            TextButton(onClick = actions.onDismissTypeError, modifier = Modifier.testTag("wallet_type_error_dismiss")) {
+                Text(stringResource(R.string.wallet_dismiss))
+            }
+        }
     }
     if (state.noteNeeded) {
         NoticeCard(
             kind = NoticeKind.INFO,
             title = stringResource(R.string.wallet_menu_chain_server),
-            body = stringResource(R.string.wallet_privacy_note),
+            body = stringResource(R.string.wallet_privacy_note) +
+                (state.serverHost?.let { "\n\n" + stringResource(R.string.wallet_privacy_server, it) } ?: ""),
             modifier = Modifier.testTag("wallet_privacy_note"),
             actions = {
+                if (state.network != null) {
+                    TextButton(onClick = actions.onChainServer, modifier = Modifier.testTag("wallet_privacy_chain_server")) {
+                        Text(stringResource(R.string.wallet_menu_chain_server))
+                    }
+                }
                 TextButton(onClick = actions.onAcknowledge, modifier = Modifier.testTag("wallet_privacy_continue")) {
                     Text(stringResource(R.string.wallet_continue))
                 }
@@ -152,7 +166,12 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
         Balance(state)
         LookupProblem(state, actions)
     }
-    PrimaryButton(stringResource(R.string.wallet_receive), actions.onReceive, Modifier.testTag("wallet_receive"))
+    PrimaryButton(
+        stringResource(R.string.wallet_receive),
+        actions.onReceive,
+        Modifier.testTag("wallet_receive"),
+        enabled = state.lookup != LookupResult.AddressMismatch,
+    )
 }
 
 /** Confirmed, in bitcoin with satoshis underneath; "+ … incoming" (or "- … outgoing") while unconfirmed; the last look-up. */
@@ -160,7 +179,8 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
 private fun Balance(state: WalletDetailUiState) {
     val last = state.last
     if (last == null) {
-        if (state.lookingUp) Text(stringResource(R.string.wallet_server_checking), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val text = if (state.lookingUp) R.string.wallet_looking_up else R.string.wallet_not_looked_up
+        Text(stringResource(text), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("wallet_no_balance"))
         return
     }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -208,25 +228,10 @@ private fun LookupProblem(state: WalletDetailUiState, actions: WalletDetailActio
     val chain = stringResource(R.string.wallet_menu_chain_server) to actions.onChainServer
     val again = stringResource(R.string.wallet_try_again) to actions.onRefresh
     when (val l = state.lookup) {
-        null, is LookupResult.Done, LookupResult.Cleared -> Unit
+        null, is LookupResult.Done, LookupResult.Cleared, LookupResult.NoteNeeded -> Unit
         LookupResult.NeedsNetwork -> NeedsNetwork(state, actions)
-        LookupResult.NetworkNotOffered -> Problem(
-            stringResource(
-                if (state.network == Network.TESTNET) R.string.wallet_testnet3_unsupported else R.string.wallet_network_not_offered,
-            ),
-            "wallet_problem_not_offered",
-        )
-        is LookupResult.NoServer -> Problem(
-            stringResource(
-                when (l.server) {
-                    ChainServer.Unreadable -> R.string.wallet_server_unreadable
-                    ChainServer.NotOffered -> R.string.wallet_network_not_offered
-                    else -> R.string.wallet_server_not_set
-                },
-            ),
-            "wallet_problem_no_server",
-            listOf(chain),
-        )
+        LookupResult.NetworkNotOffered -> NotOffered(state, actions)
+        is LookupResult.NoServer -> NoServer(l.server, chain)
         is LookupResult.ServerWrongNetwork -> Problem(
             stringResource(R.string.wallet_server_wrong_network, networkLabel(state.network).orEmpty()),
             "wallet_problem_wrong_network",
@@ -240,6 +245,31 @@ private fun LookupProblem(state: WalletDetailUiState, actions: WalletDetailActio
         LookupResult.AddressMismatch -> Problem(stringResource(R.string.wallet_address_mismatch), "wallet_problem_mismatch")
         is LookupResult.VaultFailed -> Problem(stringResource(l.failure.kind.messageRes()), "wallet_problem_vault", listOf(again))
     }
+}
+
+@Composable
+private fun NotOffered(state: WalletDetailUiState, actions: WalletDetailActions) {
+    if (state.askNetwork) {
+        NeedsNetwork(state, actions)
+        return
+    }
+    val testnet3 = state.network == Network.TESTNET
+    Problem(
+        stringResource(if (testnet3) R.string.wallet_testnet3_unsupported else R.string.wallet_network_not_offered),
+        "wallet_problem_not_offered",
+        // testnet3 was the member's answer: it can be changed.
+        if (testnet3) listOf(stringResource(R.string.wallet_network_change) to actions.onChangeNetwork) else emptyList(),
+    )
+}
+
+@Composable
+private fun NoServer(server: ChainServer, chain: Pair<String, () -> Unit>) {
+    val text = when (server) {
+        ChainServer.Unreadable -> R.string.wallet_server_unreadable
+        ChainServer.NotOffered -> R.string.wallet_network_not_offered
+        else -> R.string.wallet_server_not_set
+    }
+    Problem(stringResource(text), "wallet_problem_no_server", listOf(chain))
 }
 
 /** "Which test network is this wallet on?": Testnet4 or Testnet3 (the staging app does not connect to testnet3). */
@@ -286,7 +316,7 @@ private fun WalletMenu(state: WalletDetailUiState, actions: WalletDetailActions)
             Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.wallet_menu))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            MenuItem(R.string.wallet_menu_address_type, "wallet_menu_address_type", enabled = state.loaded) {
+            MenuItem(R.string.wallet_menu_address_type, "wallet_menu_address_type", enabled = state.loaded && !state.typeBusy) {
                 open = false
                 typeDialog = true
             }

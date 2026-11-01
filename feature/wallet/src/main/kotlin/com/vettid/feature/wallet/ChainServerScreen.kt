@@ -62,7 +62,7 @@ private fun settingText(server: ChainServer): String = when (server) {
     is ChainServer.Own -> stringResource(R.string.wallet_server_own, server.url.host)
     ChainServer.NotSet -> stringResource(R.string.wallet_server_not_set)
     ChainServer.Unreadable -> stringResource(R.string.wallet_server_unreadable)
-    ChainServer.NotOffered -> stringResource(R.string.wallet_server_not_offered)
+    ChainServer.NotOffered -> stringResource(R.string.wallet_network_not_offered)
 }
 
 @Composable
@@ -100,7 +100,7 @@ private fun problemText(p: ServerProblem, state: ChainServerUiState): String = w
     ServerProblem.Failed -> stringResource(R.string.wallet_server_failed)
     ServerProblem.WrongNetwork -> stringResource(R.string.wallet_server_wrong_network, networkLabel(state.network).orEmpty())
     ServerProblem.NotWritten -> stringResource(R.string.wallet_server_not_written)
-    ServerProblem.NotOffered -> stringResource(R.string.wallet_server_not_offered)
+    ServerProblem.NotOffered -> stringResource(R.string.wallet_network_not_offered)
     ServerProblem.ResetFailed -> stringResource(R.string.wallet_server_reset_failed)
 }
 

@@ -229,7 +229,7 @@ The A2 exit test:
   `wallet.detail_no_server`, `wallet.detail_server_unreadable`, `wallet.detail_wrong_network`, `wallet.detail_server_failed`,
   `wallet.detail_mismatch`, `wallet.detail_vault_failed`, `wallet.detail_privacy_note`, `wallet.detail_not_backed_up`,
   `wallet.address_type`, `wallet.delete_confirm`, `wallet.delete_password`, `wallet.delete_wrong_password`, `wallet.receive`,
-  `wallet.receive_amount`, `wallet.receive_not_backed_up`, `wallet.chain_server`, `wallet.chain_server_own`,
+  `wallet.receive_amount`, `wallet.receive_not_backed_up`, `wallet.receive_not_offered`, `wallet.receive_mismatch`, `wallet.detail_change_network`, `wallet.chain_server`, `wallet.chain_server_own`,
   `wallet.chain_server_not_set`, `wallet.chain_server_unreadable`, `wallet.chain_server_checking`, `wallet.chain_server_saved`,
   `wallet.chain_server_bad_url`, `wallet.chain_server_not_https`, `wallet.chain_server_credentials`, `wallet.chain_server_query`,
   `wallet.chain_server_failed`, `wallet.chain_server_wrong_network`, `wallet.chain_server_not_written`, `wallet.details`

@@ -32,6 +32,7 @@ class WalletDetailViewModelTest {
     private val flagsFile = MemoryFlags()
     private val id = "01WALLET0000000000000000AA"
     private var opened = 0
+    private val settings = FakeServerSettings()
     private var open: ChainOpen = ChainOpen.NoServer(ChainServer.NotSet)
     private val chain = ChainSource {
         opened++
@@ -43,7 +44,7 @@ class WalletDetailViewModelTest {
         if (noteShown) flags.setPrivacyNoteShown(id)
         val m = manager(backgroundScope, ops, flags, chain)
         m.open()
-        return WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        return WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
     }
 
     @Test
@@ -93,6 +94,7 @@ class WalletDetailViewModelTest {
         val vm = vm()
         eventually { vm.state.value.lookup is LookupResult.ServerWrongNetwork }
         open = ChainOpen.Ready("mempool.space") { error("not asked: the address check stops first") }
+        ops.lie = true
         vm.refresh()
         eventually { vm.state.value.lookup == LookupResult.AddressMismatch }
     }
@@ -147,8 +149,57 @@ class WalletDetailViewModelTest {
         ops.unsupported = true
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)
         runCatching { m.open() }
-        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
         eventually { vm.state.value.closed }
+    }
+
+    private val emptyTotals = com.vettid.core.chain.ChainSummary(0, 0, 0, 0)
+
+    @Test
+    fun aGoodLookupIsLookedUpAgainWhenTheChainServerChangedMeanwhile() = runTest {
+        ops.wallet(id)
+        settings.server = ChainServer.Default(com.vettid.core.chain.ChainDefaults.TESTNET4)
+        open = ChainOpen.Ready("mempool.space") { emptyTotals }
+        val vm = vm()
+        eventually { vm.state.value.lookup is LookupResult.Done }
+        val before = opened
+        // Back with the same setting: nothing.
+        vm.resumed()
+        assertEquals(before, opened)
+        // Another server was saved on the Chain server screen.
+        settings.server = ChainServer.Default(com.vettid.core.chain.ChainDefaults.SIGNET)
+        open = ChainOpen.Ready("other.example") { emptyTotals }
+        vm.resumed()
+        eventually { opened == before + 1 && !vm.state.value.lookingUp }
+        assertEquals("other.example", vm.state.value.last?.host)
+    }
+
+    @Test
+    fun thePrivacyNoteNamesTheServerAndFollowsItsChange() = runTest {
+        ops.wallet(id)
+        settings.server = ChainServer.Default(com.vettid.core.chain.ChainDefaults.TESTNET4)
+        val vm = vm(noteShown = false)
+        eventually { vm.state.value.noteNeeded }
+        assertEquals("mempool.space", vm.state.value.serverHost)
+        settings.server = ChainServer.NotSet
+        vm.resumed()
+        eventually { vm.state.value.serverHost == null }
+        assertEquals(0, opened)
+    }
+
+    @Test
+    fun testnet3CanBeChangedBackToTheQuestion() = runTest {
+        ops.wallet(id, network = "testnet")
+        val vm = vm()
+        eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
+        vm.chooseTestNetwork(Network.TESTNET)
+        eventually { vm.state.value.lookup == LookupResult.NetworkNotOffered }
+        vm.changeNetwork()
+        assertTrue(vm.state.value.askNetwork)
+        vm.chooseTestNetwork(Network.TESTNET4)
+        eventually { vm.state.value.lookup is LookupResult.NoServer }
+        assertFalse(vm.state.value.askNetwork)
+        assertEquals(Network.TESTNET4, vm.state.value.network)
     }
 
     @Test
@@ -250,7 +301,7 @@ class WalletDetailViewModelTest {
         ops.wallet(id)
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile).also { it.setPrivacyNoteShown(id) }, chain)
         m.open()
-        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
         eventually { vm.state.value.loaded }
         m.clear()
         eventually { vm.state.value.closed }

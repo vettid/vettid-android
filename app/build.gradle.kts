@@ -859,12 +859,12 @@ val walletMarkers = listOf(
  * the ones the app reaches (R8 removes the rest). W1c-1 reaches `wallet.list` (the list read while the vault is open). W1c-2a's
  * screens add `wallet.create`, which is in neither list: the check matches substrings, and History's `wallet.created` label (which
  * stays in release) contains it; `Lcom/vettid/feature/wallet/` in the DEX check covers those screens. W1c-2b's screens reach
- * `wallet.update` (the receiving address type) and the address requests (Receive, the look-up); `wallet.get` is not reached yet.
+ * `wallet.update` (the receiving address type) and the address requests (Receive, the look-up), and `wallet.get` (the wallet is read again after this phone issued or marked addresses).
  * `vettid_wallet_screens` is the screens' own marker (`WALLET_SCREENS_MARKER` in :feature:wallet, the list's test tag): R8 keeps the
  * string whatever it renames.
  */
 val walletMarkersReached = listOf(
-    "wallet.list", "wallet.update", "wallet.address.new", "wallet.address.list", "wallet.address.used", "vettid_wallet_screens",
+    "wallet.list", "wallet.get", "wallet.update", "wallet.address.new", "wallet.address.list", "wallet.address.used", "vettid_wallet_screens",
 )
 
 val productionPins = listOf(
