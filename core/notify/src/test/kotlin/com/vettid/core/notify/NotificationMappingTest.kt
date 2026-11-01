@@ -37,6 +37,8 @@ class NotificationMappingTest {
             "identity.rotation_failed", "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
             // ANDROID-PLAN 0.1.102 "Votes": "The channel is Vault activity; no new channel."
             "vote.open", "vote.closing", "vote.result", "vote.problem",
+            // ANDROID-PLAN 0.1.74 "Notifications": a spending limit's items, on Vault activity.
+            "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised",
         ),
     )
 

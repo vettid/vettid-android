@@ -269,7 +269,7 @@ private fun PasswordStep(state: BackupUiState, actions: BackupActions, modifier:
 private fun doneBody(state: BackupUiState): List<Int> = buildList {
     if (state.revealFailed) add(R.string.wallet_created_reveal_failed)
     if (state.saveFailed) add(R.string.wallet_save_failed)
-    if (state.capsFailed) add(R.string.wallet_caps_not_set)
+    if (state.capsFailed) add(if (state.capsDuplicate) R.string.wallet_limits_duplicate else R.string.wallet_caps_not_set)
     if (state.capsNotSaved) add(R.string.wallet_caps_not_saved)
     if (state.capsUnsupported) add(R.string.wallet_caps_unsupported)
     if (isEmpty() && !state.backedUp) add(R.string.wallet_backup_body)

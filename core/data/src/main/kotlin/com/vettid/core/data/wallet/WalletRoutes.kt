@@ -14,6 +14,10 @@ data object WalletRoute
 @Serializable
 data class WalletOpenRoute(val walletId: String)
 
+/** One wallet's Spending limits (W1d-2; a notification about a limit opens it). Registered by `:feature:wallet` only where it is linked. */
+@Serializable
+data class SpendingLimitsRoute(val walletId: String)
+
 /**
  * Make a wallet and back it up. This and [BackupRoute] hold a recovery phrase: never saved with the back stack (state saving would
  * keep their view model, and with it the words, alive behind another screen); the drawer and a notification pop them

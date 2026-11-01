@@ -113,8 +113,17 @@ sealed interface ReceiveResult {
     /** The spending limit the member chose has not been set yet (W1d): no Receive until `wallet.caps.set` has been answered. */
     data object CapsPending : ReceiveResult
 
+    /** The pending limit was refused with `duplicate_wallet` (the vault holds another copy of this wallet): no Receive, and the reason. */
+    data object CapsDuplicate : ReceiveResult
+
     /** This phone's wallet settings cannot be read, so no wallet is known to be free of a limit still to be set: no Receive. */
     data object SettingsUnreadable : ReceiveResult
+
+    /**
+     * The wallet settings were reset on this phone and the vault shows the wallet without a limit: "Set a spending limit?" is asked
+     * again ([WalletsManager.answerLimits]) before any address.
+     */
+    data object LimitsAsk : ReceiveResult
 }
 
 /** The result of [WalletsManager.create]. */
@@ -149,7 +158,7 @@ data class Imported(
  * looks them up again. On disk only [WalletFlags] and the chain server setting. A [generation] guard drops whatever was read before
  * a clear.
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass") // one manager for the wallets, their limits and the flags
 class WalletsManager(
     private val scope: CoroutineScope,
     private val ops: () -> WalletOps,
@@ -190,6 +199,13 @@ class WalletsManager(
      */
     val capsPending: StateFlow<Set<String>> = capsPendingFlow.asStateFlow()
 
+    /** The wallets whose pending `wallet.caps.set` the vault refused with `duplicate_wallet` (memory only). Under [lock]. */
+    private val duplicateSet = HashSet<String>()
+    private val duplicateFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The wallets whose pending limit was refused because the vault holds another copy of the wallet: the screens say so. */
+    val capsDuplicate: StateFlow<Set<String>> = duplicateFlow.asStateFlow()
+
     /** Wallets made in this session whose backup is under way: their pending limits wait for the check (the phrase needs no PIN). */
     private val held = HashSet<String>()
     private val capsLock = Mutex()
@@ -201,6 +217,9 @@ class WalletsManager(
     private val lock = Any()
     private var generation = 0L
     private var open = false
+
+    /** A `wallet.list` was published since the vault opened (a created or imported wallet alone does not count). Under [lock]. */
+    private var listRead = false
 
     /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
     private val checked = HashMap<Pair<String, Network>, Wallet>()
@@ -271,12 +290,15 @@ class WalletsManager(
             pendingRefresh = null
             availabilityFlow.value = WalletAvailability.UNKNOWN
             walletsFlow.value = emptyList()
+            listRead = false
             lookupsFlow.value = emptyMap()
             checked.clear()
             pendingMap.clear()
             pendingUnknown = false
             publishPending()
             held.clear()
+            duplicateSet.clear()
+            duplicateFlow.value = emptySet()
         }
     }
 
@@ -331,12 +353,15 @@ class WalletsManager(
             if (e.kind == FailureKind.NOT_SUPPORTED) publish(g) { availabilityFlow.value = WalletAvailability.UNSUPPORTED }
             throw e
         }
-        publish(g) {
+        val published = publish(g) {
             walletsFlow.value = list
             availabilityFlow.value = WalletAvailability.AVAILABLE
+            listRead = true
             // A wallet gone (deleted on another device): its look-up goes too.
             lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
         }
+        // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
+        if (published) flags.listed(list.map { it.id }.toSet())
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
@@ -454,6 +479,8 @@ class WalletsManager(
         // A vault that gives the new wallet no `caps` cannot enforce a limit: nothing is kept or sent for it.
         val unsupported = caps != null && !caps.none && !wallet.capsSupported
         val saved = keepCaps(wallet.id, caps.takeUnless { unsupported }, g, hold = true)
+        // The limit was chosen (or No limit) on the step before: a reset later does not ask this wallet's question again.
+        flags.clearAskCaps(wallet.id)
         val kept = publish(g) {
             walletsFlow.update { l -> l.filterNot { it.id == wallet.id } + wallet }
             availabilityFlow.value = WalletAvailability.AVAILABLE
@@ -492,6 +519,7 @@ class WalletsManager(
         val wallet = vaultGuard { ops().create(name, network.vaultName, password, WalletImport(words, passphrase)) }
         val unsupported = caps != null && !caps.none && !wallet.capsSupported
         val saved = keepCaps(wallet.id, caps.takeUnless { unsupported }, g, hold = false)
+        flags.clearAskCaps(wallet.id)
         // The words were typed, so the wallet starts backed up; a flag that cannot be written is tried once more and then said.
         val recorded = flags.setBackedUp(wallet.id) || flags.setBackedUp(wallet.id)
         flagsChangedFlow.update { it + 1 }
@@ -547,13 +575,27 @@ class WalletsManager(
             val g = gen()
             if (synchronized(lock) { pendingUnknown }) loadPending(g)
             val caps = synchronized(lock) { pendingMap[walletId] } ?: return
-            val version = sendPending(walletId, caps, g)
+            val version = try {
+                sendPending(walletId, caps, g)
+            } catch (e: VaultFailure) {
+                // The vault holds another copy of this wallet (`duplicate_wallet`): the limit stays pending, Receive stays off, and the
+                // screens say why. Not retried here; the next Try again or unlock sends it once more.
+                markDuplicate(walletId, e.code == DUPLICATE_WALLET)
+                throw e
+            }
+            markDuplicate(walletId, false)
             withContext(NonCancellable) {
                 if (version != null) {
                     publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }
                 }
                 done(walletId, g)
             }
+        }
+    }
+
+    private fun markDuplicate(walletId: String, duplicate: Boolean) {
+        synchronized(lock) {
+            if (if (duplicate) duplicateSet.add(walletId) else duplicateSet.remove(walletId)) duplicateFlow.value = duplicateSet.toSet()
         }
     }
 
@@ -639,13 +681,28 @@ class WalletsManager(
 
     /**
      * "Raise or remove a limit": `wallet.caps.raise`, one credential operation with [pin] and [password], bound to the values the
-     * wallet will have ([perTx], [perPeriod]; null: no limit). **Fail secure**: on any error the limits stay as they were (nothing
+     * wallet will have ([perTx], [perPeriod]; null: no limit). A pending `wallet.caps.set` is sent first and the raise is then
+     * refused ([CAPS_SETTLED]), or refused as it is ([CAPS_PENDING]). **Fail secure**: on any error the limits stay as they were (nothing
      * here is changed before the vault has answered `ok`), a `conflict` reads the wallet again and is thrown (the typed secrets are
      * not sent a second time), and the pending `wallet.caps.set` of [settleCaps] is a different request that never raises.
      */
+    @Suppress("ThrowsCount") // a pending limit, no wallet
     suspend fun raiseCaps(walletId: String, perTx: Long?, perPeriod: Long?, pin: String, password: String) {
         require(CapsRules.problem(perTx, perPeriod) == null) { "limits" }
         val g = gen()
+        // The pending limits cannot be known while the settings file is unreadable: say so (the reset is on the wallet's screen).
+        if (synchronized(lock) { pendingUnknown }) {
+            loadPending(g)
+            if (synchronized(lock) { pendingUnknown }) throw VaultFailure(FailureKind.OTHER, SETTINGS_UNREADABLE)
+        }
+        // A pending `wallet.caps.set` goes first, and a raise never goes over a lower that has not reached the vault. If it cannot be
+        // sent, or the pending limits cannot be known, nothing is raised ([CAPS_PENDING]). If it was sent, the values asked for were
+        // chosen against limits that have just changed (a member left as it was would raise the lowered one again), so nothing
+        // is raised then either ([CAPS_SETTLED]): the screen shows the limits as they now are, and the member asks again.
+        if (isCapsPending(walletId)) {
+            settleCaps(walletId)
+            throw VaultFailure(FailureKind.OTHER, if (isCapsPending(walletId)) CAPS_PENDING else CAPS_SETTLED)
+        }
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
         val version = try {
             withContext(NonCancellable) { vaultGuard { ops().capsRaise(walletId, wallet.version, perTx, perPeriod, pin, password) } }
@@ -665,6 +722,8 @@ class WalletsManager(
                 }
             }
         }
+        // The member set or removed the limits here: a reset later does not ask this wallet's question again.
+        flags.clearAskCaps(walletId)
     }
 
     /**
@@ -730,7 +789,7 @@ class WalletsManager(
     /** "New address" on Receive: the next address of the receiving account, checked like [receiveAddress]. */
     suspend fun newReceiveAddress(walletId: String): ReceiveResult = receive(walletId, fresh = true)
 
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one early answer per state
     private suspend fun receive(walletId: String, fresh: Boolean): ReceiveResult {
         val g = gen()
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
@@ -739,8 +798,17 @@ class WalletsManager(
         if (isCapsPending(walletId)) {
             attempt { settleFirst(walletId) }
             if (isCapsPending(walletId)) {
-                return if (synchronized(lock) { pendingUnknown }) ReceiveResult.SettingsUnreadable else ReceiveResult.CapsPending
+                return when {
+                    synchronized(lock) { pendingUnknown } -> ReceiveResult.SettingsUnreadable
+                    synchronized(lock) { walletId in duplicateSet } -> ReceiveResult.CapsDuplicate
+                    else -> ReceiveResult.CapsPending
+                }
             }
+        }
+        when (asksLimits(wallet)) {
+            null -> return ReceiveResult.SettingsUnreadable
+            true -> return ReceiveResult.LimitsAsk
+            false -> Unit
         }
         val network = networkOf(wallet) ?: return ReceiveResult.NeedsNetwork
         if (!offered(network)) return ReceiveResult.NotOffered
@@ -751,6 +819,63 @@ class WalletsManager(
         if (gen() != g) throw VaultFailure(FailureKind.OTHER, CLEARED)
         return if (derives(derived, address)) ReceiveResult.Address(address) else ReceiveResult.Mismatch
     }
+
+    /**
+     * Whether the limit question is to be asked before [wallet]'s Receive (after [resetSettings]): true; null when the flags cannot
+     * be read (no Receive); false otherwise. A wallet the vault already caps, or whose vault has no `caps`, is not asked.
+     */
+    private suspend fun asksLimits(wallet: VaultWallet): Boolean? =
+        if (!wallet.capsSupported || wallet.capped) false else flags.asksCaps(wallet.id)
+
+    /** Whether the limit question is to be asked before Receive for [walletId] (see [receiveAddress]). */
+    suspend fun asksLimits(walletId: String): Boolean =
+        walletsFlow.value.firstOrNull { it.id == walletId }?.let { asksLimits(it) } == true
+
+    /**
+     * "Reset wallet settings on this phone", offered only while the flags file is unreadable ([capsPending] holds [UNKNOWN]): it
+     * forgets the local flags only (backed up, test-chain labels, privacy notes, pending limits) and writes a fresh file, the one
+     * sanctioned overwrite. Nothing is sent to the vault. Every wallet is marked to be asked "Set a spending limit?" again (the
+     * pending limit forgotten may have been one the member chose); whether it is, is decided at Receive from the vault's own view
+     * (not for a wallet it already caps, or a vault without `caps`), so a list not read yet changes nothing. Limits chosen in this
+     * session and not yet sent are carried into the fresh file. Nothing is marked backed up. False (nothing changed) when the file
+     * reads after all, or could not be written.
+     */
+    suspend fun resetSettings(): Boolean {
+        val g = gen()
+        val pending = synchronized(lock) { HashMap(pendingMap) }
+        // The wallets the vault listed; if no list was read since open (a created wallet alone is not a list), the first one names them.
+        val listed = if (synchronized(lock) { listRead }) walletsFlow.value.map { it.id }.toSet() else null
+        val done = flags.reset(pending, listed)
+        if (!done) {
+            // The file may read after all: the unknown state ends with it, and Receive can go on.
+            loadPending(g)
+            return false
+        }
+        publish(g) {
+            pendingUnknown = false
+            publishPending()
+            flagsChangedFlow.update { it + 1 }
+        }
+        return true
+    }
+
+    /**
+     * The answer to "Set a spending limit?" after a reset: [caps] null is **No limit**; otherwise the limits are kept as pending
+     * and sent with `wallet.caps.set` ([settleCaps]; a failure leaves them pending, with no Receive until Try again). False when the
+     * answer could not be kept on this phone (the question stays).
+     */
+    suspend fun answerLimits(walletId: String, caps: WalletCaps?): Boolean {
+        require(caps == null || (CapsRules.problem(caps) == null && !caps.none)) { "limits" }
+        val g = gen()
+        val kept = caps == null || keepCaps(walletId, caps, g, hold = false)
+        if (!kept || !flags.clearAskCaps(walletId)) return false
+        flagsChangedFlow.update { it + 1 }
+        if (caps != null) settleCaps(walletId)
+        return true
+    }
+
+    /** Reads this phone's pending limits again (from "Try again" on the unreadable notice): the unknown state ends if the file reads. */
+    suspend fun rereadSettings() = loadPending(gen())
 
     /** Whether the limit chosen for [walletId] is not set yet. */
     fun isCapsPending(walletId: String): Boolean = synchronized(lock) { pendingUnknown || walletId in pendingMap }
@@ -940,6 +1065,18 @@ class WalletsManager(
 
         /** Whether [walletId] is pending in [pending] (a set from [capsPending]): named in it, or nothing is known ([UNKNOWN]). */
         fun isPending(pending: Set<String>, walletId: String): Boolean = UNKNOWN in pending || walletId in pending
+
+        /** The vault's refusal of a limit on a wallet that shares its keys with another one (VAULT-MESSAGING 0.82.3). */
+        const val DUPLICATE_WALLET = "duplicate_wallet"
+
+        /** What [raiseCaps] answers (a [VaultFailure] code) while this phone's wallet settings cannot be read. */
+        const val SETTINGS_UNREADABLE = "settings_unreadable"
+
+        /** What [raiseCaps] answers (a [VaultFailure] code) while the wallet's chosen limit is still to be set. */
+        const val CAPS_PENDING = "caps_pending"
+
+        /** What [raiseCaps] answers when it just sent the wallet's pending `wallet.caps.set` instead: nothing was raised. */
+        const val CAPS_SETTLED = "caps_settled"
 
         /** The vault's `bad_request` (VAULT-MESSAGING §10.1). */
         const val BAD_REQUEST = "bad_request"

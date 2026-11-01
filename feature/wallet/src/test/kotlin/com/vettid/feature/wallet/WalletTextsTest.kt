@@ -68,8 +68,22 @@ class WalletTextsTest {
             R.string.wallet_import_invalid to "These words aren't a valid recovery phrase. Check each word and the order.",
             R.string.wallet_import_advanced to "Advanced",
             R.string.wallet_import_passphrase_note to "Only if you set one when the wallet was made. Letters, digits and symbols from a standard keyboard only.",
+            // The Spending limits screen (W1d-2): the plan's Texts (drafts) and "The screen".
+            R.string.wallet_menu_limits to "Spending limits",
+            R.string.wallet_limits_lower_button to "Lower a limit",
+            R.string.wallet_limits_raise_button to "Raise or remove a limit",
+            R.string.wallet_limits_remove_title to "Remove the limit?",
+            R.string.wallet_limits_enter_secrets to "Enter your PIN and password.",
         )
         for ((res, text) in drafts) assertEquals(text, r.getString(res))
+        assertEquals("Used in the last 24 hours: 750,000 sats of 2,000,000 sats", r.getString(R.string.wallet_limits_used, "750,000 sats", "2,000,000 sats"))
+        assertEquals(
+            "Your vault holds another copy of this wallet. Delete one copy before setting a limit.",
+            r.getString(R.string.wallet_limits_duplicate),
+        )
+        assertEquals("Remove the limits?", r.getString(R.string.wallet_limits_remove_title_both))
+        assertEquals("Lower the limit to 400,000 sats?", r.getString(R.string.wallet_limits_lower_title, "400,000 sats"))
+        assertEquals("Raise the limit from 1 sat to 2 sats?", r.getString(R.string.wallet_limits_raise_title, "1 sat", "2 sats"))
         assertEquals("Which is word 4?", r.getString(R.string.wallet_check_which, 4))
         assertEquals("That's not word 11. Look at your paper again.", r.getString(R.string.wallet_check_wrong, 11))
         assertEquals("That server isn't on Signet.", r.getString(R.string.wallet_server_wrong_network, "Signet"))

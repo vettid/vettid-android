@@ -32,6 +32,12 @@ enum class ReceiveProblem {
 
     /** This phone cannot read its wallet settings, so no wallet is known to be free of a limit to set: no address ("Try again"). */
     SETTINGS_UNREADABLE,
+
+    /** The pending limit was refused with `duplicate_wallet` (the vault holds another copy of this wallet): no address; Try again. */
+    CAPS_DUPLICATE,
+
+    /** Wallet settings were reset on this phone and the vault shows no limit on this wallet: "Set a spending limit?" is asked first. */
+    LIMITS_ASK,
 }
 
 /** Receive: the address the vault issued, the optional amount, and what is encoded. Prints its type name only. */
@@ -50,7 +56,18 @@ data class ReceiveUiState(
     val needsNetwork: Boolean = false,
     val networkSaveFailed: Boolean = false,
     val problem: ReceiveProblem? = null,
+    /** The answer to "Set a spending limit?" as typed ([ReceiveProblem.LIMITS_ASK]). */
+    val limits: LimitsForm = LimitsForm(),
+    /** The member chose No limit or a limit on that question: nothing is preselected. */
+    val limitsChosen: Boolean = false,
+    /** "Reset wallet settings on this phone" is asked about (its confirm is up). */
+    val resetAsk: Boolean = false,
+    /** The reset, or the answer to the limit question, could not be kept on this phone. */
+    val resetFailed: Boolean = false,
+    val limitsNotSaved: Boolean = false,
 ) {
+    val limitsParse: LimitsParse get() = LimitsInput.parse(limits)
+
     val amount: BtcFormat.Amount get() = BtcFormat.parse(amountText)
 
     /** The QR code's content: a BIP21 URI; an amount that is not valid is left out. */
@@ -75,6 +92,8 @@ data class ReceiveUiState(
  * Receive (ANDROID-PLAN §4 screens table): the newest unused address of the receiving account ([WalletsManager.receiveAddress]), as
  * a QR code and as text; "New address" asks the vault for the next one. A wallet whose phrase is not confirmed asks for no address.
  */
+// One function per action of the screen (they share its state).
+@Suppress("TooManyFunctions")
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ReceiveViewModel @Inject constructor(
@@ -126,9 +145,18 @@ class ReceiveViewModel @Inject constructor(
     /** The address to show; from Try again too. */
     fun load() {
         viewModelScope.launch {
+            // Try again on the unreadable notice reads the file again first: it may read now.
+            wallets.rereadSettings()
+            // Settings that cannot be read come first: with them "Not backed up" is only a guess, and the way out (the reset) is here.
+            if (WalletsManager.UNKNOWN in wallets.capsPending.value) {
+                mutable.update {
+                    it.copy(loading = false, notBackedUp = false, address = null, problem = ReceiveProblem.SETTINGS_UNREADABLE)
+                }
+                return@launch
+            }
             // The gate stays up until the flag reads true (no spinner in between while it is still not backed up).
             if (!wallets.backedUp(walletId)) {
-                mutable.update { it.copy(loading = false, notBackedUp = true) }
+                mutable.update { it.copy(loading = false, notBackedUp = true, problem = null) }
                 return@launch
             }
             mutable.update { it.copy(loading = true, error = null, notBackedUp = false) }
@@ -156,10 +184,65 @@ class ReceiveViewModel @Inject constructor(
                         it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.CAPS_PENDING)
                     ReceiveResult.SettingsUnreadable ->
                         it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.SETTINGS_UNREADABLE)
+                    ReceiveResult.CapsDuplicate ->
+                        it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.CAPS_DUPLICATE)
+                    ReceiveResult.LimitsAsk ->
+                        it.copy(loading = false, busy = false, address = null, problem = ReceiveProblem.LIMITS_ASK)
                 }
             }
         } catch (e: VaultFailure) {
             mutable.update { it.copy(loading = false, busy = false, error = e.kind) }
+        }
+    }
+
+    fun setLimitChoice(limit: Boolean) = mutable.update { it.copy(limits = it.limits.copy(limit = limit), limitsChosen = true) }
+
+    fun setPerTx(v: String) = mutable.update { it.copy(limits = it.limits.copy(perTx = LimitsInput.filter(v, it.limits.btc))) }
+
+    fun setPerPeriod(v: String) = mutable.update { it.copy(limits = it.limits.copy(perPeriod = LimitsInput.filter(v, it.limits.btc))) }
+
+    fun toggleUnit() = mutable.update { it.copy(limits = it.limits.toggled()) }
+
+    /**
+     * "Continue" on "Set a spending limit?" after a reset: **No limit** is remembered as answered; a limit is kept as pending and
+     * sent with `wallet.caps.set` (a failed send leaves it pending: Receive says so, with Try again). Then the address.
+     */
+    fun answerLimits() {
+        val s = mutable.value
+        val parse = s.limitsParse
+        val ready = s.problem == ReceiveProblem.LIMITS_ASK && s.limitsChosen && parse.ok
+        if (!ready || s.busy) return
+        mutable.update { it.copy(busy = true, limitsNotSaved = false) }
+        viewModelScope.launch {
+            val kept = try {
+                wallets.answerLimits(walletId, parse.caps)
+            } catch (_: VaultFailure) {
+                // Kept, but not sent yet: it is pending, and Receive says so.
+                true
+            }
+            mutable.update { it.copy(busy = false, limitsNotSaved = !kept) }
+            if (kept) load()
+        }
+    }
+
+    /** "Reset wallet settings on this phone" (offered while the settings cannot be read): the confirm. */
+    fun askReset() {
+        if (mutable.value.problem == ReceiveProblem.SETTINGS_UNREADABLE) mutable.update { it.copy(resetAsk = true, resetFailed = false) }
+    }
+
+    fun cancelReset() = mutable.update { it.copy(resetAsk = false) }
+
+    /** The reset confirmed: the local flags only, a fresh file; nothing is sent to the vault. Then Receive starts over. */
+    fun resetSettings() {
+        val s = mutable.value
+        if (!s.resetAsk || s.problem != ReceiveProblem.SETTINGS_UNREADABLE || s.closed) return
+        mutable.update { it.copy(resetAsk = false) }
+        viewModelScope.launch {
+            val done = wallets.resetSettings()
+            // A reset refused because the file reads after all is no failure: Receive goes on.
+            val stillUnreadable = WalletsManager.UNKNOWN in wallets.capsPending.value
+            mutable.update { it.copy(resetFailed = !done && stillUnreadable) }
+            load()
         }
     }
 

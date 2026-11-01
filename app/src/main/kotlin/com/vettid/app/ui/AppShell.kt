@@ -28,6 +28,7 @@ import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.data.feed.FeedTarget
 import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.ImportWalletRoute
+import com.vettid.core.data.wallet.SpendingLimitsRoute
 import com.vettid.core.data.wallet.NewWalletRoute
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
@@ -406,7 +407,7 @@ fun AppShell(
                             NotificationsHost(
                                 onBack = back,
                                 onOpenArchived = { navController.navigate(NotificationsRoute(archived = true)) { launchSingleTop = true } },
-                                onOpen = { t -> navController.openFeedTarget(t) },
+                                onOpen = { t -> navController.openFeedTarget(t, badges.walletShown) },
                             ),
                         )
                         debugTools.register(
@@ -454,7 +455,7 @@ fun AppShell(
                 if (target == null || target == FeedTarget.Sheet) {
                     navController.navigate(NotificationsRoute()) { launchSingleTop = true }
                 } else {
-                    navController.openFeedTarget(target)
+                    navController.openFeedTarget(target, badges.walletShown)
                 }
             }
         }
@@ -535,13 +536,20 @@ private fun visibleOf(e: NavBackStackEntry?): Visible? {
 }
 
 /** The screen a notification opens (ANDROID-PLAN 0.1.23, 4); the sheet is the Notifications screen's own. */
-internal fun NavHostController.openFeedTarget(t: FeedTarget) {
+internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolean = false) {
     when (t) {
         FeedTarget.Connections -> navigateTopLevel(ConnectionsRoute)
         FeedTarget.History -> navigateTopLevel(HistoryRoute)
         FeedTarget.Security -> navigateTopLevel(SettingsRoute)
         FeedTarget.Approvals -> navigateTopLevel(ApprovalsRoute)
         FeedTarget.VoteList -> navigateTopLevel(VotesRoute)
+        // A wallet's Spending limits exist only in a build with the wallet, and while its entry is shown; else the Notifications list.
+        is FeedTarget.WalletLimits ->
+            if (walletShown) {
+                navigate(SpendingLimitsRoute(t.walletId)) { launchSingleTop = true }
+            } else {
+                navigate(NotificationsRoute()) { launchSingleTop = true }
+            }
         else -> feedRoute(t)?.let { navigate(it) { launchSingleTop = true } }
     }
 }

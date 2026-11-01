@@ -223,6 +223,7 @@ class NotificationsViewModel @Inject constructor(
             is FeedTarget.SharedWithYou -> connection(t.connectionId)
             is FeedTarget.ShareRule -> connection(t.connectionId)
             is FeedTarget.Item -> n.items.containsKey(t.itemId)
+            is FeedTarget.WalletLimits -> n.items.containsKey(t.walletId)
             else -> true
         }
     }

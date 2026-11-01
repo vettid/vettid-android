@@ -99,13 +99,31 @@ internal class FakeWallets : WalletOps {
 
     override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long {
         calls += "caps.raise:$perTx:$perPeriod"
-        error("the screens of W1d never raise")
+        capsRaiseFails?.let { throw VaultOpException("wallet.caps.raise", it) }
+        if (pin != this.pin) throw VaultOpException("wallet.caps.raise", "bad_pin")
+        if (password != "pw") throw VaultOpException("wallet.caps.raise", "bad_password")
+        val w = wallets.getValue(walletId)
+        if (version != w.version) throw VaultOpException("wallet.caps.raise", "conflict")
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = perTx != null || perPeriod != null, perTxSats = perTx, perPeriodSats = perPeriod)
+        }
     }
+
+    /** Wallets whose reveal needs the PIN although the list shows no limit (a twin of a capped wallet). */
+    val needsPin = mutableSetOf<String>()
+
+    /** The reveal answers `pin_required` even with a PIN. */
+    var pinStubborn = false
+
+    /** A vault error code for `wallet.caps.raise`, else none. */
+    var capsRaiseFails: String? = null
 
     override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
         calls += "reveal:$walletId" + if (pin != null) ":pin" else ""
         revealCode?.let { throw VaultOpException("item.reveal", it) }
-        if (wallets[walletId]?.capped == true) {
+        // A wallet the list shows without a limit may still need the PIN (it matches a capped wallet or a twin): the app cannot know.
+        if (pinStubborn && pin != null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
+        if (wallets[walletId]?.capped == true || walletId in needsPin) {
             if (pin == null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
             if (pin != this.pin) throw VaultOpException("item.reveal", "bad_pin")
         }

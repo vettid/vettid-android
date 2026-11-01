@@ -192,7 +192,7 @@ private fun ImportPassword(state: ImportUiState, actions: ImportActions, modifie
 private fun ImportDone(state: ImportUiState, actions: ImportActions, modifier: Modifier) {
     // Every line that applies: the limit not set, that it was not saved on this phone, that the wallet was not recorded as backed up.
     val lines = buildList {
-        if (state.capsFailed) add(R.string.wallet_caps_not_set)
+        if (state.capsFailed) add(if (state.capsDuplicate) R.string.wallet_limits_duplicate else R.string.wallet_caps_not_set)
         if (state.capsNotSaved) add(R.string.wallet_caps_not_saved)
         if (state.notRecorded) add(R.string.wallet_import_not_recorded)
         if (state.capsUnsupported) add(R.string.wallet_caps_unsupported)

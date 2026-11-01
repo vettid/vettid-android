@@ -111,6 +111,8 @@ data class ImportUiState(
     /** The wallet was imported ([ImportStep.DONE] when its limit is still to be set, else the flow leaves for it). */
     val importedId: String? = null,
     val capsFailed: Boolean = false,
+    /** The limit was refused with `duplicate_wallet`: the vault holds another copy of this wallet. */
+    val capsDuplicate: Boolean = false,
     /** This phone could not record the imported wallet as backed up: it shows "Not backed up". */
     val notRecorded: Boolean = false,
     /**
@@ -267,7 +269,8 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
                 mutable.update {
                     it.copy(
                         busy = false, typed = "", passphrase = "", status = PhraseStatus(), importedId = r.wallet.id,
-                        capsFailed = r.capsFailure != null, notRecorded = r.notRecorded, capsNotSaved = r.capsNotSaved,
+                        capsFailed = r.capsFailure != null, capsDuplicate = r.capsFailure?.code == WalletsManager.DUPLICATE_WALLET,
+                        notRecorded = r.notRecorded, capsNotSaved = r.capsNotSaved,
                         capsUnsupported = r.capsUnsupported,
                         step = if (notice) ImportStep.DONE else it.step,
                     )
@@ -302,7 +305,7 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
             } catch (_: VaultFailure) {
                 false
             }
-            mutable.update { it.copy(busy = false, capsFailed = !ok) }
+            mutable.update { it.copy(busy = false, capsFailed = !ok, capsDuplicate = !ok && id in wallets.capsDuplicate.value) }
         }
     }
 

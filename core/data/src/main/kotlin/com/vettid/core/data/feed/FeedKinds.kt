@@ -82,6 +82,9 @@ sealed interface FeedTarget {
 
     data class Item(val itemId: String) : FeedTarget
 
+    /** A wallet's Spending limits (`wallet.cap_refused`, `wallet.caps_lowered`, `wallet.caps_raised`; `ref` = the wallet's item id). */
+    data class WalletLimits(val walletId: String) : FeedTarget
+
     /** Settings → Vault (the transfer and the signer's notices). */
     data object Devices : FeedTarget
 
@@ -142,6 +145,8 @@ object FeedKinds {
         "identity.rotation_failed", "identity.rotate_conflict", "leash.item.run", "leash.item.proxy",
         // VAULT-MESSAGING 0.50.0 (owner decision of 2026-10-20): a `rollback` closure's urgent item.
         "recovery.generation_closed",
+        // VAULT-MESSAGING 0.56.0 §10.18 (ANDROID-PLAN 0.1.74 "Notifications"): `ref` = `wallet_id`.
+        "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised",
         // VAULT-MESSAGING 0.81.0 §10.19.7 (ANDROID-PLAN 0.1.102 "Votes"): each carries `connection_id` with `ref` = `proposal_id`.
         "vote.open", "vote.closing", "vote.result", "vote.problem",
     )
@@ -232,6 +237,7 @@ object FeedKinds {
     }
 
     /** The item's name (never a value), when the item or the ask names one. */
+    @Suppress("CyclomaticComplexMethod") // one per kind
     fun itemName(item: FeedItem, names: FeedNames): String? = when (item.kind) {
         "item.revealed" -> item.ref?.let { names.items[it] }
         "grant.request" -> (names.approvals[FeedAsks.approvalKey(item.kind, item.ref) ?: ""] as? Approval.GrantRequest)
@@ -239,6 +245,7 @@ object FeedKinds {
         "critical-secret.use.request" ->
             (names.approvals[FeedAsks.approvalKey(item.kind, item.ref) ?: ""] as? Approval.CriticalUse)?.itemName
         "leash.item.run", "leash.item.proxy" -> item.ref?.let { names.items[it] }
+        in WALLET_CAPS -> item.ref?.let { names.items[it] }
         else -> null
     }.let { AccountNames.isolateOrNull(it) }
 
@@ -316,6 +323,11 @@ object FeedKinds {
             "location.shared" -> FeedText(R.string.data_feed_location_shared, listOf(first))
             "location.request" -> FeedText(R.string.data_feed_location_request, listOf(first))
             "wallet.signed" -> FeedText(R.string.data_feed_wallet_signed)
+            "wallet.cap_refused" -> FeedText(R.string.data_feed_wallet_cap_refused)
+            "wallet.caps_lowered" ->
+                walletCaps(R.string.data_feed_wallet_caps_lowered, R.string.data_feed_wallet_caps_lowered_any, thing, details)
+            "wallet.caps_raised" ->
+                walletCaps(R.string.data_feed_wallet_caps_raised, R.string.data_feed_wallet_caps_raised_any, thing, details)
             "vault.pin_changed" -> FeedText(R.string.data_feed_pin_changed)
             "device.secret_renewed" -> FeedText(R.string.data_feed_secret_renewed)
             "credential.recovered" -> FeedText(R.string.data_feed_credential_recovered)
@@ -356,6 +368,14 @@ object FeedKinds {
             else -> FeedText(R.string.data_feed_recovery_attempt_someone, listOf(a.n, RecoveryRefs.ATTEMPTS))
         }
     }
+
+    /** A spending limit changed: with the wallet's name ("Deleted item" when it is gone), or, without details, none. */
+    private fun walletCaps(named: Int, any: Int, thing: String?, details: Boolean): FeedText = when {
+        !details -> FeedText(any)
+        else -> FeedText(named, listOf(thing?.let { FeedText(literal = it) } ?: FeedText(R.string.data_feed_deleted_item)))
+    }
+
+    private val WALLET_CAPS = setOf("wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised")
 
     /** `item.revealed`: the item's name, "Deleted item", or (no details) none. */
     private fun revealed(thing: String?, details: Boolean): FeedText = when {
@@ -457,6 +477,8 @@ object FeedKinds {
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
             "share.rate_limited" -> if (c != null && !ref.isNullOrEmpty()) FeedTarget.ShareRule(c, ref) else FeedTarget.Sheet
             "item.revealed" -> if (!ref.isNullOrEmpty()) FeedTarget.Item(ref) else FeedTarget.Sheet
+            "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised" ->
+                if (!ref.isNullOrEmpty()) FeedTarget.WalletLimits(ref) else FeedTarget.Sheet
             // 0.1.53: the pairing (AA2 opens its comparison), the device and the list are in Devices & agents.
             "device.paired" -> item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
             "device.pair.pending" -> FeedTarget.Pairing
