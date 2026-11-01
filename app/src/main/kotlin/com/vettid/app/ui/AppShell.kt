@@ -26,6 +26,8 @@ import com.vettid.app.debug.DebugHost
 import com.vettid.app.debug.debugTools
 import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.data.feed.FeedTarget
+import com.vettid.core.data.wallet.BackupRoute
+import com.vettid.core.data.wallet.NewWalletRoute
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
@@ -75,6 +77,7 @@ import com.vettid.feature.votes.VoteRoute
 import com.vettid.feature.votes.VotesHost
 import com.vettid.feature.votes.VotesRoute
 import com.vettid.feature.votes.votesDestination
+import com.vettid.app.walletui.walletDestinations
 import com.vettid.feature.history.ConnectionHistoryRoute
 import com.vettid.feature.history.DeviceHistoryRoute
 import com.vettid.feature.history.HistoryHost
@@ -333,6 +336,7 @@ fun AppShell(
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back, onLeaveDetail = navController::leaveApprovalDetail)
+                        walletDestinations(chrome, navigate = navigate, leave = navController::leaveEntry)
                         votesDestination(
                             chrome,
                             VotesHost(
@@ -503,6 +507,8 @@ private fun drawerSections(badges: ShellBadges): List<List<DrawerItem>> =
             }
                 // The Votes entry shows only with a vote or a connection to connect again (ANDROID-PLAN 0.1.102): no empty screen.
                 .filterNot { item -> item.key == TopLevelDestination.Votes.key && !badges.votesShown }
+                // The Wallet entry only when the vault has wallets (never in a build without the wallet).
+                .filterNot { item -> item.key == TopLevelDestination.Wallet.key && !badges.walletShown }
         }
 
 private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>): String? {
@@ -577,11 +583,31 @@ internal fun NavHostController.leaveApprovalDetail(entryId: String) {
     }
 }
 
+/** Leaves the screen of the back stack entry [entryId] (once: a second call finds another entry in front and does nothing). */
+internal fun NavHostController.leaveEntry(entryId: String) {
+    if (currentBackStackEntry?.id == entryId) popBackStack()
+}
+
+/**
+ * The wallet's screens that hold a recovery phrase ([NewWalletRoute], [BackupRoute]) are never saved with the stack: leaving them by
+ * the drawer or a notification pops them, so their view model (and the words) goes. Only where the graph has them: a build without
+ * the wallet has neither, and popping a route the graph does not know throws.
+ */
+internal fun NavHostController.popWalletSecrets() {
+    popIfInGraph<NewWalletRoute>()
+    popIfInGraph<BackupRoute>()
+}
+
+private inline fun <reified T : Any> NavHostController.popIfInGraph() {
+    if (graph.findNode<T>() != null) popBackStack<T>(inclusive = true)
+}
+
 /** Drawer navigation: one copy of each top-level screen, state saved per destination. */
-private fun NavHostController.navigateTopLevel(route: Any) {
+internal fun NavHostController.navigateTopLevel(route: Any) {
     // The pairing is never saved with the stack (state saving keeps the screen's view model alive, and with it a pairing
     // nobody answers): leaving it by the drawer or a notification pops it, which rejects it.
     popBackStack<PairRoute>(inclusive = true)
+    popWalletSecrets()
     navigate(route) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true

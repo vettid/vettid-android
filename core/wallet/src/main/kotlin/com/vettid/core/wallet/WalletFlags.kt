@@ -23,13 +23,18 @@ interface WalletFlagsFile {
 /**
  * What the app keeps of its wallets on this phone (ANDROID-PLAN §4 "Local state"), in its encrypted settings, never sent to the
  * vault: the **backed-up** flag per `wallet_id` (the vault has none) and, for a legacy `testnet` wallet only, which test chain the
- * member said it is on (question 16). Read from the file every time, nothing kept in memory. A write is refused when a wipe began
+ * member said it is on (question 16), and whether the chain server's privacy note was shown for a wallet.
+ * Read from the file every time, nothing kept in memory. A write is refused when a wipe began
  * after the operation started ([generation] moved), so that a write in flight cannot bring the file back after it was erased.
  */
 class WalletFlags(private val file: WalletFlagsFile, private val generation: () -> Long = { 0 }) {
     private val lock = Mutex()
 
-    private data class Flags(val backedUp: Set<String>, val testnet: Map<String, Network>)
+    private data class Flags(
+        val backedUp: Set<String>,
+        val testnet: Map<String, Network>,
+        val noteShown: Set<String> = emptySet(),
+    )
 
     /** Whether [walletId] was backed up (the phrase checked). False when the file cannot be read: "Not backed up" fails safe. */
     suspend fun backedUp(walletId: String): Boolean = lock.withLock { read()?.backedUp?.contains(walletId) == true }
@@ -48,11 +53,17 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         return change { it.copy(testnet = it.testnet + (walletId to network)) }
     }
 
+    /** Whether the chain server's privacy note was shown for [walletId] (before its first look-up). False when the file cannot be read. */
+    suspend fun privacyNoteShown(walletId: String): Boolean = lock.withLock { read()?.noteShown?.contains(walletId) == true }
+
+    /** Records the privacy note as shown for [walletId]; false if it could not be written. */
+    suspend fun setPrivacyNoteShown(walletId: String): Boolean = change { it.copy(noteShown = it.noteShown + walletId) }
+
     /** Waits for a write in progress (a wipe's hook, after the generation moved), so that none that started before the wipe is kept. */
     suspend fun fence() = lock.withLock { }
 
     /** Forgets what is kept of a deleted wallet. */
-    suspend fun forget(walletId: String): Boolean = change { Flags(it.backedUp - walletId, it.testnet - walletId) }
+    suspend fun forget(walletId: String): Boolean = change { Flags(it.backedUp - walletId, it.testnet - walletId, it.noteShown - walletId) }
 
     @Suppress("TooGenericExceptionCaught")
     private suspend fun change(f: (Flags) -> Flags): Boolean {
@@ -98,13 +109,20 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
             val n = Network.fromVaultName(name)?.takeIf { it == Network.TESTNET || it == Network.TESTNET4 } ?: return null
             id to n
         }
-        return Flags(backedUp, testnet)
+        // `note_shown` came after version 1: a file without it reads as an empty set (no version bump).
+        val noteShown = when (val n = o["note_shown"]) {
+            null -> emptySet()
+            is JsonArray -> n.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: return null }.toSet()
+            else -> return null
+        }
+        return Flags(backedUp, testnet, noteShown)
     }
 
     private fun encode(f: Flags): ByteArray = buildJsonObject {
         put("version", VERSION)
         put("backed_up", JsonArray(f.backedUp.sorted().map(::JsonPrimitive)))
         put("testnet", buildJsonObject { f.testnet.entries.sortedBy { it.key }.forEach { put(it.key, it.value.vaultName) } })
+        put("note_shown", JsonArray(f.noteShown.sorted().map(::JsonPrimitive)))
     }.toString().encodeToByteArray()
 
     private companion object {

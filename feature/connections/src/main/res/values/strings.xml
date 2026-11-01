@@ -90,6 +90,9 @@
     <string name="connections_connected_title">You are connected</string>
     <string name="connections_connected_body">You and %1$s can now message each other through your vaults.</string>
     <string name="connections_connected_body_unnamed">You can now message each other through your vaults.</string>
+    <!-- A service cannot message a member (release 25). Approved by the owner 2026-10-31 (vettid-android #237). -->
+    <string name="connections_connected_body_service">You\'re connected to %1$s. It can ask you to sign in, vote and update your profile.</string>
+    <string name="connections_connected_body_service_unnamed">You\'re connected. The service can ask you to sign in, vote and update your profile.</string>
     <string name="connections_send_message">Send a message</string>
 
     <string name="connections_accept_title">Paste an invitation</string>
@@ -263,4 +266,9 @@
     <string name="connections_vote_remove_warning">You have a vote with %1$s that isn\'t finished. If you remove this connection you can\'t vote in it.</string>
     <string name="connections_vote_reconnect_title">Connect again to vote</string>
     <string name="connections_vote_reconnect_body">%1$s is registered with VettID as a service. This connection was made before it said it was a service, so it can\'t take part in votes. Remove it and connect again from a new invitation from %1$s.</string>
+    <!-- Leaving an open connection request (2026-11-01, lead's option (a)): proposed, for the owner's approval. -->
+    <string name="connections_leave_request_title">Leave this request?</string>
+    <string name="connections_leave_request_body">It stays in Approvals, where you can finish it.</string>
+    <string name="connections_leave_request_leave">Leave</string>
+    <string name="connections_leave_request_stay">Stay</string>
 </resources>

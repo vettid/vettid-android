@@ -15,6 +15,8 @@ data class EntryNames(
     val item: String? = null,
     /** The title of the entry's vote, from the Votes list in memory (ANDROID-PLAN 0.1.102 "Votes"); null when not known. */
     val vote: String? = null,
+    /** The entry's item is a wallet's (template `wallet.btc`): its `item.revealed` shows the phrase ("Recovery phrase shown: <name>"). */
+    val wallet: Boolean = false,
 )
 
 /** The member-facing title of an audit entry ([AuditKinds]), in Compose and from a [Context] (search, export). */
@@ -28,7 +30,9 @@ object HistoryText {
         names: EntryNames = EntryNames(),
         isolate: Boolean = true,
     ): String =
-        when (val t = AuditKinds.title(kind, ref)) {
+        if (shownPhrase(kind, names)) {
+            phraseShown(context, names, isolate)
+        } else when (val t = AuditKinds.title(kind, ref)) {
             is AuditKinds.Title.Known -> context.getString(t.res)
             is AuditKinds.Title.Summary -> context.getString(R.string.history_kind_summary, context.getString(t.res))
             is AuditKinds.Title.Dropped -> context.getString(R.string.history_kind_dropped, t.reason)
@@ -40,19 +44,20 @@ object HistoryText {
 
     @Composable
     fun title(kind: String, ref: String? = null, names: EntryNames = EntryNames()): String = when (val t = AuditKinds.title(kind, ref)) {
-        is AuditKinds.Title.Known -> stringResource(t.res)
+        is AuditKinds.Title.Known -> if (shownPhrase(kind, names)) {
+            AccountNames.isolateOrNull(names.item)?.let { stringResource(R.string.history_kind_wallet_phrase_shown_named, it) }
+                ?: stringResource(R.string.history_kind_wallet_phrase_shown)
+        } else {
+            stringResource(t.res)
+        }
         is AuditKinds.Title.Summary -> stringResource(R.string.history_kind_summary, stringResource(t.res))
         is AuditKinds.Title.Dropped -> stringResource(R.string.history_kind_dropped, t.reason)
         is AuditKinds.Title.Unknown -> stringResource(R.string.history_kind_unknown, t.kind)
         is AuditKinds.Title.Counted -> stringResource(t.res, t.n, t.of)
         is AuditKinds.Title.Named -> {
-            val name = when (t.who) {
-                AuditKinds.Who.CONNECTION -> names.connection
-                AuditKinds.Who.DEVICE -> names.device
-                AuditKinds.Who.ITEM -> names.item
-            }
+            val name = nameOf(t.who, names)
             val clean = AccountNames.isolateOrNull(name)
-            if (clean != null) stringResource(t.res, clean) else stringResource(t.anyRes)
+            if (clean != null) stringResource(resOf(t, names), clean) else stringResource(t.anyRes)
         }
         is AuditKinds.Title.Vote -> {
             val (hasTitle, args) = voteArgs(
@@ -94,15 +99,38 @@ object HistoryText {
         return (title != null) to args.toTypedArray()
     }
 
+    /** The title with the name: [AuditKinds.Title.Named.itemRes] when the name shown is the item's in place of a connection's. */
+    private fun resOf(t: AuditKinds.Title.Named, names: EntryNames): Int =
+        if (t.who == AuditKinds.Who.CONNECTION_ELSE_ITEM && names.connection == null && t.itemRes != null) t.itemRes else t.res
+
+    /** `item.revealed` of a wallet's item: titled by the wallet (ANDROID-PLAN §4 "Wallet", "History"). */
+    private fun shownPhrase(kind: String, names: EntryNames): Boolean = kind == "item.revealed" && names.wallet
+
+    private fun phraseShown(context: Context, names: EntryNames, isolate: Boolean): String {
+        val name = if (isolate) AccountNames.isolateOrNull(names.item) else AccountNames.cleaned(names.item)
+        return if (name != null) {
+            context.getString(R.string.history_kind_wallet_phrase_shown_named, name)
+        } else {
+            context.getString(R.string.history_kind_wallet_phrase_shown)
+        }
+    }
+
+    /** The template of a wallet's item (VAULT-ITEMS). */
+    const val WALLET_TEMPLATE = "wallet.btc"
+
+    /** The name a [AuditKinds.Title.Named] shows, or null. */
+    private fun nameOf(who: AuditKinds.Who, names: EntryNames): String? = when (who) {
+        AuditKinds.Who.CONNECTION -> names.connection
+        AuditKinds.Who.DEVICE -> names.device
+        AuditKinds.Who.ITEM -> names.item
+        AuditKinds.Who.CONNECTION_ELSE_ITEM -> names.connection ?: names.item
+    }
+
     /** Without the name (gone or not known), the title drops it. */
     private fun named(context: Context, t: AuditKinds.Title.Named, names: EntryNames, isolate: Boolean): String {
-        val name = when (t.who) {
-            AuditKinds.Who.CONNECTION -> names.connection
-            AuditKinds.Who.DEVICE -> names.device
-            AuditKinds.Who.ITEM -> names.item
-        }
+        val name = nameOf(t.who, names)
         val clean = if (isolate) AccountNames.isolateOrNull(name) else AccountNames.cleaned(name)
-        return if (clean != null) context.getString(t.res, clean) else context.getString(t.anyRes)
+        return if (clean != null) context.getString(resOf(t, names), clean) else context.getString(t.anyRes)
     }
 
     /**
