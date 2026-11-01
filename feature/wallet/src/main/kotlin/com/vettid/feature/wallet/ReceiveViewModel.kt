@@ -100,11 +100,12 @@ class ReceiveViewModel @Inject constructor(
     /** The address to show; from Try again too. */
     fun load() {
         viewModelScope.launch {
-            mutable.update { it.copy(loading = true, error = null, notBackedUp = false) }
+            // The gate stays up until the flag reads true (no spinner in between while it is still not backed up).
             if (!wallets.backedUp(walletId)) {
                 mutable.update { it.copy(loading = false, notBackedUp = true) }
                 return@launch
             }
+            mutable.update { it.copy(loading = true, error = null, notBackedUp = false) }
             ask { wallets.receiveAddress(walletId) }
         }
     }

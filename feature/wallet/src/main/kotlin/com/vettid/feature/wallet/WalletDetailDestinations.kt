@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -61,12 +62,14 @@ private fun ReceiveDestination(host: WalletHost, leave: () -> Unit) {
     val context = LocalContext.current
     LaunchedEffect(state.closed) { if (state.closed) leave() }
     val address = state.address?.address.orEmpty()
+    val clipLabel = stringResource(R.string.wallet_clip_label)
+    val shareTitle = stringResource(R.string.wallet_share_title)
     ReceiveScreen(
         state,
         ReceiveActions(
             onBack = leave,
-            onCopy = { copySensitive(context, context.getString(R.string.wallet_clip_label), address) },
-            onShare = { share(context, address) },
+            onCopy = { copySensitive(context, clipLabel, address) },
+            onShare = { share(context, address, shareTitle) },
             onAmount = vm::setAmount,
             onNewAddress = vm::newAddress,
             onBackUp = { host.navigate(BackupRoute(vm.walletId)) },
@@ -88,12 +91,13 @@ private fun DetailsDestination(host: WalletHost, leave: () -> Unit) {
     val vm: WalletDetailsViewModel = hiltViewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val detailsLabel = stringResource(R.string.wallet_menu_details)
     LaunchedEffect(state.closed) { if (state.closed) leave() }
     WalletDetailsScreen(
         state,
         WalletDetailsActions(
             onBack = leave,
-            onCopy = { copySensitive(context, context.getString(R.string.wallet_menu_details), it) },
+            onCopy = { copySensitive(context, detailsLabel, it) },
             onChainServer = { state.networkName?.let { host.navigate(ChainServerRoute(it)) } },
         ),
     )
@@ -104,8 +108,8 @@ private fun copySensitive(context: Context, label: String, text: String) =
     SecureClipboard.copy(context, label, text, sensitive = true)
 
 /** Share: the address as plain text, through the system's chooser. */
-private fun share(context: Context, address: String) {
+private fun share(context: Context, address: String, title: String) {
     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, address)
-    val chooser = Intent.createChooser(send, context.getString(R.string.wallet_share_title))
+    val chooser = Intent.createChooser(send, title)
     context.startActivity(chooser)
 }

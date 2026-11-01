@@ -66,7 +66,12 @@ internal class FakeWalletOps : WalletOps {
         return wallets.values.toList()
     }
 
-    override suspend fun get(walletId: String): VaultWallet = wallets[walletId] ?: refuse("wallet.get", "not_found")
+    var gets = 0
+
+    override suspend fun get(walletId: String): VaultWallet {
+        gets++
+        return wallets[walletId] ?: refuse("wallet.get", "not_found")
+    }
 
     override suspend fun create(name: String, network: String, password: String): VaultWallet {
         calls += "create:$network"
@@ -118,9 +123,12 @@ internal class FakeWalletOps : WalletOps {
         return AddressPage(page, if (all.size > limit) page.last().index else null)
     }
 
-    override suspend fun markUsed(walletId: String, addresses: List<String>) {
+    override suspend fun markUsed(walletId: String, addresses: List<String>): Int {
+        // As the vault: only addresses not marked before count, and only then does the version move.
+        val fresh = addresses.filterNot { a -> marked.any { a in it } }
         marked += addresses
-        wallets[walletId]?.let { wallets[walletId] = it.copy(version = it.version + 1) }
+        if (fresh.isNotEmpty()) wallets[walletId]?.let { wallets[walletId] = it.copy(version = it.version + 1) }
+        return fresh.size
     }
 }
 

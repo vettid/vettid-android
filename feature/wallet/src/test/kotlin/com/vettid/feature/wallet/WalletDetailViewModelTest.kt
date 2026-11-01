@@ -131,6 +131,18 @@ class WalletDetailViewModelTest {
     }
 
     @Test
+    fun theTestNetworkAnsweredOnReceiveIsLookedUpOnReturn() = runTest {
+        ops.wallet(id, network = "testnet")
+        val vm = vm()
+        eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
+        // Receive asked the same question and the member answered there.
+        WalletFlags(flagsFile).setTestnetLabel(id, Network.TESTNET4)
+        vm.resumed()
+        eventually { vm.state.value.lookup is LookupResult.NoServer }
+        assertEquals(1, opened)
+    }
+
+    @Test
     fun aVaultWithoutWalletsClosesTheScreen() = runTest {
         ops.unsupported = true
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)

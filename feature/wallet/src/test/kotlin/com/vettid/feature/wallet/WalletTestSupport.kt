@@ -82,7 +82,7 @@ internal class FakeWallets : WalletOps {
         return AddressPage(emptyList(), null)
     }
 
-    override suspend fun markUsed(walletId: String, addresses: List<String>) = Unit
+    override suspend fun markUsed(walletId: String, addresses: List<String>) = 0
 }
 
 internal class MemoryFlags : WalletFlagsFile {

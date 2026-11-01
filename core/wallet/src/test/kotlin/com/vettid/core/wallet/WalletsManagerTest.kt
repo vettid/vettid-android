@@ -90,6 +90,19 @@ class WalletsManagerTest {
     }
 
     @Test
+    fun aSecondLookupThatMarksNothingNewDoesNotReadTheWalletAgain() = runBlocking {
+        val w = withWallet()
+        funded(receive, 0, 50_000)
+        val m = manager()
+        m.open()
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        val gets = ops.gets
+        // The same funded address again: the vault marks nothing, so its version did not move and nothing is read.
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        assertEquals(gets, ops.gets)
+    }
+
+    @Test
     fun aLookupSumsBothAccountsAndChainsAndReportsTheFundedAddresses() = runBlocking {
         val w = withWallet()
         funded(receive, 0, 50_000)

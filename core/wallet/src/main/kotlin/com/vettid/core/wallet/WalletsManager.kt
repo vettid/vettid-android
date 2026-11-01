@@ -410,9 +410,9 @@ class WalletsManager(
         try {
             for (chunk in reportable(now, scan.funded).chunked(ADDRESS_USED_MAX)) {
                 if (gen() != g) return LookupResult.Cleared
-                vaultGuard { ops().markUsed(walletId, chunk) }
-                // `wallet.address.used` moves the wallet's version.
-                reload(walletId, g)
+                val marked = vaultGuard { ops().markUsed(walletId, chunk) }
+                // `wallet.address.used` moves the wallet's version when it marked something: only then is it read again.
+                if (marked > 0) reload(walletId, g)
             }
         } catch (e: VaultFailure) {
             // The balance stands; the marks go again with the next look-up.

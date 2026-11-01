@@ -75,7 +75,8 @@ interface WalletOps {
     suspend fun addresses(walletId: String, chain: AddressChain, after: Int?, limit: Int): AddressPage
 
     /** `wallet.address.used` (1–256 addresses). */
-    suspend fun markUsed(walletId: String, addresses: List<String>)
+    /** `wallet.address.used`: how many of [addresses] the vault marked now (those it issued and had not marked yet). */
+    suspend fun markUsed(walletId: String, addresses: List<String>): Int
 }
 
 /** [WalletOps] over the open vault's client. */
@@ -111,8 +112,10 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     override suspend fun addresses(walletId: String, chain: AddressChain, after: Int?, limit: Int): AddressPage =
         WalletWire.page(api().walletAddressList(walletId, chain.type, chain.change, after, limit))
 
-    override suspend fun markUsed(walletId: String, addresses: List<String>) {
-        api().walletAddressUsed(walletId, addresses)
+    override suspend fun markUsed(walletId: String, addresses: List<String>): Int {
+        val o = api().walletAddressUsed(walletId, addresses)
+        // `{marked, version}`; an answer without the count is taken as "some were marked" (the wallet is read again).
+        return (o["marked"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull() ?: addresses.size
     }
 
     internal companion object {

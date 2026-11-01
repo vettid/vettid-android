@@ -170,8 +170,15 @@ class WalletDetailViewModel @Inject constructor(
      */
     fun resumed() {
         when (mutable.value.lookup) {
-            null, is LookupResult.Done, LookupResult.NeedsNetwork, LookupResult.Cleared -> Unit
-            else -> refresh()
+            // What the member may have changed elsewhere: the chain server, or a server that was down.
+            is LookupResult.NoServer, is LookupResult.ServerWrongNetwork, is LookupResult.ServerFailed -> refresh()
+            // The test network answered elsewhere (Receive asks too): the look-up once it is known.
+            LookupResult.NeedsNetwork -> viewModelScope.launch {
+                val w = wallets.wallets.value.firstOrNull { it.id == walletId } ?: return@launch
+                if (wallets.networkOf(w) != null) lookUp()
+            }
+            // A mismatch, a network not offered, a vault failure, a balance: coming back changes none of them.
+            else -> Unit
         }
     }
 
