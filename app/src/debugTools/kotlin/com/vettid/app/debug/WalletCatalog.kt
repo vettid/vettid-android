@@ -40,6 +40,8 @@ import com.vettid.feature.wallet.ImportScreen
 import com.vettid.feature.wallet.ImportStep
 import com.vettid.feature.wallet.ImportUiState
 import com.vettid.feature.wallet.LimitsForm
+import com.vettid.feature.wallet.CapsEditForm
+import com.vettid.feature.wallet.LimitsStep
 import com.vettid.feature.wallet.PhraseInput
 import com.vettid.feature.wallet.PhraseWords
 import com.vettid.feature.wallet.ReceiveActions
@@ -47,6 +49,9 @@ import com.vettid.feature.wallet.ReceiveProblem
 import com.vettid.feature.wallet.ReceiveScreen
 import com.vettid.feature.wallet.ReceiveUiState
 import com.vettid.feature.wallet.ServerProblem
+import com.vettid.feature.wallet.SpendingLimitsActions
+import com.vettid.feature.wallet.SpendingLimitsScreen
+import com.vettid.feature.wallet.SpendingLimitsUiState
 import com.vettid.feature.wallet.WalletDetailActions
 import com.vettid.feature.wallet.WalletDetailScreen
 import com.vettid.feature.wallet.WalletDetailUiState
@@ -112,6 +117,17 @@ internal object WalletCatalog {
 
     @Composable
     private fun Detail(state: WalletDetailUiState) = WalletDetailScreen(state, WalletDetailActions())
+
+    private val limits = SpendingLimitsUiState(
+        loaded = true, name = "Savings", perTx = 500_000, perPeriod = 2_000_000, spent = 750_000,
+    )
+
+    @Composable
+    private fun Limits(state: SpendingLimitsUiState) = SpendingLimitsScreen(state, SpendingLimitsActions())
+
+    private val raiseSecrets = limits.copy(
+        step = LimitsStep.CONFIRM_RAISE, raiseForm = true, form = CapsEditForm(perTx = "600000"), pin = "123456", password = "secret",
+    )
 
     private val address = WalletAddress("tb1p5cyxnuxmeuwuvkwfem96lxx9wex2a5qe0l8e37j0sy6v6pxd0p6sxt3ukd", "p2tr", 0, false, false)
     private val receive = ReceiveUiState(loading = false, network = Network.TESTNET4, address = address)
@@ -187,6 +203,39 @@ internal object WalletCatalog {
         "wallet.detail_privacy_note" to { Detail(noLookup.copy(lookup = null, noteNeeded = true)) },
         "wallet.detail_not_backed_up" to { Detail(detail.copy(backedUp = false)) },
         "wallet.detail_caps_pending" to { Detail(detail.copy(capsPending = true)) },
+        "wallet.detail_reset" to { Detail(detail.copy(capsPending = true, settingsUnreadable = true, capsSupported = true)) },
+        "wallet.detail_reset_confirm" to {
+            Detail(detail.copy(capsPending = true, settingsUnreadable = true, capsSupported = true, resetAsk = true))
+        },
+        "wallet.receive_reset" to {
+            Receive(ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.SETTINGS_UNREADABLE))
+        },
+        "wallet.receive_limits_ask" to {
+            Receive(ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.LIMITS_ASK))
+        },
+        "wallet.limits" to { Limits(limits) },
+        "wallet.limits_none" to { Limits(limits.copy(perTx = null, perPeriod = null, spent = 0)) },
+        "wallet.limits_one" to { Limits(limits.copy(perTx = null, spent = 0)) },
+        "wallet.limits_unsupported" to { Limits(limits.copy(supported = false)) },
+        "wallet.limits_lower" to {
+            Limits(limits.copy(step = LimitsStep.LOWER, form = CapsEditForm(perTx = "400000")))
+        },
+        "wallet.limits_lower_bad" to {
+            Limits(limits.copy(step = LimitsStep.LOWER, form = CapsEditForm(perTx = "600000")))
+        },
+        "wallet.limits_lower_confirm" to {
+            Limits(limits.copy(step = LimitsStep.CONFIRM_SET, form = CapsEditForm(perTx = "400000")))
+        },
+        "wallet.limits_raise" to {
+            Limits(limits.copy(step = LimitsStep.RAISE, raiseForm = true, form = CapsEditForm(perTx = "600000")))
+        },
+        "wallet.limits_raise_confirm" to { Limits(raiseSecrets) },
+        "wallet.limits_remove" to {
+            Limits(raiseSecrets.copy(form = CapsEditForm(removePeriod = true)))
+        },
+        "wallet.limits_bad_pin" to { Limits(raiseSecrets.copy(pin = "", password = "", error = FailureKind.BAD_PIN)) },
+        "wallet.limits_backoff" to { Limits(raiseSecrets.copy(pin = "", password = "", error = FailureKind.BACKOFF)) },
+        "wallet.limits_conflict" to { Limits(limits.copy(error = FailureKind.CONFLICT)) },
         "wallet.address_type" to { AddressTypeDialog(AddressTypes.TAPROOT, onPick = {}, onDismiss = {}) },
         "wallet.delete_confirm" to { Detail(detail.copy(delete = DeleteStep.CONFIRM)) },
         "wallet.delete_password" to { Detail(detail.copy(delete = DeleteStep.PASSWORD, password = "secret")) },

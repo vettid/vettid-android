@@ -206,6 +206,12 @@
     <string name="data_feed_location_shared">%1$s shared a location</string>
     <string name="data_feed_location_request">%1$s asks for your location</string>
     <string name="data_feed_wallet_signed">A wallet transaction was signed</string>
+    <!-- ANDROID-PLAN 0.1.74 "Notifications": the plan's texts. The "_any" ones are without names (new). -->
+    <string name="data_feed_wallet_cap_refused">A payment was refused by your spending limit</string>
+    <string name="data_feed_wallet_caps_raised">A spending limit was raised or removed on %1$s</string>
+    <string name="data_feed_wallet_caps_raised_any">A spending limit was raised or removed</string>
+    <string name="data_feed_wallet_caps_lowered">Spending limit lowered: %1$s</string>
+    <string name="data_feed_wallet_caps_lowered_any">A spending limit was lowered</string>
     <!-- ANDROID-PLAN 0.1.52 §4 "Event titles" (approved by the owner 2026-10-19) -->
     <string name="data_feed_pin_changed">Your PIN was changed</string>
     <string name="data_feed_secret_renewed">Your phone now uses a new secret for your vault</string>

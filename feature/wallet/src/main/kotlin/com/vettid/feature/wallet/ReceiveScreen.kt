@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.text.KeyboardOptions
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.QrCode
 import com.vettid.core.ui.theme.Spacing
@@ -37,6 +38,11 @@ data class ReceiveActions(
     val onBackUp: () -> Unit = {},
     val onRetry: () -> Unit = {},
     val onChooseNetwork: (com.vettid.core.chain.Network) -> Unit = {},
+    val onLimitsContinue: () -> Unit = {},
+    val limits: LimitsActions = LimitsActions(),
+    val onAskReset: () -> Unit = {},
+    val onCancelReset: () -> Unit = {},
+    val onReset: () -> Unit = {},
 )
 
 /**
@@ -58,23 +64,8 @@ fun ReceiveScreen(state: ReceiveUiState, actions: ReceiveActions, modifier: Modi
         ) {
             NetworkQuestion(state.networkSaveFailed, actions.onChooseNetwork)
         }
-        state.problem != null -> FormScaffold(
-            title = title,
-            body = stringResource(
-                when {
-                    state.problem == ReceiveProblem.CAPS_PENDING -> R.string.wallet_receive_caps_pending
-                    state.problem == ReceiveProblem.SETTINGS_UNREADABLE -> R.string.wallet_settings_unreadable
-                    state.problem == ReceiveProblem.MISMATCH -> R.string.wallet_address_mismatch
-                    state.network == com.vettid.core.chain.Network.TESTNET -> R.string.wallet_testnet3_unsupported
-                    else -> R.string.wallet_network_not_offered
-                },
-            ),
-            // The limit chosen is sent again from here; the other problems have no way out on this screen.
-            primaryLabel = if (state.problem in RETRYABLE) stringResource(R.string.wallet_try_again) else null,
-            onPrimary = actions.onRetry,
-            onBack = actions.onBack,
-            modifier = modifier.testTag("wallet_receive_problem"),
-        ) {}
+        state.problem == ReceiveProblem.LIMITS_ASK -> LimitsAsk(state, actions, modifier)
+        state.problem != null -> ProblemScreen(state, actions, modifier)
         state.notBackedUp -> FormScaffold(
             title = title,
             body = stringResource(R.string.wallet_backup_body),
@@ -101,6 +92,65 @@ fun ReceiveScreen(state: ReceiveUiState, actions: ReceiveActions, modifier: Modi
             Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
         else -> AddressContent(state, actions, modifier)
+    }
+}
+
+/** "Set a spending limit?" asked again before Receive, after the wallet settings were reset on this phone. */
+@Composable
+private fun LimitsAsk(state: ReceiveUiState, actions: ReceiveActions, modifier: Modifier) {
+    FormScaffold(
+        title = stringResource(R.string.wallet_limits_title),
+        body = stringResource(R.string.wallet_limits_ask_reset),
+        primaryLabel = stringResource(R.string.wallet_continue),
+        onPrimary = actions.onLimitsContinue,
+        primaryEnabled = state.limitsParse.ok && !state.busy,
+        busy = state.busy,
+        onBack = actions.onBack,
+        modifier = modifier.testTag("wallet_receive_limits"),
+    ) {
+        Text(stringResource(R.string.wallet_limits_body))
+        LimitsFields(state.limits, state.limitsParse, actions.limits)
+        if (state.limitsNotSaved) {
+            Text(stringResource(R.string.wallet_limits_ask_failed), color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/** Why there is no address (and, while the settings cannot be read, the way to reset them). */
+@Composable
+private fun ProblemScreen(state: ReceiveUiState, actions: ReceiveActions, modifier: Modifier) {
+    FormScaffold(
+        title = stringResource(R.string.wallet_receive),
+        body = stringResource(
+            when {
+                state.problem == ReceiveProblem.CAPS_PENDING -> R.string.wallet_receive_caps_pending
+                state.problem == ReceiveProblem.SETTINGS_UNREADABLE -> R.string.wallet_settings_unreadable
+                state.problem == ReceiveProblem.MISMATCH -> R.string.wallet_address_mismatch
+                state.network == com.vettid.core.chain.Network.TESTNET -> R.string.wallet_testnet3_unsupported
+                else -> R.string.wallet_network_not_offered
+            },
+        ),
+        // The limit chosen is sent again from here; the other problems have no way out on this screen.
+        primaryLabel = if (state.problem in RETRYABLE) stringResource(R.string.wallet_try_again) else null,
+        onPrimary = actions.onRetry,
+        // Only while the settings cannot be read: forget them on this phone (the vault is not touched).
+        secondaryLabel = stringResource(R.string.wallet_reset_settings).takeIf { state.problem == ReceiveProblem.SETTINGS_UNREADABLE },
+        onSecondary = actions.onAskReset,
+        onBack = actions.onBack,
+        modifier = modifier.testTag("wallet_receive_problem"),
+    ) {
+        if (state.resetFailed) Text(stringResource(R.string.wallet_reset_failed), color = MaterialTheme.colorScheme.error)
+        if (state.resetAsk) {
+            ConfirmDialog(
+                title = stringResource(R.string.wallet_reset_title),
+                text = stringResource(R.string.wallet_reset_body),
+                confirmLabel = stringResource(R.string.wallet_reset_confirm),
+                onConfirm = actions.onReset,
+                onDismiss = actions.onCancelReset,
+                destructive = true,
+                modifier = Modifier.testTag("wallet_reset_confirm"),
+            )
+        }
     }
 }
 

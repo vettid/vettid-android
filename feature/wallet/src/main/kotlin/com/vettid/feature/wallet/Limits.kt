@@ -180,21 +180,25 @@ internal fun LimitsFields(
 }
 
 /** What the limits step does; the creation flows pass their view model's functions. */
-internal data class LimitsActions(
+data class LimitsActions(
     val onChoice: (Boolean) -> Unit = {},
     val onPerTx: (String) -> Unit = {},
     val onPerPeriod: (String) -> Unit = {},
     val onToggleUnit: () -> Unit = {},
 )
 
+/** One limit's field. [message] is an error of the screen's own (shown in place of the amount in sats); [note] a line under it. */
 @Composable
-private fun LimitField(
+internal fun LimitField(
     value: String,
     btc: Boolean,
     label: Int,
     problem: LimitProblem?,
     onChange: (String) -> Unit,
     tag: String,
+    message: String? = null,
+    note: String? = null,
+    enabled: Boolean = true,
 ) {
     val parsed = LimitsInput.sats(value, btc)?.takeIf { it > 0 }
     OutlinedTextField(
@@ -202,14 +206,21 @@ private fun LimitField(
         onValueChange = onChange,
         label = { Text(stringResource(label)) },
         suffix = { Text(stringResource(if (btc) R.string.wallet_unit_btc else R.string.wallet_unit_sats)) },
-        isError = problem == LimitProblem.OUT_OF_RANGE,
+        isError = problem == LimitProblem.OUT_OF_RANGE || message != null,
+        enabled = enabled,
         supportingText = when {
             problem == LimitProblem.OUT_OF_RANGE -> {
                 { Text(stringResource(R.string.wallet_limit_out_of_range, BtcFormat.sats(CapsRules.MAX_SATS))) }
             }
+            message != null -> {
+                { Text(message) }
+            }
             // In bitcoin, the sats it comes to: sats everywhere in this screen, whole numbers with a thousands separator.
             btc && parsed != null -> {
                 { Text(stringResource(R.string.wallet_balance_sats, BtcFormat.sats(parsed))) }
+            }
+            note != null -> {
+                { Text(note) }
             }
             else -> null
         },

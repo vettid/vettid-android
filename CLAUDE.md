@@ -254,8 +254,23 @@ The A2 exit test:
   `wallet.new_limits_btc`, `wallet.new_limits_bad`, `wallet.new_password`, `wallet.password_bad_pin`, `wallet.done_caps_failed`,
   `wallet.import`, `wallet.import_words`, `wallet.import_unknown_word`, `wallet.import_invalid`, `wallet.import_advanced`,
   `wallet.import_bad_passphrase`, `wallet.import_limits`, `wallet.import_password`, `wallet.import_exists`,
-  `wallet.import_done_caps_failed`, `wallet.receive_caps_pending`, `wallet.detail_caps_pending`. The Spending limits screen (lower,
-  raise or remove) and the review of a send are later.
+  `wallet.import_done_caps_failed`, `wallet.receive_caps_pending`, `wallet.detail_caps_pending`.
+  W1d-2 (Spending limits screen): wallet ⋯ → **Spending limits** (`SpendingLimitsRoute` in `:core:data`, shown only when `capsSupported`;
+  `SpendingLimitsViewModel`, `CapsEdit` pure rules): the two limits in sats or "No limit", "Used in the last 24 hours" from
+  `caps.spent_sats` (`VaultWallet.spentSats`; the plan says "last hour" on staging, the owner kept "24 hours" there too), **Lower a
+  limit** (only lower, or a limit where there was none; `wallet.caps.set`, confirm, no password) and **Raise or remove a limit**
+  (PIN and password, `wallet.caps.raise`; a form that only lowers is sent as `set`, one that raises or does both as `raise` with the
+  lowered value in it). Any error leaves the limits and the wallet is read again. `raiseCaps` never goes over a pending `set`: it sends
+  the set and then refuses (`CAPS_SETTLED`, the form was chosen against the old limits), or refuses (`CAPS_PENDING`). Feed titles and
+  `FeedTarget.WalletLimits` for `wallet.cap_refused|caps_lowered|caps_raised` (a notification opens the screen while the Wallet entry
+  is shown). **Reset wallet settings on this phone** (`WalletsManager.resetSettings`, `WalletFlags.reset`: the one sanctioned overwrite
+  of an unreadable `wallet-flags.bin`, offered only while it is unreadable, behind a `ConfirmDialog`, nothing sent to the vault; the
+  local flags are forgotten, so wallets show "Not backed up"): an uncapped wallet of a vault with `caps` is then asked "Set a spending
+  limit?" before Receive (`ask_caps` in the flags, `ReceiveResult.LimitsAsk`, `answerLimits`); a limit goes through the pending path.
+  Catalog adds `wallet.limits`, `wallet.limits_none`, `wallet.limits_one`, `wallet.limits_unsupported`, `wallet.limits_lower`,
+  `wallet.limits_lower_bad`, `wallet.limits_lower_confirm`, `wallet.limits_raise`, `wallet.limits_raise_confirm`,
+  `wallet.limits_remove`, `wallet.limits_bad_pin`, `wallet.limits_backoff`, `wallet.limits_conflict`, `wallet.detail_reset`,
+  `wallet.detail_reset_confirm`, `wallet.receive_reset`, `wallet.receive_limits_ask`. The review of a send is later.
 
 ## Device testing
 

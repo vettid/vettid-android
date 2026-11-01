@@ -99,8 +99,18 @@ internal class FakeWallets : WalletOps {
 
     override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long {
         calls += "caps.raise:$perTx:$perPeriod"
-        error("the screens of W1d never raise")
+        capsRaiseFails?.let { throw VaultOpException("wallet.caps.raise", it) }
+        if (pin != this.pin) throw VaultOpException("wallet.caps.raise", "bad_pin")
+        if (password != "pw") throw VaultOpException("wallet.caps.raise", "bad_password")
+        val w = wallets.getValue(walletId)
+        if (version != w.version) throw VaultOpException("wallet.caps.raise", "conflict")
+        return (version + 1).also {
+            wallets[walletId] = w.copy(version = it, capped = perTx != null || perPeriod != null, perTxSats = perTx, perPeriodSats = perPeriod)
+        }
     }
+
+    /** A vault error code for `wallet.caps.raise`, else none. */
+    var capsRaiseFails: String? = null
 
     override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
         calls += "reveal:$walletId" + if (pin != null) ":pin" else ""

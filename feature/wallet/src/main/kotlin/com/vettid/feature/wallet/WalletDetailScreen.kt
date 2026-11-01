@@ -72,6 +72,10 @@ data class WalletDetailActions(
     val onDelete: () -> Unit = {},
     val onDismissTypeError: () -> Unit = {},
     val onChangeNetwork: () -> Unit = {},
+    val onLimits: () -> Unit = {},
+    val onAskReset: () -> Unit = {},
+    val onCancelReset: () -> Unit = {},
+    val onReset: () -> Unit = {},
 )
 
 /**
@@ -102,6 +106,17 @@ fun WalletDetailScreen(state: WalletDetailUiState, actions: WalletDetailActions,
                 }
             }
         }
+    }
+    if (state.resetAsk) {
+        ConfirmDialog(
+            title = stringResource(R.string.wallet_reset_title),
+            text = stringResource(R.string.wallet_reset_body),
+            confirmLabel = stringResource(R.string.wallet_reset_confirm),
+            onConfirm = actions.onReset,
+            onDismiss = actions.onCancelReset,
+            destructive = true,
+            modifier = Modifier.testTag("wallet_reset_confirm"),
+        )
     }
     if (state.delete == DeleteStep.CONFIRM) {
         ConfirmDialog(
@@ -177,6 +192,19 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
         TextButton(onClick = actions.onRetryCaps, modifier = Modifier.testTag("wallet_caps_retry")) {
             Text(stringResource(R.string.wallet_try_again))
         }
+        // Only while the file cannot be read: the one way out that does not leave a wallet without its limit question.
+        if (state.settingsUnreadable) {
+            TextButton(onClick = actions.onAskReset, modifier = Modifier.testTag("wallet_reset_settings")) {
+                Text(stringResource(R.string.wallet_reset_settings))
+            }
+        }
+    }
+    if (state.resetFailed) {
+        Text(
+            stringResource(R.string.wallet_reset_failed),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("wallet_reset_failed"),
+        )
     }
     PrimaryButton(
         stringResource(R.string.wallet_receive),
@@ -318,7 +346,7 @@ private fun Problem(text: String, tag: String, ways: List<Pair<String, () -> Uni
     }
 }
 
-/** ⋯: Receiving address type, Chain server, Details, Delete wallet. (Recovery phrase and Spending limits come with W1d.) */
+/** ⋯: Receiving address type, Spending limits (when the vault enforces them), Chain server, Details, Delete wallet. */
 @Composable
 private fun WalletMenu(state: WalletDetailUiState, actions: WalletDetailActions) {
     var open by remember { mutableStateOf(false) }
@@ -331,6 +359,12 @@ private fun WalletMenu(state: WalletDetailUiState, actions: WalletDetailActions)
             MenuItem(R.string.wallet_menu_address_type, "wallet_menu_address_type", enabled = state.loaded && !state.typeBusy) {
                 open = false
                 typeDialog = true
+            }
+            if (state.capsSupported) {
+                MenuItem(R.string.wallet_menu_limits, "wallet_menu_limits", enabled = state.loaded) {
+                    open = false
+                    actions.onLimits()
+                }
             }
             MenuItem(R.string.wallet_menu_chain_server, "wallet_menu_chain_server", enabled = state.network != null) {
                 open = false
