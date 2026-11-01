@@ -161,6 +161,8 @@ enum class InviteStep { CHOOSE, SHOWING, REQUEST, CONNECTING, CONNECTED, EXPIRED
 /** Immutable UI state of the invite screen. */
 data class InviteUiState(
     val step: InviteStep = InviteStep.CHOOSE,
+    /** [InviteStep.CONNECTED]: the new connection declared itself a service (it cannot message the member). */
+    val connectedService: Boolean = false,
     val ttls: List<InviteTtl> = listOf(InviteTtl.TEN_MINUTES),
     val ttl: InviteTtl = InviteTtl.TEN_MINUTES,
     val invite: InviteInfo? = null,
@@ -238,7 +240,12 @@ class InviteViewModel @Inject constructor(
                 if (state.value.step != InviteStep.CONNECTING && state.value.step != InviteStep.REQUEST) return@collect
                 val added = cs.firstOrNull { it.id !in before && it.state == ConnectionState.ACTIVE } ?: return@collect
                 state.update {
-                    it.copy(step = InviteStep.CONNECTED, connectionId = added.id, connectionName = added.displayName.ifBlank { null })
+                    it.copy(
+                        step = InviteStep.CONNECTED,
+                        connectionId = added.id,
+                        connectionName = added.displayName.ifBlank { null },
+                        connectedService = added.service,
+                    )
                 }
             }
         }
@@ -342,6 +349,8 @@ enum class AcceptStep {
 /** Immutable UI state of the accept screen. */
 data class AcceptUiState(
     val step: AcceptStep = AcceptStep.INPUT,
+    /** [AcceptStep.CONNECTED]: the new connection declared itself a service (it cannot message the member). */
+    val connectedService: Boolean = false,
     val input: String = "",
     /** The screen was opened from a link (App Link or `vettid://`): the member confirms first. */
     val fromLink: Boolean = false,
@@ -405,7 +414,11 @@ class AcceptViewModel @Inject constructor(
                 }
                 state.update {
                     when {
-                        active != null -> it.copy(step = AcceptStep.CONNECTED, connectionName = active.displayName.ifBlank { null })
+                        active != null -> it.copy(
+                            step = AcceptStep.CONNECTED,
+                            connectionName = active.displayName.ifBlank { null },
+                            connectedService = active.service,
+                        )
                         end != null && req == null -> it.copy(step = AcceptStep.ENDED, end = end)
                         req == null -> it
                         else -> it.copy(
