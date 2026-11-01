@@ -128,6 +128,18 @@ class SpendingLimitsScreenTest {
     }
 
     @Test
+    fun removingBothLimitsAsksInThePlural() {
+        show(state(step = LimitsStep.CONFIRM_RAISE, raise = true, form = CapsEditForm(removeTx = true, removePeriod = true)))
+        rule.onNodeWithText("Remove the limits?").assertIsDisplayed()
+    }
+
+    @Test
+    fun anUnreadableSettingsRefusalPointsToTheReset() {
+        show(state(error = FailureKind.OTHER, code = WalletsManager.SETTINGS_UNREADABLE))
+        rule.onNodeWithText("This phone can't read its wallet settings, so nothing was raised. Open the wallet and choose Reset wallet settings on this phone.").assertExists()
+    }
+
+    @Test
     fun aWrongPinIsOnThePinFieldAndTheLimitsAreSaidToBeUnchanged() {
         show(state(step = LimitsStep.CONFIRM_RAISE, raise = true, form = CapsEditForm(perTx = "600000"), error = FailureKind.BAD_PIN))
         rule.onNodeWithText("That PIN is not correct.").assertExists()

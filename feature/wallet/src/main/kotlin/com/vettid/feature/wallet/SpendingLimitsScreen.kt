@@ -22,6 +22,7 @@ import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.SecureWindow
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.wallet.WalletsManager
 
@@ -139,6 +140,7 @@ private fun errorText(kind: FailureKind, code: String?): String = stringResource
     when (code) {
         WalletsManager.CAPS_PENDING -> R.string.wallet_limits_pending_first
         WalletsManager.CAPS_SETTLED -> R.string.wallet_limits_settled
+        WalletsManager.SETTINGS_UNREADABLE -> R.string.wallet_limits_unreadable
         else -> kind.messageRes()
     },
 )
@@ -269,17 +271,26 @@ private fun ConfirmSet(state: SpendingLimitsUiState, actions: SpendingLimitsActi
     )
 }
 
-/** "Raise the limit from {old} to {new}?" or "Remove the limit?", and "Enter your PIN and password.": one credential operation. */
+/** "Raise the limit from {old} to {new}?", "Remove the limit?" or, when both go, "Remove the limits?". */
+@Composable
+private fun raiseTitle(state: SpendingLimitsUiState, remove: Boolean): String {
+    val plan = state.plan
+    val both = plan.txMove == CapMove.RAISE && plan.periodMove == CapMove.RAISE && plan.newPerTx == null && plan.newPerPeriod == null
+    return when {
+        !remove -> stringResource(R.string.wallet_limits_raise_title, oldNamed(state, CHANGING), newNamed(state, CHANGING))
+        both -> stringResource(R.string.wallet_limits_remove_title_both)
+        else -> stringResource(R.string.wallet_limits_remove_title)
+    }
+}
+
+/** The question of a raise, with the PIN and password, and "Enter your PIN and password.": one credential operation. */
 @Composable
 private fun ConfirmRaise(state: SpendingLimitsUiState, actions: SpendingLimitsActions, modifier: Modifier) {
     val plan = state.plan
     val remove = removesOnly(plan)
-    val title = if (remove) {
-        stringResource(R.string.wallet_limits_remove_title)
-    } else {
-        stringResource(R.string.wallet_limits_raise_title, oldNamed(state, CHANGING), newNamed(state, CHANGING))
-    }
+    val title = raiseTitle(state, remove)
     val kind = state.error
+    SecureWindow()
     FormScaffold(
         title = title,
         body = stringResource(R.string.wallet_limits_enter_secrets),

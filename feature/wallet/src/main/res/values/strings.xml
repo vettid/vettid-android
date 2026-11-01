@@ -62,6 +62,7 @@
     <string name="wallet_limits_lower_title">Lower the limit to %1$s?</string> <!-- draft -->
     <string name="wallet_limits_raise_title">Raise the limit from %1$s to %2$s?</string> <!-- draft -->
     <string name="wallet_limits_remove_title">Remove the limit?</string> <!-- draft -->
+    <string name="wallet_limits_remove_title_both">Remove the limits?</string> <!-- new: both limits removed -->
     <string name="wallet_limits_enter_secrets">Enter your PIN and password.</string> <!-- draft -->
     <string name="wallet_limits_phrase_tx">%1$s per payment</string> <!-- new: how a limit is named in the questions -->
     <string name="wallet_limits_phrase_period">%1$s in any 24 hours</string> <!-- new -->
@@ -77,6 +78,7 @@
     <string name="wallet_limits_nothing">Nothing would change. Enter a different number.</string> <!-- new -->
     <string name="wallet_limits_not_lower">That is not lower than it is now. To raise a limit, use Raise or remove a limit.</string> <!-- new -->
     <string name="wallet_limits_pending_first">A spending limit you chose has not been set yet, so nothing was raised. Try again once it is set.</string> <!-- new -->
+    <string name="wallet_limits_unreadable">This phone can\'t read its wallet settings, so nothing was raised. Open the wallet and choose Reset wallet settings on this phone.</string> <!-- new -->
     <string name="wallet_limits_settled">A limit you chose earlier has just been set. Look at your limits, then try again.</string> <!-- new -->
     <string name="wallet_limits_unchanged">Nothing was changed. Your limits are as they were.</string> <!-- new -->
 
@@ -87,7 +89,7 @@
     <string name="wallet_reset_confirm">Reset</string> <!-- new -->
     <string name="wallet_reset_failed">This phone couldn\'t reset its wallet settings.</string> <!-- new -->
     <string name="wallet_limits_ask_failed">This phone couldn\'t save your answer. Try again.</string> <!-- new -->
-    <string name="wallet_limits_ask_reset">Your wallet settings were reset on this phone, so your vault shows no limit on this wallet. Choose a limit, or No limit, to go on.</string> <!-- new -->
+    <string name="wallet_limits_ask_reset">Your wallet settings were reset on this phone. Your vault shows no limit on this wallet. If you chose one before, choose it again, or choose No limit.</string> <!-- new -->
 
     <!-- The phrase of a wallet with a spending limit -->
     <string name="wallet_pin_too">To protect your spending limit, enter your PIN too.</string> <!-- draft -->

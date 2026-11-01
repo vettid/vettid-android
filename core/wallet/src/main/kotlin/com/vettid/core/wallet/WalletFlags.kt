@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
@@ -41,8 +42,12 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         val testnet: Map<String, Network>,
         val noteShown: Set<String> = emptySet(),
         val pendingCaps: Map<String, WalletCaps> = emptyMap(),
-        /** Wallets whose limit is to be asked again before Receive (after [reset]): the vault shows them without a limit. */
-        val askCaps: Set<String> = emptySet(),
+        /**
+         * After [reset]: every wallet is asked "Set a spending limit?" again before Receive, unless the vault already caps it (decided
+         * at Receive, from the vault's own view) or it was [answeredCaps] since.
+         */
+        val askAllCaps: Boolean = false,
+        val answeredCaps: Set<String> = emptySet(),
     )
 
     /** Whether [walletId] was backed up (the phrase checked). False when the file cannot be read: "Not backed up" fails safe. */
@@ -90,30 +95,35 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     /** Forgets what is kept of a deleted wallet. */
     suspend fun forget(walletId: String): Boolean = change {
         Flags(
-            it.backedUp - walletId, it.testnet - walletId, it.noteShown - walletId, it.pendingCaps - walletId, it.askCaps - walletId,
+            it.backedUp - walletId, it.testnet - walletId, it.noteShown - walletId, it.pendingCaps - walletId,
+            it.askAllCaps, it.answeredCaps - walletId,
         )
     }
 
-    /** The wallets whose limit is to be asked before Receive (a [reset] left them without one); null when the file cannot be read. */
-    suspend fun askCaps(): Set<String>? = lock.withLock { read()?.askCaps }
+    /**
+     * Whether [walletId]'s limit is to be asked before Receive (a [reset] left every wallet unanswered and it was not answered since;
+     * whether the vault already caps it is for the caller); null when the file cannot be read.
+     */
+    suspend fun asksCaps(walletId: String): Boolean? = lock.withLock { read()?.let { it.askAllCaps && walletId !in it.answeredCaps } }
 
     /** [walletId]'s limit was answered (pending now, or "No limit"): not asked again; false if it could not be written. */
-    suspend fun clearAskCaps(walletId: String): Boolean = change { it.copy(askCaps = it.askCaps - walletId) }
+    suspend fun clearAskCaps(walletId: String): Boolean = change { it.copy(answeredCaps = it.answeredCaps + walletId) }
 
     /**
      * Writes a **fresh** file over one that cannot be read: nothing of the old one is kept (backed up, test chains, privacy notes,
-     * pending limits), and [ask] are the wallets whose limit is asked again before Receive. The one sanctioned overwrite
+     * pending limits except [pending], the ones chosen in this session and not yet sent, which are carried over), and every wallet's
+     * limit is asked again before Receive. The one sanctioned overwrite
      * (the member confirmed "Reset wallet settings on this phone"); false when the file reads fine (nothing is reset then), when
      * a wipe began meanwhile or when it could not be written.
      */
     @Suppress("TooGenericExceptionCaught")
-    suspend fun reset(ask: Set<String>): Boolean {
+    suspend fun reset(pending: Map<String, WalletCaps> = emptyMap()): Boolean {
         val started = generation()
         return lock.withLock {
             if (readResult() is Read.Loaded) return@withLock false
             if (generation() != started) return@withLock false
             try {
-                withContext(Dispatchers.IO) { file.save(encode(Flags(emptySet(), emptyMap(), askCaps = ask))) }
+                withContext(Dispatchers.IO) { file.save(encode(Flags(emptySet(), emptyMap(), pendingCaps = pending, askAllCaps = true))) }
                 true
             } catch (_: Exception) {
                 false
@@ -191,13 +201,18 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
             is JsonObject -> c.entries.associate { (id, v) -> id to (capsOf(v) ?: return null) }
             else -> return null
         }
-        // `ask_caps` came with the reset: a file without it reads as none.
-        val ask = when (val a = o["ask_caps"]) {
+        // `ask_all_caps` and `answered_caps` came with the reset: a file without them reads as not asking.
+        val askAll = when (val a = o["ask_all_caps"]) {
+            null -> false
+            is JsonPrimitive -> a.booleanOrNull ?: return null
+            else -> return null
+        }
+        val answered = when (val a = o["answered_caps"]) {
             null -> emptySet()
             is JsonArray -> a.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: return null }.toSet()
             else -> return null
         }
-        return Flags(backedUp, testnet, noteShown, pending, ask)
+        return Flags(backedUp, testnet, noteShown, pending, askAll, answered)
     }
 
     /** A pending entry `{per_tx_sats?, per_period_sats?}`; null if it is not limits the vault would take (the file is then unreadable). */
@@ -216,7 +231,8 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
         put("backed_up", JsonArray(f.backedUp.sorted().map(::JsonPrimitive)))
         put("testnet", buildJsonObject { f.testnet.entries.sortedBy { it.key }.forEach { put(it.key, it.value.vaultName) } })
         put("note_shown", JsonArray(f.noteShown.sorted().map(::JsonPrimitive)))
-        if (f.askCaps.isNotEmpty()) put("ask_caps", JsonArray(f.askCaps.sorted().map(::JsonPrimitive)))
+        if (f.askAllCaps) put("ask_all_caps", true)
+        if (f.answeredCaps.isNotEmpty()) put("answered_caps", JsonArray(f.answeredCaps.sorted().map(::JsonPrimitive)))
         if (f.pendingCaps.isNotEmpty()) {
             put(
                 "pending_caps",

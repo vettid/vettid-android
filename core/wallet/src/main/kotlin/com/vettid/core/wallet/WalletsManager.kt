@@ -654,6 +654,11 @@ class WalletsManager(
     suspend fun raiseCaps(walletId: String, perTx: Long?, perPeriod: Long?, pin: String, password: String) {
         require(CapsRules.problem(perTx, perPeriod) == null) { "limits" }
         val g = gen()
+        // The pending limits cannot be known while the settings file is unreadable: say so (the reset is on the wallet's screen).
+        if (synchronized(lock) { pendingUnknown }) {
+            loadPending(g)
+            if (synchronized(lock) { pendingUnknown }) throw VaultFailure(FailureKind.OTHER, SETTINGS_UNREADABLE)
+        }
         // A pending `wallet.caps.set` goes first, and a raise never goes over a lower that has not reached the vault. If it cannot be
         // sent, or the pending limits cannot be known, nothing is raised ([CAPS_PENDING]). If it was sent, the values asked for were
         // chosen against limits that have just changed (a member left as it was would raise the lowered one again), so nothing
@@ -778,7 +783,7 @@ class WalletsManager(
      * be read (no Receive); false otherwise. A wallet the vault already caps, or whose vault has no `caps`, is not asked.
      */
     private suspend fun asksLimits(wallet: VaultWallet): Boolean? =
-        if (!wallet.capsSupported || wallet.capped) false else flags.askCaps()?.let { wallet.id in it }
+        if (!wallet.capsSupported || wallet.capped) false else flags.asksCaps(wallet.id)
 
     /** Whether the limit question is to be asked before Receive for [walletId] (see [receiveAddress]). */
     suspend fun asksLimits(walletId: String): Boolean =
@@ -787,18 +792,18 @@ class WalletsManager(
     /**
      * "Reset wallet settings on this phone", offered only while the flags file is unreadable ([capsPending] holds [UNKNOWN]): it
      * forgets the local flags only (backed up, test-chain labels, privacy notes, pending limits) and writes a fresh file, the one
-     * sanctioned overwrite. Nothing is sent to the vault. Every listed wallet the vault shows **without a limit** is asked
-     * "Set a spending limit?" again before its Receive (the pending limit forgotten may have been one the member chose). Nothing is
-     * marked backed up. False (nothing changed) when the file reads after all, or could not be written.
+     * sanctioned overwrite. Nothing is sent to the vault. Every wallet is marked to be asked "Set a spending limit?" again (the
+     * pending limit forgotten may have been one the member chose); whether it is, is decided at Receive from the vault's own view
+     * (not for a wallet it already caps, or a vault without `caps`), so a list not read yet changes nothing. Limits chosen in this
+     * session and not yet sent are carried into the fresh file. Nothing is marked backed up. False (nothing changed) when the file
+     * reads after all, or could not be written.
      */
     suspend fun resetSettings(): Boolean {
         val g = gen()
-        val ask = walletsFlow.value.filter { it.capsSupported && !it.capped }.map { it.id }.toSet()
-        val done = flags.reset(ask)
+        val pending = synchronized(lock) { HashMap(pendingMap) }
+        val done = flags.reset(pending)
         if (!done) return false
         publish(g) {
-            pendingMap.clear()
-            held.clear()
             pendingUnknown = false
             publishPending()
             flagsChangedFlow.update { it + 1 }
@@ -1009,6 +1014,9 @@ class WalletsManager(
 
         /** Whether [walletId] is pending in [pending] (a set from [capsPending]): named in it, or nothing is known ([UNKNOWN]). */
         fun isPending(pending: Set<String>, walletId: String): Boolean = UNKNOWN in pending || walletId in pending
+
+        /** What [raiseCaps] answers (a [VaultFailure] code) while this phone's wallet settings cannot be read. */
+        const val SETTINGS_UNREADABLE = "settings_unreadable"
 
         /** What [raiseCaps] answers (a [VaultFailure] code) while the wallet's chosen limit is still to be set. */
         const val CAPS_PENDING = "caps_pending"

@@ -146,10 +146,11 @@ internal fun LimitsFields(
     form: LimitsForm,
     parse: LimitsParse,
     actions: LimitsActions,
+    noneSelected: Boolean = !form.limit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
         FilterChip(
-            selected = !form.limit,
+            selected = noneSelected,
             onClick = { actions.onChoice(false) },
             label = { Text(stringResource(R.string.wallet_limits_none)) },
             modifier = Modifier.testTag("limits_none"),

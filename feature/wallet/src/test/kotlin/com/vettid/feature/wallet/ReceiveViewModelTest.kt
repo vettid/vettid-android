@@ -205,8 +205,9 @@ class ReceiveViewModelTest {
         ops.wallet(id)
         flagsFile.failLoads = true
         val vm = vm(backedUp = false)
-        // Not backed up is decided from the same file, which cannot be read: it reads as not backed up.
-        eventually { vm.state.value.notBackedUp }
+        // Not backed up is decided from the same file, which cannot be read: the notice comes first, not the backup gate.
+        eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
+        assertFalse(vm.state.value.notBackedUp)
         flagsFile.failLoads = false
         WalletFlags(flagsFile).setBackedUp(id)
         flagsFile.failLoads = true

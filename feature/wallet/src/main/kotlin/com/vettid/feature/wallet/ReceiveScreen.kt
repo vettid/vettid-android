@@ -103,13 +103,13 @@ private fun LimitsAsk(state: ReceiveUiState, actions: ReceiveActions, modifier: 
         body = stringResource(R.string.wallet_limits_ask_reset),
         primaryLabel = stringResource(R.string.wallet_continue),
         onPrimary = actions.onLimitsContinue,
-        primaryEnabled = state.limitsParse.ok && !state.busy,
+        primaryEnabled = state.limitsChosen && state.limitsParse.ok && !state.busy,
         busy = state.busy,
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_receive_limits"),
     ) {
         Text(stringResource(R.string.wallet_limits_body))
-        LimitsFields(state.limits, state.limitsParse, actions.limits)
+        LimitsFields(state.limits, state.limitsParse, actions.limits, noneSelected = state.limitsChosen && !state.limits.limit)
         if (state.limitsNotSaved) {
             Text(stringResource(R.string.wallet_limits_ask_failed), color = MaterialTheme.colorScheme.error)
         }

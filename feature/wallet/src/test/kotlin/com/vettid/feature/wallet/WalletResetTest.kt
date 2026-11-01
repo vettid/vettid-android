@@ -4,6 +4,10 @@
 package com.vettid.feature.wallet
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -101,7 +105,7 @@ class WalletResetTest {
         var go = 0
         rule.setContent {
             ReceiveScreen(
-                ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.LIMITS_ASK),
+                ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.LIMITS_ASK, limitsChosen = true),
                 ReceiveActions(onLimitsContinue = { go++ }),
             )
         }
@@ -154,6 +158,7 @@ class WalletResetTest {
         eventually { vm.state.value.problem == ReceiveProblem.LIMITS_ASK }
         assertTrue(ops.calls.none { it == "new" })
         // No limit: Receive goes on with an address, nothing set.
+        vm.setLimitChoice(false)
         vm.answerLimits()
         eventually { vm.state.value.address != null }
         assertTrue(ops.calls.none { it.startsWith("caps.") })
@@ -190,15 +195,94 @@ class WalletResetTest {
     }
 
     @Test
-    fun theReceiveResetStartsReceiveOver() = runTest {
+    fun receiveRefusesTheResetWhileTheSettingsRead() = runTest {
         val w = ops.wallet(id)
         ops.wallets[id] = w.copy(capped = true, perTxSats = 1000, perPeriodSats = 5000)
         WalletFlags(flagsFile).setBackedUp(id)
         val m = mgr().also { it.open() }
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.address != null }
-        // Not offered while the file reads.
+        // Not offered while the file reads (the confirm cannot be asked for).
         vm.askReset()
         assertFalse(vm.state.value.resetAsk)
+    }
+
+    @Test
+    fun receiveShowsTheUnreadableNoticeWithTheResetBeforeTheBackupGateAndTheResetStartsReceiveOver() = runTest {
+        val w = ops.wallet(id)
+        ops.wallets[id] = w.copy(capped = true, perTxSats = 1000, perPeriodSats = 5000)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = mgr().also { it.open() }
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        // backedUp reads false on an unreadable file, but the notice, not the backup gate, is what is shown.
+        eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
+        assertFalse(vm.state.value.notBackedUp)
+        vm.askReset()
+        assertTrue(vm.state.value.resetAsk)
+        vm.resetSettings()
+        // Reset: the file reads, nothing is marked backed up, so the (ordinary) backup gate comes now.
+        eventually { vm.state.value.notBackedUp }
+        assertEquals(null, vm.state.value.problem)
+    }
+
+    @Test
+    fun aClosedReceiveDoesNotReset() = runTest {
+        ops.wallet(id)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = mgr().also { it.open() }
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
+        vm.askReset()
+        m.clear()
+        eventually { vm.state.value.closed }
+        vm.resetSettings()
+        kotlinx.coroutines.delay(200)
+        assertEquals(unreadable, flagsFile.bytes!!.decodeToString())
+    }
+
+    @Test
+    fun theLimitQuestionPreselectsNothingAndContinueWaitsForAChoice() = runTest {
+        ops.wallet(id)
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        val m = mgr().also { it.open() }
+        m.resetSettings()
+        WalletFlags(flagsFile).setBackedUp(id)
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.problem == ReceiveProblem.LIMITS_ASK }
+        assertFalse(vm.state.value.limitsChosen)
+        // Continue does nothing until No limit or a limit is chosen.
+        vm.answerLimits()
+        kotlinx.coroutines.delay(200)
+        assertEquals(ReceiveProblem.LIMITS_ASK, vm.state.value.problem)
+        assertTrue(ops.calls.none { it == "new" })
+        vm.setLimitChoice(false)
+        assertTrue(vm.state.value.limitsChosen)
+        vm.answerLimits()
+        eventually { vm.state.value.address != null }
+    }
+
+    @Test
+    fun theLimitQuestionScreenHasNeitherChoiceSelectedAndContinueIsOffUntilOne() {
+        rule.setContent {
+            ReceiveScreen(
+                ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.LIMITS_ASK),
+                ReceiveActions(),
+            )
+        }
+        rule.onNodeWithTag("limits_none").assertIsNotSelected()
+        rule.onNodeWithTag("limits_set").assertIsNotSelected()
+        rule.onNodeWithText("Continue").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theLimitQuestionContinueIsOnOnceNoLimitIsChosen() {
+        rule.setContent {
+            ReceiveScreen(
+                ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.LIMITS_ASK, limitsChosen = true),
+                ReceiveActions(),
+            )
+        }
+        rule.onNodeWithTag("limits_none").assertIsSelected()
+        rule.onNodeWithText("Continue").assertIsEnabled()
     }
 }

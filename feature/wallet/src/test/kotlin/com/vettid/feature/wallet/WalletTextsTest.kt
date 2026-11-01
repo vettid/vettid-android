@@ -77,6 +77,7 @@ class WalletTextsTest {
         )
         for ((res, text) in drafts) assertEquals(text, r.getString(res))
         assertEquals("Used in the last 24 hours: 750,000 sats of 2,000,000 sats", r.getString(R.string.wallet_limits_used, "750,000 sats", "2,000,000 sats"))
+        assertEquals("Remove the limits?", r.getString(R.string.wallet_limits_remove_title_both))
         assertEquals("Lower the limit to 400,000 sats?", r.getString(R.string.wallet_limits_lower_title, "400,000 sats"))
         assertEquals("Raise the limit from 1 sat to 2 sats?", r.getString(R.string.wallet_limits_raise_title, "1 sat", "2 sats"))
         assertEquals("Which is word 4?", r.getString(R.string.wallet_check_which, 4))

@@ -55,6 +55,8 @@ data class ReceiveUiState(
     val problem: ReceiveProblem? = null,
     /** The answer to "Set a spending limit?" as typed ([ReceiveProblem.LIMITS_ASK]). */
     val limits: LimitsForm = LimitsForm(),
+    /** The member chose No limit or a limit on that question: nothing is preselected. */
+    val limitsChosen: Boolean = false,
     /** "Reset wallet settings on this phone" is asked about (its confirm is up). */
     val resetAsk: Boolean = false,
     /** The reset, or the answer to the limit question, could not be kept on this phone. */
@@ -140,9 +142,16 @@ class ReceiveViewModel @Inject constructor(
     /** The address to show; from Try again too. */
     fun load() {
         viewModelScope.launch {
+            // Settings that cannot be read come first: with them "Not backed up" is only a guess, and the way out (the reset) is here.
+            if (WalletsManager.UNKNOWN in wallets.capsPending.value) {
+                mutable.update {
+                    it.copy(loading = false, notBackedUp = false, address = null, problem = ReceiveProblem.SETTINGS_UNREADABLE)
+                }
+                return@launch
+            }
             // The gate stays up until the flag reads true (no spinner in between while it is still not backed up).
             if (!wallets.backedUp(walletId)) {
-                mutable.update { it.copy(loading = false, notBackedUp = true) }
+                mutable.update { it.copy(loading = false, notBackedUp = true, problem = null) }
                 return@launch
             }
             mutable.update { it.copy(loading = true, error = null, notBackedUp = false) }
@@ -179,7 +188,7 @@ class ReceiveViewModel @Inject constructor(
         }
     }
 
-    fun setLimitChoice(limit: Boolean) = mutable.update { it.copy(limits = it.limits.copy(limit = limit)) }
+    fun setLimitChoice(limit: Boolean) = mutable.update { it.copy(limits = it.limits.copy(limit = limit), limitsChosen = true) }
 
     fun setPerTx(v: String) = mutable.update { it.copy(limits = it.limits.copy(perTx = LimitsInput.filter(v, it.limits.btc))) }
 
@@ -194,7 +203,8 @@ class ReceiveViewModel @Inject constructor(
     fun answerLimits() {
         val s = mutable.value
         val parse = s.limitsParse
-        if (s.problem != ReceiveProblem.LIMITS_ASK || s.busy || !parse.ok) return
+        val ready = s.problem == ReceiveProblem.LIMITS_ASK && s.limitsChosen && parse.ok
+        if (!ready || s.busy) return
         mutable.update { it.copy(busy = true, limitsNotSaved = false) }
         viewModelScope.launch {
             val kept = try {
@@ -217,7 +227,8 @@ class ReceiveViewModel @Inject constructor(
 
     /** The reset confirmed: the local flags only, a fresh file; nothing is sent to the vault. Then Receive starts over. */
     fun resetSettings() {
-        if (!mutable.value.resetAsk || mutable.value.problem != ReceiveProblem.SETTINGS_UNREADABLE) return
+        val s = mutable.value
+        if (!s.resetAsk || s.problem != ReceiveProblem.SETTINGS_UNREADABLE || s.closed) return
         mutable.update { it.copy(resetAsk = false) }
         viewModelScope.launch {
             val done = wallets.resetSettings()

@@ -543,8 +543,13 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolea
         FeedTarget.Security -> navigateTopLevel(SettingsRoute)
         FeedTarget.Approvals -> navigateTopLevel(ApprovalsRoute)
         FeedTarget.VoteList -> navigateTopLevel(VotesRoute)
-        // A wallet's Spending limits exist only in a build with the wallet, and while its entry is shown.
-        is FeedTarget.WalletLimits -> if (walletShown) navigate(SpendingLimitsRoute(t.walletId)) { launchSingleTop = true }
+        // A wallet's Spending limits exist only in a build with the wallet, and while its entry is shown; else the Notifications list.
+        is FeedTarget.WalletLimits ->
+            if (walletShown) {
+                navigate(SpendingLimitsRoute(t.walletId)) { launchSingleTop = true }
+            } else {
+                navigate(NotificationsRoute()) { launchSingleTop = true }
+            }
         else -> feedRoute(t)?.let { navigate(it) { launchSingleTop = true } }
     }
 }

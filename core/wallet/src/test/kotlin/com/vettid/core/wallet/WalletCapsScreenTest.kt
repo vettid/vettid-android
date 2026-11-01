@@ -8,6 +8,7 @@ import com.vettid.core.data.vault.VaultFailure
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -107,7 +108,7 @@ class WalletCapsScreenTest {
         assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
         ops.calls.clear()
         val e = runCatching { m.raiseCaps(w.id, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
-        assertEquals(WalletsManager.CAPS_PENDING, e.code)
+        assertEquals(WalletsManager.SETTINGS_UNREADABLE, e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.") })
         assertEquals(500_000L, ops.wallets.getValue(w.id).perTxSats)
     }
@@ -146,7 +147,8 @@ class WalletCapsScreenTest {
         assertFalse(fresh.backedUp(id))
         assertEquals(emptyMap<String, WalletCaps>(), fresh.allPendingCaps())
         assertTrue(m.capsPending.value.isEmpty())
-        assertEquals(setOf(id), fresh.askCaps())
+        assertEquals(true, fresh.asksCaps(id))
+        assertEquals(true, fresh.asksCaps("01ANYTHING"))
         assertFalse(m.resetSettings())
     }
 
@@ -173,7 +175,8 @@ class WalletCapsScreenTest {
         // The question is asked again, and no address was issued for the wallet that has to answer it.
         assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(bare))
         assertTrue(ops.calls.none { it.startsWith("caps.") })
-        assertEquals(setOf(bare), WalletFlags(flagsFile).askCaps())
+        assertEquals(true, WalletFlags(flagsFile).asksCaps(bare))
+        assertEquals(true, WalletFlags(flagsFile).asksCaps(capped))
         // A restart does not forget the question.
         val again = manager()
         again.open()
@@ -192,7 +195,8 @@ class WalletCapsScreenTest {
         assertTrue(m.answerLimits(id, null))
         assertTrue(ops.calls.none { it.startsWith("caps.") })
         assertFalse(m.asksLimits(id))
-        assertTrue(WalletFlags(flagsFile).askCaps()!!.isEmpty())
+        assertEquals(false, WalletFlags(flagsFile).asksCaps(id))
+        assertEquals(true, WalletFlags(flagsFile).asksCaps("01OTHER"))
         assertTrue(m.receiveAddress(id) is ReceiveResult.Address)
     }
 
@@ -247,5 +251,40 @@ class WalletCapsScreenTest {
         m.open()
         assertFalse(m.resetSettings())
         assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
+    }
+
+    @Test
+    fun aResetBeforeTheListIsReadStillAsksEveryUncappedWalletAtReceive() = runBlocking {
+        val id = "01WALLET000000000000000001"
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        // The vault is open but its list has not been read: no wallet is known yet.
+        ops.listGate = kotlinx.coroutines.CompletableDeferred()
+        val m = manager()
+        val opening = CoroutineScope(Dispatchers.Default).launch { m.open() }
+        kotlinx.coroutines.delay(300)
+        assertTrue(m.wallets.value.isEmpty())
+        assertTrue(m.resetSettings())
+        assertEquals(true, WalletFlags(flagsFile).asksCaps(id))
+        wallet(id)
+        ops.listGate!!.complete(Unit)
+        opening.join()
+        assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(id))
+    }
+
+    @Test
+    fun limitsChosenInThisSessionSurviveTheReset() = runBlocking {
+        val id = "01WALLET000000000000000001"
+        wallet(id)
+        val m = manager()
+        m.open()
+        // Chosen now, not sent (the vault refuses), so pending in memory; then the file becomes unreadable and is reset.
+        ops.capsSetFails = "internal"
+        runCatching { m.create("New", Network.TESTNET4, "pw", caps) }
+        val pendingId = m.capsPending.value.single()
+        flagsFile.bytes = unreadable.encodeToByteArray()
+        assertTrue(m.resetSettings())
+        assertEquals(caps, WalletFlags(flagsFile).pendingCaps(pendingId))
+        assertTrue(m.isCapsPending(pendingId))
+        assertEquals(ReceiveResult.CapsPending, m.receiveAddress(pendingId))
     }
 }

@@ -311,4 +311,24 @@ class SpendingLimitsViewModelTest {
         assertEquals(1_000_000L, vm.state.value.perPeriod)
         assertFalse(vm.state.value.capsPending)
     }
+
+    @Test
+    fun aRaiseOnAnUnreadableSettingsFileSaysSoAndSendsNothing() = runTest {
+        val w = ops.wallet(id)
+        ops.wallets[id] = w.copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000)
+        flagsFile.bytes = """{"version":2}""".encodeToByteArray()
+        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        m.open()
+        val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.loaded }
+        vm.openRaise()
+        vm.setPerTx("600000")
+        vm.next()
+        vm.setPin("123456")
+        vm.setPassword("pw")
+        vm.confirmRaise()
+        eventually { vm.state.value.errorCode == WalletsManager.SETTINGS_UNREADABLE }
+        assertTrue(sent("caps.").isEmpty())
+        assertEquals("", vm.state.value.password)
+    }
 }
