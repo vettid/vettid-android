@@ -16,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -233,7 +234,8 @@ class WalletsManagerTest {
         m.open()
         ops.newGate = CompletableDeferred()
         val r = async { runCatching { m.newReceiveAddress(w.id) } }
-        while (ops.calls.none { it == "new" }) kotlinx.coroutines.yield()
+        // Waits for the call itself (not by reading the call list, which the call is writing to).
+        withTimeout(5_000) { ops.newStarted.await() }
         // The vault locks while it answers.
         m.clear()
         ops.newGate!!.complete(Unit)
