@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.ShellChrome
@@ -70,17 +71,35 @@ class WalletScreensTest {
     }
 
     @Test
-    fun aWrongWordSaysWhichAndOffersTheWordsAgain() {
+    fun aWrongWordEndsTheCheckWithOnlyTheWordsAgain() {
         var again = 0
         rule.setContent {
             BackupScreen(
-                BackupUiState(BackupStep.CHECK, words = words(), asked = listOf(10, 12, 20), candidates = listOf(10), wrong = 10),
+                BackupUiState(BackupStep.CHECK, words = words(), asked = listOf(10, 12, 20), wrong = 10),
                 BackupActions(onShowAgain = { again++ }),
             )
         }
-        rule.onNodeWithText("That's not word 11. Look at your paper again.").assertIsDisplayed()
+        rule.onNodeWithText("That isn't word 11. Look at your copy again.").assertIsDisplayed()
+        rule.onNodeWithTag("check_typed").assertDoesNotExist()
+        rule.onNodeWithTag("check_candidate_10").assertDoesNotExist()
         rule.onNodeWithTag("check_show_again").performClick()
         assertEquals(1, again)
+    }
+
+    @Test
+    fun aPassphraseIsShownUnderTheWords() {
+        rule.setContent {
+            BackupScreen(BackupUiState(BackupStep.PHRASE, words = PhraseWords(List(12) { "w$it".toCharArray() }, "Correct Horse".toCharArray())), BackupActions())
+        }
+        rule.onNodeWithTag("phrase_passphrase").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Correct Horse").assertExists()
+    }
+
+    @Test
+    fun theTestBannerShowsBeforeTheFirstWallet() {
+        rule.setContent { WalletsScreen(WalletsUiState(loading = false, testBuild = true), chrome, WalletsActions()) }
+        rule.onNodeWithText("Test network: these coins have no value.").assertIsDisplayed()
+        rule.onNodeWithText("No wallets yet").assertIsDisplayed()
     }
 
     @Test

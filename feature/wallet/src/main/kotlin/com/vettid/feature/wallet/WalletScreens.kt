@@ -1,5 +1,6 @@
 package com.vettid.feature.wallet
 
+import android.os.Build
 import android.view.View
 import android.view.contentcapture.ContentCaptureManager
 import androidx.compose.foundation.layout.Arrangement
@@ -23,11 +24,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +66,13 @@ internal fun networkLabel(network: Network?): String? = when (network) {
 }
 
 /**
+ * A string only `:feature:wallet` has, kept by R8 (the list's test tag): `walletMarkers` in app/build.gradle.kts fails a release APK
+ * that contains it, and a release built with `-PvettidWalletInRelease=true` must contain it. The DEX check's package names alone
+ * would miss the screens once R8 renames their packages.
+ */
+internal const val WALLET_SCREENS_MARKER = "vettid_wallet_screens"
+
+/**
  * The Wallet list (ANDROID-PLAN §4 screens table): each wallet with its chain's chip and "Not backed up" in the error colour; the
  * test-network banner; "No wallets yet"; **New wallet**. A failed read says so, with Try again.
  */
@@ -68,7 +81,7 @@ fun WalletsScreen(state: WalletsUiState, chrome: ShellChrome, actions: WalletsAc
     TopLevelScaffold(
         title = stringResource(R.string.wallet_title),
         chrome = chrome,
-        modifier = modifier,
+        modifier = modifier.testTag(WALLET_SCREENS_MARKER),
         overlay = {
             if (!state.loading && state.failed == null) {
                 VettIdFab(
@@ -93,23 +106,19 @@ fun WalletsScreen(state: WalletsUiState, chrome: ShellChrome, actions: WalletsAc
                 }
             }
             state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            state.rows.isEmpty() -> EmptyState(
-                icon = Icons.Outlined.AccountBalanceWallet,
-                title = stringResource(R.string.wallet_empty_title),
-                body = stringResource(R.string.wallet_empty_body),
-            )
+            state.rows.isEmpty() -> Column(Modifier.fillMaxSize()) {
+                // Every wallet this build can make is on a test network: the banner is there before the first one too.
+                if (state.testBuild) TestBanner()
+                EmptyState(
+                    icon = Icons.Outlined.AccountBalanceWallet,
+                    title = stringResource(R.string.wallet_empty_title),
+                    body = stringResource(R.string.wallet_empty_body),
+                )
+            }
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 if (state.testNetwork) {
                     item {
-                        // One sentence (the plan's draft), so not a NoticeCard (which wants a title and a body).
-                        Surface(
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth().padding(Spacing.l).testTag("wallet_test_banner"),
-                        ) {
-                            Text(stringResource(R.string.wallet_test_banner), modifier = Modifier.padding(Spacing.m))
-                        }
+                        TestBanner()
                     }
                 }
                 items(state.rows, key = { it.id }) { row -> WalletRowItem(row) { actions.onOpen(row) } }
@@ -160,39 +169,62 @@ data class BackupActions(
 /** Make a wallet and back it up, or back up one (ANDROID-PLAN §4 "Creating and backing up"): one step at a time. */
 @Composable
 fun BackupScreen(state: BackupUiState, actions: BackupActions, modifier: Modifier = Modifier) {
+    // One hold for the phrase and the check together, at one place in the composition: moving between them toggles nothing.
+    if (state.step == BackupStep.PHRASE || state.step == BackupStep.CHECK) {
+        SecureWindow()
+        HiddenFromCapture()
+    }
     when (state.step) {
         BackupStep.FORM -> NewWalletForm(state, actions, modifier)
-        BackupStep.PASSWORD -> FormScaffold(
-            title = stringResource(R.string.wallet_backup_title),
-            body = stringResource(R.string.wallet_backup_body),
-            primaryLabel = stringResource(R.string.wallet_backup_show),
-            onPrimary = actions.onReveal,
-            primaryEnabled = state.password.isNotEmpty(),
-            busy = state.busy,
-            onBack = actions.onBack,
-            modifier = modifier.testTag("wallet_backup_password"),
-        ) {
-            Text(stringResource(R.string.wallet_backup_password))
-            Password(state, actions)
-        }
+        BackupStep.PASSWORD -> PasswordStep(state, actions, modifier)
         BackupStep.PHRASE -> PhraseStep(state, actions, modifier)
         BackupStep.CHECK -> CheckStep(state, actions, modifier)
-        BackupStep.DONE -> FormScaffold(
-            title = stringResource(if (state.backedUp) R.string.wallet_backed_up else R.string.wallet_backup_title),
-            body = when {
-                state.revealFailed -> stringResource(R.string.wallet_created_reveal_failed)
-                state.saveFailed -> stringResource(R.string.wallet_save_failed)
-                state.backedUp -> null
-                else -> stringResource(R.string.wallet_backup_body)
-            },
-            primaryLabel = stringResource(if (state.saveFailed) R.string.wallet_try_again else R.string.wallet_done),
-            onPrimary = if (state.saveFailed) actions.onSaveAgain else actions.onBack,
-            busy = state.busy,
-            secondaryLabel = if (state.saveFailed) stringResource(R.string.wallet_done) else null,
-            onSecondary = actions.onBack,
-            modifier = modifier.testTag("wallet_backup_done"),
-        ) {}
+        BackupStep.DONE -> DoneStep(state, actions, modifier)
     }
+}
+
+/** A wallet that is not backed up yet: the password, to show the phrase again. */
+@Composable
+private fun PasswordStep(state: BackupUiState, actions: BackupActions, modifier: Modifier) {
+    FormScaffold(
+        title = stringResource(R.string.wallet_backup_title),
+        body = stringResource(R.string.wallet_backup_body),
+        primaryLabel = stringResource(R.string.wallet_backup_show),
+        onPrimary = actions.onReveal,
+        primaryEnabled = state.password.isNotEmpty(),
+        busy = state.busy,
+        onBack = actions.onBack,
+        modifier = modifier.testTag("wallet_backup_password"),
+    ) {
+        Text(stringResource(R.string.wallet_backup_password))
+        Password(state, actions)
+    }
+}
+
+/** The end: "Backed up", or why not (the reveal failed, or the check passed but could not be recorded: Try again). */
+@Composable
+private fun DoneStep(state: BackupUiState, actions: BackupActions, modifier: Modifier) {
+    val title = when {
+        state.backedUp -> R.string.wallet_backed_up
+        state.saveFailed -> R.string.wallet_not_recorded
+        else -> R.string.wallet_backup_title
+    }
+    val body = when {
+        state.revealFailed -> R.string.wallet_created_reveal_failed
+        state.saveFailed -> R.string.wallet_save_failed
+        state.backedUp -> null
+        else -> R.string.wallet_backup_body
+    }
+    FormScaffold(
+        title = stringResource(title),
+        body = body?.let { stringResource(it) },
+        primaryLabel = stringResource(if (state.saveFailed) R.string.wallet_try_again else R.string.wallet_done),
+        onPrimary = if (state.saveFailed) actions.onSaveAgain else actions.onBack,
+        busy = state.busy,
+        secondaryLabel = if (state.saveFailed) stringResource(R.string.wallet_done) else null,
+        onSecondary = actions.onBack,
+        modifier = modifier.testTag("wallet_backup_done"),
+    ) {}
 }
 
 @Composable
@@ -241,7 +273,11 @@ private fun Password(state: BackupUiState, actions: BackupActions) {
         value = state.password,
         onValueChange = actions.onPassword,
         label = stringResource(R.string.wallet_password_label),
-        error = state.error?.let { stringResource(it.messageRes()) },
+        error = when (state.problem) {
+            BackupProblem.LIMIT -> stringResource(R.string.wallet_limit)
+            BackupProblem.PIN_REQUIRED -> stringResource(R.string.wallet_pin_required)
+            null -> state.error?.let { stringResource(it.messageRes()) }
+        },
         onImeAction = { if (state.step == BackupStep.FORM) actions.onCreate() else actions.onReveal() },
         modifier = Modifier.fillMaxWidth().testTag("wallet_password"),
     )
@@ -250,8 +286,6 @@ private fun Password(state: BackupUiState, actions: BackupActions) {
 /** The words, numbered, in two columns; no copy. The window is secure while it is shown. */
 @Composable
 private fun PhraseStep(state: BackupUiState, actions: BackupActions, modifier: Modifier) {
-    SecureWindow()
-    HiddenFromCapture()
     val words = state.words ?: return
     FormScaffold(
         title = stringResource(R.string.wallet_phrase_title),
@@ -275,6 +309,12 @@ private fun PhraseStep(state: BackupUiState, actions: BackupActions, modifier: M
                 }
             }
         }
+        if (words.hasPassphrase) {
+            Column(Modifier.testTag("phrase_passphrase")) {
+                Text(stringResource(R.string.wallet_phrase_passphrase), style = MaterialTheme.typography.labelLarge)
+                Text(words.passphrase(), fontWeight = FontWeight.SemiBold)
+            }
+        }
         Text(
             stringResource(R.string.wallet_phrase_no_screenshots),
             style = MaterialTheme.typography.bodySmall,
@@ -286,10 +326,8 @@ private fun PhraseStep(state: BackupUiState, actions: BackupActions, modifier: M
 /** "Which is word n?": four candidates, or typed. The window is secure while it is shown. */
 @Composable
 private fun CheckStep(state: BackupUiState, actions: BackupActions, modifier: Modifier) {
-    SecureWindow()
-    HiddenFromCapture()
     val words = state.words ?: return
-    val live = !state.busy
+    val live = state.answering
     val at = state.asked.getOrNull(state.askIndex) ?: 0
     FormScaffold(
         title = stringResource(R.string.wallet_check_title),
@@ -300,6 +338,18 @@ private fun CheckStep(state: BackupUiState, actions: BackupActions, modifier: Mo
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_check"),
     ) {
+        // A wrong answer ends the check: only "Show the words again" is left (the next check asks new positions).
+        state.wrong?.let { w ->
+            Text(
+                stringResource(R.string.wallet_check_wrong, w + 1),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("check_wrong"),
+            )
+            TextButton(onClick = actions.onShowAgain, enabled = !state.busy, modifier = Modifier.testTag("check_show_again")) {
+                Text(stringResource(R.string.wallet_check_show_again))
+            }
+            return@FormScaffold
+        }
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
             // Tagged by position, never by the word (debug builds expose test tags as resource ids).
             for (i in state.candidates) {
@@ -312,8 +362,10 @@ private fun CheckStep(state: BackupUiState, actions: BackupActions, modifier: Mo
                 }
             }
         }
+        // No copy, cut or paste menu on the typed word: nothing of the phrase reaches the clipboard from here.
         NoKeyboardLearning {
-            OutlinedTextField(
+            CompositionLocalProvider(LocalTextToolbar provides NoTextToolbar) {
+                OutlinedTextField(
                 value = state.typed,
                 onValueChange = actions.onTyped,
                 label = { Text(stringResource(R.string.wallet_check_type)) },
@@ -322,21 +374,40 @@ private fun CheckStep(state: BackupUiState, actions: BackupActions, modifier: Mo
                 keyboardOptions = visibleSecretKeyboard(),
                 modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("check_typed"),
             )
+            }
         }
         TextButton(onClick = { actions.onAnswer(state.typed) }, enabled = live && state.typed.isNotBlank()) {
             Text(stringResource(R.string.wallet_continue))
         }
-        state.wrong?.let { w ->
-            Text(
-                stringResource(R.string.wallet_check_wrong, w + 1),
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("check_wrong"),
-            )
-            TextButton(onClick = actions.onShowAgain, enabled = live, modifier = Modifier.testTag("check_show_again")) {
-                Text(stringResource(R.string.wallet_check_show_again))
-            }
-        }
     }
+}
+
+/** "Test network: these coins have no value." One sentence (the plan's draft), so not a NoticeCard (which wants a title and a body). */
+@Composable
+private fun TestBanner() {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth().padding(Spacing.l).testTag("wallet_test_banner"),
+    ) {
+        Text(stringResource(R.string.wallet_test_banner), modifier = Modifier.padding(Spacing.m))
+    }
+}
+
+/** A text toolbar that never shows: no copy, cut, paste or select-all menu. */
+private object NoTextToolbar : TextToolbar {
+    override val status: TextToolbarStatus get() = TextToolbarStatus.Hidden
+
+    override fun hide() = Unit
+
+    override fun showMenu(
+        rect: Rect,
+        onCopyRequested: (() -> Unit)?,
+        onPasteRequested: (() -> Unit)?,
+        onCutRequested: (() -> Unit)?,
+        onSelectAllRequested: (() -> Unit)?,
+    ) = Unit
 }
 
 /**
@@ -357,8 +428,13 @@ private fun HiddenFromCapture() {
         val important = view.importantForContentCapture
         capture?.setContentCaptureEnabled(false)
         view.importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS
+        // API 34+: only accessibility services that are accessibility tools (TalkBack) read the words; others are refused them. The
+        // view has no other setting of its own (the app sets it nowhere else), so it goes back to AUTO, the default.
+        val dataSensitive = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        if (dataSensitive) view.setAccessibilityDataSensitive(View.ACCESSIBILITY_DATA_SENSITIVE_YES)
         onDispose {
             view.importantForContentCapture = important
+            if (dataSensitive) view.setAccessibilityDataSensitive(View.ACCESSIBILITY_DATA_SENSITIVE_AUTO)
             if (captureWasOn) capture?.setContentCaptureEnabled(true)
         }
     }

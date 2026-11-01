@@ -90,7 +90,13 @@ object AuditKinds {
          * [res] with the name of the entry's connection, device or item ([who]); [anyRes] when that name is not known or
          * the connection, device or item is gone (the title drops the name).
          */
-        data class Named(@param:StringRes val res: Int, @param:StringRes val anyRes: Int, val who: Who) : Title
+        data class Named(
+            @param:StringRes val res: Int,
+            @param:StringRes val anyRes: Int,
+            val who: Who,
+            /** With [Who.CONNECTION_ELSE_ITEM]: the title when only the item's name is known (no connection's request). */
+            @param:StringRes val itemRes: Int? = null,
+        ) : Title
 
         /**
          * A vote entry (ANDROID-PLAN 0.1.102 "Votes"): [res] names the vote's title in quotes, [anyRes] is the same without it
@@ -349,7 +355,12 @@ object AuditKinds {
             Title.Named(R.string.history_kind_wallet_address_issued_named, R.string.history_kind_wallet_address_issued, Who.CONNECTION),
         "wallet.cap_refused" to
             // "with the connection's name for a request" (the plan's History paragraph).
-            Title.Named(R.string.history_kind_wallet_cap_refused_named, R.string.history_kind_wallet_cap_refused, Who.CONNECTION_ELSE_ITEM),
+            Title.Named(
+                R.string.history_kind_wallet_cap_refused_request,
+                R.string.history_kind_wallet_cap_refused,
+                Who.CONNECTION_ELSE_ITEM,
+                itemRes = R.string.history_kind_wallet_cap_refused_named,
+            ),
         "wallet.caps_lowered" to
             Title.Named(R.string.history_kind_wallet_caps_lowered_named, R.string.history_kind_wallet_caps_lowered, Who.ITEM),
         "wallet.caps_raised" to

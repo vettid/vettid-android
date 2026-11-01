@@ -26,6 +26,7 @@ import com.vettid.app.debug.DebugHost
 import com.vettid.app.debug.debugTools
 import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.data.feed.FeedTarget
+import com.vettid.core.data.wallet.WalletSecretRoutes
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
@@ -334,7 +335,7 @@ fun AppShell(
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back, onLeaveDetail = navController::leaveApprovalDetail)
-                        walletDestinations(chrome, navigate = navigate, onBack = back)
+                        walletDestinations(chrome, navigate = navigate, leave = navController::leaveEntry)
                         votesDestination(
                             chrome,
                             VotesHost(
@@ -581,11 +582,27 @@ internal fun NavHostController.leaveApprovalDetail(entryId: String) {
     }
 }
 
+/** Leaves the screen of the back stack entry [entryId] (once: a second call finds another entry in front and does nothing). */
+internal fun NavHostController.leaveEntry(entryId: String) {
+    if (currentBackStackEntry?.id == entryId) popBackStack()
+}
+
+/**
+ * The wallet's screens that hold a recovery phrase are never saved with the stack ([WalletSecretRoutes]): leaving them by the
+ * drawer or a notification pops them, so their view model (and the words) goes. By predicate: a build without the wallet has none
+ * of them in its graph, and nothing to pop.
+ */
+internal fun NavHostController.popWalletSecrets() {
+    val first = currentBackStack.value.firstOrNull { e -> WalletSecretRoutes.any { e.destination.hasRoute(it) } } ?: return
+    popBackStack(first.destination.id, inclusive = true)
+}
+
 /** Drawer navigation: one copy of each top-level screen, state saved per destination. */
-private fun NavHostController.navigateTopLevel(route: Any) {
+internal fun NavHostController.navigateTopLevel(route: Any) {
     // The pairing is never saved with the stack (state saving keeps the screen's view model alive, and with it a pairing
     // nobody answers): leaving it by the drawer or a notification pops it, which rejects it.
     popBackStack<PairRoute>(inclusive = true)
+    popWalletSecrets()
     navigate(route) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true

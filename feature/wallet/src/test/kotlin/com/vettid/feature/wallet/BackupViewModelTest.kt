@@ -67,9 +67,7 @@ class BackupViewModelTest {
         assertEquals(s.asked.sorted(), s.asked)
         assertEquals(4, s.candidates.size)
         assertTrue(s.asked[0] in s.candidates)
-        // A wrong word, then the three right ones (typed in any case).
-        vm.answer("nope")
-        assertEquals(s.asked[0], vm.state.value.wrong)
+        // The three right ones, typed in any case.
         for (at in s.asked) vm.answer(" " + ops.words[at].uppercase() + " ")
         eventually { vm.state.value.step == BackupStep.DONE }
         assertEquals(BackupStep.DONE, vm.state.value.step)
@@ -140,6 +138,10 @@ class BackupViewModelTest {
     fun theNameRule() {
         assertTrue(WalletNames.valid("Savings"))
         assertTrue(WalletNames.valid("x".repeat(128)))
+        // The vault counts bytes of UTF-8: 64 two-byte letters fit, 65 do not; a blank name is no name.
+        assertTrue(WalletNames.valid("é".repeat(64)))
+        assertFalse(WalletNames.valid("é".repeat(65)))
+        assertFalse(WalletNames.valid("   "))
         assertFalse(WalletNames.valid(""))
         assertFalse(WalletNames.valid("x".repeat(129)))
         assertFalse(WalletNames.valid("a${Char(7)}b"))
@@ -170,7 +172,6 @@ class BackupViewModelTest {
         eventually { vm.state.value.step == BackupStep.PHRASE }
         vm.startCheck()
         val s = vm.state.value
-        vm.answer("nope")
         vm.pick(s.asked[0])
         vm.answer(ops.words[s.asked[1]])
         vm.answer(ops.words[s.asked[2]])
@@ -229,5 +230,87 @@ class BackupViewModelTest {
         eventually { list.state.value.rows.singleOrNull()?.backedUp == false }
         m.confirmBackup("01OLD000000000000000000000")
         eventually { list.state.value.rows.single().backedUp }
+    }
+    @Test
+    fun aWrongAnswerEndsTheCheckAndTheNextAsksNewPositions() = runTest {
+        val vm = vm()
+        vm.setName("Savings")
+        vm.setPassword("pw")
+        vm.create()
+        eventually { vm.state.value.step == BackupStep.PHRASE }
+        vm.startCheck()
+        val first = vm.state.value.asked
+        vm.pick(vm.state.value.candidates.first { it != first[0] && !ops.words[it].equals(ops.words[first[0]], ignoreCase = true) })
+        assertEquals(first[0], vm.state.value.wrong)
+        // Ended: no other candidate, typed word or the right one is taken any more.
+        assertTrue(vm.state.value.candidates.isEmpty())
+        vm.pick(first[0])
+        vm.answer(ops.words[first[0]])
+        assertEquals(0, vm.state.value.askIndex)
+        assertEquals(first[0], vm.state.value.wrong)
+        vm.showAgain()
+        assertEquals(BackupStep.PHRASE, vm.state.value.step)
+        // The next check draws its positions again (the seeded random gives another set here).
+        var drawn = first
+        repeat(5) {
+            vm.startCheck()
+            drawn = vm.state.value.asked
+            if (drawn != first) return@repeat
+        }
+        assertTrue(drawn != first)
+        assertEquals(null, vm.state.value.wrong)
+    }
+
+    @Test
+    fun aRepeatedWordIsOfferedOnceAndEitherCopyOfItIsRight() = runTest {
+        ops.words = List(12) { i -> if (i % 4 == 0) "same" else "word$i" }
+        val vm = vm()
+        vm.setName("Savings")
+        vm.setPassword("pw")
+        vm.create()
+        eventually { vm.state.value.step == BackupStep.PHRASE }
+        vm.startCheck()
+        val s = vm.state.value
+        assertEquals(4, s.candidates.map { ops.words[it] }.distinct().size)
+        for (at in s.asked) vm.answer(ops.words[at])
+        eventually { vm.state.value.step == BackupStep.DONE }
+        assertTrue(vm.state.value.backedUp)
+    }
+
+    @Test
+    fun aPassphraseIsShownWithTheWordsAndWipedWithThem() = runTest {
+        ops.passphrase = "Correct Horse"
+        val vm = vm()
+        vm.setName("Savings")
+        vm.setPassword("pw")
+        vm.create()
+        eventually { vm.state.value.step == BackupStep.PHRASE }
+        val shown = vm.state.value.words!!
+        assertTrue(shown.hasPassphrase)
+        assertEquals("Correct Horse", shown.passphrase())
+        vm.startCheck()
+        for (at in vm.state.value.asked) vm.answer(ops.words[at])
+        eventually { vm.state.value.step == BackupStep.DONE }
+        assertEquals(String(CharArray("Correct Horse".length)), shown.passphrase())
+    }
+
+    @Test
+    fun theVaultsLimitAndPinRequiredHaveTheirOwnTexts() = runTest {
+        ops.createFails = "limit"
+        val vm = vm()
+        vm.setName("Savings")
+        vm.setPassword("pw")
+        vm.create()
+        eventually { vm.state.value.problem != null }
+        assertEquals(BackupProblem.LIMIT, vm.state.value.problem)
+        ops.wallet("01CAP000000000000000000000")
+        ops.revealFails = false
+        ops.revealCode = "pin_required"
+        val back = vm(SavedStateHandle(mapOf("walletId" to "01CAP000000000000000000000")))
+        back.setPassword("pw")
+        back.reveal()
+        eventually { back.state.value.problem != null }
+        assertEquals(BackupProblem.PIN_REQUIRED, back.state.value.problem)
+        assertEquals("", back.state.value.password)
     }
 }

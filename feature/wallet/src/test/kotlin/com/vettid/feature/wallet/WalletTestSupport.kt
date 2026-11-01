@@ -19,6 +19,11 @@ internal class FakeWallets : WalletOps {
     val wallets = linkedMapOf<String, VaultWallet>()
     val calls = mutableListOf<String>()
     var revealFails = false
+    /** A vault error code for the reveal (e.g. `pin_required`), else none. */
+    var revealCode: String? = null
+    /** A vault error code for the create (e.g. `limit`), else none. */
+    var createFails: String? = null
+    var passphrase: String? = null
     var listFails = false
     var words = List(24) { i -> "word${'a' + (i % 26)}$i" }
 
@@ -35,14 +40,16 @@ internal class FakeWallets : WalletOps {
 
     override suspend fun create(name: String, network: String, password: String): VaultWallet {
         calls += "create:$name:$network:${password.isNotEmpty()}"
+        createFails?.let { throw VaultOpException("wallet.create", it) }
         if (password != "pw") throw VaultOpException("wallet.create", "bad_password")
         return wallet("01NEW000000000000000000000", name, network)
     }
 
     override suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase {
         calls += "reveal:$walletId"
+        revealCode?.let { throw VaultOpException("item.reveal", it) }
         if (revealFails || password != "pw") throw VaultOpException("item.reveal", "bad_password")
-        return RevealedPhrase(words.joinToString(" ").toCharArray())
+        return RevealedPhrase(words.joinToString(" ").toCharArray(), passphrase?.toCharArray())
     }
 
     override suspend fun delete(walletId: String, password: String) = Unit

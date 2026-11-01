@@ -13,6 +13,7 @@ import com.vettid.feature.credential.CredentialActions
 import com.vettid.feature.credential.CredentialContent
 import com.vettid.feature.credential.CredentialUiState
 import com.vettid.feature.wallet.BackupActions
+import com.vettid.feature.wallet.BackupProblem
 import com.vettid.feature.wallet.BackupScreen
 import com.vettid.feature.wallet.BackupStep
 import com.vettid.feature.wallet.BackupUiState
@@ -36,8 +37,9 @@ internal object WalletCatalog {
     )
 
     /** Twelve made-up words (not a phrase of any wallet: no checksum). */
-    private fun words() = PhraseWords(
+    private fun words(passphrase: String? = null) = PhraseWords(
         listOf("orbit", "maple", "candle", "river", "fossil", "lantern", "velvet", "harbor", "pencil", "meadow", "copper", "thunder").map { it.toCharArray() },
+        passphrase?.toCharArray(),
     )
     private val asked = listOf(2, 6, 9)
 
@@ -55,13 +57,16 @@ internal object WalletCatalog {
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "wallet" to { WalletsScreen(WalletsUiState(loading = false, rows = rows), chrome, WalletsActions()) },
-        "wallet.empty" to { WalletsScreen(WalletsUiState(loading = false), chrome, WalletsActions()) },
+        "wallet.empty" to { WalletsScreen(WalletsUiState(loading = false, testBuild = true), chrome, WalletsActions()) },
         "wallet.failed" to { WalletsScreen(WalletsUiState(loading = false, failed = FailureKind.NETWORK), chrome, WalletsActions()) },
         "wallet.new" to { Backup(form.copy(name = "Savings", password = "secret")) },
         "wallet.new_bad_name" to { Backup(form.copy(name = "", password = "secret")) },
+        "wallet.new_limit" to { Backup(form.copy(name = "Savings", problem = BackupProblem.LIMIT)) },
         "wallet.new_bad_password" to { Backup(form.copy(name = "Savings", error = FailureKind.BAD_PASSWORD)) },
         "wallet.password" to { Backup(BackupUiState(BackupStep.PASSWORD, password = "secret")) },
+        "wallet.password_pin_required" to { Backup(BackupUiState(BackupStep.PASSWORD, problem = BackupProblem.PIN_REQUIRED)) },
         "wallet.phrase" to { Backup(BackupUiState(BackupStep.PHRASE, words = words())) },
+        "wallet.phrase_passphrase" to { Backup(BackupUiState(BackupStep.PHRASE, words = words(passphrase = "Correct Horse"))) },
         "wallet.check" to { Backup(check()) },
         "wallet.check_wrong" to { Backup(check(wrong = asked[1])) },
         "wallet.done" to { Backup(BackupUiState(BackupStep.DONE, backedUp = true)) },

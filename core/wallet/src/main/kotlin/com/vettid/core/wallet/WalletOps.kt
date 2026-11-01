@@ -18,7 +18,7 @@ import kotlinx.serialization.json.JsonPrimitive
  * on disk, in saved state or in a log. The decrypted item's bytes are wiped once read, but the JSON parser's `String` copies of the
  * value cannot be: they are left to the garbage collector, as every `String` on the JVM is.
  */
-class RevealedPhrase(private val chars: CharArray) {
+class RevealedPhrase(private val chars: CharArray, private val pass: CharArray? = null) {
     @Volatile
     private var wiped = false
 
@@ -38,9 +38,13 @@ class RevealedPhrase(private val chars: CharArray) {
 
     val wordCount: Int get() = words().also { w -> w.forEach { it.fill(Char(0)) } }.size
 
+    /** The BIP39 passphrase the wallet was imported with, or null when it has none (none once wiped). A copy: wipe it too. */
+    fun passphrase(): CharArray? = if (wiped) null else pass?.copyOf()
+
     fun wipe() {
         wiped = true
         chars.fill(Char(0))
+        pass?.fill(Char(0))
     }
 
     override fun toString(): String = "RevealedPhrase"
@@ -82,11 +86,12 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     override suspend fun revealPhrase(walletId: String, password: String): RevealedPhrase {
         val a = api()
         // The field ids of the wallet's item (`wallet.btc`: two password fields, "Recovery phrase" and "Passphrase").
-        val field = a.itemGet(walletId).fields.firstOrNull { it.label == PHRASE_LABEL }?.fieldId
-            ?: throw WalletWireException("phrase field")
+        val fields = a.itemGet(walletId).fields
+        val field = fields.firstOrNull { it.label == PHRASE_LABEL }?.fieldId ?: throw WalletWireException("phrase field")
+        val passField = fields.firstOrNull { it.label == PASSPHRASE_LABEL }?.fieldId
         val revealed = a.itemRevealCritical(password, walletId)
         try {
-            return phraseOf(revealed.json(), field)
+            return phraseOf(revealed.json(), field, passField)
         } finally {
             revealed.wipe()
         }
@@ -105,18 +110,25 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
 
     internal companion object {
         const val PHRASE_LABEL = "Recovery phrase"
+        const val PASSPHRASE_LABEL = "Passphrase"
 
-        /** The phrase's words from a revealed item's plaintext (`{"fields": [{field_id, value}]}`), normalised to single spaces. */
+        /**
+         * The phrase's words from a revealed item's plaintext (`{"fields": [{field_id, value}]}`), normalised to single spaces, and
+         * the passphrase from [passFieldId] (vettid-vault `features/wallet`: "Passphrase", empty for a wallet made without one),
+         * kept exactly as stored: a passphrase's spaces and case are part of it.
+         */
         @Suppress("ThrowsCount")
-        fun phraseOf(o: JsonObject, fieldId: String): RevealedPhrase {
+        fun phraseOf(o: JsonObject, fieldId: String, passFieldId: String? = null): RevealedPhrase {
             val fields = o["fields"] as? JsonArray ?: throw WalletWireException("fields")
-            val value = fields.firstNotNullOfOrNull { e ->
-                (e as? JsonObject)?.takeIf { VaultJson.str(it, "field_id") == fieldId }?.get("value") as? JsonPrimitive
-            }?.takeIf { it.isString }?.content ?: throw WalletWireException("phrase")
-            val words = value.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            fun value(id: String): String? = fields.firstNotNullOfOrNull { e ->
+                (e as? JsonObject)?.takeIf { VaultJson.str(it, "field_id") == id }?.get("value") as? JsonPrimitive
+            }?.takeIf { it.isString }?.content
+            val phrase = value(fieldId) ?: throw WalletWireException("phrase")
+            val words = phrase.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
             if (words.size !in PHRASE_WORDS) throw WalletWireException("phrase length")
-            // The array is the phrase's own (RevealedPhrase keeps it and wipes it); no other copy of it is made here.
-            return RevealedPhrase(words.joinToString(" ").toCharArray())
+            val pass = passFieldId?.let(::value)?.takeIf { it.isNotEmpty() }
+            // The arrays are the phrase's own (RevealedPhrase keeps them and wipes them); no other copy of them is made here.
+            return RevealedPhrase(words.joinToString(" ").toCharArray(), pass?.toCharArray())
         }
 
         /** BIP39's lengths, as the vault accepts them. */

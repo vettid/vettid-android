@@ -48,7 +48,7 @@ object HistoryText {
         is AuditKinds.Title.Named -> {
             val name = nameOf(t.who, names)
             val clean = AccountNames.isolateOrNull(name)
-            if (clean != null) stringResource(t.res, clean) else stringResource(t.anyRes)
+            if (clean != null) stringResource(resOf(t, names), clean) else stringResource(t.anyRes)
         }
         is AuditKinds.Title.Vote -> {
             val (hasTitle, args) = voteArgs(
@@ -90,6 +90,10 @@ object HistoryText {
         return (title != null) to args.toTypedArray()
     }
 
+    /** The title with the name: [AuditKinds.Title.Named.itemRes] when the name shown is the item's in place of a connection's. */
+    private fun resOf(t: AuditKinds.Title.Named, names: EntryNames): Int =
+        if (t.who == AuditKinds.Who.CONNECTION_ELSE_ITEM && names.connection == null && t.itemRes != null) t.itemRes else t.res
+
     /** The name a [AuditKinds.Title.Named] shows, or null. */
     private fun nameOf(who: AuditKinds.Who, names: EntryNames): String? = when (who) {
         AuditKinds.Who.CONNECTION -> names.connection
@@ -102,7 +106,7 @@ object HistoryText {
     private fun named(context: Context, t: AuditKinds.Title.Named, names: EntryNames, isolate: Boolean): String {
         val name = nameOf(t.who, names)
         val clean = if (isolate) AccountNames.isolateOrNull(name) else AccountNames.cleaned(name)
-        return if (clean != null) context.getString(t.res, clean) else context.getString(t.anyRes)
+        return if (clean != null) context.getString(resOf(t, names), clean) else context.getString(t.anyRes)
     }
 
     /**

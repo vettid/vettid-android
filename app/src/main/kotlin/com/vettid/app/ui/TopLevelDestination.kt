@@ -41,8 +41,8 @@ enum class TopLevelDestination(
     Votes(VotesRoute, Icons.Outlined.HowToVote, R.string.nav_votes, group = 0),
     // "Vault" in the UI (owner feedback 2026-10-07); the code keeps the Items names.
     Items(ItemsRoute, Icons.Outlined.Inventory2, R.string.nav_items, group = 1),
-    // Bitcoin wallets (ANDROID-PLAN §4 "Wallet"): after Vault; shown only when the vault answers `wallet.list` (WalletAccess), never
-    // in a build without the wallet.
+    // Bitcoin wallets (ANDROID-PLAN §4 "Wallet"): after Vault (Items). Shown while the vault is open unless it answered that it has
+    // no wallets (`WalletAccess.shown`); never in a build without the wallet (`NoWalletAccess`).
     Wallet(WalletRoute, Icons.Outlined.AccountBalanceWallet, R.string.nav_wallet, group = 1),
     // Paired agents and desktops (ANDROID-PLAN 0.1.53 AA1, decision 13): after Vault, before History. No badge: what a
     // device asks for waits in Approvals.

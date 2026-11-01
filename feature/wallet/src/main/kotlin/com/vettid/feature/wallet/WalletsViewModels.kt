@@ -7,6 +7,7 @@ import androidx.navigation.toRoute
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.wallet.RevealedPhrase
 import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
@@ -35,6 +36,8 @@ data class WalletsUiState(
     val rows: List<WalletRow> = emptyList(),
     /** The last read failed (shown with Try again: a read that failed at the unlock is not tried again by itself). */
     val failed: FailureKind? = null,
+    /** The build makes wallets on test networks only (no mainnet): the banner shows before the first wallet too. */
+    val testBuild: Boolean = false,
 ) {
     /** "Test network: these coins have no value." Every wallet the staging app holds is on one. */
     val testNetwork: Boolean get() = rows.any { it.network != Network.MAINNET }
@@ -57,6 +60,7 @@ class WalletsViewModel @Inject constructor(private val wallets: WalletsManager) 
             loading = availability == WalletAvailability.UNKNOWN && failed == null,
             rows = list.map { w -> WalletRow(w.id, w.name, wallets.networkOf(w), w.networkName, wallets.backedUp(w.id)) },
             failed = failed,
+            testBuild = !wallets.offers(Network.MAINNET),
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, WalletsUiState())
 
@@ -95,8 +99,14 @@ enum class BackupStep {
  * flow ends. A word becomes a `String` only to be drawn ([word]); the check compares the arrays ([matches], [same]). Prints its type
  * name only; equal only to itself.
  */
-class PhraseWords(private val words: List<CharArray>) {
+class PhraseWords(private val words: List<CharArray>, private val pass: CharArray? = null) {
     val size: Int get() = words.size
+
+    /** The wallet has a BIP39 passphrase (an imported one): it is shown under the words, and is part of the backup. */
+    val hasPassphrase: Boolean get() = pass != null
+
+    /** The passphrase, for drawing it; "" without one. */
+    fun passphrase(): String = pass?.let(::String).orEmpty()
 
     /** The word at [i], for drawing it. */
     fun word(i: Int): String = String(words[i])
@@ -107,7 +117,10 @@ class PhraseWords(private val words: List<CharArray>) {
     /** Whether the words at [i] and [j] are the same word, in any case. */
     fun same(i: Int, j: Int): Boolean = equalIgnoringCase(words[i], CharBuffer.wrap(words[j]))
 
-    fun wipe() = words.forEach { it.fill(Char(0)) }
+    fun wipe() {
+        words.forEach { it.fill(Char(0)) }
+        pass?.fill(Char(0))
+    }
 
     override fun toString(): String = "PhraseWords"
 
@@ -138,8 +151,13 @@ data class BackupUiState(
     /** The positions of the four words offered for the position asked now (the right one and three others), shuffled. */
     val candidates: List<Int> = emptyList(),
     val typed: String = "",
-    /** The position last answered wrong (0-based), for "That's not word n". */
+    /**
+     * The position answered wrong (0-based): the check ends there ("That isn't word n"), and only "Show the words again" is left;
+     * the next check asks new positions, so trying every candidate never passes it.
+     */
     val wrong: Int? = null,
+    /** Why the vault refused the last request, when it has its own text ([BackupProblem]); else [error]. */
+    val problem: BackupProblem? = null,
     /** The wallet was made, but its phrase could not be shown: the member backs it up from its row. */
     val revealFailed: Boolean = false,
     /** Done with the phrase checked. */
@@ -154,17 +172,30 @@ data class BackupUiState(
     /** Nothing in progress, and the vault still open: an action may start. */
     val idle: Boolean get() = !busy && !closed
 
+    /** An answer may be given: the check is shown, idle, and not ended by a wrong answer. */
+    val answering: Boolean get() = step == BackupStep.CHECK && idle && wrong == null
+
     override fun toString(): String = "BackupUiState(step=$step)"
 }
 
-/** The rule for a wallet's name (ANDROID-PLAN §4 screens table): 1–128 characters, no control characters. */
-object WalletNames {
-    const val MAX = 128
+/** A vault refusal of the flow that has its own text. */
+enum class BackupProblem {
+    /** `limit` on `wallet.create`: "Your vault holds 16 wallets, the most it can." */
+    LIMIT,
 
-    fun valid(name: String): Boolean {
-        val n = name.codePointCount(0, name.length)
-        return n in 1..MAX && name.codePoints().noneMatch { Character.getType(it) == Character.CONTROL.toInt() }
-    }
+    /** `pin_required` on the reveal: a wallet with a spending limit; this version cannot ask for the PIN yet (W1d). */
+    PIN_REQUIRED,
+}
+
+/**
+ * The rule for a wallet's name (ANDROID-PLAN §4 screens table): 1–128 bytes of UTF-8, as the vault counts them, not blank, no
+ * control characters.
+ */
+object WalletNames {
+    const val MAX_BYTES = 128
+
+    fun valid(name: String): Boolean = name.isNotBlank() && name.toByteArray(Charsets.UTF_8).size <= MAX_BYTES &&
+        name.codePoints().noneMatch { Character.getType(it) == Character.CONTROL.toInt() }
 }
 
 /**
@@ -214,7 +245,7 @@ class BackupViewModel internal constructor(
 
     fun setNetwork(n: Network) = mutable.update { it.copy(network = n) }
 
-    fun setPassword(v: String) = mutable.update { it.copy(password = v, error = null, errorCode = null) }
+    fun setPassword(v: String) = mutable.update { it.copy(password = v, error = null, errorCode = null, problem = null) }
 
     /** "Create wallet": `wallet.create`, then the reveal with the same password; the password is blanked at once. */
     fun create() {
@@ -222,7 +253,7 @@ class BackupViewModel internal constructor(
         val network = s.network ?: return
         if (!s.idle || !s.nameValid || s.password.isEmpty()) return
         val pw = s.password
-        mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null) }
+        mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null, problem = null) }
         viewModelScope.launch {
             try {
                 val c = wallets.create(s.name, network, pw)
@@ -234,7 +265,7 @@ class BackupViewModel internal constructor(
                     show(p)
                 }
             } catch (e: VaultFailure) {
-                mutable.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+                refused(e)
             }
         }
     }
@@ -245,19 +276,28 @@ class BackupViewModel internal constructor(
         val s = mutable.value
         if (!s.idle || s.password.isEmpty()) return
         val pw = s.password
-        mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null) }
+        mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null, problem = null) }
         viewModelScope.launch {
             try {
                 show(wallets.revealPhrase(id, pw))
             } catch (e: VaultFailure) {
-                mutable.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
+                refused(e)
             }
         }
     }
 
+    private fun refused(e: VaultFailure) {
+        val problem = when {
+            e.kind == FailureKind.LIMIT -> BackupProblem.LIMIT
+            e.code == "pin_required" -> BackupProblem.PIN_REQUIRED
+            else -> null
+        }
+        mutable.update { it.copy(busy = false, error = e.kind.takeIf { problem == null }, errorCode = e.code, problem = problem) }
+    }
+
     /** The words are copied out of [p], which is wiped at once: only [words] holds them from here. */
     private fun show(p: RevealedPhrase) {
-        val w = PhraseWords(p.words())
+        val w = PhraseWords(p.words(), p.passphrase())
         p.wipe()
         if (mutable.value.closed) {
             w.wipe()
@@ -288,11 +328,11 @@ class BackupViewModel internal constructor(
     private inline fun check(right: (PhraseWords, Int) -> Boolean) {
         val s = mutable.value
         val w = words
-        if (s.step != BackupStep.CHECK || !s.idle || w == null) return
+        if (!s.answering || w == null) return
         val at = s.asked[s.askIndex]
         val next = s.askIndex + 1
         when {
-            !right(w, at) -> mutable.update { it.copy(wrong = at, typed = "") }
+            !right(w, at) -> mutable.update { it.copy(wrong = at, typed = "", candidates = emptyList()) }
             next < s.asked.size -> mutable.update {
                 it.copy(askIndex = next, wrong = null, typed = "", candidates = candidates(w, s.asked[next], random))
             }

@@ -32,7 +32,7 @@ class HistoryWalletTitlesTest {
     @Test
     fun aRefusedRequestNamesTheConnection() {
         assertEquals(
-            "Payment refused by a spending limit: Sam Lee",
+            "Payment request from Sam Lee refused by a spending limit",
             title("wallet.cap_refused", EntryNames(item = "Savings", connection = "Sam Lee")),
         )
     }

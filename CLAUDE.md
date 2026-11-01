@@ -218,11 +218,13 @@ The A2 exit test:
   Screens (W1c-2a; `:feature:wallet`, `walletDestinations` in `app/src/wallet`, the drawer entry after Vault shown only while
   `WalletAccess.shown`): the list (`wallet.list`, the test-network banner, "Not backed up" from this phone's flags, Try again),
   new wallet, the phrase and the check (both `SecureWindow()`, out of autofill and content capture; three words asked, any case; the
-  words in `CharArray`s (`PhraseWords`), wiped when the flow ends or the vault closes),
+  words and any passphrase in `CharArray`s (`PhraseWords`), wiped when the flow ends or the vault closes; a wrong answer ends the
+  check; `NewWalletRoute` / `BackupRoute` are in `:core:data` (`WalletSecretRoutes`) and `navigateTopLevel` pops them, so state
+  saving never keeps the words behind another screen),
   back up later from a row, the Credential screen's "Bitcoin wallet: <name>" rows (`WalletAccess.wallets`) and History's wallet
   titles. Texts in `feature/wallet/.../strings.xml` are marked draft (the plan's) or new; `WalletTextsTest` holds them. Catalog:
-  `wallet`, `wallet.empty`, `wallet.failed`, `wallet.new`, `wallet.new_bad_name`, `wallet.new_bad_password`, `wallet.password`,
-  `wallet.phrase`, `wallet.check`, `wallet.check_wrong`, `wallet.done`, `wallet.done_save_failed`, `wallet.done_reveal_failed`,
+  `wallet`, `wallet.empty`, `wallet.failed`, `wallet.new`, `wallet.new_bad_name`, `wallet.new_limit`, `wallet.new_bad_password`,
+  `wallet.password`, `wallet.password_pin_required`, `wallet.phrase`, `wallet.phrase_passphrase`, `wallet.check`, `wallet.check_wrong`, `wallet.done`, `wallet.done_save_failed`, `wallet.done_reveal_failed`,
   `credential.wallets`
   (`WalletCatalog.kt`).
 

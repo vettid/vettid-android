@@ -109,12 +109,17 @@ object WalletModule {
     @Provides
     @Singleton
     fun walletAccess(m: WalletsManager, @AppScope scope: CoroutineScope): WalletAccess = object : WalletAccess {
-        override val shown: StateFlow<Boolean> =
-            m.availability.map { it == WalletAvailability.AVAILABLE }.stateIn(scope, SharingStarted.Eagerly, false)
+        override val shown: StateFlow<Boolean> = combine(m.isOpen, m.availability, ::shownOf).stateIn(scope, SharingStarted.Eagerly, false)
 
         override val wallets: StateFlow<List<WalletLabel>> =
             m.wallets.map { list -> list.map { WalletLabel(it.id, it.name) } }.stateIn(scope, SharingStarted.Eagerly, emptyList())
     }
+
+    /**
+     * The drawer's Wallet entry: while the vault is open, unless it answered that it has no wallets. A read that failed at the unlock
+     * leaves the entry there, and the list's Try again reads it again (nothing fails silently).
+     */
+    internal fun shownOf(open: Boolean, availability: WalletAvailability): Boolean = open && availability != WalletAvailability.UNSUPPORTED
 
     /** Whether the wallets may be held: the vault unlocked and not held or due (§3.6.3: nothing of them is kept or shown then). */
     internal fun openOf(phase: AppPhase, check: OwnerCheckView?): Boolean =

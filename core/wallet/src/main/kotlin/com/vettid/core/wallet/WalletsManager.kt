@@ -103,6 +103,10 @@ class WalletsManager(
     private val availabilityFlow = MutableStateFlow(WalletAvailability.UNKNOWN)
     val availability: StateFlow<WalletAvailability> = availabilityFlow.asStateFlow()
 
+    /** Whether the vault is open for the wallets (unlocked, not held or due): the drawer entry is shown while it is. */
+    private val openFlow = MutableStateFlow(false)
+    val isOpen: StateFlow<Boolean> = openFlow.asStateFlow()
+
     private val walletsFlow = MutableStateFlow<List<VaultWallet>>(emptyList())
     val wallets: StateFlow<List<VaultWallet>> = walletsFlow.asStateFlow()
 
@@ -141,7 +145,10 @@ class WalletsManager(
 
     /** The vault is open: the wallets are read. */
     suspend fun open() {
-        synchronized(lock) { open = true }
+        synchronized(lock) {
+            open = true
+            openFlow.value = true
+        }
         refresh()
     }
 
@@ -157,6 +164,7 @@ class WalletsManager(
         synchronized(lock) {
             generation++
             open = false
+            openFlow.value = false
             pendingRefresh?.cancel()
             pendingRefresh = null
             availabilityFlow.value = WalletAvailability.UNKNOWN
