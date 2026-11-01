@@ -8,6 +8,7 @@ import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
 import com.vettid.core.data.vault.UnlockAttempt
+import com.vettid.core.ui.components.NoticeKind
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -47,7 +48,8 @@ class UnlockOpenedThenLockedTest {
     fun aPendingLockSaysTheVaultIsBeingLocked() {
         show(MoveRepository.CODE_LOCK_PENDING)
         rule.onNodeWithTag("unlock_failed").assertExists()
-        rule.onNodeWithText("Your vault is being locked, so it didn't open. Unlock it again once it's locked.").assertExists()
+        val text = "A lock you asked for came first, so your vault didn't open. Unlock it again when the lock has finished."
+        rule.onNodeWithText(text).assertExists()
         rule.onNodeWithText("Something went wrong. Try again.").assertDoesNotExist()
     }
 
@@ -55,6 +57,26 @@ class UnlockOpenedThenLockedTest {
     fun anotherFailureOfTheSameKindStillSaysSomethingWentWrong() {
         show("something_else")
         rule.onNodeWithText("Something went wrong. Try again.").assertExists()
+    }
+
+    /** Only the unlock's end gives these codes, as OTHER: the same code with another kind is not this case. */
+    @Test
+    fun theCodesCountOnlyWithTheKindTheUnlocksEndGives() {
+        assertEquals(true, openedThenLocked(FailureKind.OTHER, MoveRepository.CODE_NOT_OPENED))
+        assertEquals(true, openedThenLocked(FailureKind.OTHER, MoveRepository.CODE_LOCK_PENDING))
+        assertEquals(false, openedThenLocked(FailureKind.NO_RESPONSE, MoveRepository.CODE_LOCK_PENDING))
+        assertEquals(false, openedThenLocked(FailureKind.NETWORK, MoveRepository.CODE_NOT_OPENED))
+        assertEquals(false, openedThenLocked(FailureKind.OTHER, null))
+    }
+
+    @Test
+    fun aLockThatCameFirstIsAWarningAsIsAPausedService() {
+        assertEquals(NoticeKind.WARNING, unlockFailedNotice(FailureKind.OTHER, MoveRepository.CODE_NOT_OPENED))
+        assertEquals(NoticeKind.WARNING, unlockFailedNotice(FailureKind.OTHER, MoveRepository.CODE_LOCK_PENDING))
+        assertEquals(NoticeKind.WARNING, unlockFailedNotice(FailureKind.SERVICE_PAUSED, "vault_unavailable"))
+        assertEquals(NoticeKind.WARNING, unlockFailedNotice(FailureKind.VAULT_UNAVAILABLE, null))
+        assertEquals(NoticeKind.URGENT, unlockFailedNotice(FailureKind.OTHER, "x"))
+        assertEquals(NoticeKind.URGENT, unlockFailedNotice(FailureKind.NO_RESPONSE, MoveRepository.CODE_LOCK_PENDING))
     }
 
     @Test

@@ -53,7 +53,7 @@ private val TRANSIENT_FAILURES = setOf(
  * failure that is not temporary means its own keys no longer open the vault (`device_secret`, an unreadable answer, …).
  */
 internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean): UnlockMessage =
-    if (keptTransfer && r.kind !in TRANSIENT_FAILURES && !openedThenLocked(r.code)) {
+    if (keptTransfer && r.kind !in TRANSIENT_FAILURES && !openedThenLocked(r.kind, r.code)) {
         UnlockMessage.MoveBackFailed
     } else {
         UnlockMessage.Failed(r.kind, r.code)
@@ -64,7 +64,8 @@ internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean)
  * pending, [MoveRepository.CODE_NOT_OPENED] after the vault's own lock. This phone's keys worked, so never "the move back
  * failed"; the unlock screen says what happened (`unlock_lock_pending`, `unlock_not_opened`).
  */
-internal fun openedThenLocked(code: String?): Boolean = code == MoveRepository.CODE_LOCK_PENDING || code == MoveRepository.CODE_NOT_OPENED
+internal fun openedThenLocked(kind: FailureKind, code: String?): Boolean =
+    kind == FailureKind.OTHER && (code == MoveRepository.CODE_LOCK_PENDING || code == MoveRepository.CODE_NOT_OPENED)
 
 /** Immutable UI state of the unlock screen. */
 private const val KEPT_MS_PER_SECOND = 1_000L
