@@ -59,6 +59,15 @@ class WalletDetailsViewModelTest {
     }
 
     @Test
+    fun aVaultWithoutWalletsClosesTheScreen() = runTest {
+        ops.unsupported = true
+        val m = manager(backgroundScope, ops)
+        runCatching { m.open() }
+        val vm = WalletDetailsViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
+        eventually { vm.state.value.closed }
+    }
+
+    @Test
     fun withoutAServerThereIsNoHostAndWhenTheVaultClosesTheScreenLeaves() = runTest {
         ops.wallet(id)
         settings.server = ChainServer.NotSet

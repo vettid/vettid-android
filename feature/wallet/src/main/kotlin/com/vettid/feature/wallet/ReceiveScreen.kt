@@ -36,6 +36,7 @@ data class ReceiveActions(
     val onNewAddress: () -> Unit = {},
     val onBackUp: () -> Unit = {},
     val onRetry: () -> Unit = {},
+    val onChooseNetwork: (com.vettid.core.chain.Network) -> Unit = {},
 )
 
 /**
@@ -47,6 +48,15 @@ data class ReceiveActions(
 fun ReceiveScreen(state: ReceiveUiState, actions: ReceiveActions, modifier: Modifier = Modifier) {
     val title = stringResource(R.string.wallet_receive)
     when {
+        state.needsNetwork -> FormScaffold(
+            title = title,
+            primaryLabel = null,
+            onPrimary = {},
+            onBack = actions.onBack,
+            modifier = modifier.testTag("wallet_receive_needs_network"),
+        ) {
+            NetworkQuestion(state.networkSaveFailed, actions.onChooseNetwork)
+        }
         state.notBackedUp -> FormScaffold(
             title = title,
             body = stringResource(R.string.wallet_backup_body),

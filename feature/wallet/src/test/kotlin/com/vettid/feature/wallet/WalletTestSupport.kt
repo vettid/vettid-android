@@ -26,6 +26,7 @@ internal class FakeWallets : WalletOps {
     var createFails: String? = null
     var passphrase: String? = null
     var listFails = false
+    var unsupported = false
     var deleteFails = false
     var addressesFail = false
     var conflict = false
@@ -36,6 +37,7 @@ internal class FakeWallets : WalletOps {
 
     override suspend fun list(): List<VaultWallet> {
         calls += "list"
+        if (unsupported) throw VaultOpException("wallet.list", "unsupported_type")
         if (listFails) throw VaultOpException("wallet.list", "internal")
         return wallets.values.toList()
     }

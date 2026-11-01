@@ -1,6 +1,7 @@
 package com.vettid.feature.wallet
 
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -243,18 +244,23 @@ private fun LookupProblem(state: WalletDetailUiState, actions: WalletDetailActio
 
 /** "Which test network is this wallet on?": Testnet4 or Testnet3 (the staging app does not connect to testnet3). */
 @Composable
-private fun NeedsNetwork(state: WalletDetailUiState, actions: WalletDetailActions) {
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.testTag("wallet_problem_needs_network")) {
+private fun NeedsNetwork(state: WalletDetailUiState, actions: WalletDetailActions) =
+    NetworkQuestion(state.networkSaveFailed, actions.onChooseNetwork, Modifier.testTag("wallet_problem_needs_network"))
+
+/** "Which test network is this wallet on?" with its two answers (the detail and Receive ask it the same way). */
+@Composable
+internal fun NetworkQuestion(saveFailed: Boolean, onChoose: (Network) -> Unit, modifier: Modifier = Modifier) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.s), modifier = modifier) {
         Text(stringResource(R.string.wallet_network_ask), style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-            OutlinedButton(onClick = { actions.onChooseNetwork(Network.TESTNET4) }, modifier = Modifier.testTag("wallet_choose_testnet4")) {
+            OutlinedButton(onClick = { onChoose(Network.TESTNET4) }, modifier = Modifier.testTag("wallet_choose_testnet4")) {
                 Text(stringResource(R.string.wallet_network_testnet4))
             }
-            OutlinedButton(onClick = { actions.onChooseNetwork(Network.TESTNET) }, modifier = Modifier.testTag("wallet_choose_testnet3")) {
+            OutlinedButton(onClick = { onChoose(Network.TESTNET) }, modifier = Modifier.testTag("wallet_choose_testnet3")) {
                 Text(stringResource(R.string.wallet_network_testnet3))
             }
         }
-        if (state.networkSaveFailed) {
+        if (saveFailed) {
             Text(stringResource(R.string.wallet_network_save_failed), color = MaterialTheme.colorScheme.error)
         }
     }
@@ -346,6 +352,8 @@ private fun TypeChoice(label: Int, type: String, current: String, onPick: (Strin
 /** The password for the delete: blanked in the state as soon as it is sent. */
 @Composable
 private fun DeletePassword(state: WalletDetailUiState, actions: WalletDetailActions, modifier: Modifier) {
+    // Back cancels the password step, not the whole screen; while the vault deletes it does nothing.
+    BackHandler { if (!state.deleting) actions.onCancelDelete() }
     FormScaffold(
         title = stringResource(R.string.wallet_menu_delete),
         body = stringResource(R.string.wallet_delete_password, state.name),

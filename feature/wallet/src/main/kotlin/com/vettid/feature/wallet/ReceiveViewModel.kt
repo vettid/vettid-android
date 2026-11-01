@@ -33,6 +33,9 @@ data class ReceiveUiState(
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val closed: Boolean = false,
+    /** A legacy `testnet` wallet whose test chain was not said yet: asked before any address. */
+    val needsNetwork: Boolean = false,
+    val networkSaveFailed: Boolean = false,
 ) {
     val amount: BtcFormat.Amount get() = BtcFormat.parse(amountText)
 
@@ -67,23 +70,37 @@ class ReceiveViewModel @Inject constructor(
                 Triple(w, availability, w?.let { wallets.networkOf(it) })
             }.collect { (w, availability, network) ->
                 if (w == null) {
-                    if (seen || availability == WalletAvailability.AVAILABLE) mutable.update { it.copy(closed = true) }
+                    if (seen || availability != WalletAvailability.UNKNOWN) mutable.update { it.copy(closed = true) }
                 } else {
                     seen = true
-                    mutable.update { it.copy(network = network) }
-                    if (!started) {
-                        started = true
-                        load()
+                    mutable.update { it.copy(network = network, needsNetwork = network == null) }
+                    when {
+                        network == null -> Unit
+                        !started -> {
+                            started = true
+                            load()
+                        }
+                        // The phrase was checked meanwhile (the backup flow ran on top of this screen): the address now.
+                        mutable.value.notBackedUp -> load()
                     }
                 }
             }
         }
     }
 
+    /** "Which test network is this wallet on?": kept on this phone, then the address. */
+    fun chooseTestNetwork(network: Network) {
+        if (!mutable.value.needsNetwork) return
+        viewModelScope.launch {
+            val kept = wallets.setTestNetwork(walletId, network)
+            mutable.update { it.copy(networkSaveFailed = !kept) }
+        }
+    }
+
     /** The address to show; from Try again too. */
     fun load() {
         viewModelScope.launch {
-            mutable.update { it.copy(loading = true, error = null) }
+            mutable.update { it.copy(loading = true, error = null, notBackedUp = false) }
             if (!wallets.backedUp(walletId)) {
                 mutable.update { it.copy(loading = false, notBackedUp = true) }
                 return@launch

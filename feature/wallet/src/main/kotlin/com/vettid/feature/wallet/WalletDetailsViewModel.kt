@@ -62,7 +62,7 @@ class WalletDetailsViewModel @Inject constructor(
                 Triple(w, availability, network to network?.let { host(it) })
             }.collect { (w, availability, networkAndHost) ->
                 if (w == null) {
-                    if (seen || availability == WalletAvailability.AVAILABLE) mutable.value = mutable.value.copy(closed = true)
+                    if (seen || availability != WalletAvailability.UNKNOWN) mutable.value = mutable.value.copy(closed = true)
                     return@collect
                 }
                 seen = true

@@ -90,8 +90,9 @@ internal class FakeWalletOps : WalletOps {
 
     override suspend fun setAddressType(walletId: String, version: Long, type: String): Long {
         calls += "update:$version:$type"
-        if (conflict) refuse("wallet.update", "conflict")
         val w = wallets.getValue(walletId)
+        // Like the vault: a version that is not the wallet's current one is a conflict.
+        if (conflict || version != w.version) refuse("wallet.update", "conflict")
         return (version + 1).also { wallets[walletId] = w.copy(addressType = type, version = it) }
     }
 
@@ -100,7 +101,14 @@ internal class FakeWalletOps : WalletOps {
         val w = wallets.getValue(walletId)
         val chain = AddressChain(w.addressType, false)
         val list = issued.getOrPut(walletId to chain) { mutableListOf() }
-        return WalletFixtures.address(chain, list.size).also { list += it }
+        return WalletFixtures.address(chain, list.size).also {
+            list += it
+            // The vault's version and next index move with every address it issues.
+            wallets[walletId] = w.copy(
+                version = w.version + 1,
+                accounts = w.accounts.map { a -> if (a.type == chain.type) a.copy(nextReceive = list.size) else a },
+            )
+        }
     }
 
     override suspend fun addresses(walletId: String, chain: AddressChain, after: Int?, limit: Int): AddressPage {
@@ -112,6 +120,7 @@ internal class FakeWalletOps : WalletOps {
 
     override suspend fun markUsed(walletId: String, addresses: List<String>) {
         marked += addresses
+        wallets[walletId]?.let { wallets[walletId] = it.copy(version = it.version + 1) }
     }
 }
 

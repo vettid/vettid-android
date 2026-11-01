@@ -84,6 +84,41 @@ class ReceiveViewModelTest {
     }
 
     @Test
+    fun theAddressComesOnceThePhraseIsChecked() = runTest {
+        ops.wallet(id)
+        val flags = WalletFlags(flagsFile)
+        val m = manager(backgroundScope, ops, flags)
+        m.open()
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.notBackedUp }
+        // The backup flow ran on top and passed.
+        assertTrue(m.confirmBackup(id))
+        eventually { vm.state.value.address != null }
+        assertFalse(vm.state.value.notBackedUp)
+    }
+
+    @Test
+    fun aLegacyTestnetWalletAsksWhichNetworkBeforeAnyAddress() = runTest {
+        ops.wallet(id, network = "testnet")
+        val vm = vm()
+        eventually { vm.state.value.needsNetwork }
+        assertTrue(ops.calls.none { it == "new" })
+        vm.chooseTestNetwork(com.vettid.core.chain.Network.TESTNET4)
+        eventually { vm.state.value.address != null }
+        assertFalse(vm.state.value.needsNetwork)
+        assertEquals(com.vettid.core.chain.Network.TESTNET4, vm.state.value.network)
+    }
+
+    @Test
+    fun aVaultWithoutWalletsClosesTheScreen() = runTest {
+        ops.unsupported = true
+        val m = manager(backgroundScope, ops)
+        runCatching { m.open() }
+        val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.closed }
+    }
+
+    @Test
     fun theScreenLeavesWhenTheVaultCloses() = runTest {
         ops.wallet(id)
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile).also { it.setBackedUp(id) })

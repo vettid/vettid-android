@@ -435,9 +435,72 @@ class WalletsManagerTest {
         ops.wallets[w.id] = w.copy(version = w.version + 5, name = "Renamed")
         val e = runCatching { m.setAddressType(w.id, "p2wpkh") }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.CONFLICT, e.kind)
+        // The retry with the fresh version conflicts again (the flag): refreshed once, asked twice, then thrown.
         assertEquals(2, ops.calls.count { it == "list" })
+        assertEquals(2, ops.calls.count { it.startsWith("update") })
         assertEquals("Renamed", m.wallets.value.single().name)
         assertEquals("p2tr", m.wallets.value.single().addressType)
+    }
+
+    @Test
+    fun aStaleVersionIsRefreshedAndTheChoiceAskedOnceMore() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        // Changed elsewhere (an address used on another device): the app's version is stale.
+        ops.wallets[w.id] = w.copy(version = w.version + 3)
+        m.setAddressType(w.id, "p2wpkh")
+        assertEquals(listOf("update:${w.version}:p2wpkh", "update:${w.version + 3}:p2wpkh"), ops.calls.filter { it.startsWith("update") })
+        assertEquals("p2wpkh", m.wallets.value.single().addressType)
+        assertEquals(w.version + 4, m.wallets.value.single().version)
+    }
+
+    @Test
+    fun aLookupAndANewAddressLeaveTheVersionCurrentForTheAddressType() = runBlocking {
+        val w = withWallet(issuedReceive = 0)
+        funded(receive, 0, 50_000)
+        val m = manager()
+        m.open()
+        // The first look-up issues the first address (the check) and reports the funded one used.
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        assertTrue(ops.marked.isNotEmpty())
+        m.newAddress(w.id)
+        m.setAddressType(w.id, "p2wpkh")
+        // No conflict: the version was taken in after each of this phone's own changes.
+        assertEquals(1, ops.calls.count { it.startsWith("update") })
+        assertEquals("p2wpkh", m.wallets.value.single().addressType)
+    }
+
+    @Test
+    fun anAddressJustIssuedIsReportedByTheSameLookup() = runBlocking {
+        // The vault knows no address yet: the check issues index 0, which the server shows funded.
+        val w = withWallet(issuedReceive = 0)
+        funded(receive, 0, 70_000)
+        val m = manager()
+        m.open()
+        assertTrue(m.lookup(w.id) is LookupResult.Done)
+        assertEquals(listOf(WalletFixtures.address(receive, 0).address), ops.marked.flatten())
+    }
+
+    @Test
+    fun aDeleteCancelledAfterTheVaultAnsweredStillForgetsTheWallet() = runBlocking {
+        val w = withWallet()
+        val file = flagsFile
+        WalletFlags(file).setBackedUp(w.id)
+        lateinit var job: kotlinx.coroutines.Job
+        val gated = object : WalletOps by ops {
+            override suspend fun delete(walletId: String, password: String) {
+                ops.delete(walletId, password)
+                job.cancel()
+            }
+        }
+        val m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(file), { it in offered }, { now })
+        m.open()
+        job = CoroutineScope(Dispatchers.Default).launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { m.delete(w.id, "pw") }
+        job.start()
+        job.join()
+        assertTrue(m.wallets.value.isEmpty())
+        assertFalse(WalletFlags(file).backedUp(w.id))
     }
 
     @Test

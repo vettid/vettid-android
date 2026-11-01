@@ -108,7 +108,7 @@ class WalletDetailViewModel @Inject constructor(
         val w = s.wallet
         if (w == null) {
             // Gone after it was shown (deleted elsewhere, locked), or the vault answered and never had it.
-            if (seen || s.availability == WalletAvailability.AVAILABLE) mutable.update { it.copy(closed = true, password = "") }
+            if (seen || s.availability != WalletAvailability.UNKNOWN) mutable.update { it.copy(closed = true, password = "") }
             return
         }
         seen = true
@@ -161,6 +161,17 @@ class WalletDetailViewModel @Inject constructor(
                 last = (result as? LookupResult.Done)?.lookup ?: it.last,
                 closed = it.closed || result is LookupResult.Cleared,
             )
+        }
+    }
+
+    /**
+     * The screen is in front again (after Chain server, or the app): a look-up that ended in a problem is made again, so that a
+     * fixed server clears the old message. A balance, the note and the network question are left as they are.
+     */
+    fun resumed() {
+        when (mutable.value.lookup) {
+            null, is LookupResult.Done, LookupResult.NeedsNetwork, LookupResult.Cleared -> Unit
+            else -> refresh()
         }
     }
 

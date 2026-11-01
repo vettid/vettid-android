@@ -64,13 +64,18 @@ sealed interface LookupResult {
     data class ServerWrongNetwork(val found: Network?) : LookupResult
 
     /** The server did not answer, or answered what Esplora does not ([error]). */
-    data class ServerFailed(val error: Exception) : LookupResult
+    data class ServerFailed(val error: Exception) : LookupResult {
+        // The error's message could name the server's URL.
+        override fun toString(): String = "ServerFailed"
+    }
 
     /** The app's derivation differs from the vault's addresses: "This wallet's addresses don't match your vault's. Nothing was sent." */
     data object AddressMismatch : LookupResult
 
     /** The vault could not be asked ([failure]). */
-    data class VaultFailed(val failure: VaultFailure) : LookupResult
+    data class VaultFailed(val failure: VaultFailure) : LookupResult {
+        override fun toString(): String = "VaultFailed"
+    }
 
     /** The vault was closed (locked, held, wiped) while the look-up ran: nothing of it is kept, nothing more was asked. */
     data object Cleared : LookupResult
@@ -255,15 +260,35 @@ class WalletsManager(
      */
     suspend fun setAddressType(walletId: String, type: String) {
         val g = gen()
-        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
         val version = try {
-            vaultGuard { ops().setAddressType(walletId, wallet.version, type) }
+            updateType(walletId, type)
         } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.CONFLICT) runCatching { refresh() }
-            throw e
+            if (e.kind != FailureKind.CONFLICT) throw e
+            // The wallet moved on (an address issued or used elsewhere): read it again and ask once more; the choice is unambiguous.
+            refresh()
+            updateType(walletId, type)
         }
         publish(g) {
             walletsFlow.update { l -> l.map { if (it.id == walletId) it.copy(addressType = type, version = version) else it } }
+        }
+    }
+
+    private suspend fun updateType(walletId: String, type: String): Long {
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: throw VaultFailure(FailureKind.OTHER, "no_wallet")
+        return vaultGuard { ops().setAddressType(walletId, wallet.version, type) }
+    }
+
+    /**
+     * Takes the wallet's new state in after this phone issued or marked addresses (`wallet.get`): the vault's `version` and
+     * `next_receive` / `next_change` moved, and a stale one would make the next `wallet.update` a conflict and a look-up skip an
+     * address just issued. Best effort: a failed read leaves what was there.
+     */
+    private suspend fun reload(walletId: String, g: Long) {
+        try {
+            val w = vaultGuard { ops().get(walletId) }
+            publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) w else it } } }
+        } catch (_: VaultFailure) {
+            // Kept as it was.
         }
     }
 
@@ -314,13 +339,17 @@ class WalletsManager(
     /** "Delete wallet": `item.delete` of its item with the password. */
     suspend fun delete(walletId: String, password: String) {
         val g = gen()
-        vaultGuard { ops().delete(walletId, password) }
-        publish(g) {
-            walletsFlow.update { l -> l.filterNot { it.id == walletId } }
-            lookupsFlow.update { it - walletId }
-            checked.keys.removeAll { it.first == walletId }
+        // Not cancelled partway: once the request is sent, the vault's answer and what is kept here are taken in together
+        // (a caller that leaves must not leave the deleted wallet shown).
+        withContext(NonCancellable) {
+            vaultGuard { ops().delete(walletId, password) }
+            publish(g) {
+                walletsFlow.update { l -> l.filterNot { it.id == walletId } }
+                lookupsFlow.update { it - walletId }
+                checked.keys.removeAll { it.first == walletId }
+            }
+            flags.forget(walletId)
         }
-        flags.forget(walletId)
     }
 
     /**
@@ -336,7 +365,12 @@ class WalletsManager(
     }
 
     /** "New address": `wallet.address.new` on the receiving account. */
-    suspend fun newAddress(walletId: String): WalletAddress = vaultGuard { ops().newAddress(walletId) }
+    suspend fun newAddress(walletId: String): WalletAddress {
+        val g = gen()
+        val a = vaultGuard { ops().newAddress(walletId) }
+        reload(walletId, g)
+        return a
+    }
 
     /**
      * A look-up (ANDROID-PLAN §4 "The chain source", "How the app uses it with the vault"): the server for the wallet's network, the
@@ -364,17 +398,21 @@ class WalletsManager(
             return LookupResult.VaultFailed(e)
         }
         if (gen() != g) return LookupResult.Cleared
+        // The check may have issued the first address: the wallet as it is now.
+        val now = walletsFlow.value.firstOrNull { it.id == walletId } ?: wallet
         val scan = try {
-            scan(wallet, derived, ready, g) ?: return LookupResult.Cleared
+            scan(now, derived, ready, g) ?: return LookupResult.Cleared
         } catch (e: ChainError) {
             return LookupResult.ServerFailed(e)
         }
         val lookup = WalletLookup(clock(), ready.host, scan.confirmed, scan.unconfirmed, scan.funded.map { it.address }.toSet())
         if (!publish(g) { lookupsFlow.update { it + (walletId to lookup) } }) return LookupResult.Cleared
         try {
-            for (chunk in reportable(wallet, scan.funded).chunked(ADDRESS_USED_MAX)) {
+            for (chunk in reportable(now, scan.funded).chunked(ADDRESS_USED_MAX)) {
                 if (gen() != g) return LookupResult.Cleared
                 vaultGuard { ops().markUsed(walletId, chunk) }
+                // `wallet.address.used` moves the wallet's version.
+                reload(walletId, g)
             }
         } catch (e: VaultFailure) {
             // The balance stands; the marks go again with the next look-up.

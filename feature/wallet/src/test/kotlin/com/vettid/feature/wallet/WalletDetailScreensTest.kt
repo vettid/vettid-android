@@ -205,6 +205,37 @@ class WalletDetailScreensTest {
     }
 
     @Test
+    fun backDuringTheDeletePasswordCancelsThePasswordStepAndDoesNothingWhileDeleting() {
+        var cancelled = 0
+        var current by mutableStateOf(detail().copy(delete = DeleteStep.PASSWORD))
+        lateinit var activity: androidx.activity.ComponentActivity
+        rule.setContent {
+            activity = androidx.activity.compose.LocalActivity.current as androidx.activity.ComponentActivity
+            WalletDetailScreen(current, WalletDetailActions(onCancelDelete = { cancelled++ }))
+        }
+        rule.runOnUiThread { activity.onBackPressedDispatcher.onBackPressed() }
+        rule.waitForIdle()
+        assertEquals(1, cancelled)
+        current = current.copy(deleting = true)
+        rule.waitForIdle()
+        rule.runOnUiThread { activity.onBackPressedDispatcher.onBackPressed() }
+        rule.waitForIdle()
+        // Taken by the screen, not passed on and not acted on.
+        assertEquals(1, cancelled)
+    }
+
+    @Test
+    fun receiveOfALegacyTestnetWalletAsksWhichNetworkFirst() {
+        val chosen = mutableListOf<Network>()
+        rule.setContent {
+            ReceiveScreen(ReceiveUiState(loading = true, needsNetwork = true), ReceiveActions(onChooseNetwork = { chosen += it }))
+        }
+        rule.onNodeWithText("Which test network is this wallet on?").assertIsDisplayed()
+        rule.onNodeWithTag("wallet_choose_testnet3").performClick()
+        assertEquals(listOf(Network.TESTNET), chosen)
+    }
+
+    @Test
     fun receiveOfAWalletNotBackedUpShowsTheWayToTheCheckInstead() {
         var backUp = 0
         rule.setContent {

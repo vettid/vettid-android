@@ -60,7 +60,8 @@ data class WalletsActions(val onNew: () -> Unit = {}, val onOpen: (WalletRow) ->
 internal fun networkLabel(network: Network?): String? = when (network) {
     Network.SIGNET -> stringResource(R.string.wallet_network_signet)
     Network.TESTNET4 -> stringResource(R.string.wallet_network_testnet4)
-    Network.TESTNET, null -> stringResource(R.string.wallet_network_testnet)
+    Network.TESTNET -> stringResource(R.string.wallet_network_testnet3)
+    null -> stringResource(R.string.wallet_network_testnet)
     Network.REGTEST -> stringResource(R.string.wallet_network_regtest)
     Network.MAINNET -> null
 }

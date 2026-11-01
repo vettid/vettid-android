@@ -65,25 +65,26 @@ fun WalletDetailsScreen(state: WalletDetailsUiState, actions: WalletDetailsActio
 
 @Composable
 private fun Account(a: AccountDetails, actions: WalletDetailsActions) {
-    val type = stringResource(if (a.type == AddressTypes.SEGWIT) R.string.wallet_account_p2wpkh else R.string.wallet_account_p2tr)
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.testTag("wallet_account_${a.type}")) {
-        Text(type, style = MaterialTheme.typography.titleMedium)
-        Value(stringResource(R.string.wallet_details_path), a.path, "wallet_path_${a.type}", actions)
-        Value(stringResource(R.string.wallet_details_receive_descriptor), a.receive, "wallet_receive_descriptor_${a.type}", actions)
-        Value(stringResource(R.string.wallet_details_change_descriptor), a.change, "wallet_change_descriptor_${a.type}", actions)
+    val type = a.type
+    val label = stringResource(if (type == AddressTypes.SEGWIT) R.string.wallet_account_p2wpkh else R.string.wallet_account_p2tr)
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.testTag("wallet_account_$type")) {
+        Text(label, style = MaterialTheme.typography.titleMedium)
+        Value(stringResource(R.string.wallet_details_path), a.path, "wallet_path_$type", actions)
+        Value(stringResource(R.string.wallet_details_receive_descriptor), a.receive, "wallet_receive_descriptor_$type", actions)
+        Value(stringResource(R.string.wallet_details_change_descriptor), a.change, "wallet_change_descriptor_$type", actions)
     }
 }
 
 /** A labelled value; with [actions], a copy button. Tagged by role, never by the value. */
 @Composable
-private fun Value(label: String, value: String, tag: String, actions: WalletDetailsActions?) {
-    Row(Modifier.fillMaxWidth().testTag(tag), verticalAlignment = Alignment.CenterVertically) {
+private fun Value(label: String, value: String, id: String, actions: WalletDetailsActions?) {
+    Row(Modifier.fillMaxWidth().testTag(id), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
         }
         if (actions != null) {
-            IconButton(onClick = { actions.onCopy(value) }, modifier = Modifier.padding(start = Spacing.s).testTag("${tag}_copy")) {
+            IconButton(onClick = { actions.onCopy(value) }, modifier = Modifier.padding(start = Spacing.s).testTag("${id}_copy")) {
                 Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.wallet_details_copy, label))
             }
         }

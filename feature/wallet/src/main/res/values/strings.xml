@@ -76,7 +76,7 @@
 
     <!-- Wallet detail: the look-up's states -->
     <string name="wallet_network_ask">Which test network is this wallet on?</string> <!-- draft -->
-    <string name="wallet_network_testnet3">Testnet3</string> <!-- new -->
+    <string name="wallet_network_testnet3">Testnet3</string> <!-- new; also the chip of a wallet the member said is on testnet3 -->
     <string name="wallet_testnet3_unsupported">VettID\'s staging app does not connect to testnet3</string> <!-- draft (Networks) -->
     <string name="wallet_network_not_offered">This version of VettID does not connect to this network.</string> <!-- new -->
     <string name="wallet_network_save_failed">This phone couldn\'t record your answer. Try again.</string> <!-- new -->
@@ -90,7 +90,7 @@
     <!-- Delete -->
     <string name="wallet_delete_title">Delete %1$s?</string> <!-- draft: the first sentence of the plan\'s Delete text -->
     <string name="wallet_delete_body">Your vault forgets this wallet and its recovery phrase. Coins on it are lost unless you have the recovery phrase written down.</string> <!-- draft: the rest of the Delete text -->
-    <string name="wallet_delete_password">Enter your password to delete %1$s.</string> <!-- new -->
+    <string name="wallet_delete_password">Enter your VettID password to delete %1$s.</string> <!-- new, revised: "VettID password" -->
 
     <!-- Receive -->
     <string name="wallet_copy">Copy</string> <!-- screens table -->

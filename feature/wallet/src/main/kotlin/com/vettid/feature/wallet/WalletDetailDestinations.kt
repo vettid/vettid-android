@@ -7,6 +7,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -28,6 +30,7 @@ private fun DetailDestination(host: WalletHost, leave: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     // Deleted, or the vault closed: nothing of the wallet is left to show.
     LaunchedEffect(state.closed) { if (state.closed) leave() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.resumed() }
     val id = vm.walletId
     WalletDetailScreen(
         state,
@@ -68,6 +71,7 @@ private fun ReceiveDestination(host: WalletHost, leave: () -> Unit) {
             onNewAddress = vm::newAddress,
             onBackUp = { host.navigate(BackupRoute(vm.walletId)) },
             onRetry = vm::load,
+            onChooseNetwork = vm::chooseTestNetwork,
         ),
     )
 }

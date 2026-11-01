@@ -109,6 +109,37 @@ class WalletDetailViewModelTest {
     }
 
     @Test
+    fun comingBackFromTheChainServerLooksUpAgainAfterAProblem() = runTest {
+        ops.wallet(id)
+        val vm = vm()
+        eventually { vm.state.value.lookup is LookupResult.NoServer }
+        assertEquals(1, opened)
+        // The server was fixed on the Chain server screen.
+        open = ChainOpen.WrongNetwork(Network.MAINNET)
+        vm.resumed()
+        eventually { vm.state.value.lookup is LookupResult.ServerWrongNetwork }
+        assertEquals(2, opened)
+    }
+
+    @Test
+    fun comingBackDoesNotLookUpWhileTheNetworkQuestionIsOpen() = runTest {
+        ops.wallet(id, network = "testnet")
+        val vm = vm()
+        eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
+        vm.resumed()
+        assertEquals(0, opened)
+    }
+
+    @Test
+    fun aVaultWithoutWalletsClosesTheScreen() = runTest {
+        ops.unsupported = true
+        val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)
+        runCatching { m.open() }
+        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.closed }
+    }
+
+    @Test
     fun testnet4IsKeptAndTheLookupRunsAgain() = runTest {
         ops.wallet(id, network = "testnet")
         val vm = vm()
