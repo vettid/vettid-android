@@ -402,6 +402,8 @@ class WalletsManager(
         val derived = checkedWallet(wallet, network, g) ?: return ReceiveResult.Mismatch
         val now = walletsFlow.value.firstOrNull { it.id == walletId } ?: wallet
         val address = if (fresh) newAddress(walletId) else unusedAddress(now)
+        // A lock (a clear) while the vault answered: nothing of the wallet is shown after it.
+        if (gen() != g) throw VaultFailure(FailureKind.OTHER, CLEARED)
         return if (derives(derived, address)) ReceiveResult.Address(address) else ReceiveResult.Mismatch
     }
 

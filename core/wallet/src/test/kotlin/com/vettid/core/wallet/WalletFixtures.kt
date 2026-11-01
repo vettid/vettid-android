@@ -102,8 +102,12 @@ internal class FakeWalletOps : WalletOps {
         return (version + 1).also { wallets[walletId] = w.copy(addressType = type, version = it) }
     }
 
+    /** Holds `wallet.address.new` until completed (a lock while the vault answers). */
+    var newGate: CompletableDeferred<Unit>? = null
+
     override suspend fun newAddress(walletId: String): WalletAddress {
         calls += "new"
+        newGate?.await()
         val w = wallets.getValue(walletId)
         val chain = AddressChain(w.addressType, false)
         val list = issued.getOrPut(walletId to chain) { mutableListOf() }

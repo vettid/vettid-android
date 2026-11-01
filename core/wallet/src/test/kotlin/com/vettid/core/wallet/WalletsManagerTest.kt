@@ -226,6 +226,21 @@ class WalletsManagerTest {
         assertEquals(5, m.newReceiveAddress(w.id).addressIndex())
     }
 
+    @Test
+    fun aLockWhileTheVaultGivesTheAddressShowsNone() = runBlocking {
+        val w = withWallet(issuedReceive = 1)
+        val m = manager()
+        m.open()
+        ops.newGate = CompletableDeferred()
+        val r = async { runCatching { m.newReceiveAddress(w.id) } }
+        while (ops.calls.none { it == "new" }) kotlinx.coroutines.yield()
+        // The vault locks while it answers.
+        m.clear()
+        ops.newGate!!.complete(Unit)
+        val e = r.await().exceptionOrNull()
+        assertTrue(e is VaultFailure && e.code == WalletsManager.CLEARED)
+    }
+
     private fun ReceiveResult.addressIndex(): Int = (this as ReceiveResult.Address).address.index
 
     @Test
