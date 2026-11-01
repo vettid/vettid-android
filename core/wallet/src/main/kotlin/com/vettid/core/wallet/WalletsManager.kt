@@ -122,14 +122,27 @@ class WalletsManager(
     private var pendingRefresh: Job? = null
 
     /**
-     * Follows the vault: while it is [open] (unlocked and not held) the wallets are read ([open]); every value that says it is
-     * not closes them ([close]: forgotten, and [onClosed] run), whatever came before. A new value cancels the work of the last
-     * (`collectLatest`), so a read in flight never holds a close back. [events] are the vault's messages (`sync.event` `wallet.*`).
+     * Follows the vault: [open] is the open session's identity (the count of the vault's openings) while it is open (unlocked and not
+     * held), and null while it is not. An open value reads the wallets ([open]); null closes them ([close]: forgotten, and
+     * [onClosed] run), whatever came before. A different identity than the last open one means a lock came between, even if its
+     * null was conflated away: the wallets are closed first, then read again, so nothing of the session before outlives it. A new
+     * value cancels the work of the last (`collectLatest`), so a read in flight never holds a close back. [events] are the
+     * vault's messages (`sync.event` `wallet.*`).
      */
-    fun follow(open: Flow<Boolean>, events: Flow<Pair<String, JsonObject>>, onClosed: suspend () -> Unit = {}): List<Job> = listOf(
+    fun follow(open: Flow<Int?>, events: Flow<Pair<String, JsonObject>>, onClosed: suspend () -> Unit = {}): List<Job> = listOf(
         scope.launch {
-            open.collectLatest { o ->
-                if (o) runCatching { open() } else close(onClosed)
+            var lastOpen: Int? = null
+            open.collectLatest { session ->
+                val before = lastOpen
+                if (session != null) lastOpen = session
+                when {
+                    session == null -> close(onClosed)
+                    before != null && before != session -> {
+                        close(onClosed)
+                        runCatching { open() }
+                    }
+                    else -> runCatching { open() }
+                }
             }
         },
         scope.launch { events.collect { (type, body) -> onEvent(type, body) } },

@@ -100,7 +100,8 @@ object WalletModule {
             m.clear()
             servers.forgetChecks()
         }
-        val open = combine(manager.phase, manager.ownerCheck.ownerCheck, ::openOf)
+        // The session's identity while open: a close and an open conflated into "still open" still move it.
+        val open = combine(manager.phase, manager.ownerCheck.ownerCheck, manager.opens, ::sessionOf)
         val events = manager.vaultEvents.filterNotNull().flatMapLatest { it.events }.map { it.type to it.body }
         m.follow(open, events, onClosed = { servers.forgetChecks() })
     }
@@ -111,6 +112,9 @@ object WalletModule {
         override val shown: StateFlow<Boolean> =
             m.availability.map { it == WalletAvailability.AVAILABLE }.stateIn(scope, SharingStarted.Eagerly, false)
     }
+
+    /** The open session's identity ([opens], the vault's openings) while the wallets may be held ([openOf]); null while not. */
+    internal fun sessionOf(phase: AppPhase, check: OwnerCheckView?, opens: Int): Int? = opens.takeIf { openOf(phase, check) }
 
     /** Whether the wallets may be held: the vault unlocked and not held or due (§3.6.3: nothing of them is kept or shown then). */
     internal fun openOf(phase: AppPhase, check: OwnerCheckView?): Boolean =

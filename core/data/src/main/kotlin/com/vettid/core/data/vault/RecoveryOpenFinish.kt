@@ -35,6 +35,9 @@ internal object RecoveryOpenFinish {
 
         fun publish(phase: AppPhase)
 
+        /** [phase] only if not [overtaken], checked and published as one step (#242); false when overtaken. */
+        fun publishUnlessOvertaken(phase: AppPhase): Boolean
+
         /** Leaves onboarding for the open app under its gate; false when the gate refused. */
         suspend fun finishSetup(): Boolean
     }
@@ -43,9 +46,13 @@ internal object RecoveryOpenFinish {
     suspend fun run(ports: Ports) {
         stopIfOvertaken(ports)
         val phase = ports.afterUnlocked()
-        // Before the phase is written: a lock asked for while it was computed is the newer wish.
+        // Before the phase is written: a lock asked for while it was computed is the newer wish. Checked again with the
+        // publish, as one step: a lock between the check and the write would otherwise be overwritten.
         stopIfOvertaken(ports)
-        ports.publish(phase)
+        if (!ports.publishUnlessOvertaken(phase)) {
+            stopIfOvertaken(ports)
+            throw VaultFailure(FailureKind.OTHER, MoveRepository.CODE_NOT_OPENED)
+        }
         when (phase) {
             AppPhase.Unlocked -> return
             AppPhase.Setup(SetupStage.FINISHING) -> if (ports.finishSetup()) return
