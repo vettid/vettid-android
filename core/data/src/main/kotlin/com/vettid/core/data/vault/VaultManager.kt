@@ -568,6 +568,18 @@ class VaultManager(
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
     private val phaseFlow = PhaseHolder(AppPhase.Starting)
 
+    /** A lock not made here, and the phases published after vault calls (#242): [PhaseGate]. */
+    private val phaseGate by lazy {
+        PhaseGate(phaseFlow, { generation }, { record.bumpGeneration() }, { lockGuard.lockedWhatever(unlocked = true) })
+    }
+
+    /**
+     * Every opening of the vault on this phone, counted ([PhaseHolder.opens]): a follower of [phase] that sees it open twice in a row
+     * tells from it whether it was closed between (a close and an open fast enough to be conflated away). The wallet's open flow
+     * uses it (ANDROID-PLAN §4 "Local state": nothing of a wallet outlives a lock).
+     */
+    val opens: StateFlow<Int> get() = phaseFlow.opens
+
     /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") The re-reads of the status after `device.unlinked{vault_deleted}`,
      * through the member API alone (the app key, kept until the vault is gone): no session is opened meanwhile.
@@ -780,8 +792,9 @@ class VaultManager(
 
             override suspend fun takeState(events: List<VaultMessage>) {
                 for (m in events) {
-                    if (lockNotices.stale(m)) continue
-                    runCatching { onEvent(m) }
+                    val take: suspend () -> Unit = { if (!lockNotices.stale(m)) runCatching { onEvent(m) } }
+                    // (#244 review B3) A vault.locking during an unlock: judged after it.
+                    if (!unlockNotices.hold(m, take)) take()
                 }
             }
         },
@@ -806,11 +819,14 @@ class VaultManager(
     /** Refused deposits to the vault: the open app goes to the unlock screen (never a wipe, [RefusalWatch]). */
     private val refusals = RefusalWatch {
         windowFlow.value = null
-        phaseFlow.value = AppPhase.Locked
+        phaseGate.refused()
     }
     override val refusedByVault: StateFlow<Boolean> = refusals.suspected
 
     /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
+    /** (#244 review B3) `vault.locking` received during an unlock, judged after it. */
+    private val unlockNotices = UnlockNoticeHold()
+
     private val lockNotices = LockNotices(opened = local.lastOpenedAtMs?.let { Instant.ofEpochMilli(it) }) { session?.device?.unlockId }
 
     /** `feed.event`s collected before the phase is known (a process started by a push wake), until it is ([HeldBackEvents]). */
@@ -1482,33 +1498,50 @@ class VaultManager(
             s.device.events.collectSurviving("event") { m ->
                 // (0.1.78) A 410 without the vault's word: only the vault's own `vault_deleted` is taken, and it erases at once.
                 if (deletionEvents.take(m)) return@collectSurviving
-                if (lockNotices.stale(m)) {
-                    // The lock before this phone's last unlock (an update's first step, or the lock an unlock of a
-                    // running vault makes), relayed late: the vault is open.
-                    android.util.Log.i("VaultManager", "dropped a vault.locking from before the last unlock")
-                    return@collectSurviving
-                }
-                onEvent(m)
-                // A lock is pending: the vault may be open and still sending, but on this phone it is locked.
-                // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
-                if (!lockGuard.takesEvents()) return@collectSurviving
-                try {
-                    items.onEvent(m)
-                    sharing.onEvent(m)
-                    devices.onEvent(m)
-                    votes.onEvent(m)
-                    pairing.onEvent(m)
-                    social.onEvent(m)
-                    attachments.onEvent(m.type, m.body)
-                    // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
-                    if (!heldBack.hold(m, phaseFlow.value)) feed.onEvent(m)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: RuntimeException) {
-                    // one malformed event must not stop the observer
-                    android.util.Log.w("VaultManager", "event ${m.type} not handled: ${e.javaClass.simpleName}")
-                }
+                // (#244 review B3) A vault.locking during an unlock: judged after it.
+                if (unlockNotices.hold(m) { takeHeldNotice(m) }) return@collectSurviving
+                takeEvent(m)
             }
+        }
+    }
+
+    /**
+     * A `vault.locking` held during an unlock, taken after it (N5): only the stale check and [onEvent], as [takeState]
+     * does. It runs beside the collector, so nothing that expects one caller at a time (the feed, [heldBack]) is
+     * called; none of them takes `vault.locking`.
+     */
+    private suspend fun takeHeldNotice(m: VaultMessage) {
+        if (!lockNotices.stale(m)) onEvent(m)
+    }
+
+    /** One event from the vault, after the deletion check (and, for a `vault.locking` during an unlock, after it). */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun takeEvent(m: VaultMessage) {
+        if (lockNotices.stale(m)) {
+            // The lock before this phone's last unlock (an update's first step, or the lock an unlock of a
+            // running vault makes), relayed late: the vault is open.
+            android.util.Log.i("VaultManager", "dropped a vault.locking from before the last unlock")
+            return
+        }
+        onEvent(m)
+        // A lock is pending: the vault may be open and still sending, but on this phone it is locked.
+        // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
+        if (!lockGuard.takesEvents()) return
+        try {
+            items.onEvent(m)
+            sharing.onEvent(m)
+            devices.onEvent(m)
+            votes.onEvent(m)
+            pairing.onEvent(m)
+            social.onEvent(m)
+            attachments.onEvent(m.type, m.body)
+            // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
+            if (!heldBack.hold(m, phaseFlow.value)) feed.onEvent(m)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RuntimeException) {
+            // one malformed event must not stop the observer
+            android.util.Log.w("VaultManager", "event ${m.type} not handled: ${e.javaClass.simpleName}")
         }
     }
 
@@ -1522,10 +1555,11 @@ class VaultManager(
 
     private fun lockedByNotice() {
         windowFlow.value = null
+        // Read before the notice locks a start (N2): a process started by the lock's own wake shows "Your vault is locked".
         val p = phaseFlow.value
-        if (p is AppPhase.Unlocked || p is AppPhase.Setup) {
-            phaseFlow.value = AppPhase.Locked
-        } else if (waking.get() > 0 && !lockedHere && p !is AppPhase.SignedOut) {
+        phaseGate.lockedByVault()
+        val notOpen = p !is AppPhase.Unlocked && p !is AppPhase.Setup && p !is AppPhase.SignedOut
+        if (notOpen && waking.get() > 0 && !lockedHere) {
             // A process started by the lock's own wake (§14.2 trigger 3) never saw the vault open: the notice is live
             // (ephemeral, 60 s) and not this phone's lock, which sends no wake.
             lockedElsewhereFlow.value = true
@@ -1644,7 +1678,7 @@ class VaultManager(
             val after = local.unreachableAfterMs ?: StuckScreens.LONG_UNREACHABLE.toMillis()
             AppPhase.Unreachable(kind, StuckScreens.longUnreachable(kind, last, System.currentTimeMillis(), after), after / MS_PER_SECOND)
         }
-        if (gen == generation) phaseFlow.value = p // a wipe meanwhile already said SignedOut
+        phaseGate.publishAfter(gen, p) // a lock, a refusal or a wipe meanwhile: what it published stands
     }
 
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one phase per state of the device
@@ -1881,8 +1915,8 @@ class VaultManager(
         } catch (e: VaultFailure) {
             // (Review F1) A failure with a request still outstanding: every screen from now on (a new one after Back, or
             // after a restart) resumes it without a PIN, and never asks for a new PIN that the vault might not hold.
-            if (session?.device?.pendingEnroll != null && phaseFlow.value == AppPhase.Setup(SetupStage.NEW_VAULT)) {
-                phaseFlow.value = AppPhase.Setup(SetupStage.ENROLLING)
+            if (session?.device?.pendingEnroll != null) {
+                phaseFlow.setIf(AppPhase.Setup(SetupStage.ENROLLING)) { phaseFlow.value == AppPhase.Setup(SetupStage.NEW_VAULT) }
             }
             throw e
         }
@@ -1951,13 +1985,13 @@ class VaultManager(
         } catch (e: EnrolmentResume.Waiting) {
             throw VaultFailure(FailureKind.ENROLL_WAITING, cause = e)
         } catch (e: EnrolmentResume.NotThisPin) {
-            phaseFlow.value = AppPhase.Setup(SetupStage.ENROLLING)
+            phaseGate.setupStage(AppPhase.Setup(SetupStage.ENROLLING))
             throw VaultFailure(FailureKind.RETRY, VaultRepository.CODE_ENROLL_PENDING, cause = e)
         } catch (e: EnrolmentResume.Unreachable) {
             throw VaultFailure(FailureKind.NETWORK, CODE_ENROLL_RELAY, cause = e)
         }
         if (r == EnrolmentResume.Result.NeedsPin) {
-            phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+            phaseGate.setupStage(AppPhase.Setup(SetupStage.NEW_VAULT))
             return false
         }
         if (d.deviceId == null) {
@@ -1977,6 +2011,8 @@ class VaultManager(
         onStep: (EnrollStep) -> Unit,
         pin: String?,
     ) = guard {
+        // Read before the vault's calls: a lock, a refusal or a wipe from here on keeps the phase it published.
+        val gen = generation
         val s = session()
         if (s.device.deviceId == null) {
             onStep(EnrollStep.HANDSHAKE)
@@ -1988,7 +2024,16 @@ class VaultManager(
         setSetting(s, KEY_BACKUP, JsonPrimitive(backup))
         onStep(EnrollStep.CONFIRM)
         s.openApi.enrollConfirm()
-        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        publishFinishing(gen)
+    }
+
+    /**
+     * FINISHING after setup steps that suspend (the end of enrolment, a recovered credential, a transfer to this phone):
+     * not over what a lock, a refusal or a wipe since [gen] published, nor while a lock is pending (#242). FinishSetupGate
+     * would otherwise open the app from it over a locked vault.
+     */
+    private fun publishFinishing(gen: Int) {
+        phaseGate.publishFinishing(gen)
     }
 
     /**
@@ -2027,10 +2072,8 @@ class VaultManager(
         if (!FinishSetupGate.allows(phaseFlow.value, lockPending = lockKeeper.holdsPhone, finishingMove = finishingMove.value)) return false
         io { updateLocal(rec) { it.copy(setupComplete = true, movedIn = false) } }
         // Both checks after the write, which suspends: the generation (a lock or a wipe meanwhile) and the guard (a lock
-        // pending now).
-        if (gen != generation || lockGuard.lockedWhatever(unlocked = true)) return false
-        phaseFlow.value = AppPhase.Unlocked
-        return true
+        // pending now), with the publish as one step (#242).
+        return phaseGate.publishAfter(gen, AppPhase.Unlocked)
     }
 
     override suspend fun preflight(): PreflightInfo {
@@ -2112,8 +2155,42 @@ class VaultManager(
      * does; without it the move is reported and the vault stays locked. [release] routes to a given release (only
      * to abandon an unconfirmed move, §11.10.5). [onStarting] hears `503 release_starting`.
      */
-    @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongParameterList", "LongMethod") // one answer per §11.4 result code
+    @Suppress("LongParameterList") // unlockStepHeld's
     private suspend fun unlockStep(
+        pin: String,
+        opts: UnlockOptions,
+        followMove: Boolean,
+        holderApp: Boolean = false,
+        release: String? = null,
+        onStarting: ((Long) -> Unit)? = null,
+        beforeOpen: (suspend () -> Unit)? = null,
+        twoStepScreen: Boolean = false,
+        pinTaken: Int? = null,
+    ): StepOutcome {
+        // (#244 review B3) A vault.locking received from here on is judged after this unlock: its own (§11.4) is stale then.
+        val ticket = unlockNotices.begin()
+        try {
+            return unlockStepHeld(pin, opts, followMove, holderApp, release, onStarting, beforeOpen, twoStepScreen, pinTaken, ticket)
+        } finally {
+            withContext(NonCancellable) { takeHeldNotices(ticket) }
+        }
+    }
+
+    /** The notices [UnlockNoticeHold] kept for [ticket]'s unlock, taken as if they had just arrived (at most once). */
+    private suspend fun takeHeldNotices(ticket: UnlockNoticeHold.Ticket) {
+        for (take in ticket.end()) {
+            try {
+                take()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                android.util.Log.w("VaultManager", "held notice not handled: ${e.javaClass.simpleName}")
+            }
+        }
+    }
+
+    @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongParameterList", "LongMethod") // one answer per §11.4 result code
+    private suspend fun unlockStepHeld(
         pin: String,
         opts: UnlockOptions,
         followMove: Boolean,
@@ -2129,6 +2206,7 @@ class VaultManager(
          * and again right before each one is posted (retries and candidate tries included). Null: the unlock screen.
          */
         pinTaken: Int? = null,
+        ticket: UnlockNoticeHold.Ticket,
     ): StepOutcome {
         ownerCheck.beginUnlock() // a count kept for an earlier attempt is not carried into this one (ANDROID-PLAN 0.1.96)
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
@@ -2210,6 +2288,12 @@ class VaultManager(
         if (moved && !followMove) return StepOutcome(UnlockAttempt.Success, moved = true)
         // The vault is open as of the result's ts: a vault.locking from before it is stale (LockNotices).
         lockNotices.opened(r.at)
+        // (N4) `at` is the sealed result's inner `ts` (VaultDevice.openUnlockResult), so every vault release gives it. A
+        // result without it would move nothing: the unlock's own notice, judged against the previous opening, would not be
+        // stale and would overtake this unlock (fail secure: Locked, and the screen says the vault did not open).
+        // Before the checks below: what came during the unlock, judged now (its own lock notice is stale; a later one
+        // moves the generation, and this unlock is overtaken).
+        takeHeldNotices(ticket)
         // Kept on the phone too: after a process start a notice from before this unlock is still stale.
         r.at?.let { at -> io { record.opened(rec, at.toEpochMilli()) } }
         val refused = r.update?.takeIf { it.result == "refused" }
@@ -2226,9 +2310,10 @@ class VaultManager(
             // Nothing but the lock while one is pending: what the member wrote earlier waits for the next unlock.
             if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox() }
         }
-        if (overtaken) {
+        val opened = if (overtaken) {
             // (Not after a wipe, which also bumps the generation and has said SignedOut.)
             if (lockedSince) phaseFlow.value = AppPhase.Locked
+            false
         } else {
             openAfterUnlock(s, gen, beforeOpen?.takeUnless { s.device.recovering })
         }
@@ -2240,7 +2325,7 @@ class VaultManager(
             io { updateLocal(rec) { it.copy(finishMovePending = false) } }
             finishMoveFlow.value = false
         }
-        val attempt = if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
+        val attempt = UnlockEnd.attempt(opened, lockPending = lockedSince, refusedUpdate = refused?.let { it.code ?: "refused" })
         return StepOutcome(attempt, abandoned = r.update?.result == UPDATE_ABANDONED)
     }
 
@@ -2249,11 +2334,13 @@ class VaultManager(
      * [before]'s requests are answered while this phone is still locked ([OpeningWindow]): the collection runs, and what
      * else the vault sends is held back until the app opens.
      */
-    private suspend fun openAfterUnlock(s: Session, gen: Int, before: (suspend () -> Unit)?) {
+    private suspend fun openAfterUnlock(s: Session, gen: Int, before: (suspend () -> Unit)?): Boolean {
+        var opened = false
         val openApp: suspend () -> Unit = {
             val p = afterUnlocked(s)
-            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now).
-            if (gen == generation && !lockGuard.lockedWhatever(unlocked = true)) phaseFlow.value = p
+            // Both checks: the generation (a lock or a wipe since this unlock began) and the guard (a lock pending now),
+            // with the publish as one step (#242).
+            opened = phaseGate.publishAfter(gen, p)
         }
         try {
             if (before == null) {
@@ -2268,6 +2355,7 @@ class VaultManager(
             // Whatever ended the open, a count kept for it is not carried to the next one (ANDROID-PLAN 0.1.97).
             ownerCheck.beginUnlock()
         }
+        return opened
     }
 
     /**
@@ -3917,6 +4005,9 @@ class VaultManager(
                     phaseFlow.value = phase
                 }
 
+                override fun publishUnlessOvertaken(phase: AppPhase): Boolean =
+                    phaseFlow.setIf(phase) { overtaken() == RecoveryOpenFinish.Overtaken.NO }
+
                 // Under guard: the failures it knows (an IOException of the account record's write, among others)
                 // become a VaultFailure; anything else (an IllegalStateException) is caught by the view model's openApp.
                 override suspend fun finishSetup(): Boolean = guard { finishSetupGated() }
@@ -3925,6 +4016,8 @@ class VaultManager(
     }
 
     override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
+        // Read before the unlock: a lock, a refusal or a wipe from here on keeps the phase it published (N3).
+        val gen = generation
         val r = unlockOnce(pin, approve, cancelRecovery = false)
         if (r != UnlockAttempt.Success) return r
         return try {
@@ -3933,8 +4026,11 @@ class VaultManager(
                 val d = session().device
                 if (d.deviceId == null) d.completeEnrollment()
             }
-            phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
-            UnlockAttempt.Success
+            if (phaseGate.publishAfter(gen, AppPhase.Setup(SetupStage.RECOVERING))) {
+                UnlockAttempt.Success
+            } else {
+                UnlockEnd.attempt(opened = false, lockPending = lockGuard.lockedWhatever(unlocked = true), refusedUpdate = null)
+            }
         } catch (e: VaultFailure) {
             UnlockAttempt.Failed(e.kind, e.code)
         }
@@ -3961,6 +4057,8 @@ class VaultManager(
     }
 
     override suspend fun recoverCredential(password: String): RecoverOutcome = guard {
+        // Read before the vault's call: a lock, a refusal or a wipe from here on keeps the phase it published.
+        val gen = generation
         val s = session()
         val outcome = try {
             s.openApi.credentialRecover(password)
@@ -3973,7 +4071,7 @@ class VaultManager(
                 else -> throw e
             }
         }
-        if (outcome == RecoverOutcome.RECOVERED) phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        if (outcome == RecoverOutcome.RECOVERED) publishFinishing(gen)
         outcome
     }
 
@@ -3986,6 +4084,8 @@ class VaultManager(
     override suspend fun transferIn(code: String): String = enrolments.transferIn(code)
 
     override suspend fun awaitTransferIn(): Boolean = guard {
+        // Read before the wait and the vault's calls: a lock, a refusal or a wipe from here on keeps the phase it published.
+        val gen = generation
         val rec = record.recordGeneration
         val s = session()
         // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
@@ -3996,7 +4096,7 @@ class VaultManager(
             await = { left -> s.device.awaitTransfer(left) },
             atDeadline = { atTransferDeadline(s) },
         ) ?: throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED)
-        completeTransferIn(s, rec, guid.userGuid)
+        completeTransferIn(s, rec, guid.userGuid).also { publishFinishing(gen) }
     }
 
     /**
@@ -4061,7 +4161,8 @@ class VaultManager(
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.openApi.credentialTakeOver()
         s.device.finishTransferIn()
-        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        // FINISHING is the caller's to publish, with the mark it took before its own vault calls (an unlock's end, a
+        // refresh, the wait for the transfer): one taken here would be after them, and miss a lock during them.
         guid != null
     }
 

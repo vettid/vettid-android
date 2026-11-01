@@ -40,6 +40,15 @@ class WalletWiringTest {
     }
 
     @Test
+    fun theSessionIsTheOpeningsCountWhileOpenAndNoneWhileNot() {
+        assertEquals(7, WalletModule.sessionOf(AppPhase.Unlocked, null, 7))
+        // The vault was closed and opened again: the same phase is another session.
+        assertEquals(8, WalletModule.sessionOf(AppPhase.Unlocked, null, 8))
+        assertEquals(null, WalletModule.sessionOf(AppPhase.Unlocked, check(OwnerCheckState.HELD), 8))
+        assertEquals(null, WalletModule.sessionOf(AppPhase.Starting, null, 8))
+    }
+
+    @Test
     fun theWipeHookMovesTheGenerationThenFencesEvenIfAClearThrows() = runBlocking {
         val wipe = WalletWipe()
         wipe.register { error("a clear fails") }

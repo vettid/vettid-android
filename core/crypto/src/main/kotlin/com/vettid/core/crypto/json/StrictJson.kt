@@ -22,10 +22,14 @@ object StrictJson {
     const val MAX_DEPTH = 32
     const val MAX_SAFE_INTEGER = (1L shl 53) - 1
 
-    /** Parses [b] as exactly one JSON object. */
-    fun parseObject(b: ByteArray): JsonObject {
+    /**
+     * Parses [b] as exactly one JSON object. [maxDepth] lowers the nesting limit for a value that will sit inside another
+     * document: what the outer one parses is the depth of both together.
+     */
+    fun parseObject(b: ByteArray, maxDepth: Int = MAX_DEPTH): JsonObject {
+        require(maxDepth in 1..MAX_DEPTH) { "maxDepth" }
         val text = decodeUtf8(b)
-        val v = Parser(text).parseDocument()
+        val v = Parser(text, maxDepth).parseDocument()
         return v as? JsonObject ?: throw CryptoException.Format("json: not an object")
     }
 
@@ -161,7 +165,7 @@ fun JsonValue.asUint(min: Long, max: Long): Long {
 }
 
 @Suppress("TooManyFunctions")
-private class Parser(private val s: String) {
+private class Parser(private val s: String, private val maxDepth: Int = StrictJson.MAX_DEPTH) {
     private var i = 0
 
     fun parseDocument(): JsonValue {
@@ -203,7 +207,7 @@ private class Parser(private val s: String) {
     }
 
     private fun obj(depth: Int): JsonObject {
-        if (depth > StrictJson.MAX_DEPTH) throw CryptoException.Format("json: nesting too deep")
+        if (depth > maxDepth) throw CryptoException.Format("json: nesting too deep")
         val start = i
         i++ // {
         val members = LinkedHashMap<String, JsonValue>()
@@ -236,7 +240,7 @@ private class Parser(private val s: String) {
     }
 
     private fun arr(depth: Int): JsonArray {
-        if (depth > StrictJson.MAX_DEPTH) throw CryptoException.Format("json: nesting too deep")
+        if (depth > maxDepth) throw CryptoException.Format("json: nesting too deep")
         val start = i
         i++ // [
         val items = ArrayList<JsonValue>()
