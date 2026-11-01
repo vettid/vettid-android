@@ -251,11 +251,23 @@ internal class FakeWalletOps : WalletOps {
         signError?.let { throw it }
         if (password != "pw") refuse("wallet.sign", "bad_password")
         val signed = signedTx(psbtBase64)
+        if (signUnreadable) throw WalletWireException("tx")
         if (unanswered < 0) return SignAnswer.Signed(signed)
         return waiting(signed)
     }
 
-    private fun waiting(signed: SignedTx): SignAnswer.Unanswered = SignAnswer.Unanswered {
+    /** How many kept requests were dropped (a lock, or given up). */
+    var forgets = 0
+
+    /** The wallets with a signing the vault may still apply. */
+    var outstanding: Set<String> = emptySet()
+
+    /** The signed answer does not read (after the vault signed). */
+    var signUnreadable = false
+
+    override suspend fun signsOutstanding(): Set<String> = outstanding
+
+    private fun waiting(signed: SignedTx): SignAnswer.Unanswered = SignAnswer.Unanswered({ forgets++ }) {
         calls += "resend"
         resends++
         resendFailure?.let { throw it }
@@ -329,6 +341,9 @@ internal class FakeChain(var open: ChainOpen? = null) : ChainSource {
     var gate: CompletableDeferred<Unit>? = null
     var spend = FakeSpend()
 
+    /** Runs when a server is opened (a lock can come in at that moment). */
+    var onOpen: (suspend () -> Unit)? = null
+
     /** A coin of [sats] at [chain]'s [index], confirmed or not, with the previous transaction that created it. */
     fun fund(chain: AddressChain, index: Int, sats: Long, confirmed: Boolean = true, salt: Int = index) {
         val account = WalletFixtures.account(chain.type)
@@ -345,7 +360,12 @@ internal class FakeChain(var open: ChainOpen? = null) : ChainSource {
         history[address] = if (confirmed) ChainSummary(sats, 0, 1, 1) else ChainSummary(0, sats, 0, 1)
     }
 
-    override suspend fun open(network: Network): ChainOpen = open ?: ChainOpen.Ready("mempool.space", spend) { address ->
+    override suspend fun open(network: Network): ChainOpen {
+        onOpen?.invoke()
+        return openNow()
+    }
+
+    private fun openNow(): ChainOpen = open ?: ChainOpen.Ready("mempool.space", spend) { address ->
         gate?.await()
         synchronized(asked) { asked += address }
         history[address] ?: ChainSummary(0, 0, 0, 0)

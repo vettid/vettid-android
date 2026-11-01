@@ -290,6 +290,12 @@ The A2 exit test:
   unanswered signings). Errors are `SendResult` / `PrepareResult` kinds with codes (`SendCodes`): `cap_exceeded` (`per_tx` /
   `per_period`, `limit_sats`, `remaining_sats`, `allowed_after`), `invalid_psbt` with its reason (`wrong_seed` is an alarm),
   `credential_locked`, `duplicate_wallet`, a broadcast failure with its reason (`BroadcastCause`, the transaction kept). Texts are W2-2's.
+  Review fixes: a reviewed payment (its unsigned txid) is **consumed** when its `wallet.sign` goes out and is signed once (`SendResult.AlreadySigned`;
+  only `credential_locked`, `cap_exceeded`, `invalid_psbt`, `bad_password`, `backoff`, `stale_credential` give it back; an unreadable answer does
+  not); any approve is refused while the wallet holds a signed `tx`. A cached or late answer keeps its UTKs but never an older credential blob
+  (`CredentialOps.keepIfNewer`). `wallet.sign` is marked durably (`SignMark` in `DeviceState.unsettledSigns`) and holds new sends for that wallet
+  (`SendHold.SIGN_UNSETTLED`) across lock, unlock and restart until `credential.version` passes the version it was sent at or its `exp` passes
+  (`walletSignsOutstanding`). A lock drops the kept request (`forget`) and nothing is broadcast after one.
 
 ## Device testing
 

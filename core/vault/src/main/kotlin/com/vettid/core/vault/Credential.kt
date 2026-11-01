@@ -248,17 +248,24 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         type: String,
         payload: JsonObjectBuilder.() -> Unit,
         extra: JsonObjectBuilder.() -> Unit = {},
+        /** The wallet a `wallet.sign` is for: the request is then durably marked outstanding until it is decided ([SignMark]). */
+        walletId: String? = null,
     ): JsonObject = serialized(payload, null) {
         try {
-            sendKeptOnce(type, payload, extra)
+            sendKeptOnce(type, payload, extra, walletId)
         } catch (e: VaultOpException) {
             // [settle] already fetched the latest blob.
             if (e.code != CODE_STALE) throw e
-            sendKeptOnce(type, payload, extra)
+            sendKeptOnce(type, payload, extra, walletId)
         }
     }
 
-    private suspend fun sendKeptOnce(type: String, payload: JsonObjectBuilder.() -> Unit, extra: JsonObjectBuilder.() -> Unit): JsonObject {
+    private suspend fun sendKeptOnce(
+        type: String,
+        payload: JsonObjectBuilder.() -> Unit,
+        extra: JsonObjectBuilder.() -> Unit,
+        walletId: String?,
+    ): JsonObject {
         val utk = takeUtk()
         var stored = false
         val kept = try {
@@ -266,7 +273,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             val id = d.newId()
             val body = sealedBody(type, utk, true, id, payload, null, extra)
             val exp = d.vaultNow().plus(ChangeTypes.EXP).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
-            d.trackCredential(id, exp)
+            d.trackCredential(id, exp, walletId?.let { SignMark(it, version) })
             KeptChange(type, id, body, exp, version).also { stored = true }
         } finally {
             // Nothing was sent: the UTK goes back to the pool.
@@ -296,7 +303,29 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     /** The answer to a kept request: the request is decided ([settle]); the credential operation is no longer unsettled. */
     private suspend fun settleKept(kept: KeptChange, r: VaultMessage): JsonObject {
         d.settleCredential(kept.innerId)
-        return settle(kept, r)
+        if (r.inner.status != Inner.STATUS_OK) return settle(kept, r)
+        d.dropKept(kept)
+        try {
+            keepIfNewer(r.body)
+        } catch (_: java.io.IOException) {
+            // The operation applied; the blob is fetched by the next operation that finds it stale.
+        }
+        return r.body
+    }
+
+    /**
+     * Keeps what a (possibly cached, possibly late) answer carries: the UTKs always, the blob and its acknowledgement only when its
+     * `credential_version` is above the one held. Another credential operation may have moved the credential on while this
+     * answer was awaited; storing the older blob would present a version the vault has passed, which it freezes as a clone.
+     */
+    private suspend fun keepIfNewer(o: JsonObject) {
+        val held = d.credentialVersion
+        val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
+        if (held == null || v == null || v > held) {
+            keep(o)
+        } else {
+            keep(JsonObject(o.filterKeys { it != "credential" }))
+        }
     }
 
     /**

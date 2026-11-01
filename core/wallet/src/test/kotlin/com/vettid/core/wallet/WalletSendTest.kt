@@ -477,15 +477,15 @@ class WalletSendTest {
     fun duplicateWalletAndOtherErrorsAreMapped() = runBlocking {
         val (m, w) = opened()
         ops.signError = refusal("duplicate_wallet")
-        assertEquals(SendResult.DuplicateWallet, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.DuplicateWallet, m.approveSend(ready(m, w, request(amount = 40_001)), "pw"))
         ops.signError = refusal("backoff")
-        val e = runCatching { m.approveSend(ready(m, w), "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.approveSend(ready(m, w, request(amount = 40_002)), "pw") }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.BACKOFF, e.kind)
         ops.signError = refusal("credential_locked")
         // The vault still says locked after the app opened the window: asked again, then the vault's word.
         window = true
         ops.windowOpen = { false }
-        assertEquals(SendResult.CredentialLocked, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.CredentialLocked, m.approveSend(ready(m, w, request(amount = 40_003)), "pw"))
     }
 
     @Test
@@ -577,6 +577,131 @@ class WalletSendTest {
         assertEquals(SendResult.Cleared, m.approveSend(p, "pw"))
         assertTrue(ops.signs.isEmpty())
         assertTrue("unlock" !in ops.calls)
+    }
+
+    // --- B1: a reviewed payment is signed once ---
+
+    @Test
+    fun aPaymentIsNeverSignedASecondTimeAfterSentFailedDiscardedOrAnUnreadableAnswer() = runBlocking {
+        // After Sent.
+        val (m, w) = opened()
+        val p = ready(m, w)
+        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+        assertEquals(1, ops.signs.size)
+        // After a failed broadcast, and after it is given up.
+        chain.spend.broadcastError = ChainError.Timeout()
+        val q = ready(m, w, request(amount = 41_000))
+        assertTrue(m.approveSend(q, "pw") is SendResult.BroadcastFailed)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(q, "pw"))
+        m.discardUnsent(w.id)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(q, "pw"))
+        assertEquals(2, ops.signs.size)
+        // After an answer that does not read: the vault may have signed.
+        chain.spend.broadcastError = null
+        ops.signUnreadable = true
+        val r = ready(m, w, request(amount = 42_000))
+        assertTrue(runCatching { m.approveSend(r, "pw") }.exceptionOrNull() is WalletWireException)
+        ops.signUnreadable = false
+        assertEquals(SendResult.AlreadySigned, m.approveSend(r, "pw"))
+        assertEquals(3, ops.signs.size)
+    }
+
+    @Test
+    fun aKeptTransactionRefusesAnyApproveForTheWallet() = runBlocking {
+        val (m, w) = opened()
+        chain.spend.broadcastError = ChainError.Timeout()
+        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(ready(m, w, request(amount = 45_000)), "pw"))
+        assertEquals(1, ops.signs.size)
+    }
+
+    @Test
+    fun aDefiniteRefusalThatCountedNothingLetsTheSameApproveBeTriedAgain() = runBlocking {
+        val refusals = listOf(
+            refusal("cap_exceeded", "per_tx", """{"reason":"per_tx","limit_sats":5}"""), refusal("invalid_psbt", "fee"),
+            refusal("credential_locked"), refusal("bad_password"), refusal("backoff"), refusal("stale_credential"),
+        )
+        val (m, w) = opened()
+        val p = ready(m, w)
+        for (e in refusals) {
+            ops.signError = e
+            window = false
+            val sent = ops.signs.size
+            val r = runCatching { m.approveSend(p, "pw") }.getOrNull()
+            // The previous refusal gave the payment back: this approve reached the vault.
+            assertTrue("${e.code}: reached the vault", r != SendResult.AlreadySigned && ops.signs.size > sent)
+        }
+        ops.signError = null
+        window = false
+        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+    }
+
+    @Test
+    fun aRefusalThatMayHaveCountedKeepsTheApproveClosed() = runBlocking {
+        val (m, w) = opened()
+        val p = ready(m, w)
+        ops.signError = refusal("duplicate_wallet")
+        assertEquals(SendResult.DuplicateWallet, m.approveSend(p, "pw"))
+        ops.signError = null
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+    }
+
+    // --- 1: a signing that may still apply holds new sends ---
+
+    @Test
+    fun anOutstandingSigningHoldsPrepareAndApproveUntilTheVaultDecidesIt() = runBlocking {
+        val (m, w) = opened()
+        val p = ready(m, w)
+        ops.outstanding = setOf(w.id)
+        assertEquals(PrepareResult.Held(SendHold.SIGN_UNSETTLED), m.prepareSend(w.id, request()))
+        assertEquals(SendResult.Held(SendHold.SIGN_UNSETTLED), m.approveSend(p, "pw"))
+        assertTrue(ops.signs.isEmpty())
+        ops.outstanding = emptySet()
+        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+    }
+
+    // --- 3, 4, 7 ---
+
+    @Test
+    fun nothingIsBroadcastAfterALockThatCameInDuringTheBroadcast() = runBlocking {
+        val (m, w) = opened()
+        val p = ready(m, w)
+        chain.onOpen = { m.clear() }
+        val r = m.approveSend(p, "pw")
+        assertEquals(SendResult.Cleared, r)
+        assertTrue(chain.spend.broadcasts.isEmpty())
+        assertFalse(m.hasUnsent(w.id))
+    }
+
+    @Test
+    fun aLockDropsTheKeptSigningRequest() = runBlocking {
+        val (m, w) = opened()
+        ops.unanswered = 5
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(0, ops.forgets)
+        m.clear()
+        assertEquals(1, ops.forgets)
+        assertFalse(m.hasUnsent(w.id))
+        // Given up by the member: dropped as well.
+        val m2 = manager()
+        m2.open()
+        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 41_000)), "pw"))
+        m2.discardUnsent(w.id)
+        assertEquals(2, ops.forgets)
+    }
+
+    @Test
+    fun theInspectCapCarriesTheLimitThatStoppedIt() = runBlocking {
+        val (m, w) = opened()
+        val summary = ready(m, w).vault.toJson()
+        fun cap(body: String) = WalletWire.inspection(
+            VaultJson.parseObject((summary.dropLast(1) + ""","cap":""" + body + "}").encodeToByteArray()),
+        ).cap!!
+        assertEquals(500L, cap("""{"ok":false,"reason":"per_tx","limit_sats":500}""").limitSats)
+        assertEquals(700L, cap("""{"ok":false,"reason":"per_tx","limit":700}""").limitSats)
+        assertNull(cap("""{"ok":true}""").limitSats)
     }
 
     // --- the rest ---

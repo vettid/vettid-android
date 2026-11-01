@@ -243,6 +243,9 @@ class WalletsManager(
     /** The wallets with a signing whose answer has not come (resent as the same request), per wallet. Under [lock]. */
     private val pendingSigns = HashMap<String, PendingSign>()
 
+    /** The reviewed payments (their unsigned txids) whose `wallet.sign` went out: signed once, never again. Under [lock]. */
+    private val consumed = HashSet<String>()
+
     /** The wallets holding a signed transaction that is not broadcast yet, or a signing still unanswered: Try again is offered. */
     val unsent: StateFlow<Set<String>> = unsentFlow.asStateFlow()
 
@@ -341,7 +344,9 @@ class WalletsManager(
             duplicateSet.clear()
             duplicateFlow.value = emptySet()
             keptTx.clear()
+            pendingSigns.values.forEach { it.forget() }
             pendingSigns.clear()
+            consumed.clear()
             unsentFlow.value = emptySet()
         }
     }
@@ -1093,7 +1098,7 @@ class WalletsManager(
     private class KeptTx(val network: Network, val signed: SignedTx)
 
     /** A `wallet.sign` whose answer has not come: [resend] sends the same request again. */
-    private class PendingSign(val network: Network, val unsignedTxid: String, val resend: suspend () -> SignAnswer)
+    private class PendingSign(val network: Network, val unsignedTxid: String, val forget: () -> Unit, val resend: suspend () -> SignAnswer)
 
     /** Whether the wallet's pending limit holds a send back, as it holds Receive: it is sent first; null when nothing holds it. */
     @Suppress("ReturnCount")
@@ -1120,6 +1125,7 @@ class WalletsManager(
         val g = gen()
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: noWallet()
         holdFor(walletId)?.let { return PrepareResult.Held(it) }
+        if (signHeld(walletId)) return PrepareResult.Held(SendHold.SIGN_UNSETTLED)
         val network = networkOf(wallet) ?: return PrepareResult.NeedsNetwork
         if (!offered(network)) return PrepareResult.NotOffered
         val payee = when (val c = Payee.check(network, request.address)) {
@@ -1259,6 +1265,10 @@ class WalletsManager(
             holdFor(prepared.walletId)?.let { return@withLock SendResult.Held(it) }
             // An unanswered signing is decided first (retrySign): a new one would build the payment again and count again.
             if (synchronized(lock) { prepared.walletId in pendingSigns }) return@withLock SendResult.Unanswered
+            // A payment whose signing went out is signed once; a kept transaction is broadcast, not signed again.
+            val signedBefore = synchronized(lock) { prepared.unsignedTxid in consumed || prepared.walletId in keptTx }
+            if (signedBefore) return@withLock SendResult.AlreadySigned
+            if (signHeld(prepared.walletId)) return@withLock SendResult.Held(SendHold.SIGN_UNSETTLED)
             var toLock = false
             try {
                 if (!windowOpen()) toLock = openForSend(password)
@@ -1304,18 +1314,36 @@ class WalletsManager(
         class Failed(val result: SendResult) : Outcome
     }
 
-    private suspend fun signOnce(prepared: PreparedSend, password: String): Outcome = try {
-        Outcome.Answered(vaultGuard { ops().sign(prepared.walletId, prepared.psbtBase64, password) })
-    } catch (e: VaultFailure) {
-        Outcome.Failed(signFailure(e) ?: throw e)
+    /**
+     * The payment is consumed the moment the request goes out; only a refusal that counts nothing at the vault gives it back
+     * (`credential_locked`, `cap_exceeded`, `invalid_psbt`, `bad_password`, `backoff`, `stale_credential`). Anything else, an answer
+     * that does not read included, leaves it consumed: the vault may have signed.
+     */
+    private suspend fun signOnce(prepared: PreparedSend, password: String): Outcome {
+        synchronized(lock) { consumed += prepared.unsignedTxid }
+        return try {
+            Outcome.Answered(vaultGuard { ops().sign(prepared.walletId, prepared.psbtBase64, password) })
+        } catch (e: VaultFailure) {
+            val result = signFailure(e)
+            if (countsNothing(e, result)) synchronized(lock) { consumed -= prepared.unsignedTxid }
+            Outcome.Failed(result ?: throw e)
+        }
     }
+
+    /** A definite refusal that counted nothing against the wallet's limits. */
+    private fun countsNothing(e: VaultFailure, result: SendResult?): Boolean =
+        result is SendResult.CredentialLocked || result is SendResult.CapExceeded || result is SendResult.Refused ||
+            (e.cause is VaultOpException && e.code in NOTHING_COUNTED)
+
+    /** Whether a `wallet.sign` of this wallet may still apply at the vault, after a lock, an unlock or a restart. */
+    private suspend fun signHeld(walletId: String): Boolean = walletId in vaultGuard { ops().signsOutstanding() }
 
     /** A signing answered or not: the signed transaction kept and broadcast, an answer awaited, or the refusal. */
     private suspend fun finishSign(walletId: String, network: Network, unsignedTxid: String, g: Long, outcome: Outcome): SendResult =
         when (outcome) {
             is Outcome.Failed -> outcome.result
             is Outcome.Answered -> when (val a = outcome.answer) {
-                is SignAnswer.Unanswered -> awaitAnswer(walletId, PendingSign(network, unsignedTxid, a.resend), g)
+                is SignAnswer.Unanswered -> awaitAnswer(walletId, PendingSign(network, unsignedTxid, a.forget, a.resend), g)
                 is SignAnswer.Signed -> keepAndBroadcast(walletId, KeptTx(network, a.signed), unsignedTxid, g)
             }
         }
@@ -1358,6 +1386,8 @@ class WalletsManager(
         val open = chain.open(kept.network)
         val spend = (open as? ChainOpen.Ready)?.spend ?: return SendResult.BroadcastFailed(BroadcastCause.NoChain(open))
         var alreadyKnown = false
+        // A lock that came in meanwhile dropped the transaction: nothing is broadcast after it.
+        if (gen() != g) return SendResult.Cleared
         val txid = try {
             spend.broadcast(kept.signed.tx)
         } catch (e: ChainError.BroadcastRefused) {
@@ -1394,6 +1424,7 @@ class WalletsManager(
                 val result = if (e.cause is VaultOpException) signFailure(e) else null
                 if (result == null && e.cause !is VaultOpException) throw e
                 publish(g) {
+                    if (countsNothing(e, result)) consumed -= p.unsignedTxid
                     pendingSigns.remove(walletId)
                     publishUnsent()
                 }
@@ -1413,7 +1444,7 @@ class WalletsManager(
     fun discardUnsent(walletId: String) {
         synchronized(lock) {
             keptTx.remove(walletId)
-            pendingSigns.remove(walletId)
+            pendingSigns.remove(walletId)?.forget?.invoke()
             publishUnsent()
         }
     }
@@ -1472,6 +1503,9 @@ class WalletsManager(
             FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
             FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
         )
+
+        /** Vault codes of a signing that was refused before anything was counted. */
+        val NOTHING_COUNTED = setOf("bad_password", "backoff", "stale_credential")
 
         /** BIP44's gap: addresses past the last used one that are looked at before a chain is taken as ended. */
         const val GAP = 20

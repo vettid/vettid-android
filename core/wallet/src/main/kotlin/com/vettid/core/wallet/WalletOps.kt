@@ -14,6 +14,7 @@ import com.vettid.core.vault.walletCreate
 import com.vettid.core.vault.walletGet
 import com.vettid.core.vault.walletHistory
 import com.vettid.core.vault.walletPsbtInspect
+import com.vettid.core.vault.walletSignsOutstanding
 import com.vettid.core.vault.walletSign
 import com.vettid.core.vault.walletSignResend
 import com.vettid.core.vault.walletList
@@ -115,6 +116,9 @@ interface WalletOps {
      */
     suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer
 
+    /** The wallets with a `wallet.sign` that may still apply (also after a lock or a restart): no new send is made for them. */
+    suspend fun signsOutstanding(): Set<String>
+
     /** `wallet.history`: what this vault signed, newest first ([limit] 1–200). */
     suspend fun history(walletId: String, limit: Int?): List<WalletTx>
 }
@@ -178,10 +182,12 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     }
 
     /** No answer: sending [kept] again is the only way on; it asks for nothing (no password, no UTK) and builds nothing. */
-    private fun unanswered(a: VaultApi, kept: KeptChange): SignAnswer.Unanswered = SignAnswer.Unanswered {
+    private fun unanswered(a: VaultApi, kept: KeptChange): SignAnswer.Unanswered = SignAnswer.Unanswered({ kept.forget() }) {
         val o = a.walletSignResend(kept)
         if (o == null) unanswered(a, kept) else SignAnswer.Signed(WalletWire.signed(o))
     }
+
+    override suspend fun signsOutstanding(): Set<String> = api().walletSignsOutstanding()
 
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = WalletWire.history(api().walletHistory(walletId, limit))
 

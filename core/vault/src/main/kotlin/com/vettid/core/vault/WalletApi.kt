@@ -255,6 +255,7 @@ suspend fun VaultApi.walletSign(walletId: String, psbtBase64: String, password: 
             put("wallet_id", walletId)
             put("psbt", psbtBase64)
         },
+        walletId = walletId,
     )
 
 /**
@@ -298,4 +299,18 @@ suspend fun VaultApi.walletHistory(walletId: String, limit: Int? = null): JsonOb
             limit?.let { put("limit", it) }
         },
     )
+}
+
+/**
+ * The wallets with a `wallet.sign` that may still apply (VAULT-MESSAGING §3.5.3, §10.18): sent and not decided, also after a lock, an
+ * unlock or a restart (the mark is durable). A new signing for such a wallet would build the payment again and count again against its
+ * spending limit, so none is sent. Decided as `pin.change` is: by `credential.version`, which past the version the signing was sent at
+ * means it applied (or never will), and by the request's `exp` on the vault's clock. A failed `credential.version` is thrown: the hold
+ * stands.
+ */
+suspend fun VaultApi.walletSignsOutstanding(): Set<String> {
+    if (device.unsettledSigns().isEmpty()) return emptySet()
+    val (info, _) = credentialVersionAt()
+    info.version?.let { device.settleSignsBefore(it) }
+    return device.unsettledSigns()
 }

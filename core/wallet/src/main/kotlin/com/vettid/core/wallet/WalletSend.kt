@@ -31,7 +31,14 @@ object SendCodes {
 }
 
 /** The spending-limit check `wallet.psbt.inspect` returns (0.56.0): whether `wallet.sign` would pass now, and if not why. */
-data class SpendCap(val ok: Boolean, val reason: String?, val remainingSats: Long?, val allowedAfter: Instant?) {
+data class SpendCap(
+    val ok: Boolean,
+    val reason: String?,
+    val remainingSats: Long?,
+    val allowedAfter: Instant?,
+    /** `limit_sats` (VAULT-MESSAGING 0.82.2): the limit that would stop it; null from a vault that does not say. */
+    val limitSats: Long? = null,
+) {
     override fun toString(): String = "SpendCap"
 }
 
@@ -55,7 +62,7 @@ sealed interface SignAnswer {
      * No answer yet. [resend] sends **the same request** again (same inner id and body; the vault answers from its cache and a
      * spending limit counts it once) and answers as the first send would have; it never builds a request again.
      */
-    class Unanswered(val resend: suspend () -> SignAnswer) : SignAnswer {
+    class Unanswered(val forget: () -> Unit = {}, val resend: suspend () -> SignAnswer) : SignAnswer {
         override fun toString(): String = "Unanswered"
     }
 }
@@ -123,7 +130,14 @@ class PreparedSend internal constructor(
 }
 
 /** Why a send is held back before anything is built: as Receive is. */
-enum class SendHold { CAPS_PENDING, CAPS_DUPLICATE, SETTINGS_UNREADABLE }
+enum class SendHold {
+    CAPS_PENDING,
+    CAPS_DUPLICATE,
+    SETTINGS_UNREADABLE,
+
+    /** A `wallet.sign` for this wallet may still apply (sent, not decided: also after a lock or a restart): no new one is sent. */
+    SIGN_UNSETTLED,
+}
 
 /** The outcome of [WalletsManager.prepareSend]; nothing is signed by it. */
 sealed interface PrepareResult {
@@ -255,6 +269,12 @@ sealed interface SendResult {
     data object SignedDiffers : SendResult {
         val code: String get() = SendCodes.SIGNED_MISMATCH
     }
+
+    /**
+     * This payment was already sent to the vault to be signed (its signing was answered, or may have been): signing it again would
+     * build it again and count again against the spending limit. Prepare a new one.
+     */
+    data object AlreadySigned : SendResult
 
     /** Nothing to send again (no kept transaction, no unanswered signing). */
     data object NothingToSend : SendResult

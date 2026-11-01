@@ -2547,6 +2547,70 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * A cached answer to a resent `wallet.sign` must not roll the credential back: the sign applied (3 to 4), another credential
+     * operation then moved the credential to 5, and the late answer carries 4. Storing it would present version 4 at the next
+     * operation, which the vault freezes as a clone. The UTKs are kept; the blob and its acknowledgement are not.
+     */
+    @Test
+    fun aCachedWalletSignAnswerNeverRollsTheCredentialBack() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e1", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            (1..3).map { v.open(nextDeposit().second) }
+            val e = sign.await().exceptionOrNull() as ChangeUnansweredException
+            // Another operation moved the credential on meanwhile.
+            d.keepCredential("TkVXNQ==", 5)
+            val again = async(Dispatchers.IO) { api.walletSignResend(e.kept) }
+            val r = v.open(nextDeposit().second)
+            val fresh = utkJson("00112233445566e2", KemPrivateKey.generate())
+            d.handle(v.seal(r.type, """{"txid":"ab","tx":"0200","credential":"TkVXNA==","credential_version":4,"utks":[$fresh]}""", re = r.id, status = Inner.STATUS_OK))
+            assertEquals("0200", VaultJson.str(again.await()!!, "tx"))
+            assertEquals(5L, d.credentialVersion)
+            assertEquals("TkVXNQ==", d.credentialBlob())
+            assertEquals("the UTKs are kept", 1, d.utkCount)
+            assertNull("no acknowledgement of an older blob", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * An unanswered `wallet.sign` is outstanding across a restart (the mark is durable) and is decided by `credential.version`: at
+     * the version it was sent at it may still apply; past it, it applied or never will, and the hold ends.
+     */
+    @Test
+    fun anUnansweredWalletSignHoldsAcrossARestartUntilTheCredentialVersionDecidesIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            (1..3).map { v.open(nextDeposit().second) }
+            assertTrue(sign.await().exceptionOrNull() is ChangeUnansweredException)
+            // The mark is on disk: a new process still holds the wallet.
+            assertEquals(SignMark(signWallet, 3), savedState(store).unsettledSigns.values.single())
+            val restarted = VaultDevice.load(config(store), secrets)!!
+            assertEquals(setOf(signWallet), restarted.unsettledSigns())
+            // The live device asks the vault: still at the sent version, so it may still apply.
+            val still = async(Dispatchers.IO) { api.walletSignsOutstanding() }
+            answerVersion(d, v, 3)
+            assertEquals(setOf(signWallet), still.await())
+            // The credential moved past it: applied (or never will), settled, the hold ends.
+            val past = async(Dispatchers.IO) { api.walletSignsOutstanding() }
+            answerVersion(d, v, 4)
+            assertEquals(emptySet<String>(), past.await())
+            assertTrue(savedState(store).unsettledSigns.isEmpty())
+            assertEquals(emptySet<String>(), VaultDevice.load(config(store), secrets)!!.unsettledSigns())
+        }
+    }
+
     /** `cap_exceeded` (checked before the password is tried) is thrown as the vault's error with its body; nothing is kept to resend. */
     @Test
     fun aRefusedWalletSignThrowsTheVaultsErrorWithItsBody() = runBlocking<Unit> {

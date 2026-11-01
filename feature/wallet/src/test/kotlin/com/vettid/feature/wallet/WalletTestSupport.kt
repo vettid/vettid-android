@@ -175,6 +175,8 @@ internal class FakeWallets : WalletOps {
 
     override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer = error("no screen sends yet")
 
+    override suspend fun signsOutstanding(): Set<String> = emptySet()
+
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = emptyList()
 }
 

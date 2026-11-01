@@ -164,6 +164,7 @@ internal object WalletWire {
                 reason = (c["reason"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
                 remainingSats = c.number("remaining_sats"),
                 allowedAfter = c.instant("allowed_after"),
+                limitSats = c.number("limit_sats") ?: c.number("limit"),
             )
         }
         return PsbtInspection(summary, cap)

@@ -1991,9 +1991,34 @@ class VaultDevice private constructor(
      * (§11.14.9, M1) A credential operation [id] with [exp] is about to be sent: unsettled until its answer arrives
      * ([handle]) or the vault's clock is past [exp] plus [SETTLE_MARGIN].
      */
-    internal suspend fun trackCredential(id: String, exp: Instant) = lock.withLock {
+    internal suspend fun trackCredential(id: String, exp: Instant, sign: SignMark? = null) = lock.withLock {
         st.unsettled[id] = exp.toEpochMilli()
+        if (sign != null) st.unsettledSigns[id] = sign
         save()
+    }
+
+    /**
+     * (W2-1) The wallets with a `wallet.sign` that may still apply: sent, not answered, and the vault's clock not past its `exp`
+     * plus the margin. Durable (a restart keeps it).
+     */
+    internal suspend fun unsettledSigns(): Set<String> = lock.withLock {
+        val seen = synchronized(vaultClockLock) { answerTs }?.toEpochMilli()
+        if (pruneSettled(st.unsettled, seen)) save()
+        if (st.unsettledSigns.keys.retainAll(st.unsettled.keys)) save()
+        st.unsettledSigns.values.map { it.walletId }.toSet()
+    }
+
+    /**
+     * (W2-1) The credential is at [version]: a `wallet.sign` sent at an earlier version has applied or never will (a later
+     * request would be `stale_credential`), so it is no longer outstanding.
+     */
+    internal suspend fun settleSignsBefore(version: Long) = lock.withLock {
+        val done = st.unsettledSigns.filterValues { it.version < version }.keys
+        if (done.isNotEmpty()) {
+            st.unsettledSigns.keys.removeAll(done)
+            st.unsettled.keys.removeAll(done)
+            save()
+        }
     }
 
     /** [id] got its answer. */
