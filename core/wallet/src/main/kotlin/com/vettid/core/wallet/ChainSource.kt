@@ -36,6 +36,9 @@ interface SpendAccess {
     /** The full previous transaction, checked to be the transaction [txid] names. */
     suspend fun rawTransaction(txid: String): ByteArray
 
+    /** `GET /tx/<txid>`: whether the server knows the transaction (confirmed or not). Throws [com.vettid.core.chain.ChainError]. */
+    suspend fun knows(txid: String): Boolean
+
     /** Fee rates in sat/vB by confirmation target in blocks. */
     suspend fun feeEstimates(): Map<Int, Double>
 
@@ -62,6 +65,8 @@ class ServersChainSource(private val servers: ChainServers) : ChainSource {
                 override suspend fun unspent(address: String) = client.unspent(ChainTarget.Address(address))
 
                 override suspend fun rawTransaction(txid: String) = client.rawTransaction(txid)
+
+                override suspend fun knows(txid: String) = client.knowsTransaction(txid)
 
                 override suspend fun feeEstimates() = client.feeEstimates()
 

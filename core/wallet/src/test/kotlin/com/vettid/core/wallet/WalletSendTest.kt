@@ -657,13 +657,13 @@ class WalletSendTest {
     fun aFailureBeforeTheRequestWentOutGivesTheApproveBack() = runBlocking {
         val (m, w) = opened()
         val p = ready(m, w)
-        ops.signFailure = java.io.IOException("no UTK").also { it.addSuppressed(SignNotSent()) }
+        ops.signNotSent = java.io.IOException("no UTK")
         assertTrue(runCatching { m.approveSend(p, "pw") }.exceptionOrNull() is VaultFailure)
-        ops.signFailure = com.vettid.core.vault.CredentialUnsettledException().also { it.addSuppressed(SignNotSent()) }
+        ops.signNotSent = com.vettid.core.vault.CredentialUnsettledException()
         val second = runCatching { m.approveSend(p, "pw") }
         val e = second.exceptionOrNull() as? VaultFailure ?: error("second: ${second.getOrNull()}")
         assertEquals(FailureKind.CREDENTIAL_UNSETTLED, e.kind)
-        ops.signFailure = null
+        ops.signNotSent = null
         assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
     }
 
@@ -714,7 +714,8 @@ class WalletSendTest {
         m.clear()
         assertEquals(1, ops.forgets)
         assertFalse(m.hasUnsent(w.id))
-        // Given up by the member: dropped as well.
+        // Given up by the member: dropped as well (the first signing's mark has settled).
+        ops.outstanding = emptySet()
         val m2 = manager()
         m2.open()
         assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 41_000)), "pw"))
@@ -771,6 +772,112 @@ class WalletSendTest {
         for (v in values) {
             for (s in listOf(payee, p.vault.txid, "40000", "tb1p")) assertFalse("'$s' in $v", "$v".contains(s))
         }
+    }
+
+    // --- review note 6: a payment to oneself is named before anything is built ---
+
+    @Test
+    fun aPaymentToOneOfTheWalletsOwnAddressesIsASelfSendAndNothingIsAsked() = runBlocking {
+        val (m, w) = opened()
+        val own = WalletFixtures.account("p2tr").address(false, 0)
+        val change = WalletFixtures.account("p2wpkh").address(true, 1)
+        for (a in listOf(own, own.uppercase(), change)) {
+            assertEquals(a, PrepareResult.SelfSend, m.prepareSend(w.id, request(address = a)))
+        }
+        assertTrue("inspect" !in ops.calls)
+        assertTrue(ops.signs.isEmpty())
+        // A foreign address is not.
+        assertTrue(m.prepareSend(w.id, request()) is PrepareResult.Ready)
+    }
+
+    // --- review note 1: an unanswered signing the vault will not apply any more is decided ---
+
+    @Test
+    fun aSigningPastItsExpReachesADefiniteResultAndIsDropped() = runBlocking {
+        val (m, w) = opened()
+        ops.unanswered = 100
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        // Still outstanding at the vault: waiting.
+        assertEquals(SendResult.Unanswered, m.retrySign(w.id))
+        assertTrue(m.hasUnsent(w.id))
+        // `exp` passed (the vault no longer lists it): decided, not Unanswered for ever. It may have been signed.
+        ops.outstanding = emptySet()
+        assertEquals(SendResult.SignLapsed, m.retrySign(w.id))
+        assertFalse(m.hasUnsent(w.id))
+        assertEquals(1, ops.forgets)
+        assertEquals(SendResult.NothingToSend, m.retrySign(w.id))
+        assertEquals(1, ops.signs.size)
+    }
+
+    @Test
+    fun aResendThatFailsPastExpIsDecidedToo() = runBlocking {
+        val (m, w) = opened()
+        ops.unanswered = 100
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        ops.resendFailure = java.io.IOException("no relay")
+        assertTrue(runCatching { m.retrySign(w.id) }.exceptionOrNull() is VaultFailure)
+        ops.outstanding = emptySet()
+        assertEquals(SendResult.SignLapsed, m.retrySign(w.id))
+        assertFalse(m.hasUnsent(w.id))
+    }
+
+    // --- review note 3: a signing out invalidates older prepared payments ---
+
+    @Test
+    fun aPaymentPreparedBeforeAnotherWasSignedIsOutOfDate() = runBlocking {
+        val (m, w) = opened()
+        val older = ready(m, w)
+        val newer = ready(m, w, request(amount = 43_000))
+        chain.spend.broadcastError = null
+        assertTrue(m.approveSend(newer, "pw") is SendResult.Sent)
+        assertEquals(SendResult.Superseded, m.approveSend(older, "pw"))
+        assertEquals(1, ops.signs.size)
+        // One prepared after the signing is current.
+        assertTrue(m.approveSend(ready(m, w, request(amount = 44_000)), "pw") is SendResult.Sent)
+        assertEquals(2, ops.signs.size)
+    }
+
+    @Test
+    fun aRefusedSigningCountsNothingSoOlderPaymentsStayCurrent() = runBlocking {
+        val (m, w) = opened()
+        val older = ready(m, w)
+        val newer = ready(m, w, request(amount = 43_000))
+        ops.signError = refusal("backoff")
+        assertTrue(runCatching { m.approveSend(newer, "pw") }.isFailure)
+        ops.signError = null
+        assertTrue(m.approveSend(older, "pw") is SendResult.Sent)
+    }
+
+    // --- review note 2: was it broadcast after all? ---
+
+    @Test
+    fun aKnownTransactionAfterAServerFailureIsSent() = runBlocking {
+        val (m, w) = opened()
+        chain.spend.broadcastError = ChainError.Timeout()
+        val p = ready(m, w)
+        assertTrue(m.approveSend(p, "pw") is SendResult.BroadcastFailed)
+        // The server has it after all.
+        chain.spend.known += p.vault.txid
+        val r = m.checkSent(w.id) as SendResult.Sent
+        assertEquals(p.vault.txid, r.txid)
+        assertFalse(m.hasUnsent(w.id))
+    }
+
+    @Test
+    fun anUnknownTransactionIsNotOnTheServerAndStaysKept() = runBlocking {
+        val (m, w) = opened()
+        chain.spend.broadcastError = ChainError.Timeout()
+        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertEquals(SendResult.NotOnServer, m.checkSent(w.id))
+        assertTrue(m.hasUnsent(w.id))
+        // The server cannot say: nothing is decided.
+        chain.spend.knowsError = ChainError.Timeout()
+        assertTrue(m.checkSent(w.id) is SendResult.BroadcastFailed)
+        assertTrue(m.hasUnsent(w.id))
+        chain.spend.knowsError = null
+        chain.spend.broadcastError = null
+        assertTrue(m.retryBroadcast(w.id) is SendResult.Sent)
+        assertEquals(SendResult.NothingToSend, m.checkSent(w.id))
     }
 
     private fun indexOf(hay: ByteArray, needle: ByteArray): Int {

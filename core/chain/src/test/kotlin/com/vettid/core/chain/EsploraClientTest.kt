@@ -240,6 +240,24 @@ class EsploraClientTest {
     }
 
     @Test
+    fun aKnownTransactionIsKnownAndAnUnknownOneIsNot() = runBlocking {
+        val id = EsploraFixtures.RAW_TXID
+        server.enqueue(ok("""{"txid":"${id.uppercase()}","status":{"confirmed":false}}"""))
+        assertTrue(client().knowsTransaction(id))
+        assertEquals("/api/tx/$id", server.takeRequest().url.encodedPath)
+        server.enqueue(MockResponse.Builder().code(404).body("Transaction not found").build())
+        assertFalse(client().knowsTransaction(id))
+    }
+
+    @Test
+    fun theAnswerOfTheKnownCheckMustBeThatTransactionAndAServerFailureIsNotNo() {
+        server.enqueue(ok("""{"txid":"${txid(3)}","status":{"confirmed":true}}"""))
+        fails<ChainError.Malformed> { runBlocking { client().knowsTransaction(EsploraFixtures.RAW_TXID) } }
+        server.enqueue(MockResponse.Builder().code(500).body("oops").build())
+        fails<ChainError.BadStatus> { runBlocking { client().knowsTransaction(EsploraFixtures.RAW_TXID) } }
+    }
+
+    @Test
     fun feeEstimates() = runBlocking {
         server.enqueue(ok(EsploraFixtures.FEES))
         val fees = client().feeEstimates()

@@ -263,6 +263,22 @@ class EsploraClient internal constructor(
         return bytes
     }
 
+    /**
+     * Whether the server knows the transaction (`GET /tx/<txid>`: confirmed or in its mempool). A 404 is `false`; the answer must be
+     * that transaction ([ChainError.Malformed] otherwise); any other failure is thrown (the server's word is not known). Used to find out
+     * whether a broadcast that got no answer went through, before a payment is dropped or made again.
+     */
+    suspend fun knowsTransaction(txid: String): Boolean {
+        val id = txid.lowercase()
+        require(isHash(id)) { "not a txid" }
+        return try {
+            if (json(listOf("tx", id), limits.listBytes).asObject().hash("txid") != id) throw ChainError.Malformed()
+            true
+        } catch (e: ChainError.NotFound) {
+            false
+        }
+    }
+
     /** Fee estimates in sat/vB by confirmation target in blocks (`/fee-estimates`). */
     suspend fun feeEstimates(): Map<Int, Double> = json(listOf("fee-estimates"), limits.smallBytes).asObject().entries.associate { (k, v) ->
         val target = k.toIntOrNull()?.takeIf { it in 1..MAX_TARGET } ?: throw ChainError.Malformed()
