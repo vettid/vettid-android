@@ -33,8 +33,8 @@ class WalletPrivacyTest {
             LookupResult.ServerFailed(RuntimeException("https://secret.example/key")),
             LookupResult.VaultFailed(com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.OTHER, "secret.example")),
             // W2-3: the transactions, their list and every result that carries a value.
-            tx, WalletTransactions(Instant.EPOCH, "node.example", "https://secret.example", listOf(tx)),
-            TransactionsResult.Done(WalletTransactions(Instant.EPOCH, "node.example", null, listOf(tx))),
+            tx, WalletTransactions(Instant.EPOCH, "node.example", listOf(tx)),
+            TransactionsResult.Done(WalletTransactions(Instant.EPOCH, "node.example", listOf(tx))),
             TransactionsResult.ServerFailed(com.vettid.core.chain.ChainError.Malformed()),
             TransactionsResult.VaultFailed(com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.OTHER, "secret.example")),
             payee, WalletTx("ab".repeat(32), Instant.EPOCH, 123_456, 789, 321, listOf(payee), "conn", null),

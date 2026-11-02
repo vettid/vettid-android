@@ -21,12 +21,6 @@ sealed interface ChainOpen {
         val spend: SpendAccess? = null,
         /** What the Transactions list asks of it (W2-3); null: a source that does not list transactions. */
         val history: HistoryAccess? = null,
-        /**
-         * The server's block explorer site (its `https` base, no path to a transaction), when it has one. [ChainServers] has no such
-         * field (`chain-servers.bin` holds the server's URL only), so no source sets it yet: a button that opens it is shown only
-         * when it is set, and no host is guessed from the server's address.
-         */
-        val explorer: String? = null,
         val summary: suspend (address: String) -> ChainSummary,
     ) : ChainOpen {
         override fun toString(): String = "Ready"

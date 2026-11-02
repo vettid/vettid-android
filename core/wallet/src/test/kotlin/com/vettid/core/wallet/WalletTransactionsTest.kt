@@ -10,9 +10,12 @@ import com.vettid.core.chain.ChainTx
 import com.vettid.core.chain.ChainTxInput
 import com.vettid.core.chain.ChainTxOutput
 import com.vettid.core.chain.Network
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -104,9 +107,9 @@ class WalletTransactionsTest {
         val exactly = signed(9, 8_000, 0, 300, now.minusSeconds(24 * 3600), WalletPayee(payee, 8_000))
         val rows = merge(emptyList(), listOf(old, recent, noTime, exactly)).associateBy { it.txid }
         assertEquals(TxStatus.NotBroadcast, rows.getValue(id(6)).status)
-        // Judgement call: under 24 hours (or no time at all, as recentSends reads it) is still Waiting.
-        assertEquals(TxStatus.Waiting, rows.getValue(id(7)).status)
-        assertEquals(TxStatus.Waiting, rows.getValue(id(8)).status)
+        // Under 24 hours (or no time at all, as recentSends reads it): not seen yet, not "Not broadcast".
+        assertEquals(TxStatus.NotSeen, rows.getValue(id(7)).status)
+        assertEquals(TxStatus.NotSeen, rows.getValue(id(8)).status)
         // Exactly 24 hours is outside recentSends' window (`isAfter(cutoff)`), so it is past it here too.
         assertEquals(TxStatus.NotBroadcast, rows.getValue(id(9)).status)
         val r = rows.getValue(id(6))
@@ -135,20 +138,62 @@ class WalletTransactionsTest {
     }
 
     @Test
-    fun newestFirstWaitingBeforeConfirmed() {
+    fun newestFirstNotInABlockBeforeConfirmed() {
         val a = chainTx(11, listOf(inp(stranger, 9)), listOf(out(ours, 5)), height = 90)
         val b = chainTx(12, listOf(inp(stranger, 9)), listOf(out(ours, 5)), height = 100)
         val c = chainTx(13, listOf(inp(stranger, 9)), listOf(out(ours, 5)), height = null)
         val h = signed(14, 1, 0, 1, now.minusSeconds(100), WalletPayee(payee, 1))
-        assertEquals(listOf(id(14), id(13), id(12), id(11)).toSet(), merge(listOf(a, b, c), listOf(h)).map { it.txid }.toSet())
+        // Not in a block first (the entry with no block time by its signing time: unknown-time first, then the later), then by height.
+        assertEquals(listOf(id(13), id(14), id(12), id(11)), merge(listOf(a, b, c), listOf(h)).map { it.txid })
         assertEquals(listOf(id(12), id(11)), merge(listOf(a, b)).map { it.txid })
-        assertEquals(id(13), merge(listOf(a, b, c)).first().txid)
     }
 
     @Test
-    fun theExplorerPageIsOnlyThereWithASite() {
-        assertNull(WalletTransactions(now, "h", null, emptyList()).explorerUrl(id(1)))
-        assertEquals("https://x.example/testnet4/tx/${id(1)}", WalletTransactions(now, "h", "https://x.example/testnet4/", emptyList()).explorerUrl(id(1)))
+    fun theVaultsFiguresWinForAPaymentItSignedWhateverTheServerSays() {
+        // The server shows a payment of its own as a receipt of a million sats with no fee; the vault signed 60,000 to a payee.
+        val lie = chainTx(20, listOf(inp(stranger, 2_000_000)), listOf(out(ours, 1_000_000), out(stranger, 999_000)), fee = 1_000, height = 100)
+        val vault = signed(20, 60_000, 39_000, 1_000, now.minusSeconds(60), WalletPayee(payee, 60_000))
+        val r = merge(listOf(lie), listOf(vault)).single()
+        assertEquals(TxDirection.SENT, r.direction)
+        assertEquals(60_000L, r.amountSats)
+        assertEquals(1_000L, r.feeSats)
+        assertEquals(-61_000L, r.netSats)
+        assertEquals(listOf(WalletPayee(payee, 60_000)), r.payees)
+        // Only where it stands comes from the server.
+        assertEquals(TxStatus.Confirmed(6), r.status)
+        assertEquals(100L, r.blockHeight)
+    }
+
+    @Test
+    fun aKeptUnsentPaymentIsNotBroadcastAtOnceAndOneUnderADayIsNotSeen() {
+        val h = signed(21, 5_000, 0, 300, now.minusSeconds(60), WalletPayee(payee, 5_000))
+        assertEquals(TxStatus.NotBroadcast, TransactionMerge.merge(own, emptyMap(), listOf(h), null, now, setOf(id(21))).single().status)
+        assertEquals(TxStatus.NotSeen, TransactionMerge.merge(own, emptyMap(), listOf(h), null, now).single().status)
+    }
+
+    @Test
+    fun aTransactionThatTouchesNoOwnAddressIsDropped() {
+        val tx = chainTx(22, listOf(inp(stranger, 9_000)), listOf(out(payee, 8_000)))
+        assertTrue(merge(listOf(tx)).isEmpty())
+    }
+
+    @Test
+    fun ownAndForeignInputsGiveTheNetAmountAndNoFee() {
+        // 30,000 of the wallet's and 70,000 of another's go to a payee (90,000) and 9,000 back to the wallet.
+        val tx = chainTx(23, listOf(inp(ours, 30_000), inp(stranger, 70_000)), listOf(out(payee, 90_000), out(change, 9_000)), fee = 1_000)
+        val r = merge(listOf(tx)).single()
+        assertEquals(TxDirection.SENT, r.direction)
+        assertEquals(21_000L, r.amountSats)
+        assertEquals(-21_000L, r.netSats)
+        assertNull(r.feeSats)
+        assertTrue(r.payees.isEmpty())
+    }
+
+    @Test
+    fun sumsThatOverflowAreMalformed() {
+        val tx = chainTx(24, listOf(inp(stranger, 1)), listOf(out(ours, Long.MAX_VALUE), out(ours, Long.MAX_VALUE)))
+        val e = runCatching { merge(listOf(tx)) }.exceptionOrNull()
+        assertTrue(e is ChainError.Malformed)
     }
 
     // --- the manager ---
@@ -222,7 +267,7 @@ class WalletTransactionsTest {
         assertEquals(TxDirection.SELF, rows.getValue(id(3)).direction)
         assertEquals(TxStatus.Confirmed(5), rows.getValue(id(3)).status)
         assertEquals(TxStatus.NotBroadcast, rows.getValue(id(4)).status)
-        assertEquals(TxStatus.Waiting, rows.getValue(id(5)).status)
+        assertEquals(TxStatus.NotSeen, rows.getValue(id(5)).status)
         assertEquals("mempool.space", done.transactions.host)
         // The vault's history was asked for 200, and the two it signed that no list shows were asked of the server by themselves.
         assertTrue("history:200" in ops.calls)
@@ -340,6 +385,87 @@ class WalletTransactionsTest {
         m.open()
         m.transactions(w.id)
         m.onEvent("sync.event", syncEvent("wallet.deleted", w.id))
+        assertTrue(m.transactionsKnown.value.isEmpty())
+    }
+
+    @Test
+    fun aHistoryEntryThatIsNoTxidIsDropped() = runBlocking {
+        val w = withWallet()
+        fundedAt(receive, 0)
+        ops.history = listOf(signed(1, 1, 0, 1, now, WalletPayee(payee, 1)).copy(txid = "not-a-txid"))
+        val m = manager()
+        m.open()
+        assertTrue((m.transactions(w.id) as TransactionsResult.Done).transactions.items.isEmpty())
+        assertEquals(0, chain.txs.asked.count { it == "tx" })
+    }
+
+    @Test
+    fun aTransactionIsFoundAmongSeveralWalletsAndOnlyOnceTheListIsRead() = runBlocking {
+        val w1 = withWallet()
+        val w2 = WalletFixtures.wallet(id = "01WALLET0000000000000000BB", nextReceive = 1)
+        ops.wallets[w2.id] = w2
+        ops.history = listOf(signed(1, 1, 0, 1, now, WalletPayee(payee, 1)))
+        val m = manager()
+        // The unlock is still reading the wallets when the notification asks: the answer waits for the list and is right.
+        val gate = CompletableDeferred<Unit>()
+        ops.listGate = gate
+        val opening = async(Dispatchers.Default) { m.open() }
+        delay(100)
+        val finding = async(Dispatchers.Default) { m.walletOfTransaction(id(1)) }
+        delay(100)
+        gate.complete(Unit)
+        opening.await()
+        assertEquals(w1.id, finding.await())
+        assertNull(m.walletOfTransaction(id(2)))
+        // A list that cannot be read is a failure, not "none".
+        ops.listGate = null
+        ops.listFails = true
+        val m2 = manager()
+        runCatching { m2.open() }
+        assertTrue(runCatching { m2.walletOfTransaction(id(1)) }.exceptionOrNull() is com.vettid.core.data.vault.VaultFailure)
+    }
+
+    @Test
+    fun aClearDuringTheListsTheSignedPaymentsOrBeforePublishEndsClearedAndStopsAsking() = runBlocking {
+        val w = withWallet()
+        for (i in 0..5) fundedAt(receive, i)
+        ops.issued[w.id to receive] = (0..5).map { WalletFixtures.address(receive, it) }.toMutableList()
+        ops.wallets[w.id] = w.copy(accounts = w.accounts.map { if (it.type == "p2tr") it.copy(nextReceive = 6) else it })
+        val m = manager()
+        m.open()
+        // During the lists: the second batch is never asked.
+        chain.txs.onTransactions = { m.clear() }
+        assertEquals(TransactionsResult.Cleared, m.transactions(w.id))
+        assertEquals(5, chain.txs.asked.count { it == "txs" })
+        assertTrue(m.transactionsKnown.value.isEmpty())
+    }
+
+    @Test
+    fun aClearDuringThePerTxidAsksAndBeforePublishKeepsNothing() = runBlocking {
+        val w = withWallet()
+        fundedAt(receive, 0)
+        ops.history = listOf(
+            signed(1, 1, 0, 1, now, WalletPayee(payee, 1)),
+            signed(2, 1, 0, 1, now, WalletPayee(payee, 1)),
+        )
+        val m = manager()
+        m.open()
+        chain.txs.onTransaction = { m.clear() }
+        assertEquals(TransactionsResult.Cleared, m.transactions(w.id))
+        assertEquals(1, chain.txs.asked.count { it == "tx" })
+        assertTrue(m.transactionsKnown.value.isEmpty())
+    }
+
+    @Test
+    fun aClearAfterTheLastServerCallDropsTheList() = runBlocking {
+        val w = withWallet()
+        fundedAt(receive, 0)
+        val a0 = addr(receive, 0)
+        chain.txs.byAddress[a0] = listOf(chainTx(1, listOf(inp(stranger, 9)), listOf(out(a0, 5)), height = 100))
+        val m = manager()
+        m.open()
+        chain.txs.onTip = { m.clear() }
+        assertEquals(TransactionsResult.Cleared, m.transactions(w.id))
         assertTrue(m.transactionsKnown.value.isEmpty())
     }
 }

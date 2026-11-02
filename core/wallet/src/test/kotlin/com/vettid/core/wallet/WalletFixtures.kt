@@ -67,6 +67,7 @@ internal class FakeWalletOps : WalletOps {
     /** What was asked, in order. Thread-safe to read while a call on another thread adds to it. */
     val calls: MutableList<String> = CopyOnWriteArrayList()
     var unsupported = false
+    var listFails = false
     var revealFails = false
     var lie: ((WalletAddress) -> WalletAddress)? = null
     var listGate: CompletableDeferred<Unit>? = null
@@ -94,6 +95,7 @@ internal class FakeWalletOps : WalletOps {
         calls += "list"
         listGate?.await()
         if (unsupported) refuse("wallet.list", "unsupported_type")
+        if (listFails) refuse("wallet.list", "internal")
         return wallets.values.toList()
     }
 
@@ -407,24 +409,31 @@ internal class FakeHistory : HistoryAccess {
     val byAddress = mutableMapOf<String, List<com.vettid.core.chain.ChainTx>>()
     val byTxid = mutableMapOf<String, com.vettid.core.chain.ChainTx>()
     var tip = 1_000L
-    var explorer: String? = null
     var fails: ChainError? = null
     val asked = CopyOnWriteArrayList<String>()
 
+    /** Run when the call is made (a lock can come in at that moment). */
+    var onTransactions: (suspend () -> Unit)? = null
+    var onTransaction: (suspend () -> Unit)? = null
+    var onTip: (suspend () -> Unit)? = null
+
     override suspend fun transactions(address: String): List<com.vettid.core.chain.ChainTx> {
         asked += "txs"
+        onTransactions?.invoke()
         fails?.let { throw it }
         return byAddress[address].orEmpty()
     }
 
     override suspend fun transaction(txid: String): com.vettid.core.chain.ChainTx? {
         asked += "tx"
+        onTransaction?.invoke()
         fails?.let { throw it }
         return byTxid[txid]
     }
 
     override suspend fun tipHeight(): Long {
         asked += "tip"
+        onTip?.invoke()
         fails?.let { throw it }
         return tip
     }
@@ -464,7 +473,7 @@ internal class FakeChain(var open: ChainOpen? = null) : ChainSource {
     /** What the Transactions list asks of the server (W2-3). */
     val txs = FakeHistory()
 
-    private fun openNow(): ChainOpen = open ?: ChainOpen.Ready("mempool.space", spend, txs, txs.explorer) { address ->
+    private fun openNow(): ChainOpen = open ?: ChainOpen.Ready("mempool.space", spend, txs) { address ->
         gate?.await()
         synchronized(asked) { asked += address }
         history[address] ?: ChainSummary(0, 0, 0, 0)

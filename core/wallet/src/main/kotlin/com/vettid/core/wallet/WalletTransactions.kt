@@ -29,10 +29,19 @@ sealed interface TxStatus {
     /** In a block; [confirmations] counts that block (1 for the tip's own), from the server's tip height. */
     data class Confirmed(val confirmations: Long) : TxStatus
 
-    /** In the server's mempool, or (a judgement call, see [TransactionMerge]) signed less than 24 hours ago and not yet seen. */
+    /** In the server's mempool. */
     data object Waiting : TxStatus
 
-    /** Signed by the vault, unknown to the server, and older than 24 hours by the vault's clock. */
+    /**
+     * Signed by the vault and unknown to the server, but under 24 hours old by the vault's clock (or with no time, as `recentSends`
+     * counts it): it may still be on its way. Shown as "Not seen by {host} yet".
+     */
+    data object NotSeen : TxStatus
+
+    /**
+     * Signed by the vault, unknown to the server, and either older than 24 hours by the vault's clock or still held unsent on this
+     * phone (its broadcast was refused and the server has said it does not have it).
+     */
     data object NotBroadcast : TxStatus
 }
 
@@ -64,13 +73,8 @@ data class WalletTransaction(
 data class WalletTransactions(
     val at: Instant,
     val host: String,
-    /** The chain server's block explorer site, when it has one (no source has one yet: see [ChainOpen.Ready.explorer]). */
-    val explorer: String?,
     val items: List<WalletTransaction>,
 ) {
-    /** The page of [txid] on the block explorer; null when the server has no site. */
-    fun explorerUrl(txid: String): String? = explorer?.trimEnd('/')?.let { "$it/tx/$txid" }
-
     override fun toString(): String = "WalletTransactions"
 }
 
@@ -110,18 +114,18 @@ sealed interface TransactionsResult {
 }
 
 /**
- * Merges the two sources by `txid` (ANDROID-PLAN §4 "Transactions"): what the server lists for the wallet's addresses ([chain]) and
- * what the vault signed ([history]). Pure.
+ * Merges the two sources by `txid` (ANDROID-PLAN §4 "Transactions"). Pure.
  *
- * The direction and the amounts come from the wallet's own inputs and outputs ([own] are the addresses the walk found with history; a
- * transaction touching the wallet touches one of them), the payees of a payment the vault signed from the vault's own record. A
- * payment in both is the server's figures with the vault's payees; one only in the vault's history is the vault's figures.
+ * **The vault's figures win for a payment it signed:** its direction (SENT, or SELF when every payee is the wallet's own, never
+ * RECEIVED), amount, fee and payees come from `wallet.history`; the server gives only where the transaction stands (mempool or block,
+ * height, block time). A server that lies about a payment the vault signed changes its status at most. A transaction only the server
+ * lists has its direction and amounts computed from the wallet's own inputs and outputs ([own] are the addresses the walk found with
+ * history); one that touches none of them is dropped.
  *
- * Status: Confirmed with its confirmations from [tip]; Waiting when in the server's mempool; **Not broadcast** only when the vault
- * signed it, the server does not know it and it is older than 24 hours by the vault's clock ([vaultNow], as `recentSends` reads it).
- * **Judgement call:** a payment signed less than 24 hours ago that the server does not know yet is shown as Waiting (the app
- * broadcasts right after signing, so it is most likely still on its way), not as a third state with a text of its own; an entry
- * without a time counts as recent, as in `recentSends`.
+ * Status: Confirmed with its confirmations from [tip]; Waiting when in the server's mempool; for a payment the vault signed that the
+ * server does not know: **Not broadcast** when it is a kept unsent payment ([unsent]) or older than 24 hours by the vault's clock
+ * ([vaultNow], as `recentSends`: `at` not after the cutoff), else **Not seen** (under 24 hours). An entry with no `at` is recent, as
+ * `recentSends` counts it, so it stays Not seen until the vault's history gives it a time.
  */
 internal object TransactionMerge {
     val NOT_BROADCAST_AFTER: Duration = Duration.ofHours(24)
@@ -132,16 +136,23 @@ internal object TransactionMerge {
         history: List<WalletTx>,
         tip: Long?,
         vaultNow: Instant,
+        unsent: Set<String> = emptySet(),
     ): List<WalletTransaction> {
         val mine = own.map { it.lowercase() }.toSet()
         val signed = history.associateBy { it.txid.lowercase() }
         val out = ArrayList<WalletTransaction>()
-        for ((txid, tx) in chain) out += fromChain(txid, tx, mine, signed[txid], tip)
+        for ((txid, tx) in chain) {
+            val h = signed[txid]
+            val row = if (h != null) fromVault(txid, h, mine, serverStatus(tx, tip), tx) else fromChain(txid, tx, mine, tip)
+            if (row != null) out += row
+        }
         val cutoff = vaultNow.minus(NOT_BROADCAST_AFTER)
         for ((txid, h) in signed) {
-            if (txid !in chain) out += fromVault(txid, h, mine, cutoff)
+            if (txid in chain) continue
+            val old = h.at != null && !h.at.isAfter(cutoff)
+            out += fromVault(txid, h, mine, if (old || txid in unsent) TxStatus.NotBroadcast else TxStatus.NotSeen, null)
         }
-        // Newest first: what is not in a block (waiting) before what is, by the time known; an entry with no time is the newest.
+        // Newest first: what is not in a block before what is, by the time known; an entry with no time is the newest.
         return out.sortedWith(
             compareByDescending<WalletTransaction> { it.blockHeight == null }
                 .thenByDescending { it.blockHeight ?: 0L }
@@ -150,70 +161,102 @@ internal object TransactionMerge {
         )
     }
 
+    private fun serverStatus(tx: ChainTx, tip: Long?): TxStatus =
+        if (tx.confirmed) TxStatus.Confirmed(confirmations(tx.blockHeight, tip)) else TxStatus.Waiting
+
+    /** Adds [values], an overflow being an answer that is not a chain's ([ChainError.Malformed]). */
+    private fun total(values: Sequence<Long>): Long = try {
+        values.fold(0L) { a, b -> Math.addExact(a, b) }
+    } catch (_: ArithmeticException) {
+        throw ChainError.Malformed()
+    }
+
     /** What a transaction does to the wallet, from the addresses it touches that are the wallet's own. */
-    private class Totals(val spends: Boolean, val ownIn: Long, val ownOut: Long, val others: List<ChainTxOutput>, val allIn: Long?)
+    private class Totals(
+        val spends: Boolean,
+        val foreignIn: Boolean,
+        val ownIn: Long,
+        val ownOut: Long,
+        val others: List<ChainTxOutput>,
+        val allIn: Long?,
+        val allOut: Long,
+    )
 
     private fun totalsOf(tx: ChainTx, own: Set<String>): Totals {
         fun ours(address: String?) = address != null && address.lowercase() in own
-        val allIn = if (tx.inputs.all { it.prevValueSats != null }) tx.inputs.sumOf { it.prevValueSats ?: 0L } else null
+        val allIn = if (tx.inputs.all { it.prevValueSats != null }) total(tx.inputs.asSequence().map { it.prevValueSats ?: 0L }) else null
         return Totals(
             spends = tx.inputs.any { ours(it.prevAddress) },
-            ownIn = tx.inputs.filter { ours(it.prevAddress) }.sumOf { it.prevValueSats ?: 0L },
-            ownOut = tx.outputs.filter { ours(it.address) }.sumOf { it.valueSats },
+            foreignIn = tx.inputs.any { !ours(it.prevAddress) },
+            ownIn = total(tx.inputs.asSequence().filter { ours(it.prevAddress) }.map { it.prevValueSats ?: 0L }),
+            ownOut = total(tx.outputs.asSequence().filter { ours(it.address) }.map { it.valueSats }),
             others = tx.outputs.filterNot { ours(it.address) },
             allIn = allIn,
+            allOut = total(tx.outputs.asSequence().map { it.valueSats }),
         )
     }
 
-    private fun directionOf(t: Totals): TxDirection = when {
+    private fun feeOf(tx: ChainTx, t: Totals, direction: TxDirection, mixed: Boolean): Long? =
+        if (mixed || direction == TxDirection.RECEIVED) null else tx.feeSats ?: t.allIn?.let { it - t.allOut }?.takeIf { it >= 0 }
+
+    private fun payeesOf(t: Totals): List<WalletPayee> =
+        t.others.filter { it.valueSats > 0 && it.address != null }.map { WalletPayee(it.address.orEmpty(), it.valueSats) }
+
+    private fun directionOf(t: Totals, net: Long, mixed: Boolean): TxDirection = when {
         !t.spends -> TxDirection.RECEIVED
+        mixed -> when {
+            net < 0 -> TxDirection.SENT
+            net > 0 -> TxDirection.RECEIVED
+            else -> TxDirection.SELF
+        }
         // Outputs that carry no value (OP_RETURN) do not make a payee.
         t.others.none { it.valueSats > 0 } -> TxDirection.SELF
         else -> TxDirection.SENT
     }
 
-    /** The server's fee, else inputs less outputs when every input's value is known, else the vault's. */
-    private fun feeOf(tx: ChainTx, t: Totals, signed: WalletTx?): Long? =
-        tx.feeSats ?: t.allIn?.let { it - tx.outputs.sumOf { o -> o.valueSats } }?.takeIf { it >= 0 } ?: signed?.feeSats
-
-    private fun fromChain(txid: String, tx: ChainTx, own: Set<String>, signed: WalletTx?, tip: Long?): WalletTransaction {
+    /**
+     * A transaction only the server lists. Inputs of the wallet's own and of others in one transaction share the fee, so the wallet's
+     * part is its net change alone: the amount is what left (or came in) and no fee is shown.
+     */
+    private fun fromChain(txid: String, tx: ChainTx, own: Set<String>, tip: Long?): WalletTransaction? {
         val t = totalsOf(tx, own)
-        val direction = directionOf(t)
-        val amount = if (direction == TxDirection.SENT) t.others.sumOf { it.valueSats } else t.ownOut
-        val payees = if (direction == TxDirection.SENT) {
-            // The vault's payees when it signed this; else the outputs that are not the wallet's own.
-            signed?.payees?.takeIf { it.isNotEmpty() }
-                ?: t.others.filter { it.valueSats > 0 && it.address != null }.map { WalletPayee(it.address.orEmpty(), it.valueSats) }
-        } else {
-            emptyList()
+        if (!t.spends && t.ownOut == 0L) return null
+        val net = t.ownOut - t.ownIn
+        val mixed = t.spends && t.foreignIn
+        val direction = directionOf(t, net, mixed)
+        val amount = when {
+            mixed -> Math.abs(net)
+            direction == TxDirection.SENT -> total(t.others.asSequence().map { it.valueSats })
+            else -> t.ownOut
         }
+        val fee = feeOf(tx, t, direction, mixed)
+        val payees = if (direction == TxDirection.SENT && !mixed) payeesOf(t) else emptyList()
         return WalletTransaction(
-            txid = txid,
-            direction = direction,
-            amountSats = amount,
-            netSats = t.ownOut - t.ownIn,
-            feeSats = feeOf(tx, t, signed).takeIf { direction != TxDirection.RECEIVED },
-            status = if (tx.confirmed) TxStatus.Confirmed(confirmations(tx.blockHeight, tip)) else TxStatus.Waiting,
+            txid = txid, direction = direction, amountSats = amount, netSats = net, feeSats = fee, status = serverStatus(tx, tip),
             blockHeight = tx.blockHeight.takeIf { tx.confirmed },
             blockTime = tx.blockTime?.takeIf { tx.confirmed }?.let { Instant.ofEpochSecond(it) },
-            signedAt = signed?.at,
-            payees = payees.sortedByDescending { it.amountSats },
-            connectionId = signed?.connectionId,
+            signedAt = null, payees = payees.sortedByDescending { it.amountSats }, connectionId = null,
         )
     }
 
-    private fun fromVault(txid: String, h: WalletTx, own: Set<String>, cutoff: Instant): WalletTransaction {
-        val ownPaid = h.payees.filter { it.address.lowercase() in own }.sumOf { it.amountSats }
+    /** A payment the vault signed: its own figures, with [status] (and, when the server lists it, the block's height and time). */
+    private fun fromVault(txid: String, h: WalletTx, own: Set<String>, status: TxStatus, tx: ChainTx?): WalletTransaction {
+        val ownPaid = total(h.payees.asSequence().filter { it.address.lowercase() in own }.map { it.amountSats })
         val self = h.payees.isNotEmpty() && ownPaid == h.sendingSats
+        val leaving = try {
+            Math.addExact(h.sendingSats, h.feeSats)
+        } catch (_: ArithmeticException) {
+            throw ChainError.Malformed()
+        }
         return WalletTransaction(
             txid = txid,
             direction = if (self) TxDirection.SELF else TxDirection.SENT,
             amountSats = h.sendingSats,
-            netSats = ownPaid - h.sendingSats - h.feeSats,
+            netSats = ownPaid - leaving,
             feeSats = h.feeSats,
-            status = if (h.at != null && !h.at.isAfter(cutoff)) TxStatus.NotBroadcast else TxStatus.Waiting,
-            blockHeight = null,
-            blockTime = null,
+            status = status,
+            blockHeight = tx?.blockHeight?.takeIf { tx.confirmed },
+            blockTime = tx?.blockTime?.takeIf { tx.confirmed }?.let { Instant.ofEpochSecond(it) },
             signedAt = h.at,
             payees = if (self) emptyList() else h.payees.sortedByDescending { it.amountSats },
             connectionId = h.connectionId,

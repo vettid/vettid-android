@@ -1089,7 +1089,8 @@ class WalletsManager(
         val signed: List<WalletTx>
         val vaultNow: Instant
         try {
-            signed = history(walletId, HISTORY_MAX)
+            // A txid that is not 64 hex digits is not a transaction: dropped.
+            signed = history(walletId, HISTORY_MAX).filter { isTxid(it.txid.lowercase()) }
             vaultNow = vaultGuard { ops().vaultNow() }
         } catch (e: VaultFailure) {
             return TransactionsResult.VaultFailed(e)
@@ -1103,8 +1104,7 @@ class WalletsManager(
             // A payment the vault signed that no list shows: asked of the server itself, one by one.
             for (h in signed) {
                 val id = h.txid.lowercase()
-                // A txid that is not 64 hex digits cannot be asked about: it is not on the server.
-                if (id in chainTxs || id.length != TXID_LENGTH || !id.all { it in "0123456789abcdef" }) continue
+                if (id in chainTxs) continue
                 if (gen() != g) return TransactionsResult.Cleared
                 access.transaction(id)?.let { chainTxs[id] = it }
             }
@@ -1113,8 +1113,16 @@ class WalletsManager(
         } catch (e: ChainError) {
             return TransactionsResult.ServerFailed(e)
         }
-        val items = withContext(Dispatchers.Default) { TransactionMerge.merge(found.own, found.chain, signed, found.tip, vaultNow) }
-        val list = WalletTransactions(clock(), ready.host, ready.explorer, items)
+        val unsent = synchronized(lock) { keptTx[walletId]?.takeIf { !it.mayBeOnNetwork }?.signed?.txid?.lowercase() }
+        val items = try {
+            withContext(Dispatchers.Default) {
+                TransactionMerge.merge(found.own, found.chain, signed, found.tip, vaultNow, setOfNotNull(unsent))
+            }
+        } catch (e: ChainError) {
+            // A sum that overflows is not a chain's answer.
+            return TransactionsResult.ServerFailed(e)
+        }
+        val list = WalletTransactions(clock(), ready.host, items)
         var listed = false
         if (!publish(g) {
                 listed = walletsFlow.value.any { it.id == walletId }
@@ -1145,8 +1153,13 @@ class WalletsManager(
      * has it. Null when none does (an older payment than the newest 200, or a wallet since deleted). A wallet whose history cannot be
      * read is skipped; if none of the others has it, that failure is thrown.
      */
+    @Suppress("ReturnCount")
     suspend fun walletOfTransaction(txid: String): String? {
         val id = txid.lowercase()
+        // Straight after an unlock the wallets are not read yet: read them first; a list that cannot be read is a failure, not "none".
+        if (!synchronized(lock) { listRead }) refresh()
+        if (availabilityFlow.value == WalletAvailability.UNSUPPORTED) return null
+        if (!synchronized(lock) { listRead }) throw VaultFailure(FailureKind.OTHER, "list_unread")
         var failure: VaultFailure? = null
         for (w in walletsFlow.value) {
             try {
@@ -1915,6 +1928,8 @@ class WalletsManager(
         /** The most `wallet.history` gives (§10.18). */
         private const val HISTORY_MAX = 200
         private const val TXID_LENGTH = 64
+
+        private fun isTxid(s: String) = s.length == TXID_LENGTH && s.all { it in "0123456789abcdef" }
         private const val RECENT_MAX = 10
 
         /** BIP44's gap: addresses past the last used one that are looked at before a chain is taken as ended. */
