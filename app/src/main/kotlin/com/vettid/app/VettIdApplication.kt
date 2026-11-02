@@ -128,6 +128,18 @@ class VettIdApplication : DistributionApplication() {
         // on-phone service while the mode is the service and the phone has a vault.
         runCatching { Channels.ensure(this) }
         feedNotifier.start()
+        // The cover's timer stops in deep sleep: the screen coming on is a look at the clock (dynamic receiver, system broadcasts).
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: android.content.Intent) = feedNotifier.recheckCover()
+            },
+            android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_SCREEN_ON)
+                addAction(android.content.Intent.ACTION_USER_PRESENT)
+            },
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         // VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background.
         changeNotifier.start()
         // The member's pending lock: its job while it is pending (it survives the process), and its notice.

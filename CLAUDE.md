@@ -124,7 +124,7 @@ The A2 exit test:
   (`LocalNotification.publicForm(quiet)`: the lock screen's "New activity in VettID" / "VettID needs your attention", no names, no
   text, no names or message-text read; a new arrival keeps its sound and heads-up). When the flow turns true what is showing is
   re-posted in that form, quietly, if the cover still holds (a dismissed one stays dismissed; a snoozed one stays tracked and is
-  cancelled at the vault lock). Not restored when the cover goes. The ongoing call notice (`CallService`) is not covered by this.
+  cancelled at the vault lock). The timer runs on monotonic time (stops in deep sleep), so the clock is also looked at (`FeedNotifier.recheckCover()`, once per cover) on every arrival and when the screen comes on or the phone is unlocked (`VettIdApplication`'s receiver). The timer looks again when it fires early. Not restored when the cover goes. Known limit: a snooze that ends under the cover shows the named original (no delete-intent receiver). The ongoing call notice (`CallService`) is not covered by this.
   The withdrawn-request mute (`ApprovalDetailUiState.canMute`) needs a named connection, as History does.
 
 - Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the app's note; VAULT-MESSAGING §10.10 is normative): `:core:crypto` `call/`

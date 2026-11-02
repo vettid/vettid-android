@@ -109,13 +109,16 @@ class FeedNotifier(
     private val posted = LinkedHashMap<String, LocalNotification>()
     private val lock = Any()
 
+    /** A cover-up ran for the cover that is up now; reset when the cover is seen gone or a named notification is posted. */
+    private var coverDone = false
+
     private val on: Boolean get() = settings.value.mode != NotificationMode.OFF
 
     fun start() {
         scope.launch { source.arrivals.collect { onArrival(it) } }
         scope.launch { source.items.collect { onItems(it) } }
         scope.launch { source.open.collect { open -> if (!open) cancelItems() } }
-        scope.launch { source.covered.collect { if (it) coverUp() } }
+        scope.launch { source.covered.collect { if (it) coverUp() else synchronized(lock) { coverDone = false } } }
         scope.launch { settings.map { it.mode }.distinctUntilChanged().collect { if (it == NotificationMode.OFF) cancelAll() } }
         scope.launch { combine(source.lockedElsewhere, source.idleLocked) { l, i -> l to i }.collect { (l, i) -> onLocked(l, i) } }
         scope.launch { source.ownerCheck.collect { onOwnerCheck(it) } }
@@ -124,6 +127,8 @@ class FeedNotifier(
 
     @Suppress("ReturnCount")
     private suspend fun onArrival(item: FeedItem) {
+        // The cover's timer runs on monotonic time, which stops in deep sleep: the clock is looked at here too.
+        recheckCover()
         // A re-post after a withdrawal only updates what is showing: a notification the member dismissed stays dismissed.
         if (item.quietRepost && !synchronized(lock) { item.itemId in posted.keys && poster.isPosted(item.itemId) }) return
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
@@ -143,7 +148,7 @@ class FeedNotifier(
         synchronized(lock) {
             if (!notifiable(item)) return
             // The cover came up while it was being prepared.
-            if (source.coveredNow()) n = n.publicForm(quiet = false)
+            if (source.coveredNow()) n = n.publicForm(quiet = false) else coverDone = false
             posted[item.itemId] = n.publicForm(quiet = true)
             poster.post(n)
         }
@@ -188,12 +193,23 @@ class FeedNotifier(
     private fun coverUp() {
         synchronized(lock) {
             // The cover went away meanwhile: a re-post now could replace a named one posted after it.
-            if (!source.coveredNow()) return
+            if (!source.coveredNow()) {
+                coverDone = false
+                return
+            }
+            if (coverDone) return
+            coverDone = true
             // Not showing (dismissed, or snoozed: the system lists only what is active) stays in [posted]: a snoozed one
             // is still cancelled when the vault locks. A dismissed one is not re-posted.
             posted.entries.toList().forEach { (tag, publicN) -> if (poster.isPosted(tag)) poster.post(publicN) }
         }
     }
+
+    /**
+     * Looks at the cover now (not at its timer): the app calls it when the member turns the screen on or unlocks the phone,
+     * and every arrival does. If it is up and no cover-up ran for it, what is showing is re-posted in public form.
+     */
+    fun recheckCover() = coverUp()
 
     private fun cancelAll() {
         cancelItems()

@@ -3,6 +3,8 @@ package com.vettid.core.data.lock
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -108,6 +110,62 @@ class AppLockCoverTest {
         advanceTimeBy(1_000)
         runCurrent()
         assertTrue("the timer fired", covered.value)
+    }
+
+    @Test
+    fun aTimerThatFiresEarlyLooksAgainInsteadOfBeingLost() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground() // at clock 0
+        runCurrent()
+        // The monotonic timer elapses but the wall clock was set back: not covered yet.
+        advanceTimeBy(timeoutMs + 500)
+        runCurrent()
+        assertFalse(covered.value)
+        clock = timeoutMs
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue("it looked again", covered.value)
+    }
+
+    @Test
+    fun aPromptInProgressAtTheTimerIsLookedAtAgain() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        l.authenticating = true
+        clock = timeoutMs
+        advanceTimeBy(timeoutMs + 500)
+        runCurrent()
+        assertFalse(covered.value)
+        l.authenticating = false
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(covered.value)
+    }
+
+    @Test
+    fun theCoverHasNoGapWhenTheAppComesBackAfterTheTimeout() = runTest {
+        val l = unlocked()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler))
+        val covered = l.coverFlow(scope)
+        val seen = mutableListOf<Boolean>()
+        val job = scope.launch { covered.collect { seen += it } }
+        l.onBackground()
+        clock = timeoutMs
+        advanceTimeBy(timeoutMs + 500)
+        runCurrent()
+        assertTrue(covered.value)
+        seen.clear()
+        l.onForeground()
+        runCurrent()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+        assertFalse("never uncovered on the way: $seen", seen.contains(false))
+        job.cancel()
+        scope.cancel()
     }
 
     @Test

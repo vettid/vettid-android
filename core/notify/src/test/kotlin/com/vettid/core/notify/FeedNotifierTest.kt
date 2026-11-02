@@ -207,6 +207,32 @@ class FeedNotifierTest {
     }
 
     @Test
+    fun aCoverThatTheTimerMissedIsActedOnByAnArrivalOrTheScreenComingOn() = runTest {
+        val n = notifier()
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "item.revealed", ref = "i1"))
+        // The wall clock is past the deadline, the timer (the flow) has not fired.
+        source.nowOverride = true
+        n.recheckCover()
+        assertEquals("New activity in VettID", poster.shown.getValue("f1").title)
+        assertEquals("New activity in VettID", poster.shown.getValue("f2").title)
+        assertTrue(poster.shown.getValue("f1").silent)
+        // Once per cover: asked again, nothing is posted again.
+        poster.log.clear()
+        n.recheckCover()
+        assertTrue(poster.log.isEmpty())
+        // The cover goes (unlocked); a named one posted; the next cover is acted on again.
+        source.nowOverride = false
+        arrive(item("f3"))
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f3").title)
+        source.nowOverride = true
+        arrive(item("f4"))
+        assertEquals("New activity in VettID", poster.shown.getValue("f3").title)
+        assertEquals("New activity in VettID", poster.shown.getValue("f4").title)
+    }
+
+    @Test
     fun withTheCoverDownItIsAsBefore() = runTest {
         notifier()
         source.covered.value = true

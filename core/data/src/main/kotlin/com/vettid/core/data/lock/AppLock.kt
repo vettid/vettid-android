@@ -223,6 +223,11 @@ class AppLock(
                         } else {
                             emit(false)
                             delay(left + COVER_MARGIN_MS)
+                            // Early (a clock set back, a prompt in progress): look again rather than lose the cover for good.
+                            while (!wouldShowLock()) {
+                                val more = at + t.seconds * MS - now()
+                                delay(minOf(more + COVER_MARGIN_MS, COVER_RETRY_MS).coerceAtLeast(COVER_MARGIN_MS))
+                            }
                             emit(true)
                         }
                     }
@@ -333,8 +338,9 @@ class AppLock(
     fun onForeground() {
         if (authenticating) return
         val at = backgroundAt ?: return
-        backgroundAt = null
+        // Locked before the background time is cleared: the cover (wouldShowLock) has no gap between the two.
         if (stateFlow.value == AppLockState.UNLOCKED && now() - at >= timeoutFlow.value.seconds * MS) lockNow()
+        backgroundAt = null
     }
 
     private companion object {
@@ -344,5 +350,6 @@ class AppLock(
 
         /** The timer fires a little late rather than a clock tick early: [wouldShowLock] must be true when it does. */
         const val COVER_MARGIN_MS = 100L
+        const val COVER_RETRY_MS = 1000L
     }
 }
