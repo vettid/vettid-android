@@ -9,7 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 
 /**
- * Sends a PIN or password change (VAULT-MESSAGING 0.44.0 §11.14.9) in the vault manager's own scope: a screen that goes
+ * Sends a PIN or password change, or a `credential.reset` (VAULT-MESSAGING 0.44.0, 0.48.0 §11.14.9) in the vault manager's own
+ * scope: a screen that goes
  * away while the change is on its way does not stop it, and its outcome is kept and said ([ChangeResolver.check]).
  *
  * - The marker is stored first ([Ops.store]); a refused store sends nothing.
@@ -63,6 +64,12 @@ internal class ChangeSender(
             // Before the marker (a UTK request refused): nothing of the change was sent.
             val m = marker ?: throw e
             ops.clear(m)
+            if (e.code == VaultCodes.FORBIDDEN) {
+                // (ANDROID-PLAN 0.1.55, VAULT-MESSAGING 0.51.1) The vault's own `forbidden` to the request itself: another phone
+                // became the holder. Ended as the resolver ends it (moved), never shown as a refusal; nothing is erased.
+                resolver.publish(ChangeCheck.Moved(kind))
+                throw VaultFailure(FailureKind.CHANGE_CHECKING, CODE_CHECKING, cause = e)
+            }
             if (e.code == CODE_STALE) {
                 resolver.publish(ChangeCheck.NotApplied(kind))
                 throw VaultFailure(FailureKind.CHANGE_CHECKING, CODE_CHECKING, cause = e)

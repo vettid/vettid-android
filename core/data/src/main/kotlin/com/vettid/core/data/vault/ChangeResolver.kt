@@ -21,7 +21,7 @@ import java.time.Instant
 // is decided, not repeated.
 
 /**
- * The unresolved change stored in `account.bin` before a `pin.change` or `credential.password.change` is sent (§11.14.9
+ * The unresolved change stored in `account.bin` before a `pin.change`, `credential.password.change` or `credential.reset` is sent (§11.14.9
  * step 1): the type, the inner id, the blob version the request carries and its `exp` (epoch ms, the vault's clock as
  * last seen). For a PIN change [fromEpoch] is the epoch of the phone's current record when it was sent; its candidate
  * is the next epoch. No PIN, password or secret.
@@ -33,8 +33,18 @@ internal data class UnresolvedChange(
     val sentVersion: Long,
     val expMs: Long,
     val fromEpoch: Long = 0,
+    /**
+     * A reset's held key (0.48.0): the `key` of the `credential.version` answer it was sent after. A key is public to the
+     * vault, no secret; absent from records written before resets were stored, and for the other changes.
+     */
+    val heldKey: String? = null,
 ) {
-    val kind: ChangeKind get() = if (type == ChangeTypes.PIN_CHANGE) ChangeKind.PIN else ChangeKind.PASSWORD
+    val kind: ChangeKind
+        get() = when (type) {
+            ChangeTypes.PIN_CHANGE -> ChangeKind.PIN
+            ChangeTypes.RESET -> ChangeKind.RESET
+            else -> ChangeKind.PASSWORD
+        }
 
     override fun toString(): String = "UnresolvedChange($type)"
 }
@@ -115,8 +125,31 @@ internal object ChangeDecision {
     /** How long after the request's `exp` an unchanged version decides "not applied". */
     val MARGIN: Duration = Duration.ofMinutes(1)
 
-    fun of(m: UnresolvedChange, exists: Boolean, version: Long?, alarm: Boolean, ts: Instant): Verdict =
-        of(m.sentVersion, m.expMs, exists, version, alarm, ts)
+    fun of(m: UnresolvedChange, exists: Boolean, version: Long?, alarm: Boolean, ts: Instant, key: String? = null): Verdict =
+        if (m.kind == ChangeKind.RESET) {
+            ofReset(m, exists, version, key, alarm, ts)
+        } else {
+            of(m.sentVersion, m.expMs, exists, version, alarm, ts)
+        }
+
+    /**
+     * (0.48.0 "A lost answer to `credential.reset`" step 3) A reset starts again at version 1 under a new key. Applied: a `key`
+     * other than the held key, or a version lower than the one sent (only a reset or a rotation changes the key, and the gate
+     * refused the rotation). The same key and version: not applied once the answer is stamped more than [MARGIN] after `exp`,
+     * undecided before. Anything else (no credential, no key to compare, the same key with another version, an alarm) ends
+     * without a decision.
+     */
+    @Suppress("LongParameterList")
+    fun ofReset(m: UnresolvedChange, exists: Boolean, version: Long?, key: String?, alarm: Boolean, ts: Instant): Verdict {
+        val held = m.heldKey
+        return when {
+            !exists || version == null || alarm || key == null || held == null -> Verdict.ENDED
+            key != held || version < m.sentVersion -> Verdict.APPLIED
+            version == m.sentVersion && ts.isAfter(Instant.ofEpochMilli(m.expMs).plus(MARGIN)) -> Verdict.NOT_APPLIED
+            version == m.sentVersion -> Verdict.UNDECIDED
+            else -> Verdict.ENDED
+        }
+    }
 
     /** The same for any request that carried blob version [sentVersion] and expired at [expMs] (a renew, N1). */
     @Suppress("LongParameterList")
@@ -130,7 +163,7 @@ internal object ChangeDecision {
 }
 
 /**
- * Decides an unresolved PIN or password change (§11.14.9 steps 2–4): at once, at every reconnection and start
+ * Decides an unresolved PIN or password change, or reset (§11.14.9 steps 2–4, 0.48.0): at once, at every reconnection and start
  * ([kick]), and before any other credential operation ([gate]). Each round resends the kept request (the same inner id
  * and body) while its `exp` has not passed, and otherwise asks `credential.version`; an undecided round is tried again
  * after a pause of 30 s, doubling up to 5 minutes. Nothing here sends a PIN or a password that was not already in the
@@ -155,7 +188,7 @@ internal class ChangeResolver(
     }
 
     /** `credential.version`'s answer and its `ts` (the vault's clock). */
-    data class Version(val exists: Boolean, val version: Long?, val alarm: Boolean, val ts: Instant)
+    data class Version(val exists: Boolean, val version: Long?, val alarm: Boolean, val ts: Instant, val key: String? = null)
 
     interface Ops {
         /** The unresolved change stored on the phone, or null. */
@@ -249,7 +282,7 @@ internal class ChangeResolver(
     private suspend fun round(m: UnresolvedChange): ChangeCheck {
         attempt { ops.resend(m) }?.let { return settled(m, it) }
         val v = attempt { ops.version() } ?: return ChangeCheck.Unreachable(m.kind)
-        return when (ChangeDecision.of(m, v.exists, v.version, v.alarm, v.ts)) {
+        return when (ChangeDecision.of(m, v.exists, v.version, v.alarm, v.ts, v.key)) {
             ChangeDecision.Verdict.APPLIED -> {
                 // Decided, but without the blob nothing is written yet: the next round decides again.
                 if (attempt { ops.fetch() } == null) return ChangeCheck.Unreachable(m.kind)
@@ -327,7 +360,8 @@ internal class ChangeResolver(
      * §11.14.9 step 2 (0.45.0 "The gate"): while a change is unresolved, a change, an owner check or another credential
      * operation is refused **at once**, with nothing sent and without waiting for the decision (the check is started):
      * [FailureKind.CHANGE_UNRESOLVED] while the vault cannot be reached, [FailureKind.CHANGE_UNDECIDED] (PIN) or
-     * [FailureKind.CHANGE_UNDECIDED_PASSWORD] while it can. While the PIN is uncertain (step 3) an operation that
+     * [FailureKind.CHANGE_UNDECIDED_PASSWORD] (or [FailureKind.RESET_UNDECIDED] for a new credential) while it can. While the
+     * PIN is uncertain (step 3) an operation that
      * [carriesPin] is refused too ([FailureKind.PIN_UNCERTAIN]).
      */
     suspend fun gate(carriesPin: Boolean) {
@@ -340,6 +374,7 @@ internal class ChangeResolver(
         throw when {
             state.value is ChangeCheck.Unreachable -> VaultFailure(FailureKind.CHANGE_UNRESOLVED, CODE_UNRESOLVED)
             m.kind == ChangeKind.PIN -> VaultFailure(FailureKind.CHANGE_UNDECIDED, CODE_UNDECIDED)
+            m.kind == ChangeKind.RESET -> VaultFailure(FailureKind.RESET_UNDECIDED, CODE_UNDECIDED)
             else -> VaultFailure(FailureKind.CHANGE_UNDECIDED_PASSWORD, CODE_UNDECIDED)
         }
     }

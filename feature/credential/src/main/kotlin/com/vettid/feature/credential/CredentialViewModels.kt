@@ -198,7 +198,7 @@ data class ChangePasswordUiState(
         FailureKind.BAD_PIN -> copy(pin = "")
         // Refused with nothing sent: every entry stays.
         FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNDECIDED,
-        FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
+        FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.RESET_UNDECIDED, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
         FailureKind.RENEW_UNCONFIRMED,
         -> this
         else -> copy(current = "", pin = "")

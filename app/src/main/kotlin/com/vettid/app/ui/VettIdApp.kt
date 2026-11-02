@@ -365,6 +365,14 @@ private fun MoveNotices(
 @androidx.annotation.StringRes
 internal fun changeDecidedText(c: ChangeCheck): Int {
     val pin = c.kind == ChangeKind.PIN
+    if (c.kind == ChangeKind.RESET) {
+        return when (c) {
+            is ChangeCheck.Moved -> com.vettid.core.data.R.string.data_feed_device_replaced
+            is ChangeCheck.Applied -> R.string.root_reset_applied
+            is ChangeCheck.Ended -> R.string.root_reset_ended
+            else -> R.string.root_reset_not_applied
+        }
+    }
     return when (c) {
         // (ANDROID-PLAN 0.1.55) Another phone became the holder: the existing title, alone.
         is ChangeCheck.Moved -> com.vettid.core.data.R.string.data_feed_device_replaced
@@ -373,6 +381,11 @@ internal fun changeDecidedText(c: ChangeCheck): Int {
         else -> if (pin) R.string.root_change_pin_not_changed else R.string.root_change_password_not_changed
     }
 }
+
+/** The notification title of a decided change: a new credential has its own, the PIN and password changes keep theirs. */
+@androidx.annotation.StringRes
+internal fun changeDecidedTitle(c: ChangeCheck): Int =
+    if (c.kind == ChangeKind.RESET) R.string.root_reset_channel_title else R.string.root_change_channel_title
 
 /** Whether a banner sits at the top of the screen (the status bar's padding goes to the first). */
 private fun anyTopBanner(paused: Boolean, prefsReset: Boolean) = paused || prefsReset

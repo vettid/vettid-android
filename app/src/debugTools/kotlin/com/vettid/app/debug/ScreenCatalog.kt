@@ -71,6 +71,8 @@ import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.CredentialStatus
 import com.vettid.core.data.vault.EnrollStep
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.RecoveryView
@@ -783,6 +785,38 @@ object ScreenCatalog {
         "credential.new_confirm" to {
             NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, confirming = true), NewCredentialActions())
         },
+        // VAULT-MESSAGING 0.48.0 / ANDROID-PLAN 0.1.51: a reset whose answer was lost, decided later (draft texts).
+        "credential.new_checking" to {
+            NewCredentialContent(
+                NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, check = ChangeCheck.Checking(ChangeKind.RESET)),
+                NewCredentialActions(),
+            )
+        },
+        "credential.new_unreachable" to {
+            NewCredentialContent(
+                NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, check = ChangeCheck.Unreachable(ChangeKind.RESET)),
+                NewCredentialActions(),
+            )
+        },
+        "credential.new_gate" to {
+            NewCredentialContent(
+                NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, error = FailureKind.RESET_UNDECIDED),
+                NewCredentialActions(),
+            )
+        },
+        "credential.new_ended" to {
+            NewCredentialContent(
+                NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, check = ChangeCheck.Ended(ChangeKind.RESET)),
+                NewCredentialActions(),
+            )
+        },
+        "credential.new_not_made" to {
+            NewCredentialContent(
+                NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, check = ChangeCheck.NotApplied(ChangeKind.RESET)),
+                NewCredentialActions(),
+            )
+        },
+        "credential.new_done" to { NewCredentialContent(NewCredentialUiState(done = true), NewCredentialActions()) },
         "owner_check.held" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView), NoOwnerCheck) {} },
         // Release L (§3.6.8): the held screen says when the vault locks itself.
         "owner_check.held_idle_lock" to {

@@ -92,8 +92,8 @@ class ChangeResolverTest {
         }
     }
 
-    private fun version(v: Long?, ts: Instant, exists: Boolean = true, alarm: Boolean = false) =
-        ChangeResolver.Version(exists, v, alarm, ts)
+    private fun version(v: Long?, ts: Instant, exists: Boolean = true, alarm: Boolean = false, key: String? = null) =
+        ChangeResolver.Version(exists, v, alarm, ts, key)
 
     private fun resolver(scheduler: TestCoroutineScheduler, ops: FakeOps): Pair<ChangeResolver, CoroutineScope> {
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
@@ -451,5 +451,198 @@ class ChangeResolverTest {
         val earlier = """{"kind":"PIN","verdict":"refused","failure":"OTHER"}"""
         val old = kotlinx.serialization.json.Json.decodeFromString(SavedDecision.serializer(), earlier)
         assertEquals(ChangeCheck.Refused(ChangeKind.PIN, FailureKind.OTHER), old.toCheck())
+    }
+
+    // --- a lost answer to credential.reset (VAULT-MESSAGING 0.48.0, ANDROID-PLAN 0.1.51) ---
+
+    private val reset = UnresolvedChange(
+        ChangeTypes.RESET, "01JRESET", sentVersion = 7, expMs = exp.toEpochMilli(), heldKey = "key-one",
+    )
+
+    /** The version answer decides a reset by its key first, then by its version and the answer's `ts`. */
+    @Test
+    fun theKeyAndVersionDecideAReset() {
+        val late = exp.plusSeconds(61)
+        fun v(version: Long?, key: String?, ts: Instant = late, exists: Boolean = true, alarm: Boolean = false) =
+            ChangeDecision.of(reset, exists, version, alarm, ts, key)
+        // A key other than the held key: applied, whatever the version (a new credential restarts at 1).
+        assertEquals(ChangeDecision.Verdict.APPLIED, v(1, "key-two", ts = exp.minusSeconds(300)))
+        assertEquals(ChangeDecision.Verdict.APPLIED, v(9, "key-two"))
+        // The same key and a lower version: applied too.
+        assertEquals(ChangeDecision.Verdict.APPLIED, v(6, "key-one"))
+        // The same key and version: not applied only in an answer stamped more than a minute after exp.
+        assertEquals(ChangeDecision.Verdict.NOT_APPLIED, v(7, "key-one"))
+        assertEquals(ChangeDecision.Verdict.UNDECIDED, v(7, "key-one", ts = exp.plusSeconds(60)))
+        assertEquals(ChangeDecision.Verdict.UNDECIDED, v(7, "key-one", ts = exp.minusSeconds(1)))
+        // Anything else ends without a decision: the same key with another version, no credential, no key, an alarm.
+        assertEquals(ChangeDecision.Verdict.ENDED, v(8, "key-one"))
+        assertEquals(ChangeDecision.Verdict.ENDED, v(null, null, exists = false))
+        assertEquals(ChangeDecision.Verdict.ENDED, v(7, null))
+        assertEquals(ChangeDecision.Verdict.ENDED, v(1, "key-two", alarm = true))
+        // A record without a held key (written by an older build) decides nothing from the version.
+        assertEquals(ChangeDecision.Verdict.ENDED, ChangeDecision.of(reset.copy(heldKey = null), true, 1, false, late, "key-two"))
+    }
+
+    /** A reset from a held blob of version 1 is decided by the key alone. */
+    @Test
+    fun aResetFromVersionOneIsDecidedByTheKeyAlone() = runTest {
+        val one = reset.copy(sentVersion = 1)
+        val ops = FakeOps(one).apply { versions += version(1, exp.minusSeconds(500), key = "key-two") }
+        val (r, scope) = resolver(testScheduler, ops)
+        assertEquals(ChangeCheck.Applied(ChangeKind.RESET), r.decide())
+        assertEquals(1, ops.fetches)
+        assertEquals(listOf(one), ops.confirmed)
+        scope.cancel()
+    }
+
+    /** A dropped reset that applied: the new key decides it, with no alarm; the blob is fetched and the marker confirmed. */
+    @Test
+    fun aDroppedResetThatAppliedIsDecidedByTheNewKey() = runTest {
+        val ops = FakeOps(reset).apply { versions += version(1, exp.minusSeconds(500), key = "key-two") }
+        val (r, scope) = resolver(testScheduler, ops)
+        assertEquals(ChangeCheck.Applied(ChangeKind.RESET), r.decide())
+        assertEquals(1, ops.fetches)
+        assertEquals(listOf(reset), ops.confirmed)
+        assertTrue(ops.cleared.isEmpty() && ops.ended.isEmpty())
+        scope.cancel()
+    }
+
+    /** A dropped reset that never reached the vault: undecided until an answer stamped more than a minute after exp. */
+    @Test
+    fun aDroppedResetThatNeverArrivedIsDecidedAfterExpPlusAMinute() = runTest {
+        val ops = FakeOps(reset).apply { versions += version(7, exp.plusSeconds(30), key = "key-one") }
+        val (r, scope) = resolver(testScheduler, ops)
+        assertEquals(ChangeCheck.Checking(ChangeKind.RESET), r.decide())
+        assertEquals(reset, ops.marker)
+        ops.versions.clear()
+        ops.versions += version(7, exp.plusSeconds(61), key = "key-one")
+        assertEquals(ChangeCheck.NotApplied(ChangeKind.RESET), r.decide())
+        assertEquals(listOf(reset), ops.cleared)
+        assertEquals(0, ops.fetches)
+        scope.cancel()
+    }
+
+    /** A resend answered from the vault's cache decides by itself: the new blob is success, every refusal is not applied. */
+    @Test
+    fun aResentResetIsDecidedByItsAnswer() = runTest {
+        val ok = FakeOps(reset).apply { resendAnswer = ChangeResolver.Answer.Ok }
+        val (r, scope) = resolver(testScheduler, ok)
+        assertEquals(ChangeCheck.Applied(ChangeKind.RESET), r.decide())
+        assertEquals(0, ok.versionCalls)
+        scope.cancel()
+        for (stale in listOf(false, true)) {
+            val refused = FakeOps(reset).apply { resendAnswer = ChangeResolver.Answer.Refused(FailureKind.BAD_PASSWORD, stale = stale) }
+            val (r2, scope2) = resolver(testScheduler, refused)
+            val c = r2.decide()
+            val expected =
+                if (stale) ChangeCheck.NotApplied(ChangeKind.RESET) else ChangeCheck.Refused(ChangeKind.RESET, FailureKind.BAD_PASSWORD)
+            assertEquals(expected, c)
+            assertEquals(listOf(reset), refused.cleared)
+            scope2.cancel()
+        }
+    }
+
+    /** The check ends without a decision when the version cannot tell; nothing is retried with the typed secrets. */
+    @Test
+    fun aResetThatCannotBeDecidedEnds() = runTest {
+        val ops = FakeOps(reset).apply { versions += version(8, exp, key = "key-one") }
+        val (r, scope) = resolver(testScheduler, ops)
+        assertEquals(ChangeCheck.Ended(ChangeKind.RESET), r.decide())
+        assertEquals(listOf(reset), ops.ended)
+        scope.cancel()
+    }
+
+    /** `forbidden` from the vault to the resend, `credential.version` or the fetch after "applied" ends the reset as moved. */
+    @Test
+    fun aResetThatGetsForbiddenIsMoved() = runTest {
+        val cases = listOf<FakeOps.() -> Unit>(
+            { resendThrows = forbidden(ChangeTypes.RESET) },
+            { versions += forbidden("credential.version") },
+            {
+                versions += version(1, exp.minusSeconds(500), key = "key-two")
+                fetchThrows = forbidden("credential.get")
+            },
+        )
+        for (setup in cases) {
+            val ops = FakeOps(reset).apply(setup)
+            val (r, scope) = resolver(testScheduler, ops)
+            assertEquals(ChangeCheck.Moved(ChangeKind.RESET), r.decide())
+            assertEquals(listOf(reset), ops.cleared)
+            assertNull(ops.marker)
+            scope.cancel()
+        }
+    }
+
+    /**
+     * §11.14.9 step 2: while a reset is unresolved an owner check and a `wallet.sign` are refused at once, with the reset
+     * wording while the vault can be reached and "can't reach your vault" while it cannot; nothing is sent.
+     */
+    @Test
+    fun anOwnerCheckAndAWalletSignAreRefusedWhileAResetIsUnresolved() = runTest {
+        val ops = FakeOps(reset).apply { versions += IOException("no answer") }
+        val (r, scope) = resolver(testScheduler, ops)
+        suspend fun send(type: String, carriesPin: Boolean) {
+            r.gate(carriesPin)
+            ops.sent += type
+        }
+        for (type in listOf("vault.owner_check", "wallet.sign")) {
+            val e = runCatching { send(type, type == "vault.owner_check") }.exceptionOrNull() as VaultFailure
+            assertEquals(FailureKind.RESET_UNDECIDED, e.kind)
+        }
+        assertTrue(ops.sent.isEmpty())
+        testScheduler.runCurrent()
+        assertEquals(ChangeCheck.Unreachable(ChangeKind.RESET), r.check.value)
+        for (type in listOf("vault.owner_check", "wallet.sign")) {
+            assertEquals(FailureKind.CHANGE_UNRESOLVED, (runCatching { send(type, false) }.exceptionOrNull() as VaultFailure).kind)
+        }
+        assertTrue(ops.sent.isEmpty())
+        scope.cancel()
+    }
+
+    /** A marker record written without `heldKey` still reads; the key is public to the vault but never printed. */
+    @Test
+    fun aMarkerWithoutAHeldKeyStillReads() {
+        val json = """{"type":"credential.reset","innerId":"01JOLD","sentVersion":4,"expMs":9}"""
+        val m = kotlinx.serialization.json.Json.decodeFromString(UnresolvedChange.serializer(), json)
+        assertNull(m.heldKey)
+        assertEquals(ChangeKind.RESET, m.kind)
+        val back = kotlinx.serialization.json.Json.decodeFromString(
+            UnresolvedChange.serializer(),
+            kotlinx.serialization.json.Json.encodeToString(UnresolvedChange.serializer(), reset),
+        )
+        assertEquals(reset, back)
+        assertFalse(reset.toString().contains("key-one"))
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.55 "Only the vault's own answer counts") An HTTP 403, a `forbidden` of the relay, the member API or the
+     * host (none is the vault's error answer) and a timeout, to the resend, to `credential.version` or to the fetch after
+     * "applied", leave the reset's marker and say "can't reach"; no wipe, no gate opening.
+     */
+    @Test
+    fun anErrorThatIsNotTheVaultsOwnForbiddenLeavesTheResetUnresolved() = runTest {
+        val errors = listOf<Exception>(
+            IOException("HTTP 403"),
+            IllegalStateException("relay: forbidden"),
+            java.net.SocketTimeoutException("timeout"),
+        )
+        for (e in errors) {
+            val cases = listOf<FakeOps.() -> Unit>(
+                { resendThrows = e; versions += IOException("no answer") },
+                { versions += e },
+                {
+                    versions += version(1, exp.minusSeconds(500), key = "key-two")
+                    fetchThrows = e
+                },
+            )
+            for (setup in cases) {
+                val ops = FakeOps(reset).apply(setup)
+                val (r, scope) = resolver(testScheduler, ops)
+                assertEquals(ChangeCheck.Unreachable(ChangeKind.RESET), r.decide())
+                assertEquals(reset, ops.marker)
+                assertTrue(ops.cleared.isEmpty() && ops.confirmed.isEmpty())
+                scope.cancel()
+            }
+        }
     }
 }

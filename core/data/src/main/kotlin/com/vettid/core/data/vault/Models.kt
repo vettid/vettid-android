@@ -511,6 +511,9 @@ enum class FailureKind {
     /** As [CHANGE_UNDECIDED], for a password change. */
     CHANGE_UNDECIDED_PASSWORD,
 
+    /** As [CHANGE_UNDECIDED], for a new credential (`credential.reset`, 0.48.0). */
+    RESET_UNDECIDED,
+
     /**
      * (0.45.0 §11.14.9 step 3) A PIN change's check ended without a decision: the PIN is uncertain, and nothing that
      * carries it is sent until a lock and two-step unlock settles it ("Lock and unlock now").
@@ -551,7 +554,13 @@ enum class FailureKind {
 }
 
 /** (VAULT-MESSAGING 0.44.0 §11.14.9) The change a lost answer is decided for. */
-enum class ChangeKind { PIN, PASSWORD }
+enum class ChangeKind {
+    PIN,
+    PASSWORD,
+
+    /** (0.48.0 §11.14.9 "A lost answer to `credential.reset`", ANDROID-PLAN 0.1.51) A new credential. */
+    RESET,
+}
 
 /**
  * (VAULT-MESSAGING 0.44.0 §11.14.9, ANDROID-PLAN 0.1.45) Where the decision of a PIN or password change whose answer was

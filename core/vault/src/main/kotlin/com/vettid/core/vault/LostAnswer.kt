@@ -17,8 +17,11 @@ object ChangeTypes {
     const val PIN_CHANGE = "pin.change"
     const val PASSWORD_CHANGE = "credential.password.change"
 
+    /** (0.48.0) A reset is sent and decided like a change: its lost answer is never answered by a new request. */
+    const val RESET = "credential.reset"
+
     /** Never retried with the typed secrets after `stale_credential` ([CredentialOps.credOp]). */
-    val ALL: Set<String> = setOf(PIN_CHANGE, PASSWORD_CHANGE)
+    val ALL: Set<String> = setOf(PIN_CHANGE, PASSWORD_CHANGE, RESET)
 
     /** A change request's `exp`: 10 minutes after the vault's clock as last seen (§11.14.9 step 1). */
     val EXP: Duration = Duration.ofMinutes(10)
@@ -34,7 +37,14 @@ data class SentRequest(val type: String, val innerId: String, val sentVersion: L
  * What the app stores durably before it sends a change (§11.14.9 step 1): the type, the inner id, the blob version the
  * request carries and the request's `exp`. No PIN, password or secret.
  */
-data class ChangeMarker(val type: String, val innerId: String, val sentVersion: Long, val exp: Instant)
+data class ChangeMarker(
+    val type: String,
+    val innerId: String,
+    val sentVersion: Long,
+    val exp: Instant,
+    /** A reset's held key: the `key` of the `credential.version` answer the request was sent after (null for other changes). */
+    val heldKey: String? = null,
+)
 
 /**
  * A change request as it was sent: the same inner id and body (the sealed payload and the blob) go out again in a new
@@ -47,6 +57,8 @@ class KeptChange(
     val body: JsonObject,
     val exp: Instant,
     val sentVersion: Long,
+    /** A reset's held key (see [ChangeMarker.heldKey]). */
+    val heldKey: String? = null,
 ) {
     /** The vault's answer to any of the sends, whenever it comes ([VaultDevice.sendKept]). */
     internal val answer = CompletableDeferred<Inner>()
@@ -63,7 +75,7 @@ class KeptChange(
     @OptIn(ExperimentalCoroutinesApi::class)
     internal fun answered(): VaultMessage? = if (answer.isCompleted) VaultMessage(answer.getCompleted()) else null
 
-    val marker: ChangeMarker get() = ChangeMarker(type, innerId, sentVersion, exp)
+    val marker: ChangeMarker get() = ChangeMarker(type, innerId, sentVersion, exp, heldKey)
 
     override fun toString(): String = "KeptChange($type, $innerId)"
 }

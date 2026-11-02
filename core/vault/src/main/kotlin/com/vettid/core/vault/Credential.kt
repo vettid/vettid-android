@@ -222,15 +222,11 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         onRefused: (suspend (innerId: String, code: String) -> Unit)? = null,
     ): Triple<JsonObject, KemPrivateKey?, String> = serialized(payload, null) {
         try {
-            sentCounted(type, onSending) { sending ->
-                sealedWith(type, takeUtk(), true, payload, reply, extra, sending, onAnswered, onRefused)
-            }
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered, onRefused)
         } catch (e: VaultOpException) {
             if (e.code != CODE_STALE || type in ChangeTypes.ALL) throw e
             fetch()
-            sentCounted(type, onSending) { sending ->
-                sealedWith(type, takeUtk(), true, payload, reply, extra, sending, onAnswered, onRefused)
-            }
+            sealedWith(type, takeUtk(), true, payload, reply, extra, onSending, onAnswered, onRefused)
         }
     }
 
@@ -330,35 +326,13 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     private suspend fun keepIfNewer(o: JsonObject, kept: KeptChange) {
         val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
         val sentBlob = VaultJson.str(kept.body, "credential")
-        if (sentBlob != null && v != null && d.credentialBlob() == sentBlob && v > kept.sentVersion) {
-            keep(o)
+        // A reset's new credential restarts at version 1 under a new key: only the blob it was sent with decides. Any other
+        // answer needs a version above the one sent, and an answer without a version keeps nothing.
+        val newer = v != null && (v > kept.sentVersion || kept.type == ChangeTypes.RESET)
+        if (sentBlob != null && d.credentialBlob() == sentBlob && newer) {
+            keep(o, sameKey = kept.type !in KEY_REPLACING)
         } else {
             keep(JsonObject(o.filterKeys { it != "credential" }))
-        }
-    }
-
-    /**
-     * (VAULT-MESSAGING 0.48.0 §11.14.9 step 2) A `credential.reset` replaces the password and the credential key, so it
-     * counts as a secret sent ([secretGeneration]): once as it goes out (after [onSending] stored it) and again once it
-     * ended (answered, refused or unanswered), both under [VaultDevice.credentialLock]. An operation that read the count
-     * before the reset went out, or while it was out, is then refused with nothing sent when it gets the lock. A reset
-     * stopped before it went out counts nothing. Any other [type] runs [send] with [onSending] as it is.
-     */
-    private suspend fun <T> sentCounted(
-        type: String,
-        onSending: (suspend (SentRequest) -> Unit)?,
-        send: suspend (onSending: (suspend (SentRequest) -> Unit)?) -> T,
-    ): T {
-        if (type != TYPE_RESET) return send(onSending)
-        var sent = false
-        try {
-            return send { r ->
-                onSending?.invoke(r)
-                secretGeneration++
-                sent = true
-            }
-        } finally {
-            if (sent) secretGeneration++
         }
     }
 
@@ -402,13 +376,14 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
      * operation applied without its answer reaching the phone: the latest blob is fetched and kept, and the request goes
      * with it only when its version equals the vault's. A fetch that fails, or that gives another version, throws
      * [CredentialUnsettledException] (the "earlier request" text); no answer to `credential.version` throws its
-     * [java.io.IOException] as it is. Either way nothing of the request was built or sent.
+     * [java.io.IOException] as it is. Either way nothing of the request was built or sent. Returns the `key` of the vault's
+     * answer (the credential key as the vault names it now), or null when it named none.
      */
-    private suspend fun currentBlob() {
+    private suspend fun currentBlob(): String? {
         // No credential on this phone: nothing to send with, nothing asked (0.47.0, as before the key was compared).
         if (d.credentialVersion == null) throw VaultStateException("no credential on this device")
         val v = vaultCredential()
-        if (v.matchesHeld()) return
+        if (v.matchesHeld()) return v.key
         @Suppress("TooGenericExceptionCaught")
         try {
             fetch()
@@ -418,6 +393,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             throw CredentialUnsettledException(e)
         }
         if (!v.adoptFetched()) throw CredentialUnsettledException()
+        return v.key
     }
 
     /** `credential.version` as asked under the lock: its [version] and [key] (null when absent or not `ok`). */
@@ -534,7 +510,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     /**
      * (§11.14.9 step 2) How many PIN or password changes and renews this client has sent (counted once each is stored
      * and about to go out, under [VaultDevice.credentialLock]); a `credential.reset` counts as it goes out and again
-     * once it ended ([sentCounted], 0.48.0). An operation whose PIN or password was typed, or whose
+     * once it ended ([change], 0.48.0). An operation whose PIN or password was typed, or whose
      * phone epoch was read, before one of them went out may carry what is no longer current: it is refused with nothing
      * sent ([serialized]), so that it never spends a failed owner check or a password attempt.
      */
@@ -558,7 +534,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     }
 
     /**
-     * (0.44.0, §11.14.9) A PIN or password change, decided rather than repeated when its answer is lost. [onMarker]
+     * (0.44.0, §11.14.9) A PIN or password change, or (0.48.0) a `credential.reset`, decided rather than repeated when its answer
+     * is lost. [onMarker]
      * stores the marker durably before anything is sent and throws to stop the operation. The request carries an
      * `exp` 10 minutes after [VaultDevice.vaultNow] and is sent as [KeptChange] (the automatic resends of §8.6 with
      * the same id and body). An answer decides it ([settle]); none throws [ChangeUnansweredException] with the kept
@@ -580,7 +557,10 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             // (waited for at most 30 s), so that one above the version sent can only be this change.
             if (!d.awaitCredentialSettled()) throw CredentialUnsettledException()
             // (0.47.0 step 1) Sent with the vault's current blob; checked before the UTK, the marker and the candidate.
-            currentBlob()
+            val vaultKey = currentBlob()
+            // (0.48.0, a reset) The vault's key is recorded with the marker as the held key: an answer without one decides
+            // nothing later, so nothing is sent ("earlier request" text).
+            val heldKey = if (type == ChangeTypes.RESET) vaultKey ?: throw CredentialUnsettledException() else null
             val utk = takeUtk()
             var stored = false
             try {
@@ -588,7 +568,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
                 val id = d.newId()
                 val body = sealedBody(type, utk, true, id, payload, null) {}
                 val exp = d.vaultNow().plus(ChangeTypes.EXP).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
-                KeptChange(type, id, body, exp, version).also {
+                KeptChange(type, id, body, exp, version, heldKey).also {
                     onMarker(it.marker)
                     stored = true
                     secretGeneration++
@@ -598,16 +578,27 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
                 if (!stored) d.returnUtk(utk)
             }
         }
-        // After the marker, whatever goes wrong before an answer is read is "no answer" (§11.14.9 step 2), never a failure.
-        @Suppress("TooGenericExceptionCaught")
-        val r = try {
-            d.sendKept(kept, CHANGE_SENDS)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw ChangeUnansweredException(kept, e)
-        } ?: throw ChangeUnansweredException(kept)
-        return settle(kept, r)
+        // (0.48.0 step 2) A reset replaces the password and the credential key: it counted as it went out (the marker above)
+        // and counts again once this send ended (answered, refused or unanswered), so that an operation which read the count
+        // while it was out is refused when it gets the lock. The gate keeps the rest out until the reset is decided.
+        try {
+            // After the marker, whatever goes wrong before an answer is read is "no answer" (§11.14.9 step 2), never a failure.
+            @Suppress("TooGenericExceptionCaught")
+            val r = try {
+                d.sendKept(kept, CHANGE_SENDS)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                throw ChangeUnansweredException(kept, e)
+            } ?: throw ChangeUnansweredException(kept)
+            return settle(kept, r)
+        } finally {
+            // Under the lock, off the cancellation of the caller: the count must not be lost or torn (`++` is not atomic). This
+            // is not inside the lock (the lock block above ended, and [settle] released its own), so it cannot deadlock.
+            if (type == ChangeTypes.RESET) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { d.credentialLock.withLock { secretGeneration++ } }
+            }
+        }
     }
 
     /**
@@ -630,8 +621,17 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             // A late or cached answer (§11.14.9 step 3, or [LostAnswer] after the change was settled elsewhere) must not roll the
             // credential back: the blob only while the credential held is still the one the change was sent at ([keepIfNewer]).
             d.credentialLock.withLock { keepIfNewer(r.body, kept) }
-        } catch (_: java.io.IOException) {
-            // The change applied; the blob is fetched again by the next operation that finds it stale.
+        } catch (e: java.io.IOException) {
+            // The change applied. For a PIN or password change the blob is one version behind and the next operation is answered
+            // `stale_credential` (the vault takes current - 1 for a stale blob, not a clone) and fetches it. A reset replaces the
+            // key and restarts at version 1: the blob held is of a lineage the vault has destroyed, and presenting it raises the
+            // clone alarm. So when the new blob could not be stored (the UTKs or the blob; only the acknowledgement may fail) the
+            // reset is not reported as made: it stays unresolved and the resolver fetches the blob ([ChangeUnansweredException]).
+            if (kept.type == ChangeTypes.RESET && VaultJson.str(r.body, "credential") != null &&
+                d.credentialBlob() == VaultJson.str(kept.body, "credential")
+            ) {
+                throw ChangeUnansweredException(kept, e)
+            }
         }
         return r.body
     }
@@ -689,8 +689,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         private const val TYPE_ROTATE = "credential.rotate"
 
         /** Operations whose answer carries a credential under a new key (or one this phone has not held before). */
-        private const val TYPE_RESET = "credential.reset"
-        private val KEY_REPLACING = setOf(TYPE_ROTATE, TYPE_RESET, "credential.create", "credential.recover")
+        private val KEY_REPLACING = setOf(TYPE_ROTATE, ChangeTypes.RESET, "credential.create", "credential.recover")
 
         /** The first send and the two automatic resends of §8.6. */
         private const val CHANGE_SENDS = 3

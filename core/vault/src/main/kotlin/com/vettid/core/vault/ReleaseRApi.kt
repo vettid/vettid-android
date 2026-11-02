@@ -107,3 +107,26 @@ suspend fun VaultApi.credentialChangePassword(
         put("new_password", newPassword)
     }, onMarker, since)
 }
+
+/**
+ * The holder's new credential (§3.5.5, 0.15.2): with the blob, the PIN, the current password and the new one
+ * sealed to one UTK. The old credential and every critical item are destroyed; checked like an owner check
+ * (`bad_pin`, `bad_password` are failed checks) and it starts the owner-check clock afresh. (0.48.0) Sent and decided as a
+ * change is ([CredentialOps.change]): the marker (with the held key) is stored first; no answer throws
+ * [ChangeUnansweredException].
+ */
+suspend fun VaultApi.credentialResetHolder(
+    pin: String,
+    password: String,
+    newPassword: String,
+    /** [credentialGeneration] as read when the reset began: refused if a change or a renew went out since. */
+    since: Long? = null,
+    /** Stores the marker before anything goes out (VAULT-MESSAGING 0.48.0 §11.14.9, "A lost answer to `credential.reset`"). */
+    onMarker: suspend (ChangeMarker) -> Unit = {},
+) {
+    credentialOps.change(ChangeTypes.RESET, {
+        put("pin", pin)
+        put("password", password)
+        put("new_password", newPassword)
+    }, onMarker, since)
+}
