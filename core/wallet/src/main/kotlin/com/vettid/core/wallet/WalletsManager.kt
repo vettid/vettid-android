@@ -1222,19 +1222,16 @@ class WalletsManager(
      * beyond it. A payment to oneself comes back from the vault with the output as change, so it could never match what was entered
      * (`summary_mismatch`, review note 6): it is named before anything is built or sent.
      */
-    private fun isOwnAddress(vault: VaultWallet, wallet: Wallet, address: String): Boolean {
-        for (type in AccountType.entries) {
-            val account = wallet.account(type)
-            val stated = vault.account(type.vaultName)
-            for (change in listOf(false, true)) {
-                val next = if (change) stated?.nextChange ?: 0 else stated?.nextReceive ?: 0
-                for (i in 0 until minOf(next + GAP, Account.MAX_INDEX)) {
-                    val own = account.address(change, i)
-                    if (own == address || own == address.lowercase()) return true
-                }
+    private fun isOwnAddress(vault: VaultWallet, wallet: Wallet, address: String): Boolean = AccountType.entries.any { type ->
+        val account = wallet.account(type)
+        val stated = vault.account(type.vaultName)
+        listOf(false, true).any { change ->
+            val next = if (change) stated?.nextChange ?: 0 else stated?.nextReceive ?: 0
+            (0 until minOf(next + GAP, Account.MAX_INDEX)).any { i ->
+                val own = account.address(change, i)
+                own == address || own == address.lowercase()
             }
         }
-        return false
     }
 
     /** Both accounts' receive and change chains as [scan] walks them, reading the unspent outputs of the addresses with funds. */
@@ -1522,7 +1519,11 @@ class WalletsManager(
                 is SignOutcome.Unanswered -> {
                     // Still no answer: kept (the newest request to resend) unless the vault will not apply it any more.
                     val again = PendingSign(p.network, p.unsignedTxid, outcome.forget, outcome.resend)
-                    if (lapsed(walletId, g, again)) SendResult.SignLapsed else finishSign(walletId, p.network, p.unsignedTxid, g, outcomeOf(again))
+                    if (lapsed(walletId, g, again)) {
+                        SendResult.SignLapsed
+                    } else {
+                        finishSign(walletId, p.network, p.unsignedTxid, g, outcomeOf(again))
+                    }
                 }
                 is SignOutcome.Answered -> {
                     val result = try {
@@ -1557,11 +1558,10 @@ class WalletsManager(
     private suspend fun lapsed(walletId: String, g: Long, p: PendingSign): Boolean {
         val held = try {
             signHeld(walletId)
-        } catch (e: VaultFailure) {
-            return false
+        } catch (_: VaultFailure) {
+            true
         }
-        if (held) return false
-        val dropped = publish(g) {
+        val dropped = !held && publish(g) {
             pendingSigns.remove(walletId)
             publishUnsent()
         }

@@ -6,6 +6,8 @@ package com.vettid.feature.wallet
 import androidx.test.core.app.ApplicationProvider
 import android.content.Context
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -102,5 +104,59 @@ class WalletTextsTest {
         )
         assertEquals("0.00123 BTC", r.getString(R.string.wallet_balance_btc, BtcFormat.btc(123_000)))
         assertEquals("123,000 sats", r.getString(R.string.wallet_balance_sats, BtcFormat.sats(123_000, java.util.Locale.US)))
+    }
+
+    @Test
+    fun theSendDraftsAreThePlansWordsAndNoneIsMarkedApproved() {
+        // ANDROID-PLAN §4 "Sending", "Texts (drafts)" and the cap_exceeded / invalid_psbt paragraphs, word for word.
+        assertEquals("This is a mainnet address. This wallet is on Signet.", r.getString(R.string.wallet_send_wrong_network, "mainnet", "Signet"))
+        assertEquals("Your vault saw a different payment from the one you entered. Nothing was signed.", r.getString(R.string.wallet_send_mismatch))
+        assertEquals("Send 0.0012 tBTC to tb1qexample? Fee 1,200 sats.", r.getString(R.string.wallet_send_approve, "0.0012 tBTC", "tb1qexample", "1,200 sats"))
+        assertEquals("Approve with password", r.getString(R.string.wallet_send_approve_button))
+        assertEquals(
+            "Signed, but mempool.space didn't accept it: the fee is too low. Try again, or choose another server.",
+            r.getString(R.string.wallet_send_broadcast_failed, "mempool.space", r.getString(R.string.wallet_send_reason_fee_low)),
+        )
+        assertEquals(
+            "Counts toward your limit for the last 24 hours: 41,200 sats. Left after this: 1,208,800 sats",
+            r.getString(R.string.wallet_send_limit_review, "41,200 sats", "1,208,800 sats"),
+        )
+        assertEquals("This fee is much higher than needed right now. Pay it anyway?", r.getString(R.string.wallet_send_fee_much_higher))
+        assertEquals("Sent. It will confirm in about an hour.", r.getString(R.string.wallet_send_sent, r.getString(R.string.wallet_send_time_hour)))
+        assertEquals("Include unconfirmed coins", r.getString(R.string.wallet_send_unconfirmed))
+        assertEquals("Send all", r.getString(R.string.wallet_send_all))
+        assertEquals(listOf("Slow", "Normal", "Fast", "Custom"), listOf(R.string.wallet_send_fee_slow, R.string.wallet_send_fee_normal, R.string.wallet_send_fee_fast, R.string.wallet_send_fee_custom).map(r::getString))
+        // cap_exceeded.
+        assertEquals("This payment is more than the 500,000 sats you allow per payment. Nothing was signed.", r.getString(R.string.wallet_cap_per_tx, "500,000 sats"))
+        assertEquals(
+            "This payment would take you over your limit of 2,000,000 sats in any 24 hours. You can send up to 300,000 sats now.",
+            r.getString(R.string.wallet_cap_per_period, "2,000,000 sats") + " " + r.getString(R.string.wallet_cap_remaining, "300,000 sats"),
+        )
+        assertEquals("You can't send anything more right now.", r.getString(R.string.wallet_cap_none))
+        assertEquals("You can send this at 9:00 AM.", r.getString(R.string.wallet_cap_after, "9:00 AM"))
+        assertEquals("This is more than your 24-hour limit allows at any time.", r.getString(R.string.wallet_cap_never))
+        assertEquals("Change the amount", r.getString(R.string.wallet_cap_change_amount))
+        assertEquals("Spending limits", r.getString(R.string.wallet_menu_limits))
+        // invalid_psbt.
+        assertEquals("The fee is above the most your vault will sign (1,000 sat/vB).", r.getString(R.string.wallet_psbt_fee_rate))
+        assertEquals("One amount is below 330 sats, too small to send.", r.getString(R.string.wallet_psbt_output_amount))
+        assertEquals("VettID built a payment your vault won't sign. Nothing was signed. Please report this.", r.getString(R.string.wallet_psbt_technical))
+        assertEquals("Details", r.getString(R.string.wallet_psbt_details))
+        assertEquals(
+            "Your vault's recovery phrase for this wallet doesn't match its addresses. Nothing was signed. Contact VettID.",
+            r.getString(R.string.wallet_psbt_wrong_seed),
+        )
+        assertEquals("Your vault would not sign this payment (odd_reason).", r.getString(R.string.wallet_psbt_other, "odd_reason"))
+    }
+
+    @Test
+    fun noSendTextIsMarkedApprovedAndEachIsMarkedDraftNewOrAScreensTableWord() {
+        val xml = java.io.File("src/main/res/values/strings.xml").readLines()
+        val send = xml.filter { Regex("""name="wallet_(send|cap|psbt)_""").containsMatchIn(it) }
+        assertTrue(send.size > 90)
+        for (line in send) {
+            assertFalse("approved: $line", line.substringAfter("-->", "").isEmpty() && line.substringAfter("<!--").contains("approved"))
+            assertTrue("unmarked: $line", Regex("""<!-- (draft|new|screens table|sending paragraph)""").containsMatchIn(line))
+        }
     }
 }

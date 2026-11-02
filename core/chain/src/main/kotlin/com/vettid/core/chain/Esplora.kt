@@ -274,7 +274,7 @@ class EsploraClient internal constructor(
         return try {
             if (json(listOf("tx", id), limits.listBytes).asObject().hash("txid") != id) throw ChainError.Malformed()
             true
-        } catch (e: ChainError.NotFound) {
+        } catch (_: ChainError.NotFound) {
             false
         }
     }
