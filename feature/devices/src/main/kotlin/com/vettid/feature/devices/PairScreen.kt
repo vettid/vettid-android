@@ -87,8 +87,8 @@ data class PairActions(
     val onPair: () -> Unit = {},
     val onReject: () -> Unit = {},
     val onDone: () -> Unit = {},
-    /** Opens the new agent's page. */
-    val onOpenPage: (String) -> Unit = {},
+    /** **Choose what it may use** (AA4): the new agent's share-rule editor; null when its id is not known (the list opens). */
+    val onChooseItems: (String?) -> Unit = {},
     val onOwnerCheck: () -> Unit = {},
 )
 
@@ -443,11 +443,10 @@ private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifie
     FormScaffold(
         title = stringResource(R.string.pair_paired_title, name),
         body = stringResource(R.string.pair_paired_body),
-        // What it may use is chosen from AA4 on; until then there is nothing to choose, only its page.
-        primaryLabel = stringResource(R.string.pair_done),
-        onPrimary = actions.onDone,
-        secondaryLabel = stage.deviceId?.let { stringResource(R.string.pair_open_page) },
-        onSecondary = { stage.deviceId?.let(actions.onOpenPage) },
+        primaryLabel = stringResource(R.string.pair_choose),
+        onPrimary = { actions.onChooseItems(stage.deviceId) },
+        secondaryLabel = stringResource(R.string.pair_later),
+        onSecondary = actions.onDone,
         onBack = actions.onDone,
         modifier = modifier.testTag("pair_paired"),
     ) {}

@@ -29,9 +29,10 @@ class DevicesViewModelsTest {
     private val phone = DeviceInfo("me", "app", "Pixel", null, null, null, null, thisPhone = true)
     private val agent = DeviceInfo("a1", "agent", "Claude", null, now.minusSeconds(3600), now.minusSeconds(600), now.plusSeconds(1800))
     private val desktop = DeviceInfo("d1", "desktop", "Laptop", null, now.minusSeconds(7200), null, null)
+    private val sharing = com.vettid.core.testing.FakeSharing()
     private val devices = FakeDevices().apply { this.devices.value = listOf(phone, agent, desktop) }
 
-    private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices)
+    private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing)
 
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
@@ -218,9 +219,62 @@ class DevicesViewModelsTest {
     }
 
     @Test
-    fun neverAsksForTheCredentialPasswordOrTheUnlockWindow() {
-        // The page's ViewModel holds only the devices repository: it has no way to sign anything.
+    fun neverAsksForTheCredentialPasswordOrTheUnlockWindow() = runTest {
+        // The page's ViewModel holds the devices repository and, since AA4, the sharing repository to read the agent's rules:
+        // ending access, removing and reading the rules sign nothing (no password, no unlock window, no rule saved).
         val ctor = DeviceViewModel::class.java.constructors.single()
-        assertEquals(listOf("SavedStateHandle", "DevicesRepository"), ctor.parameterTypes.map { it.simpleName })
+        assertEquals(listOf("SavedStateHandle", "DevicesRepository", "SharingRepository"), ctor.parameterTypes.map { it.simpleName })
+        val vm = page("a1")
+        advanceUntilIdle()
+        vm.refreshRules()
+        vm.askEndAccess()
+        vm.confirm()
+        advanceUntilIdle()
+        vm.askRemove()
+        advanceUntilIdle()
+        vm.confirm()
+        advanceUntilIdle()
+        assertTrue(sharing.calls.all { it == "agentRules" })
+        assertTrue(sharing.agentSaves.isEmpty())
+    }
+
+    @Test
+    fun theAgentsRulesAreReadOnOpeningAndAgainOnReturn() = runTest {
+        sharing.rulesStored += com.vettid.core.data.items.ShareRule("r1", 1, null, "a1", listOf("api"), perHour = 60, perDay = 1000)
+        sharing.rulesStored += com.vettid.core.data.items.ShareRule("r2", 1, null, "other", listOf("x"))
+        val vm = page("a1")
+        advanceUntilIdle()
+        assertEquals(listOf("r1"), vm.uiState.value.rules.map { it.ruleId })
+        assertTrue(vm.uiState.value.rulesLoaded)
+        sharing.rulesStored += com.vettid.core.data.items.ShareRule("r3", 1, null, "a1", listOf("ops"), perHour = 60, perDay = 1000)
+        vm.refreshRules()
+        advanceUntilIdle()
+        assertEquals(listOf("r1", "r3"), vm.uiState.value.rules.map { it.ruleId })
+    }
+
+    @Test
+    fun aRuleListThatFailsKeepsWhatWasShownAndSaysSo() = runTest {
+        val vm = page("a1")
+        advanceUntilIdle()
+        sharing.fail["agentRules"] = VaultFailure(FailureKind.NO_RESPONSE, "no_response")
+        vm.refreshRules()
+        advanceUntilIdle()
+        assertEquals(FailureKind.NO_RESPONSE, vm.uiState.value.rulesError)
+        vm.refreshRules()
+        advanceUntilIdle()
+        assertEquals(null, vm.uiState.value.rulesError)
+    }
+
+    @Test
+    fun theSavedNoticeComesFromTheSharingRepositoryAndClearsOnce() = runTest {
+        val vm = page("a1")
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.ruleSaved)
+        sharing.savedFlow.value = true
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.ruleSaved)
+        vm.ruleSavedShown()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.ruleSaved)
     }
 }

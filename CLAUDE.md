@@ -205,9 +205,42 @@ The A2 exit test:
   (`PairViewModel.onCleared`; `navigateTopLevel` pops `PairRoute` so state saving never keeps it alive); a pairing taken away
   by a lock shows "This pairing has ended" (`PairUiState.interrupted`); an approval with no answer is "Pairing not
   confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
-  from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens (the paired screen offers only Done and "Open its page" until AA4).
-  Permissions (AA3), share rules (AA4) and Approvals for devices, including the pending pairing's entry (AA5), are later
-  PRs; screens are in the catalog (`devices*`).
+  from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
+  Permissions (AA3) and Approvals for devices, including the pending pairing's entry (AA5), are later PRs; screens are in the
+  catalog (`devices*`).
+
+- What an agent may use (ANDROID-PLAN 0.1.116 §4 AA4, decisions 1-8, 17 and 18; VAULT-MESSAGING 0.83.2 §10.12, §10.11, §11.10.9):
+  an agent's share rules, on the agent's page under **What it may use** (`share.rule.list{agent_id}` via
+  `SharingRepository.agentRules`, read on opening and on every return to the page; `ShareRule.agentId`, `statusTtl`) and in the
+  connection rule editor, reused (`RuleEditViewModel` / `RuleEditScreen` in `:feature:items`; the route `AgentRuleRoute` is in
+  `:core:data` `devices/` so `:feature:devices` can open it). One tag per rule as for connections (0.1.22). **The password is asked for
+  every save**, even with the unlock window open (decision 4): `SharingRepository.saveAgentRule(draft, password)` checks the rule first
+  (nothing is unlocked for a rule the app would refuse), sends `credential.unlock`, then `share.rule.set` (agent subject, `per_hour` /
+  `per_day` always, `status_ttl`), then `credential.lock` **only if the window was closed before the save**, in a `finally` that is
+  not cancellable: so after a refused save too, and after an unlock whose answer was lost (it may have opened the window); not after a
+  definite refusal of the unlock (`bad_password`, `backoff`, `credential_frozen`, `rotation_required`, `owner_check_required`). A window that was
+  already open is left as it was. A lock that fails is `SharingRepository.windowNotClosed` (the votes' notice, **Close it now**).
+  The password is in `RuleEditUiState` only while the request runs; the state prints only its type name. `credential_locked`
+  answers the prompt again and sends the same request once; a second one is "Your credential locked again before the rule was saved.
+  Try again."; `conflict` re-reads the rule ("Another device changed this rule. Here is the current one."); a wrong password, a
+  backoff and an open credential alarm keep the prompt (the alarm with a link to it). The dry run (preview) is sent without the
+  window. Deleting a rule (`Stop sharing`) asks no password. **`item_ways` (decision 17):** `Capabilities.ITEM_WAYS` /
+  `ReleasePath.itemWays(local.capabilities)` / `SharingRepository.itemWays`; without it **Include tagged items automatically** is not
+  offered (`RuleEditUiState.autoOffered`; a rule that is already `auto` keeps showing, selected, so it is never silently changed; a
+  new `auto` rule is refused by the manager before anything is unlocked) and the editor and every row carry "On this vault, the agent
+  may receive the values of the items it uses, and its app may keep them in its history." (`core_ui_agent_ways_warning`). Texts in
+  `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
+  for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it
+  may use** (the agent's page with the editor on top; the list when the id is unknown) and **Later**. Left to later PRs: how the agent may use each
+  item (AA7), permissions (AA3), Approvals entries for agents (AA5). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
+  full flow needs a `vaultctl` agent paired to the app's vault). Catalog: `items.agent_rule_new`, `items.agent_rule_new_ways`,
+  `items.agent_rule_edit_auto`, `items.agent_rule_auto_no_ways`, `items.agent_rule_preview`, `items.agent_rule_more`, `items.agent_rule_invalid`,
+  `items.agent_rule_password`, `items.agent_rule_password_wrong`, `items.agent_rule_password_backoff`, `items.agent_rule_password_alarm`,
+  `items.agent_rule_sending`, `items.agent_rule_locked_again`, `items.agent_rule_conflict`, `items.agent_rule_window_open`,
+  `items.agent_rule_limit_grants`, `items.agent_rule_limit_subject`, `items.agent_rule_limit_vault`, `items.agent_rule_not_paired`,
+  `items.agent_rule_owner_check`, `items.agent_rule_delete_confirm`, `devices.page_agent_rules`, `devices.page_agent_rules_ways`,
+  `devices.page_agent_rules_warning`, `devices.page_agent_rules_none`, `devices.page_agent_rules_failed`, `devices.page_agent_rules_limit`,
+  `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
 
 - Votes (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes", item 5.1; VAULT-MESSAGING 0.81.3 §10.19; `:feature:votes`, `VotesManager` /
   `VotesRepository` in `:core:data` `votes/`, `VoteApi.kt` in `:core:vault`, `VaultManager.votes`): the drawer entry after Approvals

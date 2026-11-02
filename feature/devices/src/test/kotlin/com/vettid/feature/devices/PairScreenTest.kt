@@ -50,7 +50,7 @@ class PairScreenTest {
         onPair = { calls += "pair" },
         onChoose = { calls += "choose:${it.name}" },
         onDone = { calls += "done" },
-        onOpenPage = { calls += "page:$it" },
+        onChooseItems = { calls += "choose:$it" },
         onOwnerCheck = { calls += "check" },
         onBack = { calls += "back" },
     )
@@ -172,12 +172,18 @@ class PairScreenTest {
     fun pairedNamesTheAgentAndOffersTheNextStep() {
         show(at(PairingStage.Paired("Claude on laptop", "a1")))
         rule.onNodeWithText("is paired", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("It can't use any of your items yet.").assertIsDisplayed()
-        // Nothing to choose until AA4: Done, and the agent's page.
-        assertEquals(0, rule.onAllNodesWithText("Choose what it may use").fetchSemanticsNodes().size)
-        rule.onNodeWithText("Open its page").performClick()
-        rule.onNodeWithText("Done").performClick()
-        assertEquals(listOf("page:a1", "done"), calls)
+        rule.onNodeWithText("It can't use any of your items yet.", substring = true).assertIsDisplayed()
+        // AA4: the editor of what it may use, or later.
+        rule.onNodeWithText("Choose what it may use").performClick()
+        rule.onNodeWithText("Later").performClick()
+        assertEquals(listOf("choose:a1", "done"), calls)
+    }
+
+    @Test
+    fun pairedWithoutTheNewAgentsIdStillOffersToChooseAndTheListOpens() {
+        show(at(PairingStage.Paired("Claude on laptop", null)))
+        rule.onNodeWithText("Choose what it may use").performClick()
+        assertEquals(listOf("choose:null"), calls)
     }
 
     @Test

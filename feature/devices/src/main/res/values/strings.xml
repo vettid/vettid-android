@@ -126,14 +126,35 @@
 
     <!-- Step 4: paired. %1$s is the name the agent gave itself. -->
     <string name="pair_paired_title">%1$s is paired</string>
-    <!-- The plan's text goes on: "Choose the items it may use: you decide per tag, and it never gets critical items." with
-         the buttons "Choose what it may use" and "Later", when the share-rule editor (AA4) exists. -->
-    <string name="pair_paired_body">It can\'t use any of your items yet.</string>
-    <!-- Only when the new agent\'s id is known. -->
-    <string name="pair_open_page">Open its page</string>
+    <!-- AA4, ANDROID-PLAN 0.1.116: the plan\'s text and buttons, word for word. draft -->
+    <string name="pair_paired_body">It can\'t use any of your items yet. Choose the items it may use: you decide per tag, and it never gets critical items.</string>
+    <string name="pair_choose">Choose what it may use</string>
+    <string name="pair_later">Later</string>
     <!-- Said once a minute to a screen reader while the code counts down. -->
     <plurals name="pair_minutes_left">
         <item quantity="one">%1$d minute left</item>
         <item quantity="other">%1$d minutes left</item>
     </plurals>
+
+    <!-- AA4, ANDROID-PLAN 0.1.116 §4 "What an agent may use: share rules": "draft" = the plan\'s text word for word, "new" = proposed here. -->
+    <string name="devices_rules_title">What it may use</string> <!-- draft -->
+    <string name="devices_rules_add">Add a rule</string> <!-- draft -->
+    <string name="devices_rules_none">It can\'t use any of your items yet.</string> <!-- new: the pairing text, "It can\'t use any of your items yet." -->
+    <string name="devices_rules_failed">What it may use could not be loaded.</string> <!-- new -->
+    <string name="devices_rules_limit">An agent can have at most 64 rules.</string> <!-- draft -->
+    <string name="devices_rule_ask">Asks you about each item</string> <!-- draft -->
+    <string name="devices_rule_auto">Includes tagged items automatically</string> <!-- draft -->
+    <plurals name="devices_rule_per_hour">
+        <item quantity="one">Up to %1$d use an hour</item> <!-- new: the singular of the draft -->
+        <item quantity="other">Up to %1$d uses an hour</item> <!-- draft -->
+    </plurals>
+    <string name="devices_rule_ends">Ends %1$s</string> <!-- new: the rule\'s end, "the end" in the plan -->
+    <string name="devices_rule_no_end">No end date</string> <!-- new -->
+    <plurals name="devices_rule_items">
+        <item quantity="one">%1$d item</item> <!-- draft -->
+        <item quantity="other">%1$d items</item> <!-- draft -->
+    </plurals>
+    <string name="devices_rule_waiting">%1$d waiting for you</string> <!-- draft -->
+    <string name="devices_rule_saved">Rule saved</string> <!-- draft -->
+    <string name="devices_rule_row_cd">%1$s: edit this rule</string> <!-- new: a screen reader\'s name for the row -->
 </resources>

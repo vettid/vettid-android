@@ -6,6 +6,9 @@ package com.vettid.app.debug
 import androidx.compose.runtime.Composable
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.items.ShareMode
+import com.vettid.core.data.items.ShareRule
+import com.vettid.core.data.items.TagMatch
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.feature.devices.DeviceConfirm
@@ -50,6 +53,13 @@ internal object DevicesCatalog {
     @Composable
     private fun Page(s: DeviceUiState) = DevicePageScreen(s, DevicePageActions())
 
+    // AA4: the agent's share rules (ANDROID-PLAN 0.1.116).
+    private val askRule = ShareRule(
+        "r1", 1, null, "a1", listOf("api"), perHour = 60, perDay = 1_000, expiresAt = now.plus(28, ChronoUnit.DAYS),
+        included = listOf("i1", "i2"), pending = listOf("i3"), statusTtl = 900,
+    )
+    private val autoRule = ShareRule("r2", 1, null, "a1", listOf("keys", "ops"), TagMatch.ANY, ShareMode.AUTO, perHour = 5, perDay = 50, included = listOf("i4"))
+
     private val code = PairingCode("p1", "eyJ2IjoyLCJ0IjoiYSIsInIiOiJodHRwczovL3JlbGF5LnZldHRpZC5vcmcifQ", now.plus(581, ChronoUnit.SECONDS))
     private val pending = PendingPairing("p1", "Claude on work laptop", "123456", now.plus(10, ChronoUnit.MINUTES))
 
@@ -72,6 +82,20 @@ internal object DevicesCatalog {
         "devices.remove_desktop_confirm" to { Page(DeviceUiState(device = desktop, loaded = true, confirm = DeviceConfirm.REMOVE)) },
         "devices.end_failed" to { Page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.END_ACCESS, error = FailureKind.NETWORK)) },
         "devices.remove_failed" to { Page(DeviceUiState(device = agent, loaded = true, failure = DeviceFailure.REMOVE, error = FailureKind.NETWORK)) },
+        "devices.page_agent_rules" to { Page(DeviceUiState(device = agent, loaded = true, rules = listOf(askRule), rulesLoaded = true)) },
+        "devices.page_agent_rules_ways" to {
+            Page(DeviceUiState(device = agent, loaded = true, rules = listOf(askRule, autoRule), rulesLoaded = true, itemWays = true))
+        },
+        "devices.page_agent_rules_warning" to {
+            Page(DeviceUiState(device = agent, loaded = true, rules = listOf(askRule, autoRule), rulesLoaded = true, itemWays = false))
+        },
+        "devices.page_agent_rules_none" to { Page(DeviceUiState(device = agent, loaded = true, rulesLoaded = true)) },
+        "devices.page_agent_rules_failed" to { Page(DeviceUiState(device = agent, loaded = true, rulesError = FailureKind.NETWORK)) },
+        "devices.page_agent_rules_limit" to {
+            Page(DeviceUiState(device = agent, loaded = true, rulesLoaded = true, rules = (1..64).map { askRule.copy(ruleId = "r$it", tags = listOf("tag$it")) }))
+        },
+        "devices.page_agent_rule_saved" to { Page(DeviceUiState(device = agent, loaded = true, rules = listOf(askRule), rulesLoaded = true, ruleSaved = true)) },
+        "devices.pair_paired_unknown" to { Pair(PairingStage.Paired("Claude on work laptop", null)) },
         "devices.pair_code" to { Pair(PairingStage.Code(code)) },
         "devices.pair_expired" to { Pair(PairingStage.CodeExpired("p1", now)) },
         "devices.pair_failed" to { Pair(PairingStage.Idle, error = FailureKind.NETWORK) },
