@@ -612,7 +612,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     suspend fun resend(kept: KeptChange): VaultMessage? = d.sendKept(kept, 1)
 
     /**
-     * (§11.14.9 step 4) An answer to a change decides it: the new blob and UTKs are kept (a failure to keep or ack them
+     * (§11.14.9 step 4) An answer to a change decides it: the new UTKs are kept, and the new blob while the credential held is still
+     * the one the change was sent at (a failure to keep or ack them
      * does not make the change fail: it applied), or the refusal is thrown as it is. A `stale_credential` fetches the
      * latest blob and is thrown; it is never retried with the typed secrets.
      */
@@ -630,7 +631,9 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             throw VaultOpException(kept.type, code, r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
         try {
-            keep(r.body)
+            // A late or cached answer (§11.14.9 step 3, or [LostAnswer] after the change was settled elsewhere) must not roll the
+            // credential back: the blob only while the credential held is still the one the change was sent at ([keepIfNewer]).
+            keepIfNewer(r.body, kept.sentVersion)
         } catch (_: java.io.IOException) {
             // The change applied; the blob is fetched again by the next operation that finds it stale.
         }

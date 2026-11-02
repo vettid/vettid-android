@@ -2457,6 +2457,39 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (#252 review, `pin.change`) A cached answer to a resent change must not roll the credential back: the change applied (3 to 4),
+     * another credential operation then moved the credential to 5, and the late answer carries 4. Storing it would present version
+     * 4 at the next operation, which the vault freezes as a clone. The UTKs are kept; the blob and its acknowledgement are not.
+     */
+    @Test
+    fun aCachedChangeAnswerNeverRollsTheCredentialBack() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val change = async(Dispatchers.IO) {
+                runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) }
+            }
+            answerVersion(d, v, 3)
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566c7", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            (1..3).map { v.open(nextDeposit().second) }
+            val e = change.await().exceptionOrNull() as ChangeUnansweredException
+            // Another operation moved the credential on meanwhile.
+            d.keepCredential("TkVXNQ==", 5)
+            val again = async(Dispatchers.IO) { api.changeResend(e.kept) }
+            val r = v.open(nextDeposit().second)
+            val fresh = utkJson("00112233445566c8", KemPrivateKey.generate())
+            d.handle(v.seal(r.type, """{"credential":"TkVXNA==","version":4,"utks":[$fresh]}""", re = r.id, status = Inner.STATUS_OK))
+            api.changeSettle(e.kept, again.await()!!)
+            assertEquals(5L, d.credentialVersion)
+            assertEquals("TkVXNQ==", d.credentialBlob())
+            assertEquals("the UTKs are kept", 1, d.utkCount)
+            assertNull("no acknowledgement of an older blob", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
     private val signWallet = "01HXZ3N5Q8R2T4V6W9Y0B1C2D3"
     private val signPsbtBytes = ByteArray(300) { (it * 7).toByte() }
     private val signPsbt = java.util.Base64.getEncoder().encodeToString(signPsbtBytes)
