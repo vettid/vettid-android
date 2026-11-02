@@ -361,8 +361,7 @@ class SendViewModel internal constructor(
                 // Either way the amount changed, so a 10% fee agreed to for the earlier one no longer stands.
                 p.isLink && p.amountSats == null -> s.copy(
                     address = p.address, addressIssue = issue, amountText = "", sendAll = false, linkRefused = false, problem = null,
-                    tenConfirmedFee = null, tenConfirmedPayee = null, bigFeeAsk = null, bigFeePayee = null,
-                )
+                ).unagreed()
                 else -> {
                     val withAmount = p.amountSats?.let {
                         s.copy(
@@ -487,9 +486,9 @@ class SendViewModel internal constructor(
         // Asked unless this fee was agreed to; a fee well above the one agreed to (more than 1.5 times) is asked about again.
         val agreed = mutable.value.tenConfirmedFee
         val basis = mutable.value.tenConfirmedPayee
-        // A payee below the one agreed to (Send all: the balance less the fee shrank) is asked about again too, and so is an agreement
-        // with no basis (Send all agreed on the form: the review's payee is not adopted silently).
-        val again = agreed == null || basis == null || r.feeSats * AGAIN_NUM > agreed * AGAIN_DEN || (basis != null && r.payeeSats < basis)
+        // A payee below the one agreed to (Send all: the balance less the fee shrank) is asked about again too. An agreement made on the
+        // form always has a basis now; an agreement with none is only a backstop, and it asks again (nothing is adopted silently).
+        val again = agreed == null || basis == null || r.feeSats * AGAIN_NUM > agreed * AGAIN_DEN || r.payeeSats < basis
         val ten = SendFees.overTenPercent(r.feeSats, r.payeeSats) && again
         mutable.update {
             it.copy(busy = false, step = SendStep.REVIEW, review = Review(

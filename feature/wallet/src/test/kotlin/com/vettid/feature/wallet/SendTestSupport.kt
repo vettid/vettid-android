@@ -52,9 +52,20 @@ internal class FakeEngine : SendEngine {
         return prepared
     }
 
+    /** When set, [approve] waits here (inside NonCancellable, like the manager's sign) before it answers. */
+    var approveGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Whether the array was intact at the moment the sign ran, and again when it was released. */
+    var intactAtSign: Boolean? = null
+    var intactAtRelease: Boolean? = null
+
     override suspend fun approve(password: CharArray): SendResult {
         passwords += String(password)
         passwordArrays += password
+        approveGate?.let { gate ->
+            intactAtSign = password.none { it == '\u0000' }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { gate.await() }
+            intactAtRelease = password.none { it == '\u0000' }
+        }
         approveFailure?.let { throw it }
         approveThrows?.let { throw it }
         return approveResult

@@ -966,6 +966,34 @@ class SendViewModelTest {
         assertFalse("pw" in vm.state.value.toString())
     }
 
+    /** The view model is cleared while the sign is in flight: the array is not wiped before the sign completes, only after. */
+    @Test
+    fun clearingTheViewModelDuringAnApproveDoesNotWipeThePasswordBeforeTheSignEnds() = runTest {
+        val vm = review()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        engine.approveGate = gate
+        vm.setPassword("pw")
+        vm.approve()
+        eventually { engine.intactAtSign != null }
+        assertEquals(true, engine.intactAtSign)
+        val store = androidx.lifecycle.ViewModelStore()
+        androidx.lifecycle.ViewModelProvider(
+            store,
+            object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T = vm as T
+            },
+        )[SendViewModel::class.java]
+        store.clear()
+        // Cleared and the scope cancelled, the sign still waiting: the array is as it was handed down.
+        assertEquals(1, engine.passwordArrays.size)
+        assertTrue(engine.passwordArrays.single().concatToString() == "pw")
+        gate.complete(Unit)
+        eventually { engine.intactAtRelease != null }
+        assertEquals(true, engine.intactAtRelease)
+        eventually { engine.passwordArrays.single().all { it == '\u0000' } }
+    }
+
     @Test
     fun approveNeedsAPasswordAndNothingElseRuns() = runTest {
         val vm = review()

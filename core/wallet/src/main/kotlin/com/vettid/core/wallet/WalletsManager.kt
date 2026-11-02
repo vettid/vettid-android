@@ -1411,7 +1411,7 @@ class WalletsManager(
             val walk = collectCoins(now, derived, spend.first, spend.second, g) ?: return PrepareResult.Cleared
             // The same range the walk covered: an own address beyond next + gap but within the gap after a used one (N3). No look-up
             // of its own; still before the build and the compare.
-            if (withContext(Dispatchers.Default) { isOwnAddress(now, derived, request.address, walk.lastUsed) }) {
+            if (withContext(compute) { isOwnAddress(now, derived, request.address, walk.lastUsed) }) {
                 return PrepareResult.SelfSend
             }
             val coins = walk.coins
