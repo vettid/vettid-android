@@ -90,7 +90,13 @@
     <string name="root_change_password_not_changed">Your password change didn\'t go through. Your previous password is still your password.</string>
     <string name="root_change_pin_ended">VettID couldn\'t confirm whether your PIN was changed, because something else changed in your vault at the same time. To find out without using an attempt, lock your vault and unlock it again: VettID will ask for each PIN in turn.</string>
     <string name="root_change_password_ended">VettID couldn\'t confirm whether your password was changed, because something else changed in your vault at the same time. Either your previous or your new password may be the current one.</string>
+    <!-- DRAFT (ANDROID-PLAN 0.1.51 "A lost answer to New credential"; shared with the iPhone app): the one-time notices. -->
+    <string name="root_reset_applied">Your new credential was made. Use your new password from now on. Your critical items were deleted with the old credential.</string>
+    <string name="root_reset_not_applied">Your new credential wasn\'t made. Your credential, its password and your critical items are unchanged.</string>
+    <string name="root_reset_ended">VettID couldn\'t confirm whether your new credential was made, because something else changed in your vault at the same time. Either your previous or your new password may be the current one.</string>
     <string name="root_change_lock_unlock">Lock and unlock now</string>
+    <!-- NEW (for the owner): the notification title of a new credential's decision. -->
+    <string name="root_reset_channel_title">New credential</string>
     <string name="root_change_channel_title">PIN or password change</string>
     <string name="root_moved_back">This phone is your vault\'s phone again. Start the move again when you are ready.</string>
     <string name="root_service_paused">The vault service is paused for maintenance. Try again later.</string>

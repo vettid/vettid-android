@@ -2349,10 +2349,11 @@ class VaultDeviceTest {
      * (0.47.0 §11.14.9 step 1) The `credential.version` a change or a renew asks first, under the credential lock, once
      * every earlier request is settled; answered [version] (null: answered without one).
      */
-    private suspend fun answerVersion(d: VaultDevice, v: FakeVault, version: Long?, ts: Instant = Instant.now()) {
+    private suspend fun answerVersion(d: VaultDevice, v: FakeVault, version: Long?, ts: Instant = Instant.now(), key: String? = null) {
         val q = v.open(nextDeposit().second)
         assertEquals("credential.version", q.type)
-        val body = if (version == null) """{"exists":false}""" else """{"exists":true,"version":$version}"""
+        val k = key?.let { ""","key":"$it"""" } ?: ""
+        val body = if (version == null) """{"exists":false}""" else """{"exists":true,"version":$version$k}"""
         d.handle(v.msg(v.keyring.current()!!.seal(Inner(id = Ulid.new(), type = q.type, ts = ts, re = q.id, status = Inner.STATUS_OK, body = body.toByteArray()))))
     }
 
@@ -2733,6 +2734,301 @@ class VaultDeviceTest {
             d.keepUtks(listOf(u, u))
             d.keepUtks(listOf(u, UtkRecord("00112233445566f6", "BBBB", Long.MAX_VALUE)))
             assertEquals(2, d.utkCount)
+        }
+    }
+
+    /** A `credential.reset` at [version] under [key] whose answers are all lost; returns its kept request. */
+    private suspend fun CoroutineScope.lostReset(
+        d: VaultDevice,
+        v: FakeVault,
+        api: VaultApi,
+        version: Long,
+        key: String?,
+        utkId: String,
+        markers: MutableList<ChangeMarker> = mutableListOf(),
+    ): KeptChange {
+        d.keepCredential("QkxPQg==", version, key)
+        val reset = async(Dispatchers.IO) {
+            runCatching { api.credentialResetHolder("975310", "old password", "new password!") { markers.add(it) } }
+        }
+        answerVersion(d, v, version, key = key)
+        val get = v.open(nextDeposit().second)
+        assertEquals("credential.utk.get", get.type)
+        d.handle(v.seal(get.type, """{"utks":[${utkJson(utkId, KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+        (1..3).map { v.open(nextDeposit().second) }
+        return (reset.await().exceptionOrNull() as ChangeUnansweredException).kept
+    }
+
+    /**
+     * (0.48.0 "A lost answer to `credential.reset`" step 1) A reset is stored as a marker (type, inner id, blob version, exp
+     * and the held key of the `credential.version` answer) before it is sent, and kept for resends; the marker holds no secret.
+     */
+    @Test
+    fun aResetIsStoredWithTheHeldKeyAndKeptForResends() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val markers = mutableListOf<ChangeMarker>()
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569a1", markers)
+            val m = markers.single()
+            assertEquals(ChangeTypes.RESET, m.type)
+            assertEquals(3L, m.sentVersion)
+            assertEquals("the vault's key, as the version answer named it", "key-one", m.heldKey)
+            assertEquals(m, kept.marker)
+            assertFalse("no secret in the marker", m.toString().contains("975310") || m.toString().contains("password"))
+        }
+    }
+
+    /** An answer to `credential.version` without a `key` stops a reset with nothing sent (the "earlier request" text). */
+    @Test
+    fun aResetWhoseVersionAnswerHasNoKeyIsNotSent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            var marked = false
+            val reset = async(Dispatchers.IO) {
+                runCatching { api.credentialResetHolder("975310", "old password", "new password!") { marked = true } }
+            }
+            answerVersion(d, v, 3)
+            assertTrue(reset.await().exceptionOrNull() is CredentialUnsettledException)
+            assertFalse("no marker", marked)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * A reset from a held blob of version 1: the cached answer (version 1 under a new key) is kept although its version is not
+     * above the one sent; it is acknowledged and the next operation carries the new blob. The UTKs are kept.
+     */
+    @Test
+    fun aCachedResetAnswerFromVersionOneIsKeptAndTheNextOperationCarriesItsBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 1, "key-one", "00112233445569a2")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            assertEquals(ChangeTypes.RESET, r.type)
+            assertEquals(kept.innerId, r.id)
+            val fresh = utkJson("00112233445569a3", KemPrivateKey.generate())
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":1,"key":"key-two","utks":[$fresh]}""", re = r.id, status = Inner.STATUS_OK))
+            val settle = async(Dispatchers.IO) { api.changeSettle(kept, again.await()!!) }
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            settle.await()
+            assertEquals("TkVX", d.credentialBlob())
+            assertEquals("key-two", d.credentialKey)
+            assertEquals(1L, d.credentialVersion)
+            assertEquals("the UTK is kept", 1, d.utkCount)
+            // The next operation is sent with the fetched blob.
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "new password!") } }
+            val sent = v.open(nextDeposit().second)
+            assertEquals("TkVX", StrictJson.parseObject(sent.body).string("credential"))
+            check.cancel()
+        }
+    }
+
+    /**
+     * The plan's first test at the vault layer, as the resolver drives it: a reset whose answers were dropped and that applied is
+     * decided by `credential.version` (the new key, version 1: no alarm), the latest blob is fetched (`credential.get`,
+     * `credential.ack`), and the next owner check is sent with the fetched blob.
+     */
+    @Test
+    fun aDroppedResetThatAppliedIsDecidedByTheNewKeyAndTheNextOwnerCheckCarriesTheFetchedBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            lostReset(d, v, api, 3, "key-one", "00112233445569b1")
+            val ask = async(Dispatchers.IO) { api.credentialVersionAt() }
+            answerVersion(d, v, 1, key = "key-two")
+            val (info, _) = ask.await()
+            assertEquals("key-two", info.key)
+            assertEquals(1L, info.version)
+            assertNull(info.alarm)
+            val fetch = async(Dispatchers.IO) { api.credentialFetch() }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.get", get.type)
+            d.handle(v.seal(get.type, """{"credential":"TkVXMQ==","version":1,"utks":[]}""", re = get.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            fetch.await()
+            assertEquals(1L, d.credentialVersion)
+            assertEquals("TkVXMQ==", d.credentialBlob())
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "new password!") } }
+            val utkGet = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", utkGet.type)
+            d.handle(v.seal(utkGet.type, """{"utks":[${utkJson("00112233445569b2", KemPrivateKey.generate())}]}""", re = utkGet.id, status = Inner.STATUS_OK))
+            val sent = v.open(nextDeposit().second)
+            assertEquals("TkVXMQ==", StrictJson.parseObject(sent.body).string("credential"))
+            check.cancel()
+        }
+    }
+
+    /** A store whose next save fails once (a full disk, a Keystore error). */
+    private class FlakyStore : DeviceStateStore {
+        private val inner = InMemoryDeviceStateStore()
+
+        @Volatile
+        var failNext = false
+
+        /** Saves to let through before [failNext] takes effect. */
+        @Volatile
+        var passFirst = 0
+
+        override fun load(): ByteArray? = inner.load()
+
+        override fun save(state: ByteArray) {
+            if (failNext) {
+                if (passFirst > 0) {
+                    passFirst--
+                } else {
+                    failNext = false
+                    throw java.io.IOException("disk full")
+                }
+            }
+            inner.save(state)
+        }
+
+        override fun clear() = inner.clear()
+    }
+
+    /**
+     * (#256 review M1) A reset's answer that cannot be stored (the UTKs, the blob) is not reported as made: the phone would hold a
+     * blob of the destroyed lineage and the next operation would raise the clone alarm. The reset stays unresolved
+     * ([ChangeUnansweredException]), nothing is acknowledged, and the resolver's fetch then keeps the new blob.
+     */
+    @Test
+    fun aResetAnswerThatCannotBeStoredIsNotReportedAsMadeAndTheFetchKeepsTheNewBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569c1")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":1,"key":"key-two","utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            store.failNext = true
+            val e = runCatching { api.changeSettle(kept, answer) }.exceptionOrNull()
+            assertTrue("not reported as made: $e", e is ChangeUnansweredException)
+            assertEquals("the old blob is still held", "QkxPQg==", d.credentialBlob())
+            assertNull("nothing acknowledged", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // The resolver decides it by credential.version (the new key) and fetches the latest blob.
+            val ask = async(Dispatchers.IO) { api.credentialVersionAt() }
+            answerVersion(d, v, 1, key = "key-two")
+            assertEquals("key-two", ask.await().first.key)
+            val fetch = async(Dispatchers.IO) { api.credentialFetch() }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.get", get.type)
+            d.handle(v.seal(get.type, """{"credential":"TkVX","version":1,"utks":[]}""", re = get.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            fetch.await()
+            assertEquals("TkVX", d.credentialBlob())
+            assertEquals(1L, d.credentialVersion)
+        }
+    }
+
+    /**
+     * (#256 lead recheck) The UTKs are saved, then the blob's own save fails: the held copy is put back (memory never runs ahead
+     * of the disk), so the reset is not reported as made and the old blob is still held, on disk and in memory.
+     */
+    @Test
+    fun aResetAnswerWhoseBlobSaveFailsAfterTheUtksIsNotReportedAsMade() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569c4")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            val utk = utkJson("00112233445569c5", KemPrivateKey.generate())
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":1,"key":"key-two","utks":[$utk]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            store.passFirst = 1
+            store.failNext = true
+            val e = runCatching { api.changeSettle(kept, answer) }.exceptionOrNull()
+            assertTrue("not reported as made: $e", e is ChangeUnansweredException)
+            assertFalse("the UTKs' save went through first", store.failNext)
+            assertEquals("the old blob is still held", "QkxPQg==", d.credentialBlob())
+            assertEquals(3L, d.credentialVersion)
+            assertNull("nothing acknowledged", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * The same failure for a PIN change is not a clone: the change applied (N to N+1), the held blob is the vault's current - 1,
+     * and the next operation is answered `stale_credential` and fetches. It stays reported as applied (its confirmation is the
+     * phone's epoch, not the blob).
+     */
+    @Test
+    fun aPinChangeAnswerThatCannotBeStoredStaysApplied() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostPinChange(d, v, api, "a2V5LUE=", "00112233445569c2")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            store.failNext = true
+            api.changeSettle(kept, answer)
+            assertEquals("QkxPQg==", d.credentialBlob())
+            assertEquals(3L, d.credentialVersion)
+        }
+    }
+
+    /** A reset's answer without a `key` does not keep the old lineage's key with the new blob (a reset replaces the key). */
+    @Test
+    fun aResetAnswerWithoutAKeyDoesNotKeepTheOldKey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569b3")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":1,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val settle = async(Dispatchers.IO) { api.changeSettle(kept, again.await()!!) }
+            val ack = v.open(nextDeposit().second)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            settle.await()
+            assertEquals("TkVX", d.credentialBlob())
+            assertNull(d.credentialKey)
+        }
+    }
+
+    /** A reset's refusal (`bad_password`) is a refusal as for any change: thrown as it is, the marker's job to clear. */
+    @Test
+    fun aRefusedCachedResetAnswerIsThrown() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569a4")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.error(r.id, r.type, "bad_password"))
+            val e = runCatching { api.changeSettle(kept, again.await()!!) }.exceptionOrNull() as VaultOpException
+            assertEquals("bad_password", e.code)
+            assertEquals("QkxPQg==", d.credentialBlob())
+        }
+    }
+
+    /** The gate refuses an owner check and a `wallet.sign` at once while a reset is unresolved: nothing is sent. */
+    @Test
+    fun aGateRefusesOtherCredentialOperationsWithNothingSent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            lostReset(d, v, api, 3, "key-one", "00112233445569a5")
+            api.setCredentialGate { _ -> throw VaultStateException("reset undecided") }
+            assertTrue(runCatching { api.ownerCheck("975310", "old password") }.exceptionOrNull() is VaultStateException)
+            assertTrue(runCatching { api.walletSign(signWallet, signPsbt, "old password") }.exceptionOrNull() is VaultStateException)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
         }
     }
 
@@ -3638,8 +3934,9 @@ class VaultDeviceTest {
     /**
      * (VAULT-MESSAGING 0.48.0 §11.14.9 step 2) A `credential.reset` counts as a secret sent, as it goes out and again once
      * it ended: an owner check that read the count before the reset went out, and one that read it while the reset was
-     * out, are both refused with nothing sent once the reset is answered, although no gate is set. Typed again afterwards,
-     * an operation goes as usual.
+     * out, are both refused with nothing sent once the reset is answered. The first by the count at the first bump; the second
+     * only by the count's second bump, because the reset sends outside the lock and the gate (here a gate that opens once the
+     * reset ended) is what lets it through. Typed again afterwards, an operation goes as usual.
      */
     @Test
     fun anOperationQueuedBehindAResetIsRefused() = runBlocking<Unit> {
@@ -3649,6 +3946,7 @@ class VaultDeviceTest {
             d.keepCredential("QkxPQg==", 3, "key-one")
             val gen = api.credentialGeneration
             val reset = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            answerVersion(d, v, 3, key = "key-one")
             val get = v.open(nextDeposit().second)
             assertEquals("credential.utk.get", get.type)
             // Read before the reset goes out (it holds the lock, waiting for its UTK).
@@ -3659,7 +3957,10 @@ class VaultDeviceTest {
             val req = v.open(nextDeposit().second)
             assertEquals("credential.reset", req.type)
             assertEquals("counted as it went out", gen + 1, api.credentialGeneration)
-            // Read while the reset is out.
+            // Read while the reset is out; the gate (which refuses it while the reset is unresolved) lets it through only once
+            // the reset ended, as in the race between its read of the count and the decision.
+            val ended = kotlinx.coroutines.CompletableDeferred<Unit>()
+            api.setCredentialGate { ended.await() }
             val during = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "old password") } }
             kotlinx.coroutines.delay(200)
             d.handle(v.seal(req.type, """{"credential":"TkVX","version":1,"key":"key-two","utks":[]}""", re = req.id, status = Inner.STATUS_OK))
@@ -3668,6 +3969,7 @@ class VaultDeviceTest {
             d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
             assertTrue(reset.await().isSuccess)
             assertEquals("counted again once it ended", gen + 2, api.credentialGeneration)
+            ended.complete(Unit)
             assertTrue(before.await().exceptionOrNull() is CredentialUnsettledException)
             assertTrue(during.await().exceptionOrNull() is CredentialUnsettledException)
             assertNull("neither owner check sent", deposits.poll(500, TimeUnit.MILLISECONDS))
@@ -3691,27 +3993,36 @@ class VaultDeviceTest {
             val gen = api.credentialGeneration
             // Refused: counted out and back.
             val reset = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            answerVersion(d, v, 3, key = "key-one")
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445568e1", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             val req = v.open(nextDeposit().second)
             assertEquals("credential.reset", req.type)
+            // Read while the reset is out; the gate lets it through only once the reset ended.
+            val ended = kotlinx.coroutines.CompletableDeferred<Unit>()
+            api.setCredentialGate { ended.await() }
             val waiting = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "old password") } }
             kotlinx.coroutines.delay(100)
             d.handle(v.error(req.id, req.type, "bad_password"))
             assertEquals("bad_password", (reset.await().exceptionOrNull() as VaultOpException).code)
+            ended.complete(Unit)
             assertTrue(waiting.await().exceptionOrNull() is CredentialUnsettledException)
             assertEquals(gen + 2, api.credentialGeneration)
             assertNull("the owner check not sent", deposits.poll(300, TimeUnit.MILLISECONDS))
             // Unanswered: counted out and back as well.
             val lost = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            answerVersion(d, v, 3, key = "key-one")
             val get2 = v.open(nextDeposit().second)
             d.handle(v.seal(get2.type, """{"utks":[${utkJson("00112233445568e2", KemPrivateKey.generate())}]}""", re = get2.id, status = Inner.STATUS_OK))
             val sends = (1..3).map { v.open(nextDeposit().second) }
             assertTrue(sends.all { it.type == "credential.reset" })
-            assertTrue(lost.await().isFailure)
+            val unanswered = lost.await().exceptionOrNull() as ChangeUnansweredException
             assertEquals(gen + 4, api.credentialGeneration)
+            // Decided elsewhere (the resolver): its kept request is forgotten, so the next reset is not held back by it.
+            d.dropKept(unanswered.kept)
             // Stopped before it went out (the UTK fetch refused): nothing counted.
             val stopped = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            answerVersion(d, v, 3, key = "key-one")
             val get3 = v.open(nextDeposit().second)
             assertEquals("credential.utk.get", get3.type)
             d.handle(v.error(get3.id, get3.type, "busy"))

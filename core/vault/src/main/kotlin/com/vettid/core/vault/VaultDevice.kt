@@ -1843,8 +1843,17 @@ class VaultDevice private constructor(
     }
 
     internal suspend fun keepCredential(blob: String, version: Long, key: String? = null) = lock.withLock {
+        // (#256 review) Memory never runs ahead of the disk: a save that fails puts the held copy back, so a caller that checks
+        // [credentialBlob] after a failed keep sees what the disk holds.
+        val prev = st.credential
         st.credential = CredentialCopy(blob, version, key)
-        save()
+        try {
+            save()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Any failure (an I/O error, a Keystore error): put the copy back and rethrow it unchanged.
+            st.credential = prev
+            throw e
+        }
     }
 
     internal suspend fun endRecovery() = lock.withLock {

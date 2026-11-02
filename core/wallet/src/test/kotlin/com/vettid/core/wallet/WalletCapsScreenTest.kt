@@ -67,6 +67,78 @@ class WalletCapsScreenTest {
         assertNull(WalletFixtures.wallet(caps = null).spentSats)
     }
 
+    /**
+     * (VAULT-MESSAGING 0.48.0) A new credential destroyed every wallet: the held list goes, the pending limit kept on this phone
+     * for a wallet that no longer exists is forgotten before the vault is read again, and nothing is sent for it.
+     */
+    @Test
+    fun aNewCredentialForgetsTheWalletsAndTheirPendingLimits() = runBlocking {
+        val w = wallet("01WALLET000000000000000001")
+        WalletFlags(flagsFile).setPendingCaps(w.id, WalletCaps(100_000, null))
+        val m = manager()
+        ops.capsSetFails = "internal"
+        m.open()
+        assertEquals(listOf(w.id), m.wallets.value.map { it.id })
+        assertTrue(m.isCapsPending(w.id))
+        // The reset destroyed the wallet; the vault no longer lists it.
+        ops.wallets.clear()
+        ops.capsSetFails = null
+        ops.calls.clear()
+        m.beginCredentialReset()()
+        assertTrue(m.wallets.value.isEmpty())
+        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertNull(WalletFlags(flagsFile).pendingCaps(w.id))
+        assertFalse(m.isCapsPending(w.id))
+        assertTrue("nothing is sent for a wallet that is gone", ops.calls.none { it.startsWith("caps.set") })
+    }
+
+    /** A lock while the reset's action runs leaves the manager closed: it is not marked open again over a locked vault. */
+    @Test
+    fun aLockDuringTheResetLeavesTheManagerClosed() = runBlocking {
+        wallet("01WALLET000000000000000001")
+        val m = manager()
+        m.open()
+        assertTrue(m.isOpen.value)
+        val action = m.beginCredentialReset()
+        // The action clears and re-opens only while nothing cleared the manager since; the lock comes first here.
+        m.clear()
+        action()
+        assertFalse(m.isOpen.value)
+        assertTrue(m.wallets.value.isEmpty())
+    }
+
+    /** A wallet made after the reset was confirmed keeps its pending limit; only the wallets that existed then are forgotten. */
+    @Test
+    fun aWalletMadeAfterTheResetKeepsItsPendingLimit() = runBlocking {
+        val old = wallet("01WALLET000000000000000001")
+        WalletFlags(flagsFile).setPendingCaps(old.id, WalletCaps(100_000, null))
+        val m = manager()
+        ops.capsSetFails = "internal"
+        m.open()
+        val action = m.beginCredentialReset()
+        // The reset destroyed the old wallet; a new wallet is made and its limit chosen before the action runs.
+        ops.wallets.clear()
+        val fresh = "01WALLET000000000000000002"
+        WalletFlags(flagsFile).setPendingCaps(fresh, WalletCaps(5_000, null))
+        action()
+        assertNull(WalletFlags(flagsFile).pendingCaps(old.id))
+        assertEquals(WalletCaps(5_000, null), WalletFlags(flagsFile).pendingCaps(fresh))
+    }
+
+    /** The flags of the destroyed wallets are forgotten even when the wallets cannot be read again afterwards. */
+    @Test
+    fun theFlagsAreForgottenEvenIfTheListCannotBeReadAgain() = runBlocking {
+        val w = wallet("01WALLET000000000000000001")
+        WalletFlags(flagsFile).setPendingCaps(w.id, WalletCaps(100_000, null))
+        val m = manager()
+        ops.capsSetFails = "internal"
+        m.open()
+        val action = m.beginCredentialReset()
+        ops.unsupported = true
+        action()
+        assertNull(WalletFlags(flagsFile).pendingCaps(w.id))
+    }
+
     // A raise over a pending set
 
     @Test

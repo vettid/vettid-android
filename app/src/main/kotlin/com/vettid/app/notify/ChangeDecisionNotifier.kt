@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import com.vettid.app.MainActivity
 import com.vettid.app.R
 import com.vettid.app.ui.changeDecidedText
+import com.vettid.app.ui.changeDecidedTitle
 import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.notify.Channels
@@ -75,7 +76,7 @@ class ChangeDecisionNotifier(
         val text = context.getString(changeDecidedText(c))
         val n = NotificationCompat.Builder(context, Channels.SECURITY)
             .setSmallIcon(R.drawable.ic_stat_vault_update)
-            .setContentTitle(context.getString(R.string.root_change_channel_title))
+            .setContentTitle(context.getString(changeDecidedTitle(c)))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(tap)

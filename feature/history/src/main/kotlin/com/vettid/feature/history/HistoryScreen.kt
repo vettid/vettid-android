@@ -128,6 +128,8 @@ data class HistoryHost(
     val onOpenConnection: (String) -> Unit,
     /** Opens an item of the Vault (an item entry's detail). */
     val onOpenItem: (String) -> Unit = {},
+    /** Opens a signed payment's transaction (W2-3; `wallet.signed`'s `ref` is its `txid`); null where the wallet is not shown. */
+    val onOpenTransaction: ((String) -> Unit)? = null,
     /** The credential alarm (an open alarm refuses a History export, ANDROID-PLAN 0.1.17). */
     val onOpenAlarm: () -> Unit = {},
     /** The owner-check screen (an export answered `owner_check_required`). */
@@ -148,6 +150,7 @@ fun NavGraphBuilder.historyDestination(chrome: ShellChrome, host: HistoryHost) {
             onRetry = vm::load,
             onOpenConnection = host.onOpenConnection,
             onOpenItem = host.onOpenItem,
+            onOpenTransaction = host.onOpenTransaction,
             onAskMute = vm::askMute,
             onMute = vm::mute,
             onDismissMute = vm::dismissMute,

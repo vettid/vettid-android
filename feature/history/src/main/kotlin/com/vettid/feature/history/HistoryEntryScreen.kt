@@ -49,6 +49,7 @@ fun HistoryEntryScreen(
     onRetry: () -> Unit = {},
     onOpenConnection: (String) -> Unit = {},
     onOpenItem: (String) -> Unit = {},
+    onOpenTransaction: ((String) -> Unit)? = null,
     onAskMute: () -> Unit = {},
     onMute: () -> Unit = {},
     onDismissMute: () -> Unit = {},
@@ -73,7 +74,7 @@ fun HistoryEntryScreen(
                 stringResource(R.string.history_detail_missing),
                 modifier = Modifier.padding(Spacing.xl),
             )
-            else -> EntryDetail(e, state, onOpenConnection, onOpenItem, onAskMute)
+            else -> EntryDetail(e, state, onOpenConnection, onOpenItem, onOpenTransaction, onAskMute)
         }
         if (state.confirmMute) {
             ConfirmDialog(
@@ -98,6 +99,7 @@ private fun EntryDetail(
     state: HistoryEntryUiState,
     onOpenConnection: (String) -> Unit,
     onOpenItem: (String) -> Unit,
+    onOpenTransaction: ((String) -> Unit)?,
     onAskMute: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -169,6 +171,15 @@ private fun EntryDetail(
                             onClick = { onOpenItem(id) },
                             modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("history_open_item"),
                         ) { Text(stringResource(R.string.history_detail_open_item)) }
+                    }
+                }
+                // A signed payment (`wallet.signed`, `ref` = its txid) opens the transaction, where the wallet is shown.
+                if (e.kind == "wallet.signed" && onOpenTransaction != null) {
+                    e.ref?.takeIf { it.isNotEmpty() }?.let { txid ->
+                        TextButton(
+                            onClick = { onOpenTransaction(txid) },
+                            modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("history_open_transaction"),
+                        ) { Text(stringResource(R.string.history_detail_open_transaction)) }
                     }
                 }
                 AuditKinds.signerDetail(e.kind, e.ref)?.let {

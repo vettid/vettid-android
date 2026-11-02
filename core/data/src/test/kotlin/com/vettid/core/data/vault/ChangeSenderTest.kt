@@ -54,7 +54,7 @@ class ChangeSenderTest {
             resolver,
             object : ChangeSender.Ops {
                 override fun store(since: Int, m: ChangeMarker, fromEpoch: Long): UnresolvedChange {
-                    val u = UnresolvedChange(m.type, m.innerId, m.sentVersion, m.exp.toEpochMilli(), fromEpoch)
+                    val u = UnresolvedChange(m.type, m.innerId, m.sentVersion, m.exp.toEpochMilli(), fromEpoch, m.heldKey)
                     check(record.storeChange(since, u) == AccountRecord.ChangeStored.STORED) { "not stored" }
                     return u
                 }
@@ -69,8 +69,8 @@ class ChangeSenderTest {
             failureOf = { e -> VaultFailure(if (e.code == "bad_pin") FailureKind.BAD_PIN else FailureKind.OTHER, e.code, cause = e) },
         )
 
-        suspend fun send(block: suspend (suspend (ChangeMarker) -> Unit) -> Unit): Result<Unit> =
-            runCatching { sender.send(record.recordGeneration, ChangeKind.PIN, 3, block) }
+        suspend fun send(kind: ChangeKind = ChangeKind.PIN, block: suspend (suspend (ChangeMarker) -> Unit) -> Unit): Result<Unit> =
+            runCatching { sender.send(record.recordGeneration, kind, 3, block) }
     }
 
     private fun kept(m: ChangeMarker) = KeptChange(m.type, m.innerId, JsonObject(emptyMap()), m.exp, m.sentVersion)
@@ -161,5 +161,78 @@ class ChangeSenderTest {
         assertEquals("kept although the screen went away", marker.innerId, f.kept?.innerId)
         assertTrue(f.resolver.check.value!!.open)
         f.scope.cancel()
+    }
+
+    private val resetMarker = ChangeMarker(ChangeTypes.RESET, "01JRESET", 1, Instant.parse("2026-10-18T12:10:00Z"), heldKey = "key-one")
+
+    /** (0.48.0 step 1) A reset's marker is stored before the send, with its held key; no secret is in it. */
+    @Test
+    fun aResetMarkerIsStoredFirstWithItsHeldKey() = runTest {
+        val f = Fixture(testScheduler)
+        var stored: UnresolvedChange? = null
+        val r = f.send(ChangeKind.RESET) { store ->
+            store(resetMarker)
+            stored = f.record.value.unresolvedChange
+            throw ChangeUnansweredException(kept(resetMarker))
+        }
+        assertEquals(FailureKind.CHANGE_CHECKING, (r.exceptionOrNull() as VaultFailure).kind)
+        assertEquals("key-one", stored?.heldKey)
+        assertEquals(ChangeKind.RESET, stored?.kind)
+        assertEquals("key-one", f.record.value.unresolvedChange?.heldKey)
+        assertTrue(f.resolver.check.value!!.open)
+        assertEquals(ChangeKind.RESET, f.resolver.check.value!!.kind)
+        f.scope.cancel()
+    }
+
+    /** An answer that applied confirms a reset; the phone's epoch does not move (only a PIN change moves it). */
+    @Test
+    fun anAnswerToAResetConfirmsItWithoutMovingTheEpoch() = runTest {
+        val f = Fixture(testScheduler)
+        assertTrue(f.send(ChangeKind.RESET) { store -> store(resetMarker) }.isSuccess)
+        assertNull(f.record.value.unresolvedChange)
+        assertEquals(3L, f.record.value.phoneEpoch)
+        assertEquals(ChangeCheck.Applied(ChangeKind.RESET), f.resolver.check.value)
+        f.scope.cancel()
+    }
+
+    /** `stale_credential` to a reset: not applied, not retried with the typed secrets; any other refusal is said as it is. */
+    @Test
+    fun aStaleOrRefusedResetClearsTheMarker() = runTest {
+        val f = Fixture(testScheduler)
+        val stale = f.send(ChangeKind.RESET) { store ->
+            store(resetMarker)
+            throw VaultOpException(ChangeTypes.RESET, "stale_credential")
+        }
+        assertEquals(FailureKind.CHANGE_CHECKING, (stale.exceptionOrNull() as VaultFailure).kind)
+        assertNull(f.record.value.unresolvedChange)
+        assertEquals(ChangeCheck.NotApplied(ChangeKind.RESET), f.resolver.check.value)
+        val refused = f.send(ChangeKind.RESET) { store ->
+            store(resetMarker.copy(innerId = "01JRESET2"))
+            throw VaultOpException(ChangeTypes.RESET, "bad_pin")
+        }
+        assertTrue(refused.exceptionOrNull() is VaultOpException)
+        assertNull(f.record.value.unresolvedChange)
+        assertEquals(ChangeCheck.Refused(ChangeKind.RESET, FailureKind.BAD_PIN), f.resolver.check.value)
+        f.scope.cancel()
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.55, VAULT-MESSAGING 0.51.1) The vault's own `forbidden` to the request itself ends the change as moved,
+     * for a reset and for the other changes alike: the marker goes and it is not a refusal.
+     */
+    @Test
+    fun aForbiddenAnswerToTheRequestItselfEndsTheChangeAsMoved() = runTest {
+        val password = marker.copy(type = ChangeTypes.PASSWORD_CHANGE)
+        for ((kind, m) in listOf(ChangeKind.RESET to resetMarker, ChangeKind.PIN to marker, ChangeKind.PASSWORD to password)) {
+            val f = Fixture(testScheduler)
+            val r = f.send(kind) { store ->
+                store(m)
+                throw VaultOpException(m.type, "forbidden")
+            }
+            assertEquals(FailureKind.CHANGE_CHECKING, (r.exceptionOrNull() as VaultFailure).kind)
+            assertNull(f.record.value.unresolvedChange)
+            assertEquals(ChangeCheck.Moved(kind), f.resolver.check.value)
+            f.scope.cancel()
+        }
     }
 }

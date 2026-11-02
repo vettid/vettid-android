@@ -20,7 +20,13 @@ import com.vettid.core.chain.AddressFamily
 import com.vettid.core.wallet.CapReason
 import com.vettid.core.wallet.LookupResult
 import com.vettid.core.wallet.WalletAddress
+import com.vettid.core.wallet.TransactionsResult
+import com.vettid.core.wallet.TxDirection
+import com.vettid.core.wallet.TxStatus
 import com.vettid.core.wallet.WalletLookup
+import com.vettid.core.wallet.WalletPayee
+import com.vettid.core.wallet.WalletTransaction
+import com.vettid.core.wallet.WalletTransactions
 import com.vettid.feature.credential.CredentialActions
 import com.vettid.feature.credential.CredentialContent
 import com.vettid.feature.credential.CredentialUiState
@@ -69,6 +75,12 @@ import com.vettid.feature.wallet.SendScreen
 import com.vettid.feature.wallet.SendStep
 import com.vettid.feature.wallet.SendUiState
 import com.vettid.feature.wallet.SpendingLimitsActions
+import com.vettid.feature.wallet.TransactionActions
+import com.vettid.feature.wallet.TransactionScreen
+import com.vettid.feature.wallet.TransactionUiState
+import com.vettid.feature.wallet.TransactionsActions
+import com.vettid.feature.wallet.TransactionsScreen
+import com.vettid.feature.wallet.TransactionsUiState
 import com.vettid.feature.wallet.SpendingLimitsScreen
 import com.vettid.feature.wallet.SpendingLimitsUiState
 import com.vettid.feature.wallet.WalletDetailActions
@@ -88,7 +100,8 @@ import java.time.Instant
  * failed read, new wallet, the password to show a phrase again, the phrase, the check (and a wrong word), done, and the Credential
  * screen's wallet rows; W1c-2b: the detail (loaded, incoming, each look-up state, the privacy note, not backed up), the address type
  * dialog, delete (the warning, the password), Receive (with and without an amount, not backed up), the Chain server (each setting,
- * checking, each refusal) and the details. The real phrase and check screens are `FLAG_SECURE` (`SecureWindow`); these samples are not. Made-up words.
+ * checking, each refusal) and the details; W2-3: the Transactions list (loaded, loading, empty, each failed look-up) and one
+ * transaction (sent, received, to oneself, not broadcast, not seen yet, loading, not found, a failed read). The real phrase and check screens are `FLAG_SECURE` (`SecureWindow`); these samples are not. Made-up words.
  */
 internal object WalletCatalog {
     private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
@@ -136,6 +149,39 @@ internal object WalletCatalog {
 
     @Composable
     private fun Detail(state: WalletDetailUiState) = WalletDetailScreen(state, WalletDetailActions())
+
+    // Transactions (W2-3): made-up payees and ids, newest first.
+    private val sample = listOf(
+        WalletTransaction(
+            "a1".repeat(32), TxDirection.SENT, 60_000, -61_000, 1_000, TxStatus.Confirmed(6), 4_321_000, Instant.parse("2026-10-31T19:00:00Z"),
+            Instant.parse("2026-10-31T18:55:00Z"), listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 60_000)), null, vaultSigned = true,
+        ),
+        WalletTransaction(
+            "b2".repeat(32), TxDirection.RECEIVED, 50_000, 50_000, null, TxStatus.Waiting, null, null, null, emptyList(), null,
+        ),
+        WalletTransaction(
+            "c3".repeat(32), TxDirection.SELF, 19_500, -500, 500, TxStatus.Confirmed(1), 4_321_005, Instant.parse("2026-10-31T19:30:00Z"),
+            null, emptyList(), null,
+        ),
+        WalletTransaction(
+            "d4".repeat(32), TxDirection.SENT, 5_000, -5_300, 300, TxStatus.NotBroadcast, null, null, Instant.parse("2026-10-29T08:00:00Z"),
+            listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 5_000)), null, vaultSigned = true,
+        ),
+        WalletTransaction(
+            "e5".repeat(32), TxDirection.SENT, 7_000, -7_300, 300, TxStatus.NotSeen, null, null, Instant.parse("2026-10-31T19:50:00Z"),
+            listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 7_000)), null, vaultSigned = true,
+        ),
+    )
+    private val sampleList = WalletTransactions(Instant.parse("2026-10-31T20:00:00Z"), "mempool.space", sample)
+    private val txList = TransactionsUiState(loading = false, name = "Savings", network = Network.TESTNET4, list = sampleList)
+    private fun txProblem(p: TransactionsResult) = txList.copy(list = null, problem = p)
+    private val txOne = TransactionUiState(loading = false, name = "Savings", network = Network.TESTNET4, tx = sample[0], host = "mempool.space")
+
+    @Composable
+    private fun Transactions(state: TransactionsUiState) = TransactionsScreen(state, TransactionsActions())
+
+    @Composable
+    private fun Transaction(state: TransactionUiState) = TransactionScreen(state, TransactionActions())
 
     private val limits = SpendingLimitsUiState(
         loaded = true, name = "Savings", perTx = 500_000, perPeriod = 2_000_000, spent = 750_000,
@@ -358,6 +404,29 @@ internal object WalletCatalog {
         "wallet.send_duplicate" to { Send(sendDone(SendOutcome.DuplicateWallet)) },
         "wallet.send_unsent" to { Send(sendDone(SendOutcome.Unsent)) },
         "wallet.send_discard" to { Send(sendDone(SendOutcome.AlreadySigned).copy(discardAsk = true)) },
+        "wallet.transactions" to { Transactions(txList) },
+        "wallet.transactions_loading" to { Transactions(txList.copy(loading = true, list = null)) },
+        "wallet.transactions_empty" to { Transactions(txList.copy(list = sampleList.copy(items = emptyList()))) },
+        "wallet.transactions_no_server" to { Transactions(txProblem(TransactionsResult.NoServer(ChainServer.NotSet))) },
+        "wallet.transactions_server_unreadable" to { Transactions(txProblem(TransactionsResult.NoServer(ChainServer.Unreadable))) },
+        "wallet.transactions_wrong_network" to { Transactions(txProblem(TransactionsResult.ServerWrongNetwork(Network.MAINNET))) },
+        "wallet.transactions_server_failed" to { Transactions(txProblem(TransactionsResult.ServerFailed(ChainError.Malformed()))) },
+        "wallet.transactions_mismatch" to { Transactions(txProblem(TransactionsResult.AddressMismatch)) },
+        "wallet.transactions_vault_failed" to {
+            Transactions(txProblem(TransactionsResult.VaultFailed(VaultFailure(FailureKind.NETWORK, "x"))))
+        },
+        "wallet.transactions_note_needed" to { Transactions(txProblem(TransactionsResult.NoteNeeded)) },
+        "wallet.transactions_not_offered" to { Transactions(txProblem(TransactionsResult.NetworkNotOffered)) },
+        "wallet.transaction_sent" to { Transaction(txOne) },
+        "wallet.transaction_received" to { Transaction(txOne.copy(tx = sample[1])) },
+        "wallet.transaction_self" to { Transaction(txOne.copy(tx = sample[2])) },
+        "wallet.transaction_not_broadcast" to { Transaction(txOne.copy(tx = sample[3])) },
+        "wallet.transaction_not_seen" to { Transaction(txOne.copy(tx = sample[4])) },
+        "wallet.transaction_loading" to { Transaction(TransactionUiState(name = "Savings", network = Network.TESTNET4)) },
+        "wallet.transaction_not_found" to { Transaction(TransactionUiState(loading = false, notFound = true)) },
+        "wallet.transaction_server_failed" to {
+            Transaction(txOne.copy(problem = TransactionsResult.ServerFailed(ChainError.Timeout())))
+        },
         "wallet.address_type" to { AddressTypeDialog(AddressTypes.TAPROOT, onPick = {}, onDismiss = {}) },
         "wallet.delete_confirm" to { Detail(detail.copy(delete = DeleteStep.CONFIRM)) },
         "wallet.delete_password" to { Detail(detail.copy(delete = DeleteStep.PASSWORD, password = "secret")) },

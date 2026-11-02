@@ -112,6 +112,8 @@ object WalletModule {
             m.clear()
             servers.forgetChecks()
         }
+        // A new credential destroys every wallet with the other critical items (VAULT-MESSAGING 0.48.0).
+        manager.onCredentialReset { m.beginCredentialReset() }
         // The session's identity while open: a close and an open conflated into "still open" still move it.
         val open = combine(manager.phase, manager.ownerCheck.ownerCheck, manager.opens, ::sessionOf)
         val events = manager.vaultEvents.filterNotNull().flatMapLatest { it.events }.map { it.type to it.body }

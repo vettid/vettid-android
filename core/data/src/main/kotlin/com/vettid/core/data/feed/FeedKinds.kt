@@ -85,6 +85,9 @@ sealed interface FeedTarget {
     /** A wallet's Spending limits (`wallet.cap_refused`, `wallet.caps_lowered`, `wallet.caps_raised`; `ref` = the wallet's item id). */
     data class WalletLimits(val walletId: String) : FeedTarget
 
+    /** A transaction the vault signed (`wallet.signed`; `ref` = the `txid`, no wallet id: the screen finds the wallet). */
+    data class WalletTransaction(val txid: String) : FeedTarget
+
     /** Settings → Vault (the transfer and the signer's notices). */
     data object Devices : FeedTarget
 
@@ -164,7 +167,7 @@ object FeedKinds {
     fun notAvailable(kind: String): Boolean =
         kind.startsWith("leash.") || kind in LATER
 
-    private val LATER = setOf("action.request", "intro.request", "location.shared", "location.request", "wallet.signed")
+    private val LATER = setOf("action.request", "intro.request", "location.shared", "location.request")
 
     fun known(kind: String): Boolean = kind in KNOWN || kind.startsWith("leash.")
 
@@ -479,6 +482,8 @@ object FeedKinds {
             "item.revealed" -> if (!ref.isNullOrEmpty()) FeedTarget.Item(ref) else FeedTarget.Sheet
             "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised" ->
                 if (!ref.isNullOrEmpty()) FeedTarget.WalletLimits(ref) else FeedTarget.Sheet
+            // ANDROID-PLAN §4 "Notifications": "Bitcoin payment signed" opens the transaction.
+            "wallet.signed" -> if (!ref.isNullOrEmpty()) FeedTarget.WalletTransaction(ref) else FeedTarget.Sheet
             // 0.1.53: the pairing (AA2 opens its comparison), the device and the list are in Devices & agents.
             "device.paired" -> item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
             "device.pair.pending" -> FeedTarget.Pairing

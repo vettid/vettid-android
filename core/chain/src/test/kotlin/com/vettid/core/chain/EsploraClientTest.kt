@@ -250,6 +250,50 @@ class EsploraClientTest {
     }
 
     @Test
+    fun oneTransactionIsParsedLikeAnEntryOfTheListAndAnUnknownOneIsNull() = runBlocking {
+        server.enqueue(ok(tx(5, true)))
+        val t = client().transaction(txid(5).uppercase())!!
+        assertEquals(txid(5), t.txid)
+        assertEquals(200_005L, t.blockHeight)
+        assertEquals(1_730_000_000L, t.blockTime)
+        assertEquals("/api/tx/${txid(5)}", server.takeRequest().url.encodedPath)
+        server.enqueue(MockResponse.Builder().code(404).body("Transaction not found").build())
+        assertNull(client().transaction(txid(6)))
+        // Another transaction than the one asked for, and a failure, are not "unknown".
+        server.enqueue(ok(tx(7, false)))
+        fails<ChainError.Malformed> { runBlocking { client().transaction(txid(8)) } }
+        server.enqueue(MockResponse.Builder().code(500).body("oops").build())
+        fails<ChainError.BadStatus> { runBlocking { client().transaction(txid(8)) } }
+        Unit
+    }
+
+    @Test
+    fun aBlockTimeOrHeightOutOfRangeIsMalformedAndTheBoundsAreAccepted() = runBlocking {
+        fun withStatus(status: String) = tx(5, true).replace(Regex(""""status":\{[^}]*\}"""), """"status":$status""")
+        // A uint32 time and an Int height are the largest there are.
+        server.enqueue(ok(withStatus("""{"confirmed":true,"block_height":2147483647,"block_time":4294967295}""")))
+        assertEquals(4_294_967_295L, client().transaction(txid(5))!!.blockTime)
+        server.enqueue(ok(withStatus("""{"confirmed":true,"block_height":5,"block_time":4294967296}""")))
+        fails<ChainError.Malformed> { runBlocking { client().transaction(txid(5)) } }
+        server.enqueue(ok(withStatus("""{"confirmed":true,"block_height":5,"block_time":99999999999999999}""")))
+        fails<ChainError.Malformed> { runBlocking { client().transaction(txid(5)) } }
+        server.enqueue(ok(withStatus("""{"confirmed":true,"block_height":2147483648,"block_time":5}""")))
+        fails<ChainError.Malformed> { runBlocking { client().transaction(txid(5)) } }
+        Unit
+    }
+
+    @Test
+    fun anOutputTextThatIsNotAnAddressIsNoAddress() = runBlocking {
+        val long = "a".repeat(129)
+        server.enqueue(ok(tx(5, true).replace(ADDRESS, long)))
+        assertNull(client().transaction(txid(5))!!.outputs[0].address)
+        server.enqueue(ok(tx(5, true).replace(ADDRESS, "tb1q <script>alert(1)</script>")))
+        assertNull(client().transaction(txid(5))!!.outputs[0].address)
+        server.enqueue(ok(tx(5, true)))
+        assertEquals(ADDRESS, client().transaction(txid(5))!!.outputs[0].address)
+    }
+
+    @Test
     fun aTransactionIsConfirmedUnconfirmedOrNotFound() = runBlocking {
         val id = EsploraFixtures.RAW_TXID
         server.enqueue(ok("""{"txid":"$id","status":{"confirmed":true,"block_height":5}}"""))

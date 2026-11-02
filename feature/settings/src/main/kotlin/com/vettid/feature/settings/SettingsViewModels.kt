@@ -301,7 +301,7 @@ internal fun ChangePinUiState.afterRefusal(kind: FailureKind): ChangePinUiState 
     FailureKind.BAD_PASSWORD -> copy(password = "")
     // Refused with nothing sent: every entry stays.
     FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNDECIDED,
-    FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
+    FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.RESET_UNDECIDED, FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED,
     FailureKind.RENEW_UNCONFIRMED,
     -> this
     // Every other refusal (credential_required, "not the holder", an unmapped code): no PIN or password is kept, the new
