@@ -346,4 +346,28 @@
     <string name="wallet_send_recent_checking">Checking your recent payments…</string> <!-- new -->
     <string name="wallet_send_recent_unreadable">VettID couldn\'t check your recent payments. One you approved may still be on its way. Check before you send again.</string> <!-- new -->
     <string name="wallet_send_anyway">Send anyway</string> <!-- new -->
+    <!-- Transactions (W2-3). "draft": the plan's "Transactions" paragraph, word for word; "new": proposed here. None is approved. -->
+    <string name="wallet_tx_title">Transactions</string> <!-- draft: the plan's section name -->
+    <string name="wallet_tx_sent_to">Sent to %1$s</string> <!-- draft: row, "Sent to tb1q…" (the address shortened) -->
+    <string name="wallet_tx_received">Received</string> <!-- draft: row -->
+    <string name="wallet_tx_confirmed">Confirmed</string> <!-- draft: status -->
+    <string name="wallet_tx_waiting">Waiting for confirmation</string> <!-- draft: status -->
+    <string name="wallet_tx_not_broadcast">Not broadcast</string> <!-- draft: status -->
+    <string name="wallet_tx_explorer">Open in a block explorer</string> <!-- draft: the detail's button -->
+    <string name="wallet_tx_sent">Sent</string> <!-- new: a sent row with no payee address to name -->
+    <string name="wallet_tx_self">Moved within this wallet</string> <!-- new: a transfer to oneself -->
+    <string name="wallet_tx_empty">No transactions yet.</string> <!-- new -->
+    <string name="wallet_tx_not_found">This transaction isn\'t in your vault\'s history or on the chain server.</string> <!-- new -->
+    <string name="wallet_tx_status">Status</string> <!-- new: detail label -->
+    <string name="wallet_tx_total_out">Total left the wallet</string> <!-- new: detail label, a sent payment's amount and fee -->
+    <string name="wallet_tx_confirmations">Confirmations</string> <!-- new: detail label -->
+    <string name="wallet_tx_block_time">Block time</string> <!-- new: detail label -->
+    <string name="wallet_tx_signed_at">Signed by your vault</string> <!-- new: detail label, when the vault signed it -->
+    <string name="wallet_tx_id">Transaction ID</string> <!-- new: detail label -->
+    <string name="wallet_tx_copy">Copy</string> <!-- new -->
+    <string name="wallet_tx_clip_label">Bitcoin transaction ID</string> <!-- new: the clipboard's label -->
+    <string name="wallet_tx_not_broadcast_note">Your vault signed this payment more than 24 hours ago, but the chain server has no record of it. It may never have been sent.</string> <!-- new -->
+    <string name="wallet_tx_leave_title">Leave VettID?</string> <!-- new: the explorer confirm -->
+    <string name="wallet_tx_leave_body">This opens %1$s in your browser. That site will see this transaction and your internet address.</string> <!-- new -->
+    <string name="wallet_tx_leave_open">Open</string> <!-- new -->
 </resources>

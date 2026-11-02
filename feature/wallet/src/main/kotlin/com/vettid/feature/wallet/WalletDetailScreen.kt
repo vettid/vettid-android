@@ -59,6 +59,7 @@ data class WalletDetailActions(
     val onRefresh: () -> Unit = {},
     val onReceive: () -> Unit = {},
     val onSend: () -> Unit = {},
+    val onTransactions: () -> Unit = {},
     val onBackUp: () -> Unit = {},
     val onRetryCaps: () -> Unit = {},
     val onAcknowledge: () -> Unit = {},
@@ -200,6 +201,12 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
             enabled = open && !state.noteNeeded,
         )
     }
+    // The wallet's transactions (W2-3): asked of the chain server like the balance, so not before the privacy note is acknowledged.
+    OutlinedButton(
+        onClick = actions.onTransactions,
+        modifier = Modifier.fillMaxWidth().testTag("wallet_transactions"),
+        enabled = state.lookup != LookupResult.AddressMismatch && !state.noteNeeded,
+    ) { Text(stringResource(R.string.wallet_tx_title)) }
 }
 
 /** The spending limit chosen is sent first: no Receive until it is set (and the way out of unreadable settings); a failed reset. */

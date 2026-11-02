@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -17,6 +18,7 @@ import androidx.navigation.compose.composable
 import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.SendRoute
 import com.vettid.core.data.wallet.SpendingLimitsRoute
+import com.vettid.core.data.wallet.TransactionRoute
 import com.vettid.core.data.wallet.WalletOpenRoute
 import com.vettid.core.ui.components.SecureClipboard
 
@@ -25,6 +27,8 @@ internal fun NavGraphBuilder.walletDetailDestinations(host: WalletHost) {
     composable<WalletOpenRoute> { entry -> DetailDestination(host) { host.leave(entry.id) } }
     composable<ReceiveRoute> { entry -> ReceiveDestination(host) { host.leave(entry.id) } }
     composable<SendRoute> { entry -> SendDestination(host) { host.leave(entry.id) } }
+    composable<TransactionsRoute> { entry -> TransactionsDestination(host) { host.leave(entry.id) } }
+    composable<TransactionRoute> { entry -> TransactionDestination(host) { host.leave(entry.id) } }
     composable<ChainServerRoute> { entry -> ChainServerDestination { host.leave(entry.id) } }
     composable<WalletDetailsRoute> { entry -> DetailsDestination(host) { host.leave(entry.id) } }
     composable<SpendingLimitsRoute> { entry -> LimitsDestination { host.leave(entry.id) } }
@@ -72,6 +76,7 @@ private fun DetailDestination(host: WalletHost, leave: () -> Unit) {
             onRefresh = vm::refresh,
             onReceive = { host.navigate(ReceiveRoute(id)) },
             onSend = { host.navigate(SendRoute(id)) },
+            onTransactions = { host.navigate(TransactionsRoute(id)) },
             onBackUp = { host.navigate(BackupRoute(id)) },
             onRetryCaps = vm::retryCaps,
             onAcknowledge = vm::acknowledgeNote,
@@ -171,6 +176,52 @@ private fun SendDestination(host: WalletHost, leave: () -> Unit) {
             onDone = leave,
             onAcknowledgeRecent = vm::acknowledgeRecent,
             onDismissRecentNote = vm::dismissRecentNote,
+        ),
+    )
+}
+
+@Composable
+private fun TransactionsDestination(host: WalletHost, leave: () -> Unit) {
+    val vm: TransactionsViewModel = hiltViewModel()
+    val state by vm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.closed) { if (state.closed) leave() }
+    TransactionsScreen(
+        state,
+        TransactionsActions(
+            onBack = leave,
+            onRefresh = vm::load,
+            onOpen = { tx -> host.navigate(TransactionRoute(tx.txid, vm.walletId)) },
+            onChainServer = { state.network?.let { host.navigate(ChainServerRoute(it.vaultName)) } },
+        ),
+    )
+}
+
+@Composable
+private fun TransactionDestination(host: WalletHost, leave: () -> Unit) {
+    val vm: TransactionViewModel = hiltViewModel()
+    val state by vm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val uri = LocalUriHandler.current
+    val clipLabel = stringResource(R.string.wallet_tx_clip_label)
+    LaunchedEffect(state.closed) { if (state.closed) leave() }
+    // The member confirmed that this leaves VettID: the page opens once.
+    LaunchedEffect(state.openUrl) {
+        state.openUrl?.let {
+            uri.openUri(it)
+            vm.explorerOpened()
+        }
+    }
+    TransactionScreen(
+        state,
+        TransactionActions(
+            onBack = leave,
+            onRefresh = vm::load,
+            // A transaction ID is public (it is on the chain): copied as plain text, not marked sensitive.
+            onCopy = { SecureClipboard.copy(context, clipLabel, it, sensitive = false) },
+            onExplorer = vm::askExplorer,
+            onCancelExplorer = vm::cancelExplorer,
+            onConfirmExplorer = vm::confirmExplorer,
+            onChainServer = { state.network?.let { host.navigate(ChainServerRoute(it.vaultName)) } },
         ),
     )
 }

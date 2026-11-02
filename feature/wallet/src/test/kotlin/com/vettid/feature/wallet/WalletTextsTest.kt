@@ -206,4 +206,26 @@ class WalletTextsTest {
             assertTrue("unmarked: $line", Regex("""<!-- (draft|new|screens table|sending paragraph)""").containsMatchIn(line))
         }
     }
+
+    @Test
+    fun theTransactionsDraftsAreThePlansWordsAndTheRestIsMarkedNew() {
+        // ANDROID-PLAN §4 "Wallet", "Transactions": 'A row: "Sent to tb1q…" or "Received", the amount, "Confirmed" / "Waiting for
+        // confirmation" / "Not broadcast"; detail: … "Open in a block explorer"', word for word.
+        assertEquals("Transactions", r.getString(R.string.wallet_tx_title))
+        assertEquals("Sent to tb1q…", r.getString(R.string.wallet_tx_sent_to, "tb1q…"))
+        assertEquals("Received", r.getString(R.string.wallet_tx_received))
+        assertEquals("Confirmed", r.getString(R.string.wallet_tx_confirmed))
+        assertEquals("Waiting for confirmation", r.getString(R.string.wallet_tx_waiting))
+        assertEquals("Not broadcast", r.getString(R.string.wallet_tx_not_broadcast))
+        assertEquals("Open in a block explorer", r.getString(R.string.wallet_tx_explorer))
+        assertEquals("This opens explorer.example in your browser. That site will see this transaction and your internet address.", r.getString(R.string.wallet_tx_leave_body, "explorer.example"))
+        val xml = java.io.File("src/main/res/values/strings.xml").readLines().filter { Regex("""name="wallet_tx_""").containsMatchIn(it) }
+        assertTrue(xml.size >= 20)
+        val drafts = setOf("wallet_tx_title", "wallet_tx_sent_to", "wallet_tx_received", "wallet_tx_confirmed", "wallet_tx_waiting", "wallet_tx_not_broadcast", "wallet_tx_explorer")
+        for (line in xml) {
+            val name = Regex("""name="([a-z_]+)"""").find(line)!!.groupValues[1]
+            val mark = if (name in drafts) "draft" else "new"
+            assertTrue("$name is not marked $mark: $line", line.substringAfter("-->", "").isEmpty() && Regex("""<!-- $mark\b""").containsMatchIn(line))
+        }
+    }
 }
