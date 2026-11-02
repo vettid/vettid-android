@@ -1837,7 +1837,8 @@ class VaultDevice private constructor(
     internal fun hasCredential(): Boolean = st.credential != null
 
     internal suspend fun keepUtks(utks: List<UtkRecord>) = lock.withLock {
-        st.utks.addAll(utks)
+        val have = st.utks.mapTo(HashSet()) { it.id }
+        st.utks.addAll(utks.filter { have.add(it.id) })
         save()
     }
 

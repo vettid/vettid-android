@@ -2490,6 +2490,252 @@ class VaultDeviceTest {
         }
     }
 
+    /** Runs a pin change whose answers are all lost at version 3 under [key]; returns what is needed to settle a late answer. */
+    private suspend fun CoroutineScope.lostPinChange(d: VaultDevice, v: FakeVault, api: VaultApi, key: String?, utkId: String): KeptChange {
+        d.keepCredential("QkxPQg==", 3, key)
+        val change = async(Dispatchers.IO) { runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) } }
+        answerVersion(d, v, 3)
+        val get = v.open(nextDeposit().second)
+        d.handle(v.seal(get.type, """{"utks":[${utkJson(utkId, KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+        (1..3).map { v.open(nextDeposit().second) }
+        return (change.await().exceptionOrNull() as ChangeUnansweredException).kept
+    }
+
+    /**
+     * (#253 review N1) A reset restarts the version under a new key: sent at version 3 under key A, reset to key B, then brought
+     * back to version 3 by other operations, a late answer (version 4, the old lineage's blob) must not be kept. UTKs are.
+     */
+    @Test
+    fun aLateAnswerAfterAResetIsNotKeptEvenAtTheSentVersion() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostPinChange(d, v, api, "a2V5LUE=", "00112233445566f1")
+            d.keepCredential("UkVTRVQ=", 1, "a2V5LUI=")
+            d.keepCredential("QkxPQjM=", 3, "a2V5LUI=")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            val fresh = utkJson("00112233445566f2", KemPrivateKey.generate())
+            d.handle(v.seal(r.type, """{"credential":"T0xE","version":4,"utks":[$fresh]}""", re = r.id, status = Inner.STATUS_OK))
+            api.changeSettle(kept, again.await()!!)
+            assertEquals(3L, d.credentialVersion)
+            assertEquals("QkxPQjM=", d.credentialBlob())
+            assertEquals("a2V5LUI=", d.credentialKey)
+            assertEquals("the UTKs are kept", 1, d.utkCount)
+            assertNull("no acknowledgement of an old-lineage blob", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** The late answer is refused when the sent key and/or the post-reset key are unknown (null): the held blob differs. */
+    @Test
+    fun aLateAnswerAfterAResetIsNotKeptWhenKeysAreUnknown() = runBlocking<Unit> {
+        for ((sentKey, newKey) in listOf(null to "a2V5LUI=", "a2V5LUE=" to null, null to null)) {
+            withTimeout(30_000) {
+                val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+                val api = VaultApi(d) { true }
+                val kept = lostPinChange(d, v, api, sentKey, "00112233445566f7")
+                d.keepCredential("UkVTRVQ=", 1, newKey)
+                d.keepCredential("QkxPQjM=", 3, newKey)
+                val again = async(Dispatchers.IO) { api.changeResend(kept) }
+                val r = v.open(nextDeposit().second)
+                d.handle(v.seal(r.type, """{"credential":"T0xE","version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+                api.changeSettle(kept, again.await()!!)
+                assertEquals("QkxPQjM=", d.credentialBlob())
+                assertEquals(3L, d.credentialVersion)
+                assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            }
+        }
+    }
+
+    /** The `wallet.sign` way ([CredentialOps.credOpKept], resendKept, settleKept): a reset in between, the cached answer is not kept. */
+    @Test
+    fun aCachedWalletSignAnswerAfterAResetIsNotKept() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            (1..3).map { v.open(nextDeposit().second) }
+            val e = sign.await().exceptionOrNull() as ChangeUnansweredException
+            d.keepCredential("UkVTRVQ=", 1, "a2V5LUI=")
+            d.keepCredential("QkxPQjM=", 3, "a2V5LUI=")
+            val again = async(Dispatchers.IO) { api.walletSignResend(e.kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"txid":"ab","tx":"0200","credential":"T0xE","credential_version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            assertEquals("0200", VaultJson.str(again.await()!!, "tx"))
+            assertEquals(3L, d.credentialVersion)
+            assertEquals("QkxPQjM=", d.credentialBlob())
+            assertNull("no acknowledgement", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
+     * (#255 lead review 1) `wallet.sign` answered `stale_credential`: [CredentialOps.settleKept] fetches with the unlocked fetch
+     * under the lock it holds (a locking fetch would hang here), then the sign goes out once more as a new request.
+     */
+    @Test
+    fun aStaleWalletSignFetchesThenSignsOnceMoreAsANewRequest() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(2_000))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            val utks = listOf("00112233445566a1", "00112233445566a2").joinToString(",") { utkJson(it, KemPrivateKey.generate()) }
+            d.handle(v.seal(get.type, """{"utks":[$utks]}""", re = get.id, status = Inner.STATUS_OK))
+            val first = v.open(nextDeposit().second)
+            assertEquals("wallet.sign", first.type)
+            d.handle(v.error(first.id, first.type, "stale_credential"))
+            val fetch = v.open(nextDeposit().second)
+            assertEquals("credential.get", fetch.type)
+            d.handle(v.seal(fetch.type, """{"credential":"TkVX","version":5,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            val second = v.open(nextDeposit().second)
+            assertEquals("wallet.sign", second.type)
+            org.junit.Assert.assertNotEquals("a new request", first.id, second.id)
+            d.handle(v.seal(second.type, """{"txid":"ab","tx":"0200","credential":"TkVXNg==","credential_version":6,"utks":[]}""", re = second.id, status = Inner.STATUS_OK))
+            val ack2 = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack2.type)
+            d.handle(v.seal(ack2.type, "{}", re = ack2.id, status = Inner.STATUS_OK))
+            assertEquals("0200", VaultJson.str(sign.await().getOrThrow(), "tx"))
+            assertEquals(6L, d.credentialVersion)
+        }
+    }
+
+    /** (#255 lead review 1) A resent `wallet.sign` answered `stale_credential` fetches the blob and throws: never signed again here. */
+    @Test
+    fun aStaleAnswerToAResentWalletSignFetchesAndThrows() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566a3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            (1..3).map { v.open(nextDeposit().second) }
+            val e = sign.await().exceptionOrNull() as ChangeUnansweredException
+            val again = async(Dispatchers.IO) { runCatching { api.walletSignResend(e.kept) } }
+            val r = v.open(nextDeposit().second)
+            assertEquals("wallet.sign", r.type)
+            d.handle(v.error(r.id, r.type, "stale_credential"))
+            val fetch = v.open(nextDeposit().second)
+            assertEquals("credential.get", fetch.type)
+            d.handle(v.seal(fetch.type, """{"credential":"TkVX","version":5,"utks":[]}""", re = fetch.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            assertEquals("stale_credential", (again.await().exceptionOrNull() as VaultOpException).code)
+            assertEquals(5L, d.credentialVersion)
+            assertNull("no wallet.sign sent again", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** (#255 lead review 3) The same blob, but an answer at or below the sent version (or with none): not kept, not acknowledged. */
+    @Test
+    fun aLateAnswerNotAboveTheSentVersionIsNotKept() = runBlocking<Unit> {
+        for ((i, answer) in listOf(
+            """{"credential":"TkVX","version":3,"utks":[]}""",
+            """{"credential":"TkVX","version":2,"utks":[]}""",
+            """{"credential":"TkVX","utks":[]}""",
+        ).withIndex()) {
+            withTimeout(30_000) {
+                val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+                val api = VaultApi(d) { true }
+                val kept = lostPinChange(d, v, api, "a2V5LUE=", "00112233445566b$i")
+                val again = async(Dispatchers.IO) { api.changeResend(kept) }
+                val r = v.open(nextDeposit().second)
+                d.handle(v.seal(r.type, answer, re = r.id, status = Inner.STATUS_OK))
+                runCatching { api.changeSettle(kept, again.await()!!) }
+                assertEquals(answer, 3L, d.credentialVersion)
+                assertEquals(answer, "QkxPQg==", d.credentialBlob())
+                assertNull("$answer: no acknowledgement", deposits.poll(300, TimeUnit.MILLISECONDS))
+            }
+        }
+    }
+
+    /** The same blob (any key state) still keeps the late answer's. */
+    @Test
+    fun aLateAnswerForTheSameBlobIsKeptWhateverTheKeyState() = runBlocking<Unit> {
+        for (key in listOf("a2V5LUE=", null)) {
+            withTimeout(30_000) {
+                val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+                val api = VaultApi(d) { true }
+                val kept = lostPinChange(d, v, api, key, "00112233445566f3")
+                val again = async(Dispatchers.IO) { api.changeResend(kept) }
+                val r = v.open(nextDeposit().second)
+                d.handle(v.seal(r.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+                val settle = async(Dispatchers.IO) { api.changeSettle(kept, again.await()!!) }
+                val ack = v.open(nextDeposit().second)
+                d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+                settle.await()
+                assertEquals(4L, d.credentialVersion)
+                assertEquals("TkVX", d.credentialBlob())
+            }
+        }
+    }
+
+    /** (N2) `credentialFetch` waits for the credential lock, so a settle's check and write cannot interleave with it. */
+    @Test
+    fun credentialFetchWaitsForTheCredentialLock() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3, "a2V5LUE=")
+            d.credentialLock.lock()
+            val fetch = async(Dispatchers.IO) { api.credentialFetch() }
+            assertNull("nothing is sent while the lock is held", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertTrue(fetch.isActive)
+            d.credentialLock.unlock()
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.get", get.type)
+            d.handle(v.seal(get.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = get.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            fetch.await()
+            assertEquals(4L, d.credentialVersion)
+        }
+    }
+
+    /** (#253 review N2) The version check and the write of an ok answer happen under the credential lock. */
+    @Test
+    fun settlingAnOkAnswerWaitsForTheCredentialLock() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostPinChange(d, v, api, "a2V5LUE=", "00112233445566f4")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            d.credentialLock.lock()
+            val settle = async(Dispatchers.IO) { api.changeSettle(kept, answer) }
+            assertNull("nothing is written while another operation holds the lock", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertEquals(3L, d.credentialVersion)
+            assertTrue(settle.isActive)
+            d.credentialLock.unlock()
+            val ack = v.open(nextDeposit().second)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            settle.await()
+            assertEquals(4L, d.credentialVersion)
+        }
+    }
+
+    /** (#253 review nit) A resent answer carrying the same UTK again does not add it twice. */
+    @Test
+    fun keepUtksDoesNotAddTheSameUtkTwice() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val u = UtkRecord("00112233445566f5", "AAAA", Long.MAX_VALUE)
+            d.keepUtks(listOf(u, u))
+            d.keepUtks(listOf(u, UtkRecord("00112233445566f6", "BBBB", Long.MAX_VALUE)))
+            assertEquals(2, d.utkCount)
+        }
+    }
+
     private val signWallet = "01HXZ3N5Q8R2T4V6W9Y0B1C2D3"
     private val signPsbtBytes = ByteArray(300) { (it * 7).toByte() }
     private val signPsbt = java.util.Base64.getEncoder().encodeToString(signPsbtBytes)
