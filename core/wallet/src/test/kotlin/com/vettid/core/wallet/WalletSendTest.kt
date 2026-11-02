@@ -1101,6 +1101,20 @@ class WalletSendTest {
         assertTrue(m.prepareSend(w.id, request()) is PrepareResult.Ready)
     }
 
+    @Test
+    fun anOwnAddressWithinTheGapAfterAUsedOneIsASelfSendEvenBeyondNextPlusGap() = runBlocking {
+        val (m, w) = opened()
+        // The vault's next receive index is 1 (window 0..20); index 20 has history, so the walk goes on to 40, and 25 is an own address.
+        chain.fund(receive, 20, 5_000)
+        val beyond = WalletFixtures.account("p2tr").address(false, 25)
+        assertEquals(PrepareResult.SelfSend, m.prepareSend(w.id, request(address = beyond)))
+        assertTrue("inspect" !in ops.calls)
+        assertTrue(ops.signs.isEmpty())
+        // Past the gap after the last used index it is not recognised (as before): 20 + 20 = 40.
+        val far = WalletFixtures.account("p2tr").address(false, 45)
+        assertTrue(m.prepareSend(w.id, request(address = far)) !is PrepareResult.SelfSend)
+    }
+
     // --- review note 1: an unanswered signing the vault will not apply any more is decided ---
 
     @Test

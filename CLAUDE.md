@@ -335,7 +335,7 @@ The A2 exit test:
   a `cap` with `ok: false` shows the `cap_exceeded` text and no password field. `PrepareResult.Different` is the plan's "Your vault saw a
   different payment…". **Self-send** (review note 6): `PrepareResult.SelfSend`, detected in `prepareSend` **before** the build and the
   compare (`isOwnAddress`: both accounts, both chains, up to the vault's next index plus the gap), so nothing is built or sent to any server;
-  the screen has its own text; an own address beyond that range still ends in `summary_mismatch`. Results: Sent ("in about" 20 minutes,
+  checked once more after `collectCoins`, with its `lastUsed` per chain, over the range the walk covers (`max(next, lastUsed + 1) + gap`; no look-up of its own, still before the build); the screen has its own text; an own address beyond that range still ends in `summary_mismatch`. Results: Sent ("in about" 20 minutes,
   an hour or a day from the fee target, a custom rate by the quickest target it reaches), Broadcast failed ("Signed, but {host} didn't
   accept it: {reason}…", Try again = `retryBroadcast`, a way to Chain server), the `cap_exceeded` and `invalid_psbt` texts, and plain
   notices for `SignedDiffers`, `AlreadySigned`, `Unanswered`, a lapse, a superseded payment and `duplicate_wallet`; **Discard is on every

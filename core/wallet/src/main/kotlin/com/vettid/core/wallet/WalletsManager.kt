@@ -1408,7 +1408,13 @@ class WalletsManager(
         val changeType = AccountType.fromVaultName(now.addressType) ?: return noAccount
         val changeIndex = now.account(now.addressType)?.nextChange ?: return noAccount
         val selected = try {
-            val coins = collectCoins(now, derived, spend.first, spend.second, g) ?: return PrepareResult.Cleared
+            val walk = collectCoins(now, derived, spend.first, spend.second, g) ?: return PrepareResult.Cleared
+            // The same range the walk covered: an own address beyond next + gap but within the gap after a used one (N3). No look-up
+            // of its own; still before the build and the compare.
+            if (withContext(Dispatchers.Default) { isOwnAddress(wallet, derived, request.address, walk.lastUsed) }) {
+                return PrepareResult.SelfSend
+            }
+            val coins = walk.coins
             val s = CoinSelection.select(
                 coins, payee.scriptSize, request.amountSats, request.feeRate, changeType, request.includeUnconfirmed,
             )
@@ -1460,21 +1466,32 @@ class WalletsManager(
     }
 
     /**
-     * Whether [address] is one of this wallet's own: both accounts, receive and change, up to the vault's next index and the gap
-     * beyond it. A payment to oneself comes back from the vault with the output as change, so it could never match what was entered
+     * Whether [address] is one of this wallet's own: both accounts, receive and change, up to the further of the vault's next index
+     * and the last used index plus one, and the gap beyond it (the range [collectCoins] walks). [lastUsed] is what that walk found
+     * per chain; without it (the first look, before any chain look-up) the vault's next index is all there is.
+     * A payment to oneself comes back from the vault with the output as change, so it could never match what was entered
      * (`summary_mismatch`, review note 6): it is named before anything is built or sent.
      */
-    private fun isOwnAddress(vault: VaultWallet, wallet: Wallet, address: String): Boolean = AccountType.entries.any { type ->
+    private fun isOwnAddress(
+        vault: VaultWallet,
+        wallet: Wallet,
+        address: String,
+        lastUsed: Map<Pair<AccountType, Boolean>, Int> = emptyMap(),
+    ): Boolean = AccountType.entries.any { type ->
         val account = wallet.account(type)
         val stated = vault.account(type.vaultName)
         listOf(false, true).any { change ->
             val next = if (change) stated?.nextChange ?: 0 else stated?.nextReceive ?: 0
-            (0 until minOf(next + GAP, Account.MAX_INDEX)).any { i ->
+            val end = maxOf(next, (lastUsed[type to change] ?: -1) + 1) + GAP
+            (0 until minOf(end, Account.MAX_INDEX)).any { i ->
                 val own = account.address(change, i)
                 own == address || own == address.lowercase()
             }
         }
     }
+
+    /** What [collectCoins] found: the coins, and the last index with history per account and chain (absent: none). */
+    private class Walk(val coins: List<Spendable>, val lastUsed: Map<Pair<AccountType, Boolean>, Int>)
 
     /** Both accounts' receive and change chains as [scan] walks them, reading the unspent outputs of the addresses with funds. */
     @Suppress("NestedBlockDepth")
@@ -1484,9 +1501,10 @@ class WalletsManager(
         ready: ChainOpen.Ready,
         spend: SpendAccess,
         g: Long,
-    ): List<Spendable>? =
+    ): Walk? =
         coroutineScope {
             val out = ArrayList<Spendable>()
+            val used = HashMap<Pair<AccountType, Boolean>, Int>()
             for (type in AccountType.entries) {
                 val account = wallet.account(type)
                 val stated = vault.account(type.vaultName)
@@ -1511,9 +1529,10 @@ class WalletsManager(
                         }
                         index += batch.size
                     }
+                    used[type to change] = lastUsed
                 }
             }
-            out
+            Walk(out, used)
         }
 
     /** The fee rates the chain server gives for the wallet's network (sat/vB by confirmation target), for Slow, Normal and Fast. */
