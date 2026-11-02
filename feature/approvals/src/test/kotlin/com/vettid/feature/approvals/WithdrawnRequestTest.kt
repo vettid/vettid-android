@@ -224,6 +224,22 @@ class WithdrawnRequestTest {
     }
 
     @Test
+    fun aNamelessConnectionOffersNoMute() = runTest {
+        val nameless = auth.copy(connectionName = "")
+        social.approvals.value = listOf(nameless)
+        val vm = ApprovalDetailViewModel(
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to nameless.key)), social, com.vettid.core.testing.FakeItems(),
+            com.vettid.core.testing.FakeDevices(), FakeVault(), social,
+        )
+        advanceUntilIdle()
+        vanish()
+        social.withdrawn.value = setOf("a1")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.withdrawn)
+        assertFalse("no names: no \"Mute requests from A connection\"", vm.uiState.value.canMute)
+    }
+
+    @Test
     fun aFailedMuteSaysSoAndKeepsTheNotice() = runTest {
         val vm = detail()
         vanish()

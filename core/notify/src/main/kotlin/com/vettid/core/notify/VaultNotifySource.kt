@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class VaultNotifySource(
     private val vault: VaultManager,
     scope: CoroutineScope,
+    override val covered: StateFlow<Boolean>,
     /** The resources for a photo's text ("Photo", "Photo: <caption>"). */
     private val res: () -> android.content.res.Resources? = { null },
 ) : NotifySource {

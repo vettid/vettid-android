@@ -33,6 +33,14 @@ data class LocalNotification(
     val silent: Boolean = false,
 )
 
+/**
+ * The form a notification has while the app lock's cover is up, the one the lock screen shows: [LocalNotification.publicTitle]
+ * ("New activity in VettID", or "VettID needs your attention") as its only text, no names. Quiet, so that putting it in
+ * place of one showing makes no sound.
+ */
+fun LocalNotification.publicForm(): LocalNotification =
+    copy(title = publicTitle, text = null, names = false, alertOnce = true, silent = true)
+
 /** Posts and cancels [LocalNotification]s ([AndroidPoster] on a phone; a list in tests). */
 interface Poster {
     fun post(n: LocalNotification)

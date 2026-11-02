@@ -3,6 +3,7 @@ package com.vettid.feature.approvals
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
@@ -382,7 +383,9 @@ class ApprovalDetailViewModel @Inject constructor(
                 withdrawn = withdrawn,
                 // A decision's failure is moot once the ask is withdrawn (a late `not_found` is not an error).
                 error = s.error.takeUnless { withdrawn },
-                canMute = withdrawn && peer != null && peer.asks?.muted != true && !s.muted,
+                // Only a connection with names: "Mute requests from A connection" is not offered (as in History).
+                canMute = withdrawn && peer != null && peer.asks?.muted != true && !s.muted &&
+                    AccountNames.isolateOrNull(shown?.connectionName) != null,
                 connectionIsService = peer?.service == true,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)

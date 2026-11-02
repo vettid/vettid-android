@@ -61,6 +61,7 @@ class FeedNotifierTest {
         override val arrivals = MutableSharedFlow<FeedItem>(extraBufferCapacity = 16)
         override val items = MutableStateFlow<List<FeedItem>>(emptyList())
         override val open = MutableStateFlow(true)
+        override val covered = MutableStateFlow(false)
         override val lockedElsewhere = MutableStateFlow(false)
         override val idleLocked = MutableStateFlow<com.vettid.core.data.vault.IdleLocked?>(null)
         override val ownerCheck = MutableStateFlow<OwnerCheckView?>(null)
@@ -110,6 +111,89 @@ class FeedNotifierTest {
         source.items.value = listOf(item("f1", status = "read"))
         runCurrent()
         assertTrue(poster.shown.isEmpty())
+    }
+
+    // --- the app lock's cover (owner request 2026-11-02): nothing past the lock names anything ---
+
+    @Test
+    fun underTheCoverAnItemNotifiesInItsPublicFormOnly() = runTest {
+        notifier()
+        source.covered.value = true
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "item.revealed", ref = "i1"))
+        arrive(item("f3", kind = "grant.request", ref = "g1"))
+        for (tag in listOf("f1", "f2", "f3")) {
+            val n = poster.shown.getValue(tag)
+            assertEquals(n.publicTitle, n.title)
+            assertNull(n.text)
+            assertFalse(n.names)
+            val all = "${n.title} ${n.text}"
+            assertFalse(all, "Sam" in all || "Lee" in all || "Passport" in all || "See you" in all)
+        }
+        assertEquals("New activity in VettID", poster.shown.getValue("f1").title)
+        assertEquals(Channels.MESSAGES, poster.shown.getValue("f1").channel)
+        assertEquals("f1", poster.shown.getValue("f1").itemId)
+    }
+
+    @Test
+    fun withTheCoverDownItIsAsBefore() = runTest {
+        notifier()
+        source.covered.value = true
+        source.covered.value = false
+        runCurrent()
+        arrive(item("f1"))
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f1").title)
+        assertFalse(poster.shown.getValue("f1").silent)
+    }
+
+    @Test
+    fun theCoverComingUpReplacesWhatIsShowingAndLeavesADismissedOneAlone() = runTest {
+        notifier()
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "item.revealed", ref = "i1"))
+        assertEquals("See you at 6", poster.shown.getValue("f1").text)
+        poster.shown.remove("f2") // the member swiped it away
+        poster.log.clear()
+        source.covered.value = true
+        runCurrent()
+        val n = poster.shown.getValue("f1")
+        assertEquals("New activity in VettID", n.title)
+        assertNull(n.text)
+        assertTrue("quiet", n.silent)
+        assertEquals(listOf("post:f1"), poster.log)
+        assertFalse("f2" in poster.shown)
+        // Read on another device while covered: it still goes.
+        source.items.value = emptyList()
+        runCurrent()
+        assertTrue(poster.shown.isEmpty())
+    }
+
+    @Test
+    fun anItemBeingPreparedWhenTheCoverComesUpIsPostedPublic() = runTest {
+        notifier()
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.textGate = gate
+        arrive(item("f1"))
+        assertTrue(poster.shown.isEmpty())
+        source.covered.value = true
+        gate.complete(Unit)
+        runCurrent()
+        val n = poster.shown.getValue("f1")
+        assertEquals("New activity in VettID", n.title)
+        assertNull(n.text)
+    }
+
+    @Test
+    fun aBatchUpdateUnderTheCoverStaysPublic() = runTest {
+        notifier()
+        arrive(item("b", kind = "grant.request", count = 2, ref = "g1"))
+        source.covered.value = true
+        runCurrent()
+        arrive(item("b", kind = "grant.request", count = 3, ref = "g1"))
+        assertEquals("New activity in VettID", poster.shown.getValue("b").title)
     }
 
     @Test

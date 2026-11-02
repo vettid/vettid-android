@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withTimeoutOrNull
 import com.vettid.app.BuildConfig
 import com.vettid.core.data.lock.AppLock
+import com.vettid.core.data.lock.AppLockState
 import com.vettid.core.data.lock.ScreenshotAllowance
 import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
@@ -326,10 +327,13 @@ object AppModule {
         prefs: PreferencesRepository,
         m: VaultManager,
         visibility: NotifyVisibility,
+        appLock: AppLock,
         @AppScope scope: CoroutineScope,
     ): FeedNotifier = FeedNotifier(
         scope,
-        VaultNotifySource(m, scope) { context.resources },
+        // The cover is up while the app lock is locked, and until its state is known (AppLockGate shows the lock, or "starting").
+        VaultNotifySource(m, scope, appLock.state.map { it == AppLockState.LOCKED || it == AppLockState.PENDING }
+            .stateIn(scope, SharingStarted.Eagerly, true)) { context.resources },
         prefs.preferences.map { NotifySettings(it.effectiveNotificationMode, it.notificationPreviews) }
             .stateIn(scope, SharingStarted.Eagerly, NotifySettings(NotificationMode.OFF)), // until the preferences are read
         visibility.visible,
