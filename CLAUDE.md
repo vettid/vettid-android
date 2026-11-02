@@ -32,6 +32,12 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   `ANDROID_SERIAL=<serial> ./gradlew :core:keystore:connectedDebugAndroidTest`
   (also `:core:altchan:` for the real attester against the production policy).
 - `:core:relay` is a JVM module too (`:core:relay:test`, RELAY-PROTOCOL §9 vectors).
+- A credential change whose answer may be lost is stored as an `UnresolvedChange` marker (no secret) before it is sent and decided by
+  `ChangeResolver`, never repeated: `pin.change`, `credential.password.change`, and (VAULT-MESSAGING 0.48.0, ANDROID-PLAN 0.1.51)
+  `credential.reset`, which goes through `CredentialOps.change` like the others. A reset's marker carries `heldKey` (the `key` of the
+  `credential.version` answer it was sent after; an answer without one stops it with nothing sent); it is decided by the key (another
+  key, or a lower version: applied) and a reset's answer keeps its blob although its version restarts at 1. Texts marked DRAFT in
+  `strings*.xml` are shared with the iPhone app: do not reword them alone.
 - The local dev stack (`devstack/devstack.sh up|down`, see `devstack/README.md`):
   vettid-vault's `cmd/devstack` run by commit (`go run ...@<commit>`) with
   `devstack/device-policy.json` (Google roots, the dev packages, the debug signing

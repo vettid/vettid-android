@@ -24,6 +24,8 @@ import com.vettid.core.data.policy.PasswordRule
 import com.vettid.core.data.policy.hintRes
 import com.vettid.core.data.policy.labelRes
 import com.vettid.core.data.policy.messageRes
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -69,12 +71,21 @@ data class NewCredentialUiState(
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
     val done: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.48.0 §11.14.9 "A lost answer to `credential.reset`") The reset got no answer and VettID is deciding
+     * it ([ChangeCheck.Checking], [ChangeCheck.Unreachable]), or decided that it was not made ([ChangeCheck.NotApplied]), or
+     * could not decide ([ChangeCheck.Ended], [ChangeCheck.Moved]). The entries are kept.
+     */
+    val check: ChangeCheck? = null,
 ) {
+    /** The reset is being decided, or its check ended without a decision: nothing is sent from this screen (no retry). */
+    val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended || check is ChangeCheck.Moved
+
     val filled: Boolean
         get() = pin.length >= MIN_PIN && current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && acknowledged &&
-            !refused && (!newRules || rule.passes)
+            !refused && (!newRules || rule.passes) && !checking
 
-    override fun toString(): String = "NewCredentialUiState(busy=$busy, error=$error, done=$done)"
+    override fun toString(): String = "NewCredentialUiState(busy=$busy, error=$error, done=$done, check=$check)"
 
     companion object {
         const val MIN_PIN = 6
@@ -87,9 +98,33 @@ data class NewCredentialUiState(
  * one; the old credential and every critical item are destroyed. Wrong entries count as failed owner checks.
  */
 @HiltViewModel
-class NewCredentialViewModel @Inject constructor(private val repo: CredentialRepository, vault: VaultRepository) : ViewModel() {
+class NewCredentialViewModel @Inject constructor(private val repo: CredentialRepository, private val vault: VaultRepository) : ViewModel() {
     private val state = MutableStateFlow(NewCredentialUiState(newRules = vault.usesPhoneSecret))
     val uiState: StateFlow<NewCredentialUiState> = state.asStateFlow()
+
+    /** This screen follows a reset: one it sent, or one being decided when it opened (an old decision is the shell's notice). */
+    private var following = false
+
+    init {
+        viewModelScope.launch {
+            vault.changeCheck.collect { c -> if (c != null && c.kind == ChangeKind.RESET) onCheck(c) }
+        }
+    }
+
+    private fun onCheck(c: ChangeCheck) {
+        if (c.open) following = true
+        if (!following || !c.open && state.value.busy) return
+        when (c) {
+            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
+                state.update { it.copy(busy = false, error = null, check = c) }
+            is ChangeCheck.Applied -> state.value = NewCredentialUiState(newRules = state.value.newRules, done = true)
+            is ChangeCheck.Refused -> state.update { it.copy(busy = false, check = null, error = c.failure, errorCode = c.shownCode) }
+        }
+        if (!c.open) {
+            following = false
+            vault.acknowledgeChangeCheck()
+        }
+    }
 
     fun setPin(v: String) = state.update {
         val pin = v.filter { c -> c.isDigit() }.take(NewCredentialUiState.MAX_PIN)
@@ -128,18 +163,32 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
     fun confirm() {
         val s = state.value
         if (!s.confirming) return
-        state.update { it.copy(confirming = false, busy = true, error = null) }
+        state.update { it.copy(confirming = false, busy = true, error = null, check = null) }
+        following = true
         viewModelScope.launch {
             try {
                 repo.newCredential(s.pin, s.current, s.password)
                 state.value = NewCredentialUiState(newRules = s.newRules, done = true)
+                following = false
+                vault.acknowledgeChangeCheck() // said here: not again by the shell
             } catch (e: VaultFailure) {
+                if (e.kind == FailureKind.CHANGE_CHECKING) {
+                    // No answer is not a failure: the entries stay and the check's state follows.
+                    state.update { it.copy(busy = false, error = null) }
+                    vault.changeCheck.value?.takeIf { it.kind == ChangeKind.RESET }?.let(::onCheck)
+                    return@launch
+                }
+                following = false
+                vault.acknowledgeChangeCheck()
                 // The PIN and the current password are not kept after an answer. weak_password (§11.14.7): its reason
                 // under the new password, in the same words as the app's.
                 val rule = if (e.kind == FailureKind.WEAK_PASSWORD) PasswordRule.fromVault(e.weakPasswordReason) else null
                 state.update {
                     if (rule != null) {
                         it.copy(busy = false, error = null, rule = rule, refused = true, pin = "", current = "")
+                    } else if (e.kind in NOTHING_SENT) {
+                        // Refused with nothing sent (an earlier request undecided): every entry stays.
+                        it.copy(busy = false, error = e.kind, errorCode = e.shownCode)
                     } else {
                         it.copy(busy = false, error = e.kind, errorCode = e.shownCode, pin = "", current = "")
                     }
@@ -148,6 +197,12 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
         }
     }
 }
+
+/** Failures that mean nothing of the reset was sent: the typed entries are not spent, so they stay. */
+private val NOTHING_SENT = setOf(
+    FailureKind.CHANGE_UNRESOLVED, FailureKind.CHANGE_UNDECIDED, FailureKind.CHANGE_UNDECIDED_PASSWORD, FailureKind.RESET_UNDECIDED,
+    FailureKind.PIN_UNCERTAIN, FailureKind.CREDENTIAL_UNSETTLED, FailureKind.RENEW_UNCONFIRMED,
+)
 
 /** What the new-credential form can ask for. */
 data class NewCredentialActions(
@@ -178,6 +233,7 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
         modifier = Modifier.testTag("new_credential"),
     ) {
         if (state.done) return@FormScaffold
+        NewCredentialCheckNotice(state.check)
         NoticeCard(
             NoticeKind.URGENT,
             stringResource(R.string.credential_new_warning_title),
@@ -245,4 +301,25 @@ internal fun NewPasswordRule(rule: PasswordRule, refused: Boolean) {
         refused = refused,
         modifier = Modifier.testTag("password_rule"),
     )
+}
+
+/** VAULT-MESSAGING 0.48.0 §11.14.9: a reset whose answer was lost is decided, not repeated (texts: drafts, ANDROID-PLAN 0.1.51). */
+@Composable
+private fun NewCredentialCheckNotice(c: ChangeCheck?) {
+    val text = when (c) {
+        is ChangeCheck.Checking -> R.string.credential_new_checking
+        is ChangeCheck.Unreachable -> R.string.credential_new_unreachable
+        is ChangeCheck.NotApplied -> R.string.credential_new_not_made
+        is ChangeCheck.Ended -> R.string.credential_new_ended
+        // (ANDROID-PLAN 0.1.55) "Your vault moved to a new phone", no "Try again".
+        is ChangeCheck.Moved -> com.vettid.core.data.R.string.data_feed_device_replaced
+        else -> return
+    }
+    NoticeCard(
+        if (c is ChangeCheck.NotApplied || c is ChangeCheck.Ended || c is ChangeCheck.Moved) NoticeKind.WARNING else NoticeKind.INFO,
+        stringResource(R.string.credential_new_title),
+        stringResource(text),
+        Modifier.testTag("new_credential_check"),
+    )
+    Spacer(Modifier.height(Spacing.l))
 }

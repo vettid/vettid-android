@@ -61,6 +61,7 @@ import com.vettid.core.vault.changeResend
 import com.vettid.core.vault.changeSettle
 import com.vettid.core.vault.credentialChangePassword
 import com.vettid.core.vault.credentialGeneration
+import com.vettid.core.vault.credentialResetHolder
 import com.vettid.core.vault.credentialTopUpUtks
 import com.vettid.core.vault.credentialVersionAt
 import com.vettid.core.vault.setCredentialGate
@@ -226,7 +227,7 @@ class VaultManager(
                     VaultJson.str(a, "alarm_id")?.let { alarmFlow.value = CredentialAlarm(it, VaultJson.str(a, "state")
                         ?: CredentialAlarm.STATE_FROZEN, VaultJson.str(a, "at")) }
                 }
-                return ChangeResolver.Version(info.exists, info.version, info.alarm != null, ts)
+                return ChangeResolver.Version(info.exists, info.version, info.alarm != null, ts, info.key)
             }
 
             override suspend fun fetch() {
@@ -292,6 +293,7 @@ class VaultManager(
         return when {
             m != null && c is ChangeCheck.Unreachable -> FailureKind.CHANGE_UNRESOLVED
             m != null && m.kind == ChangeKind.PIN -> FailureKind.CHANGE_UNDECIDED
+            m != null && m.kind == ChangeKind.RESET -> FailureKind.RESET_UNDECIDED
             m != null -> FailureKind.CHANGE_UNDECIDED_PASSWORD
             a.uncertainPinFromEpoch != null -> FailureKind.PIN_UNCERTAIN
             else -> null
@@ -322,7 +324,7 @@ class VaultManager(
      * step as the write (L4), refuses it ([FailureKind.CHANGE_UNRESOLVED]).
      */
     private fun storeChange(since: Int, m: ChangeMarker, fromEpoch: Long): UnresolvedChange {
-        val u = UnresolvedChange(m.type, m.innerId, m.sentVersion, m.exp.toEpochMilli(), fromEpoch)
+        val u = UnresolvedChange(m.type, m.innerId, m.sentVersion, m.exp.toEpochMilli(), fromEpoch, m.heldKey)
         when (record.storeChange(since, u)) {
             AccountRecord.ChangeStored.STORED -> Unit
             AccountRecord.ChangeStored.CONFLICT -> throw VaultFailure(FailureKind.CHANGE_UNRESOLVED, ChangeResolver.CODE_UNRESOLVED)
@@ -345,7 +347,24 @@ class VaultManager(
         val ok = record.confirmChange(m)
         newPinStep = false
         refreshChangeFlows()
+        if (m.kind == ChangeKind.RESET) resetApplied()
         return ok
+    }
+
+    /**
+     * (0.48.0) A new credential was made (its answer, or a check that found it applied): the unlock window is closed, the
+     * critical items destroyed with the old credential are dropped from the lists held here (re-read in the background), the
+     * alarm state is read afresh and the owner-check clock starts afresh (§3.6.1).
+     */
+    private fun resetApplied() {
+        windowFlow.value = null
+        items.clear()
+        scope.launch {
+            val s = runCatching { session() }.getOrNull() ?: return@launch
+            runCatching { refreshAlarm(s) }
+            ownerCheck.onOpened()
+            items.refreshQuietly()
+        }
     }
 
     /** The change is decided as not applied, refused or ended: its marker goes; the epoch stays (§11.14.1 rules 3–5). */
@@ -3172,12 +3191,20 @@ class VaultManager(
         refreshAlarm(s)
     }
 
+    /**
+     * `credential.reset`, sent and decided as a change is (VAULT-MESSAGING 0.48.0 §11.14.9 "A lost answer to
+     * `credential.reset`", ANDROID-PLAN 0.1.51): the marker with the held key is stored before it goes out, no answer is not
+     * a failure ([ChangeSender], [changes]), and [resetApplied] runs once it is decided as made.
+     */
     override suspend fun newCredential(pin: String, password: String, newPassword: String) = guard {
+        val rec = record.recordGeneration
+        // §11.14.9 step 2: an earlier change is decided first (the reset carries the PIN).
+        changes.gate(carriesPin = true)
         val s = session()
-        s.openApi.credentialResetHolder(pin, password, newPassword)
-        windowFlow.value = null
-        runCatching { refreshAlarm(s) }
-        ownerCheck.onOpened() // a new credential starts the owner-check clock afresh (§3.6.1)
+        val gen = s.openApi.credentialGeneration
+        changeSender.send(rec, ChangeKind.RESET, local.phone.epoch) { store ->
+            s.openApi.credentialResetHolder(pin, password, newPassword, since = gen, onMarker = store)
+        }
     }
 
     override suspend fun setBackup(on: Boolean) = guard {

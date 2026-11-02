@@ -76,6 +76,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.CHANGE_CHECKING, FailureKind.CHANGE_UNRESOLVED -> R.string.data_failure_change_unresolved
     FailureKind.CHANGE_UNDECIDED -> R.string.data_failure_change_undecided
     FailureKind.CHANGE_UNDECIDED_PASSWORD -> R.string.data_failure_change_undecided_password
+    FailureKind.RESET_UNDECIDED -> R.string.data_failure_reset_undecided
     FailureKind.PIN_UNCERTAIN -> R.string.data_failure_pin_uncertain
     FailureKind.RENEW_UNCONFIRMED -> R.string.data_failure_renew_unconfirmed
     FailureKind.CREDENTIAL_UNSETTLED -> R.string.data_failure_credential_unsettled
