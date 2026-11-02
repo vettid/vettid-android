@@ -10,7 +10,9 @@ import java.nio.charset.CodingErrorAction
  * Strict JSON for the vault messaging wire format (VAULT-MESSAGING §5.3), the
  * Kotlin twin of the Go reference's `internal/strictjson`:
  *
- * - valid UTF-8, exactly one top-level object, nothing after it but white space;
+ * - valid UTF-8 with no leading byte-order mark, exactly one top-level object, nothing after it but white space;
+ * - `\uXXXX` escapes of ASCII hex digits only, and surrogates only as a high escape followed at once by a low one
+ *   (VAULT-MESSAGING 0.83.1: what the vault and the iPhone app refuse, the app never accepts);
  * - no duplicate member names at any depth (names are case-sensitive);
  * - nesting at most [MAX_DEPTH];
  * - integers as plain JSON integers (no sign, fraction, exponent or leading
@@ -21,6 +23,7 @@ import java.nio.charset.CodingErrorAction
 object StrictJson {
     const val MAX_DEPTH = 32
     const val MAX_SAFE_INTEGER = (1L shl 53) - 1
+    private val BOM = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
 
     /**
      * Parses [b] as exactly one JSON object. [maxDepth] lowers the nesting limit for a value that will sit inside another
@@ -28,6 +31,8 @@ object StrictJson {
      */
     fun parseObject(b: ByteArray, maxDepth: Int = MAX_DEPTH): JsonObject {
         require(maxDepth in 1..MAX_DEPTH) { "maxDepth" }
+        // A leading UTF-8 byte-order mark is refused outright, not skipped (VAULT-MESSAGING 0.83.1).
+        if (b.size >= BOM.size && b[0] == BOM[0] && b[1] == BOM[1] && b[2] == BOM[2]) throw CryptoException.Format("json: byte-order mark")
         val text = decodeUtf8(b)
         val v = Parser(text, maxDepth).parseDocument()
         return v as? JsonObject ?: throw CryptoException.Format("json: not an object")
@@ -295,27 +300,33 @@ private class Parser(private val s: String, private val maxDepth: Int = StrictJs
         }
     }
 
-    // \uXXXX, combining surrogate pairs; a lone surrogate decodes to U+FFFD,
-    // as Go's encoding/json does.
+    // \uXXXX, combining surrogate pairs (VAULT-MESSAGING 0.83.1): a high surrogate must be followed at once by a
+    // `\u` low surrogate, and a lone low surrogate is refused. Neither becomes U+FFFD, since the vault refuses both.
     private fun unicodeEscape(): String {
         val hi = hex4()
-        if (hi in 0xD800..0xDBFF && s.startsWith("\\u", i)) {
-            val save = i
+        if (hi in 0xD800..0xDBFF) {
+            if (!s.startsWith("\\u", i)) fail()
             i += 2
             val lo = hex4()
-            if (lo in 0xDC00..0xDFFF) return String(Character.toChars(0x10000 + ((hi - 0xD800) shl 10) + (lo - 0xDC00)))
-            i = save
+            if (lo !in 0xDC00..0xDFFF) fail()
+            return String(Character.toChars(0x10000 + ((hi - 0xD800) shl 10) + (lo - 0xDC00)))
         }
-        if (hi in 0xD800..0xDFFF) return "�"
+        if (hi in 0xDC00..0xDFFF) fail()
         return hi.toChar().toString()
     }
 
+    // Four ASCII hex digits only: Character.digit would also take fullwidth and other Unicode digits (VAULT-MESSAGING 0.83.1).
     private fun hex4(): Int {
         if (i + 4 > s.length) fail()
         var v = 0
         repeat(4) {
-            val d = Character.digit(s[i++], 16)
-            if (d < 0) fail()
+            val c = s[i++]
+            val d = when (c) {
+                in '0'..'9' -> c - '0'
+                in 'a'..'f' -> c - 'a' + 10
+                in 'A'..'F' -> c - 'A' + 10
+                else -> fail()
+            }
             v = (v shl 4) or d
         }
         return v

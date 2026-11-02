@@ -51,10 +51,10 @@ class WireFormatTest {
         assertEquals(9007199254740991L, n.uint("d", 0, Long.MAX_VALUE))
         assertThrows(CryptoException.Format::class.java) { n.string("a") }
         assertThrows(CryptoException.Format::class.java) { n.string("missing") }
-        // Surrogates: pairs combine, lone ones decode to U+FFFD (as Go).
-        val s = StrictJson.parseObject("""{"a":"\ud83d\ude00","b":"\ud800x"}""")
+        // Surrogates: pairs combine; a lone one is refused, as the vault does (VAULT-MESSAGING 0.83.1; StrictJsonEscapeTest).
+        val s = StrictJson.parseObject("""{"a":"\ud83d\ude00"}""")
         assertEquals("\uD83D\uDE00", s.string("a"))
-        assertEquals("\uFFFDx", s.string("b"))
+        assertThrows(CryptoException.Format::class.java) { StrictJson.parseObject("""{"b":"\ud800x"}""") }
     }
 
     @Test
