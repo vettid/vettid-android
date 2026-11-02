@@ -3,6 +3,7 @@ package com.vettid.core.crypto.json
 import com.vettid.core.crypto.CryptoException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -13,10 +14,6 @@ import org.junit.Test
 class StrictJsonEscapeTest {
     private fun refused(json: String) {
         assertThrows(json, CryptoException.Format::class.java) { StrictJson.parseObject(json) }
-    }
-
-    private fun refused(bytes: ByteArray) {
-        assertThrows(CryptoException.Format::class.java) { StrictJson.parseObject(bytes) }
     }
 
     private fun value(json: String): String = (StrictJson.parseObject(json)["a"] as JsonString).value
@@ -52,8 +49,11 @@ class StrictJsonEscapeTest {
         refused("""{"a":"\ud83d\u0041"}""")
         refused("""{"a":"\ud83d\ud83d"}""")
         refused("""{"a":"\ud83d\n"}""")
-        // A lone low surrogate.
+        // A lone low surrogate, also right after a complete pair (VAULT-MESSAGING 0.83.1's fifth case).
         refused("""{"a":"\ude00"}""")
+        refused("""{"a":"\ud83d\ude00\ude00"}""")
+        // At any depth.
+        refused("""{"a":{"b":["\ud83d"]}}""")
         refused("""{"a":"x\udfff"}""")
         // In a member name too.
         refused("""{"\ud83d":1}""")
@@ -62,8 +62,11 @@ class StrictJsonEscapeTest {
     @Test
     fun aLeadingByteOrderMarkIsRefused() {
         val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
-        refused(bom + """{"a":"b"}""".toByteArray())
-        refused(bom)
+        // Refused by its own check, not only as "not an object" further on.
+        for (b in listOf(bom + """{"a":"b"}""".toByteArray(), bom)) {
+            val e = assertThrows(CryptoException.Format::class.java) { StrictJson.parseObject(b) }
+            assertTrue(e.message, e.message!!.contains("byte-order mark"))
+        }
         // An escaped U+FEFF inside a string is just a character.
         assertEquals("\ufeff", value("""{"a":"\ufeff"}"""))
     }
