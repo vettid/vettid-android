@@ -1,6 +1,8 @@
 package com.vettid.feature.wallet
 
+import com.vettid.core.chain.InspectSummary
 import com.vettid.core.wallet.CapReason
+import com.vettid.core.wallet.DiscardResult
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.PrepareResult
 import com.vettid.core.wallet.PreparedSend
@@ -38,7 +40,11 @@ interface SendEngine {
     /** Asks the chain server whether it has the kept transaction (review note 2). */
     suspend fun checkSent(walletId: String): SendResult
 
-    fun discard(walletId: String)
+    /** Drops the unsent payment; [DiscardResult.MUST_CHECK] while it may be on the network and no server has said otherwise. */
+    fun discard(walletId: String): DiscardResult
+
+    /** A kept transaction may be on the network: [checkSent] first, and no Discard until it says the server does not have it. */
+    fun needsCheck(walletId: String): Boolean
 
     fun hasUnsent(walletId: String): Boolean
 
@@ -56,8 +62,13 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
         prepared = null
         return when (val r = wallets.prepareSend(walletId, request)) {
             is PrepareResult.Ready -> {
-                prepared = r.prepared
-                SendPrepared.Ready(reviewOf(r.prepared))
+                val review = reviewOf(r.prepared)
+                if (review == null) {
+                    SendPrepared.Stopped(PrepareResult.Different(emptySet()))
+                } else {
+                    prepared = r.prepared
+                    SendPrepared.Ready(review)
+                }
             }
             else -> SendPrepared.Stopped(r)
         }
@@ -78,10 +89,12 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
 
     override suspend fun checkSent(walletId: String) = wallets.checkSent(walletId)
 
-    override fun discard(walletId: String) {
+    override fun discard(walletId: String): DiscardResult {
         prepared = null
-        wallets.discardUnsent(walletId)
+        return wallets.discardUnsent(walletId)
     }
+
+    override fun needsCheck(walletId: String) = wallets.mustCheck(walletId)
 
     override fun hasUnsent(walletId: String) = wallets.hasUnsent(walletId)
 
@@ -89,35 +102,44 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
         prepared = null
     }
 
-    private fun reviewOf(p: PreparedSend): Review {
-        val v = p.vault
-        val payee = v.outputs.firstOrNull { !it.change }
-        return Review(
-            address = payee?.address ?: p.address,
-            payeeSats = v.sendingSats,
-            changeSats = v.changeSats,
-            feeSats = v.feeSats,
-            vsize = v.vsize,
-            totalOutSats = v.sendingSats + v.feeSats,
-            toFeeSats = p.toFeeSats,
-            sendAll = p.sendAll,
-            leftBehind = p.leftBehind,
-            hasCap = p.cap != null,
-            capRefusal = p.cap?.let(::refusalOf),
-        )
-    }
+    private fun reviewOf(p: PreparedSend): Review? = reviewFrom(p.vault, p.cap, p.toFeeSats, p.sendAll, p.leftBehind)
 
-    private fun refusalOf(cap: SpendCap): CapText? = if (cap.ok) {
-        null
-    } else {
-        val reason = when (cap.reason) {
-            "per_tx" -> CapReason.PER_TX
-            "per_period" -> CapReason.PER_PERIOD
-            else -> CapReason.OTHER
+    companion object {
+        /**
+         * The review from **the vault's summary** only: its payee (as it wrote the address), amounts, fee and `vsize`, never the app's
+         * own selection or what was typed. Null when the summary has no single payee: nothing is shown then (the compare makes it
+         * unreachable, and there is no fallback to what was entered).
+         */
+        fun reviewFrom(vault: InspectSummary, cap: SpendCap?, toFeeSats: Long, sendAll: Boolean, leftBehind: Int): Review? {
+            val payee = vault.outputs.singleOrNull { !it.change } ?: return null
+            return Review(
+                address = payee.address,
+                payeeSats = vault.sendingSats,
+                changeSats = vault.changeSats,
+                feeSats = vault.feeSats,
+                vsize = vault.vsize,
+                totalOutSats = vault.sendingSats + vault.feeSats,
+                toFeeSats = toFeeSats,
+                sendAll = sendAll,
+                leftBehind = leftBehind,
+                hasCap = cap != null,
+                capRefusal = cap?.let(::refusalOf),
+            )
         }
-        CapText(
-            reason, cap.limitSats, if (reason == CapReason.PER_PERIOD) cap.remainingSats else null,
-            if (reason == CapReason.PER_PERIOD) cap.allowedAfter else null, other = cap.reason.takeIf { reason == CapReason.OTHER },
-        )
+
+        /** The inspect's `cap` when it says `ok: false`, as the text needs it. */
+        fun refusalOf(cap: SpendCap): CapText? = if (cap.ok) {
+            null
+        } else {
+            val reason = when (cap.reason) {
+                "per_tx" -> CapReason.PER_TX
+                "per_period" -> CapReason.PER_PERIOD
+                else -> CapReason.OTHER
+            }
+            CapText(
+                reason, cap.limitSats, if (reason == CapReason.PER_PERIOD) cap.remainingSats else null,
+                if (reason == CapReason.PER_PERIOD) cap.allowedAfter else null, other = cap.reason.takeIf { reason == CapReason.OTHER },
+            )
+        }
     }
 }

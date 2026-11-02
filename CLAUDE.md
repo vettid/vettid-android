@@ -318,11 +318,20 @@ The A2 exit test:
   an hour or a day from the fee target, a custom rate by the quickest target it reaches), Broadcast failed ("Signed, but {host} didn't
   accept it: {reason}…", Try again = `retryBroadcast`, a way to Chain server), the `cap_exceeded` and `invalid_psbt` texts, and plain
   notices for `SignedDiffers`, `AlreadySigned`, `Unanswered`, a lapse, a superseded payment and `duplicate_wallet`; **Discard is on every
-  ending that may have signed**. Review note 2: after `BroadcastFailed(Server)` the screen asks `WalletsManager.checkSent` (`GET /tx/{txid}`
-  through `EsploraClient.knowsTransaction` and `SpendAccess.knows`): known there is Sent; Discard is offered only after the server said it
-  does not have it (a refusal is the server's definite word and needs no question). Review note 1: `retrySign` asks `signsOutstanding()`
-  after an answer that does not come; a wallet no longer listed (`exp` passed, or `credential.version` moved on) ends as
-  `SendResult.SignLapsed` (the kept request is forgotten; the text says it may have been signed). Review note 3: `PreparedSend.signCount`
+  ending that may have signed, except while a signed payment may be on the network**. Review note 2 (after review): a kept transaction has
+  a `mayBeOnNetwork` flag in `WalletsManager`, set by any broadcast that ended without a definite answer (`BroadcastCause.Server`) and kept
+  for that transaction through later attempts (another server that cannot be opened, or refuses on its own policy, clears nothing).
+  `discardUnsent` returns `DiscardResult.MUST_CHECK` while it is set; only `checkSent` clears it: `GET /tx/{txid}`
+  (`EsploraClient.knowsTransaction`, `SpendAccess.knows`), known is Sent, and a "not found" is asked again after `settleMs` (4 s) before it
+  is believed; a second question that fails decides nothing. The view model asks `checkSent` on entering any ending (BroadcastFailed,
+  AlreadySigned, Unsent, ...) when `SendEngine.needsCheck`, keeps `discardLocked`, and refuses `askDiscard()`/`discard()` itself.
+  Review note 1 (after review): an unanswered signing is given up (`SendResult.SignLapsed`) only once the vault's clock is past its `exp`
+  plus the settle margin (`walletSignExpired`); before that it is kept even if `credential.version` moved on (the vault may have applied it
+  and answers a resend from its cache), and past `exp` a late answer is taken by one more resend before the request is forgotten.
+  An `ok` that does not read is `SendResult.SignedUnreadable` (consumed, "may have been signed"), never an exception to the screen; the view
+  model also turns any other exception of approve/retry into that notice, and of prepare into a form problem. While a request is out back and
+  the arrow do nothing (`SendUiState.swallowsBack`). `isOwnAddress` runs on `Dispatchers.Default`; `giveBack` is guarded by the generation.
+  `ManagerSendEngine.reviewFrom` builds the `Review` from the vault's summary alone (no summary payee: no review, no fallback). Review note 3: `PreparedSend.signCount`
   against a per-wallet counter bumped when a `wallet.sign` goes out and restored when it is given back; a payment prepared before another
   signing is `SendResult.Superseded`. **`WalletOps.sign` returns a `SignOutcome`** (`NotSent(failure)` / `Answered(SignReply.Ok(body) |
   Refused(error))` / `Unanswered(forget, resend)`): the `SignNotSent` marker and the cause-chain walk (`givesBack`) are gone, nothing depends
@@ -338,7 +347,7 @@ The A2 exit test:
   `wallet.send_broadcast_failed`, `wallet.send_broadcast_checking`, `wallet.send_broadcast_unknown`, `wallet.send_broadcast_not_there`,
   `wallet.send_cap_per_tx`, `wallet.send_cap_per_period`, `wallet.send_cap_per_period_none`, `wallet.send_invalid_fee_rate`,
   `wallet.send_invalid_output_amount`, `wallet.send_invalid_technical`, `wallet.send_invalid_wrong_seed`, `wallet.send_invalid_other`,
-  `wallet.send_signed_differs`, `wallet.send_already_signed`, `wallet.send_unanswered`, `wallet.send_lapsed`, `wallet.send_superseded`,
+  `wallet.send_signed_differs`, `wallet.send_already_signed`, `wallet.send_already_signed_locked`, `wallet.send_unreadable`, `wallet.send_unanswered`, `wallet.send_lapsed`, `wallet.send_superseded`,
   `wallet.send_duplicate`, `wallet.send_unsent`, `wallet.send_discard`.
 
 ## Device testing

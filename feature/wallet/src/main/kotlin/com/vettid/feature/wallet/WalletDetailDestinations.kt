@@ -131,12 +131,15 @@ private fun SendDestination(host: WalletHost, leave: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(state.closed) { if (state.closed) leave() }
     // Back from the review is back to the form, not out of the screen (nothing was signed).
-    BackHandler(enabled = state.step == SendStep.REVIEW && !state.busy && !state.scanning) { vm.edit() }
+    BackHandler(enabled = state.step == SendStep.REVIEW && !state.swallowsBack && !state.scanning) { vm.edit() }
     BackHandler(enabled = state.scanning) { vm.stopScan() }
+    // While a request is out (approving, trying again, asking the server) back does nothing: leaving would drop the result of a
+    // signing that goes on (`approveSend` is not cancelled), and the member would never see how it ended. Declared last, it wins.
+    BackHandler(enabled = state.swallowsBack) {}
     SendScreen(
         state,
         SendActions(
-            onBack = leave,
+            onBack = { if (!state.swallowsBack) leave() },
             onLoad = vm::load,
             onBackUp = { host.navigate(BackupRoute(vm.walletId)) },
             onChooseNetwork = vm::chooseTestNetwork,

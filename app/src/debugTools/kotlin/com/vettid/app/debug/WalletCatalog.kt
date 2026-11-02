@@ -311,13 +311,13 @@ internal object WalletCatalog {
             Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.FEE_TOO_LOW)))
         },
         "wallet.send_broadcast_checking" to {
-            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER, checking = true)))
+            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER)).copy(discardLocked = true, checking = true))
         },
         "wallet.send_broadcast_unknown" to {
-            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER)))
+            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER)).copy(discardLocked = true))
         },
         "wallet.send_broadcast_not_there" to {
-            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER, checked = true)))
+            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER)))
         },
         "wallet.send_cap_per_tx" to { Send(sendDone(SendOutcome.CapExceeded(CapText(CapReason.PER_TX, 500_000, null, null)))) },
         "wallet.send_cap_per_period" to { Send(sendDone(SendOutcome.CapExceeded(sendPeriodCap))) },
@@ -329,6 +329,8 @@ internal object WalletCatalog {
         "wallet.send_invalid_other" to { Send(sendDone(SendOutcome.InvalidPsbt("something_new", false))) },
         "wallet.send_signed_differs" to { Send(sendDone(SendOutcome.SignedDiffers)) },
         "wallet.send_already_signed" to { Send(sendDone(SendOutcome.AlreadySigned)) },
+        "wallet.send_unreadable" to { Send(sendDone(SendOutcome.SignedUnreadable)) },
+        "wallet.send_already_signed_locked" to { Send(sendDone(SendOutcome.AlreadySigned).copy(discardLocked = true)) },
         "wallet.send_unanswered" to { Send(sendDone(SendOutcome.Unanswered)) },
         "wallet.send_lapsed" to { Send(sendDone(SendOutcome.Lapsed)) },
         "wallet.send_superseded" to { Send(sendDone(SendOutcome.Superseded)) },

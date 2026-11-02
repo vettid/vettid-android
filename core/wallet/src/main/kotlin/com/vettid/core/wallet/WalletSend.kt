@@ -87,7 +87,12 @@ sealed interface SignOutcome {
         override fun toString(): String = "Answered"
     }
 
-    class Unanswered(val forget: () -> Unit = {}, val resend: suspend () -> SignOutcome) : SignOutcome {
+    class Unanswered(
+        val forget: () -> Unit = {},
+        /** The vault's clock is past the request's `exp` plus the margin: it can no longer apply, and only then is it given up. */
+        val expired: () -> Boolean = { false },
+        val resend: suspend () -> SignOutcome,
+    ) : SignOutcome {
         override fun toString(): String = "Unanswered"
     }
 }
@@ -151,7 +156,7 @@ class PreparedSend internal constructor(
     internal val signCount: Long = 0L,
 ) {
     /** The fee in sat/vB as the vault reads it. */
-    val feeRate: Double get() = feeSats.toDouble() / vsize
+    val feeRate: Double get() = vault.feeSats.toDouble() / vault.vsize
 
     override fun toString(): String = "PreparedSend"
 }
@@ -310,6 +315,12 @@ sealed interface SendResult {
     data object AlreadySigned : SendResult
 
     /**
+     * The vault answered `ok` but the answer does not read as a signed transaction. It may have signed (and counted) it; the payment
+     * stays consumed. Check the wallet before sending again.
+     */
+    data object SignedUnreadable : SendResult
+
+    /**
      * Another `wallet.sign` went out for this wallet after this payment was prepared (review note 3): its coins may be spent by that
      * one, so it is not signed. Nothing was signed; prepare it again.
      */
@@ -363,4 +374,16 @@ object FeeTargets {
 
     /** "This fee is much higher than needed right now": above twice the Fast rate. */
     fun muchHigher(rate: Double, fast: Double): Boolean = rate > 2 * fast
+}
+
+/** The outcome of [WalletsManager.discardUnsent]. */
+enum class DiscardResult {
+    DROPPED,
+
+    /**
+     * The signed transaction may have reached the network (a broadcast without a definite answer) and has not been found absent: it is
+     * kept until [WalletsManager.checkSent] has said that a reachable server does not have it. Dropping it would let a second
+     * payment from other coins confirm beside it.
+     */
+    MUST_CHECK,
 }

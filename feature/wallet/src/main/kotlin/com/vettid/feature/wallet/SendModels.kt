@@ -157,20 +157,10 @@ sealed interface SendOutcome {
     /** "Sent. It will confirm in about {time}." */
     data class Sent(val time: ConfirmTime) : SendOutcome
 
-    /**
-     * "Signed, but {host} didn't accept it: {reason}. Try again, or choose another server." [checked]: the chain server was asked
-     * whether it has the transaction after all (review note 2) and said no; only then is Discard offered after a server that did not
-     * answer the broadcast. [checking]: that question is out.
-     */
-    data class BroadcastFailed(
-        val host: String?,
-        val reason: BroadcastReason,
-        val checking: Boolean = false,
-        val checked: Boolean = false,
-    ) : SendOutcome {
-        /** A refusal is the server's definite word; only a server that did not answer leaves the payment possibly sent. */
+    /** "Signed, but {host} didn't accept it: {reason}. Try again, or choose another server." */
+    data class BroadcastFailed(val host: String?, val reason: BroadcastReason) : SendOutcome {
+        /** The server did not answer: the payment may have gone through (see [SendUiState.discardLocked]). */
         val mayBeSent: Boolean get() = reason == BroadcastReason.NO_ANSWER
-        val canDiscard: Boolean get() = !mayBeSent || checked
 
         override fun toString(): String = "BroadcastFailed"
     }
@@ -185,6 +175,9 @@ sealed interface SendOutcome {
 
     /** The signed transaction was not the one reviewed: dropped, nothing broadcast. */
     data object SignedDiffers : SendOutcome
+
+    /** The vault answered `ok` but the answer does not read: the payment may have been signed. */
+    data object SignedUnreadable : SendOutcome
 
     /** This payment was sent to the vault to be signed already. */
     data object AlreadySigned : SendOutcome

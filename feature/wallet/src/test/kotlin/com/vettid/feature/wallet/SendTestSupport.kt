@@ -4,6 +4,7 @@
 package com.vettid.feature.wallet
 
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.wallet.DiscardResult
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.SendRequest
 import com.vettid.core.wallet.SendResult
@@ -34,7 +35,7 @@ internal class FakeEngine : SendEngine {
     var retryResult: SendResult = SendResult.Sent("ab".repeat(32))
     var checkResult: SendResult = SendResult.NotOnServer
     var unsent = false
-    var prepareFailure: VaultFailure? = null
+    var prepareFailure: Exception? = null
     var discards = 0
     var forgets = 0
     var retries = 0
@@ -51,6 +52,7 @@ internal class FakeEngine : SendEngine {
     override suspend fun approve(password: String): SendResult {
         passwords += password
         approveFailure?.let { throw it }
+        approveThrows?.let { throw it }
         return approveResult
     }
 
@@ -59,15 +61,24 @@ internal class FakeEngine : SendEngine {
         return retryResult
     }
 
+    /** A kept transaction may be on the network and no server has said otherwise. */
+    var mustCheck = false
+    var approveThrows: Exception? = null
+
     override suspend fun checkSent(walletId: String): SendResult {
         checks++
+        if (checkResult == SendResult.NotOnServer) mustCheck = false
         return checkResult
     }
 
-    override fun discard(walletId: String) {
+    override fun discard(walletId: String): DiscardResult {
+        if (mustCheck) return DiscardResult.MUST_CHECK
         discards++
         unsent = false
+        return DiscardResult.DROPPED
     }
+
+    override fun needsCheck(walletId: String) = mustCheck
 
     override fun hasUnsent(walletId: String) = unsent
 

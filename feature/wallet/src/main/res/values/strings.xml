@@ -252,7 +252,7 @@
     <string name="wallet_send_review">Review</string> <!-- new -->
     <string name="wallet_send_not_enough">You have %1$s sats you can spend and this needs %2$s. Unconfirmed coins are left out unless you include them.</string> <!-- new -->
     <string name="wallet_send_too_many_inputs">This payment needs more coins than one payment can hold. Send less.</string> <!-- new -->
-    <string name="wallet_send_self_send">This address is one of this wallet\'s own. Nothing was sent. Use Receive to move coins between your own addresses.</string> <!-- new: review note 6 -->
+    <string name="wallet_send_self_send">This address is one of this wallet\'s own. Nothing was sent.</string> <!-- new: review note 6; revised after review: Receive moves no coins -->
     <string name="wallet_send_bad_amount">Enter an amount above 0, or choose Send all.</string> <!-- new -->
     <string name="wallet_send_bad_fee">Enter a fee between 1 and 1,000 sat/vB.</string> <!-- new -->
     <string name="wallet_send_server_failed">The chain server didn\'t answer. Try again, or choose another server.</string> <!-- new -->
@@ -270,7 +270,10 @@
     <string name="wallet_send_review_fee_value">%1$s sats (%2$s sat/vB)</string> <!-- new -->
     <string name="wallet_send_review_total">Total leaving the wallet</string> <!-- new -->
     <string name="wallet_send_review_dust">The change was too small to send back, so %1$s sats went to the fee.</string> <!-- new -->
-    <string name="wallet_send_review_left_behind">%1$d coins were left out.</string> <!-- new: a Send all that did not spend every coin -->
+    <plurals name="wallet_send_review_left_behind"> <!-- new: a Send all that did not spend every coin; revised after review: plurals -->
+        <item quantity="one">%1$d coin was left out.</item>
+        <item quantity="other">%1$d coins were left out.</item>
+    </plurals>
     <string name="wallet_send_limit_review">Counts toward your limit for the last 24 hours: %1$s. Left after this: %2$s</string> <!-- draft -->
     <string name="wallet_send_approve">Send %1$s to %2$s? Fee %3$s.</string> <!-- draft -->
     <string name="wallet_send_approve_button">Approve with password</string> <!-- draft -->
@@ -293,7 +296,8 @@
     <string name="wallet_send_reason_malformed">it couldn\'t read the payment</string> <!-- new -->
     <string name="wallet_send_reason_other">it refused the payment</string> <!-- new -->
     <string name="wallet_send_checking">Checking whether the server has it…</string> <!-- new: review note 2 -->
-    <string name="wallet_send_may_be_sent">The server didn\'t answer, so the payment may have gone through. Discard is offered once the server says it doesn\'t have it.</string> <!-- new -->
+    <string name="wallet_send_may_be_sent">The payment may have gone through. Discard is offered once a chain server says it doesn\'t have it.</string> <!-- new, revised after review: any unsent payment that may be on the network -->
+    <string name="wallet_send_unreadable">Your vault answered, but this phone couldn\'t read the signed payment. It may have been signed: check your wallet before you send again.</string> <!-- new: an ok answer that does not read -->
     <string name="wallet_send_choose_server">Choose another server</string> <!-- new -->
     <string name="wallet_send_discard">Discard</string> <!-- new -->
     <string name="wallet_send_discard_title">Discard this payment?</string> <!-- new -->

@@ -36,6 +36,7 @@ import java.time.Instant
 /** Send's view model (ANDROID-PLAN §4 "Sending"): every step, hold and result. */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Suppress("LargeClass") // one test per step, hold and ending
 class SendViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
@@ -528,7 +529,7 @@ class SendViewModelTest {
         assertEquals(BroadcastReason.FEE_TOO_LOW, o.reason)
         // A refusal is the server's definite word: no question about the transaction, discard is there.
         assertEquals(0, engine.checks)
-        assertTrue(o.canDiscard)
+        assertFalse(vm.state.value.discardLocked)
         vm.retry()
         eventually { vm.state.value.outcome is SendOutcome.Sent }
         assertEquals(1, engine.retries)
@@ -536,31 +537,199 @@ class SendViewModelTest {
 
     @Test
     fun aBroadcastThatGotNoAnswerAsksTheServerBeforeDiscardIsOffered() = runTest {
+        engine.mustCheck = true
         engine.checkResult = SendResult.NotOnServer
         val vm = approved(SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout())))
-        eventually { (vm.state.value.outcome as? SendOutcome.BroadcastFailed)?.checked == true }
-        val o = vm.state.value.outcome as SendOutcome.BroadcastFailed
-        assertEquals(1, engine.checks)
-        assertTrue(o.canDiscard)
+        eventually { engine.checks == 1 && !vm.state.value.discardLocked }
+        assertFalse(vm.state.value.checking)
+        vm.askDiscard()
+        assertTrue(vm.state.value.discardAsk)
     }
 
     @Test
-    fun aServerThatCannotSayLeavesDiscardOff() = runTest {
+    fun aServerThatCannotSayLeavesDiscardOffAndTheViewModelRefusesIt() = runTest {
+        engine.mustCheck = true
         engine.checkResult = SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout()))
         val vm = approved(SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout())))
-        eventually { engine.checks == 1 && (vm.state.value.outcome as? SendOutcome.BroadcastFailed)?.checking == false }
-        val o = vm.state.value.outcome as SendOutcome.BroadcastFailed
-        assertFalse(o.checked)
-        assertFalse(o.canDiscard)
-        assertTrue(o.mayBeSent)
+        eventually { engine.checks == 1 && !vm.state.value.checking }
+        assertTrue(vm.state.value.discardLocked)
+        assertTrue((vm.state.value.outcome as SendOutcome.BroadcastFailed).mayBeSent)
+        // Enforced in the view model, not only by the button: no confirm opens and nothing is dropped.
+        vm.askDiscard()
+        eventually { engine.checks >= 2 && !vm.state.value.checking }
+        assertFalse(vm.state.value.discardAsk)
+        vm.discard()
+        assertEquals(0, engine.discards)
+        assertEquals(SendStep.DONE, vm.state.value.step)
     }
 
     @Test
     fun aTransactionTheServerHasAfterAllIsTreatedAsSent() = runTest {
+        engine.mustCheck = true
         engine.checkResult = SendResult.Sent("ab".repeat(32), alreadyKnown = true)
         val vm = approved(SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout())))
         eventually { vm.state.value.outcome is SendOutcome.Sent }
         assertEquals(1, engine.checks)
+        assertFalse(vm.state.value.discardLocked)
+    }
+
+    // --- B1: the three ways round the check ---
+
+    @Test
+    fun aPaymentFromAnEarlierVisitIsCheckedBeforeDiscardIsOffered() = runTest {
+        // (a) Back after a BroadcastFailed(Server), then return: Unsent, and the check runs first.
+        engine.unsent = true
+        engine.mustCheck = true
+        engine.checkResult = SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout()))
+        val vm = vm()
+        eventually { vm.state.value.outcome == SendOutcome.Unsent && engine.checks >= 1 && !vm.state.value.checking }
+        assertTrue(vm.state.value.discardLocked)
+        vm.askDiscard()
+        eventually { !vm.state.value.checking }
+        vm.discard()
+        assertEquals(0, engine.discards)
+        assertFalse(vm.state.value.discardAsk)
+        // The server now says it does not have it: Discard opens and drops.
+        engine.checkResult = SendResult.NotOnServer
+        vm.askDiscard()
+        eventually { !vm.state.value.discardLocked && !vm.state.value.checking }
+        vm.askDiscard()
+        assertTrue(vm.state.value.discardAsk)
+        vm.discard()
+        assertEquals(1, engine.discards)
+        assertEquals(SendStep.FORM, vm.state.value.step)
+    }
+
+    @Test
+    fun aSecondServerThatSaysNothingDefiniteDoesNotOpenDiscard() = runTest {
+        // (b) Server A timed out and could not say; the member chose server B, which could not be opened: still locked.
+        engine.mustCheck = true
+        engine.checkResult = SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout()))
+        val vm = approved(SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout())))
+        eventually { engine.checks == 1 && !vm.state.value.checking }
+        engine.retryResult = SendResult.BroadcastFailed(BroadcastCause.NoChain(com.vettid.core.wallet.ChainOpen.NoServer(com.vettid.core.chain.ChainServer.NotSet)))
+        vm.retry()
+        eventually { (vm.state.value.outcome as? SendOutcome.BroadcastFailed)?.reason == BroadcastReason.NO_SERVER && !vm.state.value.checking }
+        assertTrue(vm.state.value.discardLocked)
+        vm.askDiscard()
+        eventually { !vm.state.value.checking }
+        assertFalse(vm.state.value.discardAsk)
+        assertEquals(0, engine.discards)
+    }
+
+    @Test
+    fun anAlreadySignedPaymentWithAKeptTransactionIsCheckedBeforeDiscard() = runTest {
+        // (c) AlreadySigned offers Discard as its primary action; with a kept transaction that may be on the network it waits for the check.
+        engine.mustCheck = true
+        engine.checkResult = SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout()))
+        val vm = approved(SendResult.AlreadySigned)
+        eventually { engine.checks >= 1 && !vm.state.value.checking }
+        assertEquals(SendOutcome.AlreadySigned, vm.state.value.outcome)
+        assertTrue(vm.state.value.discardLocked)
+        vm.askDiscard()
+        eventually { !vm.state.value.checking }
+        vm.discard()
+        assertEquals(0, engine.discards)
+        engine.checkResult = SendResult.NotOnServer
+        vm.askDiscard()
+        eventually { !vm.state.value.discardLocked && !vm.state.value.checking }
+        vm.askDiscard()
+        assertTrue(vm.state.value.discardAsk)
+        vm.discard()
+        assertEquals(1, engine.discards)
+    }
+
+    @Test
+    fun theCoreRefusingTheDropAfterTheAskStillLocksDiscard() = runTest {
+        val vm = approved(SendResult.AlreadySigned)
+        vm.askDiscard()
+        assertTrue(vm.state.value.discardAsk)
+        // The kept transaction became "may be on the network" between the ask and the confirm: the core refuses and the check runs.
+        engine.mustCheck = true
+        engine.checkResult = SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout()))
+        vm.discard()
+        eventually { vm.state.value.discardLocked && !vm.state.value.checking }
+        assertEquals(SendStep.DONE, vm.state.value.step)
+        assertEquals(0, engine.discards)
+    }
+
+    // --- S2, S3, S4 ---
+
+    @Test
+    fun anOkThatDoesNotReadIsAPlainNoticeAndDiscardRule() = runTest {
+        val vm = approved(SendResult.SignedUnreadable)
+        assertEquals(SendOutcome.SignedUnreadable, vm.state.value.outcome)
+    }
+
+    @Test
+    fun nothingThatIsNotAFailureOfTheVaultReachesTheTopLevel() = runTest {
+        // An exception of any other kind (a parse error, a bug) after the request may have gone out: the notice "may have been signed".
+        val vm = review()
+        engine.approveThrows = IllegalStateException("odd")
+        vm.setPassword("pw")
+        vm.approve()
+        eventually { vm.state.value.outcome == SendOutcome.SignedUnreadable }
+        assertFalse(vm.state.value.busy)
+        // A prepare that throws leaves the form with a problem.
+        val form = ready()
+        engine.prepareFailure = IllegalStateException("odd")
+        form.review()
+        eventually { form.state.value.problem == SendProblem.Failed(FailureKind.OTHER) }
+        assertFalse(form.state.value.busy)
+    }
+
+    @Test
+    fun backDoesNothingWhileARequestIsOut() = runTest {
+        val vm = review()
+        assertFalse(vm.state.value.swallowsBack)
+        assertTrue(vm.state.value.copy(busy = true).swallowsBack)
+        assertTrue(vm.state.value.copy(checking = true).swallowsBack)
+    }
+
+    @Test
+    fun theReviewIsBuiltFromTheVaultsSummaryAlone() {
+        val vault = com.vettid.core.chain.InspectSummary(
+            txid = "aa".repeat(32),
+            inputs = emptyList(),
+            outputs = listOf(
+                com.vettid.core.chain.SummaryOutput(PAYEE, 40_000, false, null, null),
+                com.vettid.core.chain.SummaryOutput("tb1qchange", 58_800, true, "p2wpkh", "m/84'/1'/0'/1/0"),
+            ),
+            totalInSats = 100_000, sendingSats = 40_000, changeSats = 58_800, feeSats = 1_200, vsize = 150,
+        )
+        val r = ManagerSendEngine.reviewFrom(vault, null, toFeeSats = 330, sendAll = false, leftBehind = 0)!!
+        // The vault's address as it wrote it, its amounts, its fee and its vsize (the rate is 1,200 / 150): nothing else.
+        assertEquals(PAYEE, r.address)
+        assertEquals(40_000L, r.payeeSats)
+        assertEquals(58_800L, r.changeSats)
+        assertEquals(1_200L, r.feeSats)
+        assertEquals(150L, r.vsize)
+        assertEquals(8.0, r.feeRate, 0.0)
+        assertEquals(41_200L, r.totalOutSats)
+        assertEquals(330L, r.toFeeSats)
+        assertFalse(r.hasCap)
+        assertNull(r.capRefusal)
+        // No single payee in the summary: no review, and no fallback to what was entered.
+        assertNull(ManagerSendEngine.reviewFrom(vault.copy(outputs = vault.outputs.filter { it.change }), null, 0, false, 0))
+        assertNull(ManagerSendEngine.reviewFrom(vault.copy(outputs = vault.outputs + vault.outputs.first()), null, 0, false, 0))
+    }
+
+    @Test
+    fun theCapOfTheInspectBecomesTheRefusalText() {
+        val at = Instant.parse("2026-11-02T09:00:00Z")
+        assertNull(ManagerSendEngine.refusalOf(com.vettid.core.wallet.SpendCap(true, null, null, null)))
+        assertEquals(
+            CapText(CapReason.PER_TX, 30_000, null, null),
+            ManagerSendEngine.refusalOf(com.vettid.core.wallet.SpendCap(false, "per_tx", 999, at, limitSats = 30_000)),
+        )
+        assertEquals(
+            CapText(CapReason.PER_PERIOD, 2_000_000, 300_000, at),
+            ManagerSendEngine.refusalOf(com.vettid.core.wallet.SpendCap(false, "per_period", 300_000, at, limitSats = 2_000_000)),
+        )
+        assertEquals(
+            CapText(CapReason.OTHER, null, null, null, other = "odd"),
+            ManagerSendEngine.refusalOf(com.vettid.core.wallet.SpendCap(false, "odd", 5, at)),
+        )
     }
 
     @Test
@@ -661,11 +830,12 @@ class SendViewModelTest {
     }
 
     @Test
-    fun aPaymentWaitingFromAnEarlierVisitIsShownWithTryAgainAndDiscard() = runTest {
+    fun aPaymentWaitingFromAnEarlierVisitWithNothingOnTheNetworkCanBeDiscarded() = runTest {
         engine.unsent = true
         val vm = vm()
         eventually { vm.state.value.outcome == SendOutcome.Unsent }
         assertEquals(SendStep.DONE, vm.state.value.step)
+        assertFalse(vm.state.value.discardLocked)
         vm.askDiscard()
         vm.discard()
         assertEquals(SendStep.FORM, vm.state.value.step)

@@ -15,6 +15,7 @@ import com.vettid.core.vault.walletCreate
 import com.vettid.core.vault.walletGet
 import com.vettid.core.vault.walletHistory
 import com.vettid.core.vault.walletPsbtInspect
+import com.vettid.core.vault.walletSignExpired
 import com.vettid.core.vault.walletSignsOutstanding
 import com.vettid.core.vault.walletSign
 import com.vettid.core.vault.walletSignResend
@@ -191,14 +192,15 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     }
 
     /** No answer: sending [kept] again is the only way on; it asks for nothing (no password, no UTK) and builds nothing. */
-    private fun unanswered(a: VaultApi, kept: KeptChange): SignOutcome.Unanswered = SignOutcome.Unanswered({ kept.forget() }) {
-        try {
-            val o = a.walletSignResend(kept)
-            if (o == null) unanswered(a, kept) else SignOutcome.Answered(SignReply.Ok(o))
-        } catch (e: VaultOpException) {
-            SignOutcome.Answered(SignReply.Refused(e))
+    private fun unanswered(a: VaultApi, kept: KeptChange): SignOutcome.Unanswered =
+        SignOutcome.Unanswered({ kept.forget() }, { a.walletSignExpired(kept) }) {
+            try {
+                val o = a.walletSignResend(kept)
+                if (o == null) unanswered(a, kept) else SignOutcome.Answered(SignReply.Ok(o))
+            } catch (e: VaultOpException) {
+                SignOutcome.Answered(SignReply.Refused(e))
+            }
         }
-    }
 
     override suspend fun signsOutstanding(): Set<String> = api().walletSignsOutstanding()
 

@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -476,7 +477,7 @@ private fun ReviewStep(state: SendUiState, actions: SendActions, modifier: Modif
         }
         if (review.sendAll && review.leftBehind > 0) {
             Text(
-                stringResource(R.string.wallet_send_review_left_behind, review.leftBehind),
+                pluralStringResource(R.plurals.wallet_send_review_left_behind, review.leftBehind, review.leftBehind),
                 modifier = Modifier.testTag("wallet_send_review_left"),
             )
         }
@@ -556,29 +557,27 @@ private class Ways(
 @Composable
 private fun DoneStep(state: SendUiState, actions: SendActions, modifier: Modifier) {
     val outcome = state.outcome ?: return
-    val discard = R.string.wallet_send_discard to actions.onAskDiscard
+    // Discard is off while a signed payment may be on the network and no server has said it is not (the view model enforces it too).
+    val discard = (R.string.wallet_send_discard to actions.onAskDiscard).takeIf { !state.discardLocked }
     val again = R.string.wallet_try_again to actions.onRetry
     val over = R.string.wallet_send_start_over to actions.onStartOver
     val ways = when (outcome) {
         is SendOutcome.Sent -> Ways(R.string.wallet_send_done to actions.onDone)
-        is SendOutcome.BroadcastFailed -> Ways(
-            again,
-            R.string.wallet_send_choose_server to actions.onChainServer,
-            discard.takeIf { outcome.canDiscard },
-        )
+        is SendOutcome.BroadcastFailed -> Ways(again, R.string.wallet_send_choose_server to actions.onChainServer, discard)
         is SendOutcome.CapExceeded ->
             Ways(R.string.wallet_cap_change_amount to actions.onStartOver, R.string.wallet_menu_limits to actions.onLimits)
         is SendOutcome.InvalidPsbt -> Ways(over)
         SendOutcome.Unanswered, SendOutcome.Unsent -> Ways(again, discard)
-        // Discard is always on offer once something may have been signed: the member is never stuck behind a payment.
-        SendOutcome.SignedDiffers, SendOutcome.AlreadySigned, SendOutcome.Lapsed -> Ways(discard, over)
+        // Discard is on offer once something may have been signed, unless the payment may be on the network: the member is not stuck.
+        SendOutcome.SignedDiffers, SendOutcome.AlreadySigned, SendOutcome.Lapsed, SendOutcome.SignedUnreadable ->
+            if (discard != null) Ways(discard, over) else Ways(again, over)
         SendOutcome.Superseded, SendOutcome.DuplicateWallet -> Ways(over, discard)
     }
     FormScaffold(
         title = stringResource(R.string.wallet_send),
         primaryLabel = ways.primary?.let { stringResource(it.first) },
         onPrimary = ways.primary?.second ?: {},
-        primaryEnabled = !state.busy && !(outcome is SendOutcome.BroadcastFailed && outcome.checking),
+        primaryEnabled = !state.busy && !state.checking,
         busy = state.busy,
         secondaryLabel = ways.secondary?.let { stringResource(it.first) },
         onSecondary = ways.secondary?.second ?: {},
@@ -588,6 +587,10 @@ private fun DoneStep(state: SendUiState, actions: SendActions, modifier: Modifie
         modifier = modifier.testTag("wallet_send_done_screen"),
     ) {
         OutcomeText(outcome)
+        if (state.checking) Text(stringResource(R.string.wallet_send_checking), modifier = Modifier.testTag("wallet_send_checking"))
+        if (state.discardLocked && !state.checking) {
+            Text(stringResource(R.string.wallet_send_may_be_sent), modifier = Modifier.testTag("wallet_send_may_be_sent"))
+        }
         state.error?.let { Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error) }
     }
     if (state.discardAsk) {
@@ -631,10 +634,6 @@ private fun OutcomeText(outcome: SendOutcome) {
                 ),
                 modifier = Modifier.testTag("wallet_send_broadcast_failed"),
             )
-            if (outcome.checking) Text(stringResource(R.string.wallet_send_checking), modifier = Modifier.testTag("wallet_send_checking"))
-            if (outcome.mayBeSent && !outcome.checked) {
-                Text(stringResource(R.string.wallet_send_may_be_sent), modifier = Modifier.testTag("wallet_send_may_be_sent"))
-            }
         }
         is SendOutcome.CapExceeded -> Text(capMessage(outcome.cap), modifier = Modifier.testTag("wallet_send_cap"))
         is SendOutcome.InvalidPsbt -> PsbtProblem(outcome.reason, outcome.alarm, outcome.byVault)
@@ -642,6 +641,7 @@ private fun OutcomeText(outcome: SendOutcome) {
         SendOutcome.AlreadySigned -> Note(R.string.wallet_send_already_signed, "wallet_send_already")
         SendOutcome.Unanswered -> Note(R.string.wallet_send_unanswered, "wallet_send_unanswered")
         SendOutcome.Lapsed -> Note(R.string.wallet_send_lapsed, "wallet_send_lapsed")
+        SendOutcome.SignedUnreadable -> Note(R.string.wallet_send_unreadable, "wallet_send_unreadable")
         SendOutcome.Superseded -> Note(R.string.wallet_send_superseded, "wallet_send_superseded")
         SendOutcome.DuplicateWallet -> Note(R.string.wallet_send_duplicate, "wallet_send_duplicate")
         SendOutcome.Unsent -> Note(R.string.wallet_send_unsent, "wallet_send_unsent")

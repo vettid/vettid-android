@@ -150,6 +150,21 @@ class WalletTextsTest {
     }
 
     @Test
+    fun theReviewedSendTextsAreAsRevised() {
+        assertEquals("This address is one of this wallet's own. Nothing was sent.", r.getString(R.string.wallet_send_self_send))
+        assertEquals("1 coin was left out.", r.getQuantityString(R.plurals.wallet_send_review_left_behind, 1, 1))
+        assertEquals("3 coins were left out.", r.getQuantityString(R.plurals.wallet_send_review_left_behind, 3, 3))
+        assertEquals(
+            "Your vault answered, but this phone couldn't read the signed payment. It may have been signed: check your wallet before you send again.",
+            r.getString(R.string.wallet_send_unreadable),
+        )
+        assertEquals(
+            "The payment may have gone through. Discard is offered once a chain server says it doesn't have it.",
+            r.getString(R.string.wallet_send_may_be_sent),
+        )
+    }
+
+    @Test
     fun noSendTextIsMarkedApprovedAndEachIsMarkedDraftNewOrAScreensTableWord() {
         val xml = java.io.File("src/main/res/values/strings.xml").readLines()
         val send = xml.filter { Regex("""name="wallet_(send|cap|psbt)_""").containsMatchIn(it) }

@@ -255,6 +255,8 @@ class SendScreenTest {
     fun aSendAllThatLeftCoinsBehindSaysSo() {
         show(review(Review(PAYEE, 99_000, 0, 1_000, 200, 100_000, 0, true, 2, true)))
         rule.onNodeWithTag("wallet_send_review_left").assertTextEquals("2 coins were left out.")
+        show(review(Review(PAYEE, 99_000, 0, 1_000, 200, 100_000, 0, true, 1, true)))
+        rule.onNodeWithTag("wallet_send_review_left").assertTextEquals("1 coin was left out.")
     }
 
     // --- the endings ---
@@ -279,7 +281,7 @@ class SendScreenTest {
         var again = false
         var server = false
         show(
-            done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.FEE_TOO_LOW, checked = true)),
+            done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.FEE_TOO_LOW)),
             SendActions(onRetry = { again = true }, onChainServer = { server = true }),
         )
         rule.onNodeWithTag("wallet_send_broadcast_failed")
@@ -292,15 +294,27 @@ class SendScreenTest {
 
     @Test
     fun aBroadcastThatGotNoAnswerOffersNoDiscardUntilTheServerSaidNo() {
-        show(done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.NO_ANSWER, checking = true)))
+        show(done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.NO_ANSWER)).copy(discardLocked = true, checking = true))
         rule.onNodeWithTag("wallet_send_checking").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Discard").fetchSemanticsNodes().size)
+        show(done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.NO_ANSWER)).copy(discardLocked = true))
+        rule.onNodeWithTag("wallet_send_may_be_sent").assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithText("Discard").fetchSemanticsNodes().size)
     }
 
     @Test
     fun afterTheServerSaidNoDiscardIsOffered() {
-        show(done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.NO_ANSWER, checked = true)))
+        show(done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.NO_ANSWER)))
         rule.onNodeWithText("Discard").assertIsDisplayed()
+    }
+
+    @Test
+    fun anAlreadySignedPaymentThatMayBeOnTheNetworkOffersNoDiscardEither() {
+        show(done(SendOutcome.AlreadySigned).copy(discardLocked = true))
+        assertEquals(0, rule.onAllNodesWithText("Discard").fetchSemanticsNodes().size)
+        rule.onNodeWithText("Try again").assertIsDisplayed()
+        show(done(SendOutcome.Unsent).copy(discardLocked = true))
+        assertEquals(0, rule.onAllNodesWithText("Discard").fetchSemanticsNodes().size)
     }
 
     @Test
@@ -312,7 +326,7 @@ class SendScreenTest {
 
     @Test
     fun everyEndingThatMayHaveSignedOffersDiscard() {
-        for (o in listOf(SendOutcome.SignedDiffers, SendOutcome.AlreadySigned, SendOutcome.Unanswered, SendOutcome.Lapsed, SendOutcome.Unsent)) {
+        for (o in listOf(SendOutcome.SignedDiffers, SendOutcome.AlreadySigned, SendOutcome.Unanswered, SendOutcome.Lapsed, SendOutcome.SignedUnreadable, SendOutcome.Unsent)) {
             show(done(o))
             rule.onNodeWithText("Discard").assertIsDisplayed()
         }
@@ -324,6 +338,13 @@ class SendScreenTest {
         rule.onNodeWithTag("wallet_send_unanswered")
             .assertTextEquals("Your vault hasn't answered yet. The payment may have been signed. Try again asks once more; it will not be signed twice.")
         rule.onNodeWithText("Try again").assertIsDisplayed()
+    }
+
+    @Test
+    fun anOkThatDoesNotReadSaysItMayHaveBeenSigned() {
+        show(done(SendOutcome.SignedUnreadable))
+        rule.onNodeWithTag("wallet_send_unreadable")
+            .assertTextEquals("Your vault answered, but this phone couldn't read the signed payment. It may have been signed: check your wallet before you send again.")
     }
 
     @Test
@@ -443,7 +464,7 @@ class SendScreenTest {
     @Test
     fun aSelfSendHasItsOwnText() {
         show(form().copy(problem = SendProblem.SelfSend))
-        rule.onNodeWithText("This address is one of this wallet's own. Nothing was sent. Use Receive to move coins between your own addresses.")
+        rule.onNodeWithText("This address is one of this wallet's own. Nothing was sent.")
             .performScrollTo().assertIsDisplayed()
     }
 

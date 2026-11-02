@@ -10,6 +10,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.wallet.SendRoute
 import com.vettid.core.wallet.CapReason
+import com.vettid.core.wallet.DiscardResult
 import com.vettid.core.wallet.ChainServerSettings
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.PrepareResult
@@ -68,6 +69,13 @@ data class SendUiState(
     // The result.
     val outcome: SendOutcome? = null,
     val discardAsk: Boolean = false,
+    /**
+     * A signed payment may be on the network and no server has said it is not (review note 2): Discard is off, and the chain server
+     * is asked (`GET /tx/{txid}`). Enforced by the view model too, not only by the button.
+     */
+    val discardLocked: Boolean = false,
+    /** The question above is out. */
+    val checking: Boolean = false,
     val closed: Boolean = false,
 ) {
     val amount: BtcFormat.Amount
@@ -91,6 +99,9 @@ data class SendUiState(
     /** Review can be asked for: a payee that passes the check, an amount, a fee rate. */
     val canReview: Boolean
         get() = address.isNotEmpty() && addressIssue == null && amountValid && feeRate != null && !busy && block == null
+
+    /** A request is out (approving, trying again, asking the server): back and the arrow do nothing, so the result is seen. */
+    val swallowsBack: Boolean get() = busy || checking
 
     override fun toString(): String = "SendUiState"
 }
@@ -162,6 +173,7 @@ class SendViewModel internal constructor(
         gate()
         if (mutable.value.block == null && engine.hasUnsent(walletId)) {
             mutable.update { it.copy(step = SendStep.DONE, outcome = SendOutcome.Unsent) }
+            settleDiscard()
         }
         if (mutable.value.block == null) loadFees()
     }
@@ -310,6 +322,9 @@ class SendViewModel internal constructor(
                 }
             } catch (e: VaultFailure) {
                 mutable.update { it.copy(busy = false, problem = SendProblem.Failed(e.kind)) }
+            } catch (_: Exception) {
+                // Nothing was signed by a prepare: whatever else went wrong, the form stays and says so.
+                mutable.update { it.copy(busy = false, problem = SendProblem.Failed(FailureKind.OTHER)) }
             }
         }
     }
@@ -399,6 +414,9 @@ class SendViewModel internal constructor(
             } catch (e: VaultFailure) {
                 // A wrong password and the like: the payment stays prepared and can be approved again with a new password.
                 mutable.update { it.copy(busy = false, error = e.kind) }
+            } catch (_: Exception) {
+                // Nothing that is not a failure of the vault may reach the app's top level: the request may have gone out.
+                handle(SendResult.SignedUnreadable)
             }
         }
     }
@@ -413,6 +431,8 @@ class SendViewModel internal constructor(
                 handle(engine.retry(walletId))
             } catch (e: VaultFailure) {
                 mutable.update { it.copy(busy = false, error = e.kind) }
+            } catch (_: Exception) {
+                handle(SendResult.SignedUnreadable)
             }
         }
     }
@@ -422,11 +442,7 @@ class SendViewModel internal constructor(
         fun done(o: SendOutcome) = mutable.update { it.copy(busy = false, step = SendStep.DONE, outcome = o, error = null) }
         when (r) {
             is SendResult.Sent -> done(SendOutcome.Sent(timeNow()))
-            is SendResult.BroadcastFailed -> {
-                val reason = BroadcastReason.of(r.cause)
-                done(SendOutcome.BroadcastFailed(hostNow(), reason))
-                if (reason == BroadcastReason.NO_ANSWER) checkSent()
-            }
+            is SendResult.BroadcastFailed -> done(SendOutcome.BroadcastFailed(hostNow(), BroadcastReason.of(r.cause)))
             is SendResult.CapExceeded -> done(
                 SendOutcome.CapExceeded(withLimit(CapText(r.reason, r.limitSats, r.remainingSats, r.allowedAfter))),
             )
@@ -436,6 +452,7 @@ class SendViewModel internal constructor(
             SendResult.Unanswered -> done(SendOutcome.Unanswered)
             SendResult.SignLapsed -> done(SendOutcome.Lapsed)
             SendResult.SignedDiffers -> done(SendOutcome.SignedDiffers)
+            SendResult.SignedUnreadable -> done(SendOutcome.SignedUnreadable)
             SendResult.AlreadySigned -> done(SendOutcome.AlreadySigned)
             SendResult.Superseded -> done(SendOutcome.Superseded)
             SendResult.NotOnServer -> mutable.update { it.copy(busy = false) }
@@ -443,6 +460,7 @@ class SendViewModel internal constructor(
             is SendResult.Held -> mutable.update { it.copy(busy = false, block = gateBlockOf(r.hold)) }
             SendResult.Cleared -> clear()
         }
+        if (mutable.value.step == SendStep.DONE && mutable.value.outcome !is SendOutcome.Sent) settleDiscard()
     }
 
     private fun gateBlockOf(hold: SendHold) = when (hold) {
@@ -453,23 +471,26 @@ class SendViewModel internal constructor(
     }
 
     /**
-     * Review note 2: after a broadcast that got no answer the server may have taken the transaction: `GET /tx/<txid>` before the
-     * member may discard it or send again. Known there is Sent.
+     * Review note 2: a signed payment that may be on the network ([SendEngine.needsCheck]) is asked about at the chain server
+     * (`GET /tx/<txid>`) before the member may discard it or send again: known there is Sent; "not there" opens Discard; a server that
+     * cannot say leaves it locked.
      */
-    private suspend fun checkSent() {
-        updateFailed { it.copy(checking = true) }
+    private suspend fun settleDiscard() {
+        val locked = engine.needsCheck(walletId)
+        mutable.update { it.copy(discardLocked = locked) }
+        if (!locked) return
+        mutable.update { it.copy(checking = true) }
         when (val c = engine.checkSent(walletId)) {
-            is SendResult.Sent -> mutable.update { it.copy(step = SendStep.DONE, outcome = SendOutcome.Sent(timeNow())) }
-            SendResult.NotOnServer -> updateFailed { it.copy(checking = false, checked = true) }
+            is SendResult.Sent -> mutable.update {
+                it.copy(step = SendStep.DONE, outcome = SendOutcome.Sent(timeNow()), discardLocked = false, checking = false)
+            }
+            SendResult.NotOnServer -> mutable.update { it.copy(discardLocked = engine.needsCheck(walletId), checking = false) }
+            SendResult.Cleared -> clear()
             else -> {
-                updateFailed { it.copy(checking = false) }
-                if (c == SendResult.Cleared) clear()
+                val stillOpen = engine.needsCheck(walletId) || c is SendResult.BroadcastFailed
+                mutable.update { it.copy(checking = false, discardLocked = stillOpen) }
             }
         }
-    }
-
-    private fun updateFailed(change: (SendOutcome.BroadcastFailed) -> SendOutcome.BroadcastFailed) = mutable.update { s ->
-        (s.outcome as? SendOutcome.BroadcastFailed)?.let { s.copy(outcome = change(it)) } ?: s
     }
 
     private fun timeNow(): ConfirmTime {
@@ -493,17 +514,29 @@ class SendViewModel internal constructor(
 
     // --- Giving up, and starting again ---
 
-    /** "Discard": asked first (the signed payment is dropped from this phone; the vault may have counted it already). */
+    /** "Discard": asked first, and never while the payment may be on the network and no server has said it is not. */
     fun askDiscard() {
-        if (mutable.value.step == SendStep.DONE) mutable.update { it.copy(discardAsk = true) }
+        val s = mutable.value
+        if (s.step != SendStep.DONE || s.checking) return
+        if (s.discardLocked || engine.needsCheck(walletId)) {
+            viewModelScope.launch { settleDiscard() }
+        } else {
+            mutable.update { it.copy(discardAsk = true) }
+        }
     }
 
     fun cancelDiscard() = mutable.update { it.copy(discardAsk = false) }
 
     fun discard() {
-        if (!mutable.value.discardAsk) return
-        engine.discard(walletId)
-        startOver()
+        val s = mutable.value
+        if (!s.discardAsk || s.discardLocked || s.checking) return
+        when (engine.discard(walletId)) {
+            DiscardResult.DROPPED -> startOver()
+            DiscardResult.MUST_CHECK -> {
+                mutable.update { it.copy(discardAsk = false, discardLocked = true) }
+                viewModelScope.launch { settleDiscard() }
+            }
+        }
     }
 
     /** Back to the form, keeping what was typed. Nothing of the review stays. */
@@ -512,7 +545,7 @@ class SendViewModel internal constructor(
         mutable.update {
             it.copy(
                 step = SendStep.FORM, review = null, outcome = null, password = "", error = null, askAgain = false, busy = false,
-                discardAsk = false, problem = null,
+                discardAsk = false, problem = null, discardLocked = false, checking = false,
             )
         }
     }

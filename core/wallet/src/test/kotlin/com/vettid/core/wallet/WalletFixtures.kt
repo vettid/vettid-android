@@ -278,12 +278,15 @@ internal class FakeWalletOps : WalletOps {
     /** The wallets with a signing the vault may still apply. */
     var outstanding: Set<String> = emptySet()
 
+    /** The vault's clock is past the unanswered request's `exp` and the margin. */
+    var expired = false
+
     /** The signed answer does not read (after the vault signed). */
     var signUnreadable = false
 
     override suspend fun signsOutstanding(): Set<String> = outstanding
 
-    private fun waiting(walletId: String, signed: SignedTx): SignOutcome.Unanswered = SignOutcome.Unanswered({ forgets++ }) {
+    private fun waiting(walletId: String, signed: SignedTx): SignOutcome.Unanswered = SignOutcome.Unanswered({ forgets++ }, { expired }) {
         calls += "resend"
         resends++
         resendFailure?.let { if (it is VaultOpException) return@Unanswered SignOutcome.Answered(SignReply.Refused(it)) else throw it }
@@ -349,9 +352,21 @@ internal class FakeSpend : SpendAccess {
     var knowsError: ChainError? = null
     var knowsAsked = 0
 
+    /** Questions after this many fail (a server that goes away between the two). */
+    var knowsFailsFrom = Int.MAX_VALUE
+
+    /** Txids a first question answers "not found" to and every later one finds (a server still taking a transaction). */
+    val appearsLater = mutableSetOf<String>()
+
     override suspend fun knows(txid: String): Boolean {
         knowsAsked++
         knowsError?.let { throw it }
+        if (knowsAsked > knowsFailsFrom) throw ChainError.Timeout()
+        if (txid in appearsLater) {
+            appearsLater -= txid
+            known += txid
+            return false
+        }
         return txid in known
     }
 
