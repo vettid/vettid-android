@@ -1115,6 +1115,56 @@ class WalletSendTest {
         assertTrue(m.prepareSend(w.id, request(address = far)) !is PrepareResult.SelfSend)
     }
 
+    @Test
+    fun theSelfSendRangeEndsExactlyAtLastUsedPlusTheGap() = runBlocking {
+        val (m, w) = opened()
+        chain.fund(receive, 20, 5_000)
+        // lastUsed 20, GAP 20: index 40 is in, 41 is out.
+        val last = WalletFixtures.account("p2tr").address(false, 40)
+        val past = WalletFixtures.account("p2tr").address(false, 41)
+        assertEquals(PrepareResult.SelfSend, m.prepareSend(w.id, request(address = last)))
+        assertTrue(m.prepareSend(w.id, request(address = past)) !is PrepareResult.SelfSend)
+    }
+
+    @Test
+    fun theChangeChainAndTheOtherAccountAreRecognisedBeyondNextPlusGapToo() = runBlocking {
+        val (m, w) = opened()
+        chain.fund(AddressChain("p2tr", true), 10, 5_000)
+        chain.fund(AddressChain("p2wpkh", false), 12, 5_000)
+        chain.fund(AddressChain("p2wpkh", true), 14, 5_000)
+        val taprootChange = WalletFixtures.account("p2tr").address(true, 30)
+        val segwitReceive = WalletFixtures.account("p2wpkh").address(false, 32)
+        val segwitChange = WalletFixtures.account("p2wpkh").address(true, 34)
+        for (a in listOf(taprootChange, segwitReceive, segwitChange)) {
+            assertEquals(a, PrepareResult.SelfSend, m.prepareSend(w.id, request(address = a)))
+        }
+    }
+
+    @Test
+    fun theSecondSelfSendCheckUsesTheWalletAsReloadedNotTheCachedOne() = runBlocking {
+        val (m, w) = opened()
+        // The vault now says next receive is 30 (the cache said 1); only index 3 has history, and 40 is within 30 + 20.
+        ops.wallets[w.id] = WalletFixtures.wallet(id = w.id, nextReceive = 30)
+        chain.fund(receive, 3, 5_000)
+        val own = WalletFixtures.account("p2tr").address(false, 40)
+        assertEquals(PrepareResult.SelfSend, m.prepareSend(w.id, request(address = own)))
+    }
+
+    @Test
+    fun aCredentialLockedSecondAttemptStillHasThePasswordAndWipesItAtTheEnd() = runBlocking {
+        val (m, w) = opened()
+        ops.signError = refusal("credential_locked")
+        window = true
+        ops.windowOpen = { false }
+        val pw = "pw".toCharArray()
+        assertEquals(SendResult.CredentialLocked, m.approveSend(ready(m, w), pw))
+        // The app believed the window open, met `credential_locked`, opened it with the password and signed again: the vault saw the
+        // real password both times (the array was not wiped between), and it is wiped at the end.
+        assertEquals(listOf("pw", "pw"), ops.signPasswords)
+        assertEquals(1, ops.calls.count { it == "unlock" })
+        assertTrue(pw.all { it == '\u0000' })
+    }
+
     // --- review note 1: an unanswered signing the vault will not apply any more is decided ---
 
     @Test

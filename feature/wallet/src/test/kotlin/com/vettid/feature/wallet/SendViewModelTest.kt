@@ -699,6 +699,53 @@ class SendViewModelTest {
     }
 
     @Test
+    fun aPayeeThatGrowsWithTheSameFeeDoesNotAskAgain() = runTest {
+        val vm = sendAllAgreedAt(40_000, 4_500)
+        // 44,000: the fee is still over 10% of it, but the payee is not below the one agreed to.
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 44_000, 0, 4_500, 150, 48_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertNull(vm.state.value.bigFeeAsk)
+    }
+
+    @Test
+    fun everySetterResetsTheAgreementAndTheOpenQuestion() = runTest {
+        val setters = listOf<(SendViewModel) -> Unit>(
+            { it.setAmount("1000") }, { it.setSendAll(false) }, { it.setFeeChoice(FeeChoice.NORMAL) },
+            { it.setCustomFee("31") }, { it.setIncludeUnconfirmed(true) },
+        )
+        for (set in setters) {
+            val vm = sendAllAgreedAt(40_000, 4_500)
+            assertEquals(4_500L, vm.state.value.tenConfirmedFee)
+            set(vm)
+            val s = vm.state.value
+            assertNull(s.tenConfirmedFee)
+            assertNull(s.tenConfirmedPayee)
+            assertNull(s.bigFeeAsk)
+            assertNull(s.bigFeePayee)
+        }
+    }
+
+    @Test
+    fun aQuestionLeftOpenAndDroppedByEditRecordsNoAgreementWhenConfirmedLater() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setSendAll(true)
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("30")
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        assertEquals(40_000L, vm.state.value.bigFeePayee)
+        vm.edit()
+        assertNull(vm.state.value.bigFeeAsk)
+        assertNull(vm.state.value.bigFeePayee)
+        vm.confirmBigFee()
+        assertNull(vm.state.value.tenConfirmedFee)
+        assertNull(vm.state.value.tenConfirmedPayee)
+    }
+
+    @Test
     fun aConfirmedPaymentIsASoftNoteThatKeepsReviewOnAndStaysDismissed() = runTest {
         val tx = com.vettid.core.wallet.WalletTx("ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1, 1, emptyList(), null, null)
         engine.recent = RecentSends.CONFIRMED

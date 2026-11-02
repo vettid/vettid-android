@@ -77,7 +77,7 @@ class WalletApiTest {
     @Test
     fun capsRaiseSealsThePinThePasswordTheWalletAndTheHash() {
         val id = "01HXZ3N5Q8R2T4V6W9Y0B1C2D3"
-        val sealed = capsRaiseSealed(id, 7, null, 2_000_000, "123456".toCharArray(), "pw".toCharArray())
+        val sealed = capsRaiseSealed(id, 7, null, 2_000_000, "123456", "pw")
         assertEquals(setOf("pin", "password", "item_id", "payload_sha256"), sealed.keys)
         assertEquals("123456", str(sealed, "pin"))
         assertEquals("pw", str(sealed, "password"))
@@ -101,7 +101,7 @@ class WalletApiTest {
     @Test
     fun anImportCarriesTheWordsAndPassphraseInTheSealedPayload() {
         val item = WalletImport("abandon ability able".toCharArray(), "Correct Horse".toCharArray())
-        val sealed = createSealed("pw".toCharArray(), item)
+        val sealed = createSealed("pw", item)
         assertEquals("pw", str(sealed, "password"))
         val inner = sealed["item"] as JsonObject
         assertEquals("abandon ability able", str(inner, "mnemonic"))
@@ -111,8 +111,8 @@ class WalletApiTest {
 
     @Test
     fun aNewWalletHasNoItemAndAnEmptyPassphraseIsLeftOut() {
-        assertEquals(setOf("password"), createSealed("pw".toCharArray(), null).keys)
-        val inner = createSealed("pw".toCharArray(), WalletImport("a b".toCharArray(), CharArray(0)))["item"] as JsonObject
+        assertEquals(setOf("password"), createSealed("pw", null).keys)
+        val inner = createSealed("pw", WalletImport("a b".toCharArray(), CharArray(0)))["item"] as JsonObject
         assertNull(inner["passphrase"])
         assertTrue(inner.containsKey("mnemonic"))
     }
@@ -144,7 +144,7 @@ class WalletApiTest {
 
     @Test
     fun signSealsThePasswordTheWalletAndTheHashOnly() {
-        val sealed = signSealed("01HXZ3N5Q8R2T4V6W9Y0B1C2D3", "AAEC", "pw".toCharArray())
+        val sealed = signSealed("01HXZ3N5Q8R2T4V6W9Y0B1C2D3", "AAEC", "pw")
         assertEquals(setOf("password", "item_id", "payload_sha256"), sealed.keys)
         assertEquals("pw", str(sealed, "password"))
         assertEquals("01HXZ3N5Q8R2T4V6W9Y0B1C2D3", str(sealed, "item_id"))
