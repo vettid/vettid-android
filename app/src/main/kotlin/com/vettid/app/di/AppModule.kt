@@ -412,7 +412,10 @@ object AppModule {
     @Provides
     @Singleton
     fun appLock(@ApplicationContext context: Context, prefs: PreferencesRepository): AppLock =
-        AppLock(prefs, KeystoreAppLockKeys(), FileWrappedKeyFile(File(context.noBackupFilesDir, "app-lock.bin")))
+        AppLock(
+            prefs, KeystoreAppLockKeys(), FileWrappedKeyFile(File(context.noBackupFilesDir, "app-lock.bin")),
+            com.vettid.app.lock.AndroidCoverAlarm(context),
+        )
 
     /**
      * "Allow screenshots" (A6 audit S1): off in release and staging builds until the member turns it on; on in the

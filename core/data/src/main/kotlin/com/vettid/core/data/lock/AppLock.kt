@@ -50,6 +50,27 @@ fun AppLockMethod.authenticators(): Int = when (this) {
     AppLockMethod.SCREEN_LOCK -> Authenticators.DEVICE_CREDENTIAL
 }
 
+/**
+ * An alarm for the cover's deadline (owner decision 2026-11-02, the frozen-process case): while the app is in the
+ * background with the lock on, something wakes the app at [set]'s time so that notifications showing names are replaced
+ * even when the process's timer does not run (deep sleep, a frozen cached process). Inexact is fine: the app looks at its
+ * clock again when it is woken. [AppLock] drives it; the Android one is in the app module.
+ */
+interface CoverAlarm {
+    /** Wake the app at about [atEpochMs] (wall clock); replaces an earlier one. */
+    fun set(atEpochMs: Long)
+
+    fun cancel()
+
+    companion object {
+        val NONE: CoverAlarm = object : CoverAlarm {
+            override fun set(atEpochMs: Long) = Unit
+
+            override fun cancel() = Unit
+        }
+    }
+}
+
 /** The user-authenticated Keystore key (`:core:keystore` [AppDataKey]); an interface so tests can use a software key. */
 interface AppLockKeys {
     /** A fresh key for [method]: biometric or screen lock, or the screen lock only. */
@@ -114,6 +135,7 @@ class AppLock(
     private val prefs: PreferencesRepository,
     private val keys: AppLockKeys,
     private val obsoleteWrappedKey: WrappedKeyFile,
+    private val coverAlarm: CoverAlarm = CoverAlarm.NONE,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val stateFlow = MutableStateFlow(AppLockState.PENDING)
@@ -171,6 +193,24 @@ class AppLock(
 
     fun setTimeout(t: AppLockTimeout) {
         timeoutFlow.value = t
+        syncCoverAlarm()
+    }
+
+    /**
+     * The alarm is set while the lock is on and unlocked, the app is in the background and the timeout is above zero (with
+     * "Immediately" the cover applies at once), for [backgroundAt] + the timeout; otherwise it is cancelled. Called after
+     * every change of those inputs. The alarm is a help: a failure to set it breaks nothing.
+     */
+    private fun syncCoverAlarm() {
+        val at = backgroundAt
+        val seconds = timeoutFlow.value.seconds
+        runCatching {
+            if (stateFlow.value == AppLockState.UNLOCKED && at != null && seconds > 0) {
+                coverAlarm.set(at + seconds * MS)
+            } else {
+                coverAlarm.cancel()
+            }
+        }
     }
 
     /**
@@ -305,6 +345,7 @@ class AppLock(
         prefs.setAppLockEnabled(false)
         invalidatedFlow.value = invalidated
         stateFlow.value = AppLockState.DISABLED
+        syncCoverAlarm()
     }
 
     /** As on a fresh install (the wipe of a replaced phone): off, no key, the default timeout. */
@@ -315,6 +356,7 @@ class AppLock(
         timeoutFlow.value = AppLockTimeout.DEFAULT
         backgroundAt = null
         authenticating = false
+        syncCoverAlarm()
     }
 
     fun acknowledgeInvalidated() {
@@ -326,6 +368,7 @@ class AppLock(
         if (stateFlow.value != AppLockState.UNLOCKED) return
         prompts.newLock()
         stateFlow.value = AppLockState.LOCKED
+        syncCoverAlarm()
     }
 
     /**
@@ -336,6 +379,7 @@ class AppLock(
     fun onBackground(changingConfigurations: Boolean = false) {
         if (authenticating || changingConfigurations) return
         backgroundAt = now()
+        syncCoverAlarm()
     }
 
     fun onForeground() {
@@ -344,6 +388,7 @@ class AppLock(
         // Locked before the background time is cleared: the cover (wouldShowLock) has no gap between the two.
         if (stateFlow.value == AppLockState.UNLOCKED && now() - at >= timeoutFlow.value.seconds * MS) lockNow()
         backgroundAt = null
+        syncCoverAlarm()
     }
 
     private companion object {
