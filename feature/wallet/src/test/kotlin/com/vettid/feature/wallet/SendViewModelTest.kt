@@ -627,6 +627,28 @@ class SendViewModelTest {
         assertNull(vm.state.value.tenConfirmedFee)
     }
 
+    /** The case that hurts: no question on the form, the vault's own fee over 10% of the link's new amount at the review. */
+    @Test
+    fun anAgreementForAnEarlierAmountNeverSilencesTheReviewQuestionAfterALink() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        // 30 sat/vB x 110 = 3,300: under 10% of 40,000, so nothing is asked on the form.
+        vm.setCustomFee("30")
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, false, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        vm.confirmBigFee()
+        assertEquals(4_500L, vm.state.value.tenConfirmedFee)
+        vm.edit()
+        // 35,000 sats from a link: 3,300 is still under 10% on the form; the vault's 4,500 is over 10% of 35,000.
+        vm.setAddress("bitcoin:$PAYEE?amount=0.00035")
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, false, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+    }
+
     @Test
     fun aConfirmedPaymentIsASoftNoteThatKeepsReviewOnAndStaysDismissed() = runTest {
         val tx = com.vettid.core.wallet.WalletTx("ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1, 1, emptyList(), null, null)
