@@ -256,7 +256,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         try {
             sendKeptOnce(type, payload, extra, walletId, onSending)
         } catch (e: VaultOpException) {
-            // [settle] already fetched the latest blob.
+            // [settleRefusal] already fetched the latest blob (the unlocked fetch, under the lock held here).
             if (e.code != CODE_STALE) throw e
             sendKeptOnce(type, payload, extra, walletId, onSending)
         }
@@ -663,7 +663,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     suspend fun fetchLocking() = d.credentialLock.withLock { fetch() }
 
     /** [fetchLocking] for a caller that already holds [VaultDevice.credentialLock]. */
-    suspend fun fetch() = keep(d.op("credential.get"), sameKey = false)
+    private suspend fun fetch() = keep(d.op("credential.get"), sameKey = false)
 
     /** Opens a value the vault sealed to [rk] for request [innerId] (§3.5.4). */
     fun open(rk: KemPrivateKey, innerId: String, sealedB64: String): ByteArray {
