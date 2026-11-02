@@ -47,7 +47,8 @@ class FeedNotifierTest {
         val log = mutableListOf<String>()
 
         override fun post(n: LocalNotification) {
-            shown[n.tag] = n
+            // Posting to a snoozed tag updates it without showing it (as the system does).
+            if (n.tag in snoozed) snoozed[n.tag] = n else shown[n.tag] = n
             log += "post:${n.tag}"
         }
 
@@ -181,7 +182,9 @@ class FeedNotifierTest {
         poster.snooze("f1")
         source.covered.value = true
         runCurrent()
-        assertTrue("not re-posted (it is snoozed)", poster.shown.isEmpty())
+        assertTrue("not shown (it is snoozed)", poster.shown.isEmpty())
+        assertEquals("but updated in place: the named original cannot come back", "New activity in VettID", poster.snoozed.getValue("f1").title)
+        assertNull(poster.snoozed.getValue("f1").text)
         source.open.value = false
         runCurrent()
         assertTrue(poster.snoozed.isEmpty())
@@ -245,12 +248,13 @@ class FeedNotifierTest {
 
     @Test
     fun theCoverComingUpReplacesWhatIsShowingAndLeavesADismissedOneAlone() = runTest {
-        notifier()
+        val notifier = notifier()
         settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
         arrive(item("f1"))
         arrive(item("f2", kind = "item.revealed", ref = "i1"))
         assertEquals("See you at 6", poster.shown.getValue("f1").text)
         poster.shown.remove("f2") // the member swiped it away
+        notifier.onDismissed("f2") // its delete intent
         poster.log.clear()
         source.covered.value = true
         runCurrent()

@@ -142,9 +142,29 @@ class AppLockCoverTest {
         runCurrent()
         assertFalse(covered.value)
         l.authenticating = false
-        advanceTimeBy(2_000)
+        advanceTimeBy(5_000)
         runCurrent()
         assertTrue(covered.value)
+    }
+
+    @Test
+    fun theRetryBacksOffAndNeverWaitsMoreThanSixtySeconds() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        l.authenticating = true
+        clock = timeoutMs
+        advanceTimeBy(timeoutMs + 200_000) // looks at 1, 3, 7, 15, 31, 63, 123, 183 s after the timer: all false
+        runCurrent()
+        l.authenticating = false
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertFalse("backed off: not looking every second", covered.value)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertTrue("the cap: a look within 60 s", covered.value)
     }
 
     @Test

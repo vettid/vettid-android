@@ -128,6 +128,16 @@ class VettIdApplication : DistributionApplication() {
         // on-phone service while the mode is the service and the phone has a vault.
         runCatching { Channels.ensure(this) }
         feedNotifier.start()
+        // A dismissed notification is not brought back by a cover-up (its delete intent: this app only, the tag only).
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: android.content.Intent) =
+                    feedNotifier.onDismissed(intent.getStringExtra(com.vettid.core.notify.NotifyIntents.EXTRA_TAG))
+            },
+            android.content.IntentFilter(com.vettid.core.notify.NotifyIntents.ACTION_DISMISSED).apply { addDataScheme("vettid") },
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         // The cover's timer stops in deep sleep: the screen coming on is a look at the clock (dynamic receiver, system broadcasts).
         androidx.core.content.ContextCompat.registerReceiver(
             this,

@@ -199,10 +199,16 @@ class FeedNotifier(
             }
             if (coverDone) return
             coverDone = true
-            // Not showing (dismissed, or snoozed: the system lists only what is active) stays in [posted]: a snoozed one
-            // is still cancelled when the vault locks. A dismissed one is not re-posted.
-            posted.entries.toList().forEach { (tag, publicN) -> if (poster.isPosted(tag)) poster.post(publicN) }
+            // Every tag still in [posted]: a dismissed one was taken out by [onDismissed]; a snoozed one is not active but is
+            // here, and posting to its tag updates it without showing it, so the named original cannot come back.
+            posted.values.toList().forEach { poster.post(it) }
         }
+    }
+
+    /** The member dismissed the notification [tag] (its delete intent): it is not re-posted by a cover-up. */
+    fun onDismissed(tag: String?) {
+        if (tag == null) return
+        synchronized(lock) { posted.remove(tag) }
     }
 
     /**

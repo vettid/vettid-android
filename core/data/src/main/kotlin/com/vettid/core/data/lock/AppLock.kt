@@ -224,9 +224,12 @@ class AppLock(
                             emit(false)
                             delay(left + COVER_MARGIN_MS)
                             // Early (a clock set back, a prompt in progress): look again rather than lose the cover for good.
+                            // Backing off: 1 s, doubling to 60 s (a prompt that stays open, a clock far back).
+                            var wait = COVER_RETRY_MS
                             while (!wouldShowLock()) {
                                 val more = at + t.seconds * MS - now()
-                                delay(minOf(more + COVER_MARGIN_MS, COVER_RETRY_MS).coerceAtLeast(COVER_MARGIN_MS))
+                                delay(if (more > 0) minOf(more + COVER_MARGIN_MS, wait) else wait)
+                                wait = minOf(wait * 2, COVER_RETRY_MAX_MS)
                             }
                             emit(true)
                         }
@@ -351,5 +354,6 @@ class AppLock(
         /** The timer fires a little late rather than a clock tick early: [wouldShowLock] must be true when it does. */
         const val COVER_MARGIN_MS = 100L
         const val COVER_RETRY_MS = 1000L
+        const val COVER_RETRY_MAX_MS = 60_000L
     }
 }

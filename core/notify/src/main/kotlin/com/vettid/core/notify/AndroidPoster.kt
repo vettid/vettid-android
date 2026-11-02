@@ -41,6 +41,7 @@ class AndroidPoster(private val context: Context) : Poster {
             .setAutoCancel(true)
             .setCategory(category(n.channel))
             .setContentIntent(NotifyIntents.open(context, n))
+            .setDeleteIntent(NotifyIntents.dismissed(context, n.tag))
         // A re-post replaces the notification, so a deadline set before is cleared explicitly unless this one has its own.
         b.setTimeoutAfter(n.closeAt?.let { maxOf(1L, it.toEpochMilli() - System.currentTimeMillis()) } ?: 0L)
         n.openUntil?.let { b.setWhen(it.toEpochMilli()).setShowWhen(true) }
@@ -93,6 +94,21 @@ object NotifyIntents {
     const val ACTION_OPEN_ITEM = "com.vettid.app.action.OPEN_NOTIFICATION"
     const val ACTION_OPEN_SETTINGS = "com.vettid.app.action.OPEN_NOTIFICATION_SETTINGS"
     const val EXTRA_ITEM_ID = "com.vettid.app.extra.ITEM_ID"
+
+    /** The member dismissed the notification [EXTRA_TAG] (swipe or clear all); a not-exported broadcast to this app only. */
+    const val ACTION_DISMISSED = "com.vettid.app.action.NOTIFICATION_DISMISSED"
+    const val EXTRA_TAG = "com.vettid.app.extra.NOTIFICATION_TAG"
+
+    /**
+     * The delete intent of the notification [tag]: a broadcast to this app's package only, immutable, carrying nothing but
+     * the tag. The data URI tells the tags' PendingIntents apart (extras do not).
+     */
+    fun dismissed(context: Context, tag: String): PendingIntent = PendingIntent.getBroadcast(
+        context, tag.hashCode(),
+        Intent(ACTION_DISMISSED).setPackage(context.packageName).setData(android.net.Uri.fromParts("vettid", "dismissed", tag))
+            .putExtra(EXTRA_TAG, tag),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     fun open(context: Context, n: LocalNotification): PendingIntent {
         val i = launch(context)

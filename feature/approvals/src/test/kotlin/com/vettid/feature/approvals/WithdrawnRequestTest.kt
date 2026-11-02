@@ -225,18 +225,26 @@ class WithdrawnRequestTest {
 
     @Test
     fun aNamelessConnectionOffersNoMute() = runTest {
-        val nameless = auth.copy(connectionName = "")
-        social.approvals.value = listOf(nameless)
-        val vm = ApprovalDetailViewModel(
-            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to nameless.key)), social, com.vettid.core.testing.FakeItems(),
-            com.vettid.core.testing.FakeDevices(), FakeVault(), social,
-        )
-        advanceUntilIdle()
-        vanish()
-        social.withdrawn.value = setOf("a1")
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.withdrawn)
-        assertFalse("no names: no \"Mute requests from A connection\"", vm.uiState.value.canMute)
+        // Empty, and names that clean to nothing (bidi controls, control characters, an isolate with nothing in it).
+        for (name in listOf("", "\u202E\u2066\u2069", "\u0007\u0000", "\u2068\u2069", " \u200B ")) {
+            val nameless = auth.copy(connectionName = name)
+            social.approvals.value = listOf(nameless)
+            social.withdrawn.value = emptySet()
+            val vm = ApprovalDetailViewModel(
+                SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to nameless.key)), social, com.vettid.core.testing.FakeItems(),
+                com.vettid.core.testing.FakeDevices(), FakeVault(), social,
+            )
+            advanceUntilIdle()
+            vanish()
+            social.withdrawn.value = setOf("a1")
+            advanceUntilIdle()
+            assertTrue(vm.uiState.value.withdrawn)
+            assertFalse("no names: no \"Mute requests from A connection\" ($name)", vm.uiState.value.canMute)
+            vm.askMute()
+            vm.mute()
+            advanceUntilIdle()
+        }
+        assertTrue("never reaches the mute", social.calls.none { it.startsWith("asksMute") })
     }
 
     @Test
