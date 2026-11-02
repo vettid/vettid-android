@@ -562,7 +562,7 @@ class SendViewModel internal constructor(
         val review = s.review
         if (s.step != SendStep.REVIEW || review == null || review.capRefusal != null) return
         if (s.password.isEmpty() || s.busy || s.bigFeeAsk != null) return
-        val pw = s.password
+        val pw = Taken.of(s.password)
         mutable.update { it.copy(busy = true, password = "", error = null, askAgain = false) }
         viewModelScope.launch {
             try {
@@ -574,7 +574,7 @@ class SendViewModel internal constructor(
                 // Nothing that is not a failure of the vault may reach the app's top level: the request may have gone out.
                 handle(SendResult.SignedUnreadable)
             }
-        }
+        }.wipeWhenDone(pw)
     }
 
     /** "Try again": the same bytes to the chain server as it is now, else the same signing request to the vault. */

@@ -30,6 +30,9 @@ internal class FakeEngine : SendEngine {
     var prepared: SendPrepared = SendPrepared.Ready(sampleReview())
     val requests = mutableListOf<SendRequest>()
     val passwords = mutableListOf<String>()
+
+    /** The arrays handed to [approve], by reference: the view model must have wiped them once its call is over (N1). */
+    val passwordArrays = mutableListOf<CharArray>()
     var approveResult: SendResult = SendResult.Sent("ab".repeat(32))
     var approveFailure: VaultFailure? = null
     var retryResult: SendResult = SendResult.Sent("ab".repeat(32))
@@ -49,8 +52,9 @@ internal class FakeEngine : SendEngine {
         return prepared
     }
 
-    override suspend fun approve(password: String): SendResult {
-        passwords += password
+    override suspend fun approve(password: CharArray): SendResult {
+        passwords += String(password)
+        passwordArrays += password
         approveFailure?.let { throw it }
         approveThrows?.let { throw it }
         return approveResult

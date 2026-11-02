@@ -347,7 +347,7 @@ class BackupViewModel internal constructor(
         val s = mutable.value
         val network = s.network
         if (!s.createReady || network == null) return
-        val pw = s.password
+        val pw = Taken.of(s.password)
         val parse = s.limitsParse
         mutable.update { it.copy(busy = true, password = "", error = null, errorCode = null, problem = null) }
         viewModelScope.launch {
@@ -365,7 +365,7 @@ class BackupViewModel internal constructor(
             } catch (e: VaultFailure) {
                 refused(e)
             }
-        }
+        }.wipeWhenDone(pw)
     }
 
     /** "Show the recovery phrase" of a wallet that is not backed up yet. */
@@ -373,8 +373,8 @@ class BackupViewModel internal constructor(
         val id = walletId ?: return
         val s = mutable.value
         if (!s.idle || s.password.isEmpty() || !s.pinReady) return
-        val pw = s.password
-        val pin = s.pin.takeIf { s.capped }
+        val pw = Taken.of(s.password)
+        val pin = s.pin.takeIf { s.capped }?.let { Taken.of(it) }
         mutable.update { it.copy(busy = true, password = "", pin = "", error = null, errorCode = null, problem = null) }
         viewModelScope.launch {
             try {
@@ -382,7 +382,7 @@ class BackupViewModel internal constructor(
             } catch (e: VaultFailure) {
                 refused(e)
             }
-        }
+        }.wipeWhenDone(pw, pin)
     }
 
     private fun refused(e: VaultFailure) {

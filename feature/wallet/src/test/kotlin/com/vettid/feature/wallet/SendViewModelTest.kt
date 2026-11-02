@@ -875,6 +875,9 @@ class SendViewModelTest {
         assertEquals("", vm.state.value.password)
         eventually { vm.state.value.step == SendStep.DONE }
         assertEquals(listOf("pw"), engine.passwords)
+        // The array handed down is wiped once the call is over (N1).
+        eventually { engine.passwordArrays.all { a -> a.all { it == '\u0000' } } }
+        assertEquals(1, engine.passwordArrays.size)
         assertEquals("", vm.state.value.password)
         assertEquals(SendOutcome.Sent(ConfirmTime.HOUR), vm.state.value.outcome)
         assertFalse("pw" in vm.state.value.toString())
@@ -914,6 +917,8 @@ class SendViewModelTest {
         vm.setPassword("nope")
         vm.approve()
         eventually { vm.state.value.error == FailureKind.BAD_PASSWORD }
+        // Also after a failure the array is wiped (N1).
+        eventually { engine.passwordArrays.single().all { it == '\u0000' } }
         assertEquals(SendStep.REVIEW, vm.state.value.step)
         assertEquals("", vm.state.value.password)
         assertFalse(vm.state.value.busy)

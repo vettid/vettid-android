@@ -323,7 +323,7 @@ The A2 exit test:
   network not chosen or not offered, and every `SendHold` (`SIGN_UNSETTLED`: "your vault may have signed a payment … check before you send
   again", which is also what a sign answer lost across a restart shows). `SendRoute` holds the password and a prepared payment: never
   saved with the stack, `popWalletSecrets` pops it. `SecureWindow()`; the password is typed once, in the state only until `approve()`
-  takes it (blanked at once), and the PSBT lives in `ManagerSendEngine` (a `SendEngine` the tests replace) and `:core:wallet` only.
+  takes it (blanked at once; N1: the password and PIN then travel as `CharArray`s (`Taken`, `Job.wipeWhenDone` in `:feature:wallet`) through `WalletsManager`, which wipes each array it is given when its call ends, to `WalletOps`/`WalletApi.kt`, where the one `String` is made for the sealed JSON; `String` copies remain in the text field and state before it is taken, in `credential.unlock` (`openWindow`, the app's own path) and in the vault client's `item.reveal`/`item.delete`), and the PSBT lives in `ManagerSendEngine` (a `SendEngine` the tests replace) and `:core:wallet` only.
   Form: the payee is **trimmed at both ends** as typed or pasted (`SendInput.parse`; `Payee` refuses spaces), a `bitcoin:` URI gives its
   address and `amount` (other parameters ignored; a capital bech32 address is read in lower case), `QrScanner` for the scan, the network
   checked as typed with `Payee` ("This is a {network} address. This wallet is on {other}."), BTC or sats (a valid amount is converted

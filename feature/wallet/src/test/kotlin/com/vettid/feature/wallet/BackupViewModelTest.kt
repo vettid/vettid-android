@@ -57,6 +57,8 @@ class BackupViewModelTest {
         // The password went once to the create and once to the reveal, and is gone from the state.
         assertEquals(listOf("create:Savings:testnet4:true", "reveal:01NEW000000000000000000000"), ops.calls.filterNot { it == "list" })
         assertEquals("", vm.state.value.password)
+        // Both arrays handed down (create, reveal) are wiped (N1).
+        assertTrue(ops.handedSecrets.allWipedAndSome())
         assertEquals(BackupStep.PHRASE, vm.state.value.step)
         val shown = vm.state.value.words!!
         assertEquals(ops.words, List(shown.size) { shown.word(it) })

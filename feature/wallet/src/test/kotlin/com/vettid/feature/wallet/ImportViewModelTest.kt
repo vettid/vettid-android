@@ -162,6 +162,7 @@ class ImportViewModelTest {
         // the words, so the wallet starts backed up; the limits followed at once.
         assertEquals(good, ops.importedWords)
         assertEquals(" Correct  Horse ", ops.importedPassphrase)
+        assertTrue(ops.handedSecrets.allWipedAndSome())
         assertEquals(listOf("create:Old wallet:testnet4:true", "import", "caps.set:500000:2000000"), ops.calls.filterNot { it == "list" })
         val id = vm.state.value.importedId!!
         assertTrue(WalletFlags(flagsFile).backedUp(id))

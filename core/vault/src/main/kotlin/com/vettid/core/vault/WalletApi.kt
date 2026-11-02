@@ -38,7 +38,7 @@ class WalletImport(val mnemonic: CharArray, val passphrase: CharArray? = null) {
  * acknowledges. No `address_type` (P2TR by default) and no `caps` (the app sets spending limits after the backup, W1d, with
  * [walletCapsSet]). `limit` at 16 wallets; `exists` for an import whose account keys equal an existing wallet's.
  */
-suspend fun VaultApi.walletCreate(name: String, network: String, password: String, item: WalletImport? = null): JsonObject =
+suspend fun VaultApi.walletCreate(name: String, network: String, password: CharArray, item: WalletImport? = null): JsonObject =
     credentialOps.credOp(
         "wallet.create",
         { createSealed(password, item).forEach { (k, v) -> put(k, v) } },
@@ -49,8 +49,9 @@ suspend fun VaultApi.walletCreate(name: String, network: String, password: Strin
     ).first
 
 /** The sealed payload of `wallet.create`: the password and, for an import, `item: {mnemonic, passphrase?}`. */
-internal fun createSealed(password: String, item: WalletImport?): JsonObject = buildJsonObject {
-    put("password", password)
+internal fun createSealed(password: CharArray, item: WalletImport?): JsonObject = buildJsonObject {
+    // The one String copy of the password: the JSON value, until the request is sealed (the caller wipes the array).
+    put("password", String(password))
     if (item != null) {
         put(
             "item",
@@ -97,8 +98,8 @@ suspend fun VaultApi.walletCapsRaise(
     version: Long,
     perTx: Long?,
     perPeriod: Long?,
-    pin: String,
-    password: String,
+    pin: CharArray,
+    password: CharArray,
 ): JsonObject =
     credentialOps.credOp(
         "wallet.caps.raise",
@@ -107,10 +108,17 @@ suspend fun VaultApi.walletCapsRaise(
     ).first
 
 /** The sealed payload of `wallet.caps.raise`: `{pin, password, item_id, payload_sha256}` (the hash in standard base64). */
-internal fun capsRaiseSealed(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): JsonObject =
+internal fun capsRaiseSealed(
+    walletId: String,
+    version: Long,
+    perTx: Long?,
+    perPeriod: Long?,
+    pin: CharArray,
+    password: CharArray,
+): JsonObject =
     buildJsonObject {
-        put("pin", pin)
-        put("password", password)
+        put("pin", String(pin))
+        put("password", String(password))
         put("item_id", walletId)
         put("payload_sha256", Base64s.encodeStd(WalletCapsBinding.payloadSha256(walletId, version, perTx, perPeriod)))
     }
@@ -250,7 +258,7 @@ suspend fun VaultApi.walletPsbtInspect(walletId: String, psbtBase64: String): Js
 suspend fun VaultApi.walletSign(
     walletId: String,
     psbtBase64: String,
-    password: String,
+    password: CharArray,
     onSending: (() -> Unit)? = null,
 ): JsonObject =
     credentialOps.credOpKept(
@@ -281,8 +289,8 @@ fun VaultApi.walletVaultNow(): java.time.Instant = device.vaultNow()
 fun VaultApi.walletSignExpired(kept: KeptChange): Boolean = !device.vaultNow().isBefore(kept.exp.plus(VaultDevice.SETTLE_MARGIN))
 
 /** The sealed payload of `wallet.sign`: `{password, item_id, payload_sha256}` (the hash in standard base64). */
-internal fun signSealed(walletId: String, psbtBase64: String, password: String): JsonObject = buildJsonObject {
-    put("password", password)
+internal fun signSealed(walletId: String, psbtBase64: String, password: CharArray): JsonObject = buildJsonObject {
+    put("password", String(password))
     put("item_id", walletId)
     put("payload_sha256", Base64s.encodeStd(WalletSignBinding.payloadSha256(psbtBase64)))
 }

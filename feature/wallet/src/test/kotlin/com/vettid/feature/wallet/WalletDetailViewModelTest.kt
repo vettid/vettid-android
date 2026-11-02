@@ -264,6 +264,7 @@ class WalletDetailViewModelTest {
         assertEquals("", vm.state.value.password)
         eventually { vm.state.value.closed }
         assertTrue("delete:$id" in ops.calls)
+        assertTrue(ops.handedSecrets.allWipedAndSome())
     }
 
     @Test

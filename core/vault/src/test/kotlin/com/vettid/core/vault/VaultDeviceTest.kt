@@ -3050,7 +3050,7 @@ class VaultDeviceTest {
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
             val utk = KemPrivateKey.generate()
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             assertEquals("credential.utk.get", get.type)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d1", utk)}]}""", re = get.id, status = Inner.STATUS_OK))
@@ -3107,7 +3107,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d2", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             val first = (1..3).map { v.open(nextDeposit().second) }.first()
@@ -3133,7 +3133,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e1", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             (1..3).map { v.open(nextDeposit().second) }
@@ -3159,7 +3159,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e4", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             (1..3).map { v.open(nextDeposit().second) }
@@ -3185,7 +3185,7 @@ class VaultDeviceTest {
             d.keepCredential("QkxPQg==", 3)
             api.setCredentialGate { _ -> throw VaultStateException("change undecided") }
             var sending = false
-            assertTrue(runCatching { api.walletSign(signWallet, signPsbt, "pw") { sending = true } }.exceptionOrNull() is VaultStateException)
+            assertTrue(runCatching { api.walletSign(signWallet, signPsbt, "pw".toCharArray()) { sending = true } }.exceptionOrNull() is VaultStateException)
             assertFalse(sending)
             assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
         }
@@ -3203,7 +3203,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this, store, secrets, timeout = java.time.Duration.ofMillis(300))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             (1..3).map { v.open(nextDeposit().second) }
@@ -3232,7 +3232,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this)
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             val req = v.open(nextDeposit().second)
@@ -3342,10 +3342,10 @@ class VaultDeviceTest {
             var undecided = true
             api.setCredentialGate { _ -> if (undecided) throw VaultStateException("change undecided") }
             val wallet = "01HXZ3N5Q8R2T4V6W9Y0B1C2D3"
-            assertTrue(runCatching { api.walletCapsRaise(wallet, 3, null, 2_000_000, "123456", "password one") }.exceptionOrNull() is VaultStateException)
+            assertTrue(runCatching { api.walletCapsRaise(wallet, 3, null, 2_000_000, "123456".toCharArray(), "password one".toCharArray()) }.exceptionOrNull() is VaultStateException)
             assertNull("nothing sent, not even a UTK request", deposits.poll(300, TimeUnit.MILLISECONDS))
             undecided = false
-            val raise = async(Dispatchers.IO) { runCatching { api.walletCapsRaise(wallet, 3, null, 2_000_000, "123456", "password one") } }
+            val raise = async(Dispatchers.IO) { runCatching { api.walletCapsRaise(wallet, 3, null, 2_000_000, "123456".toCharArray(), "password one".toCharArray()) } }
             assertEquals("credential.utk.get", v.open(nextDeposit().second).type)
             raise.cancel()
         }

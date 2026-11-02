@@ -298,7 +298,7 @@ class WalletSendTest {
     fun theWindowIsOpenedThenTheVaultSignsThenItIsBroadcastAndTheWindowClosed() = runBlocking {
         val (m, w) = opened()
         val p = ready(m, w)
-        val r = m.approveSend(p, "pw")
+        val r = m.approveSend(p, "pw".toCharArray())
         assertTrue(r.toString(), r is SendResult.Sent)
         assertEquals(p.vault.txid, (r as SendResult.Sent).txid)
         val order = ops.calls.filter { it in setOf("inspect", "unlock", "sign", "lock") }
@@ -312,10 +312,35 @@ class WalletSendTest {
     }
 
     @Test
+    fun theApprovedPasswordIsWipedOnSuccessOnARefusalAndWhenNothingWasSent() = runBlocking {
+        val (m, w) = opened()
+        val ok = "pw".toCharArray()
+        assertTrue(m.approveSend(ready(m, w), ok) is SendResult.Sent)
+        assertTrue(ops.handedSecrets.isNotEmpty() && ops.handedSecrets.all { a -> a.all { it == '\u0000' } })
+        assertTrue(ok.all { it == '\u0000' })
+        // A wrong password: the vault refuses the window, the array is wiped all the same.
+        val bad = "wrong".toCharArray()
+        assertTrue(runCatching { m.approveSend(ready(m, w, request(amount = 41_000)), bad) }.exceptionOrNull() is VaultFailure)
+        assertTrue(bad.all { it == '\u0000' })
+        // A payment already signed: nothing is sent, the array is wiped.
+        val p = ready(m, w, request(amount = 42_000))
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.Sent)
+        val again = "pw".toCharArray()
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, again))
+        assertTrue(again.all { it == '\u0000' })
+        // A payment from before a clear: nothing is sent, the array is wiped.
+        val q = ready(m, w, request(amount = 43_000))
+        m.clear()
+        val cleared = "pw".toCharArray()
+        assertEquals(SendResult.Cleared, m.approveSend(q, cleared))
+        assertTrue(cleared.all { it == '\u0000' })
+    }
+
+    @Test
     fun anOpenWindowIsUsedAsItIsAndLeftOpen() = runBlocking {
         val (m, w) = opened()
         window = true
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.Sent)
         assertTrue("unlock" !in ops.calls)
         assertTrue("lock" !in ops.calls)
         assertTrue(window)
@@ -325,7 +350,7 @@ class WalletSendTest {
     fun aWindowThatClosedMeanwhileIsOpenedAndTheSigningAskedOnce() = runBlocking {
         val (m, w) = opened()
         believesOpen = { true }
-        val r = m.approveSend(ready(m, w), "pw")
+        val r = m.approveSend(ready(m, w), "pw".toCharArray())
         assertTrue(r.toString(), r is SendResult.Sent)
         assertEquals(listOf("sign", "unlock", "sign", "lock"), ops.calls.filter { it in setOf("unlock", "sign", "lock") })
     }
@@ -335,7 +360,7 @@ class WalletSendTest {
         val (m, w) = opened()
         believesOpen = { true }
         ops.windowOpen = { false }
-        assertEquals(SendResult.CredentialLocked, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.CredentialLocked, m.approveSend(ready(m, w), "pw".toCharArray()))
         assertEquals(2, ops.signs.size)
         assertTrue(chain.spend.broadcasts.isEmpty())
     }
@@ -344,7 +369,7 @@ class WalletSendTest {
     fun aWrongPasswordAtTheUnlockSignsNothing() = runBlocking {
         val (m, w) = opened()
         val p = ready(m, w)
-        val e = runCatching { m.approveSend(p, "wrong") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.approveSend(p, "wrong".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.BAD_PASSWORD, e.kind)
         assertTrue(ops.signs.isEmpty())
         assertTrue("a window that never opened is not closed", "lock" !in ops.calls)
@@ -355,7 +380,7 @@ class WalletSendTest {
         val (m, w) = opened()
         val p = ready(m, w)
         unlockFails = VaultFailure(FailureKind.NO_RESPONSE)
-        runCatching { m.approveSend(p, "pw") }
+        runCatching { m.approveSend(p, "pw".toCharArray()) }
         assertTrue("lock" in ops.calls)
         assertTrue(ops.signs.isEmpty())
     }
@@ -364,7 +389,7 @@ class WalletSendTest {
     fun aWindowThatCouldNotBeClosedIsSaid() = runBlocking {
         val (m, w) = opened()
         lockFails = true
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.Sent)
         assertTrue(m.windowNotClosed.value)
     }
 
@@ -375,11 +400,11 @@ class WalletSendTest {
         val (m, w) = opened()
         ops.unanswered = 1
         val p = ready(m, w)
-        assertEquals(SendResult.Unanswered, m.approveSend(p, "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(p, "pw".toCharArray()))
         assertTrue(m.hasUnsent(w.id))
         assertEquals(1, ops.signs.size)
         // A new approval is refused: it would build the payment again and count again against the limit.
-        assertEquals(SendResult.Unanswered, m.approveSend(p, "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(p, "pw".toCharArray()))
         assertEquals(1, ops.signs.size)
         assertEquals(SendResult.Unanswered, m.retrySign(w.id))
         val done = m.retrySign(w.id)
@@ -396,7 +421,7 @@ class WalletSendTest {
     fun theVaultsCachedRefusalToTheResentRequestDecidesIt() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 0
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         ops.resendFailure = refusal("cap_exceeded", "per_tx", """{"reason":"per_tx","limit_sats":500}""")
         val r = m.retrySign(w.id) as SendResult.CapExceeded
         assertEquals(CapReason.PER_TX, r.reason)
@@ -408,7 +433,7 @@ class WalletSendTest {
     fun aTransportFailureOnTheResendLeavesTheRequestToTryAgain() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 0
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         ops.resendFailure = java.io.IOException("no relay")
         val e = runCatching { m.retrySign(w.id) }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.NETWORK, e.kind)
@@ -421,7 +446,7 @@ class WalletSendTest {
     fun anUnanswerableSigningCanBeGivenUp() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 100
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         assertEquals(DiscardResult.DROPPED, m.discardUnsent(w.id))
         assertFalse(m.hasUnsent(w.id))
         assertEquals(SendResult.NothingToSend, m.retrySign(w.id))
@@ -436,7 +461,7 @@ class WalletSendTest {
     fun capExceededPerTxCarriesItsLimit() = runBlocking {
         val (m, w) = opened()
         ops.signError = refusal("cap_exceeded", "per_tx", """{"reason":"per_tx","limit_sats":500000}""")
-        val r = m.approveSend(ready(m, w), "pw") as SendResult.CapExceeded
+        val r = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.CapExceeded
         assertEquals(CapReason.PER_TX, r.reason)
         assertEquals(500_000L, r.limitSats)
         assertNull(r.remainingSats)
@@ -455,14 +480,14 @@ class WalletSendTest {
             "cap_exceeded", "per_period",
             """{"reason":"per_period","limit_sats":2000000,"remaining_sats":15000,"allowed_after":"2026-11-02T08:30:00.000Z"}""",
         )
-        val r = m.approveSend(ready(m, w), "pw") as SendResult.CapExceeded
+        val r = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.CapExceeded
         assertEquals(CapReason.PER_PERIOD, r.reason)
         assertEquals(2_000_000L, r.limitSats)
         assertEquals(15_000L, r.remainingSats)
         assertEquals(Instant.parse("2026-11-02T08:30:00Z"), r.allowedAfter)
         // A fit never: no allowed_after, nothing remaining.
         ops.signError = refusal("cap_exceeded", "per_period", """{"reason":"per_period","limit_sats":10,"remaining_sats":0}""")
-        val never = m.approveSend(ready(m, w), "pw") as SendResult.CapExceeded
+        val never = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.CapExceeded
         assertEquals(0L, never.remainingSats)
         assertNull(never.allowedAfter)
     }
@@ -471,12 +496,12 @@ class WalletSendTest {
     fun invalidPsbtAtTheSigningKeepsItsReasonAndWrongSeedIsAnAlarm() = runBlocking {
         val (m, w) = opened()
         ops.signError = refusal("invalid_psbt", "derivation_key")
-        val r = m.approveSend(ready(m, w), "pw") as SendResult.Refused
+        val r = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.Refused
         assertEquals("derivation_key", r.reason)
         assertFalse(r.alarm)
         assertEquals(SendCodes.INVALID_PSBT, r.code)
         ops.signError = refusal("invalid_psbt", "wrong_seed")
-        val alarm = m.approveSend(ready(m, w), "pw") as SendResult.Refused
+        val alarm = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.Refused
         assertTrue(alarm.alarm)
         assertEquals("wrong_seed", alarm.reason)
         assertTrue(chain.spend.broadcasts.isEmpty())
@@ -486,22 +511,22 @@ class WalletSendTest {
     fun duplicateWalletAndOtherErrorsAreMapped() = runBlocking {
         val (m, w) = opened()
         ops.signError = refusal("duplicate_wallet")
-        assertEquals(SendResult.DuplicateWallet, m.approveSend(ready(m, w, request(amount = 40_001)), "pw"))
+        assertEquals(SendResult.DuplicateWallet, m.approveSend(ready(m, w, request(amount = 40_001)), "pw".toCharArray()))
         ops.signError = refusal("backoff")
-        val e = runCatching { m.approveSend(ready(m, w, request(amount = 40_002)), "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.approveSend(ready(m, w, request(amount = 40_002)), "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.BACKOFF, e.kind)
         ops.signError = refusal("credential_locked")
         // The vault still says locked after the app opened the window: asked again, then the vault's word.
         window = true
         ops.windowOpen = { false }
-        assertEquals(SendResult.CredentialLocked, m.approveSend(ready(m, w, request(amount = 40_003)), "pw"))
+        assertEquals(SendResult.CredentialLocked, m.approveSend(ready(m, w, request(amount = 40_003)), "pw".toCharArray()))
     }
 
     @Test
     fun aSignedTransactionThatIsNotTheOneReviewedIsNeverBroadcast() = runBlocking {
         val (m, w) = opened()
         ops.signedDiffers = true
-        assertEquals(SendResult.SignedDiffers, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.SignedDiffers, m.approveSend(ready(m, w), "pw".toCharArray()))
         assertTrue(chain.spend.broadcasts.isEmpty())
         assertFalse(m.hasUnsent(w.id))
     }
@@ -523,7 +548,7 @@ class WalletSendTest {
     fun aFailedBroadcastKeepsTheTransactionAndTryAgainResendsTheSameBytesAfterTheServerChanged() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.BroadcastRefused(BroadcastRefusal.FEE_TOO_LOW, "min relay fee not met")
-        val failed = m.approveSend(ready(m, w), "pw") as SendResult.BroadcastFailed
+        val failed = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.BroadcastFailed
         assertEquals(SendCodes.BROADCAST_FAILED, failed.code)
         assertEquals(BroadcastRefusal.FEE_TOO_LOW, (failed.cause as BroadcastCause.Refused).refusal)
         assertTrue(m.hasUnsent(w.id))
@@ -543,7 +568,7 @@ class WalletSendTest {
     fun aServerThatDoesNotAnswerIsAFailureWithTheTransactionKept() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Unreachable()
-        val failed = m.approveSend(ready(m, w), "pw") as SendResult.BroadcastFailed
+        val failed = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.BroadcastFailed
         assertTrue(failed.cause is BroadcastCause.Server)
         chain.open = ChainOpen.NoServer(ChainServer.NotSet)
         val noServer = m.retryBroadcast(w.id) as SendResult.BroadcastFailed
@@ -555,7 +580,7 @@ class WalletSendTest {
     fun aServerThatAlreadyHasTheTransactionIsSuccess() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.BroadcastRefused(BroadcastRefusal.ALREADY_KNOWN, "txn-already-in-mempool")
-        val r = m.approveSend(ready(m, w), "pw") as SendResult.Sent
+        val r = m.approveSend(ready(m, w), "pw".toCharArray()) as SendResult.Sent
         assertTrue(r.alreadyKnown)
         assertFalse(m.hasUnsent(w.id))
     }
@@ -564,7 +589,7 @@ class WalletSendTest {
     fun theSignedTransactionIsDroppedAtLockAndNeverWrittenToDisk() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
-        val failed = m.approveSend(ready(m, w), "pw")
+        val failed = m.approveSend(ready(m, w), "pw".toCharArray())
         assertTrue(failed is SendResult.BroadcastFailed)
         val tx = chain.spend.broadcasts.single()
         assertTrue(m.hasUnsent(w.id))
@@ -584,7 +609,7 @@ class WalletSendTest {
         m2.open()
         m2.recentSends(w.id)
         ops.unanswered = 5
-        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w), "pw"))
+        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w), "pw".toCharArray()))
         m2.clear()
         assertFalse(m2.hasUnsent(w.id))
         assertEquals(SendResult.NothingToSend, m2.retrySign(w.id))
@@ -595,7 +620,7 @@ class WalletSendTest {
         val (m, w) = opened()
         val p = ready(m, w)
         m.clear()
-        assertEquals(SendResult.Cleared, m.approveSend(p, "pw"))
+        assertEquals(SendResult.Cleared, m.approveSend(p, "pw".toCharArray()))
         assertTrue(ops.signs.isEmpty())
         assertTrue("unlock" !in ops.calls)
     }
@@ -607,27 +632,27 @@ class WalletSendTest {
         // After Sent.
         val (m, w) = opened()
         val p = ready(m, w)
-        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
-        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.Sent)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw".toCharArray()))
         assertEquals(1, ops.signs.size)
         // After a failed broadcast, and after it is given up.
         chain.spend.broadcastError = ChainError.Timeout()
         val q = ready(m, w, request(amount = 41_000))
-        assertTrue(m.approveSend(q, "pw") is SendResult.BroadcastFailed)
-        assertEquals(SendResult.AlreadySigned, m.approveSend(q, "pw"))
+        assertTrue(m.approveSend(q, "pw".toCharArray()) is SendResult.BroadcastFailed)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(q, "pw".toCharArray()))
         // The server did not answer: it is not dropped until a server says it does not have it.
         assertEquals(DiscardResult.MUST_CHECK, m.discardUnsent(w.id))
         assertEquals(SendResult.NotOnServer, m.checkSent(w.id))
         assertEquals(DiscardResult.DROPPED, m.discardUnsent(w.id))
-        assertEquals(SendResult.AlreadySigned, m.approveSend(q, "pw"))
+        assertEquals(SendResult.AlreadySigned, m.approveSend(q, "pw".toCharArray()))
         assertEquals(2, ops.signs.size)
         // After an answer that does not read: the vault may have signed.
         chain.spend.broadcastError = null
         ops.signUnreadable = true
         val r = ready(m, w, request(amount = 42_000))
-        assertEquals(SendResult.SignedUnreadable, m.approveSend(r, "pw"))
+        assertEquals(SendResult.SignedUnreadable, m.approveSend(r, "pw".toCharArray()))
         ops.signUnreadable = false
-        assertEquals(SendResult.AlreadySigned, m.approveSend(r, "pw"))
+        assertEquals(SendResult.AlreadySigned, m.approveSend(r, "pw".toCharArray()))
         assertEquals(3, ops.signs.size)
     }
 
@@ -637,9 +662,9 @@ class WalletSendTest {
         chain.spend.broadcastError = ChainError.Timeout()
         val first = ready(m, w)
         val other = ready(m, w, request(amount = 45_000))
-        assertTrue(m.approveSend(first, "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(first, "pw".toCharArray()) is SendResult.BroadcastFailed)
         // A payment prepared before is refused, and a new one is not even prepared while this one waits.
-        assertEquals(SendResult.AlreadySigned, m.approveSend(other, "pw"))
+        assertEquals(SendResult.AlreadySigned, m.approveSend(other, "pw".toCharArray()))
         assertEquals(PrepareResult.Unsent, m.prepareSend(w.id, request(amount = 45_000)))
         assertEquals(1, ops.signs.size)
     }
@@ -656,14 +681,14 @@ class WalletSendTest {
             ops.signError = e
             window = false
             val sent = ops.signs.size
-            val r = runCatching { m.approveSend(p, "pw") }.getOrNull()
+            val r = runCatching { m.approveSend(p, "pw".toCharArray()) }.getOrNull()
             // The previous refusal gave the payment back: this approve reached the vault.
             assertTrue("${e.code}: reached the vault", r != SendResult.AlreadySigned && ops.signs.size > sent)
         }
         ops.signError = null
         window = false
-        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
-        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.Sent)
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw".toCharArray()))
     }
 
     @Test
@@ -671,14 +696,14 @@ class WalletSendTest {
         val (m, w) = opened()
         val p = ready(m, w)
         ops.signError = refusal("duplicate_wallet")
-        assertEquals(SendResult.DuplicateWallet, m.approveSend(p, "pw"))
+        assertEquals(SendResult.DuplicateWallet, m.approveSend(p, "pw".toCharArray()))
         // A code the app has never heard of: thrown, and still the vault's final word.
         ops.signError = refusal("something_new")
-        assertTrue(runCatching { m.approveSend(p, "pw") }.exceptionOrNull() is VaultFailure)
+        assertTrue(runCatching { m.approveSend(p, "pw".toCharArray()) }.exceptionOrNull() is VaultFailure)
         ops.signError = null
-        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.Sent)
         assertEquals(3, ops.signs.size)
-        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw".toCharArray()))
     }
 
     @Test
@@ -686,13 +711,13 @@ class WalletSendTest {
         val (m, w) = opened()
         val p = ready(m, w)
         ops.signNotSent = java.io.IOException("no UTK")
-        assertTrue(runCatching { m.approveSend(p, "pw") }.exceptionOrNull() is VaultFailure)
+        assertTrue(runCatching { m.approveSend(p, "pw".toCharArray()) }.exceptionOrNull() is VaultFailure)
         ops.signNotSent = com.vettid.core.vault.CredentialUnsettledException()
-        val second = runCatching { m.approveSend(p, "pw") }
+        val second = runCatching { m.approveSend(p, "pw".toCharArray()) }
         val e = second.exceptionOrNull() as? VaultFailure ?: error("second: ${second.getOrNull()}")
         assertEquals(FailureKind.CREDENTIAL_UNSETTLED, e.kind)
         ops.signNotSent = null
-        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.Sent)
     }
 
     @Test
@@ -702,9 +727,9 @@ class WalletSendTest {
         // After the request went out (no answer, an answer that does not come through): the vault may have signed. Never a thrown
         // failure that the screen would show as a password problem.
         ops.signFailure = java.io.IOException("relay dropped")
-        assertEquals(SendResult.SignedUnreadable, m.approveSend(p, "pw"))
+        assertEquals(SendResult.SignedUnreadable, m.approveSend(p, "pw".toCharArray()))
         ops.signFailure = null
-        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
+        assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw".toCharArray()))
         assertEquals(1, ops.signs.size)
     }
 
@@ -713,10 +738,10 @@ class WalletSendTest {
         val (m, w) = opened()
         val p = ready(m, w)
         ops.signNotSent = java.io.IOException("no UTK")
-        val e = runCatching { m.approveSend(p, "pw") }.exceptionOrNull()
+        val e = runCatching { m.approveSend(p, "pw".toCharArray()) }.exceptionOrNull()
         assertTrue(e is VaultFailure)
         ops.signNotSent = null
-        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.Sent)
     }
 
     // --- a new payment waits for the one that is unsent ---
@@ -725,7 +750,7 @@ class WalletSendTest {
     fun aNewPaymentIsRefusedWhileASignedOneOrAnUnansweredSigningWaits() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.BroadcastFailed)
         assertEquals(PrepareResult.Unsent, m.prepareSend(w.id, request(amount = 41_000)))
         assertTrue("no second inspect", ops.calls.count { it == "inspect" } == 1)
         // Decided first: checked, then discarded, and a new payment can be prepared.
@@ -738,7 +763,7 @@ class WalletSendTest {
         m2.open()
         m2.recentSends(w.id)
         ops.unanswered = 100
-        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 42_000)), "pw"))
+        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 42_000)), "pw".toCharArray()))
         assertEquals(PrepareResult.Unsent, m2.prepareSend(w.id, request(amount = 43_000)))
         m2.discardUnsent(w.id)
         ops.outstanding = emptySet()
@@ -751,10 +776,10 @@ class WalletSendTest {
         val p = ready(m, w)
         ops.outstanding = setOf(w.id)
         assertEquals(PrepareResult.Held(SendHold.SIGN_UNSETTLED), m.prepareSend(w.id, request()))
-        assertEquals(SendResult.Held(SendHold.SIGN_UNSETTLED), m.approveSend(p, "pw"))
+        assertEquals(SendResult.Held(SendHold.SIGN_UNSETTLED), m.approveSend(p, "pw".toCharArray()))
         assertTrue(ops.signs.isEmpty())
         ops.outstanding = emptySet()
-        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.Sent)
     }
 
     // --- 3, 4, 7 ---
@@ -764,7 +789,7 @@ class WalletSendTest {
         val (m, w) = opened()
         val p = ready(m, w)
         chain.onOpen = { m.clear() }
-        val r = m.approveSend(p, "pw")
+        val r = m.approveSend(p, "pw".toCharArray())
         assertEquals(SendResult.Cleared, r)
         assertTrue(chain.spend.broadcasts.isEmpty())
         assertFalse(m.hasUnsent(w.id))
@@ -774,7 +799,7 @@ class WalletSendTest {
     fun aLockDropsTheKeptSigningRequest() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 5
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         assertEquals(0, ops.forgets)
         m.clear()
         assertEquals(1, ops.forgets)
@@ -784,7 +809,7 @@ class WalletSendTest {
         val m2 = manager()
         m2.open()
         m2.recentSends(w.id)
-        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 41_000)), "pw"))
+        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 41_000)), "pw".toCharArray()))
         m2.discardUnsent(w.id)
         assertEquals(2, ops.forgets)
     }
@@ -1082,7 +1107,7 @@ class WalletSendTest {
     fun aSigningPastItsExpReachesADefiniteResultAndIsDropped() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 100
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         // Not past `exp`: waiting.
         assertEquals(SendResult.Unanswered, m.retrySign(w.id))
         assertTrue(m.hasUnsent(w.id))
@@ -1099,7 +1124,7 @@ class WalletSendTest {
     fun aVersionThatMovedOnBeforeExpKeepsTheRequestAndTheResendGetsTheCachedOk() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 100
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         // `credential.version` moved on: the mark is gone (applied, or never will), but `exp` has not passed. Not a lapse.
         ops.outstanding = emptySet()
         assertEquals(SendResult.Unanswered, m.retrySign(w.id))
@@ -1116,7 +1141,7 @@ class WalletSendTest {
     fun aLateAnswerIsTakenBeforeTheRequestIsForgottenPastExp() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 100
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         ops.expired = true
         // The answer came late, after `exp`: the resend takes it, it is not a lapse.
         ops.unanswered = 0
@@ -1129,7 +1154,7 @@ class WalletSendTest {
     fun aResendThatFailsPastExpIsDecidedToo() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 100
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         ops.resendFailure = java.io.IOException("no relay")
         // Not past `exp`: the failure is no answer, the request stays.
         assertTrue(runCatching { m.retrySign(w.id) }.exceptionOrNull() is VaultFailure)
@@ -1145,7 +1170,7 @@ class WalletSendTest {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
         val p = ready(m, w)
-        assertTrue(m.approveSend(p, "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.BroadcastFailed)
         assertTrue(m.mustCheck(w.id))
         // Another server cannot be opened, or refuses on its own policy: still not a definite answer for the first one.
         chain.open = ChainOpen.NoServer(ChainServer.NotSet)
@@ -1164,7 +1189,7 @@ class WalletSendTest {
     fun aRefusalAloneNeverLockedDiscard() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.BroadcastRefused(BroadcastRefusal.FEE_TOO_LOW, "min relay fee not met")
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.BroadcastFailed)
         assertFalse(m.mustCheck(w.id))
         assertEquals(DiscardResult.DROPPED, m.discardUnsent(w.id))
     }
@@ -1173,7 +1198,7 @@ class WalletSendTest {
     fun discardIsRefusedUntilAReachableServerSaysNo() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.BroadcastFailed)
         // A check that fails keeps it locked.
         chain.spend.knowsError = ChainError.Timeout()
         assertTrue(m.checkSent(w.id) is SendResult.BroadcastFailed)
@@ -1191,7 +1216,7 @@ class WalletSendTest {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
         val p = ready(m, w)
-        assertTrue(m.approveSend(p, "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.BroadcastFailed)
         // The first question finds nothing, the server then has it: the second question counts.
         chain.spend.appearsLater += p.vault.txid
         val r = m.checkSent(w.id) as SendResult.Sent
@@ -1203,7 +1228,7 @@ class WalletSendTest {
     fun aSecondQuestionThatFailsDoesNotOpenDiscard() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.BroadcastFailed)
         // The first question says "not found", the server then goes away: no answer, nothing is decided, Discard stays off.
         chain.spend.knowsFailsFrom = 1
         assertTrue(m.checkSent(w.id) is SendResult.BroadcastFailed)
@@ -1215,7 +1240,7 @@ class WalletSendTest {
     fun anUnanswerableSigningHasNothingOnTheNetworkSoDiscardIsFree() = runBlocking {
         val (m, w) = opened()
         ops.unanswered = 100
-        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw"))
+        assertEquals(SendResult.Unanswered, m.approveSend(ready(m, w), "pw".toCharArray()))
         assertFalse(m.mustCheck(w.id))
         assertEquals(DiscardResult.DROPPED, m.discardUnsent(w.id))
     }
@@ -1228,11 +1253,11 @@ class WalletSendTest {
         val older = ready(m, w)
         val newer = ready(m, w, request(amount = 43_000))
         chain.spend.broadcastError = null
-        assertTrue(m.approveSend(newer, "pw") is SendResult.Sent)
-        assertEquals(SendResult.Superseded, m.approveSend(older, "pw"))
+        assertTrue(m.approveSend(newer, "pw".toCharArray()) is SendResult.Sent)
+        assertEquals(SendResult.Superseded, m.approveSend(older, "pw".toCharArray()))
         assertEquals(1, ops.signs.size)
         // One prepared after the signing is current.
-        assertTrue(m.approveSend(ready(m, w, request(amount = 44_000)), "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(ready(m, w, request(amount = 44_000)), "pw".toCharArray()) is SendResult.Sent)
         assertEquals(2, ops.signs.size)
     }
 
@@ -1242,9 +1267,9 @@ class WalletSendTest {
         val older = ready(m, w)
         val newer = ready(m, w, request(amount = 43_000))
         ops.signError = refusal("backoff")
-        assertTrue(runCatching { m.approveSend(newer, "pw") }.isFailure)
+        assertTrue(runCatching { m.approveSend(newer, "pw".toCharArray()) }.isFailure)
         ops.signError = null
-        assertTrue(m.approveSend(older, "pw") is SendResult.Sent)
+        assertTrue(m.approveSend(older, "pw".toCharArray()) is SendResult.Sent)
     }
 
     // --- review note 2: was it broadcast after all? ---
@@ -1254,7 +1279,7 @@ class WalletSendTest {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
         val p = ready(m, w)
-        assertTrue(m.approveSend(p, "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(p, "pw".toCharArray()) is SendResult.BroadcastFailed)
         // The server has it after all.
         chain.spend.known += p.vault.txid
         val r = m.checkSent(w.id) as SendResult.Sent
@@ -1266,7 +1291,7 @@ class WalletSendTest {
     fun anUnknownTransactionIsNotOnTheServerAndStaysKept() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.BroadcastFailed)
         assertEquals(SendResult.NotOnServer, m.checkSent(w.id))
         assertTrue(m.hasUnsent(w.id))
         // The server cannot say: nothing is decided.

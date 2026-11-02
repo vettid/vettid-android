@@ -64,7 +64,14 @@ class RevealedPhrase(private val chars: CharArray, private val pass: CharArray? 
     override fun toString(): String = "RevealedPhrase"
 }
 
-/** The vault side of the wallet (VAULT-MESSAGING §10.18), behind an interface for the manager's tests. */
+/**
+ * The vault side of the wallet (VAULT-MESSAGING §10.18), behind an interface for the manager's tests.
+ *
+ * The password and the PIN come as `CharArray`s, which [WalletsManager] wipes when its call ends (N1); an implementation never keeps
+ * one. The `String` copies that cannot be avoided are made as late as possible and are not wiped (the JVM gives no way to): the JSON
+ * value of the sealed request (`createSealed`, `capsRaiseSealed`, `signSealed` in `:core:vault`), and the arguments of the vault
+ * client's own `item.reveal` and `item.delete` ([VaultWalletOps]), which are not wallet code and take a `String`.
+ */
 @Suppress("TooManyFunctions")
 interface WalletOps {
     suspend fun list(): List<VaultWallet>
@@ -75,13 +82,13 @@ interface WalletOps {
      * `wallet.create`, a credential operation: a new 24-word phrase on [network] (a vault name: `signet`, `testnet4`), or, with
      * [item], the phrase imported. No limits are sent with it (they follow with [capsSet]).
      */
-    suspend fun create(name: String, network: String, password: String, item: WalletImport? = null): VaultWallet
+    suspend fun create(name: String, network: String, password: CharArray, item: WalletImport? = null): VaultWallet
 
     /**
      * `item.reveal` of the wallet's item, a credential operation: its "Recovery phrase" field. [pin] with the password for the item
      * of a wallet that has a spending limit (`pin_required` otherwise).
      */
-    suspend fun revealPhrase(walletId: String, password: String, pin: String? = null): RevealedPhrase
+    suspend fun revealPhrase(walletId: String, password: CharArray, pin: CharArray? = null): RevealedPhrase
 
     /**
      * `wallet.caps.set` at [version]: the wallet's new version. Lowers only (sets where there was none); a null member is absent
@@ -93,10 +100,10 @@ interface WalletOps {
      * `wallet.caps.raise`, one credential operation with [pin] and [password]: the limits the wallet will have afterwards (null: no
      * limit) at [version]; the wallet's new version. Any error leaves the limits as they were.
      */
-    suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long
+    suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: CharArray, password: CharArray): Long
 
     /** `item.delete` of the wallet's item, a credential operation: the vault forgets the wallet and its phrase. */
-    suspend fun delete(walletId: String, password: String)
+    suspend fun delete(walletId: String, password: CharArray)
 
     /** `wallet.update{address_type}` at [version]: the wallet's new version. `conflict` if the wallet changed meanwhile. */
     suspend fun setAddressType(walletId: String, version: Long, type: String): Long
@@ -117,7 +124,7 @@ interface WalletOps {
      * `wallet.sign`, a credential operation with [password] over [psbtBase64] (no `broadcast`: the app broadcasts). A lost or late
      * answer is [SignOutcome.Unanswered], whose `resend` sends the same request; never a second `sign` for the same payment.
      */
-    suspend fun sign(walletId: String, psbtBase64: String, password: String): SignOutcome
+    suspend fun sign(walletId: String, psbtBase64: String, password: CharArray): SignOutcome
 
     /** The wallets with a `wallet.sign` that may still apply (also after a lock or a restart): no new send is made for them. */
     suspend fun signsOutstanding(): Set<String>
@@ -136,22 +143,29 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
 
     override suspend fun get(walletId: String): VaultWallet = WalletWire.wallet(api().walletGet(walletId))
 
-    override suspend fun create(name: String, network: String, password: String, item: WalletImport?): VaultWallet =
+    override suspend fun create(name: String, network: String, password: CharArray, item: WalletImport?): VaultWallet =
         WalletWire.wallet(api().walletCreate(name, network, password, item))
 
     override suspend fun capsSet(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): Long =
         WalletWire.version(api().walletCapsSet(walletId, version, perTx, perPeriod))
 
-    override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long =
+    override suspend fun capsRaise(
+        walletId: String,
+        version: Long,
+        perTx: Long?,
+        perPeriod: Long?,
+        pin: CharArray,
+        password: CharArray,
+    ): Long =
         WalletWire.version(api().walletCapsRaise(walletId, version, perTx, perPeriod, pin, password))
 
-    override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
+    override suspend fun revealPhrase(walletId: String, password: CharArray, pin: CharArray?): RevealedPhrase {
         val a = api()
         // The field ids of the wallet's item (`wallet.btc`: two password fields, "Recovery phrase" and "Passphrase").
         val fields = a.itemGet(walletId).fields
         val field = fields.firstOrNull { it.label == PHRASE_LABEL }?.fieldId ?: throw WalletWireException("phrase field")
         val passField = fields.firstOrNull { it.label == PASSPHRASE_LABEL }?.fieldId
-        val revealed = a.itemRevealCritical(password, walletId, pin)
+        val revealed = a.itemRevealCritical(String(password), walletId, pin?.let { String(it) })
         try {
             return phraseOf(revealed.json(), field, passField)
         } finally {
@@ -159,7 +173,8 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
         }
     }
 
-    override suspend fun delete(walletId: String, password: String) = api().itemDelete(walletId, password)
+    // `item.delete` is the vault client's own call, not the wallet's: it takes a String, so the copy is made here, at the boundary.
+    override suspend fun delete(walletId: String, password: CharArray) = api().itemDelete(walletId, String(password))
 
     override suspend fun setAddressType(walletId: String, version: Long, type: String): Long =
         WalletWire.version(api().walletUpdate(walletId, version, type))
@@ -178,7 +193,7 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     override suspend fun inspect(walletId: String, psbtBase64: String): PsbtInspection =
         WalletWire.inspection(api().walletPsbtInspect(walletId, psbtBase64))
 
-    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignOutcome {
+    override suspend fun sign(walletId: String, psbtBase64: String, password: CharArray): SignOutcome {
         var sent = false
         return try {
             SignOutcome.Answered(SignReply.Ok(api().walletSign(walletId, psbtBase64, password) { sent = true }))
