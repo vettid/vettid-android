@@ -1,5 +1,7 @@
 package com.vettid.core.wallet
 
+import com.vettid.core.vault.ChangeUnansweredException
+import com.vettid.core.vault.KeptChange
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.WalletImport
@@ -10,6 +12,11 @@ import com.vettid.core.vault.walletAddressNew
 import com.vettid.core.vault.walletAddressUsed
 import com.vettid.core.vault.walletCreate
 import com.vettid.core.vault.walletGet
+import com.vettid.core.vault.walletHistory
+import com.vettid.core.vault.walletPsbtInspect
+import com.vettid.core.vault.walletSignsOutstanding
+import com.vettid.core.vault.walletSign
+import com.vettid.core.vault.walletSignResend
 import com.vettid.core.vault.walletList
 import com.vettid.core.vault.walletUpdate
 import kotlinx.serialization.json.JsonArray
@@ -99,6 +106,21 @@ interface WalletOps {
     /** `wallet.address.used` (1–256 addresses). */
     /** `wallet.address.used`: how many of [addresses] the vault marked now (those it issued and had not marked yet). */
     suspend fun markUsed(walletId: String, addresses: List<String>): Int
+
+    /** `wallet.psbt.inspect`: the vault's summary of [psbtBase64] and its `cap`. `invalid_psbt` is a [VaultOpException]. */
+    suspend fun inspect(walletId: String, psbtBase64: String): PsbtInspection
+
+    /**
+     * `wallet.sign`, a credential operation with [password] over [psbtBase64] (no `broadcast`: the app broadcasts). A lost or late
+     * answer is [SignAnswer.Unanswered], whose `resend` sends the same request; never a second `sign` for the same payment.
+     */
+    suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer
+
+    /** The wallets with a `wallet.sign` that may still apply (also after a lock or a restart): no new send is made for them. */
+    suspend fun signsOutstanding(): Set<String>
+
+    /** `wallet.history`: what this vault signed, newest first ([limit] 1–200). */
+    suspend fun history(walletId: String, limit: Int?): List<WalletTx>
 }
 
 /** [WalletOps] over the open vault's client. */
@@ -146,6 +168,35 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
         // `{marked, version}`; an answer without the count is taken as "some were marked" (the wallet is read again).
         return (o["marked"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull() ?: addresses.size
     }
+
+    override suspend fun inspect(walletId: String, psbtBase64: String): PsbtInspection =
+        WalletWire.inspection(api().walletPsbtInspect(walletId, psbtBase64))
+
+    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer {
+        val a = api()
+        var sent = false
+        return try {
+            SignAnswer.Signed(WalletWire.signed(a.walletSign(walletId, psbtBase64, password) { sent = true }))
+        } catch (e: ChangeUnansweredException) {
+            unanswered(a, e.kept)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Before the request went out nothing reached the vault: said to the manager, which then gives the payment back.
+            if (!sent) e.addSuppressed(SignNotSent())
+            throw e
+        }
+    }
+
+    /** No answer: sending [kept] again is the only way on; it asks for nothing (no password, no UTK) and builds nothing. */
+    private fun unanswered(a: VaultApi, kept: KeptChange): SignAnswer.Unanswered = SignAnswer.Unanswered({ kept.forget() }) {
+        val o = a.walletSignResend(kept)
+        if (o == null) unanswered(a, kept) else SignAnswer.Signed(WalletWire.signed(o))
+    }
+
+    override suspend fun signsOutstanding(): Set<String> = api().walletSignsOutstanding()
+
+    override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = WalletWire.history(api().walletHistory(walletId, limit))
 
     internal companion object {
         const val PHRASE_LABEL = "Recovery phrase"

@@ -235,6 +235,104 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     }
 
     /**
+     * A credential operation whose lost answer is **retried as the same request** (ANDROID-PLAN §4 "Sending", step 5; VAULT-MESSAGING
+     * §3.5.4 "Using a UTK", §10.18 "Enforcement at signing": a retry with the same inner id is answered from the vault's cache and
+     * counts once against a spending limit; a new inner id counts again). For `wallet.sign`: the sealed body is built once, with the
+     * inner id and an `exp` ([ChangeTypes.EXP] after the vault's clock) and kept in memory only as a [KeptChange]; it is sent as
+     * [sendKept] sends it (the same id and body, three times, never through the outbox, never written to storage). No answer is
+     * [ChangeUnansweredException] carrying the kept request, for [resendKept]; nothing is built again. A `stale_credential` fetches
+     * the latest blob and is tried once more as a **new** request (the refused one was cached as refused: nothing was signed).
+     * Gated like [credOp]; the sealed answer is kept (blob and UTKs, acknowledged) as any credential response.
+     */
+    suspend fun credOpKept(
+        type: String,
+        payload: JsonObjectBuilder.() -> Unit,
+        extra: JsonObjectBuilder.() -> Unit = {},
+        /** The wallet a `wallet.sign` is for: the request is then durably marked outstanding until it is decided ([SignMark]). */
+        walletId: String? = null,
+        /** Called right before the request is first sent: an exception from before it means nothing reached the vault. */
+        onSending: (() -> Unit)? = null,
+    ): JsonObject = serialized(payload, null) {
+        try {
+            sendKeptOnce(type, payload, extra, walletId, onSending)
+        } catch (e: VaultOpException) {
+            // [settle] already fetched the latest blob.
+            if (e.code != CODE_STALE) throw e
+            sendKeptOnce(type, payload, extra, walletId, onSending)
+        }
+    }
+
+    private suspend fun sendKeptOnce(
+        type: String,
+        payload: JsonObjectBuilder.() -> Unit,
+        extra: JsonObjectBuilder.() -> Unit,
+        walletId: String?,
+        onSending: (() -> Unit)?,
+    ): JsonObject {
+        val utk = takeUtk()
+        var stored = false
+        val kept = try {
+            val version = d.credentialVersion ?: throw VaultStateException("no credential on this device")
+            val id = d.newId()
+            val body = sealedBody(type, utk, true, id, payload, null, extra)
+            val exp = d.vaultNow().plus(ChangeTypes.EXP).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            d.trackCredential(id, exp, walletId?.let { SignMark(it, version) })
+            KeptChange(type, id, body, exp, version).also { stored = true }
+        } finally {
+            // Nothing was sent: the UTK goes back to the pool.
+            if (!stored) d.returnUtk(utk)
+        }
+        onSending?.invoke()
+        @Suppress("TooGenericExceptionCaught")
+        val r = try {
+            d.sendKept(kept, CHANGE_SENDS)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw ChangeUnansweredException(kept, e)
+        } ?: throw ChangeUnansweredException(kept)
+        return settleKept(kept, r)
+    }
+
+    /**
+     * [kept] sent once more, as the same request (same inner id, body and `exp`), while its `exp` has not passed by the vault's clock:
+     * its answer settled as [credOpKept] settles one, or null when there is still none ([ChangeUnansweredException] is not thrown
+     * again: the caller holds [kept]). An answer that came late to an earlier send is taken without sending.
+     */
+    suspend fun resendKept(kept: KeptChange): JsonObject? = d.credentialLock.withLock {
+        val r = d.sendKept(kept, 1) ?: return@withLock null
+        settleKept(kept, r)
+    }
+
+    /** The answer to a kept request: the request is decided ([settle]); the credential operation is no longer unsettled. */
+    private suspend fun settleKept(kept: KeptChange, r: VaultMessage): JsonObject {
+        d.settleCredential(kept.innerId)
+        if (r.inner.status != Inner.STATUS_OK) return settle(kept, r)
+        d.dropKept(kept)
+        try {
+            keepIfNewer(r.body, kept.sentVersion)
+        } catch (_: java.io.IOException) {
+            // The operation applied; the blob is fetched by the next operation that finds it stale.
+        }
+        return r.body
+    }
+
+    /**
+     * Keeps what a (possibly cached, possibly late) answer carries: the UTKs always, the blob and its acknowledgement only when the
+     * credential held is **still the one the request was sent at** ([sentVersion]) and the answer's `credential_version` is above
+     * it. Another credential operation (or a reset) may have moved the credential on while this answer was awaited; storing the
+     * blob then would present a version the vault has passed, which it freezes as a clone.
+     */
+    private suspend fun keepIfNewer(o: JsonObject, sentVersion: Long) {
+        val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
+        if (d.credentialVersion == sentVersion && (v == null || v > sentVersion)) {
+            keep(o)
+        } else {
+            keep(JsonObject(o.filterKeys { it != "credential" }))
+        }
+    }
+
+    /**
      * (VAULT-MESSAGING 0.48.0 §11.14.9 step 2) A `credential.reset` replaces the password and the credential key, so it
      * counts as a secret sent ([secretGeneration]): once as it goes out (after [onSending] stored it) and again once it
      * ended (answered, refused or unanswered), both under [VaultDevice.credentialLock]. An operation that read the count

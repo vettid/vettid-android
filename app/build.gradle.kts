@@ -847,11 +847,14 @@ val callsMarkers = listOf(
 
 /**
  * The wallet's vault request types (`WalletApi.kt`, :core:vault): a release APK must not contain them, so that no code that ships in
- * release can reach the wallet (the feed and History labels such as `wallet.signed` stay; these names are in no label).
+ * release can reach the wallet (the feed and History labels such as `wallet.signed` stay; these names are in no label). W2-1 adds
+ * `wallet.psbt.inspect` and `wallet.history`; `wallet.sign` is NOT a marker: the check matches substrings and the `wallet.signed` label
+ * (feed, History) that stays in release contains it. A release that carried `walletSign` is still caught by the others (the wallet
+ * code that calls it is linked with them) and by `Lcom/vettid/feature/wallet/` in the DEX check.
  */
 val walletMarkers = listOf(
     "wallet.list", "wallet.get", "wallet.update", "wallet.address.new", "wallet.address.list", "wallet.address.used",
-    "wallet.caps.set", "vettid_wallet_screens",
+    "wallet.caps.set", "wallet.psbt.inspect", "wallet.history", "vettid_wallet_screens",
 )
 
 /**

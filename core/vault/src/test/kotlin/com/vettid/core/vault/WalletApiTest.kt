@@ -117,5 +117,42 @@ class WalletApiTest {
         assertTrue(inner.containsKey("mnemonic"))
     }
 
+    // --- W2-1: wallet.sign, wallet.psbt.inspect, wallet.history ---
+
+    @Test
+    fun theSignHashIsOverTheDecodedBytesNotTheBase64Text() {
+        // SHA-256 of the three bytes 00 01 02 (a public vector); "AAEC" is their base64.
+        assertEquals("ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc", hex(WalletSignBinding.payloadSha256("AAEC")))
+        // The text's own hash is something else.
+        val textHash = java.security.MessageDigest.getInstance("SHA-256").digest("AAEC".toByteArray())
+        assertNotEquals(hex(textHash), hex(WalletSignBinding.payloadSha256("AAEC")))
+        // Padding and a longer PSBT-like value: the same bytes, whatever the text's length.
+        val bytes = ByteArray(1000) { (it * 31).toByte() }
+        val text = java.util.Base64.getEncoder().encodeToString(bytes)
+        assertEquals(hex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)), hex(WalletSignBinding.payloadSha256(text)))
+    }
+
+    @Test
+    fun theSignHashRefusesTextThatIsNotBase64() {
+        try {
+            WalletSignBinding.payloadSha256("not base64!")
+            fail()
+        } catch (_: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun signSealsThePasswordTheWalletAndTheHashOnly() {
+        val sealed = signSealed("01HXZ3N5Q8R2T4V6W9Y0B1C2D3", "AAEC", "pw")
+        assertEquals(setOf("password", "item_id", "payload_sha256"), sealed.keys)
+        assertEquals("pw", str(sealed, "password"))
+        assertEquals("01HXZ3N5Q8R2T4V6W9Y0B1C2D3", str(sealed, "item_id"))
+        assertEquals(
+            "ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc",
+            hex(Base64s.decodeStd(str(sealed, "payload_sha256"))),
+        )
+    }
+
     private fun str(o: JsonObject, k: String) = (o[k] as JsonPrimitive).content
 }

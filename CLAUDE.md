@@ -271,6 +271,31 @@ The A2 exit test:
   `wallet.limits_lower_bad`, `wallet.limits_lower_confirm`, `wallet.limits_raise`, `wallet.limits_raise_confirm`,
   `wallet.limits_remove`, `wallet.limits_bad_pin`, `wallet.limits_backoff`, `wallet.limits_conflict`, `wallet.detail_reset`,
   `wallet.detail_reset_confirm`, `wallet.receive_reset`, `wallet.receive_limits_ask`. The review of a send is later.
+  W2-1 (sending, no screens; ANDROID-PLAN §4 "Sending", VAULT-MESSAGING §10.18): `WalletApi.kt` adds `walletPsbtInspect`, `walletSign` (a
+  credential operation sealed `{password, item_id: wallet_id, payload_sha256}`, the hash of the PSBT's **decoded bytes**,
+  `WalletSignBinding`; no `broadcast`: the app broadcasts) and `walletHistory`; `walletMarkers` gains `wallet.psbt.inspect` and
+  `wallet.history`, **not** `wallet.sign` (the substring is in the `wallet.signed` labels that stay in release). `wallet.sign` goes through
+  `CredentialOps.credOpKept`, not `credOp`: the sealed body is built once and kept in memory as a `KeptChange` (the lost-answer machinery of
+  `pin.change`), so a lost or late answer is **resent as the same request** (`walletSignResend`: same inner id and body, the vault answers
+  from its cache) and a spending limit counts it once; never a second `walletSign` for one payment. `:core:chain`: `CoinSelection` (pure:
+  confirmed coins only unless asked, branch and bound, then largest first, fee `ceil(rate * vsize)` with the vault's own vsize, change
+  at least 330 sats or the remainder to the fee and `toFeeSats` says so, Send all, 1 to 1,000 sat/vB), `Payee` (the address for the
+  wallet's network), `SummaryCompare` (the vault's summary against what was built and entered; `vsize` is not compared). `WalletsManager`:
+  `prepareSend` (hold as Receive: pending `wallet.caps.set` first via `settleFirst`, an unreadable flags file holds; address, rate, coins of
+  both accounts from the chain server, build, `wallet.psbt.inspect`, compare; any difference is `PrepareResult.Different`, code
+  `summary_mismatch`, nothing is unlocked or signed), `approveSend(prepared, password)` (`credential.unlock` through the app's own window
+  path when the window is closed, and `credential_locked` once more; sign; the signed txid must be the reviewed one; `POST /tx`; a window
+  the app opened is closed again), `retrySign` (the same request), `retryBroadcast` (the same bytes, the chain server opened afresh),
+  `discardUnsent`. The signed `tx` is **memory only** (`keptTx`, never on disk, dropped by `clear()` at lock, hold and wipe, as are the
+  unanswered signings). Errors are `SendResult` / `PrepareResult` kinds with codes (`SendCodes`): `cap_exceeded` (`per_tx` /
+  `per_period`, `limit_sats`, `remaining_sats`, `allowed_after`), `invalid_psbt` with its reason (`wrong_seed` is an alarm),
+  `credential_locked`, `duplicate_wallet`, a broadcast failure with its reason (`BroadcastCause`, the transaction kept). Texts are W2-2's.
+  Review fixes: a reviewed payment (its unsigned txid) is **consumed** when its `wallet.sign` goes out and is signed once (`SendResult.AlreadySigned`;
+  any vault refusal of the signing (final, counts nothing) and any failure from before the request went out (`SignNotSent`) give it back; an
+  answer that does not read, or a failure after the send without an answer, does not); any approve is refused while the wallet holds a signed `tx`. A cached or late answer keeps its UTKs but never an older credential blob
+  (`CredentialOps.keepIfNewer`: the blob only while the credential held is still the one the request was sent at). `wallet.sign` is marked durably (`SignMark` in `DeviceState.unsettledSigns`) and holds new sends for that wallet
+  (`SendHold.SIGN_UNSETTLED`) across lock, unlock and restart until `credential.version` passes the version it was sent at or its `exp` passes
+  (`walletSignsOutstanding`). A lock drops the kept request (`forget`) and nothing is broadcast after one.
 
 ## Device testing
 

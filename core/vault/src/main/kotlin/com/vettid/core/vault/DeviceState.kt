@@ -49,6 +49,12 @@ internal data class DeviceState(
      */
     val unsettled: MutableMap<String, Long> = mutableMapOf(),
     /**
+     * (W2-1) The `wallet.sign` requests among [unsettled]: inner id to the wallet and the credential version the request was sent
+     * at. Kept across restarts so that no new send is made for that wallet while a signing may still apply: it is decided by
+     * `credential.version` (past the sent version, the signing applied or never will) or by its `exp` ([VaultDevice.unsettledSigns]).
+     */
+    val unsettledSigns: MutableMap<String, SignMark> = mutableMapOf(),
+    /**
      * The outbox's entries are tracked in [unsettled]. False only in a state written by an app version before 0.45.0:
      * its outbox entries carry no `exp` and are tracked at the first load ([VaultDevice.LEGACY_UNSENT]).
      */
@@ -181,4 +187,10 @@ class InMemoryDeviceStateStore : DeviceStateStore {
     override fun clear() {
         b = null
     }
+}
+
+/** A `wallet.sign` sent and not decided: its wallet and the credential version it was sent at. */
+@Serializable
+data class SignMark(val walletId: String, val version: Long) {
+    override fun toString(): String = "SignMark"
 }
