@@ -600,6 +600,34 @@ class SendViewModelTest {
     }
 
     @Test
+    fun aLinkThatSetsOrClearsTheAmountDropsTheTenPercentAgreement() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("37")
+        vm.review()
+        // 37 sat/vB x 110 = 4,070 over 10% of 40,000: asked and agreed to.
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+        vm.confirmBigFee()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertEquals(4_070L, vm.state.value.tenConfirmedFee)
+        vm.edit()
+        // A link with a smaller amount (30,000 sats): the agreement was for the earlier amount, so it is asked again.
+        vm.setAddress("bitcoin:$PAYEE?amount=0.0003")
+        assertNull(vm.state.value.tenConfirmedFee)
+        vm.review()
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+        vm.confirmBigFee()
+        eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == null }
+        assertNotNull(vm.state.value.tenConfirmedFee)
+        vm.edit()
+        // A link without an amount clears the field, and the agreement with it.
+        vm.setAddress("bitcoin:$PAYEE")
+        assertEquals("", vm.state.value.amountText)
+        assertNull(vm.state.value.tenConfirmedFee)
+    }
+
+    @Test
     fun aConfirmedPaymentIsASoftNoteThatKeepsReviewOnAndStaysDismissed() = runTest {
         val tx = com.vettid.core.wallet.WalletTx("ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1, 1, emptyList(), null, null)
         engine.recent = RecentSends.CONFIRMED

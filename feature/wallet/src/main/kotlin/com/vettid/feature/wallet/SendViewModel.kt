@@ -347,12 +347,14 @@ class SendViewModel internal constructor(
                     tenConfirmedFee = null,
                 )
                 // A link with an amount sets it; a link without one clears the field (an earlier amount is not the link's).
+                // Either way the amount changed, so a 10% fee agreed to for the earlier one no longer stands.
                 p.isLink && p.amountSats == null -> s.copy(
                     address = p.address, addressIssue = issue, amountText = "", sendAll = false, linkRefused = false, problem = null,
+                    tenConfirmedFee = null,
                 )
                 else -> {
                     val withAmount = p.amountSats?.let {
-                        s.copy(amountText = BtcFormat.btc(it), unit = AmountUnit.BTC, sendAll = false)
+                        s.copy(amountText = BtcFormat.btc(it), unit = AmountUnit.BTC, sendAll = false, tenConfirmedFee = null)
                     } ?: s
                     withAmount.copy(address = p.address, addressIssue = issue, linkRefused = false, problem = null)
                 }
