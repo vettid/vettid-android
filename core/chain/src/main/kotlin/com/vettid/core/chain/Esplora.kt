@@ -141,6 +141,7 @@ sealed class ChainError(kind: String) : Exception(kind) {
  * credentials, no identifier. Redirects are refused (a [ChainError.Redirected]). Each call has a time limit and a size limit. Nothing
  * here logs.
  */
+@Suppress("TooManyFunctions") // one function per Esplora call
 class EsploraClient internal constructor(
     private val base: HttpUrl,
     http: OkHttpClient,
@@ -233,6 +234,21 @@ class EsploraClient internal constructor(
                 return all
             }
             path = targetPath(target) + listOf("txs", "chain", confirmed.last().txid)
+        }
+    }
+
+    /**
+     * One transaction as the server lists it (`GET /tx/<txid>`, the same shape as an entry of an address's list), or null if the
+     * server does not know it (404). The answer must be that transaction ([ChainError.Malformed] otherwise). Used for a payment the
+     * vault signed that the address lists do not show, before it is called "not broadcast".
+     */
+    suspend fun transaction(txid: String): ChainTx? {
+        val id = txid.lowercase()
+        require(isHash(id)) { "not a txid" }
+        return try {
+            parseTx(json(listOf("tx", id), limits.listBytes)).also { if (it.txid != id) throw ChainError.Malformed() }
+        } catch (_: ChainError.NotFound) {
+            null
         }
     }
 

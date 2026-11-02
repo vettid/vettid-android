@@ -402,6 +402,34 @@ internal class FakeSpend : SpendAccess {
     }
 }
 
+/** The server's transactions, by address and by txid (W2-3), with its tip. */
+internal class FakeHistory : HistoryAccess {
+    val byAddress = mutableMapOf<String, List<com.vettid.core.chain.ChainTx>>()
+    val byTxid = mutableMapOf<String, com.vettid.core.chain.ChainTx>()
+    var tip = 1_000L
+    var explorer: String? = null
+    var fails: ChainError? = null
+    val asked = CopyOnWriteArrayList<String>()
+
+    override suspend fun transactions(address: String): List<com.vettid.core.chain.ChainTx> {
+        asked += "txs"
+        fails?.let { throw it }
+        return byAddress[address].orEmpty()
+    }
+
+    override suspend fun transaction(txid: String): com.vettid.core.chain.ChainTx? {
+        asked += "tx"
+        fails?.let { throw it }
+        return byTxid[txid]
+    }
+
+    override suspend fun tipHeight(): Long {
+        asked += "tip"
+        fails?.let { throw it }
+        return tip
+    }
+}
+
 /** A chain server answering from a map of address to totals (none: an address without history). */
 internal class FakeChain(var open: ChainOpen? = null) : ChainSource {
     val history = mutableMapOf<String, ChainSummary>()
@@ -433,7 +461,10 @@ internal class FakeChain(var open: ChainOpen? = null) : ChainSource {
         return openNow()
     }
 
-    private fun openNow(): ChainOpen = open ?: ChainOpen.Ready("mempool.space", spend) { address ->
+    /** What the Transactions list asks of the server (W2-3). */
+    val txs = FakeHistory()
+
+    private fun openNow(): ChainOpen = open ?: ChainOpen.Ready("mempool.space", spend, txs, txs.explorer) { address ->
         gate?.await()
         synchronized(asked) { asked += address }
         history[address] ?: ChainSummary(0, 0, 0, 0)

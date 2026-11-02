@@ -250,6 +250,24 @@ class EsploraClientTest {
     }
 
     @Test
+    fun oneTransactionIsParsedLikeAnEntryOfTheListAndAnUnknownOneIsNull() = runBlocking {
+        server.enqueue(ok(tx(5, true)))
+        val t = client().transaction(txid(5).uppercase())!!
+        assertEquals(txid(5), t.txid)
+        assertEquals(200_005L, t.blockHeight)
+        assertEquals(1_730_000_000L, t.blockTime)
+        assertEquals("/api/tx/${txid(5)}", server.takeRequest().url.encodedPath)
+        server.enqueue(MockResponse.Builder().code(404).body("Transaction not found").build())
+        assertNull(client().transaction(txid(6)))
+        // Another transaction than the one asked for, and a failure, are not "unknown".
+        server.enqueue(ok(tx(7, false)))
+        fails<ChainError.Malformed> { runBlocking { client().transaction(txid(8)) } }
+        server.enqueue(MockResponse.Builder().code(500).body("oops").build())
+        fails<ChainError.BadStatus> { runBlocking { client().transaction(txid(8)) } }
+        Unit
+    }
+
+    @Test
     fun aTransactionIsConfirmedUnconfirmedOrNotFound() = runBlocking {
         val id = EsploraFixtures.RAW_TXID
         server.enqueue(ok("""{"txid":"$id","status":{"confirmed":true,"block_height":5}}"""))

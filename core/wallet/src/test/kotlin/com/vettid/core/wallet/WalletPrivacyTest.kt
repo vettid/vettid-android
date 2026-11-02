@@ -22,14 +22,24 @@ class WalletPrivacyTest {
     fun theTypesPrintTheirNamesOnly() {
         val w = WalletFixtures.wallet()
         val a = WalletFixtures.address(AddressChain("p2tr", false), 0)
+        val payee = WalletPayee(a.address, 123_456)
+        val tx = WalletTransaction(
+            "ab".repeat(32), TxDirection.SENT, 123_456, -123_777, 321, TxStatus.Confirmed(6), 99, Instant.EPOCH, Instant.EPOCH, listOf(payee), "conn",
+        )
         val values = listOf(
             w, w.accounts[0], a, AddressPage(listOf(a), null), RevealedPhrase("abandon ability".toCharArray()),
             WalletLookup(Instant.EPOCH, "node.example", 123_456, 789, setOf(a.address)),
             ChainOpen.Ready("node.example") { error("unused") }, LookupResult.NoServer(ChainServer.NotSet),
             LookupResult.ServerFailed(RuntimeException("https://secret.example/key")),
             LookupResult.VaultFailed(com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.OTHER, "secret.example")),
+            // W2-3: the transactions, their list and every result that carries a value.
+            tx, WalletTransactions(Instant.EPOCH, "node.example", "https://secret.example", listOf(tx)),
+            TransactionsResult.Done(WalletTransactions(Instant.EPOCH, "node.example", null, listOf(tx))),
+            TransactionsResult.ServerFailed(com.vettid.core.chain.ChainError.Malformed()),
+            TransactionsResult.VaultFailed(com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.OTHER, "secret.example")),
+            payee, WalletTx("ab".repeat(32), Instant.EPOCH, 123_456, 789, 321, listOf(payee), "conn", null),
         )
-        val secrets = listOf(a.address, WalletFixtures.TPUB86, WalletFixtures.TPUB84, "abandon", "123456", "Savings", "node.example", "secret.example")
+        val secrets = listOf(a.address, WalletFixtures.TPUB86, WalletFixtures.TPUB84, "abandon", "123456", "123777", "Savings", "abab", "node.example", "secret.example")
         for (v in values) {
             for (s in secrets) assertFalse("'$s' in $v", "$v".contains(s))
         }

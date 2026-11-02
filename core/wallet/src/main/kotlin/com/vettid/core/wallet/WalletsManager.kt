@@ -7,6 +7,7 @@ import com.vettid.core.chain.BuildCoin
 import com.vettid.core.chain.BuildException
 import com.vettid.core.chain.BuildOutput
 import com.vettid.core.chain.ChainError
+import com.vettid.core.chain.ChainTx
 import com.vettid.core.chain.TxState
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.CoinSelection
@@ -212,6 +213,10 @@ class WalletsManager(
     private val lookupsFlow = MutableStateFlow<Map<String, WalletLookup>>(emptyMap())
     val lookups: StateFlow<Map<String, WalletLookup>> = lookupsFlow.asStateFlow()
 
+    /** The last Transactions list per wallet (W2-3): memory only, cleared with everything else at lock, hold and wipe. */
+    private val transactionsFlow = MutableStateFlow<Map<String, WalletTransactions>>(emptyMap())
+    val transactionsKnown: StateFlow<Map<String, WalletTransactions>> = transactionsFlow.asStateFlow()
+
     /** The limits chosen but not yet carried by `wallet.caps.set`, per wallet (memory; the file is [WalletFlags]). Under [lock]. */
     private val pendingMap = HashMap<String, WalletCaps>()
     private val capsPendingFlow = MutableStateFlow<Set<String>>(emptySet())
@@ -351,6 +356,7 @@ class WalletsManager(
             walletsFlow.value = emptyList()
             listRead = false
             lookupsFlow.value = emptyMap()
+            transactionsFlow.value = emptyMap()
             checked.clear()
             pendingMap.clear()
             pendingUnknown = false
@@ -425,6 +431,7 @@ class WalletsManager(
             listRead = true
             // A wallet gone (deleted on another device): its look-up goes too.
             lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+            transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
         }
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
         if (published) flags.listed(list.map { it.id }.toSet())
@@ -442,6 +449,7 @@ class WalletsManager(
                 VaultJson.str(body, "wallet_id")?.let { id ->
                     walletsFlow.update { l -> l.filterNot { it.id == id } }
                     lookupsFlow.update { it - id }
+                    transactionsFlow.update { it - id }
                     checked.keys.removeAll { it.first == id }
                     dropPending(id)
                     scope.launch { flags.forget(id) }
@@ -846,6 +854,7 @@ class WalletsManager(
             publish(g) {
                 walletsFlow.update { l -> l.filterNot { it.id == walletId } }
                 lookupsFlow.update { it - walletId }
+                transactionsFlow.update { it - walletId }
                 checked.keys.removeAll { it.first == walletId }
                 pendingMap.remove(walletId)
                 held.remove(walletId)
@@ -1040,6 +1049,116 @@ class WalletsManager(
             return LookupResult.VaultFailed(e)
         }
         return LookupResult.Done(lookup)
+    }
+
+    /**
+     * The wallet's transactions (W2-3; ANDROID-PLAN §4 "Transactions"): the same walk as [lookup] ([scan]: both accounts, receive and
+     * change, up to the vault's next index or the last address with history, plus the gap), then each address that has history is
+     * asked for its transactions (all pages) and the vault for what it signed (`wallet.history`, the newest 200), merged by `txid`
+     * ([TransactionMerge]). A payment the vault signed that the lists do not show is asked of the server by itself before it is
+     * called anything; a server that cannot answer that fails the list rather than guess. Nothing is sent to the server before the
+     * privacy note and the address check, and nothing is kept once the vault is closed.
+     */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongMethod")
+    suspend fun transactions(walletId: String): TransactionsResult {
+        val g = gen()
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId }
+            ?: return TransactionsResult.VaultFailed(VaultFailure(FailureKind.OTHER, "no_wallet"))
+        try {
+            settleFirst(walletId)
+        } catch (e: VaultFailure) {
+            return TransactionsResult.VaultFailed(e)
+        }
+        val network = networkOf(wallet) ?: return TransactionsResult.NeedsNetwork
+        if (!offered(network)) return TransactionsResult.NetworkNotOffered
+        if (!flags.privacyNoteShown(walletId)) return TransactionsResult.NoteNeeded
+        val ready = when (val open = chain.open(network)) {
+            is ChainOpen.Ready -> open
+            is ChainOpen.NoServer -> return TransactionsResult.NoServer(open.server)
+            is ChainOpen.WrongNetwork -> return TransactionsResult.ServerWrongNetwork(open.found)
+            is ChainOpen.Unchecked -> return TransactionsResult.ServerFailed(open.error as? ChainError ?: ChainError.Unreachable())
+        }
+        val access = ready.history ?: return TransactionsResult.ServerFailed(ChainError.Unreachable())
+        val derived = try {
+            checkedWallet(wallet, network, g) ?: return TransactionsResult.AddressMismatch
+        } catch (e: VaultFailure) {
+            return TransactionsResult.VaultFailed(e)
+        }
+        if (gen() != g) return TransactionsResult.Cleared
+        val now = walletsFlow.value.firstOrNull { it.id == walletId } ?: wallet
+        val signed: List<WalletTx>
+        val vaultNow: Instant
+        try {
+            signed = history(walletId, HISTORY_MAX)
+            vaultNow = vaultGuard { ops().vaultNow() }
+        } catch (e: VaultFailure) {
+            return TransactionsResult.VaultFailed(e)
+        } catch (_: WalletWireException) {
+            // An answer that is not §10.18's: nothing is known of what the vault signed.
+            return TransactionsResult.VaultFailed(VaultFailure(FailureKind.OTHER, "unreadable_result"))
+        }
+        val found = try {
+            val scan = scan(now, derived, ready, g) ?: return TransactionsResult.Cleared
+            val chainTxs = listsOf(access, scan.funded, g) ?: return TransactionsResult.Cleared
+            // A payment the vault signed that no list shows: asked of the server itself, one by one.
+            for (h in signed) {
+                val id = h.txid.lowercase()
+                // A txid that is not 64 hex digits cannot be asked about: it is not on the server.
+                if (id in chainTxs || id.length != TXID_LENGTH || !id.all { it in "0123456789abcdef" }) continue
+                if (gen() != g) return TransactionsResult.Cleared
+                access.transaction(id)?.let { chainTxs[id] = it }
+            }
+            val tip = if (chainTxs.values.any { it.confirmed }) access.tipHeight() else null
+            Found(scan.funded.map { it.address }.toSet(), chainTxs, tip)
+        } catch (e: ChainError) {
+            return TransactionsResult.ServerFailed(e)
+        }
+        val items = withContext(Dispatchers.Default) { TransactionMerge.merge(found.own, found.chain, signed, found.tip, vaultNow) }
+        val list = WalletTransactions(clock(), ready.host, ready.explorer, items)
+        var listed = false
+        if (!publish(g) {
+                listed = walletsFlow.value.any { it.id == walletId }
+                if (listed) transactionsFlow.update { it + (walletId to list) }
+            }
+        ) {
+            return TransactionsResult.Cleared
+        }
+        return if (listed) TransactionsResult.Done(list) else TransactionsResult.VaultFailed(VaultFailure(FailureKind.OTHER, "no_wallet"))
+    }
+
+    private class Found(val own: Set<String>, val chain: Map<String, ChainTx>, val tip: Long?)
+
+    /** Every transaction of the funded addresses, by `txid`, in batches; null as soon as a clear overtook it. */
+    private suspend fun listsOf(access: HistoryAccess, funded: List<Funded>, g: Long): MutableMap<String, ChainTx>? = coroutineScope {
+        val out = LinkedHashMap<String, ChainTx>()
+        for (batch in funded.chunked(BATCH)) {
+            if (gen() != g) return@coroutineScope null
+            for (list in batch.map { f -> async { access.transactions(f.address) } }.awaitAll()) {
+                for (tx in list) out[tx.txid.lowercase()] = tx
+            }
+        }
+        out
+    }
+
+    /**
+     * The wallet of a transaction the vault signed (`wallet.signed` carries the `txid` only, as `ref`): the wallet whose `wallet.history`
+     * has it. Null when none does (an older payment than the newest 200, or a wallet since deleted). A wallet whose history cannot be
+     * read is skipped; if none of the others has it, that failure is thrown.
+     */
+    suspend fun walletOfTransaction(txid: String): String? {
+        val id = txid.lowercase()
+        var failure: VaultFailure? = null
+        for (w in walletsFlow.value) {
+            try {
+                if (history(w.id, HISTORY_MAX).any { it.txid.lowercase() == id }) return w.id
+            } catch (e: VaultFailure) {
+                failure = e
+            } catch (_: WalletWireException) {
+                failure = VaultFailure(FailureKind.OTHER, "unreadable_result")
+            }
+        }
+        failure?.let { throw it }
+        return null
     }
 
     /**
@@ -1792,6 +1911,10 @@ class WalletsManager(
 
         private val RECENT_WINDOW: java.time.Duration = java.time.Duration.ofHours(24)
         private const val RECENT_HISTORY = 50
+
+        /** The most `wallet.history` gives (§10.18). */
+        private const val HISTORY_MAX = 200
+        private const val TXID_LENGTH = 64
         private const val RECENT_MAX = 10
 
         /** BIP44's gap: addresses past the last used one that are looked at before a chain is taken as ended. */
