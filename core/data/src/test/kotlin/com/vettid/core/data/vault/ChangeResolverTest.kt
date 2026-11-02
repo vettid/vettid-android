@@ -613,4 +613,36 @@ class ChangeResolverTest {
         assertEquals(reset, back)
         assertFalse(reset.toString().contains("key-one"))
     }
+
+    /**
+     * (ANDROID-PLAN 0.1.55 "Only the vault's own answer counts") An HTTP 403, a `forbidden` of the relay, the member API or the
+     * host (none is the vault's error answer) and a timeout, to the resend, to `credential.version` or to the fetch after
+     * "applied", leave the reset's marker and say "can't reach"; no wipe, no gate opening.
+     */
+    @Test
+    fun anErrorThatIsNotTheVaultsOwnForbiddenLeavesTheResetUnresolved() = runTest {
+        val errors = listOf<Exception>(
+            IOException("HTTP 403"),
+            IllegalStateException("relay: forbidden"),
+            java.net.SocketTimeoutException("timeout"),
+        )
+        for (e in errors) {
+            val cases = listOf<FakeOps.() -> Unit>(
+                { resendThrows = e; versions += IOException("no answer") },
+                { versions += e },
+                {
+                    versions += version(1, exp.minusSeconds(500), key = "key-two")
+                    fetchThrows = e
+                },
+            )
+            for (setup in cases) {
+                val ops = FakeOps(reset).apply(setup)
+                val (r, scope) = resolver(testScheduler, ops)
+                assertEquals(ChangeCheck.Unreachable(ChangeKind.RESET), r.decide())
+                assertEquals(reset, ops.marker)
+                assertTrue(ops.cleared.isEmpty() && ops.confirmed.isEmpty())
+                scope.cancel()
+            }
+        }
+    }
 }

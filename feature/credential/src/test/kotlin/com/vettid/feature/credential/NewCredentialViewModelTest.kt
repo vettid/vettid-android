@@ -1,6 +1,8 @@
 package com.vettid.feature.credential
 
 import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.ChangeCheck
+import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -85,5 +87,101 @@ class NewCredentialViewModelTest {
         vm.setPassword("a much longer new pass phrase 42")
         vm.setConfirm("a much longer new pass phrase 42")
         assertTrue(vm.uiState.value.filled)
+    }
+
+    // --- a lost answer to credential.reset (VAULT-MESSAGING 0.48.0, ANDROID-PLAN 0.1.51) ---
+
+    private fun ready(vm: NewCredentialViewModel) {
+        filled(vm)
+        vm.setAcknowledged(true)
+    }
+
+    /** No answer is not a failure: the entries stay, the check's state follows, and the form is closed to a new send. */
+    @Test
+    fun noAnswerKeepsTheEntriesAndFollowsTheCheck() = runTest {
+        vault.fail["newCredential"] = FakeVault.failure(FailureKind.CHANGE_CHECKING, "change_checking")
+        val vm = NewCredentialViewModel(vault, vault)
+        ready(vm)
+        vm.submit()
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
+        vm.confirm()
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals("975310", s.pin)
+        assertEquals("old password", s.current)
+        assertEquals(ChangeCheck.Checking(ChangeKind.RESET), s.check)
+        assertEquals(null, s.error)
+        assertFalse(s.busy)
+        assertFalse("nothing is sent while it is decided", s.filled)
+    }
+
+    /** Nothing was sent (an earlier request undecided): the error is shown and every entry stays. */
+    @Test
+    fun aRefusalWithNothingSentKeepsEveryEntry() = runTest {
+        for (kind in listOf(FailureKind.RESET_UNDECIDED, FailureKind.CHANGE_UNRESOLVED, FailureKind.CREDENTIAL_UNSETTLED)) {
+            vault.fail["newCredential"] = FakeVault.failure(kind, "x")
+            val vm = NewCredentialViewModel(vault, vault)
+            ready(vm)
+            vm.submit()
+            vm.confirm()
+            advanceUntilIdle()
+            assertEquals(kind, vm.uiState.value.error)
+            assertEquals("975310", vm.uiState.value.pin)
+            assertEquals("old password", vm.uiState.value.current)
+        }
+    }
+
+    /** Ended and Moved close the form (no Try again); NotApplied opens it again. */
+    @Test
+    fun endedAndMovedDisableTheFormAndNotAppliedDoesNot() = runTest {
+        val vm = NewCredentialViewModel(vault, vault)
+        ready(vm)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.filled)
+        vault.changeCheck.value = ChangeCheck.Ended(ChangeKind.RESET)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.filled)
+        assertEquals(ChangeCheck.Ended(ChangeKind.RESET), vm.uiState.value.check)
+        vault.changeCheck.value = ChangeCheck.Moved(ChangeKind.RESET)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.filled)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.NotApplied(ChangeKind.RESET)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.filled)
+        assertEquals(ChangeCheck.NotApplied(ChangeKind.RESET), vm.uiState.value.check)
+    }
+
+    /** A reset being decided when the screen opened is followed; a decision it did not follow is not shown here. */
+    @Test
+    fun anOldDecisionIsIgnoredButAnOpenCheckIsFollowed() = runTest {
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.RESET)
+        val vm = NewCredentialViewModel(vault, vault)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.done)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Applied(ChangeKind.RESET)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        assertTrue("acknowledged: said here, not again by the shell", vault.changeCheckAcknowledged > 0)
+    }
+
+    /** A refusal decided later by the resolver clears the PIN and the current password, as an answer does. */
+    @Test
+    fun aRefusalDecidedLaterClearsTheSecrets() = runTest {
+        val vm = NewCredentialViewModel(vault, vault)
+        ready(vm)
+        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
+        advanceUntilIdle()
+        vault.changeCheck.value = ChangeCheck.Refused(ChangeKind.RESET, FailureKind.BAD_PASSWORD)
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(FailureKind.BAD_PASSWORD, s.error)
+        assertEquals("", s.pin)
+        assertEquals("", s.current)
+        assertEquals(null, s.check)
     }
 }

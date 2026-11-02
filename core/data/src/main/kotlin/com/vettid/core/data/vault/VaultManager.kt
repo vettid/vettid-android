@@ -347,7 +347,8 @@ class VaultManager(
         val ok = record.confirmChange(m)
         newPinStep = false
         refreshChangeFlows()
-        if (m.kind == ChangeKind.RESET) resetApplied()
+        // Once per reset: the answer, a resend and the check may each find it applied.
+        if (m.kind == ChangeKind.RESET && handledResets.add(m.innerId)) resetApplied()
         return ok
     }
 
@@ -364,7 +365,23 @@ class VaultManager(
             runCatching { refreshAlarm(s) }
             ownerCheck.onOpened()
             items.refreshQuietly()
+            // The wallets were critical items: whatever else keeps a copy of them (the wallet list, its flags) forgets them.
+            for (hook in resetHooks) runCatching { hook() }
         }
+    }
+
+    /** The resets whose applied effects ran ([resetApplied]); a reset's inner id is unique. */
+    private val handledResets: MutableSet<String> = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+    private val resetHooks = java.util.concurrent.CopyOnWriteArrayList<suspend () -> Unit>()
+
+    /**
+     * (0.48.0) Runs [hook] once a new credential was made (its answer, or a check that found it applied): every critical item,
+     * the wallets among them, was destroyed with the old credential. For what holds copies of them outside this class
+     * (`:core:wallet`, bound in the app); the hook is quick, may suspend, and its failure is ignored.
+     */
+    fun onCredentialReset(hook: suspend () -> Unit) {
+        resetHooks.add(hook)
     }
 
     /** The change is decided as not applied, refused or ended: its marker goes; the epoch stays (§11.14.1 rules 3–5). */

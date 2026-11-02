@@ -330,7 +330,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         // answer needs a version above the one sent, and an answer without a version keeps nothing.
         val newer = v != null && (v > kept.sentVersion || kept.type == ChangeTypes.RESET)
         if (sentBlob != null && d.credentialBlob() == sentBlob && newer) {
-            keep(o)
+            keep(o, sameKey = kept.type !in KEY_REPLACING)
         } else {
             keep(JsonObject(o.filterKeys { it != "credential" }))
         }
@@ -534,7 +534,8 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     }
 
     /**
-     * (0.44.0, §11.14.9) A PIN or password change, decided rather than repeated when its answer is lost. [onMarker]
+     * (0.44.0, §11.14.9) A PIN or password change, or (0.48.0) a `credential.reset`, decided rather than repeated when its answer
+     * is lost. [onMarker]
      * stores the marker durably before anything is sent and throws to stop the operation. The request carries an
      * `exp` 10 minutes after [VaultDevice.vaultNow] and is sent as [KeptChange] (the automatic resends of §8.6 with
      * the same id and body). An answer decides it ([settle]); none throws [ChangeUnansweredException] with the kept
@@ -592,7 +593,11 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             } ?: throw ChangeUnansweredException(kept)
             return settle(kept, r)
         } finally {
-            if (type == ChangeTypes.RESET) secretGeneration++
+            // Under the lock, off the cancellation of the caller: the count must not be lost or torn (`++` is not atomic). This
+            // is not inside the lock (the lock block above ended, and [settle] released its own), so it cannot deadlock.
+            if (type == ChangeTypes.RESET) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { d.credentialLock.withLock { secretGeneration++ } }
+            }
         }
     }
 

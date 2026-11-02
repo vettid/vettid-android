@@ -21,7 +21,7 @@ import java.time.Instant
 // is decided, not repeated.
 
 /**
- * The unresolved change stored in `account.bin` before a `pin.change` or `credential.password.change` is sent (§11.14.9
+ * The unresolved change stored in `account.bin` before a `pin.change`, `credential.password.change` or `credential.reset` is sent (§11.14.9
  * step 1): the type, the inner id, the blob version the request carries and its `exp` (epoch ms, the vault's clock as
  * last seen). For a PIN change [fromEpoch] is the epoch of the phone's current record when it was sent; its candidate
  * is the next epoch. No PIN, password or secret.
@@ -163,7 +163,7 @@ internal object ChangeDecision {
 }
 
 /**
- * Decides an unresolved PIN or password change (§11.14.9 steps 2–4): at once, at every reconnection and start
+ * Decides an unresolved PIN or password change, or reset (§11.14.9 steps 2–4, 0.48.0): at once, at every reconnection and start
  * ([kick]), and before any other credential operation ([gate]). Each round resends the kept request (the same inner id
  * and body) while its `exp` has not passed, and otherwise asks `credential.version`; an undecided round is tried again
  * after a pause of 30 s, doubling up to 5 minutes. Nothing here sends a PIN or a password that was not already in the

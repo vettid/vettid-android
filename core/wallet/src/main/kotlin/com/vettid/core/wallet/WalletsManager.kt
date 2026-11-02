@@ -339,6 +339,20 @@ class WalletsManager(
         withContext(NonCancellable) { onClosed() }
     }
 
+    /**
+     * A new credential destroyed every wallet (they are critical items, VAULT-MESSAGING 0.48.0): what is held of them is forgotten
+     * (the list, the look-ups, kept transactions), what is kept of them on this phone (pending limits, backed-up marks, test-chain
+     * labels) goes, and, if the vault is open, the wallets are read again. A pending limit is dropped first, so that nothing is
+     * sent for a wallet that no longer exists.
+     */
+    suspend fun credentialReset() {
+        val (wasOpen, known) = synchronized(lock) { open to walletsFlow.value.map { it.id } }
+        clear()
+        val ids = (known + flags.allPendingCaps().orEmpty().keys).toSet()
+        for (id in ids) flags.forget(id)
+        if (wasOpen) attempt { open() }
+    }
+
     /** Lock, hold, wipe: forget everything, at once. */
     fun clear() {
         synchronized(lock) {

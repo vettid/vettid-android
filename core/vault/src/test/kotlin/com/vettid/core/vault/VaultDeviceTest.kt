@@ -2830,6 +2830,62 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * The plan's first test at the vault layer, as the resolver drives it: a reset whose answers were dropped and that applied is
+     * decided by `credential.version` (the new key, version 1: no alarm), the latest blob is fetched (`credential.get`,
+     * `credential.ack`), and the next owner check is sent with the fetched blob.
+     */
+    @Test
+    fun aDroppedResetThatAppliedIsDecidedByTheNewKeyAndTheNextOwnerCheckCarriesTheFetchedBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            lostReset(d, v, api, 3, "key-one", "00112233445569b1")
+            val ask = async(Dispatchers.IO) { api.credentialVersionAt() }
+            answerVersion(d, v, 1, key = "key-two")
+            val (info, _) = ask.await()
+            assertEquals("key-two", info.key)
+            assertEquals(1L, info.version)
+            assertNull(info.alarm)
+            val fetch = async(Dispatchers.IO) { api.credentialFetch() }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.get", get.type)
+            d.handle(v.seal(get.type, """{"credential":"TkVXMQ==","version":1,"utks":[]}""", re = get.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            fetch.await()
+            assertEquals(1L, d.credentialVersion)
+            assertEquals("TkVXMQ==", d.credentialBlob())
+            val check = async(Dispatchers.IO) { runCatching { api.ownerCheck("975310", "new password!") } }
+            val utkGet = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", utkGet.type)
+            d.handle(v.seal(utkGet.type, """{"utks":[${utkJson("00112233445569b2", KemPrivateKey.generate())}]}""", re = utkGet.id, status = Inner.STATUS_OK))
+            val sent = v.open(nextDeposit().second)
+            assertEquals("TkVXMQ==", StrictJson.parseObject(sent.body).string("credential"))
+            check.cancel()
+        }
+    }
+
+    /** A reset's answer without a `key` does not keep the old lineage's key with the new blob (a reset replaces the key). */
+    @Test
+    fun aResetAnswerWithoutAKeyDoesNotKeepTheOldKey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569b3")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":1,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val settle = async(Dispatchers.IO) { api.changeSettle(kept, again.await()!!) }
+            val ack = v.open(nextDeposit().second)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            settle.await()
+            assertEquals("TkVX", d.credentialBlob())
+            assertNull(d.credentialKey)
+        }
+    }
+
     /** A reset's refusal (`bad_password`) is a refusal as for any change: thrown as it is, the marker's job to clear. */
     @Test
     fun aRefusedCachedResetAnswerIsThrown() = runBlocking<Unit> {
@@ -3762,8 +3818,9 @@ class VaultDeviceTest {
     /**
      * (VAULT-MESSAGING 0.48.0 §11.14.9 step 2) A `credential.reset` counts as a secret sent, as it goes out and again once
      * it ended: an owner check that read the count before the reset went out, and one that read it while the reset was
-     * out, are both refused with nothing sent once the reset is answered, although no gate is set. Typed again afterwards,
-     * an operation goes as usual.
+     * out, are both refused with nothing sent once the reset is answered. The first by the count at the first bump; the second
+     * only by the count's second bump, because the reset sends outside the lock and the gate (here a gate that opens once the
+     * reset ended) is what lets it through. Typed again afterwards, an operation goes as usual.
      */
     @Test
     fun anOperationQueuedBehindAResetIsRefused() = runBlocking<Unit> {

@@ -67,6 +67,31 @@ class WalletCapsScreenTest {
         assertNull(WalletFixtures.wallet(caps = null).spentSats)
     }
 
+    /**
+     * (VAULT-MESSAGING 0.48.0) A new credential destroyed every wallet: the held list goes, the pending limit kept on this phone
+     * for a wallet that no longer exists is forgotten before the vault is read again, and nothing is sent for it.
+     */
+    @Test
+    fun aNewCredentialForgetsTheWalletsAndTheirPendingLimits() = runBlocking {
+        val w = wallet("01WALLET000000000000000001")
+        WalletFlags(flagsFile).setPendingCaps(w.id, WalletCaps(100_000, null))
+        val m = manager()
+        ops.capsSetFails = "internal"
+        m.open()
+        assertEquals(listOf(w.id), m.wallets.value.map { it.id })
+        assertTrue(m.isCapsPending(w.id))
+        // The reset destroyed the wallet; the vault no longer lists it.
+        ops.wallets.clear()
+        ops.capsSetFails = null
+        ops.calls.clear()
+        m.credentialReset()
+        assertTrue(m.wallets.value.isEmpty())
+        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertNull(WalletFlags(flagsFile).pendingCaps(w.id))
+        assertFalse(m.isCapsPending(w.id))
+        assertTrue("nothing is sent for a wallet that is gone", ops.calls.none { it.startsWith("caps.set") })
+    }
+
     // A raise over a pending set
 
     @Test
