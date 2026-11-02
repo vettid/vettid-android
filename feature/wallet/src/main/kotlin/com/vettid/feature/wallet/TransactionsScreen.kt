@@ -85,7 +85,7 @@ fun TransactionsScreen(state: TransactionsUiState, actions: TransactionsActions,
                         LazyColumn(Modifier.fillMaxSize()) {
                             item {
                                 Text(
-                                    stringResource(R.string.wallet_tx_status_from, list.host),
+                                    stringResource(R.string.wallet_tx_from, list.host),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(horizontal = Spacing.xl).testTag("wallet_transactions_source"),

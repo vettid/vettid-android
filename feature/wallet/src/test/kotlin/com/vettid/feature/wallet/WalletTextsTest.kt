@@ -41,7 +41,7 @@ class WalletTextsTest {
             R.string.wallet_network_ask to "Which test network is this wallet on?",
             R.string.wallet_address_mismatch to "This wallet's addresses don't match your vault's. Nothing was sent.",
             R.string.wallet_server_failed to "That server didn't answer.",
-            R.string.wallet_privacy_note to "To show your balance and send, VettID asks this server about your wallet's addresses. The server sees those addresses, and can tell they belong together, and it sees this phone's internet address and when you look. VettID's own servers see none of it. Use your own server to keep this to yourself.",
+            R.string.wallet_privacy_note to "To show your balance and send, VettID asks this server about your wallet's addresses. It also asks about payments your vault signed that it doesn't list yet. The server sees those addresses, and can tell they belong together, and it sees this phone's internet address and when you look. VettID's own servers see none of it. Use your own server to keep this to yourself.",
             R.string.wallet_testnet3_unsupported to "VettID's staging app does not connect to testnet3.",
             R.string.wallet_network_not_offered to "This version of VettID doesn't connect to this network.",
             R.string.wallet_server_saved to "Saved. VettID now uses this server.",
@@ -220,6 +220,11 @@ class WalletTextsTest {
         assertEquals("Not seen by mempool.space yet", r.getString(R.string.wallet_tx_not_seen, "mempool.space"))
         assertEquals("Status from mempool.space", r.getString(R.string.wallet_tx_status_from, "mempool.space"))
         assertEquals("From mempool.space", r.getString(R.string.wallet_tx_from, "mempool.space"))
+        assertEquals(
+            "Your vault signed this payment, but the chain server has no record of it. It may never have been sent. " +
+                "Another server may show it. Check before you send again.",
+            r.getString(R.string.wallet_tx_not_broadcast_note),
+        )
         assertEquals("Total sent", r.getString(R.string.wallet_tx_total_out))
         assertEquals("Signed", r.getString(R.string.wallet_tx_signed_at))
         assertEquals("Copy transaction ID", r.getString(R.string.wallet_tx_copy))

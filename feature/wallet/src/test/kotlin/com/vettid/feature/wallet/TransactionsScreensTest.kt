@@ -204,7 +204,9 @@ class TransactionsScreensTest {
     @Test
     fun theListNamesTheServerToo() {
         rule.setContent { TransactionsScreen(list, TransactionsActions()) }
-        rule.onNodeWithText("Status from mempool.space").assertExists()
+        // Owner 2026-11-02 (#257): "From {host}" above the list, since some rows' amounts are the server's word too.
+        rule.onNodeWithText("From mempool.space").assertExists()
+        rule.onNodeWithText("Status from mempool.space").assertDoesNotExist()
     }
 
     @Test
