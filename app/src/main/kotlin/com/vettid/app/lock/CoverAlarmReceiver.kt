@@ -17,7 +17,10 @@ import dagger.hilt.components.SingletonComponent
  * background deadline, no exact-alarm permission. Its PendingIntent is immutable and explicit to [CoverAlarmReceiver],
  * which is not exported, and carries nothing.
  */
-class AndroidCoverAlarm(private val context: Context) : CoverAlarm {
+class AndroidCoverAlarm(
+    private val context: Context,
+    private val now: () -> Long = System::currentTimeMillis,
+) : CoverAlarm {
     private val alarms: AlarmManager? get() = context.getSystemService(AlarmManager::class.java)
 
     private fun intent(): PendingIntent = PendingIntent.getBroadcast(
@@ -25,14 +28,25 @@ class AndroidCoverAlarm(private val context: Context) : CoverAlarm {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
+    /**
+     * An inexact `set` may fire up to about 75% of the wait late (45 minutes for an hour). From [WINDOW_FROM_MS] of wait,
+     * `setWindow` bounds it to [WINDOW_MS] after the deadline: the shortest window allowed without the exact-alarm permission.
+     */
     override fun set(atEpochMs: Long) {
-        alarms?.set(AlarmManager.RTC, atEpochMs, intent())
+        if (atEpochMs - now() >= WINDOW_FROM_MS) {
+            alarms?.setWindow(AlarmManager.RTC, atEpochMs, WINDOW_MS, intent())
+        } else {
+            alarms?.set(AlarmManager.RTC, atEpochMs, intent())
+        }
     }
 
     override fun cancel() {
         alarms?.cancel(intent())
     }
 }
+
+private const val WINDOW_FROM_MS = 15 * 60_000L
+private const val WINDOW_MS = 10 * 60_000L
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)

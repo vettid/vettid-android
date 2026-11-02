@@ -71,7 +71,10 @@ internal fun notifyMessageText(text: String, photo: Boolean, r: android.content.
 }
 
 /** A notification's tap, handed from the launcher activity to the shell: an item to open, or Settings → Notifications. */
-class NotificationOpenInbox {
+class NotificationOpenInbox(
+    /** An item notification was tapped (it goes by itself): the notifier stops tracking its tag, so a cover-up cannot bring it back. */
+    private val onItemTapped: (String) -> Unit = {},
+) {
     sealed interface Open {
         data class Item(val itemId: String) : Open
 
@@ -82,6 +85,7 @@ class NotificationOpenInbox {
     val pending: StateFlow<Open?> = flow.asStateFlow()
 
     fun offer(o: Open) {
+        if (o is Open.Item) onItemTapped(o.itemId)
         flow.value = o
     }
 

@@ -236,6 +236,19 @@ class FeedNotifierTest {
     }
 
     @Test
+    fun aTappedNotificationIsNotBroughtBackByACoverUp() = runTest {
+        val n = notifier()
+        arrive(item("f1"))
+        poster.shown.remove("f1") // tapped: auto-cancelled
+        n.onDismissed("f1") // the tap handler
+        poster.log.clear()
+        source.covered.value = true
+        runCurrent()
+        assertTrue(poster.log.isEmpty())
+        assertTrue(poster.shown.isEmpty())
+    }
+
+    @Test
     fun withTheCoverDownItIsAsBefore() = runTest {
         notifier()
         source.covered.value = true

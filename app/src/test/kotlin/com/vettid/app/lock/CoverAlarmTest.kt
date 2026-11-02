@@ -41,6 +41,26 @@ class CoverAlarmTest {
     }
 
     @Test
+    fun aLongWaitUsesAWindowOfTenMinutesAndAShortOneDoesNot() {
+        val now = 1_000_000L
+        val a = AndroidCoverAlarm(context) { now }
+        a.set(now + 15 * 60_000L)
+        val long = manager.nextScheduledAlarm!!
+        assertEquals(AlarmManager.RTC, long.type)
+        assertEquals(now + 15 * 60_000L, long.triggerAtMs)
+        assertEquals("a window of 10 minutes", 10 * 60_000L, long.windowLengthMs)
+        a.set(now + 15 * 60_000L - 1)
+        val short = manager.nextScheduledAlarm!!
+        assertEquals(now + 15 * 60_000L - 1, short.triggerAtMs)
+        assertTrue("no window", short.windowLengthMs <= 0L)
+        // The window alarm is immutable and explicit as well.
+        a.set(now + 60 * 60_000L)
+        val s = shadowOf(manager.nextScheduledAlarm!!.operation)
+        assertTrue(s.flags and PendingIntent.FLAG_IMMUTABLE != 0)
+        assertEquals(CoverAlarmReceiver::class.java.name, s.savedIntent.component!!.className)
+    }
+
+    @Test
     fun cancelAndSetAgainLeaveOneAlarm() {
         val a = AndroidCoverAlarm(context)
         a.set(1_000L)

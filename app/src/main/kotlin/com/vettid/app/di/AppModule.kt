@@ -288,7 +288,8 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun notificationOpenInbox(): NotificationOpenInbox = NotificationOpenInbox()
+    fun notificationOpenInbox(feed: dagger.Lazy<FeedNotifier>): NotificationOpenInbox =
+        NotificationOpenInbox { feed.get().onDismissed(it) } // the tag of an item notification is its item id
 
     @Provides
     @Singleton
