@@ -1109,14 +1109,16 @@ class WalletsManager(
                 access.transaction(id)?.let { chainTxs[id] = it }
             }
             val tip = if (chainTxs.values.any { it.confirmed }) access.tipHeight() else null
-            Found(scan.funded.map { it.address }.toSet(), chainTxs, tip)
+            Found(scan.derived, chainTxs, tip)
         } catch (e: ChainError) {
             return TransactionsResult.ServerFailed(e)
         }
         val unsent = synchronized(lock) { keptTx[walletId]?.takeIf { !it.mayBeOnNetwork }?.signed?.txid?.lowercase() }
         val items = try {
             withContext(Dispatchers.Default) {
-                TransactionMerge.merge(found.own, found.chain, signed, found.tip, vaultNow, setOfNotNull(unsent))
+                TransactionMerge.merge(
+                    found.own, found.chain, signed, found.tip, vaultNow, setOfNotNull(unsent),
+                ) { Payee.check(network, it) is PayeeCheck.Ok }
             }
         } catch (e: ChainError) {
             // A sum that overflows is not a chain's answer.
@@ -1145,7 +1147,12 @@ class WalletsManager(
         for (batch in funded.chunked(BATCH)) {
             if (gen() != g) return@coroutineScope null
             for (list in batch.map { f -> async { access.transactions(f.address) } }.awaitAll()) {
-                for (tx in list) out[tx.txid.lowercase()] = tx
+                for (tx in list) {
+                    // The same transaction under two addresses: the confirmed copy is kept.
+                    val id = tx.txid.lowercase()
+                    val have = out[id]
+                    if (have == null || (!have.confirmed && tx.confirmed)) out[id] = tx
+                }
             }
         }
         out
@@ -1219,7 +1226,8 @@ class WalletsManager(
     /** A funded address and where it is: its account, chain and index. */
     private data class Funded(val address: String, val type: String, val change: Boolean, val index: Int)
 
-    private class Scan(val confirmed: Long, val unconfirmed: Long, val funded: List<Funded>)
+    /** [derived] is every address the walk derived (funded or not): the wallet's own, for telling its payments apart. */
+    private class Scan(val confirmed: Long, val unconfirmed: Long, val funded: List<Funded>, val derived: Set<String>)
 
     /** Both accounts' chains, in batches; null as soon as a clear overtook it (no more is asked of the server). */
     @Suppress("NestedBlockDepth")
@@ -1227,6 +1235,7 @@ class WalletsManager(
         var confirmed = 0L
         var unconfirmed = 0L
         val funded = ArrayList<Funded>()
+        val derived = HashSet<String>()
         for (type in AccountType.entries) {
             val account = wallet.account(type)
             val stated = vault.account(type.vaultName)
@@ -1241,6 +1250,7 @@ class WalletsManager(
                     val sums = batch.map { i -> async { i to account.address(change, i).let { a -> a to ready.summary(a) } } }.awaitAll()
                     for ((i, pair) in sums) {
                         val (address, s) = pair
+                        derived += address
                         confirmed += s.confirmedSats
                         unconfirmed += s.unconfirmedSats
                         if (s.txCount > 0) {
@@ -1252,7 +1262,7 @@ class WalletsManager(
                 }
             }
         }
-        Scan(confirmed, unconfirmed, funded)
+        Scan(confirmed, unconfirmed, funded, derived)
     }
 
     // --- Sending (W2-1; ANDROID-PLAN §4 "Sending", VAULT-MESSAGING §10.18) ---
@@ -1932,7 +1942,8 @@ class WalletsManager(
         private const val HISTORY_MAX = 200
         private const val TXID_LENGTH = 64
 
-        private fun isTxid(s: String) = s.length == TXID_LENGTH && s.all { it in "0123456789abcdef" }
+        /** 64 lower-case hex digits. */
+        fun isTxid(s: String) = s.length == TXID_LENGTH && s.all { it in "0123456789abcdef" }
         private const val RECENT_MAX = 10
 
         /** BIP44's gap: addresses past the last used one that are looked at before a chain is taken as ended. */

@@ -231,4 +231,31 @@ class TransactionsViewModelsTest {
         m.clear()
         eventually { vm.state.value.closed }
     }
+
+    @Test
+    fun aRefreshDuringTheFirstLoadDoesNotStartAnother() = runTest {
+        ops.wallet(id)
+        server.byAddress[ours] = listOf(received(txA))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var opens = 0
+        val vm = list(opened(chain = { n ->
+            opens++
+            gate.await()
+            server.source().open(n)
+        }))
+        eventually { opens == 1 }
+        vm.load()
+        vm.load()
+        gate.complete(Unit)
+        eventually { vm.state.value.list != null }
+        assertEquals(1, opens)
+    }
+
+    @Test
+    fun aTapOnSomethingThatIsNoTxidAsksNobody() = runTest {
+        ops.wallet(id)
+        val vm = one(opened(), "not-a-txid", walletId = null)
+        eventually { vm.state.value.notFound }
+        assertTrue(ops.calls.none { it == "history" })
+    }
 }

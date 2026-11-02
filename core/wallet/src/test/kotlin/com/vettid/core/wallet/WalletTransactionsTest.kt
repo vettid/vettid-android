@@ -48,7 +48,7 @@ class WalletTransactionsTest {
         TransactionMerge.merge(own, chain.associateBy { it.txid }, history, tip, now)
 
     @Test
-    fun aSentPaymentInBothSourcesIsOneRowWithTheServersFiguresAndTheVaultsPayees() {
+    fun aSentPaymentInBothSourcesIsOneRowWithTheVaultsFiguresAndTheServersStatus() {
         val tx = chainTx(1, listOf(inp(ours, 100_000)), listOf(out(payee, 60_000), out(change, 39_000)), fee = 1_000)
         val vault = signed(1, 60_000, 39_000, 1_000, now.minusSeconds(3600), WalletPayee(payee, 60_000))
         val rows = merge(listOf(tx), listOf(vault))
@@ -211,6 +211,44 @@ class WalletTransactionsTest {
         assertEquals(now, WalletWire.history(entry("\"at\":\"$now\",")).single().at)
         assertTrue(runCatching { WalletWire.history(entry("\"at\":\"yesterday\",")) }.exceptionOrNull() is WalletWireException)
         assertTrue(runCatching { WalletWire.history(entry("\"at\":5,")) }.exceptionOrNull() is WalletWireException)
+    }
+
+    @Test
+    fun aServerListingASignedTxidAsAPureReceiptStillShowsSent() {
+        val lie = chainTx(25, listOf(inp(stranger, 70_000)), listOf(out(ours, 70_000)), height = null)
+        val vault = signed(25, 60_000, 0, 1_000, now.minusSeconds(60), WalletPayee(payee, 60_000))
+        val r = merge(listOf(lie), listOf(vault)).single()
+        assertEquals(TxDirection.SENT, r.direction)
+        assertEquals(60_000L, r.amountSats)
+        assertEquals(TxStatus.Waiting, r.status)
+    }
+
+    @Test
+    fun aMixedTransactionWithNoNetChangeIsSelfAndOneThatGainsIsReceived() {
+        val flat = chainTx(26, listOf(inp(ours, 10_000), inp(stranger, 5_000)), listOf(out(ours, 10_000), out(payee, 5_000)), fee = 0)
+        assertEquals(TxDirection.SELF, merge(listOf(flat)).single().direction)
+        val gain = chainTx(27, listOf(inp(ours, 10_000), inp(stranger, 5_000)), listOf(out(ours, 13_000), out(payee, 2_000)), fee = 0)
+        val r = merge(listOf(gain)).single()
+        assertEquals(TxDirection.RECEIVED, r.direction)
+        assertEquals(3_000L, r.amountSats)
+        assertNull(r.feeSats)
+    }
+
+    @Test
+    fun anOwnInputWithoutAValueIsMalformedNotZero() {
+        val tx = chainTx(28, listOf(ChainTxInput(id(999), 0, ours, null)), listOf(out(payee, 1_000)))
+        assertTrue(runCatching { merge(listOf(tx)) }.exceptionOrNull() is ChainError.Malformed)
+    }
+
+    @Test
+    fun anOutputTextThatIsNotAnAddressOfTheNetworkIsNoPayee() {
+        val tx = chainTx(29, listOf(inp(ours, 10_000)), listOf(out("<script>", 4_000), out(payee, 5_000), out(change, 500)), fee = 500)
+        val rows = TransactionMerge.merge(own, mapOf(tx.txid to tx), emptyList(), 105, now) { it == payee }
+        assertEquals(listOf(WalletPayee(payee, 5_000)), rows.single().payees)
+        // The amount still counts everything that left.
+        assertEquals(9_000L, rows.single().amountSats)
+        val none = TransactionMerge.merge(own, mapOf(tx.txid to tx), emptyList(), 105, now) { false }
+        assertTrue(none.single().payees.isEmpty())
     }
 
     @Test
@@ -491,5 +529,34 @@ class WalletTransactionsTest {
         chain.txs.onTip = { m.clear() }
         assertEquals(TransactionsResult.Cleared, m.transactions(w.id))
         assertTrue(m.transactionsKnown.value.isEmpty())
+    }
+
+    @Test
+    fun aVaultPaymentToAnOwnAddressTheWalkDerivedButNothingFundedIsASelfTransfer() = runBlocking {
+        val w = withWallet()
+        fundedAt(receive, 0)
+        // Change index 3 is derived by the walk (up to the gap) though nothing is on it.
+        ops.history = listOf(signed(1, 5_000, 0, 200, now.minusSeconds(60), WalletPayee(addr(changeChain, 3), 5_000)))
+        val m = manager()
+        m.open()
+        val r = (m.transactions(w.id) as TransactionsResult.Done).transactions.items.single()
+        assertEquals(TxDirection.SELF, r.direction)
+    }
+
+    @Test
+    fun theConfirmedCopyOfATransactionUnderTwoAddressesIsKept() = runBlocking {
+        val w = withWallet()
+        val a0 = addr(receive, 0)
+        val c0 = addr(changeChain, 0)
+        fundedAt(receive, 0)
+        fundedAt(changeChain, 0)
+        val unconfirmed = chainTx(1, listOf(inp(stranger, 9)), listOf(out(a0, 5)), height = null)
+        val confirmed = chainTx(1, listOf(inp(stranger, 9)), listOf(out(a0, 5)), height = 100)
+        chain.txs.byAddress[a0] = listOf(confirmed)
+        chain.txs.byAddress[c0] = listOf(unconfirmed)
+        val m = manager()
+        m.open()
+        val r = (m.transactions(w.id) as TransactionsResult.Done).transactions.items.single()
+        assertTrue(r.status is TxStatus.Confirmed)
     }
 }

@@ -47,6 +47,7 @@ class TransactionsViewModel @Inject constructor(
     private val mutable = MutableStateFlow(TransactionsUiState())
     val state: StateFlow<TransactionsUiState> = mutable.asStateFlow()
     private var seen = false
+    private var busy = false
 
     init {
         viewModelScope.launch {
@@ -69,7 +70,7 @@ class TransactionsViewModel @Inject constructor(
         busy = true
         mutable.update { it.copy(loading = true) }
         viewModelScope.launch {
-            val result = wallets.transactions(walletId)
+            val result = safely { wallets.transactions(walletId) }
             busy = false
             mutable.update {
                 when (result) {
@@ -80,8 +81,6 @@ class TransactionsViewModel @Inject constructor(
             }
         }
     }
-
-    private var busy = false
 
     override fun toString(): String = "TransactionsViewModel"
 }
@@ -147,7 +146,7 @@ class TransactionViewModel @Inject constructor(
                 val id = walletId ?: find()
                 if (id == null) return@launch
                 wallets.transactionsKnown.value[id]?.let { show(it) }
-                when (val result = wallets.transactions(id)) {
+                when (val result = safely { wallets.transactions(id) }) {
                     is TransactionsResult.Done -> show(result.transactions)
                     TransactionsResult.Cleared -> mutable.update { it.copy(closed = true) }
                     else -> mutable.update { it.copy(problem = result) }
@@ -162,6 +161,11 @@ class TransactionViewModel @Inject constructor(
     /** The wallet whose `wallet.history` has the txid; none: [TransactionUiState.notFound]. */
     @Suppress("ReturnCount")
     private suspend fun find(): String? {
+        // Not a txid: nothing to ask the vault about.
+        if (!WalletsManager.isTxid(txid)) {
+            mutable.update { it.copy(notFound = true) }
+            return null
+        }
         val id = try {
             wallets.walletOfTransaction(txid)
         } catch (e: VaultFailure) {
@@ -194,4 +198,17 @@ class TransactionViewModel @Inject constructor(
     }
 
     override fun toString(): String = "TransactionViewModel"
+}
+
+/**
+ * The look-up, with nothing that goes wrong in it able to escape the view model's scope (a crash on a server's or a vault's odd
+ * answer): any failure but a cancellation is a server that gave nothing usable.
+ */
+@Suppress("TooGenericExceptionCaught")
+private suspend fun safely(block: suspend () -> TransactionsResult): TransactionsResult = try {
+    block()
+} catch (e: kotlinx.coroutines.CancellationException) {
+    throw e
+} catch (_: Exception) {
+    TransactionsResult.ServerFailed(com.vettid.core.chain.ChainError.Malformed())
 }

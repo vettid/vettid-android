@@ -152,17 +152,22 @@ internal fun statusText(status: TxStatus, host: String?): String = when (status)
 @Composable
 private fun statusLine(tx: WalletTransaction, host: String?): String {
     val status = statusText(tx.status, host)
-    val time = (tx.blockTime ?: tx.signedAt)?.let { dateText(it) } ?: return status
+    val time = (tx.blockTime ?: tx.signedAt)?.let { dateText(it) }?.takeIf { it.isNotEmpty() } ?: return status
     return "$status · $time"
 }
 
 @Composable
-internal fun dateText(at: Instant): String =
-    DateUtils.formatDateTime(
-        LocalContext.current,
-        at.toEpochMilli(),
-        DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH,
-    )
+internal fun dateText(at: Instant): String {
+    val context = LocalContext.current
+    // A time that cannot be formatted (out of range) shows as nothing, never as a crash.
+    return runCatching {
+        DateUtils.formatDateTime(
+            context,
+            at.toEpochMilli(),
+            DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH,
+        )
+    }.getOrDefault("")
+}
 
 /** "+ 0.001 tBTC" received, "− 0.001 tBTC" sent, no sign for a transfer to oneself. */
 @Composable

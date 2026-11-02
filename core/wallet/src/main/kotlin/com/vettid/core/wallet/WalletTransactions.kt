@@ -139,13 +139,15 @@ internal object TransactionMerge {
         tip: Long?,
         vaultNow: Instant,
         unsent: Set<String> = emptySet(),
+        /** Whether the text is an address of the wallet's network: a server's output text is a payee only if it is. */
+        validAddress: (String) -> Boolean = { true },
     ): List<WalletTransaction> {
         val mine = own.map { it.lowercase() }.toSet()
         val signed = history.associateBy { it.txid.lowercase() }
         val out = ArrayList<WalletTransaction>()
         for ((txid, tx) in chain) {
             val h = signed[txid]
-            val row = if (h != null) fromVault(txid, h, mine, serverStatus(tx, tip), tx) else fromChain(txid, tx, mine, tip)
+            val row = if (h != null) fromVault(txid, h, mine, serverStatus(tx, tip), tx) else fromChain(txid, tx, mine, tip, validAddress)
             if (row != null) out += row
         }
         val cutoff = vaultNow.minus(NOT_BROADCAST_AFTER)
@@ -197,7 +199,10 @@ internal object TransactionMerge {
         return Totals(
             spends = tx.inputs.any { ours(it.prevAddress) },
             foreignIn = tx.inputs.any { !ours(it.prevAddress) },
-            ownIn = total(tx.inputs.asSequence().filter { ours(it.prevAddress) }.map { it.prevValueSats ?: 0L }),
+            // An own input the server gives no value for cannot be counted as 0: the answer is not usable.
+            ownIn = total(
+                tx.inputs.asSequence().filter { ours(it.prevAddress) }.map { it.prevValueSats ?: throw ChainError.Malformed() },
+            ),
             ownOut = total(tx.outputs.asSequence().filter { ours(it.address) }.map { it.valueSats }),
             others = tx.outputs.filterNot { ours(it.address) },
             allIn = allIn,
@@ -208,8 +213,9 @@ internal object TransactionMerge {
     private fun feeOf(tx: ChainTx, t: Totals, direction: TxDirection, mixed: Boolean): Long? =
         if (mixed || direction == TxDirection.RECEIVED) null else tx.feeSats ?: t.allIn?.let { it - t.allOut }?.takeIf { it >= 0 }
 
-    private fun payeesOf(t: Totals): List<WalletPayee> =
-        t.others.filter { it.valueSats > 0 && it.address != null }.map { WalletPayee(it.address.orEmpty(), it.valueSats) }
+    private fun payeesOf(t: Totals, validAddress: (String) -> Boolean): List<WalletPayee> =
+        t.others.filter { it.valueSats > 0 && it.address != null && validAddress(it.address.orEmpty()) }
+            .map { WalletPayee(it.address.orEmpty(), it.valueSats) }
 
     private fun directionOf(t: Totals, net: Long, mixed: Boolean): TxDirection = when {
         !t.spends -> TxDirection.RECEIVED
@@ -227,7 +233,13 @@ internal object TransactionMerge {
      * A transaction only the server lists. Inputs of the wallet's own and of others in one transaction share the fee, so the wallet's
      * part is its net change alone: the amount is what left (or came in) and no fee is shown.
      */
-    private fun fromChain(txid: String, tx: ChainTx, own: Set<String>, tip: Long?): WalletTransaction? {
+    private fun fromChain(
+        txid: String,
+        tx: ChainTx,
+        own: Set<String>,
+        tip: Long?,
+        validAddress: (String) -> Boolean,
+    ): WalletTransaction? {
         val t = totalsOf(tx, own)
         if (!t.spends && t.ownOut == 0L) return null
         val net = t.ownOut - t.ownIn
@@ -239,7 +251,7 @@ internal object TransactionMerge {
             else -> t.ownOut
         }
         val fee = feeOf(tx, t, direction, mixed)
-        val payees = if (direction == TxDirection.SENT && !mixed) payeesOf(t) else emptyList()
+        val payees = if (direction == TxDirection.SENT && !mixed) payeesOf(t, validAddress) else emptyList()
         return WalletTransaction(
             txid = txid, direction = direction, amountSats = amount, netSats = net, feeSats = fee, status = serverStatus(tx, tip),
             blockHeight = tx.blockHeight.takeIf { tx.confirmed },
