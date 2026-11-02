@@ -649,6 +649,55 @@ class SendViewModelTest {
         assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
     }
 
+    /** Send all, agreed to at the review (10% question answered) with this payee and fee; then back to the form (an edit that keeps it). */
+    private suspend fun TestScope.sendAllAgreedAt(payee: Long, fee: Long): SendViewModel {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setSendAll(true)
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("30")
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, payee, 0, fee, 150, payee + fee, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        vm.confirmBigFee()
+        assertEquals(fee, vm.state.value.tenConfirmedFee)
+        assertEquals(payee, vm.state.value.tenConfirmedPayee)
+        vm.edit()
+        return vm
+    }
+
+    @Test
+    fun sendAllAsksAgainWhenThePayeeShrinksWithTheSameFee() = runTest {
+        val vm = sendAllAgreedAt(40_000, 4_500)
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+    }
+
+    @Test
+    fun sendAllDoesNotAskAgainForTheSamePayee() = runTest {
+        val vm = sendAllAgreedAt(40_000, 4_500)
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertNull(vm.state.value.bigFeeAsk)
+    }
+
+    @Test
+    fun aTypedAmountKeepsItsOwnBasisAndDoesNotAskAgain() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("40")
+        vm.review()
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+        vm.confirmBigFee()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertEquals(40_000L, vm.state.value.tenConfirmedPayee)
+        assertNull(vm.state.value.bigFeeAsk)
+    }
+
     @Test
     fun aConfirmedPaymentIsASoftNoteThatKeepsReviewOnAndStaysDismissed() = runTest {
         val tx = com.vettid.core.wallet.WalletTx("ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1, 1, emptyList(), null, null)

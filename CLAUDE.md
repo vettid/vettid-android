@@ -404,7 +404,7 @@ The A2 exit test:
   `acknowledgeRecent(walletId)` was called (per wallet, memory only, cleared at lock). `recentSends` returns a `RecentReport` that names
   the newest payment (time, amount, payee) and how many more, and maps any exception to UNREADABLE; the view model does the same. A
   refused `bitcoin:` link clears the address and the amount and blocks Review until the address is edited. The review asks about the 10%
-  fee again, naming the fee, when the vault's fee is more than 1.5 times the one agreed to. One fee dialog for two guards: above twice Fast, or more than 10% of the amount sent (asked before the build when even
+  fee again, naming the fee, when the vault's fee is more than 1.5 times the one agreed to, or the vault's `payeeSats` is below the one the agreement was for (`tenConfirmedPayee`; Send all's payee shrinks with the fee unchanged; null from the form with Send all: the first review sets it). One fee dialog for two guards: above twice Fast, or more than 10% of the amount sent (asked before the build when even
   110 vB at that rate is over 10% of a typed amount, else on the review from the vault's own fee, e.g. Send all; both: the 10% text). Review note 3: `PreparedSend.signCount`
   against a per-wallet counter bumped when a `wallet.sign` goes out and restored when it is given back; a payment prepared before another
   signing is `SendResult.Superseded`. **`WalletOps.sign` returns a `SignOutcome`** (`NotSent(failure)` / `Answered(SignReply.Ok(body) |

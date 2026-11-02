@@ -65,6 +65,12 @@ data class SendUiState(
     val bigFeeSats: Long = 0,
     /** The fee (sats) the member answered "pay it anyway" to for the 10% question; null: not asked or reset by an edit. */
     val tenConfirmedFee: Long? = null,
+    /**
+     * The sats the payee gets in the payment [tenConfirmedFee] was agreed for (the vault's `payeeSats`
+     * at the review, the typed amount from the form, null from the form with Send all: no basis yet). A review whose payee is lower while
+     * the fee is still over 10% asks again: with Send all the payee is the balance less the fee and can shrink with the fee unchanged.
+     */
+    val tenConfirmedPayee: Long? = null,
     /** The last pasted or scanned `bitcoin:` link was refused whole; nothing was filled in from it. */
     val linkRefused: Boolean = false,
     /**
@@ -344,17 +350,20 @@ class SendViewModel internal constructor(
                 // Both fields are cleared too, so that Review never goes to the payee that was there before.
                 p.refused -> s.copy(
                     address = "", addressIssue = null, amountText = "", sendAll = false, linkRefused = true, problem = null,
-                    tenConfirmedFee = null,
+                    tenConfirmedFee = null, tenConfirmedPayee = null,
                 )
                 // A link with an amount sets it; a link without one clears the field (an earlier amount is not the link's).
                 // Either way the amount changed, so a 10% fee agreed to for the earlier one no longer stands.
                 p.isLink && p.amountSats == null -> s.copy(
                     address = p.address, addressIssue = issue, amountText = "", sendAll = false, linkRefused = false, problem = null,
-                    tenConfirmedFee = null,
+                    tenConfirmedFee = null, tenConfirmedPayee = null,
                 )
                 else -> {
                     val withAmount = p.amountSats?.let {
-                        s.copy(amountText = BtcFormat.btc(it), unit = AmountUnit.BTC, sendAll = false, tenConfirmedFee = null)
+                        s.copy(
+                            amountText = BtcFormat.btc(it), unit = AmountUnit.BTC, sendAll = false,
+                            tenConfirmedFee = null, tenConfirmedPayee = null,
+                        )
                     } ?: s
                     withAmount.copy(address = p.address, addressIssue = issue, linkRefused = false, problem = null)
                 }
@@ -370,7 +379,7 @@ class SendViewModel internal constructor(
 
     fun setAmount(text: String) = mutable.update {
         val filtered = if (it.unit == AmountUnit.BTC) BtcFormat.filter(text) else text.filter { c -> c in '0'..'9' }
-        it.copy(amountText = filtered, problem = null, tenConfirmedFee = null)
+        it.copy(amountText = filtered, problem = null, tenConfirmedFee = null, tenConfirmedPayee = null)
     }
 
     /** BTC or sats: a valid amount is rewritten in the other unit. */
@@ -380,15 +389,18 @@ class SendViewModel internal constructor(
         s.copy(unit = unit, amountText = text ?: "")
     }
 
-    fun setSendAll(on: Boolean) = mutable.update { it.copy(sendAll = on, problem = null, tenConfirmedFee = null) }
+    fun setSendAll(on: Boolean) = mutable.update { it.copy(sendAll = on, problem = null, tenConfirmedFee = null, tenConfirmedPayee = null) }
 
-    fun setFeeChoice(choice: FeeChoice) = mutable.update { it.copy(feeChoice = choice, problem = null, tenConfirmedFee = null) }
+    fun setFeeChoice(choice: FeeChoice) =
+        mutable.update { it.copy(feeChoice = choice, problem = null, tenConfirmedFee = null, tenConfirmedPayee = null) }
 
     fun setCustomFee(text: String) =
-        mutable.update { it.copy(customFee = SendFees.filterCustom(text), problem = null, tenConfirmedFee = null) }
+        mutable.update {
+            it.copy(customFee = SendFees.filterCustom(text), problem = null, tenConfirmedFee = null, tenConfirmedPayee = null)
+        }
 
     fun setIncludeUnconfirmed(on: Boolean) =
-        mutable.update { it.copy(includeUnconfirmed = on, problem = null, tenConfirmedFee = null) }
+        mutable.update { it.copy(includeUnconfirmed = on, problem = null, tenConfirmedFee = null, tenConfirmedPayee = null) }
 
     // --- Review ---
 
@@ -404,7 +416,9 @@ class SendViewModel internal constructor(
         val floor = Math.ceil(rate * SendFees.MIN_VSIZE).toLong()
         val ten = amount != null && SendFees.overTenPercent(floor, amount)
         when {
-            ten -> mutable.update { it.copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = floor, tenConfirmedFee = null) }
+            ten -> mutable.update {
+                it.copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = floor, tenConfirmedFee = null, tenConfirmedPayee = null)
+            }
             SendFees.muchHigher(rate, s.estimates) -> mutable.update { it.copy(bigFeeAsk = BigFee.MUCH_HIGHER) }
             else -> prepare()
         }
@@ -415,7 +429,11 @@ class SendViewModel internal constructor(
         val ask = mutable.value.bigFeeAsk ?: return
         val inReview = mutable.value.step == SendStep.REVIEW
         mutable.update {
-            it.copy(bigFeeAsk = null, tenConfirmedFee = if (ask == BigFee.TEN_PERCENT) it.bigFeeSats else it.tenConfirmedFee)
+            if (ask != BigFee.TEN_PERCENT) return@update it.copy(bigFeeAsk = null)
+            it.copy(
+                bigFeeAsk = null, tenConfirmedFee = it.bigFeeSats,
+                tenConfirmedPayee = if (inReview) it.review?.payeeSats else it.amountSats,
+            )
         }
         if (!inReview) prepare()
     }
@@ -460,12 +478,18 @@ class SendViewModel internal constructor(
         val cap = r.capRefusal?.let { withLimit(it) }
         // Asked unless this fee was agreed to; a fee well above the one agreed to (more than 1.5 times) is asked about again.
         val agreed = mutable.value.tenConfirmedFee
-        val ten = SendFees.overTenPercent(r.feeSats, r.payeeSats) && (agreed == null || r.feeSats * AGAIN_NUM > agreed * AGAIN_DEN)
+        val basis = mutable.value.tenConfirmedPayee
+        // A payee below the one agreed to (Send all: the balance less the fee shrank) is asked about again too.
+        val again = agreed == null || r.feeSats * AGAIN_NUM > agreed * AGAIN_DEN || (basis != null && r.payeeSats < basis)
+        val ten = SendFees.overTenPercent(r.feeSats, r.payeeSats) && again
         mutable.update {
             it.copy(busy = false, step = SendStep.REVIEW, review = Review(
                 r.address, r.payeeSats, r.changeSats, r.feeSats, r.vsize, r.totalOutSats, r.toFeeSats, r.sendAll, r.leftBehind,
                 r.hasCap, cap, limit,
-            ), password = "", error = null, askAgain = false, bigFeeAsk = if (ten) BigFee.TEN_PERCENT else null, bigFeeSats = r.feeSats)
+            ), password = "", error = null, askAgain = false, bigFeeAsk = if (ten) BigFee.TEN_PERCENT else null, bigFeeSats = r.feeSats,
+                // From the form with Send all there was no basis: the first review sets it.
+                tenConfirmedPayee = if (agreed != null && basis == null) r.payeeSats else basis,
+            )
         }
     }
 
