@@ -255,10 +255,11 @@ fun TransactionScreen(state: TransactionUiState, actions: TransactionActions, mo
 @Composable
 private fun Details(tx: WalletTransaction, state: TransactionUiState, actions: TransactionActions) {
     val network = state.network
-    // The server's word, said to be the server's: the status and the confirmations come from it.
+    // The server's word, said to be the server's: for a payment the vault signed only the status and confirmations are; for any other
+    // the amounts are too.
     state.host?.let {
         Text(
-            stringResource(R.string.wallet_tx_status_from, it),
+            stringResource(if (tx.vaultSigned) R.string.wallet_tx_status_from else R.string.wallet_tx_from, it),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("wallet_transaction_source"),

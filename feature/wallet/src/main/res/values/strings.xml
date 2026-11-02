@@ -355,6 +355,7 @@
     <string name="wallet_tx_not_broadcast">Not broadcast</string> <!-- draft: status -->
     <string name="wallet_tx_not_seen">Not seen by %1$s yet</string> <!-- new: signed by the vault less than 24 hours ago, unknown to the server -->
     <string name="wallet_tx_status_from">Status from %1$s</string> <!-- new: the status and confirmations are the chain server's word -->
+    <string name="wallet_tx_from">From %1$s</string> <!-- new: a row only the server lists (received, signed elsewhere): its amounts are the server's word too -->
     <string name="wallet_tx_sent">Sent</string> <!-- new: a sent row with no payee address to name -->
     <string name="wallet_tx_self">Moved within this wallet</string> <!-- new: a transfer to oneself -->
     <string name="wallet_tx_empty">No transactions yet.</string> <!-- new -->

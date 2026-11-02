@@ -190,6 +190,30 @@ class WalletTransactionsTest {
     }
 
     @Test
+    fun theVaultsOwnFiguresThatOverflowAreAVaultFailureNotTheServers() = runBlocking {
+        val w = withWallet()
+        fundedAt(receive, 0)
+        ops.history = listOf(signed(1, Long.MAX_VALUE, 0, 5, now, WalletPayee(payee, Long.MAX_VALUE)))
+        val m = manager()
+        m.open()
+        assertTrue(m.transactions(w.id) is TransactionsResult.VaultFailed)
+        val e = runCatching { merge(emptyList(), listOf(signed(1, Long.MAX_VALUE, 0, 5, now, WalletPayee(payee, Long.MAX_VALUE)))) }.exceptionOrNull()
+        assertTrue(e is WalletWireException)
+    }
+
+    @Test
+    fun anAtThatDoesNotReadIsAMalformedHistoryEntryButNoAtIsNull() {
+        fun entry(at: String) = com.vettid.core.vault.VaultJson.parseObject(
+            """{"transactions":[{"txid":"${id(1)}",$at"sending_sats":1,"change_sats":0,"fee_sats":1,"payees":[]}]}""".encodeToByteArray(),
+        )
+        assertNull(WalletWire.history(entry("")).single().at)
+        assertNull(WalletWire.history(entry("\"at\":null,")).single().at)
+        assertEquals(now, WalletWire.history(entry("\"at\":\"$now\",")).single().at)
+        assertTrue(runCatching { WalletWire.history(entry("\"at\":\"yesterday\",")) }.exceptionOrNull() is WalletWireException)
+        assertTrue(runCatching { WalletWire.history(entry("\"at\":5,")) }.exceptionOrNull() is WalletWireException)
+    }
+
+    @Test
     fun sumsThatOverflowAreMalformed() {
         val tx = chainTx(24, listOf(inp(stranger, 1)), listOf(out(ours, Long.MAX_VALUE), out(ours, Long.MAX_VALUE)))
         val e = runCatching { merge(listOf(tx)) }.exceptionOrNull()

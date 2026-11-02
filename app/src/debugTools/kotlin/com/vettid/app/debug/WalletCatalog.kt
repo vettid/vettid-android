@@ -154,7 +154,7 @@ internal object WalletCatalog {
     private val sample = listOf(
         WalletTransaction(
             "a1".repeat(32), TxDirection.SENT, 60_000, -61_000, 1_000, TxStatus.Confirmed(6), 4_321_000, Instant.parse("2026-10-31T19:00:00Z"),
-            Instant.parse("2026-10-31T18:55:00Z"), listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 60_000)), null,
+            Instant.parse("2026-10-31T18:55:00Z"), listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 60_000)), null, vaultSigned = true,
         ),
         WalletTransaction(
             "b2".repeat(32), TxDirection.RECEIVED, 50_000, 50_000, null, TxStatus.Waiting, null, null, null, emptyList(), null,
@@ -165,11 +165,11 @@ internal object WalletCatalog {
         ),
         WalletTransaction(
             "d4".repeat(32), TxDirection.SENT, 5_000, -5_300, 300, TxStatus.NotBroadcast, null, null, Instant.parse("2026-10-29T08:00:00Z"),
-            listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 5_000)), null,
+            listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 5_000)), null, vaultSigned = true,
         ),
         WalletTransaction(
             "e5".repeat(32), TxDirection.SENT, 7_000, -7_300, 300, TxStatus.NotSeen, null, null, Instant.parse("2026-10-31T19:50:00Z"),
-            listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 7_000)), null,
+            listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 7_000)), null, vaultSigned = true,
         ),
     )
     private val sampleList = WalletTransactions(Instant.parse("2026-10-31T20:00:00Z"), "mempool.space", sample)

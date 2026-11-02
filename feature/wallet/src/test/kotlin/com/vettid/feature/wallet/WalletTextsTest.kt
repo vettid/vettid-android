@@ -210,7 +210,7 @@ class WalletTextsTest {
     @Test
     fun theTransactionsDraftsAreThePlansWordsAndTheRestIsMarkedNew() {
         // ANDROID-PLAN §4 "Wallet", "Transactions": 'A row: "Sent to tb1q…" or "Received", the amount, "Confirmed" / "Waiting for
-        // confirmation" / "Not broadcast"; detail: … "Open in a block explorer"', word for word.
+        // confirmation" / "Not broadcast"', word for word. ("Open in a block explorer" is deferred: no string for it exists.)
         assertEquals("Transactions", r.getString(R.string.wallet_tx_title))
         assertEquals("Sent to tb1q…", r.getString(R.string.wallet_tx_sent_to, "tb1q…"))
         assertEquals("Received", r.getString(R.string.wallet_tx_received))
@@ -219,6 +219,7 @@ class WalletTextsTest {
         assertEquals("Not broadcast", r.getString(R.string.wallet_tx_not_broadcast))
         assertEquals("Not seen by mempool.space yet", r.getString(R.string.wallet_tx_not_seen, "mempool.space"))
         assertEquals("Status from mempool.space", r.getString(R.string.wallet_tx_status_from, "mempool.space"))
+        assertEquals("From mempool.space", r.getString(R.string.wallet_tx_from, "mempool.space"))
         assertEquals("Total sent", r.getString(R.string.wallet_tx_total_out))
         assertEquals("Signed", r.getString(R.string.wallet_tx_signed_at))
         assertEquals("Copy transaction ID", r.getString(R.string.wallet_tx_copy))

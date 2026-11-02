@@ -1121,6 +1121,9 @@ class WalletsManager(
         } catch (e: ChainError) {
             // A sum that overflows is not a chain's answer.
             return TransactionsResult.ServerFailed(e)
+        } catch (_: WalletWireException) {
+            // The vault's own figures do not add up.
+            return TransactionsResult.VaultFailed(VaultFailure(FailureKind.OTHER, "unreadable_result"))
         }
         val list = WalletTransactions(clock(), ready.host, items)
         var listed = false

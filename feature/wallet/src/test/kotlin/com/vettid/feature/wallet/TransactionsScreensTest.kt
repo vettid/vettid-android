@@ -40,7 +40,7 @@ class TransactionsScreensTest {
     private val txid = "a1".repeat(32)
     private val sent = WalletTransaction(
         txid, TxDirection.SENT, 60_000, -61_000, 1_000, TxStatus.Confirmed(6), 100, Instant.parse("2026-10-31T19:00:00Z"),
-        Instant.parse("2026-10-31T18:55:00Z"), listOf(WalletPayee(payee, 60_000)), null,
+        Instant.parse("2026-10-31T18:55:00Z"), listOf(WalletPayee(payee, 60_000)), null, vaultSigned = true,
     )
     private val received = WalletTransaction("b2".repeat(32), TxDirection.RECEIVED, 50_000, 50_000, null, TxStatus.Waiting, null, null, null, emptyList(), null)
     private val self = WalletTransaction("c3".repeat(32), TxDirection.SELF, 19_500, -500, 500, TxStatus.Confirmed(1), 101, Instant.EPOCH, null, emptyList(), null)
@@ -192,6 +192,13 @@ class TransactionsScreensTest {
     fun theStatusIsAttributedToTheServerThatGaveIt() {
         rule.setContent { TransactionScreen(one, TransactionActions()) }
         rule.onNodeWithText("Status from mempool.space").assertExists()
+    }
+
+    @Test
+    fun aRowOnlyTheServerListsSaysItsAmountsAreTheServersToo() {
+        rule.setContent { TransactionScreen(one.copy(tx = received), TransactionActions()) }
+        rule.onNodeWithText("From mempool.space").assertExists()
+        rule.onNodeWithText("Status from mempool.space").assertDoesNotExist()
     }
 
     @Test

@@ -370,7 +370,7 @@ fun AppShell(
                                 onOpenItem = { navController.navigate(ItemDetailRoute(it)) { launchSingleTop = true } },
                                 // A signed payment's entry opens its transaction (W2-3), while the wallet's entry is shown.
                                 onOpenTransaction = if (badges.walletShown) {
-                                    { txid -> navController.navigate(TransactionRoute(txid)) { launchSingleTop = true } }
+                                    { txid -> navController.openTransaction(txid) }
                                 } else {
                                     null
                                 },
@@ -544,6 +544,16 @@ private fun visibleOf(e: NavBackStackEntry?): Visible? {
     }
 }
 
+/**
+ * Opens a transaction. Not single-top: a second `wallet.signed` tap while another transaction is in front would reuse that screen's
+ * view model (it is keyed by the back stack entry) and keep showing the first. The one in front is popped, and the new one gets its own
+ * entry and view model.
+ */
+internal fun NavHostController.openTransaction(txid: String) {
+    if (currentDestination?.hasRoute(TransactionRoute::class) == true) popBackStack()
+    navigate(TransactionRoute(txid))
+}
+
 /** The screen a notification opens (ANDROID-PLAN 0.1.23, 4); the sheet is the Notifications screen's own. */
 internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolean = false) {
     when (t) {
@@ -562,7 +572,7 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolea
         // A transaction exists only in a build with the wallet, and while its entry is shown; else the Notifications list.
         is FeedTarget.WalletTransaction ->
             if (walletShown) {
-                navigate(TransactionRoute(t.txid)) { launchSingleTop = true }
+                openTransaction(t.txid)
             } else {
                 navigate(NotificationsRoute()) { launchSingleTop = true }
             }

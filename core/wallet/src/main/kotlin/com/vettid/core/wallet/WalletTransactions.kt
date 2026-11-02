@@ -65,6 +65,8 @@ data class WalletTransaction(
     val payees: List<WalletPayee>,
     /** The connection a payment request came from (`wallet.history`); null otherwise. */
     val connectionId: String?,
+    /** The vault signed it: its figures are `wallet.history`'s and the server gives only the status. Otherwise they are the server's. */
+    val vaultSigned: Boolean = false,
 ) {
     override fun toString(): String = "WalletTransaction"
 }
@@ -171,6 +173,13 @@ internal object TransactionMerge {
         throw ChainError.Malformed()
     }
 
+    /** Adds the vault's figures; an overflow is an answer that does not read ([WalletWireException]). */
+    private fun vaultTotal(values: Sequence<Long>): Long = try {
+        values.fold(0L) { a, b -> Math.addExact(a, b) }
+    } catch (_: ArithmeticException) {
+        throw WalletWireException("amounts")
+    }
+
     /** What a transaction does to the wallet, from the addresses it touches that are the wallet's own. */
     private class Totals(
         val spends: Boolean,
@@ -241,13 +250,10 @@ internal object TransactionMerge {
 
     /** A payment the vault signed: its own figures, with [status] (and, when the server lists it, the block's height and time). */
     private fun fromVault(txid: String, h: WalletTx, own: Set<String>, status: TxStatus, tx: ChainTx?): WalletTransaction {
-        val ownPaid = total(h.payees.asSequence().filter { it.address.lowercase() in own }.map { it.amountSats })
+        // Overflow in the vault's own figures is its answer not reading (a vault failure), not the chain server's.
+        val ownPaid = vaultTotal(h.payees.asSequence().filter { it.address.lowercase() in own }.map { it.amountSats })
         val self = h.payees.isNotEmpty() && ownPaid == h.sendingSats
-        val leaving = try {
-            Math.addExact(h.sendingSats, h.feeSats)
-        } catch (_: ArithmeticException) {
-            throw ChainError.Malformed()
-        }
+        val leaving = vaultTotal(sequenceOf(h.sendingSats, h.feeSats))
         return WalletTransaction(
             txid = txid,
             direction = if (self) TxDirection.SELF else TxDirection.SENT,
@@ -260,6 +266,7 @@ internal object TransactionMerge {
             signedAt = h.at,
             payees = if (self) emptyList() else h.payees.sortedByDescending { it.amountSats },
             connectionId = h.connectionId,
+            vaultSigned = true,
         )
     }
 

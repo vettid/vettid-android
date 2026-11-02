@@ -352,8 +352,8 @@ The A2 exit test:
   {host}" above the list; a row opens `TransactionRoute(txid, walletId?)` (both routes are in `:core:data`, memory only: never saved with the
   stack, `popWalletSecrets` pops them): amounts, "Total sent" and the fee for a sent payment, confirmations, block time, "Signed", the txid
   with Copy (public, an ordinary non-sensitive copy), and "Status from {host}" over the status. Loading, empty and every failed look-up (the
-  detail's texts) with Try again; pull to refresh. **"Open in a block explorer" waits for an explorer field in the chain server settings (owner
-  decision):** `ChainServers` / `chain-servers.bin` hold the server's URL only, and nothing is built for it. Notifications: `wallet.signed` is no
+  detail's texts) with Try again; pull to refresh. **"Open in a block explorer" is deferred until the chain server settings have an explorer field; where it comes from is for the
+  owner to decide:** `ChainServers` / `chain-servers.bin` hold the server's URL only, and nothing is built for it. Notifications: `wallet.signed` is no
   longer "not available": its title is "Bitcoin payment signed" and `FeedTarget.WalletTransaction(txid)` opens the transaction while the Wallet
   entry is shown (else the Notifications list, as for limits); History's entry detail has "Open the transaction" (`HistoryHost.onOpenTransaction`,
   null where the wallet is not shown). Catalog adds `wallet.transactions`, `wallet.transactions_loading`, `wallet.transactions_empty`,
