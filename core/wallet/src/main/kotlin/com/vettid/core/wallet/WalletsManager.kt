@@ -1675,12 +1675,13 @@ class WalletsManager(
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: return unreadable
         val network = networkOf(wallet) ?: return unreadable
         if (!flags.privacyNoteShown(walletId)) return unreadable
-        val txs = try {
-            history(walletId, RECENT_HISTORY)
+        // The window is measured on the vault's clock, as its `at` times are; the phone's may be wrong.
+        val (txs, vaultNow) = try {
+            history(walletId, RECENT_HISTORY) to vaultGuard { ops().vaultNow() }
         } catch (_: VaultFailure) {
             return unreadable
         }
-        val cutoff = clock().minus(RECENT_WINDOW)
+        val cutoff = vaultNow.minus(RECENT_WINDOW)
         val recent = txs.filter { it.at == null || it.at.isAfter(cutoff) }.take(RECENT_MAX)
         if (recent.isEmpty()) return RecentReport(RecentSends.CLEAR)
         val spend = (chain.open(network) as? ChainOpen.Ready)?.spend ?: return unreadable

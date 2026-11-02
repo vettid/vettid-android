@@ -553,6 +553,23 @@ class SendViewModelTest {
     }
 
     @Test
+    fun aCheckThatIsCancelledNeverLeavesReviewOffForGood() = runTest {
+        engine.recentThrows = kotlinx.coroutines.CancellationException("gone")
+        val vm = vm()
+        eventually { engine.recentAsked >= 1 && !vm.state.value.recentChecking }
+        assertFalse(vm.state.value.recentChecking)
+        // The next look works again.
+        engine.recentThrows = null
+        vm.load()
+        eventually { engine.recentAsked == 2 && !vm.state.value.recentChecking }
+        vm.setAddress(PAYEE)
+        vm.setUnit(AmountUnit.SATS)
+        vm.setAmount("40000")
+        eventually { vm.state.value.estimates != null }
+        assertTrue(vm.state.value.canReview)
+    }
+
+    @Test
     fun aCheckThatThrowsOrNeverEndsIsUnreadableAndNeverCrashes() = runTest {
         engine.recentThrows = IllegalArgumentException("not a txid")
         val vm = vm()

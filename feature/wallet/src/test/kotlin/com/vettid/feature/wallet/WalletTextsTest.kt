@@ -150,6 +150,13 @@ class WalletTextsTest {
     }
 
     @Test
+    fun theFourthReviewsTextsAreAsRevised() {
+        assertEquals("The fee, at least 4,400 sats, is more than 10% of what you're sending. Pay it anyway?", r.getString(R.string.wallet_send_fee_ten_percent_estimate, "4,400"))
+        assertEquals("A payment you approved is waiting for confirmation: 0.0004 tBTC at 9:05 AM.", r.getString(R.string.wallet_send_recent_waiting_nopayee, "0.0004 tBTC", "9:05 AM"))
+        assertEquals("A payment you approved may have gone through: 0.0004 tBTC at 9:05 AM.", r.getString(R.string.wallet_send_recent_gone_nopayee, "0.0004 tBTC", "9:05 AM"))
+    }
+
+    @Test
     fun theThirdReviewsTextsAreAsRevised() {
         assertEquals("It may not have gone out, or the server hasn't seen it yet. Check before you send again.", r.getString(R.string.wallet_send_recent_gone_more))
         assertEquals("Checking your recent payments…", r.getString(R.string.wallet_send_recent_checking))

@@ -192,7 +192,13 @@ private fun BigFeeDialog(state: SendUiState, actions: SendActions) {
     ConfirmDialog(
         title = stringResource(R.string.wallet_send_fee),
         text = if (ask == BigFee.TEN_PERCENT) {
-            stringResource(R.string.wallet_send_fee_ten_percent, BtcFormat.sats(state.bigFeeSats))
+            // Before the build the figure is an estimate (a floor); on the review it is the vault's own.
+            val text = if (state.step == SendStep.REVIEW) {
+                R.string.wallet_send_fee_ten_percent
+            } else {
+                R.string.wallet_send_fee_ten_percent_estimate
+            }
+            stringResource(text, BtcFormat.sats(state.bigFeeSats))
         } else {
             stringResource(R.string.wallet_send_fee_much_higher)
         },
@@ -209,16 +215,15 @@ private fun RecentStep(state: SendUiState, notice: RecentSends, actions: SendAct
     val latest = state.recentReport?.latest
     val detail = latest?.let { tx ->
         val amount = amountLabel(tx.sendingSats, state.network)
-        val payee = tx.payees.firstOrNull()?.address.orEmpty()
+        val payee = tx.payees.firstOrNull()?.address
         val time = tx.at?.let { SendFormat.whenAt(it) } ?: stringResource(R.string.wallet_send_recent_unknown_time)
         Triple(amount, payee, time)
     }
     val more = state.recentReport?.more ?: 0
     val text = when {
-        notice == RecentSends.WAITING && detail != null ->
-            stringResource(R.string.wallet_send_recent_waiting, detail.first, detail.second, detail.third) + moreText(more)
+        notice == RecentSends.WAITING && detail != null -> recentSentence(R.string.wallet_send_recent_waiting, detail) + moreText(more)
         notice == RecentSends.MAY_HAVE_GONE && detail != null ->
-            stringResource(R.string.wallet_send_recent_gone, detail.first, detail.second, detail.third) + moreText(more) +
+            recentSentence(R.string.wallet_send_recent_gone, detail) + moreText(more) +
                 "\n\n" + stringResource(R.string.wallet_send_recent_gone_more)
         else -> stringResource(R.string.wallet_send_recent_unreadable)
     }
@@ -230,6 +235,19 @@ private fun RecentStep(state: SendUiState, notice: RecentSends, actions: SendAct
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_send_recent"),
     ) {}
+}
+
+/** "{amount} to {address} at {time}", or without the payee when the history has none ("{amount} at {time}"). */
+@Composable
+private fun recentSentence(res: Int, detail: Triple<String, String?, String>): String {
+    val (amount, payee, time) = detail
+    if (payee != null) return stringResource(res, amount, payee, time)
+    val bare = if (res == R.string.wallet_send_recent_waiting) {
+        R.string.wallet_send_recent_waiting_nopayee
+    } else {
+        R.string.wallet_send_recent_gone_nopayee
+    }
+    return stringResource(bare, amount, time)
 }
 
 @Composable

@@ -147,7 +147,7 @@ class SendScreenTest {
     fun theTenPercentGuardHasItsOwnText() {
         var paid = false
         show(form().copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = 4_400), SendActions(onConfirmBigFee = { paid = true }))
-        rule.onNodeWithText("The fee, 4,400 sats, is more than 10% of what you're sending. Pay it anyway?").assertIsDisplayed()
+        rule.onNodeWithText("The fee, at least 4,400 sats, is more than 10% of what you're sending. Pay it anyway?").assertIsDisplayed()
         rule.onNodeWithText("Pay it anyway").performClick()
         assertTrue(paid)
     }
@@ -193,6 +193,26 @@ class SendScreenTest {
             rule.onNodeWithText("Send anyway").performClick()
         }
         assertEquals(cases.size, acknowledged)
+    }
+
+    @Test
+    fun aHistoryEntryWithoutAPayeeReadsWithoutOne() {
+        val at = Instant.parse("2026-11-02T09:05:00Z")
+        val bare = com.vettid.core.wallet.WalletTx("ab".repeat(32), at, 40_000, 1, 1, emptyList(), null, null)
+        val whenText = SendFormat.whenAt(at)
+        show(form().copy(recentNotice = RecentSends.WAITING, recentReport = com.vettid.core.wallet.RecentReport(RecentSends.WAITING, bare, 0)))
+        rule.onNodeWithText("A payment you approved is waiting for confirmation: 0.0004 tBTC at $whenText.").assertIsDisplayed()
+        show(form().copy(recentNotice = RecentSends.MAY_HAVE_GONE, recentReport = com.vettid.core.wallet.RecentReport(RecentSends.MAY_HAVE_GONE, bare, 0)))
+        rule.onNodeWithText(
+            "A payment you approved may have gone through: 0.0004 tBTC at $whenText.\n\n" +
+                "It may not have gone out, or the server hasn't seen it yet. Check before you send again.",
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun theReviewKeepsTheExactFigureText() {
+        show(review().copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = 6_000))
+        rule.onNodeWithText("The fee, 6,000 sats, is more than 10% of what you're sending. Pay it anyway?").assertIsDisplayed()
     }
 
     @Test

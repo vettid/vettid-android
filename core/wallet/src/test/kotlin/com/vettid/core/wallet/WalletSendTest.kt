@@ -56,6 +56,7 @@ class WalletSendTest {
 
     init {
         ops.windowOpen = { window }
+        ops.vaultClock = now
     }
 
     private fun manager() = WalletsManager(
@@ -895,6 +896,19 @@ class WalletSendTest {
         chain.spend.confirmed += older.txid
         assertEquals(0, m.recentSends(w.id).more)
         assertEquals("RecentReport", r.toString())
+    }
+
+    @Test
+    fun theWindowIsTheVaultsClockNotThePhones() = runBlocking {
+        val (m, w) = opened()
+        // The phone says it is 2026-10-31 20:00 (`now`); the vault's clock is two days on. A payment 1 hour old by the vault's clock
+        // is recent; one 25 hours old by it is not, whatever the phone thinks.
+        val vaultNow = now.plusSeconds(2 * 86_400L)
+        ops.vaultClock = vaultNow
+        ops.history = listOf(signed("aa".repeat(32), vaultNow.minusSeconds(25 * 3_600L)))
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
+        ops.history = listOf(signed("aa".repeat(32), vaultNow.minusSeconds(3_600)))
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id).kind)
     }
 
     @Test

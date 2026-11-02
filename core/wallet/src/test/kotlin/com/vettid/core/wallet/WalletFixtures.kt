@@ -3,6 +3,7 @@
 
 package com.vettid.core.wallet
 
+import java.time.Instant
 import com.vettid.core.chain.Account
 import com.vettid.core.chain.ChainError
 import com.vettid.core.chain.ChainServer
@@ -315,6 +316,11 @@ internal class FakeWalletOps : WalletOps {
 
     var history: List<WalletTx> = emptyList()
     var historyFails = false
+
+    /** The vault's clock (null: the fake knows no better than the phone's). */
+    var vaultClock: Instant? = null
+
+    override suspend fun vaultNow(): Instant = vaultClock ?: Instant.now()
     var historyThrows: Exception? = null
 
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> {

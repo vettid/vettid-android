@@ -332,6 +332,9 @@
     <string name="wallet_send_fee_ten_percent">The fee, %1$s sats, is more than 10%% of what you\'re sending. Pay it anyway?</string> <!-- new, revised: names the fee -->
     <string name="wallet_send_recent_waiting">A payment you approved is waiting for confirmation: %1$s to %2$s at %3$s.</string> <!-- new, revised: names the payment -->
     <string name="wallet_send_recent_gone">A payment you approved may have gone through: %1$s to %2$s at %3$s.</string> <!-- new, revised: names the payment -->
+    <string name="wallet_send_fee_ten_percent_estimate">The fee, at least %1$s sats, is more than 10%% of what you\'re sending. Pay it anyway?</string> <!-- new: before the build the figure is an estimate -->
+    <string name="wallet_send_recent_waiting_nopayee">A payment you approved is waiting for confirmation: %1$s at %2$s.</string> <!-- new: a history entry without a payee -->
+    <string name="wallet_send_recent_gone_nopayee">A payment you approved may have gone through: %1$s at %2$s.</string> <!-- new: a history entry without a payee -->
     <string name="wallet_send_recent_gone_more">It may not have gone out, or the server hasn\'t seen it yet. Check before you send again.</string> <!-- new, revised wording -->
     <plurals name="wallet_send_recent_more"> <!-- new: payments in the same state besides the one named -->
         <item quantity="one">%1$d more payment is in the same state.</item>

@@ -16,6 +16,7 @@ import com.vettid.core.vault.walletGet
 import com.vettid.core.vault.walletHistory
 import com.vettid.core.vault.walletPsbtInspect
 import com.vettid.core.vault.walletSignExpired
+import com.vettid.core.vault.walletVaultNow
 import com.vettid.core.vault.walletSignsOutstanding
 import com.vettid.core.vault.walletSign
 import com.vettid.core.vault.walletSignResend
@@ -121,6 +122,9 @@ interface WalletOps {
     /** The wallets with a `wallet.sign` that may still apply (also after a lock or a restart): no new send is made for them. */
     suspend fun signsOutstanding(): Set<String>
 
+    /** The vault's clock (its `at` times are in it); the phone's own when it has not learned the vault's. */
+    suspend fun vaultNow(): java.time.Instant = java.time.Instant.now()
+
     /** `wallet.history`: what this vault signed, newest first ([limit] 1–200). */
     suspend fun history(walletId: String, limit: Int?): List<WalletTx>
 }
@@ -202,6 +206,8 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
         }
 
     override suspend fun signsOutstanding(): Set<String> = api().walletSignsOutstanding()
+
+    override suspend fun vaultNow(): java.time.Instant = api().walletVaultNow()
 
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = WalletWire.history(api().walletHistory(walletId, limit))
 

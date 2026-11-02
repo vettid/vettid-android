@@ -218,13 +218,17 @@ class SendViewModel internal constructor(
             unreadable
         }
         val wait = recentWaitMs
-        val r = (if (wait == null) ask() else withTimeoutOrNull(wait) { ask() }) ?: unreadable
-        mutable.update {
-            it.copy(
-                recentChecking = false,
-                recentNotice = r.kind.takeIf { n -> n != RecentSends.CLEAR },
-                recentReport = r.takeIf { _ -> r.kind != RecentSends.CLEAR },
-            )
+        try {
+            val r = (if (wait == null) ask() else withTimeoutOrNull(wait) { ask() }) ?: unreadable
+            mutable.update {
+                it.copy(
+                    recentNotice = r.kind.takeIf { n -> n != RecentSends.CLEAR },
+                    recentReport = r.takeIf { _ -> r.kind != RecentSends.CLEAR },
+                )
+            }
+        } finally {
+            // A throw or a cancel must not leave Review off for good.
+            mutable.update { it.copy(recentChecking = false) }
         }
     }
 
