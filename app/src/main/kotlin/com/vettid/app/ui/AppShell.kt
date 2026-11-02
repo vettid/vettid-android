@@ -31,6 +31,7 @@ import com.vettid.core.data.wallet.ImportWalletRoute
 import com.vettid.core.data.wallet.SpendingLimitsRoute
 import com.vettid.core.data.wallet.NewWalletRoute
 import com.vettid.core.data.wallet.SendRoute
+import com.vettid.core.data.wallet.TransactionRoute
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
@@ -366,6 +367,12 @@ fun AppShell(
                                 onBack = back,
                                 onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
                                 onOpenItem = { navController.navigate(ItemDetailRoute(it)) { launchSingleTop = true } },
+                                // A signed payment's entry opens its transaction (W2-3), while the wallet's entry is shown.
+                                onOpenTransaction = if (badges.walletShown) {
+                                    { txid -> navController.navigate(TransactionRoute(txid)) { launchSingleTop = true } }
+                                } else {
+                                    null
+                                },
                                 onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
                                 onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
                             ),
@@ -548,6 +555,13 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolea
         is FeedTarget.WalletLimits ->
             if (walletShown) {
                 navigate(SpendingLimitsRoute(t.walletId)) { launchSingleTop = true }
+            } else {
+                navigate(NotificationsRoute()) { launchSingleTop = true }
+            }
+        // A transaction exists only in a build with the wallet, and while its entry is shown; else the Notifications list.
+        is FeedTarget.WalletTransaction ->
+            if (walletShown) {
+                navigate(TransactionRoute(t.txid)) { launchSingleTop = true }
             } else {
                 navigate(NotificationsRoute()) { launchSingleTop = true }
             }
