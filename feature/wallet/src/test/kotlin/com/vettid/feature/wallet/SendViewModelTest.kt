@@ -708,21 +708,57 @@ class SendViewModelTest {
         assertNull(vm.state.value.bigFeeAsk)
     }
 
+    private val resets = listOf<Pair<String, (SendViewModel) -> Unit>>(
+        "amount" to { it.setAmount("1000") },
+        "send all" to { it.setSendAll(false) },
+        "fee choice" to { it.setFeeChoice(FeeChoice.NORMAL) },
+        "custom fee" to { it.setCustomFee("31") },
+        "unconfirmed" to { it.setIncludeUnconfirmed(true) },
+        "link with an amount" to { it.setAddress("bitcoin:$PAYEE?amount=0.0003") },
+        "link without an amount" to { it.setAddress("bitcoin:$PAYEE") },
+        "refused link" to { it.setAddress("bitcoin:$PAYEE?amount=-1") },
+    )
+
+    private fun assertNothingAgreedOrAsked(name: String, vm: SendViewModel) {
+        val s = vm.state.value
+        assertNull(name, s.tenConfirmedFee)
+        assertNull(name, s.tenConfirmedPayee)
+        assertNull(name, s.bigFeeAsk)
+        assertNull(name, s.bigFeePayee)
+    }
+
+    /** The agreement stands and the review's 10% question (the payee shrank) is pending when the member edits the form. */
     @Test
-    fun everySetterResetsTheAgreementAndTheOpenQuestion() = runTest {
-        val setters = listOf<(SendViewModel) -> Unit>(
-            { it.setAmount("1000") }, { it.setSendAll(false) }, { it.setFeeChoice(FeeChoice.NORMAL) },
-            { it.setCustomFee("31") }, { it.setIncludeUnconfirmed(true) },
-        )
-        for (set in setters) {
+    fun everyEditDropsTheAgreementAndTheReviewQuestionThatIsPending() = runTest {
+        for ((name, edit) in resets) {
             val vm = sendAllAgreedAt(40_000, 4_500)
-            assertEquals(4_500L, vm.state.value.tenConfirmedFee)
-            set(vm)
-            val s = vm.state.value
-            assertNull(s.tenConfirmedFee)
-            assertNull(s.tenConfirmedPayee)
-            assertNull(s.bigFeeAsk)
-            assertNull(s.bigFeePayee)
+            engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0, true))
+            vm.review()
+            eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+            assertEquals(name, 35_000L, vm.state.value.bigFeePayee)
+            assertEquals(name, 4_500L, vm.state.value.tenConfirmedFee)
+            vm.edit()
+            vm.state.value.let { assertNull(name, it.bigFeeAsk) }
+            vm.review()
+            eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+            edit(vm)
+            assertNothingAgreedOrAsked(name, vm)
+        }
+    }
+
+    /** The form's own 10% question (a typed amount, the lowest possible size already over 10%) is pending when the member edits. */
+    @Test
+    fun everyEditDropsTheFormQuestionThatIsPending() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        for ((name, edit) in resets) {
+            val vm = ready()
+            vm.setFeeChoice(FeeChoice.CUSTOM)
+            vm.setCustomFee("40")
+            vm.review()
+            assertEquals(name, BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+            assertEquals(name, 40_000L, vm.state.value.bigFeePayee)
+            edit(vm)
+            assertNothingAgreedOrAsked(name, vm)
         }
     }
 
