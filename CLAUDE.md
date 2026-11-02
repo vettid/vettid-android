@@ -120,6 +120,21 @@ The A2 exit test:
   runs as the fallback, the mode preference is never changed, `push.unregister` goes to the vault at its next open if
   a registration may still exist, and the registration resumes when the push service is back
   (`settings.notifications_push_not_on_phone`).
+- Notifications and the app lock (owner decisions 2026-11-02): no names whenever opening VettID would show the app lock.
+  `AppLock.wouldShowLock()` is true when the state is `LOCKED` or `PENDING`, or the lock is on, the app is in the background
+  and `now - backgroundAt >= timeout` (the inputs of `onForeground()`, which still alone engages the lock); `DISABLED` is never
+  covered; a prompt in progress (`authenticating`) is not. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
+  a timer that turns it true when the timeout elapses in the background (cancelled on return or lock off; it does not survive
+  the process, whose next start is `LOCKED`, and it stops while the process is frozen (a cached process on Android 14+) as well as in deep sleep); `NotifySource.covered` is that flow, `coveredNow()` the direct read. `FeedNotifier`
+  reads `coveredNow()` at post time inside its lock: item notifications are then in public form only
+  (`LocalNotification.publicForm(quiet)`: the lock screen's "New activity in VettID" / "VettID needs your attention", no names, no
+  text, no names or message-text read; a new arrival keeps its sound and heads-up). When the flow turns true every tag still in
+  `posted` is re-posted in that form, quietly, if the cover still holds. A real dismissal takes its tag out of `posted` first
+  (`NotifyIntents.dismissed`: the delete intent, an immutable broadcast to this app's package carrying only the tag, received by a
+  not-exported receiver in `VettIdApplication`, `FeedNotifier.onDismissed`, also called when a tap on an item notification reaches `NotificationOpenInbox`); a snoozed one is still in `posted`, and posting to a
+  snoozed tag updates it without showing it, so the named original does not come back; it is also cancelled at the vault lock.
+  The timer runs on monotonic time (stops in deep sleep or while frozen), so the clock is also looked at (`FeedNotifier.recheckCover()`, once per cover) on every arrival and when the screen comes on or the phone is unlocked (`VettIdApplication`'s receiver). The timer looks again when it fires early, backing off from 1 s, doubling to 60 s. For a process that is frozen or asleep there is also an alarm (`CoverAlarm`, `AppLock.syncCoverAlarm`; `AndroidCoverAlarm`, `CoverAlarmReceiver` in `:app` `lock/`): while the lock is on and unlocked, the app in the background and the timeout above 0, an inexact `AlarmManager.set(RTC, backgroundAt + timeout)` (no exact-alarm permission; its PendingIntent is immutable and explicit to the not-exported receiver, carrying nothing), cancelled on return, lock, disable and set again when the timeout changes; the receiver calls `FeedNotifier.recheckCover()`, which asks `wouldShowLock()` itself, so an early or late alarm is harmless (an inexact `set` may fire up to about 75% of the wait late, 45 minutes for an hour, so from a wait of 15 minutes `setWindow(RTC, deadline, 10 min)` bounds the lateness to 10 minutes after the deadline, the shortest window without the exact-alarm permission; Doze may still defer it to a maintenance window). A dead process: the receiver starts a new one, whose app lock starts locked; nothing is tracked yet (`posted` is memory), and whatever the old process left showing is cancelled as before (`cancelItems` / `cancelLeftovers` when the vault is seen not open). Not restored when the cover goes. The ongoing call notice (`CallService`) keeps the caller's name under the app lock (owner decision 2026-11-02): by design, not a gap; `CallService` is not changed.
+  The withdrawn-request mute (`ApprovalDetailUiState.canMute`) needs a named connection, as History does.
 
 - Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the app's note; VAULT-MESSAGING §10.10 is normative): `:core:crypto` `call/`
   (`CallWire` against vettid-vault's `calls.json`, `MediaSuite`: the closed registry of media suites, `CallMedia`: the

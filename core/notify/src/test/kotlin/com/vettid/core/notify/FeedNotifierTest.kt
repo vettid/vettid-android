@@ -37,17 +37,26 @@ class FeedNotifierTest {
 
     private class Posted : Poster {
         val shown = linkedMapOf<String, LocalNotification>()
+
+        /** Snoozed: not active (so [isPosted] says no) but still known to the system, and cancelled by [cancel]. */
+        val snoozed = linkedMapOf<String, LocalNotification>()
+
+        fun snooze(tag: String) {
+            snoozed[tag] = shown.remove(tag)!!
+        }
         val log = mutableListOf<String>()
 
         override fun post(n: LocalNotification) {
-            shown[n.tag] = n
+            // Posting to a snoozed tag updates it without showing it (as the system does).
+            if (n.tag in snoozed) snoozed[n.tag] = n else shown[n.tag] = n
             log += "post:${n.tag}"
         }
 
         override fun isPosted(tag: String): Boolean = tag in shown
 
         override fun cancel(tag: String) {
-            if (shown.remove(tag) != null) log += "cancel:$tag"
+            val had = shown.remove(tag) != null
+            if (snoozed.remove(tag) != null || had) log += "cancel:$tag"
         }
 
         var leftoverSweeps = mutableListOf<Set<String>>()
@@ -61,18 +70,29 @@ class FeedNotifierTest {
         override val arrivals = MutableSharedFlow<FeedItem>(extraBufferCapacity = 16)
         override val items = MutableStateFlow<List<FeedItem>>(emptyList())
         override val open = MutableStateFlow(true)
+        override val covered = MutableStateFlow(false)
+        /** When set, what [coveredNow] says whatever the [covered] flow still holds (the flow lags its source). */
+        var nowOverride: Boolean? = null
+
+        override fun coveredNow() = nowOverride ?: covered.value
+        var namesCalls = 0
+        var textCalls = 0
         override val lockedElsewhere = MutableStateFlow(false)
         override val idleLocked = MutableStateFlow<com.vettid.core.data.vault.IdleLocked?>(null)
         override val ownerCheck = MutableStateFlow<OwnerCheckView?>(null)
         override val alarm = MutableStateFlow<CredentialAlarm?>(null)
         var names = FeedNames(mapOf("c1" to ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee")), mapOf("i1" to "Passport"))
 
-        override fun names() = names
+        override fun names(): FeedNames {
+            namesCalls++
+            return names
+        }
 
         /** When set, [messageText] waits for it: an item notification still being prepared. */
         var textGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
         override suspend fun messageText(connectionId: String, messageId: String): String? {
+            textCalls++
             textGate?.await()
             return "See you at 6"
         }
@@ -110,6 +130,183 @@ class FeedNotifierTest {
         source.items.value = listOf(item("f1", status = "read"))
         runCurrent()
         assertTrue(poster.shown.isEmpty())
+    }
+
+    // --- the app lock's cover (owner request 2026-11-02): nothing past the lock names anything ---
+
+    @Test
+    fun underTheCoverAnItemNotifiesInItsPublicFormOnly() = runTest {
+        notifier()
+        source.covered.value = true
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "item.revealed", ref = "i1"))
+        arrive(item("f3", kind = "grant.request", ref = "g1"))
+        for (tag in listOf("f1", "f2", "f3")) {
+            val n = poster.shown.getValue(tag)
+            assertEquals(n.publicTitle, n.title)
+            assertNull(n.text)
+            assertFalse(n.names)
+            val all = "${n.title} ${n.text}"
+            assertFalse(all, "Sam" in all || "Lee" in all || "Passport" in all || "See you" in all)
+        }
+        assertEquals("New activity in VettID", poster.shown.getValue("f1").title)
+        assertEquals(Channels.MESSAGES, poster.shown.getValue("f1").channel)
+        assertEquals("f1", poster.shown.getValue("f1").itemId)
+    }
+
+    @Test
+    fun underTheCoverNothingIsReadAndAnArrivalKeepsItsSound() = runTest {
+        notifier()
+        source.covered.value = true
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "grant.request", ref = "g1"))
+        assertEquals("no names read", 0, source.namesCalls)
+        assertEquals("no message text read", 0, source.textCalls)
+        for (tag in listOf("f1", "f2")) {
+            val n = poster.shown.getValue(tag)
+            assertEquals(n.publicTitle, n.title)
+            assertNull(n.text)
+            assertFalse("a new arrival still sounds, vibrates and shows heads-up", n.silent)
+        }
+        // A re-post after a withdrawal stays as quiet as it was.
+        arrive(item("f2", kind = "grant.request", ref = "g1").copy(quietRepost = true))
+        assertTrue(poster.shown.getValue("f2").silent)
+    }
+
+    @Test
+    fun aSnoozedNotificationStaysKnownAndIsCancelledWhenTheVaultLocks() = runTest {
+        notifier()
+        arrive(item("f1"))
+        poster.snooze("f1")
+        source.covered.value = true
+        runCurrent()
+        assertTrue("not shown (it is snoozed)", poster.shown.isEmpty())
+        assertEquals("but updated in place: the named original cannot come back", "New activity in VettID", poster.snoozed.getValue("f1").title)
+        assertNull(poster.snoozed.getValue("f1").text)
+        source.open.value = false
+        runCurrent()
+        assertTrue(poster.snoozed.isEmpty())
+        assertTrue("cancel:f1" in poster.log)
+    }
+
+    @Test
+    fun theCoverIsReadFromItsSourceNotFromTheLaggingFlow() = runTest {
+        notifier()
+        // The flow still says "open", the source already says "covered": public.
+        source.nowOverride = true
+        arrive(item("f1"))
+        assertEquals("New activity in VettID", poster.shown.getValue("f1").title)
+        assertEquals(0, source.namesCalls)
+        // A re-post for a cover that is gone by the time it runs does not replace a named notification.
+        source.nowOverride = null
+        arrive(item("f2"))
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f2").title)
+        source.nowOverride = false
+        source.covered.value = true
+        runCurrent()
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f2").title)
+    }
+
+    @Test
+    fun aCoverThatTheTimerMissedIsActedOnByAnArrivalOrTheScreenComingOn() = runTest {
+        val n = notifier()
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "item.revealed", ref = "i1"))
+        // The wall clock is past the deadline, the timer (the flow) has not fired.
+        source.nowOverride = true
+        n.recheckCover()
+        assertEquals("New activity in VettID", poster.shown.getValue("f1").title)
+        assertEquals("New activity in VettID", poster.shown.getValue("f2").title)
+        assertTrue(poster.shown.getValue("f1").silent)
+        // Once per cover: asked again, nothing is posted again.
+        poster.log.clear()
+        n.recheckCover()
+        assertTrue(poster.log.isEmpty())
+        // The cover goes (unlocked); a named one posted; the next cover is acted on again.
+        source.nowOverride = false
+        arrive(item("f3"))
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f3").title)
+        source.nowOverride = true
+        arrive(item("f4"))
+        assertEquals("New activity in VettID", poster.shown.getValue("f3").title)
+        assertEquals("New activity in VettID", poster.shown.getValue("f4").title)
+    }
+
+    @Test
+    fun aTappedNotificationIsNotBroughtBackByACoverUp() = runTest {
+        val n = notifier()
+        arrive(item("f1"))
+        poster.shown.remove("f1") // tapped: auto-cancelled
+        n.onDismissed("f1") // the tap handler
+        poster.log.clear()
+        source.covered.value = true
+        runCurrent()
+        assertTrue(poster.log.isEmpty())
+        assertTrue(poster.shown.isEmpty())
+    }
+
+    @Test
+    fun withTheCoverDownItIsAsBefore() = runTest {
+        notifier()
+        source.covered.value = true
+        source.covered.value = false
+        runCurrent()
+        arrive(item("f1"))
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f1").title)
+        assertFalse(poster.shown.getValue("f1").silent)
+    }
+
+    @Test
+    fun theCoverComingUpReplacesWhatIsShowingAndLeavesADismissedOneAlone() = runTest {
+        val notifier = notifier()
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "item.revealed", ref = "i1"))
+        assertEquals("See you at 6", poster.shown.getValue("f1").text)
+        poster.shown.remove("f2") // the member swiped it away
+        notifier.onDismissed("f2") // its delete intent
+        poster.log.clear()
+        source.covered.value = true
+        runCurrent()
+        val n = poster.shown.getValue("f1")
+        assertEquals("New activity in VettID", n.title)
+        assertNull(n.text)
+        assertTrue("quiet", n.silent)
+        assertEquals(listOf("post:f1"), poster.log)
+        assertFalse("f2" in poster.shown)
+        // Read on another device while covered: it still goes.
+        source.items.value = emptyList()
+        runCurrent()
+        assertTrue(poster.shown.isEmpty())
+    }
+
+    @Test
+    fun anItemBeingPreparedWhenTheCoverComesUpIsPostedPublic() = runTest {
+        notifier()
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.textGate = gate
+        arrive(item("f1"))
+        assertTrue(poster.shown.isEmpty())
+        source.covered.value = true
+        gate.complete(Unit)
+        runCurrent()
+        val n = poster.shown.getValue("f1")
+        assertEquals("New activity in VettID", n.title)
+        assertNull(n.text)
+    }
+
+    @Test
+    fun aBatchUpdateUnderTheCoverStaysPublic() = runTest {
+        notifier()
+        arrive(item("b", kind = "grant.request", count = 2, ref = "g1"))
+        source.covered.value = true
+        runCurrent()
+        arrive(item("b", kind = "grant.request", count = 3, ref = "g1"))
+        assertEquals("New activity in VettID", poster.shown.getValue("b").title)
     }
 
     @Test

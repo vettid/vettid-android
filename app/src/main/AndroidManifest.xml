@@ -97,6 +97,11 @@
             android:name=".lock.LockAgainReceiver"
             android:exported="false" />
 
+        <!-- The app lock's cover alarm (owner decision 2026-11-02): wakes the app at the lock's background deadline. -->
+        <receiver
+            android:name=".lock.CoverAlarmReceiver"
+            android:exported="false" />
+
         <!-- Google push (Firebase Cloud Messaging) is the `full` distribution's alone: its manifest entries are in
              src/full/AndroidManifest.xml. The `foss` distribution (F-Droid) has none (README "F-Droid build"). -->
     </application>

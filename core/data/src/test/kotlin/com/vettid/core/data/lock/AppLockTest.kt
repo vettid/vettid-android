@@ -16,7 +16,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
 /** A software stand-in for the biometric-gated Keystore key. */
-private class SoftKeys : AppLockKeys {
+internal class SoftKeys : AppLockKeys {
     var key: SecretKey? = null
     val created = mutableListOf<AppLockMethod>()
 
@@ -35,7 +35,7 @@ private class SoftKeys : AppLockKeys {
 }
 
 /** The earlier builds' wrapped app-data key file: only its deletion is left. */
-private class MemFile : WrappedKeyFile {
+internal class MemFile : WrappedKeyFile {
     var b: ByteArray? = byteArrayOf(1, 2, 3)
 
     override fun delete() {

@@ -7,7 +7,14 @@ import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.keystore.AppDataKey
 import com.vettid.core.keystore.KeystoreException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.transformLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -31,6 +38,9 @@ enum class AppLockState {
     UNLOCKED,
 }
 
+/** The app lock's cover is up in [this] state: locked, or not yet known (fails closed). */
+fun AppLockState.coversApp(): Boolean = this == AppLockState.LOCKED || this == AppLockState.PENDING
+
 /**
  * What BiometricPrompt allows for [this] method: a class 3 biometric or the phone's screen lock, or the screen lock
  * only (BiometricPrompt with a CryptoObject and DEVICE_CREDENTIAL alone needs API 30; minSdk is 31).
@@ -38,6 +48,27 @@ enum class AppLockState {
 fun AppLockMethod.authenticators(): Int = when (this) {
     AppLockMethod.BIOMETRICS -> Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL
     AppLockMethod.SCREEN_LOCK -> Authenticators.DEVICE_CREDENTIAL
+}
+
+/**
+ * An alarm for the cover's deadline (owner decision 2026-11-02, the frozen-process case): while the app is in the
+ * background with the lock on, something wakes the app at [set]'s time so that notifications showing names are replaced
+ * even when the process's timer does not run (deep sleep, a frozen cached process). Inexact is fine: the app looks at its
+ * clock again when it is woken. [AppLock] drives it; the Android one is in the app module.
+ */
+interface CoverAlarm {
+    /** Wake the app at about [atEpochMs] (wall clock); replaces an earlier one. */
+    fun set(atEpochMs: Long)
+
+    fun cancel()
+
+    companion object {
+        val NONE: CoverAlarm = object : CoverAlarm {
+            override fun set(atEpochMs: Long) = Unit
+
+            override fun cancel() = Unit
+        }
+    }
 }
 
 /** The user-authenticated Keystore key (`:core:keystore` [AppDataKey]); an interface so tests can use a software key. */
@@ -104,6 +135,7 @@ class AppLock(
     private val prefs: PreferencesRepository,
     private val keys: AppLockKeys,
     private val obsoleteWrappedKey: WrappedKeyFile,
+    private val coverAlarm: CoverAlarm = CoverAlarm.NONE,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val stateFlow = MutableStateFlow(AppLockState.PENDING)
@@ -122,8 +154,13 @@ class AppLock(
     /** The method of the key [cipherToEnable] made, saved by [completeEnable]. */
     private var enabling: AppLockMethod? = null
 
-    private var backgroundAt: Long? = null
-    private var timeout: AppLockTimeout = AppLockTimeout.DEFAULT
+    private val backgroundAtFlow = MutableStateFlow<Long?>(null)
+    private var backgroundAt: Long?
+        get() = backgroundAtFlow.value
+        set(v) {
+            backgroundAtFlow.value = v
+        }
+    private val timeoutFlow = MutableStateFlow(AppLockTimeout.DEFAULT)
 
     /** One prompt at a time, and no automatic prompt after one the member dismissed ([UnlockPromptGate]). */
     val prompts = UnlockPromptGate()
@@ -135,7 +172,7 @@ class AppLock(
     /** Reads the preference at start: an enabled lock starts locked. Always leaves [AppLockState.PENDING]. */
     suspend fun start() {
         val p = prefs.preferences.first()
-        timeout = p.appLockTimeout
+        timeoutFlow.value = p.appLockTimeout
         methodFlow.value = p.appLockMethod ?: AppLockMethod.BIOMETRICS
         prompts.newLock()
         // The wrapped app-data key of earlier builds was never used: deleted at the next start (2026-10-27).
@@ -155,7 +192,25 @@ class AppLock(
     }
 
     fun setTimeout(t: AppLockTimeout) {
-        timeout = t
+        timeoutFlow.value = t
+        syncCoverAlarm()
+    }
+
+    /**
+     * The alarm is set while the lock is on and unlocked, the app is in the background and the timeout is above zero (with
+     * "Immediately" the cover applies at once), for [backgroundAt] + the timeout; otherwise it is cancelled. Called after
+     * every change of those inputs. The alarm is a help: a failure to set it breaks nothing.
+     */
+    private fun syncCoverAlarm() {
+        val at = backgroundAt
+        val seconds = timeoutFlow.value.seconds
+        runCatching {
+            if (stateFlow.value == AppLockState.UNLOCKED && at != null && seconds > 0) {
+                coverAlarm.set(at + seconds * MS)
+            } else {
+                coverAlarm.cancel()
+            }
+        }
     }
 
     /**
@@ -177,6 +232,50 @@ class AppLock(
         enabling = null
         disable()
     }
+
+    /**
+     * Whether opening the app now would show the lock (owner decision 2026-11-02, for notifications): the lock is
+     * [AppLockState.LOCKED] or not yet known, or it is on, the app is in the background and has been for the timeout or
+     * longer. The same inputs [onForeground] uses (the lock itself engages only there); [AppLockState.DISABLED] is never covered.
+     */
+    fun wouldShowLock(): Boolean = when (stateFlow.value) {
+        AppLockState.LOCKED, AppLockState.PENDING -> true
+        AppLockState.DISABLED -> false
+        AppLockState.UNLOCKED -> !authenticating && backgroundAt?.let { now() - it >= timeoutFlow.value.seconds * MS } == true
+    }
+
+    /**
+     * [wouldShowLock] as a flow, true until the state is read. In the background it turns true by itself when the timeout
+     * elapses (a timer in [scope], cancelled when the app comes back or the lock is turned off); it does not survive the
+     * process, whose next start is [AppLockState.LOCKED] anyway.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun coverFlow(scope: CoroutineScope): StateFlow<Boolean> =
+        combine(stateFlow, backgroundAtFlow, timeoutFlow) { s, at, t -> Triple(s, at, t) }
+            .transformLatest { (s, at, t) ->
+                when {
+                    s.coversApp() -> emit(true)
+                    s != AppLockState.UNLOCKED || at == null -> emit(false)
+                    else -> {
+                        val left = at + t.seconds * MS - now()
+                        if (left <= 0) {
+                            emit(true)
+                        } else {
+                            emit(false)
+                            delay(left + COVER_MARGIN_MS)
+                            // Early (a clock set back, a prompt in progress): look again rather than lose the cover for good.
+                            // Backing off: 1 s, doubling to 60 s (a prompt that stays open, a clock far back).
+                            var wait = COVER_RETRY_MS
+                            while (!wouldShowLock()) {
+                                val more = at + t.seconds * MS - now()
+                                delay(if (more > 0) minOf(more + COVER_MARGIN_MS, wait) else wait)
+                                wait = minOf(wait * 2, COVER_RETRY_MAX_MS)
+                            }
+                            emit(true)
+                        }
+                    }
+                }
+            }.stateIn(scope, SharingStarted.Eagerly, true)
 
     /** Chooses the method while the lock is off (it applies when the lock is turned on). */
     suspend fun chooseMethod(method: AppLockMethod) {
@@ -246,6 +345,7 @@ class AppLock(
         prefs.setAppLockEnabled(false)
         invalidatedFlow.value = invalidated
         stateFlow.value = AppLockState.DISABLED
+        syncCoverAlarm()
     }
 
     /** As on a fresh install (the wipe of a replaced phone): off, no key, the default timeout. */
@@ -253,9 +353,10 @@ class AppLock(
         disable()
         methodFlow.value = AppLockMethod.BIOMETRICS
         enabling = null
-        timeout = AppLockTimeout.DEFAULT
+        timeoutFlow.value = AppLockTimeout.DEFAULT
         backgroundAt = null
         authenticating = false
+        syncCoverAlarm()
     }
 
     fun acknowledgeInvalidated() {
@@ -267,6 +368,7 @@ class AppLock(
         if (stateFlow.value != AppLockState.UNLOCKED) return
         prompts.newLock()
         stateFlow.value = AppLockState.LOCKED
+        syncCoverAlarm()
     }
 
     /**
@@ -277,18 +379,26 @@ class AppLock(
     fun onBackground(changingConfigurations: Boolean = false) {
         if (authenticating || changingConfigurations) return
         backgroundAt = now()
+        syncCoverAlarm()
     }
 
     fun onForeground() {
         if (authenticating) return
         val at = backgroundAt ?: return
+        // Locked before the background time is cleared: the cover (wouldShowLock) has no gap between the two.
+        if (stateFlow.value == AppLockState.UNLOCKED && now() - at >= timeoutFlow.value.seconds * MS) lockNow()
         backgroundAt = null
-        if (stateFlow.value == AppLockState.UNLOCKED && now() - at >= timeout.seconds * MS) lockNow()
+        syncCoverAlarm()
     }
 
     private companion object {
         /** What the authenticated cipher encrypts: not a secret, only a use of the key that needs the authentication. */
         val PROOF = "vettid/app-lock/1".toByteArray()
         const val MS = 1000L
+
+        /** The timer fires a little late rather than a clock tick early: [wouldShowLock] must be true when it does. */
+        const val COVER_MARGIN_MS = 100L
+        const val COVER_RETRY_MS = 1000L
+        const val COVER_RETRY_MAX_MS = 60_000L
     }
 }

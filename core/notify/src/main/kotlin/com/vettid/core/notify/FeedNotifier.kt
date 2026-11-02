@@ -63,6 +63,15 @@ interface NotifySource {
     /** The vault is open on this phone and not held (§3.6.3). */
     val open: StateFlow<Boolean>
 
+    /**
+     * The app lock's cover is up (locked, or not yet known): the app may be in front but the member has not passed the
+     * biometric or screen-lock gate, so no notification shows a name, a title or a text (heads-up and shade included).
+     */
+    val covered: StateFlow<Boolean>
+
+    /** [covered] read now from its source, not through a flow that may lag a dispatch behind it. */
+    fun coveredNow(): Boolean = covered.value
+
     /** The vault locked, from another device or by itself (not by the member on this phone): "Your vault is locked". */
     val lockedElsewhere: StateFlow<Boolean>
 
@@ -96,8 +105,12 @@ class FeedNotifier(
     private val res: () -> Resources,
     private val poster: Poster,
 ) {
-    private val posted = LinkedHashSet<String>()
+    /** The item notifications showing, by tag, as last posted but with the names taken out (memory only). */
+    private val posted = LinkedHashMap<String, LocalNotification>()
     private val lock = Any()
+
+    /** A cover-up ran for the cover that is up now; reset when the cover is seen gone or a named notification is posted. */
+    private var coverDone = false
 
     private val on: Boolean get() = settings.value.mode != NotificationMode.OFF
 
@@ -105,6 +118,7 @@ class FeedNotifier(
         scope.launch { source.arrivals.collect { onArrival(it) } }
         scope.launch { source.items.collect { onItems(it) } }
         scope.launch { source.open.collect { open -> if (!open) cancelItems() } }
+        scope.launch { source.covered.collect { if (it) coverUp() else synchronized(lock) { coverDone = false } } }
         scope.launch { settings.map { it.mode }.distinctUntilChanged().collect { if (it == NotificationMode.OFF) cancelAll() } }
         scope.launch { combine(source.lockedElsewhere, source.idleLocked) { l, i -> l to i }.collect { (l, i) -> onLocked(l, i) } }
         scope.launch { source.ownerCheck.collect { onOwnerCheck(it) } }
@@ -113,11 +127,14 @@ class FeedNotifier(
 
     @Suppress("ReturnCount")
     private suspend fun onArrival(item: FeedItem) {
+        // The cover's timer runs on monotonic time, which stops in deep sleep: the clock is looked at here too.
+        recheckCover()
         // A re-post after a withdrawal only updates what is showing: a notification the member dismissed stays dismissed.
-        if (item.quietRepost && !synchronized(lock) { item.itemId in posted && poster.isPosted(item.itemId) }) return
+        if (item.quietRepost && !synchronized(lock) { item.itemId in posted.keys && poster.isPosted(item.itemId) }) return
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
-        val names = source.names()
-        val previews = settings.value.previews
+        // The app lock's cover is up: the public form only, whatever the member's choice of previews (nothing is read).
+        val previews = if (source.coveredNow()) NotificationPreviews.NOTHING else settings.value.previews
+        val names = if (source.coveredNow()) FeedNames() else source.names()
         val text = if (previews == NotificationPreviews.NAMES_AND_TEXT && item.kind == "message.received") {
             val c = item.connectionId
             val m = item.ref
@@ -125,12 +142,14 @@ class FeedNotifier(
         } else {
             null
         }
-        val n = NotificationContent.of(item, channel, previews, names, res(), text)
+        var n = NotificationContent.of(item, channel, previews, names, res(), text)
         // Posted under the lock the cancels hold, and only if it still may be: an item that was being prepared while
         // the vault locked or the phone was wiped is not posted after its cancel.
         synchronized(lock) {
             if (!notifiable(item)) return
-            posted += item.itemId
+            // The cover came up while it was being prepared.
+            if (source.coveredNow()) n = n.publicForm(quiet = false) else coverDone = false
+            posted[item.itemId] = n.publicForm(quiet = true)
             poster.post(n)
         }
     }
@@ -149,7 +168,7 @@ class FeedNotifier(
     private fun onItems(items: List<FeedItem>) {
         val active = items.filter { it.status == FeedManager.STATUS_ACTIVE }.map { it.itemId }.toSet()
         synchronized(lock) {
-            val gone = posted.filter { it !in active }.also { posted.removeAll(it.toSet()) }
+            val gone = posted.keys.filter { it !in active }.also { posted.keys.removeAll(it.toSet()) }
             gone.forEach { poster.cancel(it) }
         }
     }
@@ -157,7 +176,7 @@ class FeedNotifier(
     /** The vault locked or is held, the mode is Off, or the phone was wiped: no notification names anything. */
     private fun cancelItems() {
         synchronized(lock) {
-            val all = posted.toList().also { posted.clear() }
+            val all = posted.keys.toList().also { posted.clear() }
             all.forEach { poster.cancel(it) }
             // Those a process before this one posted (the set above is memory only): at start the vault is not open
             // yet, so every item notification still showing is one that outlived the open vault (ANDROID-PLAN §4,
@@ -165,6 +184,38 @@ class FeedNotifier(
             runCatching { poster.cancelLeftovers(STATE_TAGS) }
         }
     }
+
+    /**
+     * The app lock's cover came up: what is showing is posted again in its public form ("New activity in VettID"), in
+     * place and without a sound. One the member dismissed stays dismissed. Not undone when the cover goes: the names
+     * come back with the item's next change.
+     */
+    private fun coverUp() {
+        synchronized(lock) {
+            // The cover went away meanwhile: a re-post now could replace a named one posted after it.
+            if (!source.coveredNow()) {
+                coverDone = false
+                return
+            }
+            if (coverDone) return
+            coverDone = true
+            // Every tag still in [posted]: a dismissed one was taken out by [onDismissed]; a snoozed one is not active but is
+            // here, and posting to its tag updates it without showing it, so the named original cannot come back.
+            posted.values.toList().forEach { poster.post(it) }
+        }
+    }
+
+    /** The member dismissed the notification [tag] (its delete intent): it is not re-posted by a cover-up. */
+    fun onDismissed(tag: String?) {
+        if (tag == null) return
+        synchronized(lock) { posted.remove(tag) }
+    }
+
+    /**
+     * Looks at the cover now (not at its timer): the app calls it when the member turns the screen on or unlocks the phone,
+     * and every arrival does. If it is up and no cover-up ran for it, what is showing is re-posted in public form.
+     */
+    fun recheckCover() = coverUp()
 
     private fun cancelAll() {
         cancelItems()

@@ -288,7 +288,8 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun notificationOpenInbox(): NotificationOpenInbox = NotificationOpenInbox()
+    fun notificationOpenInbox(feed: dagger.Lazy<FeedNotifier>): NotificationOpenInbox =
+        NotificationOpenInbox { feed.get().onDismissed(it) } // the tag of an item notification is its item id
 
     @Provides
     @Singleton
@@ -326,10 +327,12 @@ object AppModule {
         prefs: PreferencesRepository,
         m: VaultManager,
         visibility: NotifyVisibility,
+        appLock: AppLock,
         @AppScope scope: CoroutineScope,
     ): FeedNotifier = FeedNotifier(
         scope,
-        VaultNotifySource(m, scope) { context.resources },
+        // The cover is up while the app lock is locked, and until its state is known (AppLockGate shows the lock, or "starting").
+        VaultNotifySource(m, scope, appLock.coverFlow(scope), appLock::wouldShowLock) { context.resources },
         prefs.preferences.map { NotifySettings(it.effectiveNotificationMode, it.notificationPreviews) }
             .stateIn(scope, SharingStarted.Eagerly, NotifySettings(NotificationMode.OFF)), // until the preferences are read
         visibility.visible,
@@ -410,7 +413,10 @@ object AppModule {
     @Provides
     @Singleton
     fun appLock(@ApplicationContext context: Context, prefs: PreferencesRepository): AppLock =
-        AppLock(prefs, KeystoreAppLockKeys(), FileWrappedKeyFile(File(context.noBackupFilesDir, "app-lock.bin")))
+        AppLock(
+            prefs, KeystoreAppLockKeys(), FileWrappedKeyFile(File(context.noBackupFilesDir, "app-lock.bin")),
+            com.vettid.app.lock.AndroidCoverAlarm(context),
+        )
 
     /**
      * "Allow screenshots" (A6 audit S1): off in release and staging builds until the member turns it on; on in the

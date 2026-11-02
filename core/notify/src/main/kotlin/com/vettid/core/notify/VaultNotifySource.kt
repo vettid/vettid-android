@@ -23,11 +23,15 @@ import kotlinx.coroutines.flow.asStateFlow
 class VaultNotifySource(
     private val vault: VaultManager,
     scope: CoroutineScope,
+    override val covered: StateFlow<Boolean>,
+    private val coveredNow: () -> Boolean = { covered.value },
     /** The resources for a photo's text ("Photo", "Photo: <caption>"). */
     private val res: () -> android.content.res.Resources? = { null },
 ) : NotifySource {
     override val arrivals: Flow<FeedItem> = vault.feed.arrivals
     override val items: StateFlow<List<FeedItem>> = vault.feed.items
+    override fun coveredNow(): Boolean = coveredNow.invoke()
+
     override val open: StateFlow<Boolean> = combine(vault.phase, vault.ownerCheck.ownerCheck) { p, v ->
         p == AppPhase.Unlocked && (v == null || v.state == OwnerCheckState.OK)
     }.stateIn(scope, SharingStarted.Eagerly, false)
@@ -67,7 +71,10 @@ internal fun notifyMessageText(text: String, photo: Boolean, r: android.content.
 }
 
 /** A notification's tap, handed from the launcher activity to the shell: an item to open, or Settings → Notifications. */
-class NotificationOpenInbox {
+class NotificationOpenInbox(
+    /** An item notification was tapped (it goes by itself): the notifier stops tracking its tag, so a cover-up cannot bring it back. */
+    private val onItemTapped: (String) -> Unit = {},
+) {
     sealed interface Open {
         data class Item(val itemId: String) : Open
 
@@ -78,6 +85,7 @@ class NotificationOpenInbox {
     val pending: StateFlow<Open?> = flow.asStateFlow()
 
     fun offer(o: Open) {
+        if (o is Open.Item) onItemTapped(o.itemId)
         flow.value = o
     }
 
