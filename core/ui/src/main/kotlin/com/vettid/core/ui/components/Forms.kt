@@ -391,8 +391,11 @@ fun NoticeCard(
             Column(Modifier.weight(1f)) {
                 // Title and body as one node, so that an announced notice is read whole.
                 Column(Modifier.semantics(mergeDescendants = announce != null) { announce?.let { liveRegion = it } }) {
-                    Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(Spacing.xs))
+                    // A notice that is one sentence has no title.
+                    if (title.isNotEmpty()) {
+                        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(Spacing.xs))
+                    }
                     Text(body, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                 }
                 if (actions != null) {

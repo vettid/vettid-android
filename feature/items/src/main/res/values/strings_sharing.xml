@@ -271,4 +271,59 @@
     <string name="items_ask_state_granted">shared</string>
     <!-- 0.23.0 §10.4.1: every refusal of the member's own ask is shown neutrally, never as declined by the other member. -->
     <string name="items_ask_state_denied">not accepted</string>
+
+    <!-- ANDROID-PLAN 0.1.116 §4 "What an agent may use: share rules (AA4)". "draft" = the plan's text word for word, "new" = proposed here. -->
+    <string name="items_agent_rule_title">Share with %1$s</string> <!-- draft -->
+    <string name="items_agent_rule_critical">Critical items are never shared with agents, whatever their tags.</string> <!-- draft -->
+    <string name="items_agent_rule_mode_ask">Ask me about each item</string> <!-- draft -->
+    <string name="items_agent_rule_mode_ask_note">When an item gets one of these tags, you\'re asked before the agent can use it.</string> <!-- draft -->
+    <string name="items_agent_rule_mode_auto">Include tagged items automatically</string> <!-- draft -->
+    <string name="items_agent_rule_mode_auto_note">Items with these tags can be used without asking you first. Using an item gives the agent a result worked out from it, not the item itself.</string> <!-- draft -->
+    <string name="items_agent_rule_reveal">A use returns a code computed from the value and data the agent chooses. For a short or guessable value, such as a PIN or a common password, the agent could find the value from one such code. Share only items whose values are long and random, such as API keys.</string> <!-- draft -->
+    <string name="items_agent_rule_limits">Uses without asking</string> <!-- new: the heading, from the plan\'s bold "Uses without asking" -->
+    <string name="items_agent_rule_per_hour">Uses an hour</string> <!-- new: the field\'s label -->
+    <string name="items_agent_rule_per_day">Uses a day</string> <!-- new: the field\'s label -->
+    <string name="items_agent_rule_per_note">Up to %1$s uses an hour and %2$s a day. Past that, each use asks you.</string> <!-- draft, with the two numbers from the fields -->
+    <string name="items_agent_rule_uses">Uses of each item (optional)</string> <!-- new: the field\'s label -->
+    <string name="items_agent_rule_uses_note">Stop after %1$s uses of each item.</string> <!-- draft, with [n] from the field ("n" while empty) -->
+    <string name="items_agent_rule_uses_empty">n</string> <!-- new: [n] while the field is empty -->
+    <string name="items_agent_rule_more">More options</string> <!-- new -->
+    <string name="items_agent_rule_status_ttl">Status lifetime</string> <!-- draft -->
+    <string name="items_agent_rule_status_ttl_note">If you remove this permission, services the agent showed it to may still accept it for up to this long, plus 1 minute. Shorter is safer; the agent then checks with your vault more often.</string> <!-- draft -->
+    <string name="items_agent_rule_ttl_1m">1 minute</string> <!-- draft -->
+    <string name="items_agent_rule_ttl_5m">5 minutes</string> <!-- draft -->
+    <string name="items_agent_rule_ttl_15m">15 minutes</string> <!-- draft -->
+    <string name="items_agent_rule_ttl_1h">1 hour</string> <!-- draft -->
+    <plurals name="items_agent_rule_preview">
+        <item quantity="one">%1$d item: %2$d will be asked about, %3$d included now</item> <!-- draft -->
+        <item quantity="other">%1$d items: %2$d will be asked about, %3$d included now</item> <!-- draft -->
+    </plurals>
+    <string name="items_agent_rule_asks_because">Asks you first because %1$s for %2$s covers it</string> <!-- draft: "Asks you first because your medical rule for <name> covers it" -->
+    <string name="items_agent_rule_delete">Stop sharing</string> <!-- draft: the button -->
+    <string name="items_agent_rule_delete_title">Stop sharing %1$s\'s items with %2$s?</string> <!-- draft: "Stop sharing your medical rule\'s items with <name>?" -->
+    <string name="items_agent_rule_delete_body">It can no longer use them from now on. Services it showed this rule to may accept it for up to %1$s.</string> <!-- draft -->
+    <string name="items_agent_rule_cancel">Cancel</string> <!-- draft: the button -->
+
+    <string name="items_agent_password_title">Confirm with your credential password</string> <!-- draft -->
+    <string name="items_agent_password_body">Giving %1$s a permission is signed with your credential, so only you can do it. Enter your credential password.</string> <!-- draft -->
+    <string name="items_agent_password_label">Credential password</string> <!-- new: the vote prompt\'s label -->
+    <string name="items_agent_password_confirm">Confirm</string> <!-- draft: the button -->
+    <string name="items_agent_alarm">Permissions can\'t be changed while a credential alarm is open</string> <!-- draft -->
+    <string name="items_agent_alarm_open">Open the alarm</string> <!-- new: "a link to the alarm" -->
+    <string name="items_agent_owner_check_now">Check now</string> <!-- new: the owner-check link -->
+    <string name="items_agent_locked_again">Your credential locked again before the rule was saved. Try again.</string> <!-- new: the plan\'s permission text, for a rule -->
+    <string name="items_agent_conflict">Another device changed this rule. Here is the current one.</string> <!-- new: the plan\'s permission text, for a rule -->
+    <string name="items_agent_limit_grants">An agent can have at most 32 permissions, its share rules included. Remove one first.</string> <!-- draft -->
+    <string name="items_agent_limit_subject">An agent can have at most 64 rules.</string> <!-- draft -->
+    <string name="items_agent_limit_rules">Your vault holds at most 512 share rules.</string> <!-- draft -->
+    <string name="items_agent_not_paired">This agent is no longer paired.</string> <!-- draft -->
+    <string name="items_agent_bad_request">This rule could not be saved.</string> <!-- new: the plan\'s "This permission could not be saved: <field> is not valid.", whose field the app does not know for a rule -->
+    <string name="items_agent_window_title">The unlock window may still be open</string> <!-- new: as the vote\'s -->
+    <plurals name="items_agent_window_open">
+        <item quantity="one">VettID could not close the credential unlock window after saving the rule. It closes by itself once it has not been used for %1$d minute.</item> <!-- new -->
+        <item quantity="other">VettID could not close the credential unlock window after saving the rule. It closes by itself once it has not been used for %1$d minutes.</item> <!-- new -->
+    </plurals>
+    <string name="items_agent_window_plain">VettID could not close the credential unlock window after saving the rule. It closes by itself.</string> <!-- new -->
+    <string name="items_agent_window_close">Close it now</string> <!-- new: as the vote\'s -->
+    <string name="items_agent_saved">Rule saved</string> <!-- draft -->
 </resources>

@@ -38,6 +38,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.core.data.devices.AgentRuleRoute
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -92,6 +93,10 @@ data class ItemsHost(
     val onBack: () -> Unit,
     /** Leaves the current screen for [route] (the edit screen, once saved, for the item). */
     val replace: (Any) -> Unit,
+    /** The credential alarm's screen (an agent rule's password prompt refused while an alarm is open). */
+    val onOpenAlarm: () -> Unit = {},
+    /** The daily owner check (an agent rule's save refused because it is due). */
+    val onOwnerCheck: () -> Unit = {},
 )
 
 /** Registers the Vault list, the template picker, an item's detail and the add/edit screen. */
@@ -126,6 +131,8 @@ fun NavGraphBuilder.itemsDestination(chrome: ShellChrome, host: ItemsHost) {
     composable<TagsRoute> { TagsRouteContent(host) }
     composable<ConnectionSharingRoute> { ConnectionSharingRouteContent(host) }
     composable<RuleEditRoute> { RuleEditRouteContent(host) }
+    // AA4: an agent's share rule, the same editor (the route is in :core:data, opened from the agent's page).
+    composable<AgentRuleRoute> { RuleEditRouteContent(host) }
     composable<SharedWithYouRoute> { SharedWithYouRouteContent(host) }
 }
 
