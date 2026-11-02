@@ -345,12 +345,13 @@ class VaultManager(
     private fun confirmChange(m: UnresolvedChange): Boolean {
         forgetKept(m)
         // Once per reset: the answer, a resend and the check may each find it applied. What the hooks are to forget is taken
-        // now, before the marker goes and the gate opens: anything made after belongs to the new credential.
-        val actions = if (m.kind == ChangeKind.RESET && handledResets.add(m.innerId)) resetHooks.map { it() } else null
+        // now, before the marker goes and the gate opens (anything made after belongs to the new credential); a hook that
+        // throws is dropped, never the confirmation. The id counts as handled only after the hooks ran.
+        val actions = if (m.kind == ChangeKind.RESET && m.innerId !in handledResets) prepareResetHooks(resetHooks) else null
         val ok = record.confirmChange(m)
         newPinStep = false
         refreshChangeFlows()
-        actions?.let(::resetApplied)
+        if (actions != null && handledResets.add(m.innerId)) resetApplied(actions)
         return ok
     }
 
