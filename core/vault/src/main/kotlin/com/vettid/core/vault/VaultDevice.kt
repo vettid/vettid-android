@@ -1849,7 +1849,8 @@ class VaultDevice private constructor(
         st.credential = CredentialCopy(blob, version, key)
         try {
             save()
-        } catch (e: java.io.IOException) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Any failure (an I/O error, a Keystore error): put the copy back and rethrow it unchanged.
             st.credential = prev
             throw e
         }
