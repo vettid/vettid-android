@@ -31,6 +31,8 @@ import com.vettid.core.data.wallet.ImportWalletRoute
 import com.vettid.core.data.wallet.SpendingLimitsRoute
 import com.vettid.core.data.wallet.NewWalletRoute
 import com.vettid.core.data.wallet.SendRoute
+import com.vettid.core.data.wallet.TransactionRoute
+import com.vettid.core.data.wallet.TransactionsRoute
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
@@ -366,6 +368,12 @@ fun AppShell(
                                 onBack = back,
                                 onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
                                 onOpenItem = { navController.navigate(ItemDetailRoute(it)) { launchSingleTop = true } },
+                                // A signed payment's entry opens its transaction (W2-3), while the wallet's entry is shown.
+                                onOpenTransaction = if (badges.walletShown) {
+                                    { txid -> navController.openTransaction(txid) }
+                                } else {
+                                    null
+                                },
                                 onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
                                 onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
                             ),
@@ -536,6 +544,16 @@ private fun visibleOf(e: NavBackStackEntry?): Visible? {
     }
 }
 
+/**
+ * Opens a transaction. Not single-top: a second `wallet.signed` tap while another transaction is in front would reuse that screen's
+ * view model (it is keyed by the back stack entry) and keep showing the first. The one in front is popped, and the new one gets its own
+ * entry and view model.
+ */
+internal fun NavHostController.openTransaction(txid: String) {
+    if (currentDestination?.hasRoute(TransactionRoute::class) == true) popBackStack()
+    navigate(TransactionRoute(txid))
+}
+
 /** The screen a notification opens (ANDROID-PLAN 0.1.23, 4); the sheet is the Notifications screen's own. */
 internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolean = false) {
     when (t) {
@@ -548,6 +566,13 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolea
         is FeedTarget.WalletLimits ->
             if (walletShown) {
                 navigate(SpendingLimitsRoute(t.walletId)) { launchSingleTop = true }
+            } else {
+                navigate(NotificationsRoute()) { launchSingleTop = true }
+            }
+        // A transaction exists only in a build with the wallet, and while its entry is shown; else the Notifications list.
+        is FeedTarget.WalletTransaction ->
+            if (walletShown) {
+                openTransaction(t.txid)
             } else {
                 navigate(NotificationsRoute()) { launchSingleTop = true }
             }
@@ -600,7 +625,8 @@ internal fun NavHostController.leaveEntry(entryId: String) {
 
 /**
  * The wallet's screens that hold a recovery phrase or a password to spend ([NewWalletRoute], [ImportWalletRoute],
- * [BackupRoute], [SendRoute]) are never saved with the stack: leaving them by the drawer or a notification pops them, so
+ * [BackupRoute], [SendRoute], and the memory-only [TransactionsRoute] and [TransactionRoute]) are never
+ * saved with the stack: leaving them by the drawer or a notification pops them, so
  * their view model (and the words or the password) goes. Only where the graph has them: a build without the wallet has
  * neither, and popping a route the graph does not know throws.
  */
@@ -609,6 +635,9 @@ internal fun NavHostController.popWalletSecrets() {
     popIfInGraph<ImportWalletRoute>()
     popIfInGraph<BackupRoute>()
     popIfInGraph<SendRoute>()
+    // Transactions are memory only (W2-3): no saved state keeps their view models alive behind another screen.
+    popIfInGraph<TransactionsRoute>()
+    popIfInGraph<TransactionRoute>()
 }
 
 private inline fun <reified T : Any> NavHostController.popIfInGraph() {

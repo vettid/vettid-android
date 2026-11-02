@@ -182,7 +182,7 @@ internal object WalletWire {
         val t = e as? JsonObject ?: throw WalletWireException("transaction")
         WalletTx(
             txid = t.str("txid"),
-            at = t.instant("at"),
+            at = t.strictInstant("at"),
             sendingSats = t.long("sending_sats"),
             changeSats = t.long("change_sats"),
             feeSats = t.long("fee_sats"),
@@ -197,6 +197,14 @@ internal object WalletWire {
 
     private fun JsonObject.instant(key: String): Instant? =
         (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { runCatching { Instant.parse(it) }.getOrNull() }
+
+    /** A time that is absent or null is null; one that is there and does not read is a malformed entry, not "no time". */
+    private fun JsonObject.strictInstant(key: String): Instant? {
+        val v = this[key]
+        if (v == null || v is kotlinx.serialization.json.JsonNull) return null
+        val text = (v as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw WalletWireException(key)
+        return runCatching { Instant.parse(text) }.getOrNull() ?: throw WalletWireException(key)
+    }
 
     private fun JsonObject.str(key: String): String =
         (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() } ?: throw WalletWireException(key)

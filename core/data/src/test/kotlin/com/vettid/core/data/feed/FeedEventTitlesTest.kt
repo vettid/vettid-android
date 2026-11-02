@@ -273,4 +273,16 @@ class FeedAuthPurposeTest {
             assertEquals(FeedTarget.Sheet, FeedKinds.target(item(k)))
         }
     }
+
+    @Test
+    fun aSignedPaymentIsTitledAsThePlanSaysAndOpensItsTransaction() {
+        fun item(ref: String?) = FeedItem("i", 1, "wallet.signed", "2026-10-19T12:00:00Z", "active", "normal", ref = ref)
+        assertEquals(FeedText(R.string.data_feed_wallet_signed), FeedKinds.title(item("ab12"), FeedNames(), true))
+        // The ref is the txid and no wallet id: the target names the transaction.
+        assertEquals(FeedTarget.WalletTransaction("ab12"), FeedKinds.target(item("ab12")))
+        assertEquals(FeedTarget.Sheet, FeedKinds.target(item(null)))
+        assertEquals(FeedTarget.Sheet, FeedKinds.target(item("")))
+        // It is a screen of this app now, not "Not available in this version".
+        assertFalse(FeedKinds.notAvailable("wallet.signed"))
+    }
 }

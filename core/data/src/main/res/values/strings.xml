@@ -205,7 +205,7 @@
     <string name="data_feed_intro_request">%1$s wants to introduce someone</string>
     <string name="data_feed_location_shared">%1$s shared a location</string>
     <string name="data_feed_location_request">%1$s asks for your location</string>
-    <string name="data_feed_wallet_signed">A wallet transaction was signed</string>
+    <string name="data_feed_wallet_signed">Bitcoin payment signed</string> <!-- approved 2026-11-02 (#257) -->
     <!-- ANDROID-PLAN 0.1.74 "Notifications": the plan's texts. The "_any" ones are without names (new). -->
     <string name="data_feed_wallet_cap_refused">A payment was refused by your spending limit</string>
     <string name="data_feed_wallet_caps_raised">A spending limit was raised or removed on %1$s</string>

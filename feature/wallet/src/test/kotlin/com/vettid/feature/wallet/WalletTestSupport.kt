@@ -177,7 +177,15 @@ internal class FakeWallets : WalletOps {
 
     override suspend fun signsOutstanding(): Set<String> = emptySet()
 
-    override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = emptyList()
+    /** What `wallet.history` answers; a failure when [historyFails]. */
+    var history: List<WalletTx> = emptyList()
+    var historyFails = false
+
+    override suspend fun history(walletId: String, limit: Int?): List<WalletTx> {
+        calls += "history"
+        if (historyFails) throw VaultOpException("wallet.history", "internal")
+        return history
+    }
 }
 
 internal class MemoryFlags : WalletFlagsFile {
@@ -210,6 +218,8 @@ internal fun manager(
     chain,
     flags,
     { it == Network.SIGNET || it == Network.TESTNET4 },
+    // No work on another thread that could outlive the test and touch the next one's Main dispatcher.
+    compute = kotlinx.coroutines.Dispatchers.Unconfined,
 )
 
 /** The chain server setting, without HTTP: whatever [server] says. */

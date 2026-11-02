@@ -541,7 +541,7 @@ internal fun capMessage(cap: CapText): String {
 }
 
 @Composable
-private fun amountLabel(sats: Long, network: Network?): String {
+internal fun amountLabel(sats: Long, network: Network?): String {
     val btc = BtcFormat.btc(sats)
     return stringResource(if (network == Network.MAINNET) R.string.wallet_balance_btc else R.string.wallet_send_tbtc, btc)
 }

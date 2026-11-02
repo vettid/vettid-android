@@ -1,6 +1,8 @@
 package com.vettid.core.wallet
 
 import com.vettid.core.chain.ChainAccess
+import com.vettid.core.chain.ChainError
+import com.vettid.core.chain.ChainTx
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.ChainServers
 import com.vettid.core.chain.ChainSummary
@@ -14,7 +16,13 @@ sealed interface ChainOpen {
      * The server answers for the network: [summary] reads one address's totals; [host] is for "Using mempool.space"; [spend] is what a
      * send needs of it (W2; null: a source that only looks up).
      */
-    class Ready(val host: String, val spend: SpendAccess? = null, val summary: suspend (address: String) -> ChainSummary) : ChainOpen {
+    class Ready(
+        val host: String,
+        val spend: SpendAccess? = null,
+        /** What the Transactions list asks of it (W2-3); null: a source that does not list transactions. */
+        val history: HistoryAccess? = null,
+        val summary: suspend (address: String) -> ChainSummary,
+    ) : ChainOpen {
         override fun toString(): String = "Ready"
     }
 
@@ -49,6 +57,18 @@ interface SpendAccess {
     suspend fun broadcast(tx: ByteArray): String
 }
 
+/** What the Transactions list asks of the chain server (Esplora): an address's transactions (all pages), one transaction, the tip. */
+interface HistoryAccess {
+    /** Every transaction of one address, newest first (`/address/<a>/txs`, then `/txs/chain/<last>`). Throws [ChainError]. */
+    suspend fun transactions(address: String): List<ChainTx>
+
+    /** `GET /tx/<txid>`: the transaction, or null when the server does not know it. Throws [ChainError]. */
+    suspend fun transaction(txid: String): ChainTx?
+
+    /** The height of the server's best block, for confirmations. Throws [ChainError]. */
+    suspend fun tipHeight(): Long
+}
+
 /** The chain side of the wallet manager, so that its tests need no server. */
 fun interface ChainSource {
     suspend fun open(network: Network): ChainOpen
@@ -77,7 +97,14 @@ class ServersChainSource(private val servers: ChainServers) : ChainSource {
 
                 override suspend fun broadcast(tx: ByteArray) = client.broadcast(tx)
             }
-            ChainOpen.Ready(host, spend) { address -> client.summary(ChainTarget.Address(address)) }
+            val history = object : HistoryAccess {
+                override suspend fun transactions(address: String) = client.transactions(ChainTarget.Address(address))
+
+                override suspend fun transaction(txid: String) = client.transaction(txid)
+
+                override suspend fun tipHeight() = client.tipHeight()
+            }
+            ChainOpen.Ready(host, spend, history) { address -> client.summary(ChainTarget.Address(address)) }
         }
         is ChainAccess.NoServer -> ChainOpen.NoServer(a.server)
         is ChainAccess.WrongNetwork -> ChainOpen.WrongNetwork(a.found)

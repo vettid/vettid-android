@@ -9,14 +9,19 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
+import com.vettid.core.data.feed.FeedTarget
 import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.SendRoute
+import com.vettid.core.data.wallet.TransactionRoute
+import com.vettid.core.data.wallet.TransactionsRoute
 import com.vettid.core.data.wallet.ImportWalletRoute
 import com.vettid.core.data.wallet.NewWalletRoute
 import com.vettid.feature.devices.PairRoute
 import kotlinx.serialization.Serializable
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,6 +59,8 @@ class WalletSecretsNavTest {
                         composable<ImportWalletRoute> { Text("import wallet") }
                         composable<BackupRoute> { Text("backup") }
                         composable<SendRoute> { Text("send") }
+                        composable<TransactionsRoute> { Text("transactions") }
+                        composable<TransactionRoute> { Text("transaction") }
                     }
                 }
             }
@@ -95,6 +102,34 @@ class WalletSecretsNavTest {
         assertFalse(stack().any { it.startsWith("SendRoute") })
         act { nav.navigateTopLevel(SecretsStartRoute) }
         assertEquals(listOf("SecretsStartRoute"), stack())
+    }
+
+    @Test
+    fun theTransactionsAreMemoryOnlyAndPoppedToo() {
+        show()
+        act { nav.navigate(TransactionsRoute("01W")) }
+        act { nav.navigate(TransactionRoute("ab".repeat(32), "01W")) }
+        act { nav.navigateTopLevel(SecretsOtherRoute) }
+        assertFalse(stack().any { it.startsWith("TransactionsRoute") || it.startsWith("TransactionRoute") })
+        act { nav.navigateTopLevel(SecretsStartRoute) }
+        assertEquals(listOf("SecretsStartRoute"), stack())
+    }
+
+    @Test
+    fun twoSignedPaymentTapsInARowShowTheSecondTransactionOnItsOwnEntry() {
+        show()
+        act { nav.openFeedTarget(FeedTarget.WalletTransaction("aa".repeat(32)), walletShown = true) }
+        val first = nav.currentBackStackEntry!!
+        assertEquals("aa".repeat(32), first.toRoute<TransactionRoute>().txid)
+        act { nav.openFeedTarget(FeedTarget.WalletTransaction("bb".repeat(32)), walletShown = true) }
+        val second = nav.currentBackStackEntry!!
+        // A new entry (so a new view model, which reads its own route), not the first one kept on top by single-top.
+        assertEquals("bb".repeat(32), second.toRoute<TransactionRoute>().txid)
+        assertNotEquals(first.id, second.id)
+        assertEquals(1, stack().count { it.startsWith("TransactionRoute") })
+        // The same one again is still one entry.
+        act { nav.openFeedTarget(FeedTarget.WalletTransaction("bb".repeat(32)), walletShown = true) }
+        assertEquals(1, stack().count { it.startsWith("TransactionRoute") })
     }
 
     @Test
