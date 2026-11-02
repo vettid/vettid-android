@@ -316,9 +316,11 @@ class WalletsManager(
      * and then, for every wallet with a pending limit, `wallet.caps.set` is sent before anything else is asked of that wallet. A
      * failed send leaves the limit pending: no Receive for that wallet until it is set (Try again on its screen).
      */
-    suspend fun open() {
+    suspend fun open(ifGeneration: Long? = null) {
         val g: Long
         synchronized(lock) {
+            // Opened again only if nothing cleared the manager since [ifGeneration] was taken (a lock in between).
+            if (ifGeneration != null && generation != ifGeneration) return
             open = true
             openFlow.value = true
             g = generation
@@ -340,17 +342,27 @@ class WalletsManager(
     }
 
     /**
-     * A new credential destroyed every wallet (they are critical items, VAULT-MESSAGING 0.48.0): what is held of them is forgotten
-     * (the list, the look-ups, kept transactions), what is kept of them on this phone (pending limits, backed-up marks, test-chain
-     * labels) goes, and, if the vault is open, the wallets are read again. A pending limit is dropped first, so that nothing is
-     * sent for a wallet that no longer exists.
+     * A new credential destroyed every wallet (they are critical items, VAULT-MESSAGING 0.48.0). Called **synchronously when the
+     * reset is confirmed**: it takes the ids of the wallets that exist now (the held list and the pending limits in memory), and
+     * returns what is to run afterwards. A wallet made after this call is a wallet of the new credential and keeps its flags.
+     *
+     * The returned action forgets what is held of those wallets (the list, the look-ups, kept transactions), forgets what is
+     * kept of them on this phone (pending limits, backed-up marks, test-chain labels), and, if the vault was open and no lock,
+     * hold or wipe came meanwhile, reads the wallets again. It touches only local state before that read, so it also runs when
+     * there is no session.
      */
-    suspend fun credentialReset() {
-        val (wasOpen, known) = synchronized(lock) { open to walletsFlow.value.map { it.id } }
-        clear()
-        val ids = (known + flags.allPendingCaps().orEmpty().keys).toSet()
-        for (id in ids) flags.forget(id)
-        if (wasOpen) attempt { open() }
+    fun beginCredentialReset(): suspend () -> Unit {
+        val ids = synchronized(lock) { (walletsFlow.value.map { it.id } + pendingMap.keys).toSet() }
+        return {
+            val (wasOpen, g) = synchronized(lock) {
+                val was = open
+                clear()
+                was to generation
+            }
+            for (id in ids) flags.forget(id)
+            // Only while nothing closed the vault since [clear]: a lock during the forgetting leaves this manager closed.
+            if (wasOpen) attempt { open(ifGeneration = g) }
+        }
     }
 
     /** Lock, hold, wipe: forget everything, at once. */

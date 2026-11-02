@@ -344,11 +344,13 @@ class VaultManager(
     /** The change applied ([AccountRecord.confirmChange]); false when the write failed (still shown as done). */
     private fun confirmChange(m: UnresolvedChange): Boolean {
         forgetKept(m)
+        // Once per reset: the answer, a resend and the check may each find it applied. What the hooks are to forget is taken
+        // now, before the marker goes and the gate opens: anything made after belongs to the new credential.
+        val actions = if (m.kind == ChangeKind.RESET && handledResets.add(m.innerId)) resetHooks.map { it() } else null
         val ok = record.confirmChange(m)
         newPinStep = false
         refreshChangeFlows()
-        // Once per reset: the answer, a resend and the check may each find it applied.
-        if (m.kind == ChangeKind.RESET && handledResets.add(m.innerId)) resetApplied()
+        actions?.let(::resetApplied)
         return ok
     }
 
@@ -357,31 +359,32 @@ class VaultManager(
      * critical items destroyed with the old credential are dropped from the lists held here (re-read in the background), the
      * alarm state is read afresh and the owner-check clock starts afresh (§3.6.1).
      */
-    private fun resetApplied() {
+    private fun resetApplied(actions: List<suspend () -> Unit>) {
         windowFlow.value = null
         items.clear()
         scope.launch {
+            // First, before any request: what the hooks forget is local, needs no session, and the gate is already open.
+            for (action in actions) runCatching { action() }
             val s = runCatching { session() }.getOrNull() ?: return@launch
             runCatching { refreshAlarm(s) }
             ownerCheck.onOpened()
             items.refreshQuietly()
-            // The wallets were critical items: whatever else keeps a copy of them (the wallet list, its flags) forgets them.
-            for (hook in resetHooks) runCatching { hook() }
         }
     }
 
     /** The resets whose applied effects ran ([resetApplied]); a reset's inner id is unique. */
     private val handledResets: MutableSet<String> = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
 
-    private val resetHooks = java.util.concurrent.CopyOnWriteArrayList<suspend () -> Unit>()
+    private val resetHooks = java.util.concurrent.CopyOnWriteArrayList<() -> (suspend () -> Unit)>()
 
     /**
-     * (0.48.0) Runs [hook] once a new credential was made (its answer, or a check that found it applied): every critical item,
-     * the wallets among them, was destroyed with the old credential. For what holds copies of them outside this class
-     * (`:core:wallet`, bound in the app); the hook is quick, may suspend, and its failure is ignored.
+     * (0.48.0) Once a new credential was made (its answer, or a check that found it applied) every critical item, the wallets
+     * among them, was destroyed with the old credential. For what holds copies of them outside this class (`:core:wallet`, bound
+     * in the app). [prepare] runs **synchronously** when the reset is confirmed (it takes what is to be forgotten, before anything
+     * made afterwards exists) and returns the action, which runs first in the background, before any request; its failure is ignored.
      */
-    fun onCredentialReset(hook: suspend () -> Unit) {
-        resetHooks.add(hook)
+    fun onCredentialReset(prepare: () -> (suspend () -> Unit)) {
+        resetHooks.add(prepare)
     }
 
     /** The change is decided as not applied, refused or ended: its marker goes; the epoch stays (§11.14.1 rules 3–5). */

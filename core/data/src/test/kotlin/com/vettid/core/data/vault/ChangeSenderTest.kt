@@ -222,7 +222,8 @@ class ChangeSenderTest {
      */
     @Test
     fun aForbiddenAnswerToTheRequestItselfEndsTheChangeAsMoved() = runTest {
-        for ((kind, m) in listOf(ChangeKind.RESET to resetMarker, ChangeKind.PIN to marker)) {
+        val password = marker.copy(type = ChangeTypes.PASSWORD_CHANGE)
+        for ((kind, m) in listOf(ChangeKind.RESET to resetMarker, ChangeKind.PIN to marker, ChangeKind.PASSWORD to password)) {
             val f = Fixture(testScheduler)
             val r = f.send(kind) { store ->
                 store(m)
