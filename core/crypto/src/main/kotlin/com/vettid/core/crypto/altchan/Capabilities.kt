@@ -18,6 +18,9 @@ object Capabilities {
     /** The release offers recovery (listed only then). */
     const val RECOVERY_OFFERED = "recovery_offered"
 
+    /** (0.83.0) The ways to use a secret (§10.11): an agent's `item.get` is answered only for an item whose ways hold `reveal`. */
+    const val ITEM_WAYS = "item_ways"
+
     const val MEMBER = "capabilities"
     private const val MAX_NAMES = 32
     private const val MAX_NAME = 32

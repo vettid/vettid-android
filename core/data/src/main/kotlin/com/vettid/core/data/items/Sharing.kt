@@ -91,7 +91,12 @@ data class ShareRule(
     val declined: List<String> = emptyList(),
     val createdAt: Instant? = null,
     val updatedAt: Instant? = null,
+    /** An agent rule's `status_ttl` (60–3,600 s, §10.11); null for a connection rule or when not sent. */
+    val statusTtl: Int? = null,
 ) {
+    /** Whether the rule is an agent's (subject `{agent_id}`, §10.12). */
+    val forAgent: Boolean get() = agentId != null
+
     /** Whether an item with [itemTags] matches the rule's tags (§10.12; whether it is in force is the vault's). */
     fun matches(itemTags: List<String>): Boolean = when (match) {
         TagMatch.ANY -> tags.any { it in itemTags }
@@ -116,8 +121,21 @@ data class RuleDraft(
     /** §10.12 (0.23.0): optional for a connection rule, absent means no limit. */
     val perHour: Int? = null,
     val perDay: Int? = null,
+    /** AA4: the agent the rule is for (then [connectionId] is empty), §10.12 `subject: {agent_id}`. */
+    val agentId: String? = null,
+    /** AA4: an agent rule's `status_ttl`, 60–3,600 s (§10.11); null: the vault's default (900). */
+    val statusTtl: Int? = null,
 ) {
+    val forAgent: Boolean get() = agentId != null
+
     companion object {
+        /** An agent rule always carries its limits (§10.11): the defaults 60 an hour and 1,000 a day, the status lifetime 15 minutes. */
+        const val DEFAULT_AGENT_PER_HOUR = 60
+        const val DEFAULT_AGENT_PER_DAY = 1_000
+        const val DEFAULT_STATUS_TTL = 900
+        const val MIN_STATUS_TTL = 60
+        const val MAX_STATUS_TTL = 3_600
+
         /** A rule names 1–16 tags, none reserved (§10.12). */
         const val MAX_TAGS = 16
         const val MAX_USES = 10_000
@@ -136,16 +154,20 @@ data class RuleDraft(
 
         fun of(r: ShareRule): RuleDraft = RuleDraft(
             r.connectionId ?: "", r.tags, r.match, r.mode, r.uses, r.expiresAt, r.includeExisting, r.ruleId, r.version,
-            r.perHour, r.perDay,
+            r.perHour, r.perDay, r.agentId, r.statusTtl,
         )
     }
 
     /** The rule's checks before it is sent (§10.12). */
-    fun valid(now: Instant): Boolean = tags.size in 1..MAX_TAGS && tags.none { it.startsWith("@") } &&
+    fun valid(now: Instant): Boolean = tags.size in 1..MAX_TAGS && tags.none { it.startsWith("@") } && agentLimitsValid() &&
         (uses == null || uses in 1..MAX_USES) &&
         (perHour == null || perHour in 1..MAX_PER_HOUR) && (perDay == null || perDay in 1..MAX_PER_DAY) &&
         (expiresAt == null || (expiresAt.isAfter(now) && expiresAt.isBefore(now.plusSeconds(MAX_EXPIRY_DAYS * DAY_SECONDS))))
 }
+
+/** An agent rule always has both limits and a status lifetime in range (§10.11, §10.12); a connection rule has no such check. */
+private fun RuleDraft.agentLimitsValid(): Boolean = !forAgent ||
+    (perHour != null && perDay != null && (statusTtl == null || statusTtl in RuleDraft.MIN_STATUS_TTL..RuleDraft.MAX_STATUS_TTL))
 
 /**
  * Where share rules for one subject cover the same tags or items (§10.12 Overlapping rules, 0.23.0): `ask` wins. An

@@ -147,6 +147,45 @@ class FakeSharing : SharingRepository {
         return r
     }
 
+    /** AA4: `item_ways` listed by the vault (decision 17). */
+    override var itemWays: Boolean = false
+
+    /** The password of every [saveAgentRule], in order, and whether the window was open before it (test inspection only). */
+    val agentSaves = mutableListOf<Pair<RuleDraft, String>>()
+    val windowNotClosedFlow = MutableStateFlow<com.vettid.core.data.votes.WindowNotClosed?>(null)
+    override val windowNotClosed: kotlinx.coroutines.flow.StateFlow<com.vettid.core.data.votes.WindowNotClosed?> = windowNotClosedFlow
+
+    override suspend fun agentRules(agentId: String): List<ShareRule> {
+        call("agentRules")
+        return rulesStored.filter { it.agentId == agentId }
+    }
+
+    override suspend fun saveAgentRule(draft: RuleDraft, password: String): ShareRule {
+        call("saveAgentRule")
+        agentSaves += draft to password
+        val r = ShareRule(
+            draft.ruleId ?: "01RULE${next++}", (draft.version ?: 0) + 1, null, draft.agentId, draft.tags, draft.match, draft.mode,
+            draft.uses, draft.expiresAt, draft.includeExisting, perHour = draft.perHour, perDay = draft.perDay,
+            statusTtl = draft.statusTtl,
+        )
+        rulesStored.removeAll { it.ruleId == r.ruleId }
+        rulesStored += r
+        savedFlow.value = true
+        return r
+    }
+
+    val savedFlow = MutableStateFlow(false)
+    override val ruleSaved: kotlinx.coroutines.flow.StateFlow<Boolean> = savedFlow
+
+    override fun ruleSavedShown() {
+        savedFlow.value = false
+    }
+
+    override suspend fun closeWindowNow() {
+        call("closeWindowNow")
+        windowNotClosedFlow.value = null
+    }
+
     override suspend fun deleteRule(ruleId: String) {
         call("deleteRule")
         rulesStored.removeAll { it.ruleId == ruleId }

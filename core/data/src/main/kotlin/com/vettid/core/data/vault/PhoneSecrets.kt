@@ -330,6 +330,9 @@ object ReleasePath {
         wasMarked || path == Path.R && (makesPhoneKey || holdsPhoneSecret)
 
     /** Whether recovery is offered: always for a release before R (its earlier recovery), else only with `recovery_offered`. */
+    /** (0.83.0, decision 17) Whether the vault lists `item_ways`: only then may an agent's rule include items automatically. */
+    fun itemWays(capabilities: List<String>): Boolean = com.vettid.core.crypto.altchan.Capabilities.ITEM_WAYS in capabilities
+
     fun recoveryOffered(capabilities: List<String>): Boolean =
         com.vettid.core.crypto.altchan.Capabilities.RECOVERY_R !in capabilities ||
             com.vettid.core.crypto.altchan.Capabilities.RECOVERY_OFFERED in capabilities

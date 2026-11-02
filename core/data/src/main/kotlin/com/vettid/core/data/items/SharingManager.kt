@@ -2,6 +2,7 @@ package com.vettid.core.data.items
 
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.envelope.Timestamps
+import com.vettid.core.data.votes.WindowNotClosed
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
@@ -10,9 +11,11 @@ import com.vettid.core.vault.TagPage
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -86,6 +89,36 @@ interface SharingRepository {
 
     suspend fun saveRule(draft: RuleDraft): ShareRule
 
+    /** Every share rule of one agent (`share.rule.list{agent_id}`, AA4), sorted by `rule_id`. */
+    suspend fun agentRules(agentId: String): List<ShareRule>
+
+    /**
+     * Whether the vault lists the capability `item_ways` (VAULT-MESSAGING 0.83.0 §11.10.9, ANDROID-PLAN decision 17).
+     * Without it every agent rule is ask-only and carries the warning that the agent's app may receive values.
+     */
+    val itemWays: Boolean get() = false
+
+    /**
+     * Saves an agent's rule (`share.rule.set` with an agent subject, ANDROID-PLAN §4 AA4, decision 4): [password] is asked
+     * for every save, even while the unlock window is open (`credential.unlock` first), and when this save opened the
+     * window `credential.lock` follows the answer, whatever it was. A window that was already open is left as it was.
+     * The password is not kept. A lock that failed is told in [windowNotClosed].
+     */
+    suspend fun saveAgentRule(draft: RuleDraft, password: String): ShareRule
+
+    /** The lock after an agent rule's save failed: the window stays open until it closes by itself; null when none to tell. */
+    val windowNotClosed: StateFlow<WindowNotClosed?>
+        get() = MutableStateFlow(null)
+
+    /** An agent's rule was just saved: the agent's page says "Rule saved" once ([ruleSavedShown]). */
+    val ruleSaved: StateFlow<Boolean>
+        get() = MutableStateFlow(false)
+
+    fun ruleSavedShown() {}
+
+    /** **Close it now** on the notice of [windowNotClosed]: locks the window; the notice goes only when that went through. */
+    suspend fun closeWindowNow() {}
+
     suspend fun deleteRule(ruleId: String)
 
     /** Grants given and received (`grant.list`). */
@@ -117,6 +150,9 @@ interface SharingOps {
 
     suspend fun ruleList(connectionId: String?, after: String?): JsonObject
 
+    /** `share.rule.list{agent_id}` (AA4). */
+    suspend fun agentRuleList(agentId: String, after: String?): JsonObject = ruleList(null, after)
+
     suspend fun ruleSet(body: JsonObject): JsonObject
 
     suspend fun ruleDelete(ruleId: String)
@@ -145,6 +181,8 @@ internal class VaultSharingOps(private val api: VaultApi) : SharingOps {
 
     override suspend fun ruleList(connectionId: String?, after: String?): JsonObject = api.shareRuleList(connectionId, after = after)
 
+    override suspend fun agentRuleList(agentId: String, after: String?): JsonObject = api.shareRuleList(agentId = agentId, after = after)
+
     override suspend fun ruleSet(body: JsonObject): JsonObject = api.shareRuleSet(body)
 
     override suspend fun ruleDelete(ruleId: String) = api.shareRuleDelete(ruleId)
@@ -167,13 +205,35 @@ internal class VaultSharingOps(private val api: VaultApi) : SharingOps {
 class SharingManager(
     private val ops: suspend () -> SharingOps,
     private val onItemsChanged: suspend () -> Unit = {},
+    /** The vault's capabilities list `item_ways` (decision 17), as of the last verified instance. */
+    private val hasItemWays: () -> Boolean = { false },
+    /** The credential's unlock window (§3.5.3): until when it is open, as this app opened it. */
+    private val windowUntil: () -> Instant? = { null },
+    private val openWindow: suspend (String) -> Unit = {},
+    private val closeWindow: suspend () -> Unit = {},
+    /** The vault setting `credential.unlock_ttl_seconds`; null when it can't be read. */
+    private val unlockTtl: suspend () -> Int? = { null },
+    private val now: () -> Instant = Instant::now,
 ) : SharingRepository {
+    override val itemWays: Boolean get() = hasItemWays()
+    private val savedFlow = MutableStateFlow(false)
+    override val ruleSaved: StateFlow<Boolean> = savedFlow.asStateFlow()
+
+    override fun ruleSavedShown() {
+        savedFlow.value = false
+    }
+
+    private val notClosed = MutableStateFlow<WindowNotClosed?>(null)
+    override val windowNotClosed: StateFlow<WindowNotClosed?> = notClosed.asStateFlow()
+
     private val registry = MutableStateFlow<TagRegistry?>(null)
     override val tags: StateFlow<TagRegistry?> = registry.asStateFlow()
     private val stored = MutableStateFlow<Map<String, String>>(emptyMap())
     override val colors: StateFlow<Map<String, String>> = stored.asStateFlow()
 
     fun clear() {
+        notClosed.value = null
+        savedFlow.value = false
         registry.value = null
         stored.value = emptyMap()
     }
@@ -306,6 +366,18 @@ class SharingManager(
         return out
     }
 
+    override suspend fun agentRules(agentId: String): List<ShareRule> {
+        val out = mutableListOf<ShareRule>()
+        var after: String? = null
+        do {
+            val page = vaultGuard(resend = true) { ops().agentRuleList(agentId, after) }
+            val list = arr(page, "rules").mapNotNull(::rule)
+            out += list.filter { it.agentId == agentId }
+            after = VaultJson.str(page, "next")?.takeIf { list.isNotEmpty() }
+        } while (after != null)
+        return out
+    }
+
     override suspend fun preview(draft: RuleDraft): RulePreview {
         val o = vaultGuard { ops().ruleSet(ruleBody(draft, dryRun = true)) }
         val matches = arr(o, "matches").mapNotNull { m ->
@@ -324,6 +396,54 @@ class SharingManager(
         val o = vaultGuard { ops().ruleSet(ruleBody(draft, dryRun = false)) }
         runCatching { refreshTags() }
         return rule(o) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_rule")
+    }
+
+    override suspend fun saveAgentRule(draft: RuleDraft, password: String): ShareRule {
+        // Checked before anything is unlocked: a rule the vault would refuse spends no password.
+        val asksOnly = !hasItemWays() && draft.ruleId == null && draft.mode == ShareMode.AUTO
+        if (!draft.forAgent || !draft.valid(Instant.now()) || asksOnly) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        // Set before the unlock is sent: an unlock whose answer was lost may still have opened the window, so it is locked.
+        val unlocked = Unlocked(windowUntil()?.isAfter(now()) != true)
+        try {
+            unlock(password, unlocked)
+            val o = vaultGuard { ops().ruleSet(ruleBody(draft, dryRun = false)) }
+            runCatching { refreshTags() }
+            val saved = rule(o) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_rule")
+            savedFlow.value = true
+            return saved
+        } finally {
+            // A window this prompt opened does not stay open for its full length; one that was open is left as it was.
+            if (unlocked.toLock) closeOpenedWindow()
+        }
+    }
+
+    /** Asked for every save (decision 4), even with the window open: a full credential operation. */
+    private suspend fun unlock(password: String, unlocked: Unlocked) {
+        try {
+            openWindow(password)
+        } catch (e: VaultFailure) {
+            // Only a definite refusal opened nothing; any other failure may have come after the vault opened the window.
+            if (e.kind in DEFINITE_REFUSALS) unlocked.toLock = false
+            throw e
+        }
+    }
+
+    private class Unlocked(var toLock: Boolean)
+
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun closeOpenedWindow() {
+        withContext(NonCancellable) {
+            try {
+                closeWindow()
+            } catch (e: Exception) {
+                notClosed.value = WindowNotClosed(runCatching { unlockTtl() }.getOrNull()?.toLong())
+            }
+        }
+    }
+
+    override suspend fun closeWindowNow() {
+        withContext(NonCancellable) { closeWindow() }
+        notClosed.value = null
     }
 
     override suspend fun deleteRule(ruleId: String) {
@@ -384,6 +504,12 @@ class SharingManager(
 
     companion object {
         private const val CODE_BAD_REQUEST = "bad_request"
+
+        /** A failure that says the vault did not open the window (it refused); any other may have followed the opening. */
+        private val DEFINITE_REFUSALS = setOf(
+            FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
+            FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
+        )
         private const val MAX_TAGS_LISTED = 4_096
 
         /** At most this many colours stored in one go (the registry holds 512 entries, §10.8). */
@@ -446,6 +572,7 @@ class SharingManager(
                 declined = strings(o, "declined"),
                 createdAt = instant(VaultJson.str(o, "created_at")),
                 updatedAt = instant(VaultJson.str(o, "updated_at")),
+                statusTtl = VaultJson.long(o, "status_ttl")?.toInt(),
             )
         }
 
@@ -453,7 +580,7 @@ class SharingManager(
         fun ruleBody(d: RuleDraft, dryRun: Boolean): JsonObject = buildJsonObject {
             d.ruleId?.let { put("rule_id", it) }
             if (d.ruleId != null) d.version?.let { put("version", it) }
-            putJsonObject("subject") { put("connection_id", d.connectionId) }
+            putJsonObject("subject") { if (d.agentId != null) put("agent_id", d.agentId) else put("connection_id", d.connectionId) }
             putJsonArray("tags") { d.tags.forEach { add(JsonPrimitive(it)) } }
             put("match", d.match.wire)
             put("access", "read")
@@ -463,6 +590,7 @@ class SharingManager(
             d.perDay?.let { put("per_day", it) }
             d.expiresAt?.let { put("expires_at", Timestamps.formatMillis(it)) }
             put("include_existing", d.includeExisting)
+            if (d.agentId != null) d.statusTtl?.let { put("status_ttl", it) }
             if (dryRun) put("dry_run", true)
         }
 

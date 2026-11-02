@@ -1026,7 +1026,15 @@ class VaultManager(
     val items = ItemsManager(scope, ops = { VaultItemsOps(openApi()) })
 
     /** Tags, share rules and grants (VAULT-MESSAGING §10.8, §10.12): a tag change re-reads the items' tags. */
-    val sharing = SharingManager(ops = { VaultSharingOps(openApi()) }, onItemsChanged = { items.refresh() })
+    val sharing = SharingManager(
+        ops = { VaultSharingOps(openApi()) },
+        onItemsChanged = { items.refresh() },
+        hasItemWays = { ReleasePath.itemWays(local.capabilities) },
+        windowUntil = { windowFlow.value },
+        openWindow = { openUnlockWindow(it) },
+        closeWindow = { closeUnlockWindow() },
+        unlockTtl = { status().unlockTtlSeconds },
+    )
 
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
