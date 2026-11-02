@@ -11,6 +11,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.SendRoute
+import com.vettid.core.data.wallet.TransactionRoute
+import com.vettid.core.data.wallet.TransactionsRoute
 import com.vettid.core.data.wallet.ImportWalletRoute
 import com.vettid.core.data.wallet.NewWalletRoute
 import com.vettid.feature.devices.PairRoute
@@ -54,6 +56,8 @@ class WalletSecretsNavTest {
                         composable<ImportWalletRoute> { Text("import wallet") }
                         composable<BackupRoute> { Text("backup") }
                         composable<SendRoute> { Text("send") }
+                        composable<TransactionsRoute> { Text("transactions") }
+                        composable<TransactionRoute> { Text("transaction") }
                     }
                 }
             }
@@ -93,6 +97,17 @@ class WalletSecretsNavTest {
         act { nav.navigate(SendRoute("01W")) }
         act { nav.navigateTopLevel(SecretsOtherRoute) }
         assertFalse(stack().any { it.startsWith("SendRoute") })
+        act { nav.navigateTopLevel(SecretsStartRoute) }
+        assertEquals(listOf("SecretsStartRoute"), stack())
+    }
+
+    @Test
+    fun theTransactionsAreMemoryOnlyAndPoppedToo() {
+        show()
+        act { nav.navigate(TransactionsRoute("01W")) }
+        act { nav.navigate(TransactionRoute("ab".repeat(32), "01W")) }
+        act { nav.navigateTopLevel(SecretsOtherRoute) }
+        assertFalse(stack().any { it.startsWith("TransactionsRoute") || it.startsWith("TransactionRoute") })
         act { nav.navigateTopLevel(SecretsStartRoute) }
         assertEquals(listOf("SecretsStartRoute"), stack())
     }

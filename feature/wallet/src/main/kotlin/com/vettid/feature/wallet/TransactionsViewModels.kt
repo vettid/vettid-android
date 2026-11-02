@@ -7,6 +7,7 @@ import androidx.navigation.toRoute
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.wallet.TransactionRoute
+import com.vettid.core.data.wallet.TransactionsRoute
 import com.vettid.core.wallet.TransactionsResult
 import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletTransaction
@@ -85,7 +86,7 @@ class TransactionsViewModel @Inject constructor(
     override fun toString(): String = "TransactionsViewModel"
 }
 
-/** One transaction. [explorerAsk] is the page the confirm names (the site leaves VettID); [openUrl] is what the host opens once. */
+/** One transaction. */
 data class TransactionUiState(
     val loading: Boolean = true,
     val name: String = "",
@@ -93,12 +94,6 @@ data class TransactionUiState(
     val tx: WalletTransaction? = null,
     /** The chain server's host, for the amounts' source note; null before the first list. */
     val host: String? = null,
-    /** The page of this transaction on the chain server's block explorer; null when it has no site (no button then). */
-    val explorerUrl: String? = null,
-    /** "Open in a block explorer" was tapped: the confirm that this leaves VettID is up. */
-    val explorerAsk: Boolean = false,
-    /** The member confirmed: the host opens this and calls [TransactionViewModel.explorerOpened]. */
-    val openUrl: String? = null,
     /** The look-up ended without the list (the server states, the vault's failure, a note not yet shown). */
     val problem: TransactionsResult? = null,
     /** The wallet and the server answered and the transaction is not in either. */
@@ -192,27 +187,11 @@ class TransactionViewModel @Inject constructor(
             it.copy(
                 tx = tx,
                 host = list.host,
-                explorerUrl = if (tx != null) list.explorerUrl(txid) else null,
                 problem = null,
                 notFound = tx == null,
             )
         }
     }
-
-    /** "Open in a block explorer": asks first, and only where the chain server has a site. */
-    fun askExplorer() {
-        if (mutable.value.explorerUrl != null) mutable.update { it.copy(explorerAsk = true) }
-    }
-
-    fun cancelExplorer() = mutable.update { it.copy(explorerAsk = false) }
-
-    /** The member confirmed that this leaves VettID: the page is handed to the host, once. */
-    fun confirmExplorer() {
-        mutable.update { s -> s.copy(explorerAsk = false, openUrl = s.explorerUrl) }
-    }
-
-    /** The host opened [TransactionUiState.openUrl]. */
-    fun explorerOpened() = mutable.update { it.copy(openUrl = null) }
 
     override fun toString(): String = "TransactionViewModel"
 }

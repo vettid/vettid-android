@@ -21,7 +21,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,7 +37,6 @@ import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.CenteredTitle
-import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.VettIdBackTopBar
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.wallet.TransactionsResult
@@ -85,7 +83,15 @@ fun TransactionsScreen(state: TransactionsUiState, actions: TransactionsActions,
                         }
                     } else {
                         LazyColumn(Modifier.fillMaxSize()) {
-                            items(list.items, key = { it.txid }) { tx -> TransactionRow(tx, state.network, actions.onOpen) }
+                            item {
+                                Text(
+                                    stringResource(R.string.wallet_tx_status_from, list.host),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = Spacing.xl).testTag("wallet_transactions_source"),
+                                )
+                            }
+                            items(list.items, key = { it.txid }) { tx -> TransactionRow(tx, state.network, list.host, actions.onOpen) }
                         }
                     }
                 }
@@ -96,7 +102,7 @@ fun TransactionsScreen(state: TransactionsUiState, actions: TransactionsActions,
 
 /** A row: "Sent to tb1q…" or "Received", the status and the date, the amount. Tagged by position, never by the txid. */
 @Composable
-private fun TransactionRow(tx: WalletTransaction, network: Network?, onOpen: (WalletTransaction) -> Unit) {
+private fun TransactionRow(tx: WalletTransaction, network: Network?, host: String?, onOpen: (WalletTransaction) -> Unit) {
     Column(Modifier.fillMaxWidth().clickable { onOpen(tx) }.testTag("wallet_tx_row")) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.xl, vertical = Spacing.m),
@@ -106,7 +112,7 @@ private fun TransactionRow(tx: WalletTransaction, network: Network?, onOpen: (Wa
             Column(Modifier.weight(1f)) {
                 Text(transactionTitle(tx), fontWeight = FontWeight.Medium, modifier = Modifier.testTag("wallet_tx_row_title"))
                 Text(
-                    statusLine(tx),
+                    statusLine(tx, host),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.testTag("wallet_tx_row_status"),
@@ -136,17 +142,16 @@ private const val SHORT_KEEP = 6
 private const val SHORT_TAIL = 4
 
 @Composable
-internal fun statusText(status: TxStatus): String = stringResource(
-    when (status) {
-        is TxStatus.Confirmed -> R.string.wallet_tx_confirmed
-        TxStatus.Waiting -> R.string.wallet_tx_waiting
-        TxStatus.NotBroadcast -> R.string.wallet_tx_not_broadcast
-    },
-)
+internal fun statusText(status: TxStatus, host: String?): String = when (status) {
+    is TxStatus.Confirmed -> stringResource(R.string.wallet_tx_confirmed)
+    TxStatus.Waiting -> stringResource(R.string.wallet_tx_waiting)
+    TxStatus.NotBroadcast -> stringResource(R.string.wallet_tx_not_broadcast)
+    TxStatus.NotSeen -> stringResource(R.string.wallet_tx_not_seen, host ?: stringResource(R.string.wallet_send_host_none))
+}
 
 @Composable
-private fun statusLine(tx: WalletTransaction): String {
-    val status = statusText(tx.status)
+private fun statusLine(tx: WalletTransaction, host: String?): String {
+    val status = statusText(tx.status, host)
     val time = (tx.blockTime ?: tx.signedAt)?.let { dateText(it) } ?: return status
     return "$status · $time"
 }
@@ -210,15 +215,13 @@ data class TransactionActions(
     val onBack: () -> Unit = {},
     val onRefresh: () -> Unit = {},
     val onCopy: (String) -> Unit = {},
-    val onExplorer: () -> Unit = {},
-    val onCancelExplorer: () -> Unit = {},
-    val onConfirmExplorer: () -> Unit = {},
     val onChainServer: () -> Unit = {},
 )
 
 /**
  * One transaction: the amounts, the fee (a payment the wallet sent), the confirmations, the block time and the transaction ID with
- * Copy. "Open in a block explorer" is there only when the chain server has a site, and asks first: it leaves VettID.
+ * Copy. The status is attributed to the chain server that gave it. ("Open in a block explorer" waits for an explorer field in the
+ * chain server settings.)
  */
 @Composable
 fun TransactionScreen(state: TransactionUiState, actions: TransactionActions, modifier: Modifier = Modifier) {
@@ -247,26 +250,21 @@ fun TransactionScreen(state: TransactionUiState, actions: TransactionActions, mo
             }
         }
     }
-    val url = state.explorerUrl
-    if (state.explorerAsk && url != null) {
-        ConfirmDialog(
-            title = stringResource(R.string.wallet_tx_leave_title),
-            text = stringResource(R.string.wallet_tx_leave_body, hostOf(url)),
-            confirmLabel = stringResource(R.string.wallet_tx_leave_open),
-            onConfirm = actions.onConfirmExplorer,
-            onDismiss = actions.onCancelExplorer,
-            modifier = Modifier.testTag("wallet_transaction_leave"),
-        )
-    }
 }
-
-/** The site's host, for the confirm. */
-internal fun hostOf(url: String): String = runCatching { java.net.URI(url).host }.getOrNull() ?: url
 
 @Composable
 private fun Details(tx: WalletTransaction, state: TransactionUiState, actions: TransactionActions) {
     val network = state.network
-    Field(stringResource(R.string.wallet_tx_status), statusText(tx.status), "wallet_transaction_status")
+    // The server's word, said to be the server's: the status and the confirmations come from it.
+    state.host?.let {
+        Text(
+            stringResource(R.string.wallet_tx_status_from, it),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("wallet_transaction_source"),
+        )
+    }
+    Field(stringResource(R.string.wallet_tx_status), statusText(tx.status, state.host), "wallet_transaction_status")
     if (tx.status == TxStatus.NotBroadcast) {
         Text(
             stringResource(R.string.wallet_tx_not_broadcast_note),
@@ -299,11 +297,6 @@ private fun Details(tx: WalletTransaction, state: TransactionUiState, actions: T
         }
         IconButton(onClick = { actions.onCopy(tx.txid) }, modifier = Modifier.testTag("wallet_transaction_copy")) {
             Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.wallet_tx_copy))
-        }
-    }
-    if (state.explorerUrl != null) {
-        OutlinedButton(onClick = actions.onExplorer, modifier = Modifier.fillMaxWidth().testTag("wallet_transaction_explorer")) {
-            Text(stringResource(R.string.wallet_tx_explorer))
         }
     }
 }

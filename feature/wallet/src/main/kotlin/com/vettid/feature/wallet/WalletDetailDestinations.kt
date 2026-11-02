@@ -7,7 +7,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -19,6 +18,7 @@ import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.SendRoute
 import com.vettid.core.data.wallet.SpendingLimitsRoute
 import com.vettid.core.data.wallet.TransactionRoute
+import com.vettid.core.data.wallet.TransactionsRoute
 import com.vettid.core.data.wallet.WalletOpenRoute
 import com.vettid.core.ui.components.SecureClipboard
 
@@ -201,16 +201,8 @@ private fun TransactionDestination(host: WalletHost, leave: () -> Unit) {
     val vm: TransactionViewModel = hiltViewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val uri = LocalUriHandler.current
     val clipLabel = stringResource(R.string.wallet_tx_clip_label)
     LaunchedEffect(state.closed) { if (state.closed) leave() }
-    // The member confirmed that this leaves VettID: the page opens once.
-    LaunchedEffect(state.openUrl) {
-        state.openUrl?.let {
-            uri.openUri(it)
-            vm.explorerOpened()
-        }
-    }
     TransactionScreen(
         state,
         TransactionActions(
@@ -218,9 +210,6 @@ private fun TransactionDestination(host: WalletHost, leave: () -> Unit) {
             onRefresh = vm::load,
             // A transaction ID is public (it is on the chain): copied as plain text, not marked sensitive.
             onCopy = { SecureClipboard.copy(context, clipLabel, it, sensitive = false) },
-            onExplorer = vm::askExplorer,
-            onCancelExplorer = vm::cancelExplorer,
-            onConfirmExplorer = vm::confirmExplorer,
             onChainServer = { state.network?.let { host.navigate(ChainServerRoute(it.vaultName)) } },
         ),
     )

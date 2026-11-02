@@ -13,7 +13,3 @@ data class ChainServerRoute(val network: String)
 /** A wallet's details: fingerprint, network, accounts and descriptors. */
 @Serializable
 data class WalletDetailsRoute(val walletId: String)
-
-/** A wallet's Transactions (W2-3): the list, reached from the wallet detail. */
-@Serializable
-data class TransactionsRoute(val walletId: String)

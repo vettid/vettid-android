@@ -23,7 +23,7 @@ class WalletUiPrivacyTest {
             "abab".repeat(16), com.vettid.core.wallet.TxDirection.SENT, 4242, -4243, 1, com.vettid.core.wallet.TxStatus.Confirmed(9999),
             9999, java.time.Instant.EPOCH, java.time.Instant.EPOCH, listOf(payee), "maple",
         )
-        val walletTxs = com.vettid.core.wallet.WalletTransactions(java.time.Instant.EPOCH, "orbit.example", "https://orbit.example/maple", listOf(tx))
+        val walletTxs = com.vettid.core.wallet.WalletTransactions(java.time.Instant.EPOCH, "orbit.example", listOf(tx))
         val values = listOf(
             row,
             WalletsUiState(loading = false, rows = listOf(row)),
@@ -40,7 +40,7 @@ class WalletUiPrivacyTest {
             // W2-3: the transactions, their list, the screens' states and every result that carries a value.
             TransactionsUiState(loading = false, name = "Savings", list = walletTxs, problem = TransactionsResult.ServerFailed(com.vettid.core.chain.ChainError.Malformed())),
             TransactionUiState(
-                loading = false, name = "Savings", tx = tx, host = "orbit.example", explorerUrl = "https://orbit.example/maple/tx/abab", openUrl = "https://orbit.example/maple",
+                loading = false, name = "Savings", tx = tx, host = "orbit.example",
             ),
             tx, walletTxs,
             BackupUiState(BackupStep.CHECK, name = "Savings", password = "hunter2", words = PhraseWords(listOf("orbit".toCharArray(), "maple".toCharArray())), typed = "orb", candidates = listOf(1)),

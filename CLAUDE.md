@@ -330,34 +330,37 @@ The A2 exit test:
   and answers a resend from its cache), and past `exp` a late answer is taken by one more resend before the request is forgotten.
   W2-3 (Transactions; ANDROID-PLAN §4 "Wallet", "Transactions"; VAULT-MESSAGING §10.18 `wallet.history`): `:core:chain` `EsploraClient.transaction(txid)`
   (`GET /tx/<txid>`, null on 404; `transactions(target)` (`/address/<a>/txs`, then `/txs/chain/<last_seen>`) and `tipHeight()` were already there).
-  `ChainOpen.Ready` gains `history: HistoryAccess?` (`transactions(address)`, `transaction(txid)`, `tipHeight()`) and `explorer: String?`;
-  **`ChainServers` / `chain-servers.bin` have no explorer field** (the file holds the server's URL only), so `ServersChainSource` sets none: the
-  detail's "Open in a block explorer" is built, tested with a fake site and shown only when `explorer` is set, and no host is guessed from
-  the server's URL. `WalletsManager.transactions(walletId)` (`TransactionsResult`: Done, NeedsNetwork, NetworkNotOffered, NoServer(server),
-  ServerWrongNetwork, ServerFailed, AddressMismatch, VaultFailed, NoteNeeded, Cleared, as the look-up's) runs **the look-up's own `scan` walk**
-  (both accounts, both chains, up to the gap; no second walk), asks each address with history for its transactions (all pages, batches of
-  `BATCH`), reads `wallet.history` (200) and the vault's clock, asks the server for any signed payment the lists do not show
-  (`GET /tx/<txid>`; a server that cannot answer fails the list, never "Not broadcast"), the tip only when something is confirmed, and merges
-  by `txid` in `TransactionMerge` (pure): the direction and `netSats` from the wallet's own inputs and outputs (own = the addresses the walk
-  found with history), SENT / RECEIVED / SELF (every value-carrying output the wallet's own: only the fee left); a payment in both sources has
-  the server's figures and the vault's payees. Status: Confirmed(confirmations = tip - height + 1, at least 1) / Waiting (mempool) / Not
-  broadcast (signed by the vault, unknown to the server, **older than 24 h by the vault's clock**, as `recentSends`: `at` not after the cutoff).
-  **Judgement call:** signed less than 24 h ago and unknown to the server (or with no `at`, as `recentSends` counts it recent) shows as
-  Waiting, with no text of its own. The list is kept per wallet in `transactionsKnown` (memory only; cleared by `clear()` at lock, hold and
-  wipe, and when a wallet is deleted); `walletOfTransaction(txid)` finds the wallet from `wallet.history` (a `wallet.signed` item carries the
-  `txid` only). Screens (`:feature:wallet`): wallet detail → **Transactions** (`TransactionsRoute(walletId)`, off while the privacy note is
-  unanswered), rows "Sent to tb1qpa…x7k2" / "Received" / "Moved within this wallet", the status and date, the amount; a row opens
-  `TransactionRoute(txid, walletId?)` (in `:core:data`: amounts, "Total left the wallet" and fee for a sent payment, confirmations, block
-  time, signed time, the txid with Copy (public, an ordinary non-sensitive copy), and the explorer button + `ConfirmDialog` "Leave VettID?" that
-  names the site; `confirmExplorer()` hands the URL to the host once). Loading, empty and every failed look-up (the detail's texts) with Try
-  again; pull to refresh. Notifications: `wallet.signed` is no longer "not available": its title is "Bitcoin payment signed" and
-  `FeedTarget.WalletTransaction(txid)` opens the transaction while the Wallet entry is shown (else the Notifications list, as for limits);
-  History's entry detail has "Open the transaction" (`HistoryHost.onOpenTransaction`, null where the wallet is not shown). Catalog adds
-  `wallet.transactions`, `wallet.transactions_loading`, `wallet.transactions_empty`, `wallet.transactions_no_server`,
-  `wallet.transactions_server_unreadable`, `wallet.transactions_wrong_network`, `wallet.transactions_server_failed`,
-  `wallet.transactions_mismatch`, `wallet.transactions_vault_failed`, `wallet.transactions_note_needed`, `wallet.transactions_not_offered`,
-  `wallet.transaction_sent`, `wallet.transaction_received`, `wallet.transaction_self`, `wallet.transaction_not_broadcast`,
-  `wallet.transaction_explorer`, `wallet.transaction_explorer_confirm`, `wallet.transaction_loading`, `wallet.transaction_not_found`,
+  `ChainOpen.Ready` gains `history: HistoryAccess?` (`transactions(address)`, `transaction(txid)`, `tipHeight()`).
+  `WalletsManager.transactions(walletId)` (`TransactionsResult`: Done, NeedsNetwork, NetworkNotOffered, NoServer(server), ServerWrongNetwork,
+  ServerFailed, AddressMismatch, VaultFailed, NoteNeeded, Cleared, as the look-up's) runs **the look-up's own `scan` walk** (no second walk),
+  asks each address with history for its transactions (all pages, batches of `BATCH`), reads `wallet.history` (200; an entry whose txid is not
+  64 hex digits is dropped) and the vault's clock, asks the server for any signed payment the lists do not show (`GET /tx/<txid>`; a server that
+  cannot answer fails the list, never "Not broadcast"), the tip only when something is confirmed, and merges by `txid` in `TransactionMerge`
+  (pure). **The vault's figures win for a payment it signed** (direction SENT, or SELF when every payee is the wallet's own, never RECEIVED;
+  amount, fee, payees, net from `wallet.history`): the server gives only the status, height and block time, so a lying server changes a status at
+  most. A transaction only the server lists has its direction and `netSats` computed from the wallet's own inputs and outputs (own = the
+  addresses the walk found with history); one that touches none is dropped; with own and foreign inputs together the amount is the net change
+  and no fee is shown. Sums use `Math.addExact`; an overflow is `ChainError.Malformed` (the list fails as `ServerFailed`). Status: Confirmed
+  (confirmations = tip - height + 1, at least 1) / Waiting (mempool) / Not broadcast (signed by the vault, unknown to the server, and either
+  **older than 24 h by the vault's clock**, as `recentSends` (`at` not after the cutoff), or a **kept unsent** payment of this wallet
+  (`keptTx` with `!mayBeOnNetwork`)) / **Not seen by {host} yet** (signed under 24 h ago and unknown to the server; an entry with no `at` counts
+  as recent, as in `recentSends`, so it stays here until the vault gives it a time). The list is kept per wallet in `transactionsKnown` (memory
+  only; cleared by `clear()` at lock, hold and wipe, and when a wallet is deleted); `walletOfTransaction(txid)` reads the wallet list first if
+  it is not read yet (a list that cannot be read is a failure, not "none") and finds the wallet from `wallet.history` (a `wallet.signed` item
+  carries the `txid` only). Screens (`:feature:wallet`): wallet detail → **Transactions** (`TransactionsRoute(walletId)`, off while the privacy
+  note is unanswered), rows "Sent to tb1qpa…x7k2" / "Received" / "Moved within this wallet", the status and date, the amount, and "Status from
+  {host}" above the list; a row opens `TransactionRoute(txid, walletId?)` (both routes are in `:core:data`, memory only: never saved with the
+  stack, `popWalletSecrets` pops them): amounts, "Total sent" and the fee for a sent payment, confirmations, block time, "Signed", the txid
+  with Copy (public, an ordinary non-sensitive copy), and "Status from {host}" over the status. Loading, empty and every failed look-up (the
+  detail's texts) with Try again; pull to refresh. **"Open in a block explorer" waits for an explorer field in the chain server settings (owner
+  decision):** `ChainServers` / `chain-servers.bin` hold the server's URL only, and nothing is built for it. Notifications: `wallet.signed` is no
+  longer "not available": its title is "Bitcoin payment signed" and `FeedTarget.WalletTransaction(txid)` opens the transaction while the Wallet
+  entry is shown (else the Notifications list, as for limits); History's entry detail has "Open the transaction" (`HistoryHost.onOpenTransaction`,
+  null where the wallet is not shown). Catalog adds `wallet.transactions`, `wallet.transactions_loading`, `wallet.transactions_empty`,
+  `wallet.transactions_no_server`, `wallet.transactions_server_unreadable`, `wallet.transactions_wrong_network`,
+  `wallet.transactions_server_failed`, `wallet.transactions_mismatch`, `wallet.transactions_vault_failed`, `wallet.transactions_note_needed`,
+  `wallet.transactions_not_offered`, `wallet.transaction_sent`, `wallet.transaction_received`, `wallet.transaction_self`,
+  `wallet.transaction_not_broadcast`, `wallet.transaction_not_seen`, `wallet.transaction_loading`, `wallet.transaction_not_found`,
   `wallet.transaction_server_failed`. Out of scope: mainnet, fee bumping, labels, fiat.
   An `ok` that does not read is `SendResult.SignedUnreadable` (consumed, "may have been signed"), never an exception to the screen; the view
   model also turns any other exception of approve/retry into that notice, and of prepare into a form problem. While a request is out back and

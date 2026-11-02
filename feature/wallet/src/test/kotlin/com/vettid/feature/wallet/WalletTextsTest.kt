@@ -217,11 +217,15 @@ class WalletTextsTest {
         assertEquals("Confirmed", r.getString(R.string.wallet_tx_confirmed))
         assertEquals("Waiting for confirmation", r.getString(R.string.wallet_tx_waiting))
         assertEquals("Not broadcast", r.getString(R.string.wallet_tx_not_broadcast))
-        assertEquals("Open in a block explorer", r.getString(R.string.wallet_tx_explorer))
-        assertEquals("This opens explorer.example in your browser. That site will see this transaction and your internet address.", r.getString(R.string.wallet_tx_leave_body, "explorer.example"))
+        assertEquals("Not seen by mempool.space yet", r.getString(R.string.wallet_tx_not_seen, "mempool.space"))
+        assertEquals("Status from mempool.space", r.getString(R.string.wallet_tx_status_from, "mempool.space"))
+        assertEquals("Total sent", r.getString(R.string.wallet_tx_total_out))
+        assertEquals("Signed", r.getString(R.string.wallet_tx_signed_at))
+        assertEquals("Copy transaction ID", r.getString(R.string.wallet_tx_copy))
+        assertEquals("This transaction isn't among your vault's 200 most recent payments.", r.getString(R.string.wallet_tx_not_found))
         val xml = java.io.File("src/main/res/values/strings.xml").readLines().filter { Regex("""name="wallet_tx_""").containsMatchIn(it) }
         assertTrue(xml.size >= 20)
-        val drafts = setOf("wallet_tx_title", "wallet_tx_sent_to", "wallet_tx_received", "wallet_tx_confirmed", "wallet_tx_waiting", "wallet_tx_not_broadcast", "wallet_tx_explorer")
+        val drafts = setOf("wallet_tx_title", "wallet_tx_sent_to", "wallet_tx_received", "wallet_tx_confirmed", "wallet_tx_waiting", "wallet_tx_not_broadcast")
         for (line in xml) {
             val name = Regex("""name="([a-z_]+)"""").find(line)!!.groupValues[1]
             val mark = if (name in drafts) "draft" else "new"

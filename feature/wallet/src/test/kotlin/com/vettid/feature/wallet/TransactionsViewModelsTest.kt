@@ -33,8 +33,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.time.Instant
 
-/** A chain server for the Transactions screens: transactions by address, a tip, and optionally a block explorer site. */
-internal class TxServer(var explorer: String? = null) : HistoryAccess {
+/** A chain server for the Transactions screens: transactions by address, a tip. */
+internal class TxServer : HistoryAccess {
     val byAddress = mutableMapOf<String, List<ChainTx>>()
     var tip = 1_000L
     var fails: ChainError? = null
@@ -52,7 +52,7 @@ internal class TxServer(var explorer: String? = null) : HistoryAccess {
     override suspend fun tipHeight(): Long = tip.also { fails?.let { e -> throw e } }
 
     fun source(): ChainSource = ChainSource {
-        ChainOpen.Ready("mempool.space", null, this, explorer) { address ->
+        ChainOpen.Ready("mempool.space", null, this) { address ->
             val n = byAddress[address]?.size ?: 0
             if (n > 0) ChainSummary(1_000, 0, n.toLong(), n.toLong()) else ChainSummary(0, 0, 0, 0)
         }
@@ -176,7 +176,7 @@ class TransactionsViewModelsTest {
     }
 
     @Test
-    fun oneTransactionShowsItsFiguresAndNoExplorerWithoutASite() = runTest {
+    fun oneTransactionShowsItsFiguresAndTheServerThatSaidThem() = runTest {
         ops.wallet(id)
         server.byAddress[ours] = listOf(received(txA))
         val vm = one(opened(), txA)
@@ -184,45 +184,17 @@ class TransactionsViewModelsTest {
         val s = vm.state.value
         assertEquals(TxDirection.RECEIVED, s.tx!!.direction)
         assertEquals("mempool.space", s.host)
-        assertNull(s.explorerUrl)
-        // No button, so no ask: the chain server has no site and none is guessed.
-        vm.askExplorer()
-        assertFalse(vm.state.value.explorerAsk)
-        vm.confirmExplorer()
-        assertNull(vm.state.value.openUrl)
-    }
-
-    @Test
-    fun theExplorerIsAskedAboutBeforeItOpensAndOnlyOnConfirm() = runTest {
-        ops.wallet(id)
-        server.byAddress[ours] = listOf(received(txA))
-        server.explorer = "https://explorer.example/testnet4"
-        val vm = one(opened(), txA)
-        eventually { vm.state.value.explorerUrl != null }
-        assertEquals("https://explorer.example/testnet4/tx/$txA", vm.state.value.explorerUrl)
-        vm.askExplorer()
-        assertTrue(vm.state.value.explorerAsk)
-        assertNull(vm.state.value.openUrl)
-        vm.cancelExplorer()
-        assertFalse(vm.state.value.explorerAsk)
-        assertNull(vm.state.value.openUrl)
-        vm.askExplorer()
-        vm.confirmExplorer()
-        assertFalse(vm.state.value.explorerAsk)
-        assertEquals("https://explorer.example/testnet4/tx/$txA", vm.state.value.openUrl)
-        vm.explorerOpened()
-        assertNull(vm.state.value.openUrl)
     }
 
     @Test
     fun aTxidAloneFindsTheWalletFromTheVaultsHistory() = runTest {
         ops.wallet(id)
         ops.history = listOf(WalletTx(txB, Instant.now(), 5_000, 0, 300, listOf(WalletPayee(payee, 5_000)), null, null))
-        // Unknown to the server, signed just now: Waiting.
+        // Unknown to the server, signed just now: not seen yet.
         val vm = one(opened(), txB.uppercase(), walletId = null)
         eventually { vm.state.value.tx != null }
         assertEquals(TxDirection.SENT, vm.state.value.tx!!.direction)
-        assertEquals(TxStatus.Waiting, vm.state.value.tx!!.status)
+        assertEquals(TxStatus.NotSeen, vm.state.value.tx!!.status)
         assertEquals("Savings", vm.state.value.name)
     }
 

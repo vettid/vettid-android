@@ -50,7 +50,7 @@ class TransactionsScreensTest {
     )
     private val list = TransactionsUiState(
         loading = false, name = "Savings", network = Network.TESTNET4,
-        list = WalletTransactions(Instant.EPOCH, "mempool.space", null, listOf(sent, received, self, unsent)),
+        list = WalletTransactions(Instant.EPOCH, "mempool.space", listOf(sent, received, self, unsent)),
     )
     private val one = TransactionUiState(loading = false, name = "Savings", network = Network.TESTNET4, tx = sent, host = "mempool.space")
 
@@ -189,31 +189,28 @@ class TransactionsScreensTest {
     }
 
     @Test
-    fun theExplorerButtonIsThereOnlyWithASiteAndAsksBeforeLeaving() {
-        var asked = 0
-        var confirmed = 0
-        var cancelled = 0
-        val actions = TransactionActions(onExplorer = { asked++ }, onConfirmExplorer = { confirmed++ }, onCancelExplorer = { cancelled++ })
-        val withSite = one.copy(explorerUrl = "https://explorer.example/testnet4/tx/$txid")
-        rule.setContent { TransactionScreen(withSite, actions) }
-        rule.onNodeWithText("Open in a block explorer").performScrollTo().performClick()
-        assertEquals(1, asked)
-        assertEquals(0, confirmed)
+    fun theStatusIsAttributedToTheServerThatGaveIt() {
+        rule.setContent { TransactionScreen(one, TransactionActions()) }
+        rule.onNodeWithText("Status from mempool.space").assertExists()
     }
 
     @Test
-    fun theConfirmNamesTheSiteAndSaysItLeavesVettId() {
-        var confirmed = 0
-        var cancelled = 0
-        val ask = one.copy(explorerUrl = "https://explorer.example/testnet4/tx/$txid", explorerAsk = true)
-        rule.setContent { TransactionScreen(ask, TransactionActions(onConfirmExplorer = { confirmed++ }, onCancelExplorer = { cancelled++ })) }
-        rule.onNodeWithText("Leave VettID?").assertIsDisplayed()
-        rule.onNodeWithText("This opens explorer.example in your browser.", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("Cancel").performClick()
-        assertEquals(1, cancelled)
-        assertEquals(0, confirmed)
-        rule.onNodeWithText("Open").performClick()
-        assertEquals(1, confirmed)
+    fun theListNamesTheServerToo() {
+        rule.setContent { TransactionsScreen(list, TransactionsActions()) }
+        rule.onNodeWithText("Status from mempool.space").assertExists()
+    }
+
+    @Test
+    fun aPaymentNotSeenYetNamesTheServer() {
+        val notSeen = unsent.copy(status = TxStatus.NotSeen)
+        rule.setContent { TransactionScreen(one.copy(tx = notSeen), TransactionActions()) }
+        rule.onNodeWithText("Not seen by mempool.space yet").assertExists()
+    }
+
+    @Test
+    fun noBlockExplorerIsOfferedYet() {
+        rule.setContent { TransactionScreen(one, TransactionActions()) }
+        rule.onNodeWithText("Open in a block explorer").assertDoesNotExist()
     }
 
     @Test

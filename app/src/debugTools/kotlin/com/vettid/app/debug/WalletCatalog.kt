@@ -101,7 +101,7 @@ import java.time.Instant
  * screen's wallet rows; W1c-2b: the detail (loaded, incoming, each look-up state, the privacy note, not backed up), the address type
  * dialog, delete (the warning, the password), Receive (with and without an amount, not backed up), the Chain server (each setting,
  * checking, each refusal) and the details; W2-3: the Transactions list (loaded, loading, empty, each failed look-up) and one
- * transaction (sent, received, to oneself, not broadcast, with the explorer button and its confirm, loading, not found, a failed read). The real phrase and check screens are `FLAG_SECURE` (`SecureWindow`); these samples are not. Made-up words.
+ * transaction (sent, received, to oneself, not broadcast, not seen yet, loading, not found, a failed read). The real phrase and check screens are `FLAG_SECURE` (`SecureWindow`); these samples are not. Made-up words.
  */
 internal object WalletCatalog {
     private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
@@ -167,8 +167,12 @@ internal object WalletCatalog {
             "d4".repeat(32), TxDirection.SENT, 5_000, -5_300, 300, TxStatus.NotBroadcast, null, null, Instant.parse("2026-10-29T08:00:00Z"),
             listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 5_000)), null,
         ),
+        WalletTransaction(
+            "e5".repeat(32), TxDirection.SENT, 7_000, -7_300, 300, TxStatus.NotSeen, null, null, Instant.parse("2026-10-31T19:50:00Z"),
+            listOf(WalletPayee("tb1qpayee0000000000000000000000000000000x7k2", 7_000)), null,
+        ),
     )
-    private val sampleList = WalletTransactions(Instant.parse("2026-10-31T20:00:00Z"), "mempool.space", null, sample)
+    private val sampleList = WalletTransactions(Instant.parse("2026-10-31T20:00:00Z"), "mempool.space", sample)
     private val txList = TransactionsUiState(loading = false, name = "Savings", network = Network.TESTNET4, list = sampleList)
     private fun txProblem(p: TransactionsResult) = txList.copy(list = null, problem = p)
     private val txOne = TransactionUiState(loading = false, name = "Savings", network = Network.TESTNET4, tx = sample[0], host = "mempool.space")
@@ -417,10 +421,7 @@ internal object WalletCatalog {
         "wallet.transaction_received" to { Transaction(txOne.copy(tx = sample[1])) },
         "wallet.transaction_self" to { Transaction(txOne.copy(tx = sample[2])) },
         "wallet.transaction_not_broadcast" to { Transaction(txOne.copy(tx = sample[3])) },
-        "wallet.transaction_explorer" to { Transaction(txOne.copy(explorerUrl = "https://explorer.example/testnet4/tx/" + "a1".repeat(32))) },
-        "wallet.transaction_explorer_confirm" to {
-            Transaction(txOne.copy(explorerUrl = "https://explorer.example/testnet4/tx/" + "a1".repeat(32), explorerAsk = true))
-        },
+        "wallet.transaction_not_seen" to { Transaction(txOne.copy(tx = sample[4])) },
         "wallet.transaction_loading" to { Transaction(TransactionUiState(name = "Savings", network = Network.TESTNET4)) },
         "wallet.transaction_not_found" to { Transaction(TransactionUiState(loading = false, notFound = true)) },
         "wallet.transaction_server_failed" to {
