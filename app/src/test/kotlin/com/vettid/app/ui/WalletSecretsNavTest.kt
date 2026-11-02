@@ -10,6 +10,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.vettid.core.data.wallet.BackupRoute
+import com.vettid.core.data.wallet.SendRoute
 import com.vettid.core.data.wallet.ImportWalletRoute
 import com.vettid.core.data.wallet.NewWalletRoute
 import com.vettid.feature.devices.PairRoute
@@ -52,6 +53,7 @@ class WalletSecretsNavTest {
                         composable<NewWalletRoute> { Text("new wallet") }
                         composable<ImportWalletRoute> { Text("import wallet") }
                         composable<BackupRoute> { Text("backup") }
+                        composable<SendRoute> { Text("send") }
                     }
                 }
             }
@@ -83,6 +85,16 @@ class WalletSecretsNavTest {
         act { nav.navigate(BackupRoute("01W")) }
         act { nav.navigateTopLevel(SecretsOtherRoute) }
         assertFalse(stack().any { it.startsWith("BackupRoute") })
+    }
+
+    @Test
+    fun aSendIsPoppedToo() {
+        show()
+        act { nav.navigate(SendRoute("01W")) }
+        act { nav.navigateTopLevel(SecretsOtherRoute) }
+        assertFalse(stack().any { it.startsWith("SendRoute") })
+        act { nav.navigateTopLevel(SecretsStartRoute) }
+        assertEquals(listOf("SecretsStartRoute"), stack())
     }
 
     @Test

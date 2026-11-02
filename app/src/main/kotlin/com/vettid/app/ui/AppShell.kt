@@ -30,6 +30,7 @@ import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.ImportWalletRoute
 import com.vettid.core.data.wallet.SpendingLimitsRoute
 import com.vettid.core.data.wallet.NewWalletRoute
+import com.vettid.core.data.wallet.SendRoute
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
@@ -598,14 +599,16 @@ internal fun NavHostController.leaveEntry(entryId: String) {
 }
 
 /**
- * The wallet's screens that hold a recovery phrase ([NewWalletRoute], [ImportWalletRoute], [BackupRoute]) are never saved with
- * the stack: leaving them by the drawer or a notification pops them, so their view model (and the words) goes. Only where the
- * graph has them: a build without the wallet has neither, and popping a route the graph does not know throws.
+ * The wallet's screens that hold a recovery phrase or a password to spend ([NewWalletRoute], [ImportWalletRoute],
+ * [BackupRoute], [SendRoute]) are never saved with the stack: leaving them by the drawer or a notification pops them, so
+ * their view model (and the words or the password) goes. Only where the graph has them: a build without the wallet has
+ * neither, and popping a route the graph does not know throws.
  */
 internal fun NavHostController.popWalletSecrets() {
     popIfInGraph<NewWalletRoute>()
     popIfInGraph<ImportWalletRoute>()
     popIfInGraph<BackupRoute>()
+    popIfInGraph<SendRoute>()
 }
 
 private inline fun <reified T : Any> NavHostController.popIfInGraph() {

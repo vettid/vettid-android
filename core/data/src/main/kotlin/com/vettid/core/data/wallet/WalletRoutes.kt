@@ -36,3 +36,11 @@ data object ImportWalletRoute
 /** Back up a wallet that is not backed up yet (from its row). */
 @Serializable
 data class BackupRoute(val walletId: String)
+
+/**
+ * Send from a wallet (W2-2). It holds the password the member types to approve, and a payment built and inspected: never saved with
+ * the back stack (state saving would keep its view model alive behind another screen); the drawer and a notification pop it
+ * (`navigateTopLevel`), as [NewWalletRoute].
+ */
+@Serializable
+data class SendRoute(val walletId: String)

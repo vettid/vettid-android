@@ -270,6 +270,16 @@ suspend fun VaultApi.walletSign(
  */
 suspend fun VaultApi.walletSignResend(kept: KeptChange): JsonObject? = credentialOps.resendKept(kept)
 
+/** The vault's clock as this phone knows it (the enclave's own time, not the phone's): for windows the vault's `at` is measured in. */
+fun VaultApi.walletVaultNow(): java.time.Instant = device.vaultNow()
+
+/**
+ * Whether [kept] (an unanswered `wallet.sign`) can no longer apply: the vault's clock is past its `exp` plus the settle margin
+ * (§11.14.9). Only then is it given up for good; before that it may have applied (also when `credential.version` has moved on)
+ * and the vault answers a resend from its cache.
+ */
+fun VaultApi.walletSignExpired(kept: KeptChange): Boolean = !device.vaultNow().isBefore(kept.exp.plus(VaultDevice.SETTLE_MARGIN))
+
 /** The sealed payload of `wallet.sign`: `{password, item_id, payload_sha256}` (the hash in standard base64). */
 internal fun signSealed(walletId: String, psbtBase64: String, password: String): JsonObject = buildJsonObject {
     put("password", password)

@@ -251,6 +251,26 @@ class WalletDetailScreensTest {
     }
 
     @Test
+    fun sendIsNextToReceiveWithTheSameHolds() {
+        var current by mutableStateOf(detail(result = LookupResult.AddressMismatch))
+        var send = 0
+        rule.setContent { WalletDetailScreen(current, WalletDetailActions(onSend = { send++ })) }
+        rule.onNodeWithTag("wallet_send").performScrollTo().assertIsNotEnabled()
+        current = detail().copy(capsPending = true)
+        rule.waitForIdle()
+        rule.onNodeWithTag("wallet_send").performScrollTo().assertIsNotEnabled()
+        // The privacy note first: nothing is sent to the server before it is acknowledged.
+        current = detail().copy(noteNeeded = true)
+        rule.waitForIdle()
+        rule.onNodeWithTag("wallet_send").performScrollTo().assertIsNotEnabled()
+        current = detail()
+        rule.waitForIdle()
+        rule.onNodeWithTag("wallet_send").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, send)
+        rule.onNodeWithText("Send").assertExists()
+    }
+
+    @Test
     fun receiveIsOffOnAnAddressMismatchAndOnWhenTheLookupIsFine() {
         var current by mutableStateOf(detail(result = LookupResult.AddressMismatch))
         var receive = 0
