@@ -537,7 +537,7 @@ class WalletSendTest {
     fun aKeptUnsentPaymentShowsAsNotBroadcastInTheTransactionsAtOnce() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.BroadcastRefused(BroadcastRefusal.FEE_TOO_LOW, "min relay fee not met")
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertTrue(m.approveSend(ready(m, w), "pw".toCharArray()) is SendResult.BroadcastFailed)
         val txid = com.vettid.core.chain.Tx.id(chain.spend.broadcasts.single())!!
         ops.history = listOf(WalletTx(txid, Instant.now(), 40_000, 1, 1, emptyList(), null, null))
         val row = (m.transactions(w.id) as TransactionsResult.Done).transactions.items.single()

@@ -2555,7 +2555,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566e3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             (1..3).map { v.open(nextDeposit().second) }
@@ -2582,7 +2582,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(2_000))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             val utks = listOf("00112233445566a1", "00112233445566a2").joinToString(",") { utkJson(it, KemPrivateKey.generate()) }
             d.handle(v.seal(get.type, """{"utks":[$utks]}""", re = get.id, status = Inner.STATUS_OK))
@@ -2614,7 +2614,7 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
             val api = VaultApi(d) { true }
             d.keepCredential("QkxPQg==", 3)
-            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one") } }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
             val get = v.open(nextDeposit().second)
             d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566a3", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
             (1..3).map { v.open(nextDeposit().second) }
@@ -3027,7 +3027,7 @@ class VaultDeviceTest {
             lostReset(d, v, api, 3, "key-one", "00112233445569a5")
             api.setCredentialGate { _ -> throw VaultStateException("reset undecided") }
             assertTrue(runCatching { api.ownerCheck("975310", "old password") }.exceptionOrNull() is VaultStateException)
-            assertTrue(runCatching { api.walletSign(signWallet, signPsbt, "old password") }.exceptionOrNull() is VaultStateException)
+            assertTrue(runCatching { api.walletSign(signWallet, signPsbt, "old password".toCharArray()) }.exceptionOrNull() is VaultStateException)
             assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
         }
     }
