@@ -146,8 +146,8 @@ class SendScreenTest {
     @Test
     fun theTenPercentGuardHasItsOwnText() {
         var paid = false
-        show(form().copy(bigFeeAsk = BigFee.TEN_PERCENT), SendActions(onConfirmBigFee = { paid = true }))
-        rule.onNodeWithText("The fee is more than 10% of what you're sending. Pay it anyway?").assertIsDisplayed()
+        show(form().copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = 4_400), SendActions(onConfirmBigFee = { paid = true }))
+        rule.onNodeWithText("The fee, 4,400 sats, is more than 10% of what you're sending. Pay it anyway?").assertIsDisplayed()
         rule.onNodeWithText("Pay it anyway").performClick()
         assertTrue(paid)
     }
@@ -165,20 +165,41 @@ class SendScreenTest {
             .assertTextEquals("This payment link has something VettID can't safely use, so nothing was filled in. Check it with whoever sent it.")
     }
 
+    private fun tx(at: Instant?) =
+        com.vettid.core.wallet.WalletTx("ab".repeat(32), at, 40_000, 1, 1, listOf(com.vettid.core.wallet.WalletPayee(PAYEE, 40_000)), null, null)
+
     @Test
-    fun eachRecentPaymentNoticeHasItsTextAndSendAnywayGoesOn() {
+    fun eachRecentPaymentNoticeNamesThePaymentAndSendAnywayGoesOn() {
         var acknowledged = 0
-        val cases = mapOf(
-            RecentSends.WAITING to "A payment you approved is waiting for confirmation.",
-            RecentSends.MAY_HAVE_GONE to "A payment you approved may have gone through.\n\nIt may already be on the network. Check before you send again.",
-            RecentSends.UNREADABLE to "VettID couldn't check your recent payments. One you approved may still be on its way. Check before you send again.",
+        val at = Instant.parse("2026-11-02T09:05:00Z")
+        val whenText = SendFormat.whenAt(at)
+        val cases = listOf(
+            com.vettid.core.wallet.RecentReport(RecentSends.WAITING, tx(at), 0) to
+                "A payment you approved is waiting for confirmation: 0.0004 tBTC to $PAYEE at $whenText.",
+            com.vettid.core.wallet.RecentReport(RecentSends.MAY_HAVE_GONE, tx(at), 0) to
+                "A payment you approved may have gone through: 0.0004 tBTC to $PAYEE at $whenText.\n\n" +
+                "It may not have gone out, or the server hasn't seen it yet. Check before you send again.",
+            com.vettid.core.wallet.RecentReport(RecentSends.MAY_HAVE_GONE, tx(at), 2) to
+                "A payment you approved may have gone through: 0.0004 tBTC to $PAYEE at $whenText. 2 more payments are in the same state.\n\n" +
+                "It may not have gone out, or the server hasn't seen it yet. Check before you send again.",
+            com.vettid.core.wallet.RecentReport(RecentSends.WAITING, tx(null), 1) to
+                "A payment you approved is waiting for confirmation: 0.0004 tBTC to $PAYEE at an unknown time. 1 more payment is in the same state.",
+            com.vettid.core.wallet.RecentReport(RecentSends.UNREADABLE) to
+                "VettID couldn't check your recent payments. One you approved may still be on its way. Check before you send again.",
         )
-        for ((notice, text) in cases) {
-            show(form().copy(recentNotice = notice), SendActions(onAcknowledgeRecent = { acknowledged++ }))
+        for ((report, text) in cases) {
+            show(form().copy(recentNotice = report.kind, recentReport = report), SendActions(onAcknowledgeRecent = { acknowledged++ }))
             rule.onNodeWithText(text).assertIsDisplayed()
             rule.onNodeWithText("Send anyway").performClick()
         }
-        assertEquals(3, acknowledged)
+        assertEquals(cases.size, acknowledged)
+    }
+
+    @Test
+    fun theFormSaysItIsCheckingRecentPaymentsAndReviewIsOff() {
+        show(form().copy(recentChecking = true))
+        rule.onNodeWithText("Checking your recent payments…").assertIsDisplayed()
+        rule.onNodeWithText("Review").assertIsNotEnabled()
     }
 
     @Test

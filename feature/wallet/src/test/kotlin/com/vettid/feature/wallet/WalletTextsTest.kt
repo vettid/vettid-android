@@ -150,6 +150,15 @@ class WalletTextsTest {
     }
 
     @Test
+    fun theThirdReviewsTextsAreAsRevised() {
+        assertEquals("It may not have gone out, or the server hasn't seen it yet. Check before you send again.", r.getString(R.string.wallet_send_recent_gone_more))
+        assertEquals("Checking your recent payments…", r.getString(R.string.wallet_send_recent_checking))
+        assertEquals("The fee, 4,400 sats, is more than 10% of what you're sending. Pay it anyway?", r.getString(R.string.wallet_send_fee_ten_percent, "4,400"))
+        assertEquals("1 more payment is in the same state.", r.getQuantityString(R.plurals.wallet_send_recent_more, 1, 1))
+        assertEquals("3 more payments are in the same state.", r.getQuantityString(R.plurals.wallet_send_recent_more, 3, 3))
+    }
+
+    @Test
     fun theSecondReviewsTextsAreAsRevised() {
         assertEquals("Signed, but mempool.space didn't answer. The payment may have gone through.", r.getString(R.string.wallet_send_broadcast_no_answer, "mempool.space"))
         assertEquals("You have 1,000 sats you can spend and this needs 2,000 sats.", r.getString(R.string.wallet_send_not_enough, "1,000", "2,000"))

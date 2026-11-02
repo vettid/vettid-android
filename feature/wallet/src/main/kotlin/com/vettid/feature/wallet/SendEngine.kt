@@ -6,7 +6,7 @@ import com.vettid.core.wallet.DiscardResult
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.PrepareResult
 import com.vettid.core.wallet.PreparedSend
-import com.vettid.core.wallet.RecentSends
+import com.vettid.core.wallet.RecentReport
 import com.vettid.core.wallet.SendRequest
 import com.vettid.core.wallet.SendResult
 import com.vettid.core.wallet.SpendCap
@@ -27,6 +27,7 @@ sealed interface SendPrepared {
  * What Send asks of the sending core ([WalletsManager]), so that the view model's tests need no chain server and no vault's PSBT. The
  * payment prepared is kept in the engine only (the PSBT never reaches the screen's state) until it is approved or replaced.
  */
+@Suppress("TooManyFunctions") // one function per step of a send
 interface SendEngine {
     suspend fun feeEstimates(walletId: String): FeeEstimates
 
@@ -42,7 +43,10 @@ interface SendEngine {
     suspend fun checkSent(walletId: String): SendResult
 
     /** The vault's recent signed payments against the chain server, before a new payment is prepared. */
-    suspend fun recentPayments(walletId: String): RecentSends
+    suspend fun recentPayments(walletId: String): RecentReport
+
+    /** "Send anyway": the core refuses a new payment until what the check found is acknowledged. */
+    fun acknowledgeRecent(walletId: String)
 
     /** Drops the unsent payment; [DiscardResult.MUST_CHECK] while it may be on the network and no server has said otherwise. */
     fun discard(walletId: String): DiscardResult
@@ -57,6 +61,7 @@ interface SendEngine {
 }
 
 /** [SendEngine] over the wallet manager. */
+@Suppress("TooManyFunctions") // one function per step of a send
 class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
     private var prepared: PreparedSend? = null
 
@@ -94,6 +99,8 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
     override suspend fun checkSent(walletId: String) = wallets.checkSent(walletId)
 
     override suspend fun recentPayments(walletId: String) = wallets.recentSends(walletId)
+
+    override fun acknowledgeRecent(walletId: String) = wallets.acknowledgeRecent(walletId)
 
     override fun discard(walletId: String): DiscardResult {
         prepared = null

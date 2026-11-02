@@ -247,6 +247,11 @@ class WalletsManager(
     /** The wallets with a signing whose answer has not come (resent as the same request), per wallet. Under [lock]. */
     private val pendingSigns = HashMap<String, PendingSign>()
 
+    /** Per wallet: the recent-payments check ran in this session, and whether it found something that was acknowledged. Under [lock]. */
+    private class RecentState(val needsAck: Boolean, val acknowledged: Boolean)
+
+    private val recentState = HashMap<String, RecentState>()
+
     /** The reviewed payments (their unsigned txids) whose `wallet.sign` went out: signed once, never again. Under [lock]. */
     private val consumed = HashSet<String>()
 
@@ -358,6 +363,7 @@ class WalletsManager(
             pendingSigns.clear()
             consumed.clear()
             signCounts.clear()
+            recentState.clear()
             unsentFlow.value = emptySet()
         }
     }
@@ -1163,6 +1169,8 @@ class WalletsManager(
         // A signed payment waiting to be broadcast, or a signing waiting for its answer: no new payment beside it (it would pick other
         // coins, and both could confirm). It is decided first: Try again, or Discard once nothing of it can be on the network.
         if (hasUnsent(walletId)) return PrepareResult.Unsent
+        // The vault's recent payments are checked, and any found acknowledged, before a new payment is prepared (memory only, per wallet).
+        if (!recentOk(walletId)) return PrepareResult.RecentUnchecked
         if (signHeld(walletId)) return PrepareResult.Held(SendHold.SIGN_UNSETTLED)
         val network = networkOf(wallet) ?: return PrepareResult.NeedsNetwork
         if (!offered(network)) return PrepareResult.NotOffered
@@ -1647,38 +1655,75 @@ class WalletsManager(
      * that cannot be read is [RecentSends.UNREADABLE] (fail secure), in the mempool is [RecentSends.WAITING]. At most [RECENT_MAX] are
      * asked.
      */
+    @Suppress("ReturnCount", "TooGenericExceptionCaught")
+    suspend fun recentSends(walletId: String): RecentReport {
+        val report = try {
+            recentReport(walletId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // A malformed txid or an answer that does not read must not crash anything: nothing is known.
+            RecentReport(RecentSends.UNREADABLE)
+        }
+        synchronized(lock) { recentState[walletId] = RecentState(needsAck = report.kind != RecentSends.CLEAR, acknowledged = false) }
+        return report
+    }
+
     @Suppress("ReturnCount")
-    suspend fun recentSends(walletId: String): RecentSends {
-        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: return RecentSends.UNREADABLE
-        val network = networkOf(wallet) ?: return RecentSends.UNREADABLE
-        if (!flags.privacyNoteShown(walletId)) return RecentSends.UNREADABLE
+    private suspend fun recentReport(walletId: String): RecentReport {
+        val unreadable = RecentReport(RecentSends.UNREADABLE)
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: return unreadable
+        val network = networkOf(wallet) ?: return unreadable
+        if (!flags.privacyNoteShown(walletId)) return unreadable
         val txs = try {
             history(walletId, RECENT_HISTORY)
         } catch (_: VaultFailure) {
-            return RecentSends.UNREADABLE
+            return unreadable
         }
         val cutoff = clock().minus(RECENT_WINDOW)
         val recent = txs.filter { it.at == null || it.at.isAfter(cutoff) }.take(RECENT_MAX)
-        if (recent.isEmpty()) return RecentSends.CLEAR
-        val spend = (chain.open(network) as? ChainOpen.Ready)?.spend ?: return RecentSends.UNREADABLE
+        if (recent.isEmpty()) return RecentReport(RecentSends.CLEAR)
+        val spend = (chain.open(network) as? ChainOpen.Ready)?.spend ?: return unreadable
         return classify(spend, recent)
     }
 
-    /** The worst state of [txs] at the server: not found, then unreadable, then in the mempool. */
-    private suspend fun classify(spend: SpendAccess, txs: List<WalletTx>): RecentSends {
+    /** The worst state of [txs] at the server (not found, then unreadable, then in the mempool), naming the newest of that state. */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun classify(spend: SpendAccess, txs: List<WalletTx>): RecentReport {
         val states = txs.map { tx ->
             try {
-                spend.state(tx.txid)
-            } catch (_: ChainError) {
-                null
+                tx to spend.state(tx.txid)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                tx to null
             }
         }
-        return when {
-            TxState.NOT_FOUND in states -> RecentSends.MAY_HAVE_GONE
-            null in states -> RecentSends.UNREADABLE
-            TxState.UNCONFIRMED in states -> RecentSends.WAITING
-            else -> RecentSends.CLEAR
+        fun named(kind: RecentSends, state: TxState): RecentReport {
+            val same = states.filter { it.second == state }.map { it.first }
+            // Newest first; one without a time counts as the newest.
+            val sorted = same.sortedWith(compareByDescending<WalletTx> { it.at == null }.thenByDescending { it.at })
+            return RecentReport(kind, sorted.first(), sorted.size - 1)
         }
+        return when {
+            states.any { it.second == TxState.NOT_FOUND } -> named(RecentSends.MAY_HAVE_GONE, TxState.NOT_FOUND)
+            states.any { it.second == null } -> RecentReport(RecentSends.UNREADABLE)
+            states.any { it.second == TxState.UNCONFIRMED } -> named(RecentSends.WAITING, TxState.UNCONFIRMED)
+            else -> RecentReport(RecentSends.CLEAR)
+        }
+    }
+
+    /**
+     * "Send anyway": the member has seen what [recentSends] found. Also for a wallet whose check did not finish: they chose to go on, and
+     * nothing blocks for good.
+     */
+    fun acknowledgeRecent(walletId: String) {
+        synchronized(lock) { recentState[walletId] = RecentState(needsAck = false, acknowledged = true) }
+    }
+
+    /** Whether [prepareSend] may go on: the check ran in this session and, if it found something, was acknowledged. */
+    private fun recentOk(walletId: String): Boolean = synchronized(lock) {
+        recentState[walletId]?.let { !it.needsAck || it.acknowledged } ?: false
     }
 
     /** `wallet.history`: what this vault signed, newest first. */

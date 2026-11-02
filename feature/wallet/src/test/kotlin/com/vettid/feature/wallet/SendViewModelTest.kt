@@ -256,11 +256,20 @@ class SendViewModelTest {
         for (link in bad) {
             vm.setAddress(link)
             assertTrue(link, vm.state.value.linkRefused)
-            assertEquals(link, before.address, vm.state.value.address)
-            assertEquals(link, "0.5", vm.state.value.amountText)
+            // Nothing from the link, and nothing of the earlier payee either: Review would go to the old one.
+            assertEquals(link, "", vm.state.value.address)
+            assertEquals(link, "", vm.state.value.amountText)
+            assertFalse(link, vm.state.value.canReview)
+            vm.review()
+            assertTrue(link, engine.requests.isEmpty())
+            vm.setAddress(PAYEE)
+            vm.setAmount("0.5")
+            assertEquals(before.address, vm.state.value.address)
             vm.scanned(link)
             assertTrue(link, vm.state.value.linkRefused)
-            assertEquals(link, before.address, vm.state.value.address)
+            assertEquals(link, "", vm.state.value.address)
+            vm.setAddress(PAYEE)
+            vm.setAmount("0.5")
         }
         // Other unknown parameters are still ignored, and a good link clears the notice.
         vm.setAddress("bitcoin:$PAYEE?label=x&foo=bar&amount=0.1")
@@ -470,6 +479,107 @@ class SendViewModelTest {
             vm.review()
             eventually { engine.requests.size == 1 }
         }
+    }
+
+    @Test
+    fun nothingCanBeReviewedOrPreparedWhileTheRecentCheckRuns() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        engine.recentGate = gate
+        val vm = vm()
+        // The wait is real time here (the test clock would run the 20 s out at once).
+        vm.recentWaitMs = null
+        eventually { vm.state.value.recentChecking && vm.state.value.estimates != null }
+        vm.setAddress(PAYEE)
+        vm.setUnit(AmountUnit.SATS)
+        vm.setAmount("40000")
+        assertFalse(vm.state.value.canReview)
+        vm.review()
+        assertTrue(engine.requests.isEmpty())
+        gate.complete(Unit)
+        eventually { !vm.state.value.recentChecking }
+        assertTrue(vm.state.value.canReview)
+        vm.review()
+        eventually { engine.requests.size == 1 }
+    }
+
+    @Test
+    fun theCheckRunsAgainWheneverAHoldClears() = runTest {
+        // First look: a hold stands, nothing is checked. Try again and a hold lifting each run the check.
+        val vm = vm(backedUp = false)
+        eventually { vm.state.value.block == SendBlock.NOT_BACKED_UP }
+        assertEquals(0, engine.recentAsked)
+        WalletFlags(flagsFile).setBackedUp(id)
+        vm.load()
+        eventually { vm.state.value.block == null && engine.recentAsked == 1 && !vm.state.value.recentChecking }
+        // Try again once more (a block that was set by a prepare): the check runs again.
+        vm.load()
+        eventually { engine.recentAsked == 2 && !vm.state.value.recentChecking }
+    }
+
+    @Test
+    fun aHoldLiftingByItselfRunsTheCheck() = runTest {
+        val vm = vm(noteShown = false)
+        eventually { vm.state.value.block == SendBlock.NOTE_NEEDED }
+        assertEquals(0, engine.recentAsked)
+        // The note is shown on the detail screen: the manager's flags move and the screen re-reads its holds.
+        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        m.open()
+        m.setPrivacyNoteShown(id)
+        vm.load()
+        eventually { vm.state.value.block == null && engine.recentAsked == 1 }
+    }
+
+    @Test
+    fun theCoreAskingForTheCheckRunsItAndTheNoticeFollows() = runTest {
+        val vm = ready()
+        eventually { engine.recentAsked == 1 && !vm.state.value.recentChecking }
+        engine.recent = RecentSends.WAITING
+        engine.recentLatest = com.vettid.core.wallet.WalletTx("ab".repeat(32), Instant.parse("2026-11-02T09:00:00Z"), 40_000, 1, 1, emptyList(), null, null)
+        engine.prepared = SendPrepared.Stopped(PrepareResult.RecentUnchecked)
+        vm.review()
+        eventually { vm.state.value.recentNotice == RecentSends.WAITING && !vm.state.value.recentChecking }
+        assertEquals(2, engine.recentAsked)
+        assertFalse(vm.state.value.busy)
+    }
+
+    @Test
+    fun acknowledgingTellsTheCore() = runTest {
+        engine.recent = RecentSends.UNREADABLE
+        val vm = vm()
+        eventually { vm.state.value.recentNotice == RecentSends.UNREADABLE }
+        vm.acknowledgeRecent()
+        assertEquals(listOf(id), engine.acknowledged)
+        assertNull(vm.state.value.recentNotice)
+    }
+
+    @Test
+    fun aCheckThatThrowsOrNeverEndsIsUnreadableAndNeverCrashes() = runTest {
+        engine.recentThrows = IllegalArgumentException("not a txid")
+        val vm = vm()
+        eventually { vm.state.value.recentNotice == RecentSends.UNREADABLE && !vm.state.value.recentChecking }
+        engine.recentThrows = com.vettid.core.wallet.WalletWireException("transactions")
+        vm.load()
+        eventually { engine.recentAsked == 2 && !vm.state.value.recentChecking }
+        assertEquals(RecentSends.UNREADABLE, vm.state.value.recentNotice)
+    }
+
+    @Test
+    fun aFeeWellAboveTheOneAgreedToIsAskedAboutAgainOnTheReview() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("40")
+        vm.review()
+        // 40 sat/vB x 110 = 4,400 over 10% of 40,000: asked, naming the figure; confirmed.
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+        assertEquals(4_400L, vm.state.value.bigFeeSats)
+        // The vault's real fee is 7,000 (more than 1.5 times 4,400 = 6,600): asked again, with its figure.
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 7_000, 150, 47_000, 0, false, 0, true))
+        vm.confirmBigFee()
+        eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        assertEquals(7_000L, vm.state.value.bigFeeSats)
+        vm.confirmBigFee()
+        assertNull(vm.state.value.bigFeeAsk)
     }
 
     @Test

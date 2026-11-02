@@ -204,6 +204,12 @@ sealed interface PrepareResult {
     /** A signed payment of this wallet waits to be broadcast, or a signing waits for its answer: decide it before a new payment. */
     data object Unsent : PrepareResult
 
+    /**
+     * The recent-payments check ([WalletsManager.recentSends]) has not been run for this wallet in this session, or it found something
+     * that was not acknowledged ([WalletsManager.acknowledgeRecent]): no payment is prepared before.
+     */
+    data object RecentUnchecked : PrepareResult
+
     data object BadFeeRate : PrepareResult
 
     data object BadAmount : PrepareResult
@@ -407,4 +413,12 @@ enum class RecentSends {
 
     /** The history or the server could not be read: nothing is known. */
     UNREADABLE,
+}
+
+/**
+ * The answer of [WalletsManager.recentSends]: the worst [kind], and, for a payment that waits or may have gone through, **the most recent
+ * one** named from the vault's history ([latest]: its time, amount and payee) and how many more are in the same state ([more]).
+ */
+class RecentReport(val kind: RecentSends, val latest: WalletTx? = null, val more: Int = 0) {
+    override fun toString(): String = "RecentReport"
 }

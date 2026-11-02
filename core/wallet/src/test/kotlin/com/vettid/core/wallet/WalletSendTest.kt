@@ -96,6 +96,9 @@ class WalletSendTest {
         chain.fund(receive, 0, 100_000)
         val m = manager()
         m.open()
+        m.recentSends(w.id)
+        // The recent-payments check (nothing recent here) is run, as the screen does before a payment is prepared.
+        m.recentSends(w.id)
         return m to w
     }
 
@@ -204,6 +207,7 @@ class WalletSendTest {
         chain.fund(AddressChain("p2wpkh", false), 3, 200_000, confirmed = false)
         val m = manager()
         m.open()
+        m.recentSends(w.id)
         val short = m.prepareSend(w.id, request(amount = 100_000)) as PrepareResult.NotEnough
         assertEquals(30_000L, short.availableSats)
         val p = (m.prepareSend(w.id, request(amount = 100_000, unconfirmed = true)) as PrepareResult.Ready).prepared
@@ -219,6 +223,7 @@ class WalletSendTest {
         chain.fund(AddressChain("p2wpkh", true), 1, 10_000)
         val m = manager()
         m.open()
+        m.recentSends(w.id)
         val p = (m.prepareSend(w.id, request(amount = null)) as PrepareResult.Ready).prepared
         assertTrue(p.sendAll)
         assertEquals(3, p.vault.inputs.size)
@@ -234,6 +239,7 @@ class WalletSendTest {
         chain.fund(receive, 0, 40_400)
         val m = manager()
         m.open()
+        m.recentSends(w.id)
         val p = (m.prepareSend(w.id, request(amount = 40_000, rate = 1.0)) as PrepareResult.Ready).prepared
         assertEquals(0L, p.changeSats)
         assertEquals(400L, p.feeSats)
@@ -265,6 +271,7 @@ class WalletSendTest {
         assertEquals(PrepareResult.Held(SendHold.CAPS_PENDING), m.prepareSend(w.id, request()))
         assertTrue("nothing inspected while the limit is pending", ops.inspected.isEmpty())
         ops.capsSetFails = null
+        m.recentSends(w.id)
         val p = m.prepareSend(w.id, request())
         assertTrue(p.toString(), p is PrepareResult.Ready)
         // The set went before anything else was asked for the send.
@@ -563,6 +570,7 @@ class WalletSendTest {
         // The same for a signing still unanswered.
         val m2 = manager()
         m2.open()
+        m2.recentSends(w.id)
         ops.unanswered = 5
         assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w), "pw"))
         m2.clear()
@@ -716,6 +724,7 @@ class WalletSendTest {
         // An unanswered signing holds as well.
         val m2 = manager()
         m2.open()
+        m2.recentSends(w.id)
         ops.unanswered = 100
         assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 42_000)), "pw"))
         assertEquals(PrepareResult.Unsent, m2.prepareSend(w.id, request(amount = 43_000)))
@@ -762,6 +771,7 @@ class WalletSendTest {
         ops.outstanding = emptySet()
         val m2 = manager()
         m2.open()
+        m2.recentSends(w.id)
         assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 41_000)), "pw"))
         m2.discardUnsent(w.id)
         assertEquals(2, ops.forgets)
@@ -841,34 +851,86 @@ class WalletSendTest {
         val fresh = now.minusSeconds(3_600)
         // Nothing recent: nothing, or only old ones.
         ops.history = emptyList()
-        assertEquals(RecentSends.CLEAR, m.recentSends(w.id))
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
         ops.history = listOf(signed("aa".repeat(32), now.minusSeconds(25 * 3_600L)))
-        assertEquals(RecentSends.CLEAR, m.recentSends(w.id))
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
         // Confirmed on the server: done.
         ops.history = listOf(signed("bb".repeat(32), fresh))
         chain.spend.confirmed += "bb".repeat(32)
-        assertEquals(RecentSends.CLEAR, m.recentSends(w.id))
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
         // In the mempool: waiting.
         chain.spend.known += "bb".repeat(32)
         chain.spend.confirmed -= "bb".repeat(32)
-        assertEquals(RecentSends.WAITING, m.recentSends(w.id))
+        assertEquals(RecentSends.WAITING, m.recentSends(w.id).kind)
         // The server does not have one: it may have gone through (the worst of several).
         ops.history = listOf(signed("bb".repeat(32), fresh), signed("cc".repeat(32), fresh))
-        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id))
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id).kind)
         // One without a time counts as recent.
         ops.history = listOf(signed("dd".repeat(32), null))
-        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id))
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id).kind)
         // The server cannot say.
         chain.spend.knowsError = ChainError.Timeout()
         ops.history = listOf(signed("bb".repeat(32), fresh))
-        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id))
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id).kind)
         chain.spend.knowsError = null
         // No server at all, or a history that cannot be read.
         chain.open = ChainOpen.NoServer(ChainServer.NotSet)
-        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id))
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id).kind)
         chain.open = null
         ops.historyFails = true
-        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id))
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id).kind)
+    }
+
+    @Test
+    fun theMostRecentUnconfirmedPaymentIsNamedWithHowManyMore() = runBlocking {
+        val (m, w) = opened()
+        val older = WalletTx("aa".repeat(32), now.minusSeconds(7_200), 11_000, 1, 1, listOf(WalletPayee("tb1qolder", 11_000)), null, null)
+        val newer = WalletTx("bb".repeat(32), now.minusSeconds(600), 22_000, 1, 1, listOf(WalletPayee("tb1qnewer", 22_000)), null, null)
+        ops.history = listOf(older, newer)
+        val r = m.recentSends(w.id)
+        assertEquals(RecentSends.MAY_HAVE_GONE, r.kind)
+        assertEquals(newer.txid, r.latest!!.txid)
+        assertEquals(1, r.more)
+        // A confirmed one is not counted.
+        chain.spend.confirmed += older.txid
+        assertEquals(0, m.recentSends(w.id).more)
+        assertEquals("RecentReport", r.toString())
+    }
+
+    @Test
+    fun aMalformedTxidOrAnUnreadableHistoryNeverCrashesTheCheck() = runBlocking {
+        val (m, w) = opened()
+        ops.history = listOf(signed("not-a-txid", now.minusSeconds(60)))
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id).kind)
+        ops.history = emptyList()
+        ops.historyThrows = WalletWireException("transactions")
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id).kind)
+    }
+
+    @Test
+    fun aPaymentIsNotPreparedBeforeTheRecentCheckRanAndWasAcknowledged() = runBlocking {
+        val w = withWallet()
+        chain.fund(receive, 0, 100_000)
+        val m = manager()
+        m.open()
+        // Never checked in this session.
+        assertEquals(PrepareResult.RecentUnchecked, m.prepareSend(w.id, request()))
+        // Checked and clear: it goes on.
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
+        assertTrue(m.prepareSend(w.id, request()) is PrepareResult.Ready)
+        // Checked and found something: refused until acknowledged.
+        ops.history = listOf(signed("cc".repeat(32), now.minusSeconds(60)))
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id).kind)
+        assertEquals(PrepareResult.RecentUnchecked, m.prepareSend(w.id, request()))
+        m.acknowledgeRecent(w.id)
+        assertTrue(m.prepareSend(w.id, request()) is PrepareResult.Ready)
+        // A new check asks again; a lock forgets all of it.
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id).kind)
+        assertEquals(PrepareResult.RecentUnchecked, m.prepareSend(w.id, request()))
+        m.acknowledgeRecent(w.id)
+        m.clear()
+        m.open()
+        assertEquals(PrepareResult.RecentUnchecked, m.prepareSend(w.id, request()))
     }
 
     // --- review note 6: a payment to oneself is named before anything is built ---

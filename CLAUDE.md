@@ -343,7 +343,13 @@ The A2 exit test:
   the chain server, one `GET /tx/{txid}` each (`EsploraClient.transactionState`: confirmed, in the mempool, not found); not found is
   "may have gone through", a history or server that cannot be read is "couldn't check" (fail secure), in the mempool is "waiting for
   confirmation"; every one of them needs "Send anyway" before a new payment is prepared (`canReview`), waits at most 20 s, and never
-  blocks for good. One fee dialog for two guards: above twice Fast, or more than 10% of the amount sent (asked before the build when even
+  blocks for good. Third review: the check runs whenever a hold clears (first look, Try again, a hold lifting) and nothing is reviewed or
+  prepared while it runs (`recentChecking`; "Checking your recent payments…"); the core enforces it too: `WalletsManager.prepareSend`
+  returns `PrepareResult.RecentUnchecked` until `recentSends(walletId)` ran in this session and, if it found something,
+  `acknowledgeRecent(walletId)` was called (per wallet, memory only, cleared at lock). `recentSends` returns a `RecentReport` that names
+  the newest payment (time, amount, payee) and how many more, and maps any exception to UNREADABLE; the view model does the same. A
+  refused `bitcoin:` link clears the address and the amount and blocks Review until the address is edited. The review asks about the 10%
+  fee again, naming the fee, when the vault's fee is more than 1.5 times the one agreed to. One fee dialog for two guards: above twice Fast, or more than 10% of the amount sent (asked before the build when even
   110 vB at that rate is over 10% of a typed amount, else on the review from the vault's own fee, e.g. Send all; both: the 10% text). Review note 3: `PreparedSend.signCount`
   against a per-wallet counter bumped when a `wallet.sign` goes out and restored when it is given back; a payment prepared before another
   signing is `SendResult.Superseded`. **`WalletOps.sign` returns a `SignOutcome`** (`NotSent(failure)` / `Answered(SignReply.Ok(body) |
@@ -353,7 +359,7 @@ The A2 exit test:
   `draft` (the plan's, word for word) or `new`, none approved; `WalletTextsTest` holds the drafts. Catalog: `wallet.send`, `wallet.send_filled`,
   `wallet.send_btc`, `wallet.send_all`, `wallet.send_scan`, `wallet.send_scan_unavailable`, `wallet.send_wrong_network`,
   `wallet.send_not_an_address`, `wallet.send_fee_custom`, `wallet.send_fee_custom_bad`, `wallet.send_fee_much_higher`,
-  `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_not_enough_confirmed`, `wallet.send_fee_ten_percent`, `wallet.send_review_fee_ten_percent`, `wallet.send_link_refused`, `wallet.send_recent_waiting`, `wallet.send_recent_gone`, `wallet.send_recent_unreadable`, `wallet.send_note_needed`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
+  `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_not_enough_confirmed`, `wallet.send_fee_ten_percent`, `wallet.send_review_fee_ten_percent`, `wallet.send_link_refused`, `wallet.send_recent_waiting`, `wallet.send_recent_checking`, `wallet.send_recent_gone`, `wallet.send_recent_unreadable`, `wallet.send_note_needed`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
   `wallet.send_not_backed_up`, `wallet.send_caps_pending`, `wallet.send_caps_duplicate`, `wallet.send_settings_unreadable`,
   `wallet.send_sign_unsettled`, `wallet.send_review`, `wallet.send_review_password`, `wallet.send_review_wrong_password`,
   `wallet.send_review_limit`, `wallet.send_review_dust`, `wallet.send_review_no_caps`, `wallet.send_review_cap`, `wallet.send_sent`,

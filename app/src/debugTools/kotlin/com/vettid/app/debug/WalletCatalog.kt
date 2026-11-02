@@ -183,6 +183,15 @@ internal object WalletCatalog {
     @Composable
     private fun Send(state: SendUiState) = SendScreen(state, SendActions(), secure = false)
 
+    private fun recentOf(kind: RecentSends, more: Int) = com.vettid.core.wallet.RecentReport(
+        kind,
+        com.vettid.core.wallet.WalletTx(
+            "ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1_200, 1_200,
+            listOf(com.vettid.core.wallet.WalletPayee(TEST_PAYEE, 40_000)), null, null,
+        ),
+        more,
+    )
+
     private val sendPeriodCap = CapText(CapReason.PER_PERIOD, 2_000_000, 300_000, Instant.parse("2026-11-02T09:00:00Z"))
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
@@ -291,11 +300,12 @@ internal object WalletCatalog {
         "wallet.send_fee_custom" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40")) },
         "wallet.send_fee_custom_bad" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "1500")) },
         "wallet.send_fee_much_higher" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40", bigFeeAsk = BigFee.MUCH_HIGHER)) },
-        "wallet.send_fee_ten_percent" to { Send(sendForm.copy(bigFeeAsk = BigFee.TEN_PERCENT)) },
-        "wallet.send_review_fee_ten_percent" to { Send(sendReviewing().copy(bigFeeAsk = BigFee.TEN_PERCENT)) },
+        "wallet.send_fee_ten_percent" to { Send(sendForm.copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = 4_400)) },
+        "wallet.send_review_fee_ten_percent" to { Send(sendReviewing().copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = 6_000)) },
         "wallet.send_link_refused" to { Send(sendForm.copy(linkRefused = true)) },
-        "wallet.send_recent_waiting" to { Send(sendForm.copy(recentNotice = RecentSends.WAITING)) },
-        "wallet.send_recent_gone" to { Send(sendForm.copy(recentNotice = RecentSends.MAY_HAVE_GONE)) },
+        "wallet.send_recent_waiting" to { Send(sendForm.copy(recentNotice = RecentSends.WAITING, recentReport = recentOf(RecentSends.WAITING, 0))) },
+        "wallet.send_recent_gone" to { Send(sendForm.copy(recentNotice = RecentSends.MAY_HAVE_GONE, recentReport = recentOf(RecentSends.MAY_HAVE_GONE, 2))) },
+        "wallet.send_recent_checking" to { Send(sendForm.copy(recentChecking = true)) },
         "wallet.send_recent_unreadable" to { Send(sendForm.copy(recentNotice = RecentSends.UNREADABLE)) },
         "wallet.send_no_estimates" to { Send(sendForm.copy(estimates = null, estimatesFailed = true)) },
         "wallet.send_not_enough" to { Send(sendForm.copy(problem = SendProblem.NotEnough(12_000, 41_200))) },

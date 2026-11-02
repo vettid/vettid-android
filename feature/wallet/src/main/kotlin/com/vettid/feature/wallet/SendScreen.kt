@@ -96,7 +96,7 @@ fun SendScreen(state: SendUiState, actions: SendActions, modifier: Modifier = Mo
         ) {}
         state.scanning -> ScanStep(state, actions, modifier)
         state.block != null -> BlockStep(state, state.block, actions, modifier)
-        state.step == SendStep.FORM && state.recentNotice != null -> RecentStep(state.recentNotice, actions, modifier)
+        state.step == SendStep.FORM && state.recentNotice != null -> RecentStep(state, state.recentNotice, actions, modifier)
         state.step == SendStep.FORM -> FormStep(state, actions, modifier)
         state.step == SendStep.REVIEW -> ReviewStep(state, actions, modifier)
         else -> DoneStep(state, actions, modifier)
@@ -171,6 +171,9 @@ private fun FormStep(state: SendUiState, actions: SendActions, modifier: Modifie
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_send_form"),
     ) {
+        if (state.recentChecking) {
+            Text(stringResource(R.string.wallet_send_recent_checking), modifier = Modifier.testTag("wallet_send_recent_checking"))
+        }
         PayeeField(state, actions)
         AmountField(state, actions)
         FeeChoices(state, actions)
@@ -188,9 +191,11 @@ private fun BigFeeDialog(state: SendUiState, actions: SendActions) {
     val ask = state.bigFeeAsk ?: return
     ConfirmDialog(
         title = stringResource(R.string.wallet_send_fee),
-        text = stringResource(
-            if (ask == BigFee.TEN_PERCENT) R.string.wallet_send_fee_ten_percent else R.string.wallet_send_fee_much_higher,
-        ),
+        text = if (ask == BigFee.TEN_PERCENT) {
+            stringResource(R.string.wallet_send_fee_ten_percent, BtcFormat.sats(state.bigFeeSats))
+        } else {
+            stringResource(R.string.wallet_send_fee_much_higher)
+        },
         confirmLabel = stringResource(R.string.wallet_send_fee_pay_anyway),
         onConfirm = actions.onConfirmBigFee,
         onDismiss = actions.onCancelBigFee,
@@ -198,13 +203,23 @@ private fun BigFeeDialog(state: SendUiState, actions: SendActions) {
     )
 }
 
-/** A payment the vault signed lately may still be on its way: the notice, and "Send anyway" to go on. */
+/** A payment the vault signed lately may still be on its way: the notice naming it, and "Send anyway" to go on. */
 @Composable
-private fun RecentStep(notice: RecentSends, actions: SendActions, modifier: Modifier) {
-    val text = when (notice) {
-        RecentSends.WAITING -> stringResource(R.string.wallet_send_recent_waiting)
-        RecentSends.MAY_HAVE_GONE ->
-            stringResource(R.string.wallet_send_recent_gone) + "\n\n" + stringResource(R.string.wallet_send_recent_gone_more)
+private fun RecentStep(state: SendUiState, notice: RecentSends, actions: SendActions, modifier: Modifier) {
+    val latest = state.recentReport?.latest
+    val detail = latest?.let { tx ->
+        val amount = amountLabel(tx.sendingSats, state.network)
+        val payee = tx.payees.firstOrNull()?.address.orEmpty()
+        val time = tx.at?.let { SendFormat.whenAt(it) } ?: stringResource(R.string.wallet_send_recent_unknown_time)
+        Triple(amount, payee, time)
+    }
+    val more = state.recentReport?.more ?: 0
+    val text = when {
+        notice == RecentSends.WAITING && detail != null ->
+            stringResource(R.string.wallet_send_recent_waiting, detail.first, detail.second, detail.third) + moreText(more)
+        notice == RecentSends.MAY_HAVE_GONE && detail != null ->
+            stringResource(R.string.wallet_send_recent_gone, detail.first, detail.second, detail.third) + moreText(more) +
+                "\n\n" + stringResource(R.string.wallet_send_recent_gone_more)
         else -> stringResource(R.string.wallet_send_recent_unreadable)
     }
     FormScaffold(
@@ -216,6 +231,10 @@ private fun RecentStep(notice: RecentSends, actions: SendActions, modifier: Modi
         modifier = modifier.testTag("wallet_send_recent"),
     ) {}
 }
+
+@Composable
+private fun moreText(more: Int): String =
+    if (more > 0) " " + pluralStringResource(R.plurals.wallet_send_recent_more, more, more) else ""
 
 @Composable
 private fun PayeeField(state: SendUiState, actions: SendActions) {

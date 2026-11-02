@@ -65,11 +65,24 @@ internal class FakeEngine : SendEngine {
     var mustCheck = false
     var approveThrows: Exception? = null
     var recent = com.vettid.core.wallet.RecentSends.CLEAR
+    var recentLatest: com.vettid.core.wallet.WalletTx? = null
+    var recentMore = 0
     var recentAsked = 0
+    var recentThrows: Exception? = null
 
-    override suspend fun recentPayments(walletId: String): com.vettid.core.wallet.RecentSends {
+    /** While set, the recent-payments check waits for it. */
+    var recentGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    val acknowledged = mutableListOf<String>()
+
+    override suspend fun recentPayments(walletId: String): com.vettid.core.wallet.RecentReport {
         recentAsked++
-        return recent
+        recentGate?.await()
+        recentThrows?.let { throw it }
+        return com.vettid.core.wallet.RecentReport(recent, recentLatest, recentMore)
+    }
+
+    override fun acknowledgeRecent(walletId: String) {
+        acknowledged += walletId
     }
 
     override suspend fun checkSent(walletId: String): SendResult {

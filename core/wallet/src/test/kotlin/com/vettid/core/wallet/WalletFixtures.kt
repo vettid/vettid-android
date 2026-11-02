@@ -315,9 +315,11 @@ internal class FakeWalletOps : WalletOps {
 
     var history: List<WalletTx> = emptyList()
     var historyFails = false
+    var historyThrows: Exception? = null
 
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> {
         calls += "history:$limit"
+        historyThrows?.let { throw it }
         if (historyFails) throw VaultOpException("wallet.history", "internal")
         return history
     }
@@ -363,6 +365,8 @@ internal class FakeSpend : SpendAccess {
     val confirmed = mutableSetOf<String>()
 
     override suspend fun state(txid: String): com.vettid.core.chain.TxState {
+        // As the Esplora client: a txid that is not 64 hex digits is a programming error, not an answer.
+        require(txid.length == 64) { "not a txid" }
         knowsAsked++
         knowsError?.let { throw it }
         return when (txid) {
