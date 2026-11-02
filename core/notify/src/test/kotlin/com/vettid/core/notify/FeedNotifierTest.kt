@@ -70,6 +70,10 @@ class FeedNotifierTest {
         override val items = MutableStateFlow<List<FeedItem>>(emptyList())
         override val open = MutableStateFlow(true)
         override val covered = MutableStateFlow(false)
+        /** When set, what [coveredNow] says whatever the [covered] flow still holds (the flow lags its source). */
+        var nowOverride: Boolean? = null
+
+        override fun coveredNow() = nowOverride ?: covered.value
         var namesCalls = 0
         var textCalls = 0
         override val lockedElsewhere = MutableStateFlow(false)
@@ -182,6 +186,24 @@ class FeedNotifierTest {
         runCurrent()
         assertTrue(poster.snoozed.isEmpty())
         assertTrue("cancel:f1" in poster.log)
+    }
+
+    @Test
+    fun theCoverIsReadFromItsSourceNotFromTheLaggingFlow() = runTest {
+        notifier()
+        // The flow still says "open", the source already says "covered": public.
+        source.nowOverride = true
+        arrive(item("f1"))
+        assertEquals("New activity in VettID", poster.shown.getValue("f1").title)
+        assertEquals(0, source.namesCalls)
+        // A re-post for a cover that is gone by the time it runs does not replace a named notification.
+        source.nowOverride = null
+        arrive(item("f2"))
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f2").title)
+        source.nowOverride = false
+        source.covered.value = true
+        runCurrent()
+        assertEquals("New message from \u2068Sam Lee\u2069", poster.shown.getValue("f2").title)
     }
 
     @Test

@@ -114,12 +114,17 @@ The A2 exit test:
   runs as the fallback, the mode preference is never changed, `push.unregister` goes to the vault at its next open if
   a registration may still exist, and the registration resumes when the push service is back
   (`settings.notifications_push_not_on_phone`).
-- Notifications and the app lock (owner request 2026-11-02): `NotifySource.covered` is true while `AppLockState` is `LOCKED` or `PENDING`
-  (the cover `AppLockGate` / "starting" shows). Then `FeedNotifier` posts item notifications in their public form only
+- Notifications and the app lock (owner decisions 2026-11-02): no names whenever opening VettID would show the app lock.
+  `AppLock.wouldShowLock()` is true when the state is `LOCKED` or `PENDING`, or the lock is on, the app is in the background
+  and `now - backgroundAt >= timeout` (the inputs of `onForeground()`, which still alone engages the lock); `DISABLED` is never
+  covered; a prompt in progress (`authenticating`) is not. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
+  a timer that turns it true when the timeout elapses in the background (cancelled on return or lock off; gone with the
+  process, whose next start is `LOCKED`); `NotifySource.covered` is that flow, `coveredNow()` the direct read. `FeedNotifier`
+  reads `coveredNow()` at post time inside its lock: item notifications are then in public form only
   (`LocalNotification.publicForm(quiet)`: the lock screen's "New activity in VettID" / "VettID needs your attention", no names, no
-  text, no names or message-text read; a new arrival keeps its sound and heads-up), and when the cover comes up what is showing
-  is re-posted in that form, quietly (a dismissed one stays dismissed; a snoozed one stays tracked and is cancelled at the vault
-  lock). The cover is read at post time from `AppLock.state` (`coversApp()`), the flow only triggers the re-post. Not restored when the cover goes. The ongoing call notice (`CallService`) is not covered by this.
+  text, no names or message-text read; a new arrival keeps its sound and heads-up). When the flow turns true what is showing is
+  re-posted in that form, quietly, if the cover still holds (a dismissed one stays dismissed; a snoozed one stays tracked and is
+  cancelled at the vault lock). Not restored when the cover goes. The ongoing call notice (`CallService`) is not covered by this.
   The withdrawn-request mute (`ApprovalDetailUiState.canMute`) needs a named connection, as History does.
 
 - Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the app's note; VAULT-MESSAGING §10.10 is normative): `:core:crypto` `call/`
