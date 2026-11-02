@@ -831,6 +831,46 @@ class WalletSendTest {
         assertEquals(p.vault.feeSats.toDouble() / p.vault.vsize, p.feeRate, 0.0)
     }
 
+    // --- a payment approved before a lock or a restart ---
+
+    private fun signed(txid: String, at: Instant?) = WalletTx(txid, at, 40_000, 1, 1, emptyList(), null, null)
+
+    @Test
+    fun recentPaymentsAreWaitingMayHaveGoneThroughUnreadableOrClear() = runBlocking {
+        val (m, w) = opened()
+        val fresh = now.minusSeconds(3_600)
+        // Nothing recent: nothing, or only old ones.
+        ops.history = emptyList()
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id))
+        ops.history = listOf(signed("aa".repeat(32), now.minusSeconds(25 * 3_600L)))
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id))
+        // Confirmed on the server: done.
+        ops.history = listOf(signed("bb".repeat(32), fresh))
+        chain.spend.confirmed += "bb".repeat(32)
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id))
+        // In the mempool: waiting.
+        chain.spend.known += "bb".repeat(32)
+        chain.spend.confirmed -= "bb".repeat(32)
+        assertEquals(RecentSends.WAITING, m.recentSends(w.id))
+        // The server does not have one: it may have gone through (the worst of several).
+        ops.history = listOf(signed("bb".repeat(32), fresh), signed("cc".repeat(32), fresh))
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id))
+        // One without a time counts as recent.
+        ops.history = listOf(signed("dd".repeat(32), null))
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id))
+        // The server cannot say.
+        chain.spend.knowsError = ChainError.Timeout()
+        ops.history = listOf(signed("bb".repeat(32), fresh))
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id))
+        chain.spend.knowsError = null
+        // No server at all, or a history that cannot be read.
+        chain.open = ChainOpen.NoServer(ChainServer.NotSet)
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id))
+        chain.open = null
+        ops.historyFails = true
+        assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id))
+    }
+
     // --- review note 6: a payment to oneself is named before anything is built ---
 
     @Test

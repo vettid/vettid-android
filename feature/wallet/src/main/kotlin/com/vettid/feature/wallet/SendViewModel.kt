@@ -14,6 +14,7 @@ import com.vettid.core.wallet.DiscardResult
 import com.vettid.core.wallet.ChainServerSettings
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.PrepareResult
+import com.vettid.core.wallet.RecentSends
 import com.vettid.core.wallet.SendHold
 import com.vettid.core.wallet.SendRequest
 import com.vettid.core.wallet.SendResult
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 /**
@@ -55,8 +57,17 @@ data class SendUiState(
     val includeUnconfirmed: Boolean = false,
     val scanning: Boolean = false,
     val scanUnavailable: Boolean = false,
-    /** "This fee is much higher than needed right now. Pay it anyway?" is asked. */
-    val bigFeeAsk: Boolean = false,
+    /** A fee guard is asked about ([BigFee]): the form's before Review, or the review's when the vault's own fee is over 10%. */
+    val bigFeeAsk: BigFee? = null,
+    /** The member answered "pay it anyway" to the 10% question for this payment. */
+    val tenPercentConfirmed: Boolean = false,
+    /** The last pasted or scanned `bitcoin:` link was refused whole; nothing was filled in from it. */
+    val linkRefused: Boolean = false,
+    /**
+     * A payment the vault signed in the last 24 hours may still be on its way ([RecentSends]); a new one is prepared only after the member
+     * says "Send anyway" ([acknowledgeRecent]). Null: nothing to say, or acknowledged. Memory only.
+     */
+    val recentNotice: RecentSends? = null,
     val problem: SendProblem? = null,
     // The review and the approval.
     val review: Review? = null,
@@ -98,7 +109,8 @@ data class SendUiState(
 
     /** Review can be asked for: a payee that passes the check, an amount, a fee rate. */
     val canReview: Boolean
-        get() = address.isNotEmpty() && addressIssue == null && amountValid && feeRate != null && !busy && block == null
+        get() = address.isNotEmpty() && addressIssue == null && amountValid && feeRate != null && !busy && block == null &&
+            recentNotice == null
 
     /** A request is out (approving, trying again, asking the server): back and the arrow do nothing, so the result is seen. */
     val swallowsBack: Boolean get() = busy || checking
@@ -175,8 +187,29 @@ class SendViewModel internal constructor(
             mutable.update { it.copy(step = SendStep.DONE, outcome = SendOutcome.Unsent) }
             settleDiscard()
         }
-        if (mutable.value.block == null) loadFees()
+        if (mutable.value.block == null) {
+            loadFees()
+            checkRecent()
+        }
     }
+
+    /**
+     * Before any new payment is prepared: what the vault signed in the last 24 hours, against the chain server. It never blocks for ever
+     * (a limit on the wait: nothing known is [RecentSends.UNREADABLE]); either way the member can go on, after acknowledging.
+     */
+    private suspend fun checkRecent() {
+        val r = withTimeoutOrNull(RECENT_WAIT_MS) {
+            try {
+                engine.recentPayments(walletId)
+            } catch (_: VaultFailure) {
+                RecentSends.UNREADABLE
+            }
+        } ?: RecentSends.UNREADABLE
+        mutable.update { it.copy(recentNotice = r.takeIf { n -> n != RecentSends.CLEAR }) }
+    }
+
+    /** "Send anyway": the notice is acknowledged for this visit. */
+    fun acknowledgeRecent() = mutable.update { it.copy(recentNotice = null) }
 
     /** "Try again" on a notice: the holds are read again. */
     fun load() {
@@ -255,10 +288,20 @@ class SendViewModel internal constructor(
     private fun applyPayee(p: SendInput.Parsed) {
         mutable.update { s ->
             val issue = s.network?.let { SendInput.issue(it, p.address) }
-            val withAmount = p.amountSats?.let {
-                s.copy(amountText = BtcFormat.btc(it), unit = AmountUnit.BTC, sendAll = false)
-            } ?: s
-            withAmount.copy(address = p.address, addressIssue = issue, problem = null)
+            when {
+                // A link refused whole fills nothing in.
+                p.refused -> s.copy(linkRefused = true, problem = null)
+                // A link with an amount sets it; a link without one clears the field (an earlier amount is not the link's).
+                p.isLink && p.amountSats == null -> s.copy(
+                    address = p.address, addressIssue = issue, amountText = "", sendAll = false, linkRefused = false, problem = null,
+                )
+                else -> {
+                    val withAmount = p.amountSats?.let {
+                        s.copy(amountText = BtcFormat.btc(it), unit = AmountUnit.BTC, sendAll = false)
+                    } ?: s
+                    withAmount.copy(address = p.address, addressIssue = issue, linkRefused = false, problem = null)
+                }
+            }
         }
     }
 
@@ -270,7 +313,7 @@ class SendViewModel internal constructor(
 
     fun setAmount(text: String) = mutable.update {
         val filtered = if (it.unit == AmountUnit.BTC) BtcFormat.filter(text) else text.filter { c -> c in '0'..'9' }
-        it.copy(amountText = filtered, problem = null)
+        it.copy(amountText = filtered, problem = null, tenPercentConfirmed = false)
     }
 
     /** BTC or sats: a valid amount is rewritten in the other unit. */
@@ -280,35 +323,50 @@ class SendViewModel internal constructor(
         s.copy(unit = unit, amountText = text ?: "")
     }
 
-    fun setSendAll(on: Boolean) = mutable.update { it.copy(sendAll = on, problem = null) }
+    fun setSendAll(on: Boolean) = mutable.update { it.copy(sendAll = on, problem = null, tenPercentConfirmed = false) }
 
-    fun setFeeChoice(choice: FeeChoice) = mutable.update { it.copy(feeChoice = choice, problem = null) }
+    fun setFeeChoice(choice: FeeChoice) = mutable.update { it.copy(feeChoice = choice, problem = null, tenPercentConfirmed = false) }
 
-    fun setCustomFee(text: String) = mutable.update { it.copy(customFee = SendFees.filterCustom(text), problem = null) }
+    fun setCustomFee(text: String) =
+        mutable.update { it.copy(customFee = SendFees.filterCustom(text), problem = null, tenPercentConfirmed = false) }
 
-    fun setIncludeUnconfirmed(on: Boolean) = mutable.update { it.copy(includeUnconfirmed = on, problem = null) }
+    fun setIncludeUnconfirmed(on: Boolean) =
+        mutable.update { it.copy(includeUnconfirmed = on, problem = null, tenPercentConfirmed = false) }
 
     // --- Review ---
 
-    /** "Review": a fee above twice Fast is asked about first. */
+    /**
+     * "Review": a fee above twice Fast, or one that the lowest possible size already puts above 10% of the amount, is asked about first
+     * (one dialog; the 10% text when both apply, as it speaks of the member's money).
+     */
     fun review() {
         val s = mutable.value
         if (!s.canReview) return
         val rate = s.feeRate ?: return
-        if (SendFees.muchHigher(rate, s.estimates)) {
-            mutable.update { it.copy(bigFeeAsk = true) }
-        } else {
-            prepare()
+        val amount = s.amountSats
+        val floor = Math.ceil(rate * SendFees.MIN_VSIZE).toLong()
+        val ten = amount != null && SendFees.overTenPercent(floor, amount)
+        when {
+            ten -> mutable.update { it.copy(bigFeeAsk = BigFee.TEN_PERCENT, tenPercentConfirmed = false) }
+            SendFees.muchHigher(rate, s.estimates) -> mutable.update { it.copy(bigFeeAsk = BigFee.MUCH_HIGHER) }
+            else -> prepare()
         }
     }
 
+    /** "Pay it anyway": from the form the payment is prepared; from the review (the vault's own fee) it stays. */
     fun confirmBigFee() {
-        if (!mutable.value.bigFeeAsk) return
-        mutable.update { it.copy(bigFeeAsk = false) }
-        prepare()
+        val ask = mutable.value.bigFeeAsk ?: return
+        val inReview = mutable.value.step == SendStep.REVIEW
+        mutable.update { it.copy(bigFeeAsk = null, tenPercentConfirmed = it.tenPercentConfirmed || ask == BigFee.TEN_PERCENT) }
+        if (!inReview) prepare()
     }
 
-    fun cancelBigFee() = mutable.update { it.copy(bigFeeAsk = false) }
+    /** "Cancel": the form stays; from the review, back to the form. */
+    fun cancelBigFee() {
+        val inReview = mutable.value.step == SendStep.REVIEW
+        mutable.update { it.copy(bigFeeAsk = null) }
+        if (inReview) edit()
+    }
 
     private fun prepare() {
         val s = mutable.value
@@ -341,11 +399,12 @@ class SendViewModel internal constructor(
             null
         }
         val cap = r.capRefusal?.let { withLimit(it) }
+        val ten = !mutable.value.tenPercentConfirmed && SendFees.overTenPercent(r.feeSats, r.payeeSats)
         mutable.update {
             it.copy(busy = false, step = SendStep.REVIEW, review = Review(
                 r.address, r.payeeSats, r.changeSats, r.feeSats, r.vsize, r.totalOutSats, r.toFeeSats, r.sendAll, r.leftBehind,
                 r.hasCap, cap, limit,
-            ), password = "", error = null, askAgain = false)
+            ), password = "", error = null, askAgain = false, bigFeeAsk = if (ten) BigFee.TEN_PERCENT else null)
         }
     }
 
@@ -412,7 +471,7 @@ class SendViewModel internal constructor(
         val s = mutable.value
         val review = s.review
         if (s.step != SendStep.REVIEW || review == null || review.capRefusal != null) return
-        if (s.password.isEmpty() || s.busy) return
+        if (s.password.isEmpty() || s.busy || s.bigFeeAsk != null) return
         val pw = s.password
         mutable.update { it.copy(busy = true, password = "", error = null, askAgain = false) }
         viewModelScope.launch {
@@ -558,6 +617,9 @@ class SendViewModel internal constructor(
     }
 
     private companion object {
+        /** The longest the recent-payments check is waited for. */
+        const val RECENT_WAIT_MS = 20_000L
+
         /** The holds that Receive has too: they lift when the phrase is checked, the limit is set or the network is chosen. */
         val GATES = setOf(
             SendBlock.NOT_BACKED_UP, SendBlock.SETTINGS_UNREADABLE, SendBlock.CAPS_PENDING, SendBlock.CAPS_DUPLICATE,

@@ -64,6 +64,13 @@ internal class FakeEngine : SendEngine {
     /** A kept transaction may be on the network and no server has said otherwise. */
     var mustCheck = false
     var approveThrows: Exception? = null
+    var recent = com.vettid.core.wallet.RecentSends.CLEAR
+    var recentAsked = 0
+
+    override suspend fun recentPayments(walletId: String): com.vettid.core.wallet.RecentSends {
+        recentAsked++
+        return recent
+    }
 
     override suspend fun checkSent(walletId: String): SendResult {
         checks++

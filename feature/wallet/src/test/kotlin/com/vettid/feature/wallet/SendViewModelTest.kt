@@ -15,6 +15,7 @@ import com.vettid.core.wallet.BroadcastCause
 import com.vettid.core.wallet.CapReason
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.PrepareResult
+import com.vettid.core.wallet.RecentSends
 import com.vettid.core.wallet.SendHold
 import com.vettid.core.wallet.SendResult
 import com.vettid.core.wallet.WalletCaps
@@ -215,7 +216,7 @@ class SendViewModelTest {
     fun aBip21UriGivesItsAddressAndAmountAndNothingElse() = runTest {
         val vm = vm()
         eventually { vm.state.value.network != null }
-        vm.setAddress(" bitcoin:$PAYEE?label=Rent&amount=0.0012&message=x&req-other=1 ")
+        vm.setAddress(" bitcoin:$PAYEE?label=Rent&amount=0.0012&message=x&other-param=1 ")
         assertEquals(PAYEE, vm.state.value.address)
         assertEquals("0.0012", vm.state.value.amountText)
         assertEquals(AmountUnit.BTC, vm.state.value.unit)
@@ -225,9 +226,47 @@ class SendViewModelTest {
         assertEquals(PAYEE, vm.state.value.address)
         assertEquals(50_000_000L, vm.state.value.amountSats)
         assertFalse(vm.state.value.scanning)
-        // A URI without an amount leaves what was typed.
+        // A valid link without an amount clears the field (what was typed before is not the link's).
         vm.scanned("bitcoin:$PAYEE")
-        assertEquals(50_000_000L, vm.state.value.amountSats)
+        assertEquals("", vm.state.value.amountText)
+        assertNull(vm.state.value.amountSats)
+        assertFalse(vm.state.value.linkRefused)
+        // A plain address, typed, leaves the amount alone.
+        vm.setAmount("0.5")
+        vm.setAddress(PAYEE)
+        assertEquals("0.5", vm.state.value.amountText)
+    }
+
+    @Test
+    fun aLinkWithSomethingUnsafeIsRefusedWholeAndFillsNothingIn() = runTest {
+        val vm = vm()
+        eventually { vm.state.value.network != null }
+        vm.setAddress(PAYEE)
+        vm.setAmount("0.5")
+        val before = vm.state.value
+        val bad = listOf(
+            "bitcoin:$PAYEE?req-network=main&amount=0.1",
+            "bitcoin:$PAYEE?REQ-x=1",
+            "bitcoin:$PAYEE?amount=-1",
+            "bitcoin:$PAYEE?amount=0.123456789",
+            "bitcoin:$PAYEE?amount=abc",
+            "bitcoin:$PAYEE?amount=",
+            "bitcoin:$PAYEE?amount=0.1&amount=0.2",
+        )
+        for (link in bad) {
+            vm.setAddress(link)
+            assertTrue(link, vm.state.value.linkRefused)
+            assertEquals(link, before.address, vm.state.value.address)
+            assertEquals(link, "0.5", vm.state.value.amountText)
+            vm.scanned(link)
+            assertTrue(link, vm.state.value.linkRefused)
+            assertEquals(link, before.address, vm.state.value.address)
+        }
+        // Other unknown parameters are still ignored, and a good link clears the notice.
+        vm.setAddress("bitcoin:$PAYEE?label=x&foo=bar&amount=0.1")
+        assertFalse(vm.state.value.linkRefused)
+        assertEquals("0.1", vm.state.value.amountText)
+        assertFalse("tb1" in SendInput.parse("bitcoin:$PAYEE?req-x=1").address)
     }
 
     @Test
@@ -336,18 +375,116 @@ class SendViewModelTest {
         vm.setCustomFee("24")
         vm.review()
         eventually { engine.requests.size == 1 }
-        assertFalse(vm.state.value.bigFeeAsk)
+        assertNull(vm.state.value.bigFeeAsk)
         vm.edit()
         vm.setCustomFee("25")
         vm.review()
-        assertTrue(vm.state.value.bigFeeAsk)
+        assertEquals(BigFee.MUCH_HIGHER, vm.state.value.bigFeeAsk)
         assertEquals(1, engine.requests.size)
         vm.cancelBigFee()
-        assertFalse(vm.state.value.bigFeeAsk)
+        assertNull(vm.state.value.bigFeeAsk)
         vm.review()
         vm.confirmBigFee()
         eventually { vm.state.value.step == SendStep.REVIEW }
         assertEquals(25.0, engine.requests.last().feeRate, 0.0)
+    }
+
+    @Test
+    fun aFeeOverTenPercentOfTheAmountIsAskedAboutWithItsOwnText() = runTest {
+        // 40,000 sats; the smallest transaction (110 vB) at 36 sat/vB is 3,960 (not over 10%), at 37 it is 4,070 (over).
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("36")
+        vm.review()
+        eventually { engine.requests.size == 1 && vm.state.value.step == SendStep.REVIEW }
+        assertNull(vm.state.value.bigFeeAsk)
+        vm.edit()
+        vm.setCustomFee("37")
+        vm.review()
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+        assertEquals(1, engine.requests.size)
+        vm.cancelBigFee()
+        vm.review()
+        vm.confirmBigFee()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        // Confirmed once: the review does not ask again for this payment.
+        assertNull(vm.state.value.bigFeeAsk)
+        // Both guards apply (above twice Fast and over 10%): one question, the 10% text.
+        vm.edit()
+        vm.setCustomFee("200")
+        vm.review()
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+    }
+
+    @Test
+    fun theVaultsOwnFeeOverTenPercentIsAskedAboutAtTheReview() = runTest {
+        // Send all: the amount is not known before the build. 4,000 of 40,000 is exactly 10% (fine); 4,001 is over.
+        val vm = ready()
+        vm.setSendAll(true)
+        engine.prepared = SendPrepared.Ready(sampleReview().let { Review(it.address, 40_000, 0, 4_000, 150, 44_000, 0, true, 0, true) })
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertNull(vm.state.value.bigFeeAsk)
+        vm.edit()
+        engine.prepared = SendPrepared.Ready(sampleReview().let { Review(it.address, 40_000, 0, 4_001, 150, 44_001, 0, true, 0, true) })
+        vm.review()
+        eventually { vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        // No approving while the question stands.
+        vm.setPassword("pw")
+        vm.approve()
+        assertTrue(engine.passwords.isEmpty())
+        vm.confirmBigFee()
+        assertEquals(SendStep.REVIEW, vm.state.value.step)
+        vm.approve()
+        eventually { vm.state.value.step == SendStep.DONE }
+        // Cancelling goes back to the form.
+        val other = ready()
+        other.setSendAll(true)
+        other.review()
+        eventually { other.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        other.cancelBigFee()
+        assertEquals(SendStep.FORM, other.state.value.step)
+    }
+
+    // --- a payment the vault signed lately ---
+
+    @Test
+    fun aRecentPaymentWaitingOrPossiblyGoneThroughNeedsAcknowledgingBeforeANewOne() = runTest {
+        for (notice in listOf(RecentSends.WAITING, RecentSends.MAY_HAVE_GONE, RecentSends.UNREADABLE)) {
+            engine.recent = notice
+            engine.requests.clear()
+            val vm = vm()
+            eventually { vm.state.value.recentNotice == notice }
+            vm.setAddress(PAYEE)
+            vm.setUnit(AmountUnit.SATS)
+            vm.setAmount("40000")
+            eventually { vm.state.value.estimates != null }
+            // No new payment is prepared until it is acknowledged.
+            assertFalse(vm.state.value.canReview)
+            vm.review()
+            assertTrue(engine.requests.isEmpty())
+            vm.acknowledgeRecent()
+            assertNull(vm.state.value.recentNotice)
+            assertTrue(vm.state.value.canReview)
+            vm.review()
+            eventually { engine.requests.size == 1 }
+        }
+    }
+
+    @Test
+    fun nothingRecentShowsNoNotice() = runTest {
+        engine.recent = RecentSends.CLEAR
+        val vm = vm()
+        eventually { vm.state.value.estimates != null && engine.recentAsked == 1 }
+        assertNull(vm.state.value.recentNotice)
+    }
+
+    @Test
+    fun theCheckRunsOnlyOnceAHoldIsLifted() = runTest {
+        val vm = vm(backedUp = false)
+        eventually { vm.state.value.block == SendBlock.NOT_BACKED_UP }
+        assertEquals(0, engine.recentAsked)
     }
 
     @Test

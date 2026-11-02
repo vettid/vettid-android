@@ -250,6 +250,17 @@ class EsploraClientTest {
     }
 
     @Test
+    fun aTransactionIsConfirmedUnconfirmedOrNotFound() = runBlocking {
+        val id = EsploraFixtures.RAW_TXID
+        server.enqueue(ok("""{"txid":"$id","status":{"confirmed":true,"block_height":5}}"""))
+        assertEquals(TxState.CONFIRMED, client().transactionState(id))
+        server.enqueue(ok("""{"txid":"$id","status":{"confirmed":false}}"""))
+        assertEquals(TxState.UNCONFIRMED, client().transactionState(id))
+        server.enqueue(MockResponse.Builder().code(404).body("Transaction not found").build())
+        assertEquals(TxState.NOT_FOUND, client().transactionState(id))
+    }
+
+    @Test
     fun theAnswerOfTheKnownCheckMustBeThatTransactionAndAServerFailureIsNotNo() {
         server.enqueue(ok("""{"txid":"${txid(3)}","status":{"confirmed":true}}"""))
         fails<ChainError.Malformed> { runBlocking { client().knowsTransaction(EsploraFixtures.RAW_TXID) } }

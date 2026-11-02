@@ -6,6 +6,7 @@ import com.vettid.core.wallet.DiscardResult
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.PrepareResult
 import com.vettid.core.wallet.PreparedSend
+import com.vettid.core.wallet.RecentSends
 import com.vettid.core.wallet.SendRequest
 import com.vettid.core.wallet.SendResult
 import com.vettid.core.wallet.SpendCap
@@ -39,6 +40,9 @@ interface SendEngine {
 
     /** Asks the chain server whether it has the kept transaction (review note 2). */
     suspend fun checkSent(walletId: String): SendResult
+
+    /** The vault's recent signed payments against the chain server, before a new payment is prepared. */
+    suspend fun recentPayments(walletId: String): RecentSends
 
     /** Drops the unsent payment; [DiscardResult.MUST_CHECK] while it may be on the network and no server has said otherwise. */
     fun discard(walletId: String): DiscardResult
@@ -88,6 +92,8 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
     }
 
     override suspend fun checkSent(walletId: String) = wallets.checkSent(walletId)
+
+    override suspend fun recentPayments(walletId: String) = wallets.recentSends(walletId)
 
     override fun discard(walletId: String): DiscardResult {
         prepared = null

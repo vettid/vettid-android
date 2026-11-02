@@ -197,6 +197,9 @@ sealed interface SendOutcome {
     data object Unsent : SendOutcome
 }
 
+/** Which fee guard is asked about: "much higher than needed right now" (above twice Fast), or more than 10% of what is sent. */
+enum class BigFee { MUCH_HIGHER, TEN_PERCENT }
+
 /** A problem of the form after Review was asked, shown under the form. */
 sealed interface SendProblem {
     data object SelfSend : SendProblem
@@ -242,6 +245,13 @@ object SendFees {
     fun customRate(text: String): Double? =
         text.trim().replace(',', '.').takeIf { it.isNotEmpty() }?.toDoubleOrNull()?.takeIf { it in CUSTOM_MIN..CUSTOM_MAX }
 
+    /** The fee is more than 10% of [amountSats] (what the payee receives): `fee > amount / 10`, strictly. */
+    fun overTenPercent(feeSats: Long, amountSats: Long): Boolean = feeSats * TEN > amountSats
+
+    /** The smallest transaction the wallet builds is about this many vB: a fee rate times it is a floor for the fee before it is built. */
+    const val MIN_VSIZE = 110L
+    private const val TEN = 10L
+
     /** The rate of [choice] from the server's [estimates] (sat/vB by target), or the custom text; null while it is not known. */
     fun rate(choice: FeeChoice, estimates: Map<Int, Double>?, custom: String): Double? = when (choice) {
         FeeChoice.CUSTOM -> customRate(custom)
@@ -273,8 +283,12 @@ object SendFees {
 
 /** What the member typed, pasted or scanned as the payee. */
 object SendInput {
-    /** The address and, from a BIP21 URI, the amount in satoshis (other parameters are ignored). */
-    class Parsed(val address: String, val amountSats: Long?) {
+    /**
+     * The address and, from a BIP21 URI, the amount in satoshis (other parameters are ignored). [isLink]: it was a `bitcoin:` link
+     * (a link without an amount clears the amount field). [refused]: the whole link is refused (an unknown `req-*` parameter, a bad
+     * or doubled `amount`) and nothing is filled in from it.
+     */
+    class Parsed(val address: String, val amountSats: Long?, val isLink: Boolean = false, val refused: Boolean = false) {
         override fun toString(): String = "Parsed"
     }
 
@@ -282,25 +296,33 @@ object SendInput {
 
     /**
      * [text] as a payee: **leading and trailing spaces are removed** ([Payee] refuses them), and a `bitcoin:` URI gives its address
-     * and `amount` (in bitcoin). A bech32 address in capitals (a QR code's alphanumeric mode) is written in lower case.
+     * and `amount` (in bitcoin). A bech32 address in capitals (a QR code's alphanumeric mode) is written in lower case. BIP21 says a
+     * client that does not understand a `req-*` parameter must not pay: such a link, a negative or non-numeric amount, one with more than
+     * 8 decimals, and two amounts are refused whole.
      */
+    @Suppress("ReturnCount")
     fun parse(text: String): Parsed {
         val t = text.trim()
         if (!t.startsWith("bitcoin:", ignoreCase = true)) return Parsed(clean(t), null)
         val rest = t.substring("bitcoin:".length)
         val address = clean(rest.substringBefore('?').trim())
-        val amount = rest.substringAfter('?', "").split('&').firstNotNullOfOrNull { pair ->
-            val key = pair.substringBefore('=')
-            if (key.equals("amount", ignoreCase = true)) pair.substringAfter('=', "") else null
-        }?.let { v ->
+        val params = rest.substringAfter('?', "").split('&').filter { it.isNotEmpty() }
+        val amounts = ArrayList<String>()
+        for (pair in params) {
+            val key = pair.substringBefore('=').lowercase()
+            if (key.startsWith("req-")) return Parsed("", null, isLink = true, refused = true)
+            if (key == "amount") amounts += pair.substringAfter('=', "")
+        }
+        if (amounts.size > 1) return Parsed("", null, isLink = true, refused = true)
+        val sats = amounts.singleOrNull()?.let { v ->
             val decoded = try {
                 URLDecoder.decode(v, "UTF-8")
             } catch (_: IllegalArgumentException) {
                 v
             }
-            (BtcFormat.parse(decoded) as? BtcFormat.Amount.Valid)?.sats
+            (BtcFormat.parse(decoded) as? BtcFormat.Amount.Valid)?.sats ?: return Parsed("", null, isLink = true, refused = true)
         }
-        return Parsed(address, amount)
+        return Parsed(address, sats, isLink = true)
     }
 
     private fun clean(a: String): String = if (a == a.uppercase() && BECH32.matches(a.lowercase())) a.lowercase() else a

@@ -314,9 +314,11 @@ internal class FakeWalletOps : WalletOps {
     }
 
     var history: List<WalletTx> = emptyList()
+    var historyFails = false
 
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> {
         calls += "history:$limit"
+        if (historyFails) throw VaultOpException("wallet.history", "internal")
         return history
     }
 
@@ -357,6 +359,18 @@ internal class FakeSpend : SpendAccess {
 
     /** Txids a first question answers "not found" to and every later one finds (a server still taking a transaction). */
     val appearsLater = mutableSetOf<String>()
+
+    val confirmed = mutableSetOf<String>()
+
+    override suspend fun state(txid: String): com.vettid.core.chain.TxState {
+        knowsAsked++
+        knowsError?.let { throw it }
+        return when (txid) {
+            in confirmed -> com.vettid.core.chain.TxState.CONFIRMED
+            in known -> com.vettid.core.chain.TxState.UNCONFIRMED
+            else -> com.vettid.core.chain.TxState.NOT_FOUND
+        }
+    }
 
     override suspend fun knows(txid: String): Boolean {
         knowsAsked++

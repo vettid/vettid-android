@@ -41,6 +41,7 @@ import com.vettid.core.ui.components.SecureWindow
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.wallet.CapReason
 import com.vettid.core.wallet.ChainOpen
+import com.vettid.core.wallet.RecentSends
 
 /** What Send asks of its host. */
 @Suppress("LongParameterList")
@@ -75,6 +76,7 @@ data class SendActions(
     val onDiscard: () -> Unit = {},
     val onStartOver: () -> Unit = {},
     val onDone: () -> Unit = {},
+    val onAcknowledgeRecent: () -> Unit = {},
 )
 
 /**
@@ -94,6 +96,7 @@ fun SendScreen(state: SendUiState, actions: SendActions, modifier: Modifier = Mo
         ) {}
         state.scanning -> ScanStep(state, actions, modifier)
         state.block != null -> BlockStep(state, state.block, actions, modifier)
+        state.step == SendStep.FORM && state.recentNotice != null -> RecentStep(state.recentNotice, actions, modifier)
         state.step == SendStep.FORM -> FormStep(state, actions, modifier)
         state.step == SendStep.REVIEW -> ReviewStep(state, actions, modifier)
         else -> DoneStep(state, actions, modifier)
@@ -175,17 +178,43 @@ private fun FormStep(state: SendUiState, actions: SendActions, modifier: Modifie
             stringResource(R.string.wallet_send_unconfirmed), state.includeUnconfirmed, actions.onUnconfirmed, "wallet_send_unconfirmed",
         )
         state.problem?.let { ProblemText(state, it, actions) }
-        if (state.bigFeeAsk) {
-            ConfirmDialog(
-                title = stringResource(R.string.wallet_send_fee),
-                text = stringResource(R.string.wallet_send_fee_much_higher),
-                confirmLabel = stringResource(R.string.wallet_send_fee_pay_anyway),
-                onConfirm = actions.onConfirmBigFee,
-                onDismiss = actions.onCancelBigFee,
-                modifier = Modifier.testTag("wallet_send_big_fee"),
-            )
-        }
+        BigFeeDialog(state, actions)
     }
+}
+
+/** One dialog for both fee guards: much higher than needed right now, or more than 10% of what is sent. */
+@Composable
+private fun BigFeeDialog(state: SendUiState, actions: SendActions) {
+    val ask = state.bigFeeAsk ?: return
+    ConfirmDialog(
+        title = stringResource(R.string.wallet_send_fee),
+        text = stringResource(
+            if (ask == BigFee.TEN_PERCENT) R.string.wallet_send_fee_ten_percent else R.string.wallet_send_fee_much_higher,
+        ),
+        confirmLabel = stringResource(R.string.wallet_send_fee_pay_anyway),
+        onConfirm = actions.onConfirmBigFee,
+        onDismiss = actions.onCancelBigFee,
+        modifier = Modifier.testTag("wallet_send_big_fee"),
+    )
+}
+
+/** A payment the vault signed lately may still be on its way: the notice, and "Send anyway" to go on. */
+@Composable
+private fun RecentStep(notice: RecentSends, actions: SendActions, modifier: Modifier) {
+    val text = when (notice) {
+        RecentSends.WAITING -> stringResource(R.string.wallet_send_recent_waiting)
+        RecentSends.MAY_HAVE_GONE ->
+            stringResource(R.string.wallet_send_recent_gone) + "\n\n" + stringResource(R.string.wallet_send_recent_gone_more)
+        else -> stringResource(R.string.wallet_send_recent_unreadable)
+    }
+    FormScaffold(
+        title = stringResource(R.string.wallet_send),
+        body = text,
+        primaryLabel = stringResource(R.string.wallet_send_anyway),
+        onPrimary = actions.onAcknowledgeRecent,
+        onBack = actions.onBack,
+        modifier = modifier.testTag("wallet_send_recent"),
+    ) {}
 }
 
 @Composable
@@ -205,6 +234,13 @@ private fun PayeeField(state: SendUiState, actions: SendActions) {
         minLines = 1,
         modifier = Modifier.fillMaxWidth().testTag("wallet_send_address"),
     )
+    if (state.linkRefused) {
+        Text(
+            stringResource(R.string.wallet_send_link_refused),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("wallet_send_link_refused"),
+        )
+    }
     TextButton(onClick = actions.onScan, modifier = Modifier.testTag("wallet_send_scan_button")) {
         Text(stringResource(R.string.wallet_send_scan))
     }
@@ -458,6 +494,7 @@ private fun ReviewStep(state: SendUiState, actions: SendActions, modifier: Modif
         onBack = actions.onEdit,
         modifier = modifier.testTag("wallet_send_review"),
     ) {
+        BigFeeDialog(state, actions)
         SummaryRow(R.string.wallet_send_review_to, review.address, "wallet_send_review_address", mono = true)
         SummaryRow(R.string.wallet_send_review_amount, amountLabel(review.payeeSats, state.network), "wallet_send_review_amount")
         if (review.changeSats > 0) {

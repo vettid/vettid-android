@@ -7,6 +7,7 @@ import com.vettid.core.chain.BuildCoin
 import com.vettid.core.chain.BuildException
 import com.vettid.core.chain.BuildOutput
 import com.vettid.core.chain.ChainError
+import com.vettid.core.chain.TxState
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.CoinSelection
 import com.vettid.core.chain.InspectResult
@@ -1639,6 +1640,47 @@ class WalletsManager(
         DiscardResult.DROPPED
     }
 
+    /**
+     * Minimal guard for a payment whose broadcast ended without an answer before a lock or a restart (memory only, nothing on disk): the
+     * vault's `wallet.history` of the last 24 hours (by `at`; one without a time counts as recent), each txid asked of the chain server
+     * (`GET /tx/<txid>`). Confirmed ones are done. The worst of the rest: not found is [RecentSends.MAY_HAVE_GONE], a server or a history
+     * that cannot be read is [RecentSends.UNREADABLE] (fail secure), in the mempool is [RecentSends.WAITING]. At most [RECENT_MAX] are
+     * asked.
+     */
+    @Suppress("ReturnCount")
+    suspend fun recentSends(walletId: String): RecentSends {
+        val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: return RecentSends.UNREADABLE
+        val network = networkOf(wallet) ?: return RecentSends.UNREADABLE
+        if (!flags.privacyNoteShown(walletId)) return RecentSends.UNREADABLE
+        val txs = try {
+            history(walletId, RECENT_HISTORY)
+        } catch (_: VaultFailure) {
+            return RecentSends.UNREADABLE
+        }
+        val cutoff = clock().minus(RECENT_WINDOW)
+        val recent = txs.filter { it.at == null || it.at.isAfter(cutoff) }.take(RECENT_MAX)
+        if (recent.isEmpty()) return RecentSends.CLEAR
+        val spend = (chain.open(network) as? ChainOpen.Ready)?.spend ?: return RecentSends.UNREADABLE
+        return classify(spend, recent)
+    }
+
+    /** The worst state of [txs] at the server: not found, then unreadable, then in the mempool. */
+    private suspend fun classify(spend: SpendAccess, txs: List<WalletTx>): RecentSends {
+        val states = txs.map { tx ->
+            try {
+                spend.state(tx.txid)
+            } catch (_: ChainError) {
+                null
+            }
+        }
+        return when {
+            TxState.NOT_FOUND in states -> RecentSends.MAY_HAVE_GONE
+            null in states -> RecentSends.UNREADABLE
+            TxState.UNCONFIRMED in states -> RecentSends.WAITING
+            else -> RecentSends.CLEAR
+        }
+    }
+
     /** `wallet.history`: what this vault signed, newest first. */
     suspend fun history(walletId: String, limit: Int? = null): List<WalletTx> {
         settleFirst(walletId)
@@ -1693,6 +1735,10 @@ class WalletsManager(
             FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
             FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
         )
+
+        private val RECENT_WINDOW: java.time.Duration = java.time.Duration.ofHours(24)
+        private const val RECENT_HISTORY = 50
+        private const val RECENT_MAX = 10
 
         /** BIP44's gap: addresses past the last used one that are looked at before a chain is taken as ended. */
         const val GAP = 20

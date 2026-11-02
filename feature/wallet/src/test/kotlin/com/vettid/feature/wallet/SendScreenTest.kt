@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.getOrNull
 import com.vettid.core.chain.AddressFamily
 import com.vettid.core.chain.Network
 import com.vettid.core.wallet.CapReason
+import com.vettid.core.wallet.RecentSends
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -136,10 +137,48 @@ class SendScreenTest {
     @Test
     fun aFeeMuchHigherThanNeededAsksWithTheDraftsWords() {
         var paid = false
-        show(form().copy(bigFeeAsk = true), SendActions(onConfirmBigFee = { paid = true }))
+        show(form().copy(bigFeeAsk = BigFee.MUCH_HIGHER), SendActions(onConfirmBigFee = { paid = true }))
         rule.onNodeWithText("This fee is much higher than needed right now. Pay it anyway?").assertIsDisplayed()
         rule.onNodeWithText("Pay it anyway").performClick()
         assertTrue(paid)
+    }
+
+    @Test
+    fun theTenPercentGuardHasItsOwnText() {
+        var paid = false
+        show(form().copy(bigFeeAsk = BigFee.TEN_PERCENT), SendActions(onConfirmBigFee = { paid = true }))
+        rule.onNodeWithText("The fee is more than 10% of what you're sending. Pay it anyway?").assertIsDisplayed()
+        rule.onNodeWithText("Pay it anyway").performClick()
+        assertTrue(paid)
+    }
+
+    @Test
+    fun theReviewAsksAboutAFeeOverTenPercentWithTheSameDialog() {
+        show(review().copy(bigFeeAsk = BigFee.TEN_PERCENT))
+        rule.onNodeWithTag("wallet_send_big_fee").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRefusedLinkIsSaidPlainly() {
+        show(form().copy(linkRefused = true))
+        rule.onNodeWithTag("wallet_send_link_refused").performScrollTo()
+            .assertTextEquals("This payment link has something VettID can't safely use, so nothing was filled in. Check it with whoever sent it.")
+    }
+
+    @Test
+    fun eachRecentPaymentNoticeHasItsTextAndSendAnywayGoesOn() {
+        var acknowledged = 0
+        val cases = mapOf(
+            RecentSends.WAITING to "A payment you approved is waiting for confirmation.",
+            RecentSends.MAY_HAVE_GONE to "A payment you approved may have gone through.\n\nIt may already be on the network. Check before you send again.",
+            RecentSends.UNREADABLE to "VettID couldn't check your recent payments. One you approved may still be on its way. Check before you send again.",
+        )
+        for ((notice, text) in cases) {
+            show(form().copy(recentNotice = notice), SendActions(onAcknowledgeRecent = { acknowledged++ }))
+            rule.onNodeWithText(text).assertIsDisplayed()
+            rule.onNodeWithText("Send anyway").performClick()
+        }
+        assertEquals(3, acknowledged)
     }
 
     @Test

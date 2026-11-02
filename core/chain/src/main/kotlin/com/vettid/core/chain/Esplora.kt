@@ -268,14 +268,21 @@ class EsploraClient internal constructor(
      * that transaction ([ChainError.Malformed] otherwise); any other failure is thrown (the server's word is not known). Used to find out
      * whether a broadcast that got no answer went through, before a payment is dropped or made again.
      */
-    suspend fun knowsTransaction(txid: String): Boolean {
+    suspend fun knowsTransaction(txid: String): Boolean = transactionState(txid) != TxState.NOT_FOUND
+
+    /**
+     * Where the server has the transaction (`GET /tx/<txid>`, its `status.confirmed`): confirmed, in its mempool, or not at all (404).
+     * The answer must be that transaction ([ChainError.Malformed] otherwise); any other failure is thrown.
+     */
+    suspend fun transactionState(txid: String): TxState {
         val id = txid.lowercase()
         require(isHash(id)) { "not a txid" }
         return try {
-            if (json(listOf("tx", id), limits.listBytes).asObject().hash("txid") != id) throw ChainError.Malformed()
-            true
+            val o = json(listOf("tx", id), limits.listBytes).asObject()
+            if (o.hash("txid") != id) throw ChainError.Malformed()
+            if (o["status"].asObject().flag("confirmed")) TxState.CONFIRMED else TxState.UNCONFIRMED
         } catch (_: ChainError.NotFound) {
-            false
+            TxState.NOT_FOUND
         }
     }
 
@@ -488,3 +495,6 @@ class EsploraClient internal constructor(
         fun JsonObject.optString(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
     }
 }
+
+/** Where a chain server has a transaction. */
+enum class TxState { CONFIRMED, UNCONFIRMED, NOT_FOUND }

@@ -169,6 +169,7 @@ private fun SendDestination(host: WalletHost, leave: () -> Unit) {
             onDiscard = vm::discard,
             onStartOver = vm::startOver,
             onDone = leave,
+            onAcknowledgeRecent = vm::acknowledgeRecent,
         ),
     )
 }

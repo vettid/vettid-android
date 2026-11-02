@@ -390,3 +390,21 @@ enum class DiscardResult {
      */
     MUST_CHECK,
 }
+
+/**
+ * What the vault's recent signed payments of a wallet look like on the chain server ([WalletsManager.recentSends]): a payment the member
+ * approved may still be on its way, whatever became of this phone's memory (a lock, a restart). The worst applies.
+ */
+enum class RecentSends {
+    /** Nothing signed in the last 24 hours that is not confirmed. */
+    CLEAR,
+
+    /** Signed, and in the server's mempool: waiting for confirmation. */
+    WAITING,
+
+    /** Signed, and the server does not have it: it may have gone through (a broadcast that got no answer), or never left the phone. */
+    MAY_HAVE_GONE,
+
+    /** The history or the server could not be read: nothing is known. */
+    UNREADABLE,
+}

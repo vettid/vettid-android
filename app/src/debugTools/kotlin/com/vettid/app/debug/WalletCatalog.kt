@@ -51,7 +51,9 @@ import com.vettid.feature.wallet.ReceiveProblem
 import com.vettid.feature.wallet.ReceiveScreen
 import com.vettid.feature.wallet.ReceiveUiState
 import com.vettid.feature.wallet.ServerProblem
+import com.vettid.core.wallet.RecentSends
 import com.vettid.feature.wallet.AddressIssue
+import com.vettid.feature.wallet.BigFee
 import com.vettid.feature.wallet.AmountUnit
 import com.vettid.feature.wallet.BroadcastReason
 import com.vettid.feature.wallet.CapText
@@ -288,7 +290,13 @@ internal object WalletCatalog {
         "wallet.send_not_an_address" to { Send(sendForm.copy(address = "hello", addressIssue = AddressIssue.NotAnAddress)) },
         "wallet.send_fee_custom" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40")) },
         "wallet.send_fee_custom_bad" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "1500")) },
-        "wallet.send_fee_much_higher" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40", bigFeeAsk = true)) },
+        "wallet.send_fee_much_higher" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40", bigFeeAsk = BigFee.MUCH_HIGHER)) },
+        "wallet.send_fee_ten_percent" to { Send(sendForm.copy(bigFeeAsk = BigFee.TEN_PERCENT)) },
+        "wallet.send_review_fee_ten_percent" to { Send(sendReviewing().copy(bigFeeAsk = BigFee.TEN_PERCENT)) },
+        "wallet.send_link_refused" to { Send(sendForm.copy(linkRefused = true)) },
+        "wallet.send_recent_waiting" to { Send(sendForm.copy(recentNotice = RecentSends.WAITING)) },
+        "wallet.send_recent_gone" to { Send(sendForm.copy(recentNotice = RecentSends.MAY_HAVE_GONE)) },
+        "wallet.send_recent_unreadable" to { Send(sendForm.copy(recentNotice = RecentSends.UNREADABLE)) },
         "wallet.send_no_estimates" to { Send(sendForm.copy(estimates = null, estimatesFailed = true)) },
         "wallet.send_not_enough" to { Send(sendForm.copy(problem = SendProblem.NotEnough(12_000, 41_200))) },
         "wallet.send_not_enough_confirmed" to { Send(sendForm.copy(problem = SendProblem.NotEnough(12_000, 41_200), includeUnconfirmed = true)) },
