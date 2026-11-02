@@ -26,6 +26,15 @@ class ResetTextsTest {
         assertEquals(R.string.root_change_pin_ended, changeDecidedText(ChangeCheck.Ended(ChangeKind.PIN)))
     }
 
+    /** (review L1) A reset's decision has its own notification title; the PIN and password changes keep theirs. */
+    @Test
+    fun aResetHasItsOwnNotificationTitle() {
+        assertEquals(R.string.root_reset_channel_title, changeDecidedTitle(ChangeCheck.Applied(ChangeKind.RESET)))
+        assertEquals(R.string.root_reset_channel_title, changeDecidedTitle(ChangeCheck.Ended(ChangeKind.RESET)))
+        assertEquals(R.string.root_change_channel_title, changeDecidedTitle(ChangeCheck.Applied(ChangeKind.PIN)))
+        assertEquals(R.string.root_change_channel_title, changeDecidedTitle(ChangeCheck.NotApplied(ChangeKind.PASSWORD)))
+    }
+
     private fun values(path: String): Map<String, String> {
         val f = listOf(File(path), File("app/$path")).first { it.exists() }
         return Regex("""<string name="([^"]+)">(.*?)</string>""", RegexOption.DOT_MATCHES_ALL)

@@ -131,21 +131,28 @@ class NewCredentialViewModelTest {
         }
     }
 
-    /** Ended and Moved close the form (no Try again); NotApplied opens it again. */
+    /** Ended and Moved close the form (no Try again) and the typed secrets go; NotApplied keeps them and opens the form again. */
     @Test
-    fun endedAndMovedDisableTheFormAndNotAppliedDoesNot() = runTest {
+    fun endedAndMovedDisableTheFormAndClearTheSecretsButNotAppliedDoesNot() = runTest {
+        for (decided in listOf(ChangeCheck.Ended(ChangeKind.RESET), ChangeCheck.Moved(ChangeKind.RESET))) {
+            val v = FakeVault(AppPhase.Unlocked)
+            val vm = NewCredentialViewModel(v, v)
+            ready(vm)
+            v.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
+            advanceUntilIdle()
+            assertFalse(vm.uiState.value.filled)
+            v.changeCheck.value = decided
+            advanceUntilIdle()
+            val s = vm.uiState.value
+            assertFalse(s.filled)
+            assertEquals(decided, s.check)
+            assertEquals("", s.pin)
+            assertEquals("", s.current)
+            assertEquals("", s.password)
+            assertEquals("", s.confirm)
+        }
         val vm = NewCredentialViewModel(vault, vault)
         ready(vm)
-        vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.filled)
-        vault.changeCheck.value = ChangeCheck.Ended(ChangeKind.RESET)
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.filled)
-        assertEquals(ChangeCheck.Ended(ChangeKind.RESET), vm.uiState.value.check)
-        vault.changeCheck.value = ChangeCheck.Moved(ChangeKind.RESET)
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.filled)
         vault.changeCheck.value = ChangeCheck.Checking(ChangeKind.RESET)
         advanceUntilIdle()
         vault.changeCheck.value = ChangeCheck.NotApplied(ChangeKind.RESET)

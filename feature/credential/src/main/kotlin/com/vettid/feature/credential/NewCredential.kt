@@ -115,8 +115,11 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
         if (c.open) following = true
         if (!following || !c.open && state.value.busy) return
         when (c) {
-            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied, is ChangeCheck.Ended, is ChangeCheck.Moved ->
+            is ChangeCheck.Checking, is ChangeCheck.Unreachable, is ChangeCheck.NotApplied ->
                 state.update { it.copy(busy = false, error = null, check = c) }
+            // Nothing can be sent from here again, and the typed secrets are not kept on a form that stays open.
+            is ChangeCheck.Ended, is ChangeCheck.Moved ->
+                state.update { it.copy(busy = false, error = null, check = c, pin = "", current = "", password = "", confirm = "") }
             is ChangeCheck.Applied -> state.value = NewCredentialUiState(newRules = state.value.newRules, done = true)
             // A refusal decided later: the PIN and the current password are not kept after an answer, as in [confirm].
             is ChangeCheck.Refused -> state.update {

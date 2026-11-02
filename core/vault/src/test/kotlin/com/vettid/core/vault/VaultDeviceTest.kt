@@ -2867,6 +2867,87 @@ class VaultDeviceTest {
         }
     }
 
+    /** A store whose next save fails once (a full disk, a Keystore error). */
+    private class FlakyStore : DeviceStateStore {
+        private val inner = InMemoryDeviceStateStore()
+
+        @Volatile
+        var failNext = false
+
+        override fun load(): ByteArray? = inner.load()
+
+        override fun save(state: ByteArray) {
+            if (failNext) {
+                failNext = false
+                throw java.io.IOException("disk full")
+            }
+            inner.save(state)
+        }
+
+        override fun clear() = inner.clear()
+    }
+
+    /**
+     * (#256 review M1) A reset's answer that cannot be stored (the UTKs, the blob) is not reported as made: the phone would hold a
+     * blob of the destroyed lineage and the next operation would raise the clone alarm. The reset stays unresolved
+     * ([ChangeUnansweredException]), nothing is acknowledged, and the resolver's fetch then keeps the new blob.
+     */
+    @Test
+    fun aResetAnswerThatCannotBeStoredIsNotReportedAsMadeAndTheFetchKeepsTheNewBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569c1")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":1,"key":"key-two","utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            store.failNext = true
+            val e = runCatching { api.changeSettle(kept, answer) }.exceptionOrNull()
+            assertTrue("not reported as made: $e", e is ChangeUnansweredException)
+            assertEquals("the old blob is still held", "QkxPQg==", d.credentialBlob())
+            assertNull("nothing acknowledged", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // The resolver decides it by credential.version (the new key) and fetches the latest blob.
+            val ask = async(Dispatchers.IO) { api.credentialVersionAt() }
+            answerVersion(d, v, 1, key = "key-two")
+            assertEquals("key-two", ask.await().first.key)
+            val fetch = async(Dispatchers.IO) { api.credentialFetch() }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.get", get.type)
+            d.handle(v.seal(get.type, """{"credential":"TkVX","version":1,"utks":[]}""", re = get.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            fetch.await()
+            assertEquals("TkVX", d.credentialBlob())
+            assertEquals(1L, d.credentialVersion)
+        }
+    }
+
+    /**
+     * The same failure for a PIN change is not a clone: the change applied (N to N+1), the held blob is the vault's current - 1,
+     * and the next operation is answered `stale_credential` and fetches. It stays reported as applied (its confirmation is the
+     * phone's epoch, not the blob).
+     */
+    @Test
+    fun aPinChangeAnswerThatCannotBeStoredStaysApplied() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostPinChange(d, v, api, "a2V5LUE=", "00112233445569c2")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            store.failNext = true
+            api.changeSettle(kept, answer)
+            assertEquals("QkxPQg==", d.credentialBlob())
+            assertEquals(3L, d.credentialVersion)
+        }
+    }
+
     /** A reset's answer without a `key` does not keep the old lineage's key with the new blob (a reset replaces the key). */
     @Test
     fun aResetAnswerWithoutAKeyDoesNotKeepTheOldKey() = runBlocking<Unit> {

@@ -621,8 +621,17 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             // A late or cached answer (§11.14.9 step 3, or [LostAnswer] after the change was settled elsewhere) must not roll the
             // credential back: the blob only while the credential held is still the one the change was sent at ([keepIfNewer]).
             d.credentialLock.withLock { keepIfNewer(r.body, kept) }
-        } catch (_: java.io.IOException) {
-            // The change applied; the blob is fetched again by the next operation that finds it stale.
+        } catch (e: java.io.IOException) {
+            // The change applied. For a PIN or password change the blob is one version behind and the next operation is answered
+            // `stale_credential` (the vault takes current - 1 for a stale blob, not a clone) and fetches it. A reset replaces the
+            // key and restarts at version 1: the blob held is of a lineage the vault has destroyed, and presenting it raises the
+            // clone alarm. So when the new blob could not be stored (the UTKs or the blob; only the acknowledgement may fail) the
+            // reset is not reported as made: it stays unresolved and the resolver fetches the blob ([ChangeUnansweredException]).
+            if (kept.type == ChangeTypes.RESET && VaultJson.str(r.body, "credential") != null &&
+                d.credentialBlob() == VaultJson.str(kept.body, "credential")
+            ) {
+                throw ChangeUnansweredException(kept, e)
+            }
         }
         return r.body
     }

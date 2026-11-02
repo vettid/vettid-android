@@ -382,5 +382,10 @@ internal fun changeDecidedText(c: ChangeCheck): Int {
     }
 }
 
+/** The notification title of a decided change: a new credential has its own, the PIN and password changes keep theirs. */
+@androidx.annotation.StringRes
+internal fun changeDecidedTitle(c: ChangeCheck): Int =
+    if (c.kind == ChangeKind.RESET) R.string.root_reset_channel_title else R.string.root_change_channel_title
+
 /** Whether a banner sits at the top of the screen (the status bar's padding goes to the first). */
 private fun anyTopBanner(paused: Boolean, prefsReset: Boolean) = paused || prefsReset

@@ -344,39 +344,39 @@ class VaultManager(
     /** The change applied ([AccountRecord.confirmChange]); false when the write failed (still shown as done). */
     private fun confirmChange(m: UnresolvedChange): Boolean {
         forgetKept(m)
-        // Once per reset: the answer, a resend and the check may each find it applied. What the hooks are to forget is taken
-        // now, before the marker goes and the gate opens (anything made after belongs to the new credential); a hook that
-        // throws is dropped, never the confirmation. The id counts as handled only after the hooks ran.
-        val actions = if (m.kind == ChangeKind.RESET && m.innerId !in handledResets) prepareResetHooks(resetHooks) else null
-        val ok = record.confirmChange(m)
-        newPinStep = false
-        refreshChangeFlows()
-        if (actions != null && handledResets.add(m.innerId)) resetApplied(actions)
-        return ok
+        return resetConfirmation.confirm(m) {
+            val ok = record.confirmChange(m)
+            newPinStep = false
+            refreshChangeFlows()
+            ok
+        }
     }
 
     /**
      * (0.48.0) A new credential was made (its answer, or a check that found it applied): the unlock window is closed, the
      * critical items destroyed with the old credential are dropped from the lists held here (re-read in the background), the
-     * alarm state is read afresh and the owner-check clock starts afresh (§3.6.1).
+     * alarm state is read afresh and the owner-check clock starts afresh (§3.6.1). See [ResetConfirmation].
      */
-    private fun resetApplied(actions: List<suspend () -> Unit>) {
-        windowFlow.value = null
-        items.clear()
-        scope.launch {
-            // First, before any request: what the hooks forget is local, needs no session, and the gate is already open.
-            for (action in actions) runCatching { action() }
-            val s = runCatching { session() }.getOrNull() ?: return@launch
-            runCatching { refreshAlarm(s) }
-            ownerCheck.onOpened()
-            items.refreshQuietly()
-        }
-    }
-
-    /** The resets whose applied effects ran ([resetApplied]); a reset's inner id is unique. */
-    private val handledResets: MutableSet<String> = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
-
     private val resetHooks = java.util.concurrent.CopyOnWriteArrayList<() -> (suspend () -> Unit)>()
+
+    private val resetConfirmation = ResetConfirmation(
+        scope,
+        resetHooks,
+        object : ResetEffects {
+            override fun closeWindow() {
+                windowFlow.value = null
+            }
+
+            override fun clearItems() = items.clear()
+
+            override suspend fun afterwards() {
+                val s = runCatching { session() }.getOrNull() ?: return
+                runCatching { refreshAlarm(s) }
+                ownerCheck.onOpened()
+                items.refreshQuietly()
+            }
+        },
+    )
 
     /**
      * (0.48.0) Once a new credential was made (its answer, or a check that found it applied) every critical item, the wallets
