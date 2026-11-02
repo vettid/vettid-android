@@ -4,6 +4,7 @@
 package com.vettid.feature.wallet
 
 import com.vettid.core.chain.Network
+import com.vettid.core.wallet.TransactionsResult
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,6 +18,12 @@ class WalletUiPrivacyTest {
     @Test
     fun theStatesPrintNoNameWordOrPassword() {
         val row = WalletRow("01WALLET0000000000000000AA", "Savings", Network.SIGNET, "signet", backedUp = false)
+        val payee = com.vettid.core.wallet.WalletPayee("orbit1address", 4242)
+        val tx = com.vettid.core.wallet.WalletTransaction(
+            "abab".repeat(16), com.vettid.core.wallet.TxDirection.SENT, 4242, -4243, 1, com.vettid.core.wallet.TxStatus.Confirmed(9999),
+            9999, java.time.Instant.EPOCH, java.time.Instant.EPOCH, listOf(payee), "maple",
+        )
+        val walletTxs = com.vettid.core.wallet.WalletTransactions(java.time.Instant.EPOCH, "orbit.example", listOf(tx))
         val values = listOf(
             row,
             WalletsUiState(loading = false, rows = listOf(row)),
@@ -30,17 +37,23 @@ class WalletUiPrivacyTest {
             ),
             LimitsForm(true, "4242", "9999"),
             BackupUiState(BackupStep.LIMITS, name = "Savings", pin = "424242", limits = LimitsForm(true, "4242", "9999")),
+            // W2-3: the transactions, their list, the screens' states and every result that carries a value.
+            TransactionsUiState(loading = false, name = "Savings", list = walletTxs, problem = TransactionsResult.ServerFailed(com.vettid.core.chain.ChainError.Malformed())),
+            TransactionUiState(
+                loading = false, name = "Savings", tx = tx, host = "orbit.example",
+            ),
+            tx, walletTxs,
             BackupUiState(BackupStep.CHECK, name = "Savings", password = "hunter2", words = PhraseWords(listOf("orbit".toCharArray(), "maple".toCharArray())), typed = "orb", candidates = listOf(1)),
         )
         for (v in values) {
-            for (s in listOf("Savings", "hunter2", "orbit", "maple", "orb", "01WALLET", "4242")) assertFalse("'$s' in $v", "$v".contains(s))
+            for (s in listOf("Savings", "hunter2", "orbit", "maple", "orb", "01WALLET", "4242", "4243", "9999", "abab", "orbit1address")) assertFalse("'$s' in $v", "$v".contains(s))
         }
     }
 
     @Test
     fun theModuleHasNoLoggingCallAndKeepsNothingInSavedState() {
         val sources = File("src/main/kotlin").walkTopDown().filter { it.extension == "kt" }.toList()
-        assertTrue(sources.size >= 11)
+        assertTrue(sources.size >= 13)
         val banned = listOf(
             "android.util.Log", "Log.", "println(", "printStackTrace", "Timber", "System.out", "System.err",
             "java.util.logging", "Logger", "stackTraceToString", "rememberSaveable", "saved[", "saved.set", "getStateFlow",

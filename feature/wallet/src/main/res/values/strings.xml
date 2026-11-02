@@ -166,7 +166,7 @@
     <string name="wallet_server_wrong_network">That server isn\'t on %1$s.</string> <!-- draft -->
     <string name="wallet_server_failed">That server didn\'t answer.</string> <!-- draft -->
     <string name="wallet_address_mismatch">This wallet\'s addresses don\'t match your vault\'s. Nothing was sent.</string> <!-- draft -->
-    <string name="wallet_privacy_note">To show your balance and send, VettID asks this server about your wallet\'s addresses. The server sees those addresses, and can tell they belong together, and it sees this phone\'s internet address and when you look. VettID\'s own servers see none of it. Use your own server to keep this to yourself.</string> <!-- draft -->
+    <string name="wallet_privacy_note">To show your balance and send, VettID asks this server about your wallet\'s addresses. It also asks about payments your vault signed that it doesn\'t list yet. The server sees those addresses, and can tell they belong together, and it sees this phone\'s internet address and when you look. VettID\'s own servers see none of it. Use your own server to keep this to yourself.</string> <!-- draft, revised: approved 2026-11-02 (#257) adds the signed-payment look-ups -->
 
     <!-- Delete -->
     <string name="wallet_delete_title">Delete %1$s?</string> <!-- draft: the first sentence of the plan\'s Delete text -->
@@ -346,4 +346,27 @@
     <string name="wallet_send_recent_checking">Checking your recent payments…</string> <!-- new -->
     <string name="wallet_send_recent_unreadable">VettID couldn\'t check your recent payments. One you approved may still be on its way. Check before you send again.</string> <!-- new -->
     <string name="wallet_send_anyway">Send anyway</string> <!-- new -->
+    <!-- Transactions (W2-3). Approved by the owner 2026-11-02 (#257, "merge, as recommended"); "draft"/"new" says where each came from. -->
+    <string name="wallet_tx_title">Transactions</string> <!-- draft: the plan's section name; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_sent_to">Sent to %1$s</string> <!-- draft: row, "Sent to tb1q…" (the address shortened); approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_received">Received</string> <!-- draft: row; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_confirmed">Confirmed</string> <!-- draft: status; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_waiting">Waiting for confirmation</string> <!-- draft: status; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_not_broadcast">Not broadcast</string> <!-- draft: status; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_not_seen">Not seen by %1$s yet</string> <!-- new: signed by the vault less than 24 hours ago, unknown to the server; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_status_from">Status from %1$s</string> <!-- new: the status and confirmations are the chain server's word; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_from">From %1$s</string> <!-- new: a row only the server lists (received, signed elsewhere): its amounts are the server's word too; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_sent">Sent</string> <!-- new: a sent row with no payee address to name; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_self">Moved within this wallet</string> <!-- new: a transfer to oneself; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_empty">No transactions yet.</string> <!-- new; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_not_found">This transaction isn\'t among your vault\'s 200 most recent payments.</string> <!-- new; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_status">Status</string> <!-- new: detail label; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_total_out">Total sent</string> <!-- new: detail label, a sent payment's amount and fee; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_confirmations">Confirmations</string> <!-- new: detail label; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_block_time">Block time</string> <!-- new: detail label; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_signed_at">Signed</string> <!-- new: detail label, when the vault signed it; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_id">Transaction ID</string> <!-- new: detail label; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_copy">Copy transaction ID</string> <!-- new; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_clip_label">Bitcoin transaction ID</string> <!-- new: the clipboard's label; approved 2026-11-02 (#257) -->
+    <string name="wallet_tx_not_broadcast_note">Your vault signed this payment, but the chain server has no record of it. It may never have been sent. Another server may show it. Check before you send again.</string> <!-- new; approved 2026-11-02 (#257) -->
 </resources>

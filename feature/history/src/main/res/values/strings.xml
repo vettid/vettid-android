@@ -70,6 +70,7 @@
     <string name="history_item_deleted">Deleted item</string>
     <string name="history_detail_item">Item</string>
     <string name="history_detail_open_item">Open the item</string>
+    <string name="history_detail_open_transaction">Open the transaction</string> <!-- new (W2-3): a signed payment's entry opens its transaction; approved 2026-11-02 (#257) -->
 
     <!-- History export (ANDROID-PLAN 0.1.17, VAULT-MESSAGING 0.22.0 §10.9) -->
     <string name="history_more_actions">More options</string>

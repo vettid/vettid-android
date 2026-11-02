@@ -141,6 +141,7 @@ sealed class ChainError(kind: String) : Exception(kind) {
  * credentials, no identifier. Redirects are refused (a [ChainError.Redirected]). Each call has a time limit and a size limit. Nothing
  * here logs.
  */
+@Suppress("TooManyFunctions") // one function per Esplora call
 class EsploraClient internal constructor(
     private val base: HttpUrl,
     http: OkHttpClient,
@@ -233,6 +234,21 @@ class EsploraClient internal constructor(
                 return all
             }
             path = targetPath(target) + listOf("txs", "chain", confirmed.last().txid)
+        }
+    }
+
+    /**
+     * One transaction as the server lists it (`GET /tx/<txid>`, the same shape as an entry of an address's list), or null if the
+     * server does not know it (404). The answer must be that transaction ([ChainError.Malformed] otherwise). Used for a payment the
+     * vault signed that the address lists do not show, before it is called "not broadcast".
+     */
+    suspend fun transaction(txid: String): ChainTx? {
+        val id = txid.lowercase()
+        require(isHash(id)) { "not a txid" }
+        return try {
+            parseTx(json(listOf("tx", id), limits.listBytes)).also { if (it.txid != id) throw ChainError.Malformed() }
+        } catch (_: ChainError.NotFound) {
+            null
         }
     }
 
@@ -383,8 +399,8 @@ class EsploraClient internal constructor(
         return ChainTx(
             txid = o.hash("txid"),
             confirmed = confirmed,
-            blockHeight = status.optCount("block_height"),
-            blockTime = status.optCount("block_time"),
+            blockHeight = status.optBounded("block_height", Int.MAX_VALUE.toLong()),
+            blockTime = status.optBounded("block_time", MAX_BLOCK_TIME),
             feeSats = o["fee"]?.takeUnless { it is JsonNull }?.let { o.sats("fee") },
             inputs = o["vin"].asArray().map { v ->
                 val i = v.asObject()
@@ -393,7 +409,7 @@ class EsploraClient internal constructor(
                 ChainTxInput(
                     prevTxid = if (coinbase) null else i.hash("txid"),
                     prevVout = if (coinbase) null else i.index("vout"),
-                    prevAddress = prev?.optString("scriptpubkey_address"),
+                    prevAddress = prev?.optAddress("scriptpubkey_address"),
                     prevValueSats = prev?.sats("value"),
                 )
             },
@@ -401,7 +417,7 @@ class EsploraClient internal constructor(
                 val out = v.asObject()
                 val script = out.optString("scriptpubkey") ?: throw ChainError.Malformed()
                 if (script.length % 2 != 0 || !script.all { it in HEX }) throw ChainError.Malformed()
-                ChainTxOutput(scriptHex = script, address = out.optString("scriptpubkey_address"), valueSats = out.sats("value"))
+                ChainTxOutput(scriptHex = script, address = out.optAddress("scriptpubkey_address"), valueSats = out.sats("value"))
             },
         )
     }
@@ -437,6 +453,9 @@ class EsploraClient internal constructor(
 
         const val MAX_SERVER_TEXT = 500
         const val MAX_ADDRESS = 128
+
+        /** The largest block time (a uint32). */
+        const val MAX_BLOCK_TIME = 4_294_967_295L
         const val MAX_TARGET = 1008
         const val MAX_SATS = 2_100_000_000_000_000L
         const val READ_CHUNK = 64L * 1024
@@ -491,6 +510,17 @@ class EsploraClient internal constructor(
 
         fun JsonObject.hash(key: String): String =
             (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.lowercase()?.takeIf(::isHash) ?: throw ChainError.Malformed()
+
+        /** A count in `0..max`, or absent/null; anything else is malformed (a block's `nTime` is a uint32, a height an Int). */
+        fun JsonObject.optBounded(key: String, max: Long): Long? = optCount(key)?.also { if (it > max) throw ChainError.Malformed() }
+
+        /**
+         * An output's address as the server writes it: kept only if it looks like one (ASCII letters and digits, at most
+         * [MAX_ADDRESS]); any other text is the server's, not an address, and becomes null.
+         */
+        fun JsonObject.optAddress(key: String): String? = optString(key)?.takeIf { a ->
+            a.isNotEmpty() && a.length <= MAX_ADDRESS && a.all { it.isLetterOrDigit() && it.code < ASCII }
+        }
 
         fun JsonObject.optString(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
     }
