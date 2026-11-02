@@ -330,7 +330,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     private suspend fun keepIfNewer(o: JsonObject, kept: KeptChange) {
         val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
         val sentBlob = VaultJson.str(kept.body, "credential")
-        if (sentBlob != null && d.credentialBlob() == sentBlob && (v == null || v > kept.sentVersion)) {
+        if (sentBlob != null && v != null && d.credentialBlob() == sentBlob && v > kept.sentVersion) {
             keep(o)
         } else {
             keep(JsonObject(o.filterKeys { it != "credential" }))
