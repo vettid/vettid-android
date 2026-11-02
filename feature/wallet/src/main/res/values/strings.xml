@@ -250,7 +250,8 @@
     <string name="wallet_send_fee_pay_anyway">Pay it anyway</string> <!-- new -->
     <string name="wallet_send_unconfirmed">Include unconfirmed coins</string> <!-- sending paragraph -->
     <string name="wallet_send_review">Review</string> <!-- new -->
-    <string name="wallet_send_not_enough">You have %1$s sats you can spend and this needs %2$s. Unconfirmed coins are left out unless you include them.</string> <!-- new -->
+    <string name="wallet_send_not_enough">You have %1$s sats you can spend and this needs %2$s sats.</string> <!-- new, revised after review: "sats" after each number -->
+    <string name="wallet_send_not_enough_unconfirmed">Unconfirmed coins are left out unless you include them.</string> <!-- new: shown only while they are not included -->
     <string name="wallet_send_too_many_inputs">This payment needs more coins than one payment can hold. Send less.</string> <!-- new -->
     <string name="wallet_send_self_send">This address is one of this wallet\'s own. Nothing was sent.</string> <!-- new: review note 6; revised after review: Receive moves no coins -->
     <string name="wallet_send_bad_amount">Enter an amount above 0, or choose Send all.</string> <!-- new -->
@@ -269,7 +270,7 @@
     <string name="wallet_send_review_fee">Fee</string> <!-- new -->
     <string name="wallet_send_review_fee_value">%1$s sats (%2$s sat/vB)</string> <!-- new -->
     <string name="wallet_send_review_total">Total leaving the wallet</string> <!-- new -->
-    <string name="wallet_send_review_dust">The change was too small to send back, so %1$s sats went to the fee.</string> <!-- new -->
+    <string name="wallet_send_review_dust">%1$s sats were added to the fee, since sending them back as change wasn\'t worth it.</string> <!-- new, revised after review: not always "too small" -->
     <plurals name="wallet_send_review_left_behind"> <!-- new: a Send all that did not spend every coin; revised after review: plurals -->
         <item quantity="one">%1$d coin was left out.</item>
         <item quantity="other">%1$d coins were left out.</item>
@@ -286,7 +287,7 @@
     <string name="wallet_send_time_day">a day</string> <!-- sending paragraph: the Slow target -->
     <string name="wallet_send_broadcast_failed">Signed, but %1$s didn\'t accept it: %2$s. Try again, or choose another server.</string> <!-- draft -->
     <string name="wallet_send_host_none">the chain server</string> <!-- new: no host to name -->
-    <string name="wallet_send_reason_no_answer">it didn\'t answer</string> <!-- new: the reasons in the sentence above -->
+    <string name="wallet_send_broadcast_no_answer">Signed, but %1$s didn\'t answer. The payment may have gone through.</string> <!-- new, revised after review: replaces the "didn\'t accept it: it didn\'t answer" reason -->
     <string name="wallet_send_reason_no_server">no server could be used</string> <!-- new -->
     <string name="wallet_send_reason_inputs_spent">its coins are spent or missing</string> <!-- new -->
     <string name="wallet_send_reason_fee_low">the fee is too low</string> <!-- new -->
@@ -305,7 +306,9 @@
     <string name="wallet_send_start_over">Start over</string> <!-- new -->
     <string name="wallet_send_done">Done</string> <!-- new -->
     <string name="wallet_send_signed_differs">The vault signed a different payment from the one you reviewed. It was dropped and nothing was sent. Please report this.</string> <!-- new -->
-    <string name="wallet_send_already_signed">This payment was already sent to your vault to be signed. Signing it again could count it twice toward your limit. Discard it and start again if you want to send.</string> <!-- new -->
+    <string name="wallet_send_already_signed">This payment was already sent to your vault to be signed. Signing it again could count it twice toward your limit.</string> <!-- new, revised after review: the sentence below is added by state -->
+    <string name="wallet_send_already_signed_discard">Discard it and start again if you want to send.</string> <!-- new: Discard is offered -->
+    <string name="wallet_send_already_signed_wait">Discard is offered once a chain server says the payment isn\'t there.</string> <!-- new: Discard waits for the check -->
     <string name="wallet_send_unanswered">Your vault hasn\'t answered yet. The payment may have been signed. Try again asks once more; it will not be signed twice.</string> <!-- new -->
     <string name="wallet_send_lapsed">Your vault didn\'t answer in time and will not sign this payment now. It may have been signed before that: check your wallet before you send again.</string> <!-- new -->
     <string name="wallet_send_superseded">Another payment from this wallet was signed after this one was prepared, so its coins may be spent. Nothing was signed. Start over.</string> <!-- new -->

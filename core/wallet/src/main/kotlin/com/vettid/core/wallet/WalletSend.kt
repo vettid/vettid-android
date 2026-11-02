@@ -201,6 +201,9 @@ sealed interface PrepareResult {
      */
     data object SelfSend : PrepareResult
 
+    /** A signed payment of this wallet waits to be broadcast, or a signing waits for its answer: decide it before a new payment. */
+    data object Unsent : PrepareResult
+
     data object BadFeeRate : PrepareResult
 
     data object BadAmount : PrepareResult

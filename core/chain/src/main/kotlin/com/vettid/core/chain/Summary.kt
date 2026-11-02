@@ -23,6 +23,8 @@ data class InspectSummary(
     val feeSats: Long,
     val vsize: Long,
 ) {
+    override fun toString(): String = "InspectSummary"
+
     /**
      * The summary in the vault's own serialization (vettid-vault `features/wallet/wallet.go`, `summaryJSON`: this member order, no
      * spaces), so that two summaries compare byte for byte.
@@ -81,10 +83,14 @@ data class InspectSummary(
     }
 }
 
-data class SummaryInput(val txid: String, val vout: Long, val amountSats: Long, val type: String, val path: String)
+data class SummaryInput(val txid: String, val vout: Long, val amountSats: Long, val type: String, val path: String) {
+    override fun toString(): String = "SummaryInput"
+}
 
 /** [type] and [path] are present for change outputs only, as the vault gives them. */
-data class SummaryOutput(val address: String, val amountSats: Long, val change: Boolean, val type: String?, val path: String?)
+data class SummaryOutput(val address: String, val amountSats: Long, val change: Boolean, val type: String?, val path: String?) {
+    override fun toString(): String = "SummaryOutput"
+}
 
 /** The vault's reasons for `invalid_psbt` (VAULT-MESSAGING §10.18 table), plus the one the app adds for a PSBT member it cannot send. */
 object PsbtReasons {

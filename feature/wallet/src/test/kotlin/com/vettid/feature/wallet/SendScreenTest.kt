@@ -201,7 +201,7 @@ class SendScreenTest {
         rule.onNodeWithTag("wallet_send_review_change").assertTextEquals("0.000588 tBTC")
         rule.onNodeWithTag("wallet_send_review_fee").assertTextEquals("1,200 sats (6 sat/vB)")
         rule.onNodeWithTag("wallet_send_review_total").assertTextEquals("0.000412 tBTC")
-        rule.onNodeWithTag("wallet_send_review_dust").assertTextEquals("The change was too small to send back, so 200 sats went to the fee.")
+        rule.onNodeWithTag("wallet_send_review_dust").assertTextEquals("200 sats were added to the fee, since sending them back as change wasn't worth it.")
     }
 
     @Test
@@ -471,8 +471,32 @@ class SendScreenTest {
     @Test
     fun notEnoughNamesWhatThereIsAndWhatIsNeeded() {
         show(form().copy(problem = SendProblem.NotEnough(12_000, 41_200)))
-        rule.onNodeWithText("You have 12,000 sats you can spend and this needs 41,200. Unconfirmed coins are left out unless you include them.")
+        rule.onNodeWithText("You have 12,000 sats you can spend and this needs 41,200 sats. Unconfirmed coins are left out unless you include them.")
             .performScrollTo().assertIsDisplayed()
+        // With unconfirmed coins already included the sentence about them is not shown.
+        show(form().copy(problem = SendProblem.NotEnough(12_000, 41_200), includeUnconfirmed = true))
+        rule.onNodeWithText("You have 12,000 sats you can spend and this needs 41,200 sats.").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun anAlreadySignedPaymentSaysTheRightThingInBothStates() {
+        show(done(SendOutcome.AlreadySigned))
+        rule.onNodeWithTag("wallet_send_already").assertTextEquals(
+            "This payment was already sent to your vault to be signed. Signing it again could count it twice toward your limit. " +
+                "Discard it and start again if you want to send.",
+        )
+        show(done(SendOutcome.AlreadySigned).copy(discardLocked = true))
+        rule.onNodeWithTag("wallet_send_already").assertTextEquals(
+            "This payment was already sent to your vault to be signed. Signing it again could count it twice toward your limit. " +
+                "Discard is offered once a chain server says the payment isn't there.",
+        )
+    }
+
+    @Test
+    fun aBroadcastThatGotNoAnswerSaysSoAndNamesTheHost() {
+        show(done(SendOutcome.BroadcastFailed("orbit.example", BroadcastReason.NO_ANSWER)).copy(discardLocked = true))
+        rule.onNodeWithTag("wallet_send_broadcast_failed")
+            .assertTextEquals("Signed, but orbit.example didn't answer. The payment may have gone through.")
     }
 
     @Test

@@ -150,6 +150,16 @@ class WalletTextsTest {
     }
 
     @Test
+    fun theSecondReviewsTextsAreAsRevised() {
+        assertEquals("Signed, but mempool.space didn't answer. The payment may have gone through.", r.getString(R.string.wallet_send_broadcast_no_answer, "mempool.space"))
+        assertEquals("You have 1,000 sats you can spend and this needs 2,000 sats.", r.getString(R.string.wallet_send_not_enough, "1,000", "2,000"))
+        assertEquals("Unconfirmed coins are left out unless you include them.", r.getString(R.string.wallet_send_not_enough_unconfirmed))
+        assertEquals("330 sats were added to the fee, since sending them back as change wasn't worth it.", r.getString(R.string.wallet_send_review_dust, "330"))
+        assertEquals("Discard it and start again if you want to send.", r.getString(R.string.wallet_send_already_signed_discard))
+        assertEquals("Discard is offered once a chain server says the payment isn't there.", r.getString(R.string.wallet_send_already_signed_wait))
+    }
+
+    @Test
     fun theReviewedSendTextsAreAsRevised() {
         assertEquals("This address is one of this wallet's own. Nothing was sent.", r.getString(R.string.wallet_send_self_send))
         assertEquals("1 coin was left out.", r.getQuantityString(R.plurals.wallet_send_review_left_behind, 1, 1))

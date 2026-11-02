@@ -374,7 +374,7 @@ private fun problemText(state: SendUiState, problem: SendProblem): String = when
     SendProblem.TooManyInputs -> stringResource(R.string.wallet_send_too_many_inputs)
     is SendProblem.NotEnough -> stringResource(
         R.string.wallet_send_not_enough, BtcFormat.sats(problem.availableSats), BtcFormat.sats(problem.neededSats),
-    )
+    ) + if (state.includeUnconfirmed) "" else " " + stringResource(R.string.wallet_send_not_enough_unconfirmed)
     SendProblem.ServerFailed -> stringResource(R.string.wallet_send_server_failed)
     is SendProblem.NoChain -> when (val open = problem.open) {
         is ChainOpen.NoServer -> stringResource(
@@ -586,7 +586,7 @@ private fun DoneStep(state: SendUiState, actions: SendActions, modifier: Modifie
         onBack = if (outcome is SendOutcome.Sent) null else actions.onBack,
         modifier = modifier.testTag("wallet_send_done_screen"),
     ) {
-        OutcomeText(outcome)
+        OutcomeText(outcome, state.discardLocked)
         if (state.checking) Text(stringResource(R.string.wallet_send_checking), modifier = Modifier.testTag("wallet_send_checking"))
         if (state.discardLocked && !state.checking) {
             Text(stringResource(R.string.wallet_send_may_be_sent), modifier = Modifier.testTag("wallet_send_may_be_sent"))
@@ -608,7 +608,7 @@ private fun DoneStep(state: SendUiState, actions: SendActions, modifier: Modifie
 
 @Suppress("CyclomaticComplexMethod") // one branch per state
 @Composable
-private fun OutcomeText(outcome: SendOutcome) {
+private fun OutcomeText(outcome: SendOutcome, discardLocked: Boolean) {
     when (outcome) {
         is SendOutcome.Sent -> NoticeCard(
             NoticeKind.SUCCESS,
@@ -626,19 +626,26 @@ private fun OutcomeText(outcome: SendOutcome) {
             Modifier.testTag("wallet_send_sent"),
         )
         is SendOutcome.BroadcastFailed -> {
+            val host = outcome.host ?: stringResource(R.string.wallet_send_host_none)
             Text(
-                stringResource(
-                    R.string.wallet_send_broadcast_failed,
-                    outcome.host ?: stringResource(R.string.wallet_send_host_none),
-                    stringResource(reasonText(outcome.reason)),
-                ),
+                if (outcome.mayBeSent) {
+                    stringResource(R.string.wallet_send_broadcast_no_answer, host)
+                } else {
+                    stringResource(R.string.wallet_send_broadcast_failed, host, stringResource(reasonText(outcome.reason)))
+                },
                 modifier = Modifier.testTag("wallet_send_broadcast_failed"),
             )
         }
         is SendOutcome.CapExceeded -> Text(capMessage(outcome.cap), modifier = Modifier.testTag("wallet_send_cap"))
         is SendOutcome.InvalidPsbt -> PsbtProblem(outcome.reason, outcome.alarm, outcome.byVault)
         SendOutcome.SignedDiffers -> Note(R.string.wallet_send_signed_differs, "wallet_send_differs")
-        SendOutcome.AlreadySigned -> Note(R.string.wallet_send_already_signed, "wallet_send_already")
+        SendOutcome.AlreadySigned -> Text(
+            stringResource(R.string.wallet_send_already_signed) + " " +
+                stringResource(
+                    if (discardLocked) R.string.wallet_send_already_signed_wait else R.string.wallet_send_already_signed_discard,
+                ),
+            modifier = Modifier.testTag("wallet_send_already"),
+        )
         SendOutcome.Unanswered -> Note(R.string.wallet_send_unanswered, "wallet_send_unanswered")
         SendOutcome.Lapsed -> Note(R.string.wallet_send_lapsed, "wallet_send_lapsed")
         SendOutcome.SignedUnreadable -> Note(R.string.wallet_send_unreadable, "wallet_send_unreadable")
@@ -652,7 +659,7 @@ private fun OutcomeText(outcome: SendOutcome) {
 private fun Note(text: Int, tag: String) = Text(stringResource(text), modifier = Modifier.testTag(tag))
 
 private fun reasonText(reason: BroadcastReason): Int = when (reason) {
-    BroadcastReason.NO_ANSWER -> R.string.wallet_send_reason_no_answer
+    BroadcastReason.NO_ANSWER -> R.string.wallet_send_reason_other
     BroadcastReason.NO_SERVER -> R.string.wallet_send_reason_no_server
     BroadcastReason.INPUTS_SPENT -> R.string.wallet_send_reason_inputs_spent
     BroadcastReason.FEE_TOO_LOW -> R.string.wallet_send_reason_fee_low

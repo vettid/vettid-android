@@ -175,12 +175,11 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
         WalletWire.inspection(api().walletPsbtInspect(walletId, psbtBase64))
 
     override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignOutcome {
-        val a = api()
         var sent = false
         return try {
-            SignOutcome.Answered(SignReply.Ok(a.walletSign(walletId, psbtBase64, password) { sent = true }))
+            SignOutcome.Answered(SignReply.Ok(api().walletSign(walletId, psbtBase64, password) { sent = true }))
         } catch (e: ChangeUnansweredException) {
-            unanswered(a, e.kept)
+            unanswered(api(), e.kept)
         } catch (e: VaultOpException) {
             if (sent) SignOutcome.Answered(SignReply.Refused(e)) else SignOutcome.NotSent(e)
         } catch (e: kotlinx.coroutines.CancellationException) {

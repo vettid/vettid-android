@@ -615,8 +615,12 @@ class WalletSendTest {
     fun aKeptTransactionRefusesAnyApproveForTheWallet() = runBlocking {
         val (m, w) = opened()
         chain.spend.broadcastError = ChainError.Timeout()
-        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
-        assertEquals(SendResult.AlreadySigned, m.approveSend(ready(m, w, request(amount = 45_000)), "pw"))
+        val first = ready(m, w)
+        val other = ready(m, w, request(amount = 45_000))
+        assertTrue(m.approveSend(first, "pw") is SendResult.BroadcastFailed)
+        // A payment prepared before is refused, and a new one is not even prepared while this one waits.
+        assertEquals(SendResult.AlreadySigned, m.approveSend(other, "pw"))
+        assertEquals(PrepareResult.Unsent, m.prepareSend(w.id, request(amount = 45_000)))
         assertEquals(1, ops.signs.size)
     }
 
@@ -672,17 +676,53 @@ class WalletSendTest {
     }
 
     @Test
-    fun aFailureAfterTheSendWithoutAnAnswerKeepsTheApproveClosed() = runBlocking {
+    fun aFailureAfterTheSendWithoutAnAnswerIsAPlainNoticeAndKeepsTheApproveClosed() = runBlocking {
         val (m, w) = opened()
         val p = ready(m, w)
+        // After the request went out (no answer, an answer that does not come through): the vault may have signed. Never a thrown
+        // failure that the screen would show as a password problem.
         ops.signFailure = java.io.IOException("relay dropped")
-        assertTrue(runCatching { m.approveSend(p, "pw") }.exceptionOrNull() is VaultFailure)
+        assertEquals(SendResult.SignedUnreadable, m.approveSend(p, "pw"))
         ops.signFailure = null
         assertEquals(SendResult.AlreadySigned, m.approveSend(p, "pw"))
         assertEquals(1, ops.signs.size)
     }
 
-    // --- 1: a signing that may still apply holds new sends ---
+    @Test
+    fun aFailureBeforeTheSendStaysNotSentAndGivesTheApproveBack() = runBlocking {
+        val (m, w) = opened()
+        val p = ready(m, w)
+        ops.signNotSent = java.io.IOException("no UTK")
+        val e = runCatching { m.approveSend(p, "pw") }.exceptionOrNull()
+        assertTrue(e is VaultFailure)
+        ops.signNotSent = null
+        assertTrue(m.approveSend(p, "pw") is SendResult.Sent)
+    }
+
+    // --- a new payment waits for the one that is unsent ---
+
+    @Test
+    fun aNewPaymentIsRefusedWhileASignedOneOrAnUnansweredSigningWaits() = runBlocking {
+        val (m, w) = opened()
+        chain.spend.broadcastError = ChainError.Timeout()
+        assertTrue(m.approveSend(ready(m, w), "pw") is SendResult.BroadcastFailed)
+        assertEquals(PrepareResult.Unsent, m.prepareSend(w.id, request(amount = 41_000)))
+        assertTrue("no second inspect", ops.calls.count { it == "inspect" } == 1)
+        // Decided first: checked, then discarded, and a new payment can be prepared.
+        assertEquals(SendResult.NotOnServer, m.checkSent(w.id))
+        assertEquals(DiscardResult.DROPPED, m.discardUnsent(w.id))
+        chain.spend.broadcastError = null
+        assertTrue(m.prepareSend(w.id, request(amount = 41_000)) is PrepareResult.Ready)
+        // An unanswered signing holds as well.
+        val m2 = manager()
+        m2.open()
+        ops.unanswered = 100
+        assertEquals(SendResult.Unanswered, m2.approveSend(ready(m2, w, request(amount = 42_000)), "pw"))
+        assertEquals(PrepareResult.Unsent, m2.prepareSend(w.id, request(amount = 43_000)))
+        m2.discardUnsent(w.id)
+        ops.outstanding = emptySet()
+        assertTrue(m2.prepareSend(w.id, request(amount = 43_000)) is PrepareResult.Ready)
+    }
 
     @Test
     fun anOutstandingSigningHoldsPrepareAndApproveUntilTheVaultDecidesIt() = runBlocking {

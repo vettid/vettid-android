@@ -331,7 +331,11 @@ The A2 exit test:
   An `ok` that does not read is `SendResult.SignedUnreadable` (consumed, "may have been signed"), never an exception to the screen; the view
   model also turns any other exception of approve/retry into that notice, and of prepare into a form problem. While a request is out back and
   the arrow do nothing (`SendUiState.swallowsBack`). `isOwnAddress` runs on `Dispatchers.Default`; `giveBack` is guarded by the generation.
-  `ManagerSendEngine.reviewFrom` builds the `Review` from the vault's summary alone (no summary payee: no review, no fallback). Review note 3: `PreparedSend.signCount`
+  `ManagerSendEngine.reviewFrom` builds the `Review` from the vault's summary alone (no summary payee: no review, no fallback).
+  Second review: a `VaultFailure` after the sign request went out ends as `SendResult.SignedUnreadable` (consumed), never as a password
+  error (one from before is `NotSent`; `api()` is inside the sign's try); `prepareSend` refuses a new payment while the wallet has a kept
+  transaction or an unanswered signing (`PrepareResult.Unsent`, shown as the Unsent notice under B1's Discard rule); Try again on the
+  chain server's note re-checks it (`NOTE_NEEDED` is a gate); `InspectSummary`, `SummaryInput` and `SummaryOutput` print their type names. Review note 3: `PreparedSend.signCount`
   against a per-wallet counter bumped when a `wallet.sign` goes out and restored when it is given back; a payment prepared before another
   signing is `SendResult.Superseded`. **`WalletOps.sign` returns a `SignOutcome`** (`NotSent(failure)` / `Answered(SignReply.Ok(body) |
   Refused(error))` / `Unanswered(forget, resend)`): the `SignNotSent` marker and the cause-chain walk (`givesBack`) are gone, nothing depends
@@ -340,7 +344,7 @@ The A2 exit test:
   `draft` (the plan's, word for word) or `new`, none approved; `WalletTextsTest` holds the drafts. Catalog: `wallet.send`, `wallet.send_filled`,
   `wallet.send_btc`, `wallet.send_all`, `wallet.send_scan`, `wallet.send_scan_unavailable`, `wallet.send_wrong_network`,
   `wallet.send_not_an_address`, `wallet.send_fee_custom`, `wallet.send_fee_custom_bad`, `wallet.send_fee_much_higher`,
-  `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
+  `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_not_enough_confirmed`, `wallet.send_note_needed`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
   `wallet.send_not_backed_up`, `wallet.send_caps_pending`, `wallet.send_caps_duplicate`, `wallet.send_settings_unreadable`,
   `wallet.send_sign_unsettled`, `wallet.send_review`, `wallet.send_review_password`, `wallet.send_review_wrong_password`,
   `wallet.send_review_limit`, `wallet.send_review_dust`, `wallet.send_review_no_caps`, `wallet.send_review_cap`, `wallet.send_sent`,

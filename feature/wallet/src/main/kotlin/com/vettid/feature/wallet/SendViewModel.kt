@@ -210,6 +210,8 @@ class SendViewModel internal constructor(
                 if (walletId in wallets.capsDuplicate.value) SendBlock.CAPS_DUPLICATE else SendBlock.CAPS_PENDING
             network == null -> SendBlock.NEEDS_NETWORK
             !wallets.offers(network) -> SendBlock.NOT_OFFERED
+            // The note may have been shown on the detail screen meanwhile: Try again asks again.
+            !wallets.privacyNoteShown(walletId) -> SendBlock.NOTE_NEEDED
             else -> null
         }
         mutable.update { it.copy(loading = false, block = block, problem = null) }
@@ -355,7 +357,7 @@ class SendViewModel internal constructor(
     }
 
     @Suppress("CyclomaticComplexMethod")
-    private fun stopped(r: PrepareResult) {
+    private suspend fun stopped(r: PrepareResult) {
         fun problem(p: SendProblem) = mutable.update { it.copy(busy = false, problem = p) }
 
         fun block(b: SendBlock) = mutable.update { it.copy(busy = false, block = b) }
@@ -377,6 +379,11 @@ class SendViewModel internal constructor(
                 it.copy(busy = false, addressIssue = it.network?.let { n -> SendInput.issue(n, it.address) } ?: AddressIssue.NotAnAddress)
             }
             PrepareResult.SelfSend -> problem(SendProblem.SelfSend)
+            PrepareResult.Unsent -> {
+                // A signed payment (or a signing without its answer) is decided first: Try again, or Discard under B1's rule.
+                mutable.update { it.copy(busy = false, step = SendStep.DONE, outcome = SendOutcome.Unsent, review = null) }
+                settleDiscard()
+            }
             PrepareResult.BadFeeRate -> problem(SendProblem.BadFee)
             PrepareResult.BadAmount -> problem(SendProblem.BadAmount)
             PrepareResult.TooManyInputs -> problem(SendProblem.TooManyInputs)
@@ -554,7 +561,7 @@ class SendViewModel internal constructor(
         /** The holds that Receive has too: they lift when the phrase is checked, the limit is set or the network is chosen. */
         val GATES = setOf(
             SendBlock.NOT_BACKED_UP, SendBlock.SETTINGS_UNREADABLE, SendBlock.CAPS_PENDING, SendBlock.CAPS_DUPLICATE,
-            SendBlock.NEEDS_NETWORK,
+            SendBlock.NEEDS_NETWORK, SendBlock.NOTE_NEEDED,
         )
     }
 }

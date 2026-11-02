@@ -49,11 +49,12 @@ class SendViewModelTest {
     /** Changes the wallet the vault holds before the screen opens (a limit, say). */
     private var editWallet: (com.vettid.core.wallet.VaultWallet) -> com.vettid.core.wallet.VaultWallet = { it }
 
-    private suspend fun TestScope.vm(backedUp: Boolean = true, network: String = "testnet4"): SendViewModel {
+    private suspend fun TestScope.vm(backedUp: Boolean = true, network: String = "testnet4", noteShown: Boolean = true): SendViewModel {
         ops.wallet(id, network = network)
         ops.wallets[id] = editWallet(ops.wallets.getValue(id))
         val flags = WalletFlags(flagsFile)
         if (backedUp) flags.setBackedUp(id)
+        if (noteShown) flags.setPrivacyNoteShown(id)
         val m = manager(backgroundScope, ops, flags)
         m.open()
         return SendViewModel(SavedStateHandle(mapOf("walletId" to id)), m, FakeServerSettings(), engine)
@@ -157,6 +158,39 @@ class SendViewModelTest {
         // Try again reads the holds again: the one from the prepare is gone once the screen is asked to look.
         vm.load()
         eventually { vm.state.value.block == null }
+    }
+
+    @Test
+    fun theChainServersNoteGatesSendAndTryAgainAsksAgain() = runTest {
+        val vm = vm(noteShown = false)
+        eventually { vm.state.value.block == SendBlock.NOTE_NEEDED }
+        // It was shown on the detail screen meanwhile: Try again re-checks and opens the form.
+        WalletFlags(flagsFile).setPrivacyNoteShown(id)
+        vm.load()
+        eventually { vm.state.value.block == null }
+    }
+
+    @Test
+    fun aNewPaymentWhileOneIsUnsentShowsTheUnsentNoticeUnderTheCheckRule() = runTest {
+        val vm = ready()
+        engine.mustCheck = true
+        engine.checkResult = SendResult.BroadcastFailed(BroadcastCause.Server(ChainError.Timeout()))
+        engine.prepared = SendPrepared.Stopped(PrepareResult.Unsent)
+        vm.review()
+        eventually { vm.state.value.outcome == SendOutcome.Unsent && engine.checks >= 1 && !vm.state.value.checking }
+        assertEquals(SendStep.DONE, vm.state.value.step)
+        assertTrue(vm.state.value.discardLocked)
+        vm.askDiscard()
+        eventually { !vm.state.value.checking }
+        assertFalse(vm.state.value.discardAsk)
+        assertEquals(0, engine.discards)
+        // Nothing on the network: Discard is there.
+        engine.mustCheck = false
+        engine.checkResult = SendResult.NotOnServer
+        vm.askDiscard()
+        eventually { !vm.state.value.discardLocked && !vm.state.value.checking }
+        vm.askDiscard()
+        assertTrue(vm.state.value.discardAsk)
     }
 
     // --- who and how much ---

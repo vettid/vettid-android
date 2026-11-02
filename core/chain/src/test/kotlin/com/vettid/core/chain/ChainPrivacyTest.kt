@@ -121,6 +121,19 @@ class ChainPrivacyTest {
     }
 
     @Test
+    fun theSummaryTypesPrintTheirNamesOnly() {
+        val out = SummaryOutput("tb1qsecretaddress", 123456, false, null, null)
+        val inp = SummaryInput("ab".repeat(32), 0, 654321, "p2wpkh", "m/84'/1'/0'/0/7")
+        val summary = InspectSummary("cd".repeat(32), listOf(inp), listOf(out), 777777, 123456, 0, 1234, 150)
+        for (v in listOf<Any>(summary, inp, out)) {
+            for (s in listOf("tb1qsecret", "abab", "cdcd", "123456", "654321", "777777", "m/84")) {
+                assertFalse("'$s' in $v", "$v".contains(s))
+            }
+        }
+        assertEquals("InspectSummary", summary.toString())
+    }
+
+    @Test
     fun theModuleHasNoLoggingCall() {
         // This module, and the app's wallet wiring (`app/src/wallet`).
         val dirs = listOf(File("src/main/kotlin"), File("../../app/src/wallet/kotlin"))

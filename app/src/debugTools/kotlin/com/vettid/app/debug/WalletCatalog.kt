@@ -291,6 +291,8 @@ internal object WalletCatalog {
         "wallet.send_fee_much_higher" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40", bigFeeAsk = true)) },
         "wallet.send_no_estimates" to { Send(sendForm.copy(estimates = null, estimatesFailed = true)) },
         "wallet.send_not_enough" to { Send(sendForm.copy(problem = SendProblem.NotEnough(12_000, 41_200))) },
+        "wallet.send_not_enough_confirmed" to { Send(sendForm.copy(problem = SendProblem.NotEnough(12_000, 41_200), includeUnconfirmed = true)) },
+        "wallet.send_note_needed" to { Send(sendForm.copy(block = SendBlock.NOTE_NEEDED)) },
         "wallet.send_self_send" to { Send(sendForm.copy(problem = SendProblem.SelfSend)) },
         "wallet.send_different" to { Send(sendForm.copy(problem = SendProblem.Different)) },
         "wallet.send_server_failed" to { Send(sendForm.copy(problem = SendProblem.ServerFailed)) },

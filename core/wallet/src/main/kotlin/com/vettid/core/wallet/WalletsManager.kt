@@ -1159,6 +1159,9 @@ class WalletsManager(
         val g = gen()
         val wallet = walletsFlow.value.firstOrNull { it.id == walletId } ?: noWallet()
         holdFor(walletId)?.let { return PrepareResult.Held(it) }
+        // A signed payment waiting to be broadcast, or a signing waiting for its answer: no new payment beside it (it would pick other
+        // coins, and both could confirm). It is decided first: Try again, or Discard once nothing of it can be on the network.
+        if (hasUnsent(walletId)) return PrepareResult.Unsent
         if (signHeld(walletId)) return PrepareResult.Held(SendHold.SIGN_UNSETTLED)
         val network = networkOf(wallet) ?: return PrepareResult.NeedsNetwork
         if (!offered(network)) return PrepareResult.NotOffered
@@ -1382,7 +1385,14 @@ class WalletsManager(
             consumed += prepared.unsignedTxid
             signCounts.merge(prepared.walletId, 1L, Long::plus)
         }
-        return when (val o = vaultGuard { ops().sign(prepared.walletId, prepared.psbtBase64, password) }) {
+        val outcome = try {
+            vaultGuard { ops().sign(prepared.walletId, prepared.psbtBase64, password) }
+        } catch (_: VaultFailure) {
+            // A failure from before the request went out is `SignOutcome.NotSent` (a result, not this). One that reaches here came
+            // after it: the vault may have signed. Never a "try your password again": consumed, with the plain notice.
+            return Outcome.Failed(SendResult.SignedUnreadable)
+        }
+        return when (val o = outcome) {
             is SignOutcome.NotSent -> {
                 giveBack(prepared.walletId, prepared.unsignedTxid, prepared.generation)
                 throw failureOf(o.failure)
