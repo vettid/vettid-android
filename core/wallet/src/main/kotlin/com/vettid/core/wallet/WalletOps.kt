@@ -4,6 +4,7 @@ import com.vettid.core.vault.ChangeUnansweredException
 import com.vettid.core.vault.KeptChange
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultJson
+import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.WalletImport
 import com.vettid.core.vault.walletCapsRaise
 import com.vettid.core.vault.walletCapsSet
@@ -14,6 +15,8 @@ import com.vettid.core.vault.walletCreate
 import com.vettid.core.vault.walletGet
 import com.vettid.core.vault.walletHistory
 import com.vettid.core.vault.walletPsbtInspect
+import com.vettid.core.vault.walletSignExpired
+import com.vettid.core.vault.walletVaultNow
 import com.vettid.core.vault.walletSignsOutstanding
 import com.vettid.core.vault.walletSign
 import com.vettid.core.vault.walletSignResend
@@ -112,12 +115,15 @@ interface WalletOps {
 
     /**
      * `wallet.sign`, a credential operation with [password] over [psbtBase64] (no `broadcast`: the app broadcasts). A lost or late
-     * answer is [SignAnswer.Unanswered], whose `resend` sends the same request; never a second `sign` for the same payment.
+     * answer is [SignOutcome.Unanswered], whose `resend` sends the same request; never a second `sign` for the same payment.
      */
-    suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer
+    suspend fun sign(walletId: String, psbtBase64: String, password: String): SignOutcome
 
     /** The wallets with a `wallet.sign` that may still apply (also after a lock or a restart): no new send is made for them. */
     suspend fun signsOutstanding(): Set<String>
+
+    /** The vault's clock (its `at` times are in it); the phone's own when it has not learned the vault's. */
+    suspend fun vaultNow(): java.time.Instant = java.time.Instant.now()
 
     /** `wallet.history`: what this vault signed, newest first ([limit] 1–200). */
     suspend fun history(walletId: String, limit: Int?): List<WalletTx>
@@ -172,29 +178,36 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     override suspend fun inspect(walletId: String, psbtBase64: String): PsbtInspection =
         WalletWire.inspection(api().walletPsbtInspect(walletId, psbtBase64))
 
-    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer {
-        val a = api()
+    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignOutcome {
         var sent = false
         return try {
-            SignAnswer.Signed(WalletWire.signed(a.walletSign(walletId, psbtBase64, password) { sent = true }))
+            SignOutcome.Answered(SignReply.Ok(api().walletSign(walletId, psbtBase64, password) { sent = true }))
         } catch (e: ChangeUnansweredException) {
-            unanswered(a, e.kept)
+            unanswered(api(), e.kept)
+        } catch (e: VaultOpException) {
+            if (sent) SignOutcome.Answered(SignReply.Refused(e)) else SignOutcome.NotSent(e)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            // Before the request went out nothing reached the vault: said to the manager, which then gives the payment back.
-            if (!sent) e.addSuppressed(SignNotSent())
-            throw e
+            // Before the request went out nothing reached the vault: said as a result, and the manager gives the payment back.
+            if (sent) throw e else SignOutcome.NotSent(e)
         }
     }
 
     /** No answer: sending [kept] again is the only way on; it asks for nothing (no password, no UTK) and builds nothing. */
-    private fun unanswered(a: VaultApi, kept: KeptChange): SignAnswer.Unanswered = SignAnswer.Unanswered({ kept.forget() }) {
-        val o = a.walletSignResend(kept)
-        if (o == null) unanswered(a, kept) else SignAnswer.Signed(WalletWire.signed(o))
-    }
+    private fun unanswered(a: VaultApi, kept: KeptChange): SignOutcome.Unanswered =
+        SignOutcome.Unanswered({ kept.forget() }, { a.walletSignExpired(kept) }) {
+            try {
+                val o = a.walletSignResend(kept)
+                if (o == null) unanswered(a, kept) else SignOutcome.Answered(SignReply.Ok(o))
+            } catch (e: VaultOpException) {
+                SignOutcome.Answered(SignReply.Refused(e))
+            }
+        }
 
     override suspend fun signsOutstanding(): Set<String> = api().walletSignsOutstanding()
+
+    override suspend fun vaultNow(): java.time.Instant = api().walletVaultNow()
 
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = WalletWire.history(api().walletHistory(walletId, limit))
 

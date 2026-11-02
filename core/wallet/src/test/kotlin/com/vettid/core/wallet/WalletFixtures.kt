@@ -3,6 +3,7 @@
 
 package com.vettid.core.wallet
 
+import java.time.Instant
 import com.vettid.core.chain.Account
 import com.vettid.core.chain.ChainError
 import com.vettid.core.chain.ChainServer
@@ -20,6 +21,7 @@ import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.WalletImport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -246,19 +248,30 @@ internal class FakeWalletOps : WalletOps {
         return PsbtInspection(tamper?.invoke(summary) ?: summary, cap)
     }
 
-    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignAnswer {
+    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignOutcome {
         calls += "sign"
         signs += psbtBase64
         signPasswords += password
-        if (!windowOpen()) refuse("wallet.sign", "credential_locked")
+        if (!windowOpen()) return refused("wallet.sign", "credential_locked")
+        signNotSent?.let { return SignOutcome.NotSent(it) }
         signFailure?.let { throw it }
-        signError?.let { throw it }
-        if (password != "pw") refuse("wallet.sign", "bad_password")
+        signError?.let { return SignOutcome.Answered(SignReply.Refused(it)) }
+        if (password != "pw") return refused("wallet.sign", "bad_password")
         val signed = signedTx(psbtBase64)
-        if (signUnreadable) throw WalletWireException("tx")
-        if (unanswered < 0) return SignAnswer.Signed(signed)
-        return waiting(signed)
+        if (signUnreadable) return SignOutcome.Answered(SignReply.Ok(JsonObject(emptyMap())))
+        if (unanswered < 0) return SignOutcome.Answered(SignReply.Ok(body(signed)))
+        outstanding += walletId
+        return waiting(walletId, signed)
     }
+
+    private fun refused(type: String, code: String) = SignOutcome.Answered(SignReply.Refused(VaultOpException(type, code, "")))
+
+    private fun body(signed: SignedTx) = JsonObject(
+        mapOf("txid" to JsonPrimitive(signed.txid), "tx" to JsonPrimitive(signed.tx.joinToString("") { "%02x".format(it) })),
+    )
+
+    /** A failure of `wallet.sign` from before the request went out (nothing reached the vault). */
+    var signNotSent: Exception? = null
 
     /** How many kept requests were dropped (a lock, or given up). */
     var forgets = 0
@@ -266,20 +279,24 @@ internal class FakeWalletOps : WalletOps {
     /** The wallets with a signing the vault may still apply. */
     var outstanding: Set<String> = emptySet()
 
+    /** The vault's clock is past the unanswered request's `exp` and the margin. */
+    var expired = false
+
     /** The signed answer does not read (after the vault signed). */
     var signUnreadable = false
 
     override suspend fun signsOutstanding(): Set<String> = outstanding
 
-    private fun waiting(signed: SignedTx): SignAnswer.Unanswered = SignAnswer.Unanswered({ forgets++ }) {
+    private fun waiting(walletId: String, signed: SignedTx): SignOutcome.Unanswered = SignOutcome.Unanswered({ forgets++ }, { expired }) {
         calls += "resend"
         resends++
-        resendFailure?.let { throw it }
+        resendFailure?.let { if (it is VaultOpException) return@Unanswered SignOutcome.Answered(SignReply.Refused(it)) else throw it }
         if (unanswered > 0) {
             unanswered--
-            waiting(signed)
+            waiting(walletId, signed)
         } else {
-            SignAnswer.Signed(signed)
+            outstanding -= walletId
+            SignOutcome.Answered(SignReply.Ok(body(signed)))
         }
     }
 
@@ -298,9 +315,18 @@ internal class FakeWalletOps : WalletOps {
     }
 
     var history: List<WalletTx> = emptyList()
+    var historyFails = false
+
+    /** The vault's clock (null: the fake knows no better than the phone's). */
+    var vaultClock: Instant? = null
+
+    override suspend fun vaultNow(): Instant = vaultClock ?: Instant.now()
+    var historyThrows: Exception? = null
 
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> {
         calls += "history:$limit"
+        historyThrows?.let { throw it }
+        if (historyFails) throw VaultOpException("wallet.history", "internal")
         return history
     }
 
@@ -330,6 +356,43 @@ internal class FakeSpend : SpendAccess {
     override suspend fun rawTransaction(txid: String): ByteArray = rawTxs[txid] ?: throw ChainError.NotFound()
 
     override suspend fun feeEstimates(): Map<Int, Double> = fees
+
+    /** The txids this server knows (a broadcast that got through), and what asking fails with. */
+    val known = mutableSetOf<String>()
+    var knowsError: ChainError? = null
+    var knowsAsked = 0
+
+    /** Questions after this many fail (a server that goes away between the two). */
+    var knowsFailsFrom = Int.MAX_VALUE
+
+    /** Txids a first question answers "not found" to and every later one finds (a server still taking a transaction). */
+    val appearsLater = mutableSetOf<String>()
+
+    val confirmed = mutableSetOf<String>()
+
+    override suspend fun state(txid: String): com.vettid.core.chain.TxState {
+        // As the Esplora client: a txid that is not 64 hex digits is a programming error, not an answer.
+        require(txid.length == 64) { "not a txid" }
+        knowsAsked++
+        knowsError?.let { throw it }
+        return when (txid) {
+            in confirmed -> com.vettid.core.chain.TxState.CONFIRMED
+            in known -> com.vettid.core.chain.TxState.UNCONFIRMED
+            else -> com.vettid.core.chain.TxState.NOT_FOUND
+        }
+    }
+
+    override suspend fun knows(txid: String): Boolean {
+        knowsAsked++
+        knowsError?.let { throw it }
+        if (knowsAsked > knowsFailsFrom) throw ChainError.Timeout()
+        if (txid in appearsLater) {
+            appearsLater -= txid
+            known += txid
+            return false
+        }
+        return txid in known
+    }
 
     override suspend fun broadcast(tx: ByteArray): String {
         broadcasts += tx

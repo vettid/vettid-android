@@ -16,6 +16,8 @@ import com.vettid.core.data.vault.CredentialStatus
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.wallet.WalletLabel
 import com.vettid.core.ui.components.ShellChrome
+import com.vettid.core.chain.AddressFamily
+import com.vettid.core.wallet.CapReason
 import com.vettid.core.wallet.LookupResult
 import com.vettid.core.wallet.WalletAddress
 import com.vettid.core.wallet.WalletLookup
@@ -49,6 +51,23 @@ import com.vettid.feature.wallet.ReceiveProblem
 import com.vettid.feature.wallet.ReceiveScreen
 import com.vettid.feature.wallet.ReceiveUiState
 import com.vettid.feature.wallet.ServerProblem
+import com.vettid.core.wallet.RecentSends
+import com.vettid.feature.wallet.AddressIssue
+import com.vettid.feature.wallet.BigFee
+import com.vettid.feature.wallet.AmountUnit
+import com.vettid.feature.wallet.BroadcastReason
+import com.vettid.feature.wallet.CapText
+import com.vettid.feature.wallet.ConfirmTime
+import com.vettid.feature.wallet.FeeChoice
+import com.vettid.feature.wallet.LimitLine
+import com.vettid.feature.wallet.Review
+import com.vettid.feature.wallet.SendActions
+import com.vettid.feature.wallet.SendBlock
+import com.vettid.feature.wallet.SendOutcome
+import com.vettid.feature.wallet.SendProblem
+import com.vettid.feature.wallet.SendScreen
+import com.vettid.feature.wallet.SendStep
+import com.vettid.feature.wallet.SendUiState
 import com.vettid.feature.wallet.SpendingLimitsActions
 import com.vettid.feature.wallet.SpendingLimitsScreen
 import com.vettid.feature.wallet.SpendingLimitsUiState
@@ -143,6 +162,38 @@ internal object WalletCatalog {
 
     private fun refused(p: ServerProblem) = defaultServer.copy(text = "https://esplora.example.org/api", problem = p)
 
+    private const val TEST_PAYEE = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+
+    private val sendForm = SendUiState(
+        loading = false, network = Network.TESTNET4, address = TEST_PAYEE, amountText = "40000", unit = AmountUnit.SATS,
+        estimates = mapOf(2 to 12.0, 6 to 5.0, 144 to 1.0),
+    )
+
+    private val sendReview = Review(
+        address = TEST_PAYEE, payeeSats = 40_000, changeSats = 58_800, feeSats = 1_200, vsize = 200, totalOutSats = 41_200,
+        toFeeSats = 0, sendAll = false, leftBehind = 0, hasCap = true,
+    )
+
+    private fun sendReviewing(r: Review = sendReview, password: String = "") =
+        sendForm.copy(step = SendStep.REVIEW, review = r, password = password)
+
+    private fun sendDone(o: SendOutcome) = sendForm.copy(step = SendStep.DONE, outcome = o)
+
+    // Not secure here: the catalog is screenshotted.
+    @Composable
+    private fun Send(state: SendUiState) = SendScreen(state, SendActions(), secure = false)
+
+    private fun recentOf(kind: RecentSends, more: Int) = com.vettid.core.wallet.RecentReport(
+        kind,
+        com.vettid.core.wallet.WalletTx(
+            "ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1_200, 1_200,
+            listOf(com.vettid.core.wallet.WalletPayee(TEST_PAYEE, 40_000)), null, null,
+        ),
+        more,
+    )
+
+    private val sendPeriodCap = CapText(CapReason.PER_PERIOD, 2_000_000, 300_000, Instant.parse("2026-11-02T09:00:00Z"))
+
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "wallet" to { WalletsScreen(WalletsUiState(loading = false, rows = rows), chrome, WalletsActions()) },
         "wallet.empty" to { WalletsScreen(WalletsUiState(loading = false, testBuild = true), chrome, WalletsActions()) },
@@ -236,6 +287,76 @@ internal object WalletCatalog {
         "wallet.limits_bad_pin" to { Limits(raiseSecrets.copy(pin = "", password = "", error = FailureKind.BAD_PIN)) },
         "wallet.limits_backoff" to { Limits(raiseSecrets.copy(pin = "", password = "", error = FailureKind.BACKOFF)) },
         "wallet.limits_conflict" to { Limits(limits.copy(error = FailureKind.CONFLICT)) },
+        "wallet.send" to { Send(sendForm.copy(address = "", amountText = "")) },
+        "wallet.send_filled" to { Send(sendForm.copy(feeChoice = FeeChoice.FAST, includeUnconfirmed = true)) },
+        "wallet.send_btc" to { Send(sendForm.copy(unit = AmountUnit.BTC, amountText = "0.0004")) },
+        "wallet.send_all" to { Send(sendForm.copy(sendAll = true, amountText = "")) },
+        "wallet.send_scan" to { Send(sendForm.copy(scanning = true)) },
+        "wallet.send_scan_unavailable" to { Send(sendForm.copy(scanning = true, scanUnavailable = true)) },
+        "wallet.send_wrong_network" to {
+            Send(sendForm.copy(address = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", addressIssue = AddressIssue.WrongNetwork(AddressFamily.MAINNET)))
+        },
+        "wallet.send_not_an_address" to { Send(sendForm.copy(address = "hello", addressIssue = AddressIssue.NotAnAddress)) },
+        "wallet.send_fee_custom" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40")) },
+        "wallet.send_fee_custom_bad" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "1500")) },
+        "wallet.send_fee_much_higher" to { Send(sendForm.copy(feeChoice = FeeChoice.CUSTOM, customFee = "40", bigFeeAsk = BigFee.MUCH_HIGHER)) },
+        "wallet.send_fee_ten_percent" to { Send(sendForm.copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = 4_400)) },
+        "wallet.send_review_fee_ten_percent" to { Send(sendReviewing().copy(bigFeeAsk = BigFee.TEN_PERCENT, bigFeeSats = 6_000)) },
+        "wallet.send_link_refused" to { Send(sendForm.copy(linkRefused = true)) },
+        "wallet.send_recent_waiting" to { Send(sendForm.copy(recentNotice = RecentSends.WAITING, recentReport = recentOf(RecentSends.WAITING, 0))) },
+        "wallet.send_recent_gone" to { Send(sendForm.copy(recentNotice = RecentSends.MAY_HAVE_GONE, recentReport = recentOf(RecentSends.MAY_HAVE_GONE, 2))) },
+        "wallet.send_recent_checking" to { Send(sendForm.copy(recentChecking = true)) },
+        "wallet.send_recent_unreadable" to { Send(sendForm.copy(recentNotice = RecentSends.UNREADABLE)) },
+        "wallet.send_no_estimates" to { Send(sendForm.copy(estimates = null, estimatesFailed = true)) },
+        "wallet.send_not_enough" to { Send(sendForm.copy(problem = SendProblem.NotEnough(12_000, 41_200))) },
+        "wallet.send_not_enough_confirmed" to { Send(sendForm.copy(problem = SendProblem.NotEnough(12_000, 41_200), includeUnconfirmed = true)) },
+        "wallet.send_note_needed" to { Send(sendForm.copy(block = SendBlock.NOTE_NEEDED)) },
+        "wallet.send_self_send" to { Send(sendForm.copy(problem = SendProblem.SelfSend)) },
+        "wallet.send_different" to { Send(sendForm.copy(problem = SendProblem.Different)) },
+        "wallet.send_server_failed" to { Send(sendForm.copy(problem = SendProblem.ServerFailed)) },
+        "wallet.send_not_backed_up" to { Send(sendForm.copy(block = SendBlock.NOT_BACKED_UP)) },
+        "wallet.send_caps_pending" to { Send(sendForm.copy(block = SendBlock.CAPS_PENDING)) },
+        "wallet.send_caps_duplicate" to { Send(sendForm.copy(block = SendBlock.CAPS_DUPLICATE)) },
+        "wallet.send_settings_unreadable" to { Send(sendForm.copy(block = SendBlock.SETTINGS_UNREADABLE)) },
+        "wallet.send_sign_unsettled" to { Send(sendForm.copy(block = SendBlock.SIGN_UNSETTLED)) },
+        "wallet.send_review" to { Send(sendReviewing()) },
+        "wallet.send_review_password" to { Send(sendReviewing(password = "secret")) },
+        "wallet.send_review_wrong_password" to { Send(sendReviewing().copy(error = FailureKind.BAD_PASSWORD)) },
+        "wallet.send_review_limit" to { Send(sendReviewing(sendReview.limited(LimitLine(41_200, 1_208_800)))) },
+        "wallet.send_review_dust" to { Send(sendReviewing(sendReview.dusty(200))) },
+        "wallet.send_review_no_caps" to { Send(sendReviewing(sendReview.noCaps())) },
+        "wallet.send_review_cap" to { Send(sendReviewing(sendReview.refused(CapText(CapReason.PER_TX, 30_000, null, null)))) },
+        "wallet.send_sent" to { Send(sendDone(SendOutcome.Sent(ConfirmTime.HOUR))) },
+        "wallet.send_broadcast_failed" to {
+            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.FEE_TOO_LOW)))
+        },
+        "wallet.send_broadcast_checking" to {
+            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER)).copy(discardLocked = true, checking = true))
+        },
+        "wallet.send_broadcast_unknown" to {
+            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER)).copy(discardLocked = true))
+        },
+        "wallet.send_broadcast_not_there" to {
+            Send(sendDone(SendOutcome.BroadcastFailed("mempool.space", BroadcastReason.NO_ANSWER)))
+        },
+        "wallet.send_cap_per_tx" to { Send(sendDone(SendOutcome.CapExceeded(CapText(CapReason.PER_TX, 500_000, null, null)))) },
+        "wallet.send_cap_per_period" to { Send(sendDone(SendOutcome.CapExceeded(sendPeriodCap))) },
+        "wallet.send_cap_per_period_none" to { Send(sendDone(SendOutcome.CapExceeded(sendPeriodCap.copy(remainingSats = 0, allowedAfter = null)))) },
+        "wallet.send_invalid_fee_rate" to { Send(sendDone(SendOutcome.InvalidPsbt("fee_rate", false))) },
+        "wallet.send_invalid_output_amount" to { Send(sendDone(SendOutcome.InvalidPsbt("output_amount", false))) },
+        "wallet.send_invalid_technical" to { Send(sendDone(SendOutcome.InvalidPsbt("derivation_key", false))) },
+        "wallet.send_invalid_wrong_seed" to { Send(sendDone(SendOutcome.InvalidPsbt("wrong_seed", true))) },
+        "wallet.send_invalid_other" to { Send(sendDone(SendOutcome.InvalidPsbt("something_new", false))) },
+        "wallet.send_signed_differs" to { Send(sendDone(SendOutcome.SignedDiffers)) },
+        "wallet.send_already_signed" to { Send(sendDone(SendOutcome.AlreadySigned)) },
+        "wallet.send_unreadable" to { Send(sendDone(SendOutcome.SignedUnreadable)) },
+        "wallet.send_already_signed_locked" to { Send(sendDone(SendOutcome.AlreadySigned).copy(discardLocked = true)) },
+        "wallet.send_unanswered" to { Send(sendDone(SendOutcome.Unanswered)) },
+        "wallet.send_lapsed" to { Send(sendDone(SendOutcome.Lapsed)) },
+        "wallet.send_superseded" to { Send(sendDone(SendOutcome.Superseded)) },
+        "wallet.send_duplicate" to { Send(sendDone(SendOutcome.DuplicateWallet)) },
+        "wallet.send_unsent" to { Send(sendDone(SendOutcome.Unsent)) },
+        "wallet.send_discard" to { Send(sendDone(SendOutcome.AlreadySigned).copy(discardAsk = true)) },
         "wallet.address_type" to { AddressTypeDialog(AddressTypes.TAPROOT, onPick = {}, onDismiss = {}) },
         "wallet.delete_confirm" to { Detail(detail.copy(delete = DeleteStep.CONFIRM)) },
         "wallet.delete_password" to { Detail(detail.copy(delete = DeleteStep.PASSWORD, password = "secret")) },
@@ -280,4 +401,15 @@ internal object WalletCatalog {
             )
         },
     )
+
+    private fun Review.rebuilt(capRefusal: CapText? = this.capRefusal, limit: LimitLine? = this.limit, toFee: Long = toFeeSats, cap: Boolean = hasCap) =
+        Review(address, payeeSats, changeSats, feeSats, vsize, totalOutSats, toFee, sendAll, leftBehind, cap, capRefusal, limit)
+
+    private fun Review.limited(l: LimitLine) = rebuilt(limit = l)
+
+    private fun Review.dusty(sats: Long) = rebuilt(toFee = sats)
+
+    private fun Review.noCaps() = rebuilt(cap = false)
+
+    private fun Review.refused(c: CapText) = rebuilt(capRefusal = c)
 }

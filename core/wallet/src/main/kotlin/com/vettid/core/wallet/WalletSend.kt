@@ -7,6 +7,8 @@ import com.vettid.core.chain.InspectSummary
 import com.vettid.core.chain.Network
 import com.vettid.core.chain.PayeeCheck
 import com.vettid.core.chain.SummaryDifference
+import com.vettid.core.vault.VaultOpException
+import kotlinx.serialization.json.JsonObject
 import java.time.Instant
 
 // The types of sending (W2-1; ANDROID-PLAN §4 "Sending", VAULT-MESSAGING §10.18). Memory only. Each prints its type name only: an
@@ -52,17 +54,45 @@ class SignedTx(val tx: ByteArray, val txid: String) {
     override fun toString(): String = "SignedTx"
 }
 
-/** The vault's answer to `wallet.sign`, or the lack of one. */
-sealed interface SignAnswer {
-    class Signed(val signed: SignedTx) : SignAnswer {
-        override fun toString(): String = "Signed"
+/** What the vault said to `wallet.sign`: [Ok] with the answer's body, or a [Refused] with the refusal and its code. */
+sealed interface SignReply {
+    /** `ok`: [body] is `{tx, txid, ...}`; the vault may have signed even if it does not read. */
+    class Ok(val body: JsonObject) : SignReply {
+        override fun toString(): String = "Ok"
     }
 
-    /**
-     * No answer yet. [resend] sends **the same request** again (same inner id and body; the vault answers from its cache and a
-     * spending limit counts it once) and answers as the first send would have; it never builds a request again.
-     */
-    class Unanswered(val forget: () -> Unit = {}, val resend: suspend () -> SignAnswer) : SignAnswer {
+    /** A refusal: final, and it counted nothing (§10.18). [error] holds the code. */
+    class Refused(val error: VaultOpException) : SignReply {
+        val code: String get() = error.code
+
+        override fun toString(): String = "Refused"
+    }
+}
+
+/**
+ * What one `wallet.sign` came to, as a result and not as an exception, so that nothing depends on a marker surviving a coroutine's
+ * copy of an exception:
+ * - [NotSent]: the failure came **before** the request went out; nothing reached the vault (the payment is given back);
+ * - [Answered]: the vault's answer, `ok` or a refusal;
+ * - [Unanswered]: sent, and no answer yet; [Unanswered.resend] sends **the same request** (same inner id and body; the vault answers
+ *   from its cache and a spending limit counts it once) and never builds a request again.
+ * A failure after the send without an answer is thrown from the call: the request may have applied.
+ */
+sealed interface SignOutcome {
+    class NotSent(val failure: Exception) : SignOutcome {
+        override fun toString(): String = "NotSent"
+    }
+
+    class Answered(val reply: SignReply) : SignOutcome {
+        override fun toString(): String = "Answered"
+    }
+
+    class Unanswered(
+        val forget: () -> Unit = {},
+        /** The vault's clock is past the request's `exp` plus the margin: it can no longer apply, and only then is it given up. */
+        val expired: () -> Boolean = { false },
+        val resend: suspend () -> SignOutcome,
+    ) : SignOutcome {
         override fun toString(): String = "Unanswered"
     }
 }
@@ -122,9 +152,11 @@ class PreparedSend internal constructor(
     internal val psbtBase64: String,
     internal val unsignedTxid: String,
     internal val generation: Long,
+    /** How many signings had gone out for the wallet when this was prepared: a later one makes this payment out of date. */
+    internal val signCount: Long = 0L,
 ) {
     /** The fee in sat/vB as the vault reads it. */
-    val feeRate: Double get() = feeSats.toDouble() / vsize
+    val feeRate: Double get() = vault.feeSats.toDouble() / vault.vsize
 
     override fun toString(): String = "PreparedSend"
 }
@@ -162,6 +194,21 @@ sealed interface PrepareResult {
     data class BadAddress(val check: PayeeCheck) : PrepareResult {
         override fun toString(): String = "BadAddress"
     }
+
+    /**
+     * The payee is one of this wallet's own addresses (review note 6): the vault would show that output as change and the compare
+     * would end in `summary_mismatch`. Named before anything is built; nothing is sent to the chain server or the vault.
+     */
+    data object SelfSend : PrepareResult
+
+    /** A signed payment of this wallet waits to be broadcast, or a signing waits for its answer: decide it before a new payment. */
+    data object Unsent : PrepareResult
+
+    /**
+     * The recent-payments check ([WalletsManager.recentSends]) has not been run for this wallet in this session, or it found something
+     * that was not acknowledged ([WalletsManager.acknowledgeRecent]): no payment is prepared before.
+     */
+    data object RecentUnchecked : PrepareResult
 
     data object BadFeeRate : PrepareResult
 
@@ -276,6 +323,27 @@ sealed interface SendResult {
      */
     data object AlreadySigned : SendResult
 
+    /**
+     * The vault answered `ok` but the answer does not read as a signed transaction. It may have signed (and counted) it; the payment
+     * stays consumed. Check the wallet before sending again.
+     */
+    data object SignedUnreadable : SendResult
+
+    /**
+     * Another `wallet.sign` went out for this wallet after this payment was prepared (review note 3): its coins may be spent by that
+     * one, so it is not signed. Nothing was signed; prepare it again.
+     */
+    data object Superseded : SendResult
+
+    /**
+     * An unanswered signing that the vault will not apply any more (its `exp` passed, or the credential moved on): it is dropped from
+     * memory. **It may have been signed** (and counted against the limit) before: check the wallet before sending again.
+     */
+    data object SignLapsed : SendResult
+
+    /** The chain server answered that it does not know the signed transaction ([WalletsManager.checkSent]): it is still kept. */
+    data object NotOnServer : SendResult
+
     /** Nothing to send again (no kept transaction, no unanswered signing). */
     data object NothingToSend : SendResult
 
@@ -317,5 +385,40 @@ object FeeTargets {
     fun muchHigher(rate: Double, fast: Double): Boolean = rate > 2 * fast
 }
 
-/** Added as a suppressed exception to a failure of `wallet.sign` from before its request was sent: nothing reached the vault. */
-class SignNotSent : Exception("wallet.sign: not sent")
+/** The outcome of [WalletsManager.discardUnsent]. */
+enum class DiscardResult {
+    DROPPED,
+
+    /**
+     * The signed transaction may have reached the network (a broadcast without a definite answer) and has not been found absent: it is
+     * kept until [WalletsManager.checkSent] has said that a reachable server does not have it. Dropping it would let a second
+     * payment from other coins confirm beside it.
+     */
+    MUST_CHECK,
+}
+
+/**
+ * What the vault's recent signed payments of a wallet look like on the chain server ([WalletsManager.recentSends]): a payment the member
+ * approved may still be on its way, whatever became of this phone's memory (a lock, a restart). The worst applies.
+ */
+enum class RecentSends {
+    /** Nothing signed in the last 24 hours that is not confirmed. */
+    CLEAR,
+
+    /** Signed, and in the server's mempool: waiting for confirmation. */
+    WAITING,
+
+    /** Signed, and the server does not have it: it may have gone through (a broadcast that got no answer), or never left the phone. */
+    MAY_HAVE_GONE,
+
+    /** The history or the server could not be read: nothing is known. */
+    UNREADABLE,
+}
+
+/**
+ * The answer of [WalletsManager.recentSends]: the worst [kind], and, for a payment that waits or may have gone through, **the most recent
+ * one** named from the vault's history ([latest]: its time, amount and payee) and how many more are in the same state ([more]).
+ */
+class RecentReport(val kind: RecentSends, val latest: WalletTx? = null, val more: Int = 0) {
+    override fun toString(): String = "RecentReport"
+}

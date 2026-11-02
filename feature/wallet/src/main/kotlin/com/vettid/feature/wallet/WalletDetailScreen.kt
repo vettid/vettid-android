@@ -58,6 +58,7 @@ data class WalletDetailActions(
     val onBack: () -> Unit = {},
     val onRefresh: () -> Unit = {},
     val onReceive: () -> Unit = {},
+    val onSend: () -> Unit = {},
     val onBackUp: () -> Unit = {},
     val onRetryCaps: () -> Unit = {},
     val onAcknowledge: () -> Unit = {},
@@ -183,12 +184,22 @@ private fun DetailBody(state: WalletDetailUiState, actions: WalletDetailActions)
         LookupProblem(state, actions)
     }
     CapsNotes(state, actions)
-    PrimaryButton(
-        stringResource(R.string.wallet_receive),
-        actions.onReceive,
-        Modifier.testTag("wallet_receive"),
-        enabled = state.lookup != LookupResult.AddressMismatch && !state.capsPending,
-    )
+    val open = state.lookup != LookupResult.AddressMismatch && !state.capsPending
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.fillMaxWidth()) {
+        PrimaryButton(
+            stringResource(R.string.wallet_receive),
+            actions.onReceive,
+            Modifier.weight(1f).testTag("wallet_receive"),
+            enabled = open,
+        )
+        // The same holds as Receive; the screen itself shows the others (the phrase, a signing that may still apply).
+        PrimaryButton(
+            stringResource(R.string.wallet_send),
+            actions.onSend,
+            Modifier.weight(1f).testTag("wallet_send"),
+            enabled = open && !state.noteNeeded,
+        )
+    }
 }
 
 /** The spending limit chosen is sent first: no Receive until it is set (and the way out of unreadable settings); a failed reset. */

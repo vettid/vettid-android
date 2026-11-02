@@ -270,7 +270,7 @@ The A2 exit test:
   Catalog adds `wallet.limits`, `wallet.limits_none`, `wallet.limits_one`, `wallet.limits_unsupported`, `wallet.limits_lower`,
   `wallet.limits_lower_bad`, `wallet.limits_lower_confirm`, `wallet.limits_raise`, `wallet.limits_raise_confirm`,
   `wallet.limits_remove`, `wallet.limits_bad_pin`, `wallet.limits_backoff`, `wallet.limits_conflict`, `wallet.detail_reset`,
-  `wallet.detail_reset_confirm`, `wallet.receive_reset`, `wallet.receive_limits_ask`. The review of a send is later.
+  `wallet.detail_reset_confirm`, `wallet.receive_reset`, `wallet.receive_limits_ask`. The review of a send is W2-2 (below).
   W2-1 (sending, no screens; ANDROID-PLAN §4 "Sending", VAULT-MESSAGING §10.18): `WalletApi.kt` adds `walletPsbtInspect`, `walletSign` (a
   credential operation sealed `{password, item_id: wallet_id, payload_sha256}`, the hash of the PSBT's **decoded bytes**,
   `WalletSignBinding`; no `broadcast`: the app broadcasts) and `walletHistory`; `walletMarkers` gains `wallet.psbt.inspect` and
@@ -291,11 +291,83 @@ The A2 exit test:
   `per_period`, `limit_sats`, `remaining_sats`, `allowed_after`), `invalid_psbt` with its reason (`wrong_seed` is an alarm),
   `credential_locked`, `duplicate_wallet`, a broadcast failure with its reason (`BroadcastCause`, the transaction kept). Texts are W2-2's.
   Review fixes: a reviewed payment (its unsigned txid) is **consumed** when its `wallet.sign` goes out and is signed once (`SendResult.AlreadySigned`;
-  any vault refusal of the signing (final, counts nothing) and any failure from before the request went out (`SignNotSent`) give it back; an
+  any vault refusal of the signing (final, counts nothing) and any failure from before the request went out (`SignOutcome.NotSent`) give it back; an
   answer that does not read, or a failure after the send without an answer, does not); any approve is refused while the wallet holds a signed `tx`. A cached or late answer keeps its UTKs but never an older credential blob
   (`CredentialOps.keepIfNewer`: the blob only while the credential held is still the one the request was sent at). `wallet.sign` is marked durably (`SignMark` in `DeviceState.unsettledSigns`) and holds new sends for that wallet
   (`SendHold.SIGN_UNSETTLED`) across lock, unlock and restart until `credential.version` passes the version it was sent at or its `exp` passes
   (`walletSignsOutstanding`). A lock drops the kept request (`forget`) and nothing is broadcast after one.
+  W2-2 (the send screens; `SendRoute` in `:core:data`, `SendViewModel`, `SendScreen`, `SendModels`, `SendEngine` in `:feature:wallet`): **Send**
+  beside Receive on the detail (off with Receive's holds and while the chain server's note is unanswered); the screen shows a notice
+  instead of the form for the phrase not backed up, a pending limit (it is sent first, as for Receive), settings that cannot be read, a
+  network not chosen or not offered, and every `SendHold` (`SIGN_UNSETTLED`: "your vault may have signed a payment … check before you send
+  again", which is also what a sign answer lost across a restart shows). `SendRoute` holds the password and a prepared payment: never
+  saved with the stack, `popWalletSecrets` pops it. `SecureWindow()`; the password is typed once, in the state only until `approve()`
+  takes it (blanked at once), and the PSBT lives in `ManagerSendEngine` (a `SendEngine` the tests replace) and `:core:wallet` only.
+  Form: the payee is **trimmed at both ends** as typed or pasted (`SendInput.parse`; `Payee` refuses spaces), a `bitcoin:` URI gives its
+  address and `amount` (other parameters ignored; a capital bech32 address is read in lower case), `QrScanner` for the scan, the network
+  checked as typed with `Payee` ("This is a {network} address. This wallet is on {other}."), BTC or sats (a valid amount is converted
+  when the unit changes), Send all, Slow, Normal, Fast from `FeeEstimates`/`FeeTargets` or Custom (1 to 1,000 sat/vB), above twice Fast a
+  `ConfirmDialog` ("This fee is much higher than needed right now. Pay it anyway?"), "Include unconfirmed coins" off. Review shows
+  **the vault's summary** (`Review` built from `PreparedSend.vault`: payee, change, fee in sats and sat/vB from its `vsize`, total
+  leaving = `sending_sats + fee_sats`), the dust remainder that went to the fee, and, only when the inspect returned a `cap` and the wallet
+  has `per_period_sats`, "Counts toward your limit for the last 24 hours: {outflow}. Left after this: {left}" (from `spent_sats`);
+  a `cap` with `ok: false` shows the `cap_exceeded` text and no password field. `PrepareResult.Different` is the plan's "Your vault saw a
+  different payment…". **Self-send** (review note 6): `PrepareResult.SelfSend`, detected in `prepareSend` **before** the build and the
+  compare (`isOwnAddress`: both accounts, both chains, up to the vault's next index plus the gap), so nothing is built or sent to any server;
+  the screen has its own text; an own address beyond that range still ends in `summary_mismatch`. Results: Sent ("in about" 20 minutes,
+  an hour or a day from the fee target, a custom rate by the quickest target it reaches), Broadcast failed ("Signed, but {host} didn't
+  accept it: {reason}…", Try again = `retryBroadcast`, a way to Chain server), the `cap_exceeded` and `invalid_psbt` texts, and plain
+  notices for `SignedDiffers`, `AlreadySigned`, `Unanswered`, a lapse, a superseded payment and `duplicate_wallet`; **Discard is on every
+  ending that may have signed, except while a signed payment may be on the network**. Review note 2 (after review): a kept transaction has
+  a `mayBeOnNetwork` flag in `WalletsManager`, set by any broadcast that ended without a definite answer (`BroadcastCause.Server`) and kept
+  for that transaction through later attempts (another server that cannot be opened, or refuses on its own policy, clears nothing).
+  `discardUnsent` returns `DiscardResult.MUST_CHECK` while it is set; only `checkSent` clears it: `GET /tx/{txid}`
+  (`EsploraClient.knowsTransaction`, `SpendAccess.knows`), known is Sent, and a "not found" is asked again after `settleMs` (4 s) before it
+  is believed; a second question that fails decides nothing. The view model asks `checkSent` on entering any ending (BroadcastFailed,
+  AlreadySigned, Unsent, ...) when `SendEngine.needsCheck`, keeps `discardLocked`, and refuses `askDiscard()`/`discard()` itself.
+  Review note 1 (after review): an unanswered signing is given up (`SendResult.SignLapsed`) only once the vault's clock is past its `exp`
+  plus the settle margin (`walletSignExpired`); before that it is kept even if `credential.version` moved on (the vault may have applied it
+  and answers a resend from its cache), and past `exp` a late answer is taken by one more resend before the request is forgotten.
+  An `ok` that does not read is `SendResult.SignedUnreadable` (consumed, "may have been signed"), never an exception to the screen; the view
+  model also turns any other exception of approve/retry into that notice, and of prepare into a form problem. While a request is out back and
+  the arrow do nothing (`SendUiState.swallowsBack`). `isOwnAddress` runs on `Dispatchers.Default`; `giveBack` is guarded by the generation.
+  `ManagerSendEngine.reviewFrom` builds the `Review` from the vault's summary alone (no summary payee: no review, no fallback).
+  Second review: a `VaultFailure` after the sign request went out ends as `SendResult.SignedUnreadable` (consumed), never as a password
+  error (one from before is `NotSent`; `api()` is inside the sign's try); `prepareSend` refuses a new payment while the wallet has a kept
+  transaction or an unanswered signing (`PrepareResult.Unsent`, shown as the Unsent notice under B1's Discard rule); Try again on the
+  chain server's note re-checks it (`NOTE_NEEDED` is a gate); `InspectSummary`, `SummaryInput` and `SummaryOutput` print their type names.
+  Owner's answers (#254): a `bitcoin:` link with an unknown `req-*` parameter, a bad (negative, over 8 decimals, not a number) or doubled
+  `amount` is refused whole with a notice and fills nothing in (`SendInput.Parsed.refused`); a valid link without an amount clears the
+  amount field; other unknown parameters are ignored. **Recent payments** (`WalletsManager.recentSends`, memory only): when Send opens
+  (after the holds) the vault's `wallet.history` of the last 24 hours (by `at`; none counts as recent; at most 10 asked) is checked against
+  the chain server, one `GET /tx/{txid}` each (`EsploraClient.transactionState`: confirmed, in the mempool, not found); not found is
+  "may have gone through", a history or server that cannot be read is "couldn't check" (fail secure), in the mempool is "waiting for
+  confirmation"; every one of them needs "Send anyway" before a new payment is prepared (`canReview`), waits at most 20 s, and never
+  blocks for good. Third review: the check runs whenever a hold clears (first look, Try again, a hold lifting) and nothing is reviewed or
+  prepared while it runs (`recentChecking`; "Checking your recent payments…"); the core enforces it too: `WalletsManager.prepareSend`
+  returns `PrepareResult.RecentUnchecked` until `recentSends(walletId)` ran in this session and, if it found something,
+  `acknowledgeRecent(walletId)` was called (per wallet, memory only, cleared at lock). `recentSends` returns a `RecentReport` that names
+  the newest payment (time, amount, payee) and how many more, and maps any exception to UNREADABLE; the view model does the same. A
+  refused `bitcoin:` link clears the address and the amount and blocks Review until the address is edited. The review asks about the 10%
+  fee again, naming the fee, when the vault's fee is more than 1.5 times the one agreed to. One fee dialog for two guards: above twice Fast, or more than 10% of the amount sent (asked before the build when even
+  110 vB at that rate is over 10% of a typed amount, else on the review from the vault's own fee, e.g. Send all; both: the 10% text). Review note 3: `PreparedSend.signCount`
+  against a per-wallet counter bumped when a `wallet.sign` goes out and restored when it is given back; a payment prepared before another
+  signing is `SendResult.Superseded`. **`WalletOps.sign` returns a `SignOutcome`** (`NotSent(failure)` / `Answered(SignReply.Ok(body) |
+  Refused(error))` / `Unanswered(forget, resend)`): the `SignNotSent` marker and the cause-chain walk (`givesBack`) are gone, nothing depends
+  on a suppressed exception surviving a coroutine's copy; the rules are unchanged (`NotSent` and any refusal give the payment back; `ok`,
+  even one that does not read, and `Unanswered` keep it consumed; a failure thrown after the send keeps it consumed). Texts are marked
+  `draft` (the plan's, word for word) or `new`, none approved; `WalletTextsTest` holds the drafts. Catalog: `wallet.send`, `wallet.send_filled`,
+  `wallet.send_btc`, `wallet.send_all`, `wallet.send_scan`, `wallet.send_scan_unavailable`, `wallet.send_wrong_network`,
+  `wallet.send_not_an_address`, `wallet.send_fee_custom`, `wallet.send_fee_custom_bad`, `wallet.send_fee_much_higher`,
+  `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_not_enough_confirmed`, `wallet.send_fee_ten_percent`, `wallet.send_review_fee_ten_percent`, `wallet.send_link_refused`, `wallet.send_recent_waiting`, `wallet.send_recent_checking`, `wallet.send_recent_gone`, `wallet.send_recent_unreadable`, `wallet.send_note_needed`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
+  `wallet.send_not_backed_up`, `wallet.send_caps_pending`, `wallet.send_caps_duplicate`, `wallet.send_settings_unreadable`,
+  `wallet.send_sign_unsettled`, `wallet.send_review`, `wallet.send_review_password`, `wallet.send_review_wrong_password`,
+  `wallet.send_review_limit`, `wallet.send_review_dust`, `wallet.send_review_no_caps`, `wallet.send_review_cap`, `wallet.send_sent`,
+  `wallet.send_broadcast_failed`, `wallet.send_broadcast_checking`, `wallet.send_broadcast_unknown`, `wallet.send_broadcast_not_there`,
+  `wallet.send_cap_per_tx`, `wallet.send_cap_per_period`, `wallet.send_cap_per_period_none`, `wallet.send_invalid_fee_rate`,
+  `wallet.send_invalid_output_amount`, `wallet.send_invalid_technical`, `wallet.send_invalid_wrong_seed`, `wallet.send_invalid_other`,
+  `wallet.send_signed_differs`, `wallet.send_already_signed`, `wallet.send_already_signed_locked`, `wallet.send_unreadable`, `wallet.send_unanswered`, `wallet.send_lapsed`, `wallet.send_superseded`,
+  `wallet.send_duplicate`, `wallet.send_unsent`, `wallet.send_discard`.
 
 ## Device testing
 
