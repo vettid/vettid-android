@@ -163,7 +163,7 @@ class VaultApi(
         })
     }
 
-    suspend fun credentialFetch() = cred.fetch()
+    suspend fun credentialFetch() = cred.fetchLocking()
 
     suspend fun credentialVersion(): CredentialInfo = op("credential.version").decode(CredentialInfo.serializer())
 
@@ -212,7 +212,7 @@ class VaultApi(
      * (`credential.utk.get`).
      */
     suspend fun credentialTakeOver() {
-        cred.fetch()
+        cred.fetchLocking()
         cred.keep(op("credential.utk.get"))
     }
 

@@ -47,8 +47,6 @@ class KeptChange(
     val body: JsonObject,
     val exp: Instant,
     val sentVersion: Long,
-    /** The credential key held when it was sent (null: none known); a late answer's blob is kept only under the same key. */
-    val sentKey: String? = null,
 ) {
     /** The vault's answer to any of the sends, whenever it comes ([VaultDevice.sendKept]). */
     internal val answer = CompletableDeferred<Inner>()
