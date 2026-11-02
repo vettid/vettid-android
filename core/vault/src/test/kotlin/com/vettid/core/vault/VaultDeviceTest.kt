@@ -2874,12 +2874,20 @@ class VaultDeviceTest {
         @Volatile
         var failNext = false
 
+        /** Saves to let through before [failNext] takes effect. */
+        @Volatile
+        var passFirst = 0
+
         override fun load(): ByteArray? = inner.load()
 
         override fun save(state: ByteArray) {
             if (failNext) {
-                failNext = false
-                throw java.io.IOException("disk full")
+                if (passFirst > 0) {
+                    passFirst--
+                } else {
+                    failNext = false
+                    throw java.io.IOException("disk full")
+                }
             }
             inner.save(state)
         }
@@ -2922,6 +2930,33 @@ class VaultDeviceTest {
             fetch.await()
             assertEquals("TkVX", d.credentialBlob())
             assertEquals(1L, d.credentialVersion)
+        }
+    }
+
+    /**
+     * (#256 lead recheck) The UTKs are saved, then the blob's own save fails: the held copy is put back (memory never runs ahead
+     * of the disk), so the reset is not reported as made and the old blob is still held, on disk and in memory.
+     */
+    @Test
+    fun aResetAnswerWhoseBlobSaveFailsAfterTheUtksIsNotReportedAsMade() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            val kept = lostReset(d, v, api, 3, "key-one", "00112233445569c4")
+            val again = async(Dispatchers.IO) { api.changeResend(kept) }
+            val r = v.open(nextDeposit().second)
+            val utk = utkJson("00112233445569c5", KemPrivateKey.generate())
+            d.handle(v.seal(r.type, """{"credential":"TkVX","version":1,"key":"key-two","utks":[$utk]}""", re = r.id, status = Inner.STATUS_OK))
+            val answer = again.await()!!
+            store.passFirst = 1
+            store.failNext = true
+            val e = runCatching { api.changeSettle(kept, answer) }.exceptionOrNull()
+            assertTrue("not reported as made: $e", e is ChangeUnansweredException)
+            assertFalse("the UTKs' save went through first", store.failNext)
+            assertEquals("the old blob is still held", "QkxPQg==", d.credentialBlob())
+            assertEquals(3L, d.credentialVersion)
+            assertNull("nothing acknowledged", deposits.poll(300, TimeUnit.MILLISECONDS))
         }
     }
 
