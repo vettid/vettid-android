@@ -277,7 +277,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             val body = sealedBody(type, utk, true, id, payload, null, extra)
             val exp = d.vaultNow().plus(ChangeTypes.EXP).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
             d.trackCredential(id, exp, walletId?.let { SignMark(it, version) })
-            KeptChange(type, id, body, exp, version).also { stored = true }
+            KeptChange(type, id, body, exp, version, d.credentialKey).also { stored = true }
         } finally {
             // Nothing was sent: the UTK goes back to the pool.
             if (!stored) d.returnUtk(utk)
@@ -310,7 +310,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         if (r.inner.status != Inner.STATUS_OK) return settle(kept, r)
         d.dropKept(kept)
         try {
-            keepIfNewer(r.body, kept.sentVersion)
+            keepIfNewer(r.body, kept)
         } catch (_: java.io.IOException) {
             // The operation applied; the blob is fetched by the next operation that finds it stale.
         }
@@ -319,13 +319,17 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
 
     /**
      * Keeps what a (possibly cached, possibly late) answer carries: the UTKs always, the blob and its acknowledgement only when the
-     * credential held is **still the one the request was sent at** ([sentVersion]) and the answer's `credential_version` is above
-     * it. Another credential operation (or a reset) may have moved the credential on while this answer was awaited; storing the
-     * blob then would present a version the vault has passed, which it freezes as a clone.
+     * credential held is **still the one the request was sent at** (same version and, when both are known, same credential key) and
+     * the answer's `credential_version` is above it. Another credential operation (or a reset, which restarts the version under a
+     * new key) may have moved the credential on while this answer was awaited; storing the blob then would present a version the
+     * vault has passed, which it freezes as a clone. The caller must hold [VaultDevice.credentialLock] (the check and the write
+     * must not be separated by another credential operation; [Mutex] is not reentrant, so this never takes it).
      */
-    private suspend fun keepIfNewer(o: JsonObject, sentVersion: Long) {
+    private suspend fun keepIfNewer(o: JsonObject, kept: KeptChange) {
         val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
-        if (d.credentialVersion == sentVersion && (v == null || v > sentVersion)) {
+        val heldKey = d.credentialKey
+        val sameLineage = kept.sentKey == null || heldKey == null || kept.sentKey == heldKey
+        if (sameLineage && d.credentialVersion == kept.sentVersion && (v == null || v > kept.sentVersion)) {
             keep(o)
         } else {
             keep(JsonObject(o.filterKeys { it != "credential" }))
@@ -583,7 +587,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
                 val id = d.newId()
                 val body = sealedBody(type, utk, true, id, payload, null) {}
                 val exp = d.vaultNow().plus(ChangeTypes.EXP).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
-                KeptChange(type, id, body, exp, version).also {
+                KeptChange(type, id, body, exp, version, d.credentialKey).also {
                     onMarker(it.marker)
                     stored = true
                     secretGeneration++
@@ -613,9 +617,10 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
 
     /**
      * (§11.14.9 step 4) An answer to a change decides it: the new UTKs are kept, and the new blob while the credential held is still
-     * the one the change was sent at (a failure to keep or ack them
-     * does not make the change fail: it applied), or the refusal is thrown as it is. A `stale_credential` fetches the
-     * latest blob and is thrown; it is never retried with the typed secrets.
+     * the one the change was sent at (a failure to keep or ack them does not make the change fail: it applied), or the refusal is
+     * thrown as it is. A `stale_credential` fetches the latest blob and is thrown; it is never retried with the typed secrets.
+     * Takes [VaultDevice.credentialLock] for the kept answer of an ok status, so it must not be called with the lock held for one
+     * ([settleKept] calls it only for a refusal, which returns before the lock).
      */
     suspend fun settle(kept: KeptChange, r: VaultMessage): JsonObject {
         d.dropKept(kept)
@@ -633,7 +638,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         try {
             // A late or cached answer (§11.14.9 step 3, or [LostAnswer] after the change was settled elsewhere) must not roll the
             // credential back: the blob only while the credential held is still the one the change was sent at ([keepIfNewer]).
-            keepIfNewer(r.body, kept.sentVersion)
+            d.credentialLock.withLock { keepIfNewer(r.body, kept) }
         } catch (_: java.io.IOException) {
             // The change applied; the blob is fetched again by the next operation that finds it stale.
         }
