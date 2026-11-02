@@ -218,6 +218,8 @@ internal fun manager(
     chain,
     flags,
     { it == Network.SIGNET || it == Network.TESTNET4 },
+    // No work on another thread that could outlive the test and touch the next one's Main dispatcher.
+    compute = kotlinx.coroutines.Dispatchers.Unconfined,
 )
 
 /** The chain server setting, without HTTP: whatever [server] says. */

@@ -33,6 +33,7 @@ import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.WalletImport
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -195,6 +196,11 @@ class WalletsManager(
     private val closeWindow: suspend () -> Unit = {},
     /** How long a "not found" for a transaction just broadcast is doubted before it is believed ([checkSent]). */
     private val settleMs: Long = 4_000,
+    /**
+     * Where the pure, CPU-bound work runs (the merge, the own-address check): [Dispatchers.Default] in the app. View-model tests
+     * pass an unconfined dispatcher, so no work outlives a test on another thread and touches the next test's Main dispatcher.
+     */
+    private val compute: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val availabilityFlow = MutableStateFlow(WalletAvailability.UNKNOWN)
     val availability: StateFlow<WalletAvailability> = availabilityFlow.asStateFlow()
@@ -1115,7 +1121,7 @@ class WalletsManager(
         }
         val unsent = synchronized(lock) { keptTx[walletId]?.takeIf { !it.mayBeOnNetwork }?.signed?.txid?.lowercase() }
         val items = try {
-            withContext(Dispatchers.Default) {
+            withContext(compute) {
                 TransactionMerge.merge(
                     found.own, found.chain, signed, found.tip, vaultNow, setOfNotNull(unsent),
                 ) { Payee.check(network, it) is PayeeCheck.Ok }
@@ -1325,7 +1331,7 @@ class WalletsManager(
         }
         if (request.feeRate !in CoinSelection.MIN_FEE_RATE..CoinSelection.MAX_FEE_RATE) return PrepareResult.BadFeeRate
         val derived = checkedWallet(wallet, network, g) ?: return PrepareResult.AddressMismatch
-        if (withContext(Dispatchers.Default) { isOwnAddress(wallet, derived, request.address) }) return PrepareResult.SelfSend
+        if (withContext(compute) { isOwnAddress(wallet, derived, request.address) }) return PrepareResult.SelfSend
         if (!flags.privacyNoteShown(walletId)) return PrepareResult.NoteNeeded
         val spend = when (val open = chain.open(network)) {
             is ChainOpen.Ready -> open.spend?.let { open to it } ?: return PrepareResult.NoChain(open)
