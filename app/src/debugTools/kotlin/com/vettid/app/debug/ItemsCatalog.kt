@@ -222,7 +222,7 @@ internal object ItemsCatalog {
         return RuleEditUiState(
             RuleDraft(
                 "", listOfNotNull(tag), mode = mode, agentId = "a1", perHour = 60, perDay = 1_000, statusTtl = 900,
-                expiresAt = Instant.now().plusSeconds(30 * 86_400L), ruleId = "r1".takeIf { tag != null }, version = 1,
+                expiresAt = Instant.now().plusSeconds(30 * 86_400L), ruleId = "r1".takeIf { tag != null }, version = 1, storedMode = mode.takeIf { tag != null },
             ),
             "Claude on work laptop", tagNames, expiry = RuleExpiry.MONTH, perHourText = "60", perDayText = "1000",
             rules = listOf(saved), itemWays = itemWays,
@@ -322,7 +322,8 @@ internal object ItemsCatalog {
         "items.agent_rule_new" to { AgentRule(agentState()) },
         "items.agent_rule_new_ways" to { AgentRule(agentState(itemWays = true)) },
         "items.agent_rule_edit_auto" to { AgentRule(agentState(itemWays = true, mode = ShareMode.AUTO, tag = "api").copy(dirty = true)) },
-        "items.agent_rule_auto_no_ways" to { AgentRule(agentState(itemWays = false, mode = ShareMode.AUTO, tag = "api")) },
+        // A stored automatic rule on a vault without item_ways: opens as Ask, Automatic disabled, with the note.
+        "items.agent_rule_auto_no_ways" to { AgentRule(agentState(itemWays = false, mode = ShareMode.AUTO, tag = "api").let { it.copy(draft = it.draft.copy(mode = ShareMode.ASK)) }) },
         "items.agent_rule_preview" to { AgentRule(agentState(tag = "api").copy(preview = agentPreview)) },
         "items.agent_rule_more" to { AgentRule(agentState(tag = "api").copy(moreOptions = true)) },
         "items.agent_rule_invalid" to { AgentRule(agentState(tag = "api").copy(perHourText = "", perDayText = "90000")) },

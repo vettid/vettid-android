@@ -270,8 +270,17 @@ data class RuleEditUiState(
     /** The rule is an agent's (AA4). */
     val isAgent: Boolean get() = draft.agentId != null
 
-    /** "Include tagged items automatically" is offered (decision 17); an agent rule that is already `auto` keeps showing it. */
-    val autoOffered: Boolean get() = !isAgent || itemWays || draft.mode == ShareMode.AUTO
+    /** "Include tagged items automatically" can be chosen (decision 17): not without `item_ways`, for any agent rule. */
+    val autoEnabled: Boolean get() = !isAgent || itemWays
+
+    /**
+     * The choice is on the screen: always with `item_ways`; without it, only (disabled) for a rule that is stored as `auto`, to
+     * show what it was and that it now asks (owner decision 2026-11-02, b).
+     */
+    val autoShown: Boolean get() = autoEnabled || draft.storedMode == ShareMode.AUTO
+
+    /** A stored `auto` rule on a vault without `item_ways`: it opens as Ask and the note says why. */
+    val autoDemoted: Boolean get() = isAgent && !itemWays && draft.storedMode == ShareMode.AUTO
 
     /** The line "On this vault, the agent may receive the values…" on the editor (and the row), decision 17. */
     val waysWarning: Boolean get() = isAgent && !itemWays
@@ -371,9 +380,11 @@ class RuleEditViewModel @Inject constructor(
             state.update { it.copy(rules = rules, loading = ruleId != null, itemWays = sharing.itemWays) }
             if (ruleId != null) {
                 val r = rules.firstOrNull { it.ruleId == ruleId } ?: throw VaultFailure(FailureKind.NOT_FOUND)
+                // Without `item_ways` a stored `auto` agent rule opens as Ask: saving it sends `ask` (owner decision 2026-11-02, b).
+                val demote = agentId != null && !sharing.itemWays && r.mode == ShareMode.AUTO
                 state.update {
                     it.copy(
-                        draft = RuleDraft.of(r).copy(connectionId = connectionId),
+                        draft = RuleDraft.of(r).copy(connectionId = connectionId, mode = if (demote) ShareMode.ASK else r.mode),
                         expiry = if (r.expiresAt == null) RuleExpiry.NEVER else RuleExpiry.KEEP,
                         usesText = r.uses?.toString().orEmpty(),
                         perHourText = r.perHour?.toString().orEmpty(),
@@ -410,7 +421,7 @@ class RuleEditViewModel @Inject constructor(
 
     fun setMode(m: ShareMode) {
         // Decision 17: without `item_ways` a new agent rule cannot be `auto`.
-        if (m == ShareMode.AUTO && !state.value.autoOffered) return
+        if (m == ShareMode.AUTO && !state.value.autoEnabled) return
         change { it.copy(mode = m) }
     }
 

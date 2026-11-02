@@ -253,6 +253,16 @@ class DevicesViewModelsTest {
     }
 
     @Test
+    fun aDesktopsRulesAreNeverRead() = runTest {
+        val vm = page("d1")
+        advanceUntilIdle()
+        vm.refreshRules()
+        advanceUntilIdle()
+        assertTrue("agentRules" !in sharing.calls)
+        assertFalse(vm.uiState.value.rulesLoaded)
+    }
+
+    @Test
     fun aRuleListThatFailsKeepsWhatWasShownAndSaysSo() = runTest {
         val vm = page("a1")
         advanceUntilIdle()

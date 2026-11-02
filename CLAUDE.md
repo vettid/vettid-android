@@ -218,16 +218,22 @@ The A2 exit test:
   (nothing is unlocked for a rule the app would refuse), sends `credential.unlock`, then `share.rule.set` (agent subject, `per_hour` /
   `per_day` always, `status_ttl`), then `credential.lock` **only if the window was closed before the save**, in a `finally` that is
   not cancellable: so after a refused save too, and after an unlock whose answer was lost (it may have opened the window); not after a
-  definite refusal of the unlock (`bad_password`, `backoff`, `credential_frozen`, `rotation_required`, `owner_check_required`). A window that was
+  definite refusal of the unlock (six: `bad_password`, `backoff`, `credential_frozen`, `rotation_required`, `owner_check_required`,
+  `credential_unsettled`). The window counts as open only with more than 30 s left (clock skew), so a borderline one is locked by the
+  save that reopened it. Known limit, not built: no app-wide mutex with the votes' or the wallet's window use, so a lock after a
+  rule save can end a window another flow opened a moment before (it then gets `credential_locked` and asks again). A window that was
   already open is left as it was. A lock that fails is `SharingRepository.windowNotClosed` (the votes' notice, **Close it now**).
   The password is in `RuleEditUiState` only while the request runs; the state prints only its type name. `credential_locked`
   answers the prompt again and sends the same request once; a second one is "Your credential locked again before the rule was saved.
   Try again."; `conflict` re-reads the rule ("Another device changed this rule. Here is the current one."); a wrong password, a
   backoff and an open credential alarm keep the prompt (the alarm with a link to it). The dry run (preview) is sent without the
-  window. Deleting a rule (`Stop sharing`) asks no password. **`item_ways` (decision 17):** `Capabilities.ITEM_WAYS` /
+  window; its summary counts only what the vault's `outcome`s say (an answer without them is "0 will be asked about, 0 included now"; the
+  connection editor still guesses from its mode). Deleting a rule (`Stop sharing`) asks no password. **`item_ways` (decision 17):** `Capabilities.ITEM_WAYS` /
   `ReleasePath.itemWays(local.capabilities)` / `SharingRepository.itemWays`; without it **Include tagged items automatically** is not
-  offered (`RuleEditUiState.autoOffered`; a rule that is already `auto` keeps showing, selected, so it is never silently changed; a
-  new `auto` rule is refused by the manager before anything is unlocked) and the editor and every row carry "On this vault, the agent
+  offered: `saveAgentRule` refuses `auto` for every rule, new or existing, before anything is unlocked, and an agent's draft cannot go
+  through `saveRule`. Owner decision 2026-11-02 (b): an existing automatic agent rule on a vault without `item_ways` opens as Ask
+  (Automatic shown, disabled, with "This vault can't keep the agent from receiving item values, so this rule now asks you first.")
+  and saves only as ask (`RuleEditUiState.autoShown` / `autoEnabled` / `autoDemoted`, `RuleDraft.storedMode`). The editor and and every row carry "On this vault, the agent
   may receive the values of the items it uses, and its app may keep them in its history." (`core_ui_agent_ways_warning`). Texts in
   `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
   for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it

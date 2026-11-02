@@ -72,12 +72,22 @@ class AgentRuleScreenTest {
     }
 
     @Test
+    fun aStoredAutoRuleWithoutItemWaysShowsAutomaticDisabledAskSelectedAndTheNote() {
+        show(state(itemWays = false, d = draft.copy(storedMode = ShareMode.AUTO, ruleId = "r1")) { it.copy(rules = emptyList()) })
+        rule.onNodeWithTag("rule_mode_ask").assertIsSelected()
+        rule.onNodeWithTag("rule_mode_auto").assertIsNotEnabled()
+        rule.onNodeWithTag("agent_rule_auto_demoted").performScrollTo()
+            .assertTextContains("This vault can't keep the agent from receiving item values, so this rule now asks you first.")
+    }
+
+    @Test
     fun withItemWaysAutoIsOfferedAndThereIsNoWarning() {
         val auto = draft.copy(mode = ShareMode.AUTO)
         show(state(itemWays = true, d = auto))
         rule.onNodeWithText("Include tagged items automatically").assertExists()
         rule.onNodeWithTag("rule_mode_auto").assertIsSelected()
         rule.onNodeWithTag("agent_rule_ways_warning").assertDoesNotExist()
+        rule.onNodeWithTag("rule_mode_auto").assertIsEnabled()
         rule.onNodeWithTag("agent_rule_reveal").performScrollTo().assertIsDisplayed()
     }
 
@@ -139,6 +149,25 @@ class AgentRuleScreenTest {
         )
         show(state { it.copy(preview = p) })
         rule.onNodeWithTag("rule_preview_total").performScrollTo().assertTextContains("3 items: 2 will be asked about, 1 included now")
+    }
+
+    @Test
+    fun aDryRunWithoutOutcomesGuessesNothingFromTheMode() {
+        val p = RulePreview(listOf(RuleMatch("i1", "Key A", "secret", Sensitivity.SECRET), RuleMatch("i2", "Key B", "secret", Sensitivity.SECRET)), 2)
+        show(state { it.copy(preview = p) })
+        rule.onNodeWithTag("rule_preview_total").performScrollTo().assertTextContains("2 items: 0 will be asked about, 0 included now")
+    }
+
+    @Test
+    fun theUsesNoteAppearsOnlyOnceThereIsANumber() {
+        show(state { it.copy(usesText = "5") })
+        rule.onNodeWithText("Stop after 5 uses of each item.").assertExists()
+    }
+
+    @Test
+    fun noUsesNoteWhileTheFieldIsEmpty() {
+        show(state())
+        assertEquals(0, rule.onAllNodesWithText("Stop after", substring = true).fetchSemanticsNodes().size)
     }
 
     @Test

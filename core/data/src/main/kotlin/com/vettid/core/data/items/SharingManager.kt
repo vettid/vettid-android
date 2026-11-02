@@ -392,7 +392,8 @@ class SharingManager(
     }
 
     override suspend fun saveRule(draft: RuleDraft): ShareRule {
-        if (!draft.valid(Instant.now())) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        // An agent's rule is signed: only `saveAgentRule` (the password, the window) may send it.
+        if (draft.forAgent || !draft.valid(now())) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
         val o = vaultGuard { ops().ruleSet(ruleBody(draft, dryRun = false)) }
         runCatching { refreshTags() }
         return rule(o) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_rule")
@@ -400,10 +401,12 @@ class SharingManager(
 
     override suspend fun saveAgentRule(draft: RuleDraft, password: String): ShareRule {
         // Checked before anything is unlocked: a rule the vault would refuse spends no password.
-        val asksOnly = !hasItemWays() && draft.ruleId == null && draft.mode == ShareMode.AUTO
-        if (!draft.forAgent || !draft.valid(Instant.now()) || asksOnly) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        // Without `item_ways` no agent rule is saved as `auto`, new or existing (owner decision 2026-11-02, option b).
+        val asksOnly = !hasItemWays() && draft.mode == ShareMode.AUTO
+        if (!draft.forAgent || !draft.valid(now()) || asksOnly) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
         // Set before the unlock is sent: an unlock whose answer was lost may still have opened the window, so it is locked.
-        val unlocked = Unlocked(windowUntil()?.isAfter(now()) != true)
+        // Open only with a margin (clock skew): a borderline window may end before the save, so this save opens and locks its own.
+        val unlocked = Unlocked(windowUntil()?.isAfter(now().plusSeconds(WINDOW_MARGIN_SECONDS)) != true)
         try {
             unlock(password, unlocked)
             val o = vaultGuard { ops().ruleSet(ruleBody(draft, dryRun = false)) }
@@ -504,6 +507,9 @@ class SharingManager(
 
     companion object {
         private const val CODE_BAD_REQUEST = "bad_request"
+
+        /** The unlock window counts as open for a save only when it has more than this left (the phone's clock may be off). */
+        private const val WINDOW_MARGIN_SECONDS = 30L
 
         /** A failure that says the vault did not open the window (it refused); any other may have followed the opening. */
         private val DEFINITE_REFUSALS = setOf(

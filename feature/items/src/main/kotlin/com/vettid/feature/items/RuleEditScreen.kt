@@ -534,16 +534,16 @@ private fun OverlapCard(state: RuleEditUiState) {
 }
 
 @Composable
-internal fun Choice(label: Int, selected: Boolean, tag: String, note: Int? = null, onClick: () -> Unit) {
+internal fun Choice(label: Int, selected: Boolean, tag: String, note: Int? = null, enabled: Boolean = true, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = Spacing.touchTarget)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
             .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = null)
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
         Spacer(Modifier.padding(start = Spacing.m))
         Column {
             Text(stringResource(label), style = MaterialTheme.typography.bodyLarge)
@@ -570,7 +570,7 @@ private fun Preview(state: RuleEditUiState) {
             p == null -> Text(stringResource(R.string.items_rule_preview_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
             else -> {
                 Text(
-                    if (state.isAgent) agentPreviewTotal(p, state.draft.mode) else previewTotal(p, state.draft.mode),
+                    if (state.isAgent) agentPreviewTotal(p) else previewTotal(p, state.draft.mode),
                     modifier = Modifier.testTag("rule_preview_total"),
                 )
                 if (!state.draft.includeExisting && p.total > 0) {

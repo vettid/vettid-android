@@ -125,6 +125,8 @@ data class RuleDraft(
     val agentId: String? = null,
     /** AA4: an agent rule's `status_ttl`, 60–3,600 s (§10.11); null: the vault's default (900). */
     val statusTtl: Int? = null,
+    /** AA4: the mode the stored rule has (null for a new rule); a rule that is already `auto` may stay so without `item_ways`. */
+    val storedMode: ShareMode? = null,
 ) {
     val forAgent: Boolean get() = agentId != null
 
@@ -154,7 +156,7 @@ data class RuleDraft(
 
         fun of(r: ShareRule): RuleDraft = RuleDraft(
             r.connectionId ?: "", r.tags, r.match, r.mode, r.uses, r.expiresAt, r.includeExisting, r.ruleId, r.version,
-            r.perHour, r.perDay, r.agentId, r.statusTtl,
+            r.perHour, r.perDay, r.agentId, r.statusTtl, r.mode,
         )
     }
 

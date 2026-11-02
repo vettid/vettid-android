@@ -15,6 +15,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -59,11 +65,19 @@ internal fun AgentModeSection(state: RuleEditUiState, onMode: (ShareMode) -> Uni
     val ask = state.draft.mode == ShareMode.ASK
     Choice(R.string.items_agent_rule_mode_ask, ask, "rule_mode_ask", R.string.items_agent_rule_mode_ask_note) { onMode(ShareMode.ASK) }
     // Decision 17: offered only when the vault lists `item_ways` (an existing `auto` rule keeps showing, selected).
-    if (state.autoOffered) {
+    if (state.autoShown) {
         val auto = state.draft.mode == ShareMode.AUTO
-        Choice(R.string.items_agent_rule_mode_auto, auto, "rule_mode_auto", R.string.items_agent_rule_mode_auto_note) {
+        Choice(R.string.items_agent_rule_mode_auto, auto, "rule_mode_auto", R.string.items_agent_rule_mode_auto_note, state.autoEnabled) {
             onMode(ShareMode.AUTO)
         }
+    }
+    if (state.autoDemoted) {
+        Text(
+            stringResource(R.string.items_agent_rule_auto_demoted),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("agent_rule_auto_demoted"),
+        )
     }
     // What a "use" can reveal, always (decision 14 item g).
     Text(
@@ -101,10 +115,10 @@ internal fun AgentLimitsSection(state: RuleEditUiState, actions: RuleEditActions
         state.perDayText, actions.onPerDay, R.string.items_agent_rule_per_day, state.perDayValid,
         R.string.items_rule_per_day_bad, "rule_per_day",
     )
-    val n = state.usesText.ifBlank { stringResource(R.string.items_agent_rule_uses_empty) }
     AgentNumber(
         state.usesText, actions.onUses, R.string.items_agent_rule_uses, state.usesValid, R.string.items_rule_uses_bad, "rule_uses",
-        note = stringResource(R.string.items_agent_rule_uses_note, n),
+        // "Stop after [n] uses of each item.": only once there is a number.
+        note = state.usesText.takeIf { it.isNotBlank() }?.let { stringResource(R.string.items_agent_rule_uses_note, it) },
     )
 }
 
@@ -169,16 +183,11 @@ private val TTL_CHOICES = listOf(
 
 /** "<n> items: <k> will be asked about, <m> included now". */
 @Composable
-internal fun agentPreviewTotal(p: RulePreview, mode: ShareMode): String {
+internal fun agentPreviewTotal(p: RulePreview): String {
     val include = p.matches.count { it.outcome == RuleMatch.OUTCOME_INCLUDE }
     val ask = p.matches.count { it.outcome == RuleMatch.OUTCOME_ASK }
-    // An answer without outcomes: all of them follow the rule's mode.
-    val (k, m) = if (include + ask == 0) {
-        if (mode == ShareMode.AUTO) 0 to p.total else p.total to 0
-    } else {
-        ask to include
-    }
-    return pluralStringResource(R.plurals.items_agent_rule_preview, p.total, p.total, k, m)
+    // An answer without outcomes (an older vault) says how many match and no more: nothing is guessed from the mode.
+    return pluralStringResource(R.plurals.items_agent_rule_preview, p.total, p.total, ask, include)
 }
 
 /** The answers' words for an agent rule (the plan's drafts), or null to use the generic failure text. */
@@ -233,11 +242,21 @@ internal fun AgentNotices(state: RuleEditUiState, actions: RuleEditActions) {
 }
 
 private const val SECONDS_PER_MINUTE = 60L
+private const val TICK_MS = 1_000L
 
 /** The unlock window prompt (ANDROID-PLAN §4), asked for every save of an agent's rule (decision 4). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun AgentPasswordSheet(state: RuleEditUiState, name: String, actions: RuleEditActions, now: Instant = Instant.now()) {
+internal fun AgentPasswordSheet(state: RuleEditUiState, name: String, actions: RuleEditActions, start: Instant = Instant.now()) {
+    // A clock that ticks while a backoff runs, so Confirm enables when it ends.
+    var now by remember { mutableStateOf(start) }
+    LaunchedEffect(state.retryUntil) {
+        val until = state.retryUntil ?: return@LaunchedEffect
+        while (now.isBefore(until)) {
+            delay(TICK_MS)
+            now = Instant.now()
+        }
+    }
     val waiting = state.retryUntil?.isAfter(now) == true
     val sending = state.prompt == RulePrompt.SENDING
     ModalBottomSheet(onDismissRequest = actions.onDismissPrompt, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {

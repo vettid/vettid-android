@@ -80,7 +80,7 @@ class AgentRuleEditViewModelTest {
     fun autoIsHiddenAndRefusedWithoutItemWaysAndOfferedWithIt() = runTest {
         val without = vm()
         advanceUntilIdle()
-        assertFalse(without.uiState.value.autoOffered)
+        assertFalse(without.uiState.value.autoEnabled)
         assertTrue(without.uiState.value.waysWarning)
         without.setMode(ShareMode.AUTO)
         assertEquals(ShareMode.ASK, without.uiState.value.draft.mode)
@@ -88,20 +88,59 @@ class AgentRuleEditViewModelTest {
         sharing.itemWays = true
         val with = vm()
         advanceUntilIdle()
-        assertTrue(with.uiState.value.autoOffered)
+        assertTrue(with.uiState.value.autoEnabled)
         assertFalse(with.uiState.value.waysWarning)
         with.setMode(ShareMode.AUTO)
         assertEquals(ShareMode.AUTO, with.uiState.value.draft.mode)
     }
 
     @Test
-    fun aRuleThatIsAlreadyAutoStaysVisibleAndSelectedWithoutItemWays() = runTest {
+    fun aStoredAutoRuleOpensAsAskWithAutoShownButNotEnabledWithoutItemWays() = runTest {
         sharing.rulesStored += existing(ShareMode.AUTO)
         val v = vm("r1")
         advanceUntilIdle()
-        assertTrue(v.uiState.value.autoOffered)
-        assertTrue(v.uiState.value.waysWarning)
+        val s = v.uiState.value
+        assertTrue(s.autoShown)
+        assertFalse(s.autoEnabled)
+        assertTrue(s.autoDemoted)
+        assertEquals(ShareMode.ASK, s.draft.mode)
+        v.setMode(ShareMode.AUTO)
+        assertEquals(ShareMode.ASK, v.uiState.value.draft.mode)
+    }
+
+    @Test
+    fun savingAStoredAutoRuleWithoutItemWaysSendsAsk() = runTest {
+        sharing.rulesStored += existing(ShareMode.AUTO)
+        val v = vm("r1")
+        advanceUntilIdle()
+        v.setPerHour("20")
+        v.save()
+        v.setPassword("pw-fake-1")
+        v.submitPassword()
+        advanceUntilIdle()
+        assertEquals(ShareMode.ASK, sharing.agentSaves.single().first.mode)
+        assertTrue(v.uiState.value.done)
+    }
+
+    @Test
+    fun aStoredAutoRuleKeepsAutoWithItemWays() = runTest {
+        sharing.itemWays = true
+        sharing.rulesStored += existing(ShareMode.AUTO)
+        val v = vm("r1")
+        advanceUntilIdle()
         assertEquals(ShareMode.AUTO, v.uiState.value.draft.mode)
+        assertTrue(v.uiState.value.autoEnabled)
+        assertFalse(v.uiState.value.autoDemoted)
+    }
+
+    @Test
+    fun aStoredAskRuleCannotBeSwitchedToAutoWithoutItemWays() = runTest {
+        sharing.rulesStored += existing(ShareMode.ASK)
+        val v = vm("r1")
+        advanceUntilIdle()
+        assertFalse(v.uiState.value.autoEnabled)
+        v.setMode(ShareMode.AUTO)
+        assertEquals(ShareMode.ASK, v.uiState.value.draft.mode)
     }
 
     @Test

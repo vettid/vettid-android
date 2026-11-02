@@ -5,6 +5,7 @@ package com.vettid.core.data.items
 
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.testing.DevStack
 import com.vettid.core.testing.ExitScenario
 import com.vettid.core.testing.TestAndroidAttester
@@ -52,13 +53,14 @@ class AgentRulesDevStackTest {
             ops = { VaultSharingOps(c.vault) },
             hasItemWays = { false },
             windowUntil = { windowUntil },
+            // As VaultManager does: the vault's refusals arrive as VaultFailure, not as the client's VaultOpException.
             openWindow = {
                 events += "unlock"
-                windowUntil = Instant.parse(c.vault.credentialUnlock(it))
+                windowUntil = Instant.parse(vaultGuard { c.vault.credentialUnlock(it) })
             },
             closeWindow = {
                 events += "lock"
-                c.vault.credentialLock()
+                vaultGuard { c.vault.credentialLock() }
                 windowUntil = null
             },
         )
@@ -67,7 +69,8 @@ class AgentRulesDevStackTest {
             expiresAt = Instant.now().plusSeconds(30 * DAY),
         )
 
-        // A dry run for an agent subject signs nothing: no unlock window (0.83.0), and an unknown agent is `not_found`.
+        // An unknown agent is `not_found`, dry run or not. This proves only that the app's dry run does not touch the window; that the
+        // vault answers a dry run without the window is shown below, with a paired agent.
         try {
             sharing.preview(draft)
             error("a dry run for an agent that is not paired succeeded")
@@ -96,6 +99,22 @@ class AgentRulesDevStackTest {
         }
         events.clear()
         val own = draft.copy(agentId = agent)
+
+        // A dry run for a paired agent needs no unlock window (0.83.0): matches come back, never `credential_locked`.
+        val preview = sharing.preview(own)
+        check(preview.total >= 0) { "dry run $preview" }
+        check(events.isEmpty() && windowUntil == null) { "the dry run touched the window: $events" }
+        log("dry run for agent $agent: ${preview.total} matches, no window")
+
+        // A save while the window is already open: the password is asked all the same, and the window is left open.
+        windowUntil = Instant.parse(c.vault.credentialUnlock(pw))
+        val openSave = sharing.saveAgentRule(own, pw)
+        check(events == listOf("unlock")) { "window events with the window open: $events" }
+        check(windowUntil != null) { "a window that was open was locked" }
+        c.vault.credentialLock()
+        windowUntil = null
+        sharing.deleteRule(openSave.ruleId)
+        events.clear()
         val saved = sharing.saveAgentRule(own, pw)
         check(saved.agentId == agent && saved.perHour == 60 && saved.perDay == 1_000) { "saved $saved" }
         check(events == listOf("unlock", "lock")) { "window events $events" }

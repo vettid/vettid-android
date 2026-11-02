@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -141,7 +144,11 @@ class DeviceViewModel @Inject constructor(
     init {
         // A page opened from a feed item (or after a process start) may be the first reader of the list.
         refresh()
-        refreshRules()
+        // The rules are an agent's: read once the list shows this device is one (and on every return to the page).
+        viewModelScope.launch {
+            repo.devices.map { list -> list.firstOrNull { it.id == id }?.isAgent == true }.distinctUntilChanged().filter { it }
+                .collect { readRules() }
+        }
     }
 
     /** On opening, on Retry. */
@@ -158,15 +165,23 @@ class DeviceViewModel @Inject constructor(
 
     /** The agent's share rules; on opening and on every return to the page (the editor may have changed them). */
     fun refreshRules() {
+        if (uiState.value.device?.isAgent == true) readRules()
+    }
+
+    private fun readRules() {
+        val mine = ++rulesRead
         viewModelScope.launch {
             try {
                 val rules = sharing.agentRules(id)
-                local.update { it.copy(rules = rules, rulesLoaded = true, rulesError = null) }
+                // An older answer never replaces a newer one.
+                if (mine == rulesRead) local.update { it.copy(rules = rules, rulesLoaded = true, rulesError = null) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(rulesError = e.kind) }
+                if (mine == rulesRead) local.update { it.copy(rulesError = e.kind) }
             }
         }
     }
+
+    private var rulesRead = 0
 
     fun ruleSavedShown() = sharing.ruleSavedShown()
 

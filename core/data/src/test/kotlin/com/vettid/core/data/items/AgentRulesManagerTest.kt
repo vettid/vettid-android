@@ -8,6 +8,9 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.GrantFetched
 import com.vettid.core.vault.TagPage
 import com.vettid.core.vault.VaultJson
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -28,6 +31,7 @@ import java.time.Instant
  * window opened by the save and locked again only when the save opened it, the body of `share.rule.set` for an agent
  * subject, and `auto` refused for a new rule on a vault without `item_ways`.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class AgentRulesManagerTest {
     private val now = Instant.parse("2026-11-02T12:00:00Z")
 
@@ -38,6 +42,9 @@ class AgentRulesManagerTest {
         var unlockFailure: VaultFailure? = null
         var setFailure: VaultFailure? = null
         var lockFailure: VaultFailure? = null
+        var setGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        var unlockGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        var unlockThrows: Throwable? = null
         val bodies = mutableListOf<JsonObject>()
         val passwords = mutableListOf<String>()
     }
@@ -67,6 +74,7 @@ class AgentRulesManagerTest {
         override suspend fun ruleSet(body: JsonObject): JsonObject {
             log.events += "set"
             log.bodies += body
+            log.setGate?.await()
             log.setFailure?.let { throw it }
             return o(
                 """{"rule_id":"r1","version":4,"subject":{"agent_id":"a1"},"tags":["api"],"mode":"ask","per_hour":60,"per_day":1000,"status_ttl":900}""",
@@ -91,6 +99,8 @@ class AgentRulesManagerTest {
         openWindow = { pw ->
             log.events += "unlock"
             log.passwords += pw
+            log.unlockGate?.await()
+            log.unlockThrows?.let { throw it }
             log.unlockFailure?.let { throw it }
             log.windowUntil = now.plusSeconds(300)
         },
@@ -179,7 +189,10 @@ class AgentRulesManagerTest {
 
     @Test
     fun aDefiniteRefusalOfTheUnlockSendsNothingAndLocksNothing() = runTest {
-        for (kind in listOf(FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED)) {
+        for (kind in listOf(
+            FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
+            FailureKind.OWNER_CHECK_REQUIRED, FailureKind.CREDENTIAL_UNSETTLED,
+        )) {
             log.events.clear()
             log.unlockFailure = VaultFailure(kind, "x")
             try {
@@ -242,7 +255,7 @@ class AgentRulesManagerTest {
             draft().copy(tags = emptyList()),
             draft().copy(tags = listOf("@profile")),
             draft().copy(uses = 10_001),
-            draft().copy(expiresAt = Instant.now().minusSeconds(60)),
+            draft().copy(expiresAt = now.minusSeconds(60)),
             draft().copy(agentId = null, connectionId = "c1"),
         )) {
             try {
@@ -269,11 +282,24 @@ class AgentRulesManagerTest {
     }
 
     @Test
-    fun anExistingAutoRuleCanStillBeChangedWithoutItemWaysSoItIsNeverSilentlyDowngraded() = runTest {
-        manager(itemWays = false).saveAgentRule(draft(ShareMode.AUTO, ruleId = "r1"), "pw-fake-1")
-        assertEquals("auto", log.bodies.single()["mode"]!!.jsonPrimitive.content)
-        assertEquals("r1", log.bodies.single()["rule_id"]!!.jsonPrimitive.content)
-        assertEquals("3", log.bodies.single()["version"]!!.jsonPrimitive.content)
+    fun withoutItemWaysNoAutoRuleIsSavedNewOrExisting() = runTest {
+        for (stored in listOf(null, ShareMode.ASK, ShareMode.AUTO)) {
+            try {
+                manager(itemWays = false).saveAgentRule(
+                    draft(ShareMode.AUTO, ruleId = "r1".takeIf { stored != null }).copy(storedMode = stored), "pw-fake-1",
+                )
+                fail("saved auto, stored $stored")
+            } catch (e: VaultFailure) {
+                assertEquals("bad_request", e.code)
+            }
+        }
+        assertTrue(log.events.isEmpty())
+    }
+
+    @Test
+    fun anExistingAutoRuleIsSavedAsAskWithoutItemWays() = runTest {
+        manager(itemWays = false).saveAgentRule(draft(ShareMode.ASK, ruleId = "r1").copy(storedMode = ShareMode.AUTO), "pw-fake-1")
+        assertEquals("ask", log.bodies.single()["mode"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -317,5 +343,77 @@ class AgentRulesManagerTest {
         assertEquals(listOf("set"), log.events)
         assertEquals("true", log.bodies.single()["dry_run"]!!.jsonPrimitive.content)
         assertEquals("a1", log.bodies.single()["subject"]!!.jsonObject["agent_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun anExistingAskRuleCannotBecomeAutoWithoutItemWaysAndNothingIsUnlocked() = runTest {
+        try {
+            manager(itemWays = false).saveAgentRule(draft(ShareMode.AUTO, ruleId = "r1").copy(storedMode = ShareMode.ASK), "pw-fake-1")
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals("bad_request", e.code)
+        }
+        assertTrue(log.events.isEmpty())
+        manager(itemWays = true).saveAgentRule(draft(ShareMode.AUTO, ruleId = "r1").copy(storedMode = ShareMode.ASK), "pw-fake-1")
+        assertEquals("auto", log.bodies.single()["mode"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun theNoPasswordSavePathRefusesAnAgentRule() = runTest {
+        try {
+            manager().saveRule(draft())
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals("bad_request", e.code)
+        }
+        assertTrue(log.events.isEmpty())
+    }
+
+    @Test
+    fun aWindowThatEndsWithinThirtySecondsIsNotTakenForOpenSoThisSaveLocksIt() = runTest {
+        log.windowUntil = now.plusSeconds(20)
+        manager().saveAgentRule(draft(), "pw-fake-1")
+        assertEquals(listOf("unlock", "set", "lock"), log.events)
+        log.events.clear()
+        log.windowUntil = now.plusSeconds(31)
+        manager().saveAgentRule(draft(), "pw-fake-1")
+        assertEquals(listOf("unlock", "set"), log.events)
+    }
+
+    @Test
+    fun cancellingDuringTheUnlockStillLocksTheWindow() = runTest {
+        log.unlockGate = kotlinx.coroutines.CompletableDeferred()
+        val job = launch { manager().saveAgentRule(draft(), "pw-fake-1") }
+        runCurrent()
+        assertEquals(listOf("unlock"), log.events)
+        job.cancel()
+        job.join()
+        assertEquals(listOf("unlock", "lock"), log.events)
+    }
+
+    @Test
+    fun cancellingDuringTheSaveStillLocksTheWindow() = runTest {
+        log.setGate = kotlinx.coroutines.CompletableDeferred()
+        val job = launch { manager().saveAgentRule(draft(), "pw-fake-1") }
+        // The vault call runs off the test scheduler: wait for it for real.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeout(5_000) { while ("set" !in log.events) kotlinx.coroutines.delay(5) }
+        }
+        assertEquals(listOf("unlock", "set"), log.events)
+        job.cancel()
+        job.join()
+        assertEquals(listOf("unlock", "set", "lock"), log.events)
+    }
+
+    @Test
+    fun anUnlockThatThrowsSomethingElseStillLocksAndPropagates() = runTest {
+        log.unlockThrows = IllegalStateException("boom")
+        try {
+            manager().saveAgentRule(draft(), "pw-fake-1")
+            fail()
+        } catch (e: IllegalStateException) {
+            assertEquals("boom", e.message)
+        }
+        assertEquals(listOf("unlock", "lock"), log.events)
     }
 }
