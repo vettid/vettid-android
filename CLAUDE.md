@@ -343,7 +343,7 @@ The A2 exit test:
   the chain server, one `GET /tx/{txid}` each (`EsploraClient.transactionState`: confirmed, in the mempool, not found); not found is
   "may have gone through", a history or server that cannot be read is "couldn't check" (fail secure), in the mempool is "waiting for
   confirmation"; every one of them needs "Send anyway" before a new payment is prepared (`canReview`), waits at most 20 s, and never
-  blocks for good. Third review: the check runs whenever a hold clears (first look, Try again, a hold lifting) and nothing is reviewed or
+  blocks for good. R3 (owner): when nothing is pending, the confirmed payments of the 24 h window (the vault's clock; the same per-txid `GET /tx`, no further call) make one soft note naming the newest (`RecentSends.CONFIRMED`: not a hold, no "Send anyway", Review stays on; dismissed it does not return in the visit). Third review: the check runs whenever a hold clears (first look, Try again, a hold lifting) and nothing is reviewed or
   prepared while it runs (`recentChecking`; "Checking your recent payments…"); the core enforces it too: `WalletsManager.prepareSend`
   returns `PrepareResult.RecentUnchecked` until `recentSends(walletId)` ran in this session and, if it found something,
   `acknowledgeRecent(walletId)` was called (per wallet, memory only, cleared at lock). `recentSends` returns a `RecentReport` that names
@@ -359,7 +359,7 @@ The A2 exit test:
   `draft` (the plan's, word for word) or `new`, none approved; `WalletTextsTest` holds the drafts. Catalog: `wallet.send`, `wallet.send_filled`,
   `wallet.send_btc`, `wallet.send_all`, `wallet.send_scan`, `wallet.send_scan_unavailable`, `wallet.send_wrong_network`,
   `wallet.send_not_an_address`, `wallet.send_fee_custom`, `wallet.send_fee_custom_bad`, `wallet.send_fee_much_higher`,
-  `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_not_enough_confirmed`, `wallet.send_fee_ten_percent`, `wallet.send_review_fee_ten_percent`, `wallet.send_link_refused`, `wallet.send_recent_waiting`, `wallet.send_recent_checking`, `wallet.send_recent_gone`, `wallet.send_recent_unreadable`, `wallet.send_note_needed`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
+  `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_not_enough_confirmed`, `wallet.send_fee_ten_percent`, `wallet.send_review_fee_ten_percent`, `wallet.send_link_refused`, `wallet.send_recent_waiting`, `wallet.send_recent_checking`, `wallet.send_recent_confirmed`, `wallet.send_recent_gone`, `wallet.send_recent_unreadable`, `wallet.send_note_needed`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
   `wallet.send_not_backed_up`, `wallet.send_caps_pending`, `wallet.send_caps_duplicate`, `wallet.send_settings_unreadable`,
   `wallet.send_sign_unsettled`, `wallet.send_review`, `wallet.send_review_password`, `wallet.send_review_wrong_password`,
   `wallet.send_review_limit`, `wallet.send_review_dust`, `wallet.send_review_no_caps`, `wallet.send_review_cap`, `wallet.send_sent`,

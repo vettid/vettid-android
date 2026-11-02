@@ -118,7 +118,10 @@ data class SendUiState(
     /** Review can be asked for: a payee that passes the check, an amount, a fee rate. */
     val canReview: Boolean
         get() = address.isNotEmpty() && addressIssue == null && amountValid && feeRate != null && !busy && block == null &&
-            recentNotice == null && !recentChecking && !linkRefused
+            !recentHold && !recentChecking && !linkRefused
+
+    /** A recent payment waits, may have gone through or could not be read: acknowledged first ([RecentSends.CONFIRMED] is a note). */
+    val recentHold: Boolean get() = recentNotice != null && recentNotice != RecentSends.CONFIRMED
 
     /** A request is out (approving, trying again, asking the server): back and the arrow do nothing, so the result is seen. */
     val swallowsBack: Boolean get() = busy || checking
@@ -153,6 +156,9 @@ class SendViewModel internal constructor(
 
     /** How long the recent-payments check is waited for ([RECENT_WAIT_MS]); tests turn it off (null) against their virtual clock. */
     internal var recentWaitMs: Long? = RECENT_WAIT_MS
+
+    /** The confirmed payment whose note was dismissed (memory only, for this visit). */
+    private var dismissedConfirmed: String? = null
 
     private var started = false
     private var seen = false
@@ -219,7 +225,9 @@ class SendViewModel internal constructor(
         }
         val wait = recentWaitMs
         try {
-            val r = (if (wait == null) ask() else withTimeoutOrNull(wait) { ask() }) ?: unreadable
+            var r = (if (wait == null) ask() else withTimeoutOrNull(wait) { ask() }) ?: unreadable
+            // A confirmed payment the member already dismissed does not come back in this session.
+            if (r.kind == RecentSends.CONFIRMED && r.latest?.txid == dismissedConfirmed) r = RecentReport(RecentSends.CLEAR)
             mutable.update {
                 it.copy(
                     recentNotice = r.kind.takeIf { n -> n != RecentSends.CLEAR },
@@ -237,6 +245,14 @@ class SendViewModel internal constructor(
         if (mutable.value.recentChecking) return
         mutable.update { it.copy(recentChecking = true, recentNotice = null, recentReport = null) }
         viewModelScope.launch { checkRecent() }
+    }
+
+    /** Dismisses the note of a confirmed payment; it does not come back in this session (the same txid). */
+    fun dismissRecentNote() {
+        val s = mutable.value
+        if (s.recentNotice != RecentSends.CONFIRMED) return
+        dismissedConfirmed = s.recentReport?.latest?.txid
+        mutable.update { it.copy(recentNotice = null, recentReport = null) }
     }
 
     /** "Send anyway": the notice is acknowledged (also in the core, which refuses a payment before). */

@@ -399,7 +399,9 @@ enum class DiscardResult {
 
 /**
  * What the vault's recent signed payments of a wallet look like on the chain server ([WalletsManager.recentSends]): a payment the member
- * approved may still be on its way, whatever became of this phone's memory (a lock, a restart). The worst applies.
+ * approved may still be on its way, whatever became of this phone's memory (a lock, a restart). The worst applies: a payment that waits,
+ * may have gone through, or could not be read is a hold (acknowledged before a new payment); when nothing is pending, the confirmed
+ * payments of the window are noted ([CONFIRMED]), softly, and only the newest is named.
  */
 enum class RecentSends {
     /** Nothing signed in the last 24 hours that is not confirmed. */
@@ -413,6 +415,12 @@ enum class RecentSends {
 
     /** The history or the server could not be read: nothing is known. */
     UNREADABLE,
+
+    /**
+     * Nothing is pending, and at least one payment of the last 24 hours (the vault's clock) is confirmed: the newest is named in a note.
+     * Not a hold: no acknowledgement is needed before a new payment, and it is not asked for.
+     */
+    CONFIRMED,
 }
 
 /**
@@ -420,5 +428,8 @@ enum class RecentSends {
  * one** named from the vault's history ([latest]: its time, amount and payee) and how many more are in the same state ([more]).
  */
 class RecentReport(val kind: RecentSends, val latest: WalletTx? = null, val more: Int = 0) {
+    /** The check found something that must be acknowledged before a new payment (everything but a clear window or a confirmed note). */
+    val isHold: Boolean get() = kind != RecentSends.CLEAR && kind != RecentSends.CONFIRMED
+
     override fun toString(): String = "RecentReport"
 }

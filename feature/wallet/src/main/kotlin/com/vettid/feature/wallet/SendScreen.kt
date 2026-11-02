@@ -77,6 +77,7 @@ data class SendActions(
     val onStartOver: () -> Unit = {},
     val onDone: () -> Unit = {},
     val onAcknowledgeRecent: () -> Unit = {},
+    val onDismissRecentNote: () -> Unit = {},
 )
 
 /**
@@ -96,7 +97,8 @@ fun SendScreen(state: SendUiState, actions: SendActions, modifier: Modifier = Mo
         ) {}
         state.scanning -> ScanStep(state, actions, modifier)
         state.block != null -> BlockStep(state, state.block, actions, modifier)
-        state.step == SendStep.FORM && state.recentNotice != null -> RecentStep(state, state.recentNotice, actions, modifier)
+        state.step == SendStep.FORM && state.recentHold && state.recentNotice != null ->
+            RecentStep(state, state.recentNotice, actions, modifier)
         state.step == SendStep.FORM -> FormStep(state, actions, modifier)
         state.step == SendStep.REVIEW -> ReviewStep(state, actions, modifier)
         else -> DoneStep(state, actions, modifier)
@@ -174,6 +176,7 @@ private fun FormStep(state: SendUiState, actions: SendActions, modifier: Modifie
         if (state.recentChecking) {
             Text(stringResource(R.string.wallet_send_recent_checking), modifier = Modifier.testTag("wallet_send_recent_checking"))
         }
+        if (state.recentNotice == RecentSends.CONFIRMED) ConfirmedNote(state, actions)
         PayeeField(state, actions)
         AmountField(state, actions)
         FeeChoices(state, actions)
@@ -248,6 +251,31 @@ private fun recentSentence(res: Int, detail: Triple<String, String?, String>): S
         R.string.wallet_send_recent_gone_nopayee
     }
     return stringResource(bare, amount, time)
+}
+
+/** A softer note: a payment of the last 24 hours went through. Not a hold; Review stays on. */
+@Composable
+private fun ConfirmedNote(state: SendUiState, actions: SendActions) {
+    val tx = state.recentReport?.latest ?: return
+    val amount = amountLabel(tx.sendingSats, state.network)
+    val time = tx.at?.let { SendFormat.whenAt(it) } ?: stringResource(R.string.wallet_send_recent_unknown_time)
+    val payee = tx.payees.firstOrNull()?.address
+    val text = if (payee != null) {
+        stringResource(R.string.wallet_send_recent_confirmed, time, amount, payee)
+    } else {
+        stringResource(R.string.wallet_send_recent_confirmed_nopayee, amount, time)
+    }
+    NoticeCard(
+        kind = NoticeKind.INFO,
+        title = stringResource(R.string.wallet_send),
+        body = text,
+        modifier = Modifier.testTag("wallet_send_recent_confirmed"),
+        actions = {
+            TextButton(onClick = actions.onDismissRecentNote, modifier = Modifier.testTag("wallet_send_recent_dismiss")) {
+                Text(stringResource(R.string.wallet_dismiss))
+            }
+        },
+    )
 }
 
 @Composable

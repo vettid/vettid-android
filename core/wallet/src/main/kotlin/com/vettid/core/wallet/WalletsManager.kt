@@ -1665,7 +1665,7 @@ class WalletsManager(
             // A malformed txid or an answer that does not read must not crash anything: nothing is known.
             RecentReport(RecentSends.UNREADABLE)
         }
-        synchronized(lock) { recentState[walletId] = RecentState(needsAck = report.kind != RecentSends.CLEAR, acknowledged = false) }
+        synchronized(lock) { recentState[walletId] = RecentState(needsAck = report.isHold, acknowledged = false) }
         return report
     }
 
@@ -1688,7 +1688,10 @@ class WalletsManager(
         return classify(spend, recent)
     }
 
-    /** The worst state of [txs] at the server (not found, then unreadable, then in the mempool), naming the newest of that state. */
+    /**
+     * The worst state of [txs] at the server (not found, then unreadable, then in the mempool, then confirmed), naming the newest of that
+     * state; several confirmed payments make one note.
+     */
     @Suppress("TooGenericExceptionCaught")
     private suspend fun classify(spend: SpendAccess, txs: List<WalletTx>): RecentReport {
         val states = txs.map { tx ->
@@ -1710,6 +1713,8 @@ class WalletsManager(
             states.any { it.second == TxState.NOT_FOUND } -> named(RecentSends.MAY_HAVE_GONE, TxState.NOT_FOUND)
             states.any { it.second == null } -> RecentReport(RecentSends.UNREADABLE)
             states.any { it.second == TxState.UNCONFIRMED } -> named(RecentSends.WAITING, TxState.UNCONFIRMED)
+            // Nothing pending: the newest confirmed payment of the window is noted (from the same per-txid answers, no further call).
+            states.any { it.second == TxState.CONFIRMED } -> named(RecentSends.CONFIRMED, TxState.CONFIRMED)
             else -> RecentReport(RecentSends.CLEAR)
         }
     }

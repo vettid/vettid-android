@@ -855,10 +855,10 @@ class WalletSendTest {
         assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
         ops.history = listOf(signed("aa".repeat(32), now.minusSeconds(25 * 3_600L)))
         assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
-        // Confirmed on the server: done.
+        // Confirmed on the server, inside the window: a soft note.
         ops.history = listOf(signed("bb".repeat(32), fresh))
         chain.spend.confirmed += "bb".repeat(32)
-        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
+        assertEquals(RecentSends.CONFIRMED, m.recentSends(w.id).kind)
         // In the mempool: waiting.
         chain.spend.known += "bb".repeat(32)
         chain.spend.confirmed -= "bb".repeat(32)
@@ -880,6 +880,54 @@ class WalletSendTest {
         chain.open = null
         ops.historyFails = true
         assertEquals(RecentSends.UNREADABLE, m.recentSends(w.id).kind)
+    }
+
+    @Test
+    fun aConfirmedPaymentIsASoftNoteNotAHold() = runBlocking {
+        val w = withWallet()
+        chain.fund(receive, 0, 100_000)
+        val m = manager()
+        m.open()
+        val older = WalletTx("aa".repeat(32), now.minusSeconds(7_200), 11_000, 1, 1, listOf(WalletPayee("tb1qolder", 11_000)), null, null)
+        val newer = WalletTx("bb".repeat(32), now.minusSeconds(600), 22_000, 1, 1, listOf(WalletPayee("tb1qnewer", 22_000)), null, null)
+        ops.history = listOf(older, newer)
+        chain.spend.confirmed += setOf(older.txid, newer.txid)
+        // Several confirmed make one note, naming the newest; no acknowledgement is needed before a payment.
+        val r = m.recentSends(w.id)
+        assertEquals(RecentSends.CONFIRMED, r.kind)
+        assertEquals(newer.txid, r.latest!!.txid)
+        assertFalse(r.isHold)
+        assertTrue(m.prepareSend(w.id, request()) is PrepareResult.Ready)
+        // Just outside the window by the vault's clock (25 h), confirmed or not: nothing.
+        ops.history = listOf(WalletTx("cc".repeat(32), now.minusSeconds(25 * 3_600L), 1, 1, 1, emptyList(), null, null))
+        chain.spend.confirmed += "cc".repeat(32)
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
+        // Inside it by the vault's clock though the phone's would say otherwise.
+        ops.vaultClock = now.plusSeconds(2 * 86_400L)
+        ops.history = listOf(WalletTx("dd".repeat(32), now.plusSeconds(2 * 86_400L - 3_600), 1, 1, 1, emptyList(), null, null))
+        chain.spend.confirmed += "dd".repeat(32)
+        assertEquals(RecentSends.CONFIRMED, m.recentSends(w.id).kind)
+    }
+
+    @Test
+    fun anUnconfirmedPaymentBesideAConfirmedOneIsStillAHold() = runBlocking {
+        val w = withWallet()
+        chain.fund(receive, 0, 100_000)
+        val m = manager()
+        m.open()
+        val done = signed("aa".repeat(32), now.minusSeconds(600))
+        val waiting = signed("bb".repeat(32), now.minusSeconds(1_200))
+        ops.history = listOf(done, waiting)
+        chain.spend.confirmed += done.txid
+        chain.spend.known += waiting.txid
+        val r = m.recentSends(w.id)
+        assertEquals(RecentSends.WAITING, r.kind)
+        assertEquals(waiting.txid, r.latest!!.txid)
+        assertTrue(r.isHold)
+        assertEquals(PrepareResult.RecentUnchecked, m.prepareSend(w.id, request()))
+        // A payment the server does not have beats both.
+        ops.history = listOf(done, waiting, signed("cc".repeat(32), now.minusSeconds(60)))
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id).kind)
     }
 
     @Test

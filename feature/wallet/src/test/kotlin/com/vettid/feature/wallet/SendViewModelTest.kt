@@ -600,6 +600,31 @@ class SendViewModelTest {
     }
 
     @Test
+    fun aConfirmedPaymentIsASoftNoteThatKeepsReviewOnAndStaysDismissed() = runTest {
+        val tx = com.vettid.core.wallet.WalletTx("ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1, 1, emptyList(), null, null)
+        engine.recent = RecentSends.CONFIRMED
+        engine.recentLatest = tx
+        val vm = ready()
+        eventually { vm.state.value.recentNotice == RecentSends.CONFIRMED && !vm.state.value.recentChecking }
+        // Not a hold: Review stays on and nothing needs acknowledging.
+        assertFalse(vm.state.value.recentHold)
+        assertTrue(vm.state.value.canReview)
+        vm.review()
+        eventually { engine.requests.size == 1 }
+        assertTrue(engine.acknowledged.isEmpty())
+        // Dismissed, it does not come back when the check runs again in this session.
+        vm.dismissRecentNote()
+        assertNull(vm.state.value.recentNotice)
+        vm.load()
+        eventually { engine.recentAsked == 2 && !vm.state.value.recentChecking }
+        assertNull(vm.state.value.recentNotice)
+        // Another payment's note does show.
+        engine.recentLatest = tx.let { com.vettid.core.wallet.WalletTx("cd".repeat(32), it.at, 1, 1, 1, emptyList(), null, null) }
+        vm.load()
+        eventually { vm.state.value.recentNotice == RecentSends.CONFIRMED }
+    }
+
+    @Test
     fun nothingRecentShowsNoNotice() = runTest {
         engine.recent = RecentSends.CLEAR
         val vm = vm()

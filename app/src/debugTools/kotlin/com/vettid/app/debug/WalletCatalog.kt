@@ -305,6 +305,7 @@ internal object WalletCatalog {
         "wallet.send_link_refused" to { Send(sendForm.copy(linkRefused = true)) },
         "wallet.send_recent_waiting" to { Send(sendForm.copy(recentNotice = RecentSends.WAITING, recentReport = recentOf(RecentSends.WAITING, 0))) },
         "wallet.send_recent_gone" to { Send(sendForm.copy(recentNotice = RecentSends.MAY_HAVE_GONE, recentReport = recentOf(RecentSends.MAY_HAVE_GONE, 2))) },
+        "wallet.send_recent_confirmed" to { Send(sendForm.copy(recentNotice = RecentSends.CONFIRMED, recentReport = recentOf(RecentSends.CONFIRMED, 0))) },
         "wallet.send_recent_checking" to { Send(sendForm.copy(recentChecking = true)) },
         "wallet.send_recent_unreadable" to { Send(sendForm.copy(recentNotice = RecentSends.UNREADABLE)) },
         "wallet.send_no_estimates" to { Send(sendForm.copy(estimates = null, estimatesFailed = true)) },

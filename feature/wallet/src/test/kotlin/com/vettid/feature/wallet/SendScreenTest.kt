@@ -216,6 +216,25 @@ class SendScreenTest {
     }
 
     @Test
+    fun aConfirmedPaymentIsANoteOnTheFormWithReviewOnAndDismiss() {
+        var dismissed = 0
+        val at = Instant.parse("2026-11-02T09:05:00Z")
+        val whenText = SendFormat.whenAt(at)
+        val report = com.vettid.core.wallet.RecentReport(RecentSends.CONFIRMED, tx(at), 0)
+        show(form().copy(recentNotice = RecentSends.CONFIRMED, recentReport = report), SendActions(onDismissRecentNote = { dismissed++ }))
+        rule.onNodeWithText("A payment you approved went through at $whenText: 0.0004 tBTC to $PAYEE.").assertIsDisplayed()
+        // The form is there and Review is on: no "Send anyway".
+        rule.onNodeWithText("Review").assertIsEnabled()
+        assertEquals(0, rule.onAllNodesWithText("Send anyway").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("wallet_send_recent_dismiss").performClick()
+        assertEquals(1, dismissed)
+        // Without a payee in the history.
+        val bare = com.vettid.core.wallet.WalletTx("ab".repeat(32), at, 40_000, 1, 1, emptyList(), null, null)
+        show(form().copy(recentNotice = RecentSends.CONFIRMED, recentReport = com.vettid.core.wallet.RecentReport(RecentSends.CONFIRMED, bare, 0)))
+        rule.onNodeWithText("A payment you approved went through: 0.0004 tBTC at $whenText.").assertIsDisplayed()
+    }
+
+    @Test
     fun theFormSaysItIsCheckingRecentPaymentsAndReviewIsOff() {
         show(form().copy(recentChecking = true))
         rule.onNodeWithText("Checking your recent payments…").assertIsDisplayed()
