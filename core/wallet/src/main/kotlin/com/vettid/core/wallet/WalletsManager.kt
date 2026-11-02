@@ -1651,9 +1651,11 @@ class WalletsManager(
     /**
      * Minimal guard for a payment whose broadcast ended without an answer before a lock or a restart (memory only, nothing on disk): the
      * vault's `wallet.history` of the last 24 hours (by `at`; one without a time counts as recent), each txid asked of the chain server
-     * (`GET /tx/<txid>`). Confirmed ones are done. The worst of the rest: not found is [RecentSends.MAY_HAVE_GONE], a server or a history
-     * that cannot be read is [RecentSends.UNREADABLE] (fail secure), in the mempool is [RecentSends.WAITING]. At most [RECENT_MAX] are
-     * asked.
+     * (`GET /tx/<txid>`). The worst state applies: not found is [RecentSends.MAY_HAVE_GONE], a server or a history that cannot be read is
+     * [RecentSends.UNREADABLE] (fail secure), in the mempool is [RecentSends.WAITING]. Only when none of those holds, confirmed payments
+     * make one soft note ([RecentSends.CONFIRMED]) naming the newest; an entry **without a time** still counts for the holds but is left
+     * out of that note (it could not age out of it), so confirmed entries without a time alone are [RecentSends.CLEAR]. At most
+     * [RECENT_MAX] are asked.
      */
     @Suppress("ReturnCount", "TooGenericExceptionCaught")
     suspend fun recentSends(walletId: String): RecentReport {
@@ -1703,8 +1705,8 @@ class WalletsManager(
                 tx to null
             }
         }
-        fun named(kind: RecentSends, state: TxState): RecentReport {
-            val same = states.filter { it.second == state }.map { it.first }
+        fun named(kind: RecentSends, state: TxState, timedOnly: Boolean = false): RecentReport {
+            val same = states.filter { it.second == state && (!timedOnly || it.first.at != null) }.map { it.first }
             // Newest first; one without a time counts as the newest.
             val sorted = same.sortedWith(compareByDescending<WalletTx> { it.at == null }.thenByDescending { it.at })
             return RecentReport(kind, sorted.first(), sorted.size - 1)
@@ -1714,7 +1716,8 @@ class WalletsManager(
             states.any { it.second == null } -> RecentReport(RecentSends.UNREADABLE)
             states.any { it.second == TxState.UNCONFIRMED } -> named(RecentSends.WAITING, TxState.UNCONFIRMED)
             // Nothing pending: the newest confirmed payment of the window is noted (from the same per-txid answers, no further call).
-            states.any { it.second == TxState.CONFIRMED } -> named(RecentSends.CONFIRMED, TxState.CONFIRMED)
+            states.any { it.second == TxState.CONFIRMED && it.first.at != null } ->
+                named(RecentSends.CONFIRMED, TxState.CONFIRMED, timedOnly = true)
             else -> RecentReport(RecentSends.CLEAR)
         }
     }

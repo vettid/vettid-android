@@ -910,6 +910,60 @@ class WalletSendTest {
     }
 
     @Test
+    fun anUnreadableCheckBesideAConfirmedPaymentIsStillUnreadableAndNeedsAcknowledging() = runBlocking {
+        val w = withWallet()
+        chain.fund(receive, 0, 100_000)
+        val m = manager()
+        m.open()
+        val done = signed("aa".repeat(32), now.minusSeconds(600))
+        val odd = signed("bb".repeat(32), now.minusSeconds(900))
+        ops.history = listOf(done, odd)
+        chain.spend.confirmed += done.txid
+        // The server cannot say about the second one (a failing question): the worst applies.
+        chain.spend.knowsFailsFrom = 1
+        val r = m.recentSends(w.id)
+        assertEquals(RecentSends.UNREADABLE, r.kind)
+        assertTrue(r.isHold)
+        assertEquals(PrepareResult.RecentUnchecked, m.prepareSend(w.id, request()))
+        m.acknowledgeRecent(w.id)
+        assertTrue(m.prepareSend(w.id, request()) is PrepareResult.Ready)
+    }
+
+    @Test
+    fun anEntryExactlyTwentyFourHoursOldByTheVaultsClockIsOutsideTheWindow() = runBlocking {
+        val (m, w) = opened()
+        ops.history = listOf(signed("aa".repeat(32), now.minusSeconds(24 * 3_600L)))
+        chain.spend.confirmed += "aa".repeat(32)
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
+        // One second inside it is in.
+        ops.history = listOf(signed("aa".repeat(32), now.minusSeconds(24 * 3_600L - 1)))
+        assertEquals(RecentSends.CONFIRMED, m.recentSends(w.id).kind)
+    }
+
+    @Test
+    fun anEntryWithoutATimeCountsForTheHoldsButNeverMakesTheConfirmedNote() = runBlocking {
+        val (m, w) = opened()
+        // Confirmed and without a time: no note (it would show on every visit), so the window is clear.
+        ops.history = listOf(signed("aa".repeat(32), null))
+        chain.spend.confirmed += "aa".repeat(32)
+        assertEquals(RecentSends.CLEAR, m.recentSends(w.id).kind)
+        // A timed confirmed entry beside it is the one named.
+        val timed = signed("bb".repeat(32), now.minusSeconds(600))
+        ops.history = listOf(signed("aa".repeat(32), null), timed)
+        chain.spend.confirmed += timed.txid
+        val r = m.recentSends(w.id)
+        assertEquals(RecentSends.CONFIRMED, r.kind)
+        assertEquals(timed.txid, r.latest!!.txid)
+        assertEquals(0, r.more)
+        // Unconfirmed without a time still holds; not found too.
+        ops.history = listOf(signed("cc".repeat(32), null))
+        chain.spend.known += "cc".repeat(32)
+        assertEquals(RecentSends.WAITING, m.recentSends(w.id).kind)
+        chain.spend.known -= "cc".repeat(32)
+        assertEquals(RecentSends.MAY_HAVE_GONE, m.recentSends(w.id).kind)
+    }
+
+    @Test
     fun anUnconfirmedPaymentBesideAConfirmedOneIsStillAHold() = runBlocking {
         val w = withWallet()
         chain.fund(receive, 0, 100_000)

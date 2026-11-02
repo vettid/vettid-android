@@ -612,8 +612,9 @@ class SendViewModelTest {
         vm.review()
         eventually { engine.requests.size == 1 }
         assertTrue(engine.acknowledged.isEmpty())
-        // Dismissed, it does not come back when the check runs again in this session.
+        // Dismissed, it does not come back when the check runs again in this session; the core's state is not touched.
         vm.dismissRecentNote()
+        assertTrue(engine.acknowledged.isEmpty())
         assertNull(vm.state.value.recentNotice)
         vm.load()
         eventually { engine.recentAsked == 2 && !vm.state.value.recentChecking }

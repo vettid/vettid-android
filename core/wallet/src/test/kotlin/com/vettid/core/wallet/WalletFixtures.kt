@@ -375,6 +375,7 @@ internal class FakeSpend : SpendAccess {
         require(txid.length == 64) { "not a txid" }
         knowsAsked++
         knowsError?.let { throw it }
+        if (knowsAsked > knowsFailsFrom) throw ChainError.Timeout()
         return when (txid) {
             in confirmed -> com.vettid.core.chain.TxState.CONFIRMED
             in known -> com.vettid.core.chain.TxState.UNCONFIRMED
