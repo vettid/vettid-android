@@ -7,7 +7,12 @@ import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.keystore.AppDataKey
 import com.vettid.core.keystore.KeystoreException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -30,6 +35,13 @@ enum class AppLockState {
     /** On, and the member authenticated since the app started or timed out. */
     UNLOCKED,
 }
+
+/** The app lock's cover is up in [this] state: locked, or not yet known (fails closed). */
+fun AppLockState.coversApp(): Boolean = this == AppLockState.LOCKED || this == AppLockState.PENDING
+
+/** [coversApp] of the lock's states as a state flow that is true until the first state is read (no gap before it). */
+fun Flow<AppLockState>.coverFlow(scope: CoroutineScope): StateFlow<Boolean> =
+    map { it.coversApp() }.stateIn(scope, SharingStarted.Eagerly, true)
 
 /**
  * What BiometricPrompt allows for [this] method: a class 3 biometric or the phone's screen lock, or the screen lock

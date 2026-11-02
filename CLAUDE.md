@@ -116,9 +116,10 @@ The A2 exit test:
   (`settings.notifications_push_not_on_phone`).
 - Notifications and the app lock (owner request 2026-11-02): `NotifySource.covered` is true while `AppLockState` is `LOCKED` or `PENDING`
   (the cover `AppLockGate` / "starting" shows). Then `FeedNotifier` posts item notifications in their public form only
-  (`LocalNotification.publicForm()`: the lock screen's "New activity in VettID" / "VettID needs your attention", no names, no
-  text, no message-text read), and when the cover comes up what is showing is re-posted in that form, quietly (a dismissed one
-  stays dismissed). Not restored when the cover goes. The ongoing call notice (`CallService`) is not covered by this.
+  (`LocalNotification.publicForm(quiet)`: the lock screen's "New activity in VettID" / "VettID needs your attention", no names, no
+  text, no names or message-text read; a new arrival keeps its sound and heads-up), and when the cover comes up what is showing
+  is re-posted in that form, quietly (a dismissed one stays dismissed; a snoozed one stays tracked and is cancelled at the vault
+  lock). The cover is read at post time from `AppLock.state` (`coversApp()`), the flow only triggers the re-post. Not restored when the cover goes. The ongoing call notice (`CallService`) is not covered by this.
   The withdrawn-request mute (`ApprovalDetailUiState.canMute`) needs a named connection, as History does.
 
 - Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the app's note; VAULT-MESSAGING §10.10 is normative): `:core:crypto` `call/`

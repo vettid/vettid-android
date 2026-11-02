@@ -37,6 +37,13 @@ class FeedNotifierTest {
 
     private class Posted : Poster {
         val shown = linkedMapOf<String, LocalNotification>()
+
+        /** Snoozed: not active (so [isPosted] says no) but still known to the system, and cancelled by [cancel]. */
+        val snoozed = linkedMapOf<String, LocalNotification>()
+
+        fun snooze(tag: String) {
+            snoozed[tag] = shown.remove(tag)!!
+        }
         val log = mutableListOf<String>()
 
         override fun post(n: LocalNotification) {
@@ -47,7 +54,8 @@ class FeedNotifierTest {
         override fun isPosted(tag: String): Boolean = tag in shown
 
         override fun cancel(tag: String) {
-            if (shown.remove(tag) != null) log += "cancel:$tag"
+            val had = shown.remove(tag) != null
+            if (snoozed.remove(tag) != null || had) log += "cancel:$tag"
         }
 
         var leftoverSweeps = mutableListOf<Set<String>>()
@@ -62,18 +70,24 @@ class FeedNotifierTest {
         override val items = MutableStateFlow<List<FeedItem>>(emptyList())
         override val open = MutableStateFlow(true)
         override val covered = MutableStateFlow(false)
+        var namesCalls = 0
+        var textCalls = 0
         override val lockedElsewhere = MutableStateFlow(false)
         override val idleLocked = MutableStateFlow<com.vettid.core.data.vault.IdleLocked?>(null)
         override val ownerCheck = MutableStateFlow<OwnerCheckView?>(null)
         override val alarm = MutableStateFlow<CredentialAlarm?>(null)
         var names = FeedNames(mapOf("c1" to ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee")), mapOf("i1" to "Passport"))
 
-        override fun names() = names
+        override fun names(): FeedNames {
+            namesCalls++
+            return names
+        }
 
         /** When set, [messageText] waits for it: an item notification still being prepared. */
         var textGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
         override suspend fun messageText(connectionId: String, messageId: String): String? {
+            textCalls++
             textGate?.await()
             return "See you at 6"
         }
@@ -134,6 +148,40 @@ class FeedNotifierTest {
         assertEquals("New activity in VettID", poster.shown.getValue("f1").title)
         assertEquals(Channels.MESSAGES, poster.shown.getValue("f1").channel)
         assertEquals("f1", poster.shown.getValue("f1").itemId)
+    }
+
+    @Test
+    fun underTheCoverNothingIsReadAndAnArrivalKeepsItsSound() = runTest {
+        notifier()
+        source.covered.value = true
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        arrive(item("f1"))
+        arrive(item("f2", kind = "grant.request", ref = "g1"))
+        assertEquals("no names read", 0, source.namesCalls)
+        assertEquals("no message text read", 0, source.textCalls)
+        for (tag in listOf("f1", "f2")) {
+            val n = poster.shown.getValue(tag)
+            assertEquals(n.publicTitle, n.title)
+            assertNull(n.text)
+            assertFalse("a new arrival still sounds, vibrates and shows heads-up", n.silent)
+        }
+        // A re-post after a withdrawal stays as quiet as it was.
+        arrive(item("f2", kind = "grant.request", ref = "g1").copy(quietRepost = true))
+        assertTrue(poster.shown.getValue("f2").silent)
+    }
+
+    @Test
+    fun aSnoozedNotificationStaysKnownAndIsCancelledWhenTheVaultLocks() = runTest {
+        notifier()
+        arrive(item("f1"))
+        poster.snooze("f1")
+        source.covered.value = true
+        runCurrent()
+        assertTrue("not re-posted (it is snoozed)", poster.shown.isEmpty())
+        source.open.value = false
+        runCurrent()
+        assertTrue(poster.snoozed.isEmpty())
+        assertTrue("cancel:f1" in poster.log)
     }
 
     @Test

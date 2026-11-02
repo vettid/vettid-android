@@ -69,6 +69,9 @@ interface NotifySource {
      */
     val covered: StateFlow<Boolean>
 
+    /** [covered] read now from its source, not through a flow that may lag a dispatch behind it. */
+    fun coveredNow(): Boolean = covered.value
+
     /** The vault locked, from another device or by itself (not by the member on this phone): "Your vault is locked". */
     val lockedElsewhere: StateFlow<Boolean>
 
@@ -125,8 +128,8 @@ class FeedNotifier(
         if (item.quietRepost && !synchronized(lock) { item.itemId in posted.keys && poster.isPosted(item.itemId) }) return
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
         // The app lock's cover is up: the public form only, whatever the member's choice of previews (nothing is read).
-        val previews = if (source.covered.value) NotificationPreviews.NOTHING else settings.value.previews
-        val names = if (source.covered.value) FeedNames() else source.names()
+        val previews = if (source.coveredNow()) NotificationPreviews.NOTHING else settings.value.previews
+        val names = if (source.coveredNow()) FeedNames() else source.names()
         val text = if (previews == NotificationPreviews.NAMES_AND_TEXT && item.kind == "message.received") {
             val c = item.connectionId
             val m = item.ref
@@ -140,8 +143,8 @@ class FeedNotifier(
         synchronized(lock) {
             if (!notifiable(item)) return
             // The cover came up while it was being prepared.
-            if (source.covered.value) n = n.publicForm()
-            posted[item.itemId] = n.publicForm()
+            if (source.coveredNow()) n = n.publicForm(quiet = false)
+            posted[item.itemId] = n.publicForm(quiet = true)
             poster.post(n)
         }
     }
@@ -184,9 +187,11 @@ class FeedNotifier(
      */
     private fun coverUp() {
         synchronized(lock) {
-            posted.entries.toList().forEach { (tag, publicN) ->
-                if (poster.isPosted(tag)) poster.post(publicN) else posted.remove(tag)
-            }
+            // The cover went away meanwhile: a re-post now could replace a named one posted after it.
+            if (!source.coveredNow()) return
+            // Not showing (dismissed, or snoozed: the system lists only what is active) stays in [posted]: a snoozed one
+            // is still cancelled when the vault locks. A dismissed one is not re-posted.
+            posted.entries.toList().forEach { (tag, publicN) -> if (poster.isPosted(tag)) poster.post(publicN) }
         }
     }
 
