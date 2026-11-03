@@ -146,6 +146,10 @@ fun AppShell(
     var showAccount by rememberSaveable { mutableStateOf(false) }
     val theme = LocalThemeController.current
     val uri = LocalUriHandler.current
+    // Turning the app lock off in Settings first asks for the phone's biometric or screen lock (same texts as the lock's prompt).
+    val presence = com.vettid.core.ui.components.LocalUserPresence.current
+    val lockOffTitle = stringResource(com.vettid.feature.onboarding.R.string.app_lock_prompt_title)
+    val lockOffSubtitle = stringResource(com.vettid.feature.onboarding.R.string.app_lock_prompt_subtitle)
     val portal = portalUrl
     val shell: ShellViewModel = hiltViewModel()
     val ownPhoto by shell.photo.collectAsStateWithLifecycle()
@@ -403,6 +407,7 @@ fun AppShell(
                                 onOpenCredential = { navController.navigate(CredentialRoute) { launchSingleTop = true } },
                                 onChangePassword = { navController.navigate(CredentialPasswordRoute) { launchSingleTop = true } },
                                 onEnableAppLock = onEnableAppLock,
+                                confirmAppLockOff = { presence.confirm(lockOffTitle, lockOffSubtitle) },
                                 onAccountClick = { showAccount = true },
                                 onOpenAccountSite = { uri.openUri(portal) },
                                 onOwnerCheck = { holdOff -> asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY },

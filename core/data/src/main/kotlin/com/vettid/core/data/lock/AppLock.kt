@@ -6,6 +6,7 @@ import android.os.SystemClock
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.keystore.AndroidKeys
 import com.vettid.core.keystore.AppDataKey
 import com.vettid.core.keystore.KeystoreException
 import kotlinx.coroutines.CoroutineScope
@@ -75,16 +76,34 @@ interface CoverAlarm {
     }
 }
 
-/** The user-authenticated Keystore key (`:core:keystore` [AppDataKey]); an interface so tests can use a software key. */
+/**
+ * The user-authenticated Keystore key (`:core:keystore` [AppDataKey]); an interface so tests can use a software key.
+ * A new key is made as a pending one ([createPending]) beside the current key and replaces it only at [promote], after
+ * its proof worked: a cancelled method change keeps the old key.
+ */
 interface AppLockKeys {
-    /** A fresh key for [method]: biometric or screen lock, or the screen lock only. */
-    fun create(method: AppLockMethod)
+    /** A fresh pending key for [method] (biometric or screen lock, or the screen lock only); the current key is untouched. */
+    fun createPending(method: AppLockMethod)
 
+    /** A cipher of the pending key, to authenticate with BiometricPrompt before [promote]. */
+    fun pendingCipher(): Cipher
+
+    /** The pending key becomes the current one; the old key is deleted. */
+    fun promote()
+
+    /** The pending key is deleted (the change was cancelled or failed); the current key stays. */
+    fun discardPending()
+
+    /** At start: a change that a dead process left half done is dropped (the lock then turns off, as with a lost key). */
+    fun recover()
+
+    /** The current key exists (a pending one does not count). */
     fun exists(): Boolean
 
     /** A cipher whose use proves a fresh authentication (BiometricPrompt CryptoObject; the key needs one per use). */
     fun encryptCipher(): Cipher
 
+    /** Deletes the current and the pending key. */
     fun delete()
 }
 
@@ -92,16 +111,60 @@ interface AppLockKeys {
  * [AppLockKeys] on the Android Keystore, per use: [AppLockMethod.BIOMETRICS] class 3 biometric or device credential,
  * invalidated by a new biometric; [AppLockMethod.SCREEN_LOCK] the device credential only.
  */
-class KeystoreAppLockKeys(private val key: AppDataKey = AppDataKey()) : AppLockKeys {
-    override fun create(method: AppLockMethod) {
-        key.create(authTimeoutSeconds = 0, allowDeviceCredential = true, allowBiometric = method == AppLockMethod.BIOMETRICS)
+class KeystoreAppLockKeys(
+    private val first: AppDataKey = AppDataKey(),
+    private val second: AppDataKey = AppDataKey(AndroidKeys.ALIAS_APP_DATA_NEXT),
+) : AppLockKeys {
+    /** The slot of the pending key; the other holds the current one. In memory only: [recover] drops what a dead process left. */
+    @Volatile
+    private var pending: AppDataKey? = null
+
+    private fun other(k: AppDataKey) = if (k === first) second else first
+
+    private fun current(): AppDataKey = pending?.let(::other) ?: if (first.exists() || !second.exists()) first else second
+
+    override fun createPending(method: AppLockMethod) {
+        discardPending()
+        val slot = other(current())
+        pending = slot
+        try {
+            // The same parameters as ever: a key per use, the biometric one invalidated by a new biometric.
+            slot.create(authTimeoutSeconds = 0, allowDeviceCredential = true, allowBiometric = method == AppLockMethod.BIOMETRICS)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            discardPending()
+            throw e
+        }
     }
 
-    override fun exists(): Boolean = key.exists()
+    override fun pendingCipher(): Cipher = (pending ?: error("no pending app-lock key")).encryptCipher()
 
-    override fun encryptCipher(): Cipher = key.encryptCipher()
+    override fun promote() {
+        val p = pending ?: return
+        other(p).delete()
+        pending = null
+    }
 
-    override fun delete() = key.delete()
+    override fun discardPending() {
+        pending?.delete()
+        pending = null
+    }
+
+    override fun recover() {
+        if (pending == null && first.exists() && second.exists()) {
+            first.delete()
+            second.delete()
+        }
+    }
+
+    override fun exists(): Boolean = current().exists()
+
+    override fun encryptCipher(): Cipher = current().encryptCipher()
+
+    override fun delete() {
+        first.delete()
+        second.delete()
+        pending = null
+    }
 }
 
 /**
@@ -185,7 +248,8 @@ class AppLock(
     /**
      * True while a prompt is showing ([promptStarted] to [promptEnded] / [abandonPrompt]); the device-credential screen sends
      * the app to the background. The background mark is still recorded meanwhile ([onBackground]) but never cleared
-     * ([onForeground] leaves it), and [wouldShowLock] is false until the prompt ends: its end decides ([promptEnded]).
+     * ([onForeground] leaves it), and its end decides ([promptEnded]). [wouldShowLock] ignores it: a prompt left up does not keep
+     * names showing in notifications past the timeout.
      */
     @Volatile
     var authenticating: Boolean = false
@@ -203,6 +267,7 @@ class AppLock(
         timeoutFlow.value = p.appLockTimeout
         methodFlow.value = p.appLockMethod ?: AppLockMethod.BIOMETRICS
         prompts.newLock()
+        runCatching { keys.recover() }
         // The wrapped app-data key of earlier builds was never used: deleted at the next start (2026-10-27).
         runCatching { obsoleteWrappedKey.delete() }
         // A key that is gone is a lock that cannot open: off, never "pending" for good (the start screen would
@@ -247,20 +312,25 @@ class AppLock(
      */
     fun cipherToEnable(method: AppLockMethod = methodFlow.value): Cipher {
         enabling = null // set only once the cipher is there: a failure leaves no half-made change behind
-        keys.create(method)
-        val cipher = keys.encryptCipher()
-        enabling = method
-        return cipher
+        try {
+            keys.createPending(method)
+            val cipher = keys.pendingCipher()
+            enabling = method
+            return cipher
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            runCatching { keys.discardPending() }
+            throw e
+        }
     }
 
     /**
-     * The prompt of [cipherToEnable] was cancelled or failed. Its fresh key replaced any earlier one, so a lock that
-     * was on (a change of method) cannot open any more: it is turned off, without the biometric notice.
+     * The prompt of [cipherToEnable] was cancelled or failed: the pending key is deleted and the lock stays as it was
+     * (a first enable stays off with no key left over; a change of method keeps the old method and the old key).
      */
-    suspend fun enableCancelled() {
+    fun enableCancelled() {
         if (enabling == null) return
         enabling = null
-        disable()
+        runCatching { keys.discardPending() }
     }
 
     /**
@@ -272,7 +342,7 @@ class AppLock(
     fun wouldShowLock(): Boolean = when (stateFlow.value) {
         AppLockState.LOCKED, AppLockState.PENDING -> true
         AppLockState.DISABLED -> false
-        AppLockState.UNLOCKED -> !authenticating && backgroundAt?.let { backgroundDue(it, timeoutFlow.value.seconds * MS) } == true
+        AppLockState.UNLOCKED -> backgroundAt?.let { backgroundDue(it, timeoutFlow.value.seconds * MS) } == true
     }
 
     /**
@@ -322,8 +392,8 @@ class AppLock(
                         } else {
                             emit(false)
                             delay(left + COVER_MARGIN_MS)
-                            // Early (only a prompt in progress now): look again rather than lose the cover for good.
-                            // Backing off: 1 s, doubling to 60 s (a prompt that stays open); a prompt's end rechecks at once.
+                            // A prompt in progress no longer holds the cover back. A timer that fires early all the same (a clock
+                            // set back, a test clock) looks again rather than loses the cover for good, backing off 1 s to 60 s.
                             var wait = COVER_RETRY_MS
                             while (!wouldShowLock()) {
                                 val more = at.elapsedMs + t.seconds * MS - elapsed()
@@ -351,8 +421,10 @@ class AppLock(
         try {
             cipher.doFinal(PROOF)
         } catch (e: GeneralSecurityException) {
+            enableCancelled()
             throw KeystoreException("app lock: not authenticated", e)
         }
+        keys.promote() // only now does the new key replace the old one
         prefs.setAppLockEnabled(true)
         val m = enabling ?: methodFlow.value
         enabling = null
@@ -486,13 +558,15 @@ class AppLock(
      * - [PromptOutcome.SYSTEM_CANCELED] or [PromptOutcome.DISMISSED] in the foreground: the decision of [onForeground]: lock
      *   if the mark is due, then clear it (fail secure; with "Immediately", cancelling a presence check whose screen stopped
      *   the activity therefore locks the app).
-     * - The same for the prompt of an enable or a method change ([promptStarted] with `enable`): the mark is only cleared, no lock.
+     * - The prompt of an enable or a method change ([promptStarted] with `enable`) that did not succeed also drops its pending
+     *   key ([enableCancelled]); the lock stays as it was, and the decision above applies to it like to any prompt.
      * - Either of those not in the foreground: the mark is kept; if there is none, one is recorded now.
      */
     fun promptEnded(outcome: PromptOutcome, inForeground: Boolean) {
         authenticating = false
         val enabled = enablePrompt
         enablePrompt = false
+        if (enabled && outcome != PromptOutcome.SUCCEEDED) enableCancelled() // a cancel, a failure, or the activity gone
         when {
             outcome == PromptOutcome.SUCCEEDED && inForeground -> {
                 provenAtElapsed = null
@@ -501,11 +575,6 @@ class AppLock(
             outcome == PromptOutcome.SUCCEEDED -> {
                 backgroundAt = Background(elapsed(), now())
                 provenAtElapsed = elapsed()
-            }
-            // A method change that was cancelled: the key is about to be deleted, so locking would only end in a false notice.
-            inForeground && enabled -> {
-                provenAtElapsed = null
-                backgroundAt = null
             }
             inForeground -> returned()
             else -> if (backgroundAt == null) backgroundAt = Background(elapsed(), now())
@@ -517,7 +586,7 @@ class AppLock(
     /** The prompt's activity was destroyed for a configuration change: no outcome, the mark stays as it is. */
     fun abandonPrompt() {
         authenticating = false
-        if (enablePrompt) enabling = null // its cancel callback will not come
+        if (enablePrompt) enableCancelled() // its cancel callback will not come
         enablePrompt = false
         recheck()
     }

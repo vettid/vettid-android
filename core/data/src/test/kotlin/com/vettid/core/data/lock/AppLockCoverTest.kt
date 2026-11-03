@@ -130,12 +130,13 @@ class AppLockCoverTest {
     }
 
     @Test
-    fun aPromptInProgressDoesNotCover() = runTest {
+    fun aPromptOpenAndABackgroundLongerThanTheTimeoutCovers() = runTest {
         val l = unlocked()
         l.onBackground()
-        clock = timeoutMs * 2
         l.promptStarted()
         assertFalse(l.wouldShowLock())
+        clock = timeoutMs * 2
+        assertTrue(l.wouldShowLock())
     }
 
     @Test
@@ -228,24 +229,6 @@ class AppLockCoverTest {
     }
 
     @Test
-    fun aPromptInProgressAtTheTimerIsLookedAtAgain() = runTest {
-        val l = unlocked()
-        val covered = l.coverFlow(backgroundScope)
-        runCurrent()
-        l.onBackground()
-        runCurrent()
-        l.promptStarted()
-        clock = timeoutMs
-        advanceTimeBy(timeoutMs + 500)
-        runCurrent()
-        assertFalse(covered.value)
-        l.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
-        advanceTimeBy(5_000)
-        runCurrent()
-        assertTrue(covered.value)
-    }
-
-    @Test
     fun theRetryBacksOffAndNeverWaitsMoreThanSixtySeconds() = runTest {
         val looks = mutableListOf<Long>() // virtual time of each look at the monotonic clock
         val l = AppLock(prefs, keys, MemFile(), now = { clock + wallSkew }, elapsed = { looks += testScheduler.currentTime; clock })
@@ -255,9 +238,8 @@ class AppLockCoverTest {
         runCurrent()
         l.onBackground()
         runCurrent()
-        l.promptStarted()
-        clock = timeoutMs
-        advanceTimeBy(timeoutMs) // up to the timer
+        // The timer fires but the monotonic clock has not reached the deadline (it stays where it was): it keeps looking.
+        advanceTimeBy(timeoutMs)
         runCurrent()
         looks.clear()
         advanceTimeBy(200_000)
@@ -269,7 +251,7 @@ class AppLockCoverTest {
     }
 
     @Test
-    fun aLongPromptHoldsTheCoverBackAndItsEndBringsItAtOnce() = runTest {
+    fun aPromptStillOpenAtTheTimerCoversAtTheTimer() = runTest {
         val l = unlocked()
         val covered = l.coverFlow(backgroundScope)
         runCurrent()
@@ -277,12 +259,9 @@ class AppLockCoverTest {
         runCurrent()
         l.promptStarted()
         clock = timeoutMs
-        advanceTimeBy(timeoutMs + 200_000) // looks at 1, 3, 7, 15, 31, 63, 123, 183 s after the timer: all false
+        advanceTimeBy(timeoutMs + 500)
         runCurrent()
-        assertFalse("held back for the whole wait", covered.value)
-        l.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
-        runCurrent()
-        assertTrue("the end of the prompt decides at once, no waiting for the retry", covered.value)
+        assertTrue("a prompt left up does not keep names showing", covered.value)
     }
 
     @Test

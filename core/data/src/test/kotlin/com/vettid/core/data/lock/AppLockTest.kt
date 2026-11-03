@@ -18,15 +18,29 @@ import javax.crypto.SecretKey
 /** A software stand-in for the biometric-gated Keystore key. */
 internal class SoftKeys : AppLockKeys {
     var key: SecretKey? = null
+    var pendingKey: SecretKey? = null
     val created = mutableListOf<AppLockMethod>()
 
     var failCreate = false
 
-    override fun create(method: AppLockMethod) {
+    override fun createPending(method: AppLockMethod) {
         check(!failCreate) { "no screen lock" }
         created += method
-        key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        pendingKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
     }
+
+    override fun pendingCipher(): Cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, pendingKey) }
+
+    override fun promote() {
+        key = pendingKey
+        pendingKey = null
+    }
+
+    override fun discardPending() {
+        pendingKey = null
+    }
+
+    override fun recover() = Unit
 
     override fun exists() = key != null
 
@@ -34,6 +48,7 @@ internal class SoftKeys : AppLockKeys {
 
     override fun delete() {
         key = null
+        pendingKey = null
     }
 }
 
@@ -210,7 +225,7 @@ class AppLockTest {
     @Test
     fun aNewProcessStartsLockedWhateverTheClocks() = runTest {
         prefs.setAppLockEnabled(true)
-        val l = AppLock(prefs, keys.also { it.create(AppLockMethod.BIOMETRICS) }, file, now = { 5L }, elapsed = { 3L })
+        val l = AppLock(prefs, keys.also { it.createPending(AppLockMethod.BIOMETRICS); it.promote() }, file, now = { 5L }, elapsed = { 3L })
         assertTrue("before start: covered", l.wouldShowLock())
         l.start()
         assertEquals(AppLockState.LOCKED, l.state.value)
@@ -362,22 +377,76 @@ class AppLockTest {
     }
 
     @Test
-    fun cancellingAMethodChangeInTheForegroundDoesNotLock() = runTest {
-        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+    fun cancellingAMethodChangeKeepsTheLockOnWithTheOldMethodAndKey() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable(AppLockMethod.BIOMETRICS))
+        l.setTimeout(AppLockTimeout.IMMEDIATELY)
+        val old = keys.key
         l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
         l.promptStarted(enable = true)
         l.onBackground() // the credential screen stopped the activity
         l.promptEnded(PromptOutcome.DISMISSED, inForeground = true)
-        assertEquals(AppLockState.UNLOCKED, l.state.value)
-        assertFalse(l.wouldShowLock())
-        l.enableCancelled()
+        // The return decision: "Immediately" locks, with no notice and no change of method or key.
+        assertEquals(AppLockState.LOCKED, l.state.value)
         assertFalse(l.invalidated.value)
-        // Out of the foreground it is unchanged: the mark stays.
-        val m = unlockedWith(AppLockTimeout.IMMEDIATELY)
-        m.cipherToEnable(AppLockMethod.SCREEN_LOCK)
-        m.promptStarted(enable = true)
-        m.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
-        assertTrue(m.wouldShowLock())
+        assertEquals(AppLockMethod.BIOMETRICS, l.method.value)
+        assertTrue(prefs.current.value.appLockEnabled)
+        assertTrue(old === keys.key)
+        assertNull(keys.pendingKey)
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+    }
+
+    @Test
+    fun aCancelledFirstEnableLeavesNoKeyAndTheLockOff() = runTest {
+        val l = lock()
+        l.start()
+        l.cipherToEnable(AppLockMethod.BIOMETRICS)
+        l.promptStarted(enable = true)
+        l.promptEnded(PromptOutcome.DISMISSED, inForeground = true)
+        assertEquals(AppLockState.DISABLED, l.state.value)
+        assertFalse(keys.exists())
+        assertNull(keys.pendingKey)
+        assertFalse(prefs.current.value.appLockEnabled)
+    }
+
+    @Test
+    fun aSuccessfulMethodChangeSwapsTheKey() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable(AppLockMethod.BIOMETRICS))
+        val old = keys.key
+        val c = l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
+        assertTrue("the old key is in place until the proof", old === keys.key)
+        l.completeEnable(c)
+        assertFalse(old === keys.key)
+        assertNull(keys.pendingKey)
+        assertEquals(AppLockMethod.SCREEN_LOCK, l.method.value)
+    }
+
+    @Test
+    fun aMethodChangeAbandonedByARotationKeepsTheOldKey() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        val old = keys.key
+        l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
+        l.promptStarted(enable = true)
+        l.abandonPrompt()
+        assertTrue(old === keys.key)
+        assertNull(keys.pendingKey)
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+        l.enableCancelled() // nothing left in progress
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+    }
+
+    @Test
+    fun aProofThatFailsDropsThePendingKey() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        val old = keys.key
+        l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
+        keys.pendingKey = null // the key is gone: the cipher cannot prove
+        runCatching { l.completeEnable(javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")) }
+        assertTrue(old === keys.key)
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
     }
 
     @Test
@@ -506,18 +575,6 @@ class AppLockTest {
         assertEquals(AppLockMethod.SCREEN_LOCK, prefs.current.value.appLockMethod)
         l.completeEnable(l.cipherToEnable())
         assertEquals(listOf(AppLockMethod.SCREEN_LOCK), keys.created)
-    }
-
-    @Test
-    fun aChangeOfMethodThatIsCancelledTurnsTheLockOff() = runTest {
-        val l = lock()
-        l.start()
-        l.completeEnable(l.cipherToEnable(AppLockMethod.BIOMETRICS))
-        l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
-        l.enableCancelled()
-        assertEquals(AppLockState.DISABLED, l.state.value)
-        assertFalse(l.invalidated.value)
-        assertFalse(prefs.current.value.appLockEnabled)
     }
 
     @Test

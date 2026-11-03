@@ -369,18 +369,19 @@ class MainActivity : ComponentActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 // A biometric or the device-credential fallback (the phone's PIN): either unlocks, once.
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    if (isDestroyed) return // late: onDestroy ended the prompt (and dropped a pending key)
                     done(PromptOutcome.SUCCEEDED)
                     result.cryptoObject?.cipher?.let(onSuccess)
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                    if (isDestroyed) return
                     done(PromptOutcome.ofError(errorCode))
                     onCancel()
                 }
 
                 private fun done(outcome: PromptOutcome) {
                     if (promptCancel === cancel) promptCancel = null
-                    if (isDestroyed) return // late: onDestroy already ended the prompt
                     if (appLock.prompts.finished(this@MainActivity, outcome)) {
                         appLock.promptEnded(outcome, inForeground())
                     }

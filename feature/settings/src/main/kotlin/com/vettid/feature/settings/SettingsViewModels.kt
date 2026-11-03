@@ -103,9 +103,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setAppLockTimeout(t) }
     }
 
-    /** Turning the lock off needs no prompt (the app is open); turning it on goes through the activity's BiometricPrompt. */
-    fun disableAppLock() {
-        viewModelScope.launch { appLock.disable() }
+    /**
+     * Turning the lock off first asks the phone's owner ([confirm]: the biometric or screen lock; true also when the phone has
+     * neither); a refused or cancelled check leaves the lock on. Turning it on goes through the activity's BiometricPrompt.
+     */
+    fun disableAppLock(confirm: suspend () -> Boolean) {
+        viewModelScope.launch { if (confirm()) appLock.disable() }
     }
 
     fun acknowledgeInvalidated() = appLock.acknowledgeInvalidated()

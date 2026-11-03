@@ -41,7 +41,11 @@ class RootViewModelTest {
     fun tearDown() = Dispatchers.resetMain()
 
     private val noKeys = object : AppLockKeys {
-        override fun create(method: AppLockMethod) = Unit
+        override fun createPending(method: com.vettid.core.data.prefs.AppLockMethod) = Unit
+        override fun pendingCipher(): Cipher = error("unused")
+        override fun promote() = Unit
+        override fun discardPending() = Unit
+        override fun recover() = Unit
         override fun exists() = false
         override fun encryptCipher(): Cipher = error("unused")
         override fun delete() = Unit

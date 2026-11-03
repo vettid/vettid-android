@@ -123,22 +123,23 @@ The A2 exit test:
 - Notifications and the app lock (owner decisions 2026-11-02): no names whenever opening VettID would show the app lock.
   `AppLock.wouldShowLock()` is true when the state is `LOCKED` or `PENDING`, or the lock is on, the app is in the background
   and the background is due (one shared decision with `onForeground()`, which still alone engages the lock; see the clock rule below); `DISABLED` is never
-  covered; a prompt in progress (`authenticating`) is not.
+  covered; a prompt in progress (`authenticating`) does not change that: a prompt left up cannot keep names showing past the timeout.
   The prompt rule (2026-11-03): `onBackground` always records the mark (not on a configuration change) and `onForeground` never
   clears it while a prompt is up; `promptEnded(outcome, inForeground)` decides. Success in the foreground clears it. Success in the
   background sets it to now with a 3 s grace for the late `onStart` (so "Immediately" does not lock right after an unlock).
   Cancelled or dismissed in the foreground runs the return decision (lock if due, then clear; with "Immediately" this locks after a
   presence check whose screen stopped the activity); in the background it keeps the mark, or records one. The prompt of an enable or
-  a method change (`promptStarted(enable = true)`) only clears the mark in the foreground (no lock, so no false "new fingerprint"
-  notice); that skip belongs to that prompt alone. `abandonPrompt()` (rotation) clears `authenticating` and the enable flag and
-  keeps the mark. A callback that arrives after `onDestroy` is ignored (`UnlockPromptGate.finished(owner, outcome)` is false for a
+  a method change (`promptStarted(enable = true)`) that does not succeed also drops its pending key (`enableCancelled()`) and then
+  follows the same decision as any prompt. The app lock key of a method change is made under a second alias
+  (`vettid.app_data.v1.next`, same Keystore parameters) and `completeEnable` swaps it in only after the proof worked
+  (`AppLockKeys.promote`); a cancel, a failure or a rotation deletes it and keeps the old key, the old method and the lock on, and a
+  first enable that is cancelled stays off with no key left over. A process that died mid-change leaves both keys: `start` drops
+  both and the lock turns off (`recover`). Turning the lock off in Settings first asks for the phone's biometric or screen lock (`SettingsHost.confirmAppLockOff`, the lock prompt's texts); a refused check leaves it on. `abandonPrompt()` (rotation) clears `authenticating`, drops a pending key and keeps the mark. A callback that arrives after `onDestroy` is ignored (`UnlockPromptGate.finished(owner, outcome)` is false for a
   destroyed owner, and `MainActivity` checks `isDestroyed`), so a rotation records no mark. Accepted fail-closed false locks:
   cancelling a credential presence check after the PIN screen was up at least the timeout locks (the time counts from the first
   stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; and `authenticating` has
   no time limit, so a callback lost in the background (no cancel, no `onDestroy`) keeps the cover down until the next
-  `promptEnded`. Known, older than this rule: `cipherToEnable` replaces the key before the prompt, so a rotation during a method
-  change leaves the new key under the old method until the method is set again (the app stays locked or opens only after a real
-  authentication; follow-up: a temporary alias swapped in by `completeEnable`). `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
+  `promptEnded`. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
   a timer that turns it true when the monotonic timeout elapses in the background (cancelled on return or lock off; it does not survive
   the process, whose next start is `LOCKED`, and it stops while the process is frozen (a cached process on Android 14+) as well as in deep sleep); `NotifySource.covered` is that flow, `coveredNow()` the direct read. `FeedNotifier`
   reads `coveredNow()` at post time inside its lock: item notifications are then in public form only
