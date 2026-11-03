@@ -302,6 +302,7 @@ private fun InfoLine(label: String, value: String) {
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod") // one branch per line of the profile
 private fun ProfileCard(c: ConnectionInfo) {
     DetailCard(Modifier.testTag("profile_card")) {
         CardTitle(stringResource(R.string.connections_detail_profile))
@@ -324,7 +325,9 @@ private fun ProfileCard(c: ConnectionInfo) {
         }
         if (display != null || c.sharedItems.isNotEmpty()) {
             display?.let {
-                InfoLine(stringResource(if (c.service) UiR.string.service_name_label else R.string.connections_detail_profile_name), it)
+                // The service's label stands once, on the names row; the display name keeps "Display name" beside it.
+                val alone = c.service && account == null
+                InfoLine(stringResource(if (alone) UiR.string.service_name_label else R.string.connections_detail_profile_name), it)
             }
             if (c.sharedItems.isNotEmpty()) {
                 Spacer(Modifier.height(Spacing.s))

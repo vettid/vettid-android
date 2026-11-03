@@ -723,11 +723,15 @@ class ConnectionDetailViewModel @Inject constructor(
             local.update { it.copy(notice = DetailNotice.AUTH_REQUESTED) }
         } catch (e: VaultFailure) {
             if (e.code != VaultCodes.FORBIDDEN) throw e
+            // Read the connections again so the vault's `peer_kind` arrives and the removal holds after leaving the screen.
+            // `forbidden` can also come from a recovering app (VAULT-MESSAGING 0.51.2): then the read may fail, and a person's
+            // connection keeps its action and the generic failure.
+            runCatching { repo.refresh() }
+            val known = uiState.value.connection?.service == true
+            val service = known || repo.connections.value.firstOrNull { it.id == id }?.service == true
+            if (!service) throw e
             // ANDROID-PLAN 0.1.90: `forbidden` to something sent to a service: "Services can't do that." and the action goes.
             local.update { it.copy(authRefused = true, error = FailureKind.SERVICE_FORBIDDEN, errorCode = null) }
-            // Read the connections again so the vault's `peer_kind` arrives and the removal holds after leaving the screen.
-            // `forbidden` can also come from a recovering app, where this read may fail: the refusal stays as said.
-            runCatching { repo.refresh() }
         }
     }
 

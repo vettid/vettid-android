@@ -75,7 +75,13 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         fail.remove(name)?.let { throw it }
     }
 
-    override suspend fun refresh() = call("refresh")
+    /** Runs at every [refresh], to play what the vault's list says by then (e.g. a connection that turns out to be a service). */
+    var onRefresh: (() -> Unit)? = null
+
+    override suspend fun refresh() {
+        call("refresh")
+        onRefresh?.invoke()
+    }
 
     override suspend fun connection(id: String): ConnectionInfo {
         call("connection")

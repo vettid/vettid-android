@@ -369,7 +369,8 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
         if (state.invites.isNotEmpty() && !state.searching) {
             item { SectionHeader(stringResource(R.string.connections_invites_header)) }
             items(state.invites, key = { "invite-${it.inviteId}" }) { InviteRow(it, onCancel = { actions.onCancelInvite(it) }) }
-            item { SectionHeader(stringResource(R.string.connections_header)) }
+            // No people rows (only services): the section's header would sit directly above "Services".
+            if (state.connections.isNotEmpty()) item { SectionHeader(stringResource(R.string.connections_header)) }
         }
         items(state.connections, key = { it.id }) { c -> ConnectionItem(c, actions) }
         // ANDROID-PLAN 0.1.90: services below the people, only when there is one; starred ones first.

@@ -240,6 +240,8 @@ class MessagesViewModelsTest {
     @Test
     fun forbiddenToAMessageIsSaidOnceAndTheComposerGoes() = runTest {
         social.fail["send"] = VaultFailure(FailureKind.OTHER, "forbidden")
+        // The vault's list, read again after the refusal, says c2 is a service.
+        social.onRefresh = { social.seed(social.connections.value.map { if (it.id == "c2") it.copy(service = true) else it }) }
         val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
         advanceUntilIdle()
         vm.setDraft("hello")
@@ -250,7 +252,6 @@ class MessagesViewModelsTest {
         assertFalse(vm.uiState.value.canSend)
         // The connections are read again; the vault now says `peer_kind: service` for c2.
         assertTrue("refresh" in social.calls.drop(1))
-        social.seed(social.connections.value.map { if (it.id == "c2") it.copy(service = true) else it })
         vm.dismissError()
         vm.setDraft("again")
         vm.send()
@@ -263,8 +264,24 @@ class MessagesViewModelsTest {
         assertTrue(again.uiState.value.noComposer)
     }
 
+    /** `forbidden` also comes from a recovering app (VAULT-MESSAGING 0.51.2): a person keeps the composer and the draft. */
+    @Test
+    fun forbiddenToAPersonIsTheGenericFailureWithTheDraftKept() = runTest {
+        social.fail["send"] = VaultFailure(FailureKind.OTHER, "forbidden")
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
+        advanceUntilIdle()
+        vm.setDraft("hello")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(FailureKind.OTHER, vm.uiState.value.error)
+        assertFalse(vm.uiState.value.noComposer)
+        assertEquals("hello", vm.uiState.value.draft)
+        assertTrue(vm.uiState.value.canSend)
+    }
+
     @Test
     fun forbiddenToAPhotoDropsTheDraftAndTheComposer() = runTest {
+        social.onRefresh = { social.seed(social.connections.value.map { if (it.id == "c1") it.copy(service = true) else it }) }
         val vm = conversation()
         advanceUntilIdle()
         vm.onPicked(picks(byteArrayOf(1)))

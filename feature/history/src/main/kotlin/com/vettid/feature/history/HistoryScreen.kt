@@ -616,7 +616,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
 }
 
 /** What a row resolves its ids with: connection, item and device names (devices null while not known). */
-private data class RowNames(
+internal data class RowNames(
     val connections: Map<String, String>,
     val items: Map<String, String>,
     val devices: Map<String, String>?,
@@ -626,7 +626,7 @@ private data class RowNames(
 )
 
 @Composable
-private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
+internal fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
     val connection = e.connectionId?.let {
         val shown = AccountNames.isolateOrNull(names.connections[it]) ?: stringResource(R.string.history_connection_removed)
         // ANDROID-PLAN 0.1.90: "Service" beside the name of a service connection.

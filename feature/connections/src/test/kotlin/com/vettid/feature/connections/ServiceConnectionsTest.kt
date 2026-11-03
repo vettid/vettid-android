@@ -197,6 +197,7 @@ class ServiceConnectionsTest {
     @Test
     fun forbiddenShowsServicesCantDoThatOnceAndRemovesTheAction() = runTest {
         social.seed(listOf(person("c1")))
+        social.onRefresh = { social.seed(listOf(person("c1").copy(service = true))) }
         social.fail["requestAuthentication"] = VaultFailure(FailureKind.OTHER, "forbidden")
         val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing())
         advanceUntilIdle()
@@ -226,5 +227,47 @@ class ServiceConnectionsTest {
         assertEquals("", noNames.copy(service = false).displayName)
         detail(noNames)
         rule.onNodeWithTag("detail_name").assertTextEquals("Acme")
+    }
+
+    /** `forbidden` also comes from a recovering app (VAULT-MESSAGING 0.51.2): a person is not told "Services can't do that.". */
+    @Test
+    fun forbiddenToAPersonIsTheGenericFailureAndTheCardStays() = runTest {
+        social.seed(listOf(person("c1")))
+        social.fail["requestAuthentication"] = VaultFailure(FailureKind.OTHER, "forbidden")
+        val vm = ConversationDetailVm()
+        advanceUntilIdle()
+        vm.requestAuthentication()
+        advanceUntilIdle()
+        assertEquals(FailureKind.OTHER, vm.uiState.value.error)
+        assertFalse(vm.uiState.value.authRefused)
+        val shown = vm.uiState.value
+        rule.setContent { ConnectionDetailScreen(shown, DetailActions()) }
+        assertEquals(0, rule.onAllNodesWithText("Services can't do that.").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("auth_card").assertExists()
+    }
+
+    private fun ConversationDetailVm() =
+        ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing())
+
+    @Test
+    fun theNameLabelStandsOnceAndNoPeopleHeaderSitsAboveServicesAlone() {
+        detail(service().copy(name = "Acme Trading"))
+        assertEquals(1, rule.onAllNodesWithText("Name given by the service").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun withOnlyServicesAndAnInviteThereIsNoConnectionsHeader() {
+        rule.setContent {
+            ConnectionsScreen(
+                ConnectionsUiState(
+                    loading = false, services = listOf(service()),
+                    invites = listOf(com.vettid.core.data.social.OutstandingInvite("i1", null, remote = true)),
+                ),
+                chrome, ConnectionsActions(),
+            )
+        }
+        rule.onNodeWithText("Services").assertIsDisplayed()
+        // Only the top bar's title says "Connections".
+        assertEquals(1, rule.onAllNodesWithText("Connections").fetchSemanticsNodes().size)
     }
 }

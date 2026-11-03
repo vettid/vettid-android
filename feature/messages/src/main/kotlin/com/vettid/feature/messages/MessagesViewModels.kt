@@ -269,10 +269,9 @@ class ConversationViewModel @Inject constructor(
                 messages.send(connectionId, text)
                 local.update { it.copy(sending = false, draft = "") }
             } catch (e: VaultFailure) {
-                if (e.code == VaultCodes.FORBIDDEN) {
-                    // ANDROID-PLAN 0.1.90: `forbidden` to a message: the connection is a service. Said once; the composer goes.
+                if (e.code == VaultCodes.FORBIDDEN && serviceAfterForbidden()) {
+                    // ANDROID-PLAN 0.1.90: `forbidden` to a message of a service. Said once; the composer goes.
                     local.update { it.copy(sending = false, draft = "", error = FailureKind.SERVICE_FORBIDDEN, serviceRefused = true) }
-                    readAfterForbidden()
                     return@launch
                 }
                 // The draft stays so that the member can retry.
@@ -283,11 +282,14 @@ class ConversationViewModel @Inject constructor(
 
     /**
      * Reads the connections again after a `forbidden`, so that the vault's `peer_kind` arrives and the removal holds after the member
-     * leaves the screen. `forbidden` can also come from a recovering app, where conversations aren't reachable: the read may fail,
-     * and the refusal stays as said.
+     * leaves the screen, and says whether this connection is a service (known before, or by the read). `forbidden` can also come from
+     * a recovering app (VAULT-MESSAGING 0.51.2), where conversations aren't reachable and the read may fail: for a person it is
+     * the generic failure, as before, with the draft kept.
      */
-    private suspend fun readAfterForbidden() {
+    private suspend fun serviceAfterForbidden(): Boolean {
         runCatching { connections.refresh() }
+        val known = uiState.value.connection?.service == true
+        return known || connections.connections.value.firstOrNull { it.id == connectionId }?.service == true
     }
 
     /**
@@ -452,13 +454,12 @@ class ConversationViewModel @Inject constructor(
                     local.update { it.copy(photoDraft = d.copy(sending = true, inFlight = false)) }
                 } catch (e: VaultFailure) {
                     if (photosCancelled) return@launch
-                    if (e.code == VaultCodes.FORBIDDEN) {
-                        // ANDROID-PLAN 0.1.90: as a refused message: the photos go, the composer goes.
+                    if (e.code == VaultCodes.FORBIDDEN && serviceAfterForbidden()) {
+                        // ANDROID-PLAN 0.1.90: as a refused message of a service: the photos go, the composer goes.
                         pendingPhoto?.let { runCatching { attachments.abandon(it) } }
                         pendingPhoto = null
                         d.photos.forEach { it.wipe() }
                         local.update { it.copy(photoDraft = null, error = FailureKind.SERVICE_FORBIDDEN, serviceRefused = true) }
-                        readAfterForbidden()
                         return@launch
                     }
                     val retry = AttachmentManager.retryable(e)

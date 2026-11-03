@@ -8,6 +8,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -56,6 +57,22 @@ class NotificationsScreenTest {
         custom.first().action?.invoke()
         rule.onNodeWithTag("feed_row_m").performClick()
         assertEquals(listOf("archive:a", "open:m"), done)
+    }
+
+    /** "Service" where a row names a service connection (ANDROID-PLAN 0.1.90); never for a person. */
+    @Test
+    fun aServiceRowCarriesTheServiceLabelAndAPersonRowDoesNot() {
+        val svc = ConnectionInfo("s1", "", ConnectionState.ACTIVE, firstName = "Acme", lastName = "Co-op", service = true)
+        val withService = FeedNames(names.connections + ("s1" to svc))
+        val serviceItem = FeedItem("s", 6, "message.received", now.minusSeconds(60).toString(), "read", connectionId = "s1")
+        rule.setContent {
+            VettIdTheme {
+                val state = NotificationsUiState(listOf(serviceItem, message), withService, ListLoad.LOADED)
+                NotificationsScreen(state, NotificationsActions())
+            }
+        }
+        rule.onNodeWithTag("feed_row_s").assertExists()
+        assertEquals(1, rule.onAllNodesWithText("Service", substring = true).fetchSemanticsNodes().size)
     }
 
     @Test
