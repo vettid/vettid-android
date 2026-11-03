@@ -1,5 +1,6 @@
 package com.vettid.feature.devices
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,7 +29,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -36,6 +40,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.devices.DeviceInfo
+import com.vettid.core.data.items.RuleNames
+import com.vettid.core.data.items.ShareMode
+import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
@@ -69,6 +76,11 @@ data class DevicePageActions(
     val onDismissFailure: () -> Unit = {},
     val onAccessEndedShown: () -> Unit = {},
     val onRetry: () -> Unit = {},
+    /** AA4: What it may use. */
+    val onNewRule: () -> Unit = {},
+    val onOpenRule: (String) -> Unit = {},
+    val onRetryRules: () -> Unit = {},
+    val onRuleSavedShown: () -> Unit = {},
 )
 
 /**
@@ -88,6 +100,12 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         if (!state.accessEnded) return@LaunchedEffect
         actions.onAccessEndedShown()
         snackbar.showSnackbar(ended)
+    }
+    val savedText = stringResource(R.string.devices_rule_saved)
+    LaunchedEffect(state.ruleSaved) {
+        if (!state.ruleSaved) return@LaunchedEffect
+        actions.onRuleSavedShown()
+        snackbar.showSnackbar(savedText)
     }
     val d = state.device?.takeIf { !it.thisPhone }
     DetailScaffold(
@@ -164,6 +182,7 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
         }
         state.failure?.let { f -> FailureNotice(state, f, DeviceText.sentenceName(d), actions.onDismissFailure) }
         AccessCard(d, now, busy = state.busy, onEndAccess = actions.onEndAccess)
+        if (d.isAgent) RulesCard(state, actions)
         DetailCard(Modifier.testTag("about_card")) {
             CardTitle(stringResource(R.string.devices_about))
             InfoLine(stringResource(R.string.devices_role), DeviceText.role(d))
@@ -241,6 +260,86 @@ private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: 
                 stringResource(R.string.devices_agents_rule),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** What it may use (AA4): the agent's share rules, each a row that opens its editor, and **Add a rule**. */
+@Composable
+private fun RulesCard(state: DeviceUiState, actions: DevicePageActions) {
+    DetailCard(Modifier.testTag("rules_card")) {
+        CardTitle(stringResource(R.string.devices_rules_title))
+        when {
+            state.rulesError != null && !state.rulesLoaded -> {
+                Text(stringResource(R.string.devices_rules_failed), modifier = Modifier.testTag("rules_failed"))
+                TextButton(onClick = actions.onRetryRules) { Text(stringResource(R.string.devices_retry)) }
+            }
+            state.rules.isEmpty() && state.rulesLoaded -> Text(
+                stringResource(R.string.devices_rules_none),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("rules_none"),
+            )
+            else -> state.rules.forEach { RuleRow(it, state.itemWays, actions.onOpenRule) }
+        }
+        if (state.atRuleLimit) {
+            Text(
+                stringResource(R.string.devices_rules_limit),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("rules_limit"),
+            )
+        }
+        Spacer(Modifier.height(Spacing.s))
+        SecondaryButton(
+            stringResource(R.string.devices_rules_add),
+            actions.onNewRule,
+            enabled = !state.atRuleLimit,
+            modifier = Modifier.testTag("rule_add"),
+        )
+    }
+}
+
+/**
+ * One rule (§10.12 "Naming a rule"): its tags, its mode, its limit, its end, what it includes and what waits. Without
+ * `item_ways` the row carries the warning line (decision 17).
+ */
+@Composable
+private fun RuleRow(r: ShareRule, itemWays: Boolean, onOpen: (String) -> Unit) {
+    val name = RuleNames.text(r)
+    val cd = stringResource(R.string.devices_rule_row_cd, name)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = Spacing.touchTarget)
+            .clickable(role = Role.Button) { onOpen(r.ruleId) }
+            .semantics(mergeDescendants = true) { contentDescription = cd }
+            .padding(vertical = Spacing.xs)
+            .testTag("rule_${r.ruleId}"),
+    ) {
+        Text(name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(if (r.mode == ShareMode.AUTO) R.string.devices_rule_auto else R.string.devices_rule_ask),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        val parts = listOfNotNull(
+            r.perHour?.let { pluralStringResource(R.plurals.devices_rule_per_hour, it, it) },
+            r.expiresAt?.let { stringResource(R.string.devices_rule_ends, Times.dayLabel(Times.day(it))) }
+                ?: stringResource(R.string.devices_rule_no_end),
+            pluralStringResource(R.plurals.devices_rule_items, r.included.size, r.included.size),
+            r.pending.size.takeIf { it > 0 }?.let { stringResource(R.string.devices_rule_waiting, it) },
+        )
+        Text(
+            parts.joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (!itemWays) {
+            Text(
+                stringResource(UiR.string.core_ui_agent_ways_warning),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("rule_ways_warning_${r.ruleId}"),
             )
         }
     }

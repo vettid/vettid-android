@@ -16,6 +16,7 @@ import com.vettid.core.data.items.ItemFilter
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultLimit
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.feature.items.DetailDialog
 import com.vettid.feature.items.EditDialog
@@ -49,6 +50,9 @@ import com.vettid.feature.items.ConnectionSharingUiState
 import com.vettid.feature.items.RuleEditActions
 import com.vettid.feature.items.RuleEditScreen
 import com.vettid.feature.items.RuleEditUiState
+import com.vettid.feature.items.RuleExpiry
+import com.vettid.feature.items.RulePrompt
+import com.vettid.core.data.votes.WindowNotClosed
 import com.vettid.feature.items.ShareImpact
 import com.vettid.feature.items.SharedWithYouActions
 import com.vettid.feature.items.SharedWithYouScreen
@@ -204,6 +208,30 @@ internal object ItemsCatalog {
             null, null,
         ),
     )
+    private val agentPreview = RulePreview(
+        listOf(
+            RuleMatch("i1", "Deploy key", "secret", Sensitivity.SECRET, outcome = RuleMatch.OUTCOME_ASK),
+            RuleMatch("i2", "Billing API key", "secret", Sensitivity.SECRET, outcome = RuleMatch.OUTCOME_ASK, askRuleId = "r1"),
+            RuleMatch("i3", "Staging token", "secret", Sensitivity.SECRET, outcome = RuleMatch.OUTCOME_INCLUDE),
+        ),
+        3,
+    )
+
+    private fun agentState(itemWays: Boolean = false, mode: ShareMode = ShareMode.ASK, tag: String? = null): RuleEditUiState {
+        val saved = ShareRule("r1", 1, null, "a1", listOf("medical"), perHour = 60, perDay = 1_000, statusTtl = 900)
+        return RuleEditUiState(
+            RuleDraft(
+                "", listOfNotNull(tag), mode = mode, agentId = "a1", perHour = 60, perDay = 1_000, statusTtl = 900,
+                expiresAt = Instant.now().plusSeconds(30 * 86_400L), ruleId = "r1".takeIf { tag != null }, version = 1, storedMode = mode.takeIf { tag != null },
+            ),
+            "Claude on work laptop", tagNames, expiry = RuleExpiry.MONTH, perHourText = "60", perDayText = "1000",
+            rules = listOf(saved), itemWays = itemWays,
+        )
+    }
+
+    @Composable
+    private fun AgentRule(s: RuleEditUiState) = RuleEditScreen(s, RuleEditActions())
+
     private val ruleDraft = RuleDraft("c1", listOf("medical"))
     private val rulePreview = RulePreview(listOf(RuleMatch("i1", "Allergies", "medical", Sensitivity.DATA), RuleMatch("i2", "Blood type", "medical", Sensitivity.DATA), RuleMatch("i9", "Signing key", "crypto_wallet", Sensitivity.CRITICAL)), 3)
 
@@ -290,6 +318,45 @@ internal object ItemsCatalog {
         "items.tags_in_use" to { TagsScreen(TagsUiState(registry, loading = false, error = FailureKind.IN_USE), TagsActions()) },
         "items.sharing" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", rules, givenGrants, mapOf(passport.itemId to passport.summary), loading = false), ConnectionSharingActions()) },
         "items.sharing_empty" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", loading = false), ConnectionSharingActions()) },
+        // AA4 (ANDROID-PLAN 0.1.116): an agent's share rule. Without `item_ways` the rule is ask-only and carries the warning.
+        "items.agent_rule_new" to { AgentRule(agentState()) },
+        "items.agent_rule_new_ways" to { AgentRule(agentState(itemWays = true)) },
+        "items.agent_rule_edit_auto" to { AgentRule(agentState(itemWays = true, mode = ShareMode.AUTO, tag = "api").copy(dirty = true)) },
+        // A stored automatic rule on a vault without item_ways: opens as Ask, Automatic disabled, with the note.
+        "items.agent_rule_auto_no_ways" to { AgentRule(agentState(itemWays = false, mode = ShareMode.AUTO, tag = "api").let { it.copy(draft = it.draft.copy(mode = ShareMode.ASK)) }) },
+        "items.agent_rule_preview" to { AgentRule(agentState(tag = "api").copy(preview = agentPreview)) },
+        "items.agent_rule_more" to { AgentRule(agentState(tag = "api").copy(moreOptions = true)) },
+        "items.agent_rule_invalid" to { AgentRule(agentState(tag = "api").copy(perHourText = "", perDayText = "90000")) },
+        "items.agent_rule_password" to { AgentRule(agentState(tag = "api").copy(prompt = RulePrompt.PASSWORD)) },
+        "items.agent_rule_password_wrong" to {
+            AgentRule(agentState(tag = "api").copy(prompt = RulePrompt.PASSWORD, passwordError = FailureKind.BAD_PASSWORD))
+        },
+        "items.agent_rule_password_backoff" to {
+            AgentRule(
+                agentState(tag = "api").copy(
+                    prompt = RulePrompt.PASSWORD, passwordError = FailureKind.BACKOFF, retryUntil = Instant.now().plusSeconds(120),
+                ),
+            )
+        },
+        "items.agent_rule_password_alarm" to {
+            AgentRule(agentState(tag = "api").copy(prompt = RulePrompt.PASSWORD, passwordError = FailureKind.CREDENTIAL_FROZEN))
+        },
+        "items.agent_rule_sending" to { AgentRule(agentState(tag = "api").copy(prompt = RulePrompt.SENDING, password = "x")) },
+        "items.agent_rule_locked_again" to { AgentRule(agentState(tag = "api").copy(lockedAgain = true)) },
+        "items.agent_rule_conflict" to { AgentRule(agentState(tag = "api").copy(conflict = true)) },
+        "items.agent_rule_window_open" to { AgentRule(agentState(tag = "api").copy(windowNotClosed = WindowNotClosed(300))) },
+        "items.agent_rule_limit_grants" to {
+            AgentRule(agentState(tag = "api").copy(error = FailureKind.LIMIT, limit = VaultLimit("agent_grants", 32)))
+        },
+        "items.agent_rule_limit_subject" to {
+            AgentRule(agentState(tag = "api").copy(error = FailureKind.LIMIT, limit = VaultLimit("share_rules_subject", 64)))
+        },
+        "items.agent_rule_limit_vault" to {
+            AgentRule(agentState(tag = "api").copy(error = FailureKind.LIMIT, limit = VaultLimit("share_rules", 512)))
+        },
+        "items.agent_rule_not_paired" to { AgentRule(agentState(tag = "api").copy(error = FailureKind.NOT_FOUND)) },
+        "items.agent_rule_owner_check" to { AgentRule(agentState(tag = "api").copy(error = FailureKind.OWNER_CHECK_REQUIRED)) },
+        "items.agent_rule_delete_confirm" to { AgentRule(agentState(tag = "api").copy(confirmDelete = true)) },
         "items.rule_new" to { RuleEditScreen(RuleEditUiState(RuleDraft("c1"), "Dana Lee", tagNames, rules = rules), RuleEditActions()) },
         // One tag per rule (owner decision 2026-10-09): the chosen tag with a gold outline and a check mark.
         "items.rule_selected" to {

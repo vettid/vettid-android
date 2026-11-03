@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.items.ShareRule
+import com.vettid.core.data.items.SharingRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
@@ -15,6 +17,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -103,7 +108,18 @@ data class DeviceUiState(
     /** The list could not be read and no device is known: the page says so and offers Retry. */
     val loadError: FailureKind? = null,
     val loadErrorCode: String? = null,
+    /** AA4: the agent's share rules (`share.rule.list{agent_id}`), "What it may use"; memory only. */
+    val rules: List<ShareRule> = emptyList(),
+    val rulesLoaded: Boolean = false,
+    val rulesError: FailureKind? = null,
+    /** The vault lists `item_ways` (decision 17): without it every rule row carries the warning line. */
+    val itemWays: Boolean = false,
+    /** "Rule saved", once. */
+    val ruleSaved: Boolean = false,
 ) {
+    /** The agent has the most rules it can have (64, §10.12 `share_rules_subject`): no new one. */
+    val atRuleLimit: Boolean get() = rules.size >= RULE_LIMIT
+
     /** This phone's own entry has no page (it has no actions). */
     val gone: Boolean get() = loaded && (device == null || device.thisPhone)
 }
@@ -116,17 +132,29 @@ data class DeviceUiState(
 class DeviceViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val repo: DevicesRepository,
+    private val sharing: SharingRepository,
 ) : ViewModel() {
     private val id: String = saved.get<String>(DeviceRoute.ARG).orEmpty()
     private val local = MutableStateFlow(DeviceUiState())
 
-    val uiState: StateFlow<DeviceUiState> = combine(local, repo.devices, repo.load) { s, list, load ->
-        s.copy(device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED)
+    /** The number of the latest rules read; declared before `init`, which may start the first read at once. */
+    private var rulesRead = 0
+
+    val uiState: StateFlow<DeviceUiState> = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
+        s.copy(
+            device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED, ruleSaved = saved == id,
+            itemWays = sharing.itemWays,
+        )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
 
     init {
         // A page opened from a feed item (or after a process start) may be the first reader of the list.
         refresh()
+        // The rules are an agent's: read once the list shows this device is one (and on every return to the page).
+        viewModelScope.launch {
+            repo.devices.map { list -> list.firstOrNull { it.id == id }?.isAgent == true }.distinctUntilChanged().filter { it }
+                .collect { readRules() }
+        }
     }
 
     /** On opening, on Retry. */
@@ -140,6 +168,27 @@ class DeviceViewModel @Inject constructor(
             }
         }
     }
+
+    /** The agent's share rules; on opening and on every return to the page (the editor may have changed them). */
+    fun refreshRules() {
+        if (uiState.value.device?.isAgent == true) readRules()
+    }
+
+    private fun readRules() {
+        val mine = ++rulesRead
+        viewModelScope.launch {
+            try {
+                val rules = sharing.agentRules(id)
+                // An older answer never replaces a newer one.
+                if (mine == rulesRead) local.update { it.copy(rules = rules, rulesLoaded = true, rulesError = null) }
+            } catch (e: VaultFailure) {
+                if (mine == rulesRead) local.update { it.copy(rulesError = e.kind) }
+            }
+        }
+    }
+
+
+    fun ruleSavedShown() = sharing.ruleSavedShown(id)
 
     fun askEndAccess() {
         val d = uiState.value.device
@@ -194,3 +243,6 @@ class DeviceViewModel @Inject constructor(
 
     fun dismissFailure() = local.update { it.copy(failure = null, error = null, errorCode = null) }
 }
+
+/** A vault holds at most 64 share rules per subject (§10.12 `share_rules_subject`). */
+private const val RULE_LIMIT = 64

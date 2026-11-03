@@ -3,6 +3,8 @@ package com.vettid.feature.items
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.devices.AgentRuleRoute
+import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.items.FetchOutcome
 import com.vettid.core.data.items.GrantView
 import com.vettid.core.data.items.ItemSummary
@@ -18,7 +20,9 @@ import com.vettid.core.data.items.TagMatch
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.votes.WindowNotClosed
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -239,16 +243,57 @@ data class RuleEditUiState(
      * be deleted, not changed, so that nothing it shares changes by surprise. A rule per tag replaces it.
      */
     val readOnly: Boolean = false,
+    /** AA4: the vault lists `item_ways` (decision 17); without it an agent's rule is ask-only and carries the warning. */
+    val itemWays: Boolean = false,
+    /** AA4: "More options" (the status lifetime) is open. */
+    val moreOptions: Boolean = false,
+    /** AA4: the password prompt (every agent rule save asks, decision 4). */
+    val prompt: RulePrompt = RulePrompt.NONE,
+    val password: String = "",
+    val passwordError: FailureKind? = null,
+    val passwordErrorCode: String? = null,
+    /** The end of a password backoff (`retry_after`). */
+    val retryUntil: Instant? = null,
+    /** `credential_locked` came twice for one save: "Your credential locked again…". */
+    val lockedAgain: Boolean = false,
+    /** The lock after the save failed: told until it is closed (**Close it now**) or the vault locks. */
+    val windowNotClosed: WindowNotClosed? = null,
+    val windowClosing: Boolean = false,
+    val windowCloseError: FailureKind? = null,
+    /** The vault answered `conflict`: the editor shows the current rule (told once). */
+    val conflict: Boolean = false,
 ) {
     val isNew: Boolean get() = draft.ruleId == null
 
+    /** The state holds the credential password while a save runs: it never prints (a log, a crash report). */
+    override fun toString(): String = "RuleEditUiState"
+
+    /** The rule is an agent's (AA4). */
+    val isAgent: Boolean get() = draft.agentId != null
+
+    /** "Include tagged items automatically" can be chosen (decision 17): not without `item_ways`, for any agent rule. */
+    val autoEnabled: Boolean get() = !isAgent || itemWays
+
+    /**
+     * The choice is on the screen: always with `item_ways`; without it, only (disabled) for a rule that is stored as `auto`, to
+     * show what it was and that it now asks (owner decision 2026-11-02, b).
+     */
+    val autoShown: Boolean get() = autoEnabled || draft.storedMode == ShareMode.AUTO
+
+    /** A stored `auto` rule on a vault without `item_ways`: it opens as Ask and the note says why. */
+    val autoDemoted: Boolean get() = isAgent && !itemWays && draft.storedMode == ShareMode.AUTO
+
+    /** The line "On this vault, the agent may receive the values…" on the editor (and the row), decision 17. */
+    val waysWarning: Boolean get() = isAgent && !itemWays
+
     val usesValid: Boolean get() = usesText.isBlank() || usesText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_USES } == true
 
+    /** An agent rule always has both limits (§10.11); a connection rule may leave them empty. */
     val perHourValid: Boolean
-        get() = perHourText.isBlank() || perHourText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_PER_HOUR } == true
+        get() = (perHourText.isBlank() && !isAgent) || perHourText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_PER_HOUR } == true
 
     val perDayValid: Boolean
-        get() = perDayText.isBlank() || perDayText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_PER_DAY } == true
+        get() = (perDayText.isBlank() && !isAgent) || perDayText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_PER_DAY } == true
 
     /** A new rule while the connection has the most it can have (§10.12 `share_rules_subject`, 64). */
     val atRuleLimit: Boolean get() = isNew && rules.size >= RuleDraft.MAX_RULES_PER_SUBJECT
@@ -275,6 +320,9 @@ data class RuleEditUiState(
     val names: Map<String, com.vettid.core.data.items.RuleNames.Name> get() = com.vettid.core.data.items.RuleNames.of(rules)
 }
 
+/** Where an agent rule's save is: the password prompt, asked for every save (ANDROID-PLAN §4 AA4, decision 4). */
+enum class RulePrompt { NONE, PASSWORD, SENDING }
+
 /**
  * One share rule for one connection (§10.12; a connection has up to 64, each with its own settings): the one tag it
  * shares (owner decision 2026-10-09: one tag per rule, a tag another rule already shares opens that rule), its mode —
@@ -291,46 +339,78 @@ class RuleEditViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val sharing: SharingRepository,
     connections: ConnectionsRepository,
+    private val devices: DevicesRepository,
 ) : ViewModel() {
-    private val connectionId: String = checkNotNull(saved[RuleEditRoute.ARG_CONNECTION])
+    /** AA4: set when the route is an agent's rule ([AgentRuleRoute]); the editor is then the agent's. */
+    private val agentId: String? = saved[AgentRuleRoute.ARG_AGENT]
+    private val connectionId: String = if (agentId != null) "" else checkNotNull(saved[RuleEditRoute.ARG_CONNECTION])
     private val ruleId: String? = saved[RuleEditRoute.ARG_RULE]
-    private val state = MutableStateFlow(RuleEditUiState(RuleDraft(connectionId), connections.nameOf(connectionId), loading = true))
+    private val state = MutableStateFlow(
+        if (agentId != null) {
+            newAgentState(agentId, agentName(devices, agentId), sharing.itemWays)
+        } else {
+            RuleEditUiState(RuleDraft(connectionId), connections.nameOf(connectionId), loading = true)
+        },
+    )
     val uiState: StateFlow<RuleEditUiState> = state.asStateFlow()
     private var previewJob: Job? = null
 
+    /** The first `credential_locked` of one save has been answered with the prompt again (then the same request once). */
+    private var lockedOnce = false
+
     init {
         viewModelScope.launch {
-            try {
-                val reg = sharing.tags.value ?: sharing.refreshTags()
-                state.update { it.copy(tags = reg.tags.filterNot { t -> t.reserved }.map { t -> t.tag }.sorted()) }
-                val rules = sharing.rules(connectionId).filter { it.connectionId == connectionId }
-                state.update { it.copy(rules = rules, loading = ruleId != null) }
-                if (ruleId != null) {
-                    val r = rules.firstOrNull { it.ruleId == ruleId } ?: throw VaultFailure(FailureKind.NOT_FOUND)
-                    state.update {
-                        it.copy(
-                            draft = RuleDraft.of(r).copy(connectionId = connectionId),
-                            expiry = if (r.expiresAt == null) RuleExpiry.NEVER else RuleExpiry.KEEP,
-                            usesText = r.uses?.toString().orEmpty(),
-                            perHourText = r.perHour?.toString().orEmpty(),
-                            perDayText = r.perDay?.toString().orEmpty(),
-                            loading = false,
-                            tags = (it.tags + r.tags).distinct().sorted(),
-                            readOnly = r.multiTag,
-                        )
-                    }
-                    schedulePreview()
-                } else {
-                    state.update { it.copy(loading = false) }
-                }
-            } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
+            sharing.windowNotClosed.collect { w -> state.update { it.copy(windowNotClosed = w) } }
+        }
+        viewModelScope.launch { load() }
+    }
+
+    private suspend fun load() {
+        try {
+            val reg = sharing.tags.value ?: sharing.refreshTags()
+            state.update { it.copy(tags = reg.tags.filterNot { t -> t.reserved }.map { t -> t.tag }.sorted()) }
+            if (agentId != null && state.value.connectionName == null) {
+                runCatching { devices.refresh() }
+                state.update { it.copy(connectionName = agentName(devices, agentId)) }
             }
+            val rules = if (agentId != null) {
+                sharing.agentRules(agentId)
+            } else {
+                sharing.rules(connectionId).filter { it.connectionId == connectionId }
+            }
+            state.update { it.copy(rules = rules, loading = ruleId != null, itemWays = sharing.itemWays) }
+            if (ruleId != null) {
+                val r = rules.firstOrNull { it.ruleId == ruleId } ?: throw VaultFailure(FailureKind.NOT_FOUND)
+                // Without `item_ways` a stored `auto` agent rule opens as Ask: saving it sends `ask` (owner decision 2026-11-02, b).
+                val demote = agentId != null && !sharing.itemWays && r.mode == ShareMode.AUTO
+                state.update {
+                    it.copy(
+                        draft = RuleDraft.of(r).copy(connectionId = connectionId, mode = if (demote) ShareMode.ASK else r.mode),
+                        expiry = if (r.expiresAt == null) RuleExpiry.NEVER else RuleExpiry.KEEP,
+                        usesText = r.uses?.toString().orEmpty(),
+                        perHourText = r.perHour?.toString().orEmpty(),
+                        perDayText = r.perDay?.toString().orEmpty(),
+                        loading = false,
+                        tags = (it.tags + r.tags).distinct().sorted(),
+                        readOnly = r.multiTag,
+                        // What the vault holds (automatic) is not what the editor shows (Ask) until it is saved: leaving asks first.
+                        dirty = demote,
+                    )
+                }
+                schedulePreview()
+            } else {
+                state.update { it.copy(loading = false) }
+            }
+        } catch (e: VaultFailure) {
+            state.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
         }
     }
 
+    /** The password prompt is up (or a save is running): the rule being signed does not change meanwhile. */
+    private val promptUp: Boolean get() = state.value.prompt != RulePrompt.NONE
+
     private fun change(f: (RuleDraft) -> RuleDraft) {
-        if (state.value.readOnly) return
+        if (state.value.readOnly || promptUp) return
         state.update { it.copy(draft = f(it.draft), error = null, dirty = true) }
         schedulePreview()
     }
@@ -345,12 +425,23 @@ class RuleEditViewModel @Inject constructor(
         change { d -> d.copy(tags = listOf(t), match = TagMatch.ANY) }
     }
 
-    fun setMode(m: ShareMode) = change { it.copy(mode = m) }
+    fun setMode(m: ShareMode) {
+        // Decision 17: without `item_ways` a new agent rule cannot be `auto`.
+        if (promptUp || (m == ShareMode.AUTO && !state.value.autoEnabled)) return
+        change { it.copy(mode = m) }
+    }
+
+    /** AA4 "More options" (the status lifetime). */
+    fun toggleMoreOptions() = state.update { it.copy(moreOptions = !it.moreOptions) }
+
+    /** An agent rule's `status_ttl` (60–3,600 s, §10.11). */
+    fun setStatusTtl(seconds: Int) = change { it.copy(statusTtl = seconds) }
 
     fun setIncludeExisting(on: Boolean) = change { it.copy(includeExisting = on) }
 
     /** Fetches of each item (§10.12 `uses`, 1–10,000; empty for none): digits only. */
     fun setUses(v: String) {
+        if (promptUp) return
         val digits = v.filter { it.isDigit() }.take(USES_DIGITS)
         state.update { it.copy(usesText = digits) }
         change { it.copy(uses = digits.toIntOrNull()) }
@@ -358,6 +449,7 @@ class RuleEditViewModel @Inject constructor(
 
     /** Fetches per hour of all the rule's items (0.23.0 §10.12 `per_hour`, 1–3,600; empty: no limit). */
     fun setPerHour(v: String) {
+        if (promptUp) return
         val digits = v.filter { it.isDigit() }.take(PER_HOUR_DIGITS)
         state.update { it.copy(perHourText = digits) }
         change { it.copy(perHour = digits.toIntOrNull()) }
@@ -365,6 +457,7 @@ class RuleEditViewModel @Inject constructor(
 
     /** Fetches per day of all the rule's items (0.23.0 §10.12 `per_day`, 1–86,400; empty: no limit). */
     fun setPerDay(v: String) {
+        if (promptUp) return
         val digits = v.filter { it.isDigit() }.take(PER_DAY_DIGITS)
         state.update { it.copy(perDayText = digits) }
         change { it.copy(perDay = digits.toIntOrNull()) }
@@ -372,7 +465,7 @@ class RuleEditViewModel @Inject constructor(
 
     /** A preset end from [now] in [zone]; [RuleExpiry.CUSTOM] opens the date picker (the end changes once a time is picked). */
     fun setExpiry(e: RuleExpiry, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()) {
-        if (state.value.readOnly) return
+        if (state.value.readOnly || promptUp) return
         when (e) {
             RuleExpiry.KEEP -> state.update { it.copy(expiry = e, endInvalid = false) }
             RuleExpiry.CUSTOM -> state.update { it.copy(endPicker = EndPicker.Date, endInvalid = false) }
@@ -391,7 +484,7 @@ class RuleEditViewModel @Inject constructor(
      * end not in the future, or more than 3,650 days ahead, is refused ([RuleEditUiState.endInvalid]) and the end stays.
      */
     fun pickEndTime(hour: Int, minute: Int, zone: ZoneId = ZoneId.systemDefault(), now: Instant = Instant.now()) {
-        val p = state.value.endPicker as? EndPicker.Time ?: return
+        val p = (state.value.endPicker as? EndPicker.Time)?.takeUnless { promptUp } ?: return
         val at = RuleEnds.of(p.dateUtcMillis, hour, minute, zone)
         if (!RuleEnds.allowed(at, now)) return state.update { it.copy(endPicker = null, endInvalid = true) }
         state.update { it.copy(endPicker = null, endInvalid = false, expiry = RuleExpiry.CUSTOM) }
@@ -419,6 +512,16 @@ class RuleEditViewModel @Inject constructor(
     fun save() {
         val s = state.value
         if (!s.canSave) return
+        // An agent rule is signed with the credential: the password is asked for every save (decision 4).
+        if (s.isAgent) {
+            lockedOnce = false
+            return state.update {
+                it.copy(
+                    prompt = RulePrompt.PASSWORD, password = "", passwordError = null, passwordErrorCode = null,
+                    error = null, lockedAgain = false,
+                )
+            }
+        }
         state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
@@ -426,6 +529,90 @@ class RuleEditViewModel @Inject constructor(
                 state.update { it.copy(busy = false, done = true, dirty = false) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, limit = e.limit) }
+            }
+        }
+    }
+
+    fun setPassword(v: String) = state.update { it.copy(password = v, passwordError = null, passwordErrorCode = null) }
+
+    fun dismissPrompt() {
+        if (state.value.prompt == RulePrompt.SENDING) return
+        lockedOnce = false
+        state.update { it.copy(prompt = RulePrompt.NONE, password = "", passwordError = null, passwordErrorCode = null) }
+    }
+
+    /** **Confirm** in the password prompt: `credential.unlock`, `share.rule.set`, then `credential.lock` if this opened the window. */
+    fun submitPassword(now: Instant = Instant.now()) {
+        val s = state.value
+        if (s.prompt != RulePrompt.PASSWORD || s.password.isEmpty() || !s.canSave) return
+        if (s.retryUntil?.isAfter(now) == true) return
+        val pw = s.password
+        state.update {
+            it.copy(prompt = RulePrompt.SENDING, error = null, passwordError = null, passwordErrorCode = null, retryUntil = null)
+        }
+        viewModelScope.launch {
+            try {
+                sharing.saveAgentRule(s.draft, pw)
+                lockedOnce = false
+                // The password is held only while the request runs.
+                state.update { it.copy(prompt = RulePrompt.NONE, password = "", done = true, dirty = false) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: VaultFailure) {
+                onSaveFailure(e)
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                // Fail secure: whatever it was, the password is gone and the member is told the rule was not saved.
+                onSaveFailure(VaultFailure(FailureKind.OTHER, "unexpected", cause = e))
+            }
+        }
+    }
+
+    private fun onSaveFailure(e: VaultFailure) {
+        when (e.kind) {
+            // The window was closed after all: the prompt again, then the same request once; a second time it says so.
+            FailureKind.CREDENTIAL_LOCKED -> if (!lockedOnce) {
+                lockedOnce = true
+                state.update { it.copy(prompt = RulePrompt.PASSWORD, password = "", passwordError = null) }
+            } else {
+                lockedOnce = false
+                state.update { it.copy(prompt = RulePrompt.NONE, password = "", lockedAgain = true) }
+            }
+            FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED ->
+                state.update {
+                    it.copy(
+                        prompt = RulePrompt.PASSWORD, password = "", passwordError = e.kind, passwordErrorCode = e.shownCode,
+                        retryUntil = if (e.kind == FailureKind.BACKOFF) Instant.now().plusSeconds(e.retryAfterSeconds) else null,
+                    )
+                }
+            FailureKind.CONFLICT -> {
+                lockedOnce = false
+                state.update { it.copy(prompt = RulePrompt.NONE, password = "", conflict = true, dirty = false, loading = true) }
+                // "Another device changed this rule. Here is the current one."
+                viewModelScope.launch { load() }
+            }
+            else -> {
+                lockedOnce = false
+                state.update {
+                    it.copy(prompt = RulePrompt.NONE, password = "", error = e.kind, errorCode = e.shownCode, limit = e.limit)
+                }
+            }
+        }
+    }
+
+    fun dismissConflict() = state.update { it.copy(conflict = false) }
+
+    fun dismissLockedAgain() = state.update { it.copy(lockedAgain = false) }
+
+    /** **Close it now** on the notice of a lock that failed. */
+    fun closeWindowNow() {
+        if (state.value.windowClosing) return
+        state.update { it.copy(windowClosing = true, windowCloseError = null) }
+        viewModelScope.launch {
+            try {
+                sharing.closeWindowNow()
+                state.update { it.copy(windowClosing = false) }
+            } catch (e: VaultFailure) {
+                state.update { it.copy(windowClosing = false, windowCloseError = e.kind) }
             }
         }
     }
@@ -451,6 +638,24 @@ class RuleEditViewModel @Inject constructor(
     fun dismissError() = state.update { it.copy(error = null) }
 
     private companion object {
+        /** A new agent rule (AA4): ask, 60 an hour and 1,000 a day, status lifetime 15 minutes, ending in 1 month (decision 7). */
+        fun newAgentState(agentId: String, name: String?, itemWays: Boolean, now: Instant = Instant.now()) = RuleEditUiState(
+            draft = RuleDraft(
+                "", agentId = agentId, perHour = RuleDraft.DEFAULT_AGENT_PER_HOUR, perDay = RuleDraft.DEFAULT_AGENT_PER_DAY,
+                statusTtl = RuleDraft.DEFAULT_STATUS_TTL, expiresAt = RuleExpiry.MONTH.endFrom(now, ZoneId.systemDefault()),
+            ),
+            connectionName = name,
+            expiry = RuleExpiry.MONTH,
+            perHourText = RuleDraft.DEFAULT_AGENT_PER_HOUR.toString(),
+            perDayText = RuleDraft.DEFAULT_AGENT_PER_DAY.toString(),
+            loading = true,
+            itemWays = itemWays,
+        )
+
+        /** The agent's own name as the list holds it (bidi isolation is the screen's), null when blank or unknown. */
+        fun agentName(devices: DevicesRepository, id: String): String? =
+            devices.devices.value.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() }
+
         const val PREVIEW_DEBOUNCE_MS = 400L
         const val USES_DIGITS = 5
         const val PER_HOUR_DIGITS = 4

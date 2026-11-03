@@ -359,6 +359,8 @@ fun AppShell(
                                     navController.popBackStack()
                                     navController.navigate(route)
                                 },
+                                onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
+                                onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
                             ),
                         )
                         historyDestination(

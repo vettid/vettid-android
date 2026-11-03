@@ -4,9 +4,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
+import com.vettid.core.data.devices.AgentRuleRoute
 import com.vettid.core.ui.components.ShellChrome
 import kotlinx.serialization.Serializable
 
@@ -71,6 +74,8 @@ fun NavGraphBuilder.devicesDestination(chrome: ShellChrome, host: DevicesHost) {
 
 @Composable
 private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: DevicesHost) {
+    // The editor (AA4) may have changed the rules: read them on every return to the page.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refreshRules() }
     DevicePageScreen(
         state,
         DevicePageActions(
@@ -83,6 +88,10 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
             onDismissFailure = vm::dismissFailure,
             onAccessEndedShown = vm::accessEndedShown,
             onRetry = vm::refresh,
+            onNewRule = { state.device?.let { host.navigate(AgentRuleRoute(it.id)) } },
+            onOpenRule = { rule -> state.device?.let { host.navigate(AgentRuleRoute(it.id, rule)) } },
+            onRetryRules = vm::refreshRules,
+            onRuleSavedShown = vm::ruleSavedShown,
         ),
         now = rememberNow(),
     )
@@ -113,11 +122,14 @@ private fun PairContent(vm: PairViewModel, state: PairUiState, host: DevicesHost
                 vm.done()
                 host.onBack()
             },
-            // The agent's page (what it may use is chosen there from AA4 on).
-            onOpenPage = { id ->
+            // Choose what it may use (AA4): the agent's page, then its share-rule editor on top; no id known: the list.
+            onChooseItems = { id ->
                 vm.done()
                 host.onBack()
-                host.navigate(DeviceRoute(id))
+                if (id != null) {
+                    host.navigate(DeviceRoute(id))
+                    host.navigate(AgentRuleRoute(id))
+                }
             },
             onOwnerCheck = host.onOwnerCheck,
         ),

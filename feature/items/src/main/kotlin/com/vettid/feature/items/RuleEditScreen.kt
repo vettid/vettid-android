@@ -66,11 +66,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.devices.AgentRuleRoute
 import com.vettid.core.data.items.RuleDraft
 import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.TagMatch
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultLimit
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
@@ -95,7 +97,13 @@ internal fun RuleEditRouteContent(host: ItemsHost) {
             onExpiry = { vm.setExpiry(it) }, onEndDate = vm::pickEndDate, onEndTime = { h, m -> vm.pickEndTime(h, m) },
             onCancelEnd = vm::cancelEndPicker, onSave = vm::save, onAskDelete = vm::askDelete, onDelete = vm::delete,
             onDismissError = vm::dismissError,
-            onOpenRule = { host.navigate(RuleEditRoute(state.draft.connectionId, it)) },
+            onOpenRule = {
+                host.navigate(state.draft.agentId?.let { a -> AgentRuleRoute(a, it) } ?: RuleEditRoute(state.draft.connectionId, it))
+            },
+            onPassword = vm::setPassword, onSubmitPassword = { vm.submitPassword() }, onDismissPrompt = vm::dismissPrompt,
+            onMoreOptions = vm::toggleMoreOptions, onStatusTtl = vm::setStatusTtl, onCloseWindow = vm::closeWindowNow,
+            onDismissConflict = vm::dismissConflict, onDismissLockedAgain = vm::dismissLockedAgain,
+            onOpenAlarm = host.onOpenAlarm, onOwnerCheck = host.onOwnerCheck,
             onAskDiscard = { vm.askDiscard(true) },
             onDiscard = {
                 vm.askDiscard(false)
@@ -133,6 +141,18 @@ data class RuleEditActions(
     val onAskDiscard: () -> Unit = {},
     val onDiscard: () -> Unit = {},
     val onKeepEditing: () -> Unit = {},
+    /** AA4: the password prompt of an agent rule's save, "More options", the status lifetime, and the notices. */
+    val onPassword: (String) -> Unit = {},
+    val onSubmitPassword: () -> Unit = {},
+    val onDismissPrompt: () -> Unit = {},
+    val onMoreOptions: () -> Unit = {},
+    val onStatusTtl: (Int) -> Unit = {},
+    val onCloseWindow: () -> Unit = {},
+    val onDismissConflict: () -> Unit = {},
+    val onDismissLockedAgain: () -> Unit = {},
+    /** The credential alarm's screen (a prompt refused for an open alarm), and the daily owner check. */
+    val onOpenAlarm: () -> Unit = {},
+    val onOwnerCheck: () -> Unit = {},
 )
 
 /**
@@ -151,7 +171,11 @@ fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: M
     val leave = { if (state.dirty) actions.onAskDiscard() else actions.onBack() }
     BackHandler(enabled = state.dirty && !state.confirmDiscard) { actions.onAskDiscard() }
     FormScaffold(
-        title = stringResource(if (state.isNew) R.string.items_rule_new_title else R.string.items_rule_edit_title),
+        title = if (state.isAgent) {
+            stringResource(R.string.items_agent_rule_title, name)
+        } else {
+            stringResource(if (state.isNew) R.string.items_rule_new_title else R.string.items_rule_edit_title)
+        },
         body = stringResource(R.string.items_rule_body, name),
         primaryLabel = null,
         onPrimary = {},
@@ -170,30 +194,77 @@ fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: M
             }
         },
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+        RuleForm(state, name, actions)
+    }
+    RuleEditDialogs(state, name, actions)
+    if (state.isAgent && state.prompt != RulePrompt.NONE) AgentPasswordSheet(state, name, actions)
+}
+
+/**
+ * An agent rule's failure: the plan's words for its limits and `not_found`, "could not be saved" for a refusal the app
+ * does not name, the owner check with its link, else the generic text.
+ */
+@Composable
+private fun AgentErrorNotice(state: RuleEditUiState, actions: RuleEditActions) {
+    val kind = state.error ?: return
+    val own = agentErrorText(kind, state.limit) ?: if (kind == FailureKind.OTHER) stringResource(R.string.items_agent_bad_request) else null
+    NoticeCard(
+        NoticeKind.WARNING,
+        stringResource(R.string.items_error_item),
+        own ?: ItemsText.failure(kind, limit = state.limit, shownCode = state.errorCode),
+        modifier = Modifier.padding(horizontal = Spacing.s).testTag("sharing_error"),
+        actions = {
+            if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
+                TextButton(onClick = actions.onOwnerCheck, modifier = Modifier.testTag("agent_rule_owner_check")) {
+                    Text(stringResource(R.string.items_agent_owner_check_now))
+                }
+            }
+            TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) }
+        },
+    )
+}
+
+/** The editor's form: the notices, the sections of a connection's or an agent's rule, the preview and the delete button. */
+@Composable
+private fun RuleForm(state: RuleEditUiState, name: String, actions: RuleEditActions) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+        if (state.isAgent) AgentNotices(state, actions)
+        if (state.isAgent && state.error != null) {
+            AgentErrorNotice(state, actions)
+        } else {
             SharingErrorNotice(state.error, state.limit, actions.onDismissError, state.errorCode)
-            if (state.atRuleLimit) RuleLimitNotice()
-            if (state.readOnly) {
-                ReadOnlyRule(state)
+        }
+        if (state.atRuleLimit) RuleLimitNotice()
+        if (state.readOnly) {
+            ReadOnlyRule(state)
+        } else {
+            TagsSection(state, name, actions)
+            if (state.isAgent) {
+                AgentModeSection(state, actions.onMode)
+                AgentLimitsSection(state, actions)
             } else {
-                TagsSection(state, name, actions)
                 ModeSection(state.draft.mode, actions.onMode)
                 LimitsSection(state, actions)
-                EndsSection(state, actions.onExpiry)
-                ExistingSwitch(state.draft.includeExisting, actions.onIncludeExisting)
             }
-            if (state.overlaps.isNotEmpty()) OverlapCard(state)
-            Preview(state)
-            if (!state.isNew) {
-                TextButton(
-                    onClick = { actions.onAskDelete(true) },
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).testTag("rule_delete"),
-                ) { Text(stringResource(R.string.items_rule_delete), color = MaterialTheme.colorScheme.error) }
+            EndsSection(state, actions.onExpiry)
+            ExistingSwitch(state.draft.includeExisting, actions.onIncludeExisting)
+            if (state.isAgent) AgentMoreOptions(state, actions)
+        }
+        if (state.overlaps.isNotEmpty()) OverlapCard(state)
+        Preview(state)
+        if (!state.isNew) {
+            TextButton(
+                onClick = { actions.onAskDelete(true) },
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).testTag("rule_delete"),
+            ) {
+                Text(
+                    stringResource(if (state.isAgent) R.string.items_agent_rule_delete else R.string.items_rule_delete),
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         }
     }
-    RuleEditDialogs(state, name, actions)
 }
 
 /** "This connection has the most share rules it can have (64)": the named limit (§10.12 `share_rules_subject`). */
@@ -463,16 +534,16 @@ private fun OverlapCard(state: RuleEditUiState) {
 }
 
 @Composable
-private fun Choice(label: Int, selected: Boolean, tag: String, note: Int? = null, onClick: () -> Unit) {
+internal fun Choice(label: Int, selected: Boolean, tag: String, note: Int? = null, enabled: Boolean = true, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = Spacing.touchTarget)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
             .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = null)
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
         Spacer(Modifier.padding(start = Spacing.m))
         Column {
             Text(stringResource(label), style = MaterialTheme.typography.bodyLarge)
@@ -498,7 +569,10 @@ private fun Preview(state: RuleEditUiState) {
             state.previewing -> CircularProgressIndicator(Modifier.heightIn(max = 24.dp), color = MaterialTheme.colorScheme.primary)
             p == null -> Text(stringResource(R.string.items_rule_preview_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
             else -> {
-                Text(previewTotal(p, state.draft.mode), modifier = Modifier.testTag("rule_preview_total"))
+                Text(
+                    if (state.isAgent) agentPreviewTotal(p) else previewTotal(p, state.draft.mode),
+                    modifier = Modifier.testTag("rule_preview_total"),
+                )
                 if (!state.draft.includeExisting && p.total > 0) {
                     Text(stringResource(R.string.items_rule_preview_later), style = MaterialTheme.typography.bodySmall)
                 }
@@ -550,6 +624,8 @@ private fun previewTotal(p: RulePreview, mode: ShareMode): String {
 private fun matchNote(m: RuleMatch, state: RuleEditUiState): String? {
     val asker = m.askRuleId?.let { id -> state.rules.firstOrNull { it.ruleId == id } }
     return when {
+        m.outcome == RuleMatch.OUTCOME_ASK && asker != null && state.isAgent ->
+            stringResource(R.string.items_agent_rule_asks_because, ruleName(asker, state.names), sharingNameOf(state.connectionName))
         m.outcome == RuleMatch.OUTCOME_ASK && asker != null ->
             stringResource(R.string.items_rule_outcome_ask_because, ruleName(asker, state.names))
         m.outcome == RuleMatch.OUTCOME_ASK -> stringResource(R.string.items_rule_outcome_ask)
@@ -575,7 +651,23 @@ private fun RuleEditDialogs(state: RuleEditUiState, name: String, actions: RuleE
             modifier = Modifier.testTag("rule_edit_discard"),
         )
     }
-    if (state.confirmDelete) {
+    if (state.confirmDelete && state.isAgent) {
+        val own = state.rules.firstOrNull { it.ruleId == state.draft.ruleId }
+        ConfirmDialog(
+            title = stringResource(
+                R.string.items_agent_rule_delete_title,
+                own?.let { ruleName(it, state.names) } ?: stringResource(R.string.items_rule_name, state.draft.tags.joinToString(", ")),
+                name,
+            ),
+            text = stringResource(R.string.items_agent_rule_delete_body, statusBoundText(state.draft.statusTtl)),
+            confirmLabel = stringResource(R.string.items_agent_rule_delete),
+            onConfirm = actions.onDelete,
+            onDismiss = { actions.onAskDelete(false) },
+            destructive = true,
+            dismissLabel = stringResource(R.string.items_agent_rule_cancel),
+            modifier = Modifier.testTag("agent_rule_delete_confirm"),
+        )
+    } else if (state.confirmDelete) {
         ConfirmDialog(
             title = stringResource(R.string.items_rule_delete_title),
             text = stringResource(R.string.items_rule_delete_body, name),

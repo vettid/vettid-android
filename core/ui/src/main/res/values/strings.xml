@@ -74,6 +74,8 @@
 
     <!-- End access (VAULT-MESSAGING 0.78.0 §6.8): the Devices page and a renewal request in Approvals share these. -->
     <string name="devices_end_access">End access</string>
+    <!-- ANDROID-PLAN 0.1.116 decision 17: on every agent rule (its editor and its row) while the vault does not list item_ways. draft -->
+    <string name="core_ui_agent_ways_warning">On this vault, the agent may receive the values of the items it uses, and its app may keep them in its history.</string>
     <string name="devices_end_access_title">End access for %1$s?</string>
     <string name="devices_end_access_body">It stops at once, and any of its requests still waiting for you are declined. It can ask for access again; you decide then.</string>
     <string name="devices_end_failed_title">Access not ended</string>

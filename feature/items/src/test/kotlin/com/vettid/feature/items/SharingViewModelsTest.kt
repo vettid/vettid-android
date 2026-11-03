@@ -182,6 +182,7 @@ class SharingViewModelsTest {
         SavedStateHandle(listOfNotNull(RuleEditRoute.ARG_CONNECTION to "c1", ruleId?.let { RuleEditRoute.ARG_RULE to it }).toMap()),
         sharing,
         social,
+        com.vettid.core.testing.FakeDevices(),
     )
 
     @Test
