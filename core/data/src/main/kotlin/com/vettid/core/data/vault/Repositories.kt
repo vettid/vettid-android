@@ -6,6 +6,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
 
+/** Pages on this build's account site, built from [AccountRepository.apiOrigin] (production, staging, or the dev stack's own). */
+object AccountSite {
+    /** MEMBER-API 2.1.0: the account site's "Delete my vault and start over". */
+    const val START_OVER_PATH = "/account/vault/deletion/"
+
+    /** The account site's page that deletes the whole VettID account (Google Play requires a link to it from the app). */
+    const val DELETE_ACCOUNT_PATH = "/account/delete/"
+
+    fun url(origin: String, path: String): String = origin.trimEnd('/') + path
+}
+
 /** No transfer kept ([VaultRepository.transferKeptSince]'s default). */
 val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
 

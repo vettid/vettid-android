@@ -467,4 +467,22 @@ class SettingsViewModelsTest {
         assertTrue(vm.uiState.value.done)
         assertFalse(vm.uiState.value.askReplaceKeys)
     }
+
+    @Test
+    fun deleteAccountUrlIsTheAccountSitesPageOnThisBuildsOrigin() = runTest {
+        // FakeVault's origin is production.
+        val vm = viewModel(screenshots())
+        advanceUntilIdle()
+        assertEquals("https://account.vettid.org/account/delete/", vm.uiState.value.accountDeleteUrl)
+        assertEquals(
+            "https://account.staging.vettid.org/account/delete/",
+            com.vettid.core.data.vault.AccountSite.url(
+                com.vettid.core.altchan.MemberApiClient.STAGING_API, com.vettid.core.data.vault.AccountSite.DELETE_ACCOUNT_PATH,
+            ),
+        )
+        assertEquals(
+            "https://account.vettid.org/account/delete/",
+            com.vettid.core.data.vault.AccountSite.url("https://account.vettid.org/", "/account/delete/"),
+        )
+    }
 }
