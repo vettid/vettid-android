@@ -194,6 +194,9 @@ class AppLock(
     /** When a prompt succeeded with the app not yet in the foreground (monotonic): the next return within the grace is that unlock. */
     private var provenAtElapsed: Long? = null
 
+    /** The prompt in progress is an enable or a method change ([promptStarted]); only that prompt's end skips the lock decision. */
+    private var enablePrompt = false
+
     /** Reads the preference at start: an enabled lock starts locked. Always leaves [AppLockState.PENDING]. */
     suspend fun start() {
         val p = prefs.preferences.first()
@@ -243,9 +246,11 @@ class AppLock(
      * [AppLockMethod.authenticators]) before [completeEnable]. Also how the method of a lock that is on changes.
      */
     fun cipherToEnable(method: AppLockMethod = methodFlow.value): Cipher {
+        enabling = null // set only once the cipher is there: a failure leaves no half-made change behind
         keys.create(method)
+        val cipher = keys.encryptCipher()
         enabling = method
-        return keys.encryptCipher()
+        return cipher
     }
 
     /**
@@ -413,6 +418,7 @@ class AppLock(
         backgroundAt = null
         authenticating = false
         provenAtElapsed = null
+        enablePrompt = false
         syncCoverAlarm()
         recheck()
     }
@@ -465,7 +471,8 @@ class AppLock(
     }
 
     /** A prompt is about to show (BiometricPrompt, the app lock's or a presence check). */
-    fun promptStarted() {
+    fun promptStarted(enable: Boolean = false) {
+        enablePrompt = enable
         authenticating = true
     }
 
@@ -479,11 +486,13 @@ class AppLock(
      * - [PromptOutcome.SYSTEM_CANCELED] or [PromptOutcome.DISMISSED] in the foreground: the decision of [onForeground]: lock
      *   if the mark is due, then clear it (fail secure; with "Immediately", cancelling a presence check whose screen stopped
      *   the activity therefore locks the app).
-     * - The same while an enable or a method change is in progress (`enabling`): the mark is only cleared, no lock.
+     * - The same for the prompt of an enable or a method change ([promptStarted] with `enable`): the mark is only cleared, no lock.
      * - Either of those not in the foreground: the mark is kept; if there is none, one is recorded now.
      */
     fun promptEnded(outcome: PromptOutcome, inForeground: Boolean) {
         authenticating = false
+        val enabled = enablePrompt
+        enablePrompt = false
         when {
             outcome == PromptOutcome.SUCCEEDED && inForeground -> {
                 provenAtElapsed = null
@@ -494,7 +503,7 @@ class AppLock(
                 provenAtElapsed = elapsed()
             }
             // A method change that was cancelled: the key is about to be deleted, so locking would only end in a false notice.
-            inForeground && enabling != null -> {
+            inForeground && enabled -> {
                 provenAtElapsed = null
                 backgroundAt = null
             }
@@ -508,6 +517,8 @@ class AppLock(
     /** The prompt's activity was destroyed for a configuration change: no outcome, the mark stays as it is. */
     fun abandonPrompt() {
         authenticating = false
+        if (enablePrompt) enabling = null // its cancel callback will not come
+        enablePrompt = false
         recheck()
     }
 

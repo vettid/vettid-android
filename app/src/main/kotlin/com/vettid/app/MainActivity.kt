@@ -290,7 +290,7 @@ class MainActivity : ComponentActivity() {
             enableFailed() // no biometric and no screen lock on this phone
             return
         }
-        authenticate(cipher, method, onCancel = { lifecycleScope.launch { appLock.enableCancelled() } }) { c ->
+        authenticate(cipher, method, enable = true, onCancel = { lifecycleScope.launch { appLock.enableCancelled() } }) { c ->
             lifecycleScope.launch { appLock.completeEnable(c) }
         }
     }
@@ -315,8 +315,8 @@ class MainActivity : ComponentActivity() {
                 .build()
             fun done(outcome: PromptOutcome) {
                 // A callback after onDestroy (a rotation cancelling the old prompt) is late: onDestroy already ended the prompt.
-                if (!isDestroyed) {
-                    appLock.prompts.finished(PromptOutcome.SUCCEEDED) // a presence check never holds back the lock's prompt
+                // finished(this, ...): a presence check never holds back the lock's prompt; false for a destroyed owner.
+                if (!isDestroyed && appLock.prompts.finished(this, PromptOutcome.SUCCEEDED)) {
                     appLock.promptEnded(outcome, inForeground())
                 }
                 val ok = outcome == PromptOutcome.SUCCEEDED
@@ -343,8 +343,14 @@ class MainActivity : ComponentActivity() {
     }
 
     /** The app lock's prompt; the caller passed [AppLock.prompts]' tryStart. */
-    private fun authenticate(cipher: Cipher, method: AppLockMethod, onCancel: () -> Unit = {}, onSuccess: (Cipher) -> Unit) {
-        appLock.promptStarted()
+    private fun authenticate(
+        cipher: Cipher,
+        method: AppLockMethod,
+        enable: Boolean = false,
+        onCancel: () -> Unit = {},
+        onSuccess: (Cipher) -> Unit,
+    ) {
+        appLock.promptStarted(enable)
         val cancel = CancellationSignal()
         promptCancel = cancel
         val subtitle = when (method) {
@@ -375,8 +381,9 @@ class MainActivity : ComponentActivity() {
                 private fun done(outcome: PromptOutcome) {
                     if (promptCancel === cancel) promptCancel = null
                     if (isDestroyed) return // late: onDestroy already ended the prompt
-                    appLock.prompts.finished(outcome)
-                    appLock.promptEnded(outcome, inForeground())
+                    if (appLock.prompts.finished(this@MainActivity, outcome)) {
+                        appLock.promptEnded(outcome, inForeground())
+                    }
                 }
             },
         )

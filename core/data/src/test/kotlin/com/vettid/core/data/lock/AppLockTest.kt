@@ -20,7 +20,10 @@ internal class SoftKeys : AppLockKeys {
     var key: SecretKey? = null
     val created = mutableListOf<AppLockMethod>()
 
+    var failCreate = false
+
     override fun create(method: AppLockMethod) {
+        check(!failCreate) { "no screen lock" }
         created += method
         key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
     }
@@ -362,7 +365,7 @@ class AppLockTest {
     fun cancellingAMethodChangeInTheForegroundDoesNotLock() = runTest {
         val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
         l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
-        l.promptStarted()
+        l.promptStarted(enable = true)
         l.onBackground() // the credential screen stopped the activity
         l.promptEnded(PromptOutcome.DISMISSED, inForeground = true)
         assertEquals(AppLockState.UNLOCKED, l.state.value)
@@ -372,9 +375,36 @@ class AppLockTest {
         // Out of the foreground it is unchanged: the mark stays.
         val m = unlockedWith(AppLockTimeout.IMMEDIATELY)
         m.cipherToEnable(AppLockMethod.SCREEN_LOCK)
-        m.promptStarted()
+        m.promptStarted(enable = true)
         m.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
         assertTrue(m.wouldShowLock())
+    }
+
+    @Test
+    fun anAbandonedEnablePromptDoesNotMakeALaterPresenceCancelSkipTheLock() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
+        l.promptStarted(enable = true)
+        l.abandonPrompt() // a rotation: the cancel callback never comes
+        l.promptStarted()
+        l.onBackground()
+        clock += 120_000
+        l.promptEnded(PromptOutcome.DISMISSED, inForeground = true)
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun aFailedCipherToEnableLeavesNoEnableInProgress() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
+        keys.failCreate = true
+        try {
+            l.cipherToEnable(AppLockMethod.BIOMETRICS)
+        } catch (_: IllegalStateException) {
+        }
+        keys.failCreate = false
+        l.enableCancelled() // nothing in progress: must not disable the lock
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
     }
 
     @Test
