@@ -88,14 +88,20 @@ interface AppLockKeys {
     /** A cipher of the pending key, to authenticate with BiometricPrompt before [promote]. */
     fun pendingCipher(): Cipher
 
-    /** The pending key becomes the current one; the old key is deleted. */
+    /** The slot (0 or 1) of the pending key: what the preferences record as the current slot once the change succeeded. */
+    fun pendingSlot(): Int
+
+    /** Call after the preferences named the pending slot: the pending key becomes the current one and the old key is deleted. */
     fun promote()
 
     /** The pending key is deleted (the change was cancelled or failed); the current key stays. */
     fun discardPending()
 
-    /** At start: a change that a dead process left half done is dropped (the lock then turns off, as with a lost key). */
-    fun recover()
+    /**
+     * At start, with the slot the preferences name ([markedSlot], 0 when never written): that slot's key is the current one
+     * and the other slot is deleted (a pending key a dead process left, or the old key after a crash following the write).
+     */
+    fun recover(markedSlot: Int)
 
     /** The current key exists (a pending one does not count). */
     fun exists(): Boolean
@@ -107,62 +113,103 @@ interface AppLockKeys {
     fun delete()
 }
 
+/** One of the two Keystore slots of the app-lock key: a seam over [AppDataKey] so that the slot logic runs in JVM tests. */
+interface AppLockKeySlot {
+    fun exists(): Boolean
+
+    /** A fresh key for [method], replacing any in this slot. */
+    fun create(method: AppLockMethod)
+
+    fun cipher(): Cipher
+
+    fun delete()
+}
+
+/** [AppLockKeySlot] on the Android Keystore alias of [key]: a key per use, the biometric one invalidated by a new biometric. */
+class AppDataKeySlot(private val key: AppDataKey) : AppLockKeySlot {
+    override fun exists() = key.exists()
+
+    override fun create(method: AppLockMethod) {
+        key.create(authTimeoutSeconds = 0, allowDeviceCredential = true, allowBiometric = method == AppLockMethod.BIOMETRICS)
+    }
+
+    override fun cipher(): Cipher = key.encryptCipher()
+
+    override fun delete() = key.delete()
+}
+
 /**
  * [AppLockKeys] on the Android Keystore, per use: [AppLockMethod.BIOMETRICS] class 3 biometric or device credential,
- * invalidated by a new biometric; [AppLockMethod.SCREEN_LOCK] the device credential only.
+ * invalidated by a new biometric; [AppLockMethod.SCREEN_LOCK] the device credential only. Two slots (slot 0 is the alias
+ * the app always used); the current one is named by the persisted marker `appLockKeySlot`, which [recover] is given at start.
  */
 class KeystoreAppLockKeys(
-    private val first: AppDataKey = AppDataKey(),
-    private val second: AppDataKey = AppDataKey(AndroidKeys.ALIAS_APP_DATA_NEXT),
+    private val slots: List<AppLockKeySlot>,
 ) : AppLockKeys {
-    /** The slot of the pending key; the other holds the current one. In memory only: [recover] drops what a dead process left. */
+    constructor() : this(
+        listOf(AppDataKeySlot(AppDataKey()), AppDataKeySlot(AppDataKey(AndroidKeys.ALIAS_APP_DATA_NEXT))),
+    )
+
+    init {
+        require(slots.size == 2)
+    }
+
+    /** The slot of the current key (the marker, set by [recover] and [promote]). */
     @Volatile
-    private var pending: AppDataKey? = null
+    private var currentSlot = 0
 
-    private fun other(k: AppDataKey) = if (k === first) second else first
+    /** The slot of the pending key, in memory only. */
+    @Volatile
+    private var pending: Int? = null
 
-    private fun current(): AppDataKey = pending?.let(::other) ?: if (first.exists() || !second.exists()) first else second
+    private fun current(): AppLockKeySlot = slots[currentSlot]
 
     override fun createPending(method: AppLockMethod) {
         discardPending()
-        val slot = other(current())
+        val slot = 1 - currentSlot
         pending = slot
         try {
-            // The same parameters as ever: a key per use, the biometric one invalidated by a new biometric.
-            slot.create(authTimeoutSeconds = 0, allowDeviceCredential = true, allowBiometric = method == AppLockMethod.BIOMETRICS)
+            slots[slot].create(method)
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             discardPending()
             throw e
         }
     }
 
-    override fun pendingCipher(): Cipher = (pending ?: error("no pending app-lock key")).encryptCipher()
+    override fun pendingCipher(): Cipher = slots[pending ?: error("no pending app-lock key")].cipher()
+
+    override fun pendingSlot(): Int = pending ?: error("no pending app-lock key")
 
     override fun promote() {
         val p = pending ?: return
-        other(p).delete()
+        slots[currentSlot].delete()
+        currentSlot = p
         pending = null
     }
 
     override fun discardPending() {
-        pending?.delete()
+        pending?.let { slots[it].delete() }
         pending = null
     }
 
-    override fun recover() {
-        if (pending == null && first.exists() && second.exists()) {
-            first.delete()
-            second.delete()
+    override fun recover(markedSlot: Int) {
+        pending = null
+        val marked = markedSlot.coerceIn(0, 1)
+        currentSlot = marked
+        val other = 1 - marked
+        if (slots[marked].exists()) {
+            slots[other].delete() // a pending key of a dead process, or the old key left by a crash after the marker was written
+        } else if (slots[other].exists()) {
+            currentSlot = other // the marker names no key but the other slot has one: keep the lock usable
         }
     }
 
     override fun exists(): Boolean = current().exists()
 
-    override fun encryptCipher(): Cipher = current().encryptCipher()
+    override fun encryptCipher(): Cipher = current().cipher()
 
     override fun delete() {
-        first.delete()
-        second.delete()
+        slots.forEach { it.delete() }
         pending = null
     }
 }
@@ -267,7 +314,7 @@ class AppLock(
         timeoutFlow.value = p.appLockTimeout
         methodFlow.value = p.appLockMethod ?: AppLockMethod.BIOMETRICS
         prompts.newLock()
-        runCatching { keys.recover() }
+        runCatching { keys.recover(p.appLockKeySlot) }
         // The wrapped app-data key of earlier builds was never used: deleted at the next start (2026-10-27).
         runCatching { obsoleteWrappedKey.delete() }
         // A key that is gone is a lock that cannot open: off, never "pending" for good (the start screen would
@@ -424,11 +471,16 @@ class AppLock(
             enableCancelled()
             throw KeystoreException("app lock: not authenticated", e)
         }
-        keys.promote() // only now does the new key replace the old one
-        prefs.setAppLockEnabled(true)
         val m = enabling ?: methodFlow.value
+        try {
+            // One edit: enabled, method and the slot of the new key. A crash after it leaves both keys; recover keeps the marked one.
+            prefs.setAppLock(true, m, keys.pendingSlot())
+        } catch (e: IOException) {
+            enableCancelled()
+            throw e
+        }
         enabling = null
-        prefs.setAppLockMethod(m)
+        keys.promote() // only now is the old key deleted
         methodFlow.value = m
         invalidatedFlow.value = false
         stateFlow.value = AppLockState.UNLOCKED

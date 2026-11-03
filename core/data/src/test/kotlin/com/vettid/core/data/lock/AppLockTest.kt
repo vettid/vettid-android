@@ -19,6 +19,7 @@ import javax.crypto.SecretKey
 internal class SoftKeys : AppLockKeys {
     var key: SecretKey? = null
     var pendingKey: SecretKey? = null
+    private var slot = 0
     val created = mutableListOf<AppLockMethod>()
 
     var failCreate = false
@@ -32,6 +33,7 @@ internal class SoftKeys : AppLockKeys {
     override fun pendingCipher(): Cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, pendingKey) }
 
     override fun promote() {
+        slot = 1 - slot
         key = pendingKey
         pendingKey = null
     }
@@ -40,7 +42,9 @@ internal class SoftKeys : AppLockKeys {
         pendingKey = null
     }
 
-    override fun recover() = Unit
+    override fun recover(markedSlot: Int) = Unit
+
+    override fun pendingSlot() = 1 - slot
 
     override fun exists() = key != null
 
@@ -517,7 +521,7 @@ class AppLockTest {
         assertFalse(keys.exists())
         assertNotNull(prefs.current.value)
         // The chosen method stays for the next time the lock is turned on.
-        assertEquals(AppPreferences(appLockMethod = AppLockMethod.BIOMETRICS), prefs.current.value)
+        assertEquals(AppPreferences(appLockMethod = AppLockMethod.BIOMETRICS, appLockKeySlot = 1), prefs.current.value)
     }
 
     // --- the method (owner request 2026-10-09, ANDROID-PLAN 0.1.19) ---

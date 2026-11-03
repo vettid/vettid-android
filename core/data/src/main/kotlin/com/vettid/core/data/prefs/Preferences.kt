@@ -83,6 +83,8 @@ data class AppPreferences(
     val appLockTimeout: AppLockTimeout = AppLockTimeout.DEFAULT,
     /** Null: never chosen (a lock turned on before the choice existed is [AppLockMethod.BIOMETRICS], see AppLock.start). */
     val appLockMethod: AppLockMethod? = null,
+    /** The Keystore slot (0 or 1) of the app-lock key that is current; 0 when never written (the alias the app always used). */
+    val appLockKeySlot: Int = 0,
     /** The release notice the member dismissed (ANDROID-PLAN 0.1.19): the target release, its kind, when (epoch ms). */
     val releaseNoticeDismissed: ReleaseNoticeDismissal? = null,
     /** The newest release a local notification was posted for (one per release). */
@@ -123,6 +125,9 @@ interface PreferencesRepository {
     suspend fun setAppLockTimeout(timeout: AppLockTimeout)
 
     suspend fun setAppLockMethod(method: AppLockMethod)
+
+    /** Turns the lock on with [method] and the current key [slot] in one edit (a crash leaves all three or none). */
+    suspend fun setAppLock(enabled: Boolean, method: AppLockMethod, slot: Int)
 
     suspend fun setReleaseNoticeDismissed(d: ReleaseNoticeDismissal)
 
@@ -182,6 +187,7 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
             theme = p[THEME]?.let { runCatching { ThemePreference.valueOf(it) }.getOrNull() } ?: ThemePreference.SYSTEM,
             appLockEnabled = p[APP_LOCK] ?: false,
             appLockTimeout = p[APP_LOCK_TIMEOUT]?.let { AppLockTimeout.of(it) } ?: AppLockTimeout.DEFAULT,
+            appLockKeySlot = p[APP_LOCK_KEY_SLOT] ?: 0,
             appLockMethod = p[APP_LOCK_METHOD]?.let { runCatching { AppLockMethod.valueOf(it) }.getOrNull() },
             releaseNoticeDismissed = p[RELEASE_DISMISSED]?.let { r ->
                 ReleaseNoticeDismissal(r, p[RELEASE_DISMISSED_KIND] ?: "", p[RELEASE_DISMISSED_AT] ?: 0, p[RELEASE_DISMISSED_FOR] ?: 0)
@@ -226,6 +232,14 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         store.edit { it[APP_LOCK_METHOD] = method.name }
     }
 
+    override suspend fun setAppLock(enabled: Boolean, method: AppLockMethod, slot: Int) {
+        store.edit {
+            it[APP_LOCK] = enabled
+            it[APP_LOCK_METHOD] = method.name
+            it[APP_LOCK_KEY_SLOT] = slot
+        }
+    }
+
     override suspend fun acknowledgeReset() {
         store.edit { it.remove(PreferencesFiles.RESET) }
     }
@@ -268,6 +282,7 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         val APP_LOCK = booleanPreferencesKey("app_lock_enabled")
         val APP_LOCK_TIMEOUT = intPreferencesKey("app_lock_timeout_s")
         val APP_LOCK_METHOD = stringPreferencesKey("app_lock_method")
+        val APP_LOCK_KEY_SLOT = intPreferencesKey("app_lock_key_slot")
         val RELEASE_DISMISSED = longPreferencesKey("release_notice_dismissed")
         val RELEASE_DISMISSED_KIND = stringPreferencesKey("release_notice_dismissed_kind")
         val RELEASE_DISMISSED_AT = longPreferencesKey("release_notice_dismissed_at_ms")
@@ -298,6 +313,9 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setAppLockTimeout(timeout: AppLockTimeout) = state.update { it.copy(appLockTimeout = timeout) }
 
     override suspend fun setAppLockMethod(method: AppLockMethod) = state.update { it.copy(appLockMethod = method) }
+
+    override suspend fun setAppLock(enabled: Boolean, method: AppLockMethod, slot: Int) =
+        state.update { it.copy(appLockEnabled = enabled, appLockMethod = method, appLockKeySlot = slot) }
 
     override suspend fun setReleaseNoticeDismissed(d: ReleaseNoticeDismissal) = state.update { it.copy(releaseNoticeDismissed = d) }
 

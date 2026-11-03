@@ -45,7 +45,8 @@ class RootViewModelTest {
         override fun pendingCipher(): Cipher = error("unused")
         override fun promote() = Unit
         override fun discardPending() = Unit
-        override fun recover() = Unit
+        override fun recover(markedSlot: Int) = Unit
+        override fun pendingSlot() = 0
         override fun exists() = false
         override fun encryptCipher(): Cipher = error("unused")
         override fun delete() = Unit

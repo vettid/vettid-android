@@ -133,11 +133,15 @@ The A2 exit test:
   follows the same decision as any prompt. The app lock key of a method change is made under a second alias
   (`vettid.app_data.v1.next`, same Keystore parameters) and `completeEnable` swaps it in only after the proof worked
   (`AppLockKeys.promote`); a cancel, a failure or a rotation deletes it and keeps the old key, the old method and the lock on, and a
-  first enable that is cancelled stays off with no key left over. A process that died mid-change leaves both keys: `start` drops
-  both and the lock turns off (`recover`). Turning the lock off in Settings first asks for the phone's biometric or screen lock (`SettingsHost.confirmAppLockOff`, the lock prompt's texts); a refused check leaves it on. `abandonPrompt()` (rotation) clears `authenticating`, drops a pending key and keeps the mark. A callback that arrives after `onDestroy` is ignored (`UnlockPromptGate.finished(owner, outcome)` is false for a
+  first enable that is cancelled stays off with no key left over. A process that died mid-change leaves both keys: `start` calls `recover(appLockKeySlot)`, which keeps the key of the
+  persisted slot marker and deletes the other (the lock stays on with the old method).
+  `completeEnable` writes enabled, method and the new slot in one DataStore edit (`setAppLock`) and only then deletes the old key,
+  so a crash after the edit also leaves both keys and `recover` keeps the marked new one; a marker never written is slot 0 (the
+  alias `vettid.app_data.v1`). Turning the lock off in Settings first asks for the phone's biometric or screen lock (`SettingsHost.confirmAppLockOff`, the lock prompt's texts); a refused check leaves it on. `abandonPrompt()` (rotation) clears `authenticating`, drops a pending key and keeps the mark. A callback that arrives after `onDestroy` is ignored (`UnlockPromptGate.finished(owner, outcome)` is false for a
   destroyed owner, and `MainActivity` checks `isDestroyed`), so a rotation records no mark. Accepted fail-closed false locks:
   cancelling a credential presence check after the PIN screen was up at least the timeout locks (the time counts from the first
-  stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; and `authenticating` has
+  stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; "Immediately" + a method change + cancelling the PIN screen locks (the old key unlocks);
+  and `authenticating` has
   no time limit, so a callback lost in the background (no cancel, no `onDestroy`) keeps the cover down until the next
   `promptEnded`. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
   a timer that turns it true when the monotonic timeout elapses in the background (cancelled on return or lock off; it does not survive

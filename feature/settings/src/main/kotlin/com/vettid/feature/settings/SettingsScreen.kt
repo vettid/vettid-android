@@ -122,7 +122,7 @@ data class SettingsHost(
      */
     val onEnableAppLock: (AppLockMethod) -> Unit,
     /** The phone owner's presence check before the app lock is turned off (the activity's BiometricPrompt); true when confirmed. */
-    val confirmAppLockOff: suspend () -> Boolean = { true },
+    val confirmAppLockOff: suspend () -> Boolean,
     val onAccountClick: () -> Unit,
     val onOpenAccountSite: () -> Unit,
     /** Opens the owner check (VAULT-MESSAGING §3.6.5): [holdOff] true turns the hold off with it (§3.6.7). */
