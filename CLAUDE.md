@@ -19,6 +19,7 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
 
 - JDK 17 or 21 (system JDK 25 does not work with AGP). Locally:
   `export JAVA_HOME=/opt/android-studio/jbr`.
+- The apps don't offer blocking (owner 2026-11-03): a connection request is declined and a connection is removed. The vault's block ops (`VaultApi.blockAdd`/`blockRemove`/`blockList`, `block.added`/`block.removed` events) are kept for old data, as are the "Blocked" state label and the History titles for blocked/unblocked connections.
 - Shared machine: memory and workers are capped in `gradle.properties`. Run
   builds with `--max-workers=2`, check `free -g` first (wait if < 8 GB
   available), and `./gradlew --stop` when done. No emulator.

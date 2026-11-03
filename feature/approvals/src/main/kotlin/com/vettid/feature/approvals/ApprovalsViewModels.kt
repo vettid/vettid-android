@@ -213,7 +213,6 @@ data class ApprovalDetailUiState(
     val approval: Approval? = null,
     val password: String = "",
     val busy: Boolean = false,
-    val confirmBlock: Boolean = false,
     /** Decided here: the screen closes. */
     val done: Boolean = false,
     /** It left the list without a decision here (decided on another device, or expired). */
@@ -527,8 +526,6 @@ class ApprovalDetailViewModel @Inject constructor(
 
     fun setPassword(v: String) = local.update { it.copy(password = v, error = null) }
 
-    fun askBlock(show: Boolean) = local.update { it.copy(confirmBlock = show) }
-
     /** Ticks or unticks one entry of a grant request. */
     private fun chosen(s: ApprovalDetailUiState): Set<Int> =
         s.grantSelected ?: (uiState.value.approval as? Approval.GrantRequest)?.grantable?.toSet() ?: emptySet()
@@ -675,13 +672,6 @@ class ApprovalDetailViewModel @Inject constructor(
                 devices.refreshQuietly()
             }
         }
-    }
-
-    fun block() {
-        val a = uiState.value.approval as? Approval.ConnectionRequest ?: return
-        local.update { it.copy(confirmBlock = false) }
-        if (expiredNow(a)) return
-        decide { repo.blockConnectionRequest(a.pendingId) }
     }
 
     private fun decide(block: suspend () -> Unit) {

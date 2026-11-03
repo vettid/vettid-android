@@ -206,8 +206,6 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onTick = { vm.tick() },
                 onApprove = vm::approve,
                 onDecline = vm::decline,
-                onAskBlock = vm::askBlock,
-                onBlock = vm::block,
                 onCancelInvite = vm::cancelInvite,
                 onAgain = vm::again,
                 onMessage = { id -> host.onOpenConversation(id) },

@@ -44,7 +44,8 @@
     <string name="data_failure_invite_expired">This invitation has expired. Ask for a new one.</string>
     <string name="data_failure_invite_not_connection">That code is not a connection invitation.</string>
     <string name="data_failure_invite_unavailable">This invitation is no longer available: it was used, cancelled or has expired. Ask for a new one.</string>
-    <string name="data_failure_blocked">You blocked the vault that sent this invitation. Unblock it first to connect.</string>
+    <!-- PENDING owner approval (no unblock advice; the apps don't offer blocking, 2026-11-03) -->
+    <string name="data_failure_blocked">You blocked this vault earlier, so this invitation can\'t be used to connect.</string>
     <string name="data_failure_credential_locked">Your credential is locked. Enter your credential password to continue.</string>
     <string name="data_failure_conflict">This changed on another device. Look again and retry.</string>
     <string name="data_failure_rejected">Rejected on your phone.</string>

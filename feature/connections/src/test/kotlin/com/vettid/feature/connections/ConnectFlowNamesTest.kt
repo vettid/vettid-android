@@ -69,7 +69,7 @@ class ConnectFlowNamesTest {
         rule.setContent {
             ConnectionRequestContent(
                 name = blank, sas = "042817", remote = false, busy = false, error = null,
-                onApprove = {}, onDecline = {}, onBlock = {}, onBack = {},
+                onApprove = {}, onDecline = {}, onBack = {},
             )
         }
         for (b in blanks) {

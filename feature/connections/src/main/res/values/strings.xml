@@ -84,9 +84,6 @@
     <string name="connections_auto_approved">Your vault approved this in-person request for you. Compare the code with %1$s; decline if it does not match.</string>
     <string name="connections_request_approve">The codes match: connect</string>
     <string name="connections_request_decline">Decline</string>
-    <string name="connections_block_request">Block this request</string>
-    <string name="connections_block_request_title">Block this request?</string>
-    <string name="connections_block_request_body">The request is declined and its vault cannot ask to connect again unless you unblock it.</string>
     <string name="connections_connected_title">You are connected</string>
     <string name="connections_connected_body">You and %1$s can now message each other through your vaults.</string>
     <string name="connections_connected_body_unnamed">You can now message each other through your vaults.</string>
@@ -153,7 +150,6 @@
     <string name="connections_detail_last_active">Last active</string>
     <string name="connections_detail_key">Vault key fingerprint</string>
     <string name="connections_detail_key_note">Identifies their vault, the one you compared the safety code with, not a person. It changes only when their vault replaces its keys.</string>
-    <string name="connections_block">Block</string>
     <string name="connections_remove">Remove</string>
     <string name="connections_remove_title">Remove %1$s?</string>
     <string name="connections_remove_body">The connection with %1$s ends and they are told it was removed. Connecting again needs a new invitation.</string>

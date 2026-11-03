@@ -53,9 +53,6 @@
     <string name="approvals_share_decline">Do not share</string>
     <string name="approvals_password">Credential password</string>
     <string name="approvals_password_hint">This action uses your Protean Credential</string>
-    <string name="approvals_block">Block this request</string>
-    <string name="approvals_block_title">Block this request?</string>
-    <string name="approvals_block_body">The request is declined and its vault cannot ask to connect again unless you unblock it.</string>
     <string name="approvals_connection_body">%1$s used your invitation. Compare this code with %1$s: it must match the code on their phone.</string>
     <string name="approvals_connection_body_remote">%1$s used your invitation link. Anyone who saw the link could have used it: compare this code with %1$s over a call or another channel you trust.</string>
     <string name="approvals_connection_approve">The codes match: connect</string>
