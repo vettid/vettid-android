@@ -63,9 +63,10 @@ data class ConnectionInfo(
 
     /**
      * The title (§10.8): "First Last"; "" before the names arrived, for which the UI shows "Name not shared yet".
-     * Never the display name alone, never an alias.
+     * Never the display name alone for a person, never an alias. A service (`peer_kind`, ANDROID-PLAN 0.1.90) without names
+     * falls back to its cleaned display name: every name of a service is "Name given by the service".
      */
-    val displayName: String get() = accountName ?: ""
+    val displayName: String get() = accountName ?: if (service) AccountNames.cleaned(name).orEmpty() else ""
 
     /** The peer's display name when it adds something to the title (non-empty and different), for secondary text. */
     val secondaryName: String?
@@ -135,6 +136,8 @@ data class AcceptedConnection(
     val name: String? = null,
     val exists: Boolean = false,
     val exp: Instant? = null,
+    /** (VAULT-MESSAGING 0.69.0 §6.4) The invitation declared itself a service (`peer_kind: "service"`); never inferred. */
+    val service: Boolean = false,
 )
 
 /** Where a connection request stands (§10.4, 0.10.3). */
@@ -305,6 +308,9 @@ sealed interface Approval {
     val exp: Instant?
     val connectionName: String?
 
+    /** The connection [connectionName] names is a service (ANDROID-PLAN 0.1.90): rows carry the label "Service". */
+    val connectionService: Boolean get() = false
+
     /** `connection.request.pending` (§6.4): approve after comparing the safety code. */
     data class ConnectionRequest(
         val pendingId: String,
@@ -347,8 +353,11 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant?,
         override val connectionName: String? = null,
+        /** (VAULT-MESSAGING 0.69.0 §6.4) `peer_kind` is `"service"`: the request says "a service, not a person". */
+        val service: Boolean = false,
     ) : Approval {
         override val key: String get() = "outgoing:$connectionId"
+        override val connectionService: Boolean get() = service
     }
 
     /** `connection.authenticate.pending` (§10.4): sign a connection's challenge with the credential key. */
@@ -366,6 +375,7 @@ sealed interface Approval {
          * from the vault's `match_code` and only for a sign-in; null otherwise. Never taken from [context].
          */
         val matchCode: String? = null,
+        override val connectionService: Boolean = false,
     ) : Approval {
         override val key: String get() = "auth:$requestId"
     }
@@ -381,6 +391,7 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant?,
         override val connectionName: String? = null,
+        override val connectionService: Boolean = false,
     ) : Approval {
         override val key: String get() = "grant:$requestId"
 
@@ -403,6 +414,7 @@ sealed interface Approval {
         override val connectionName: String? = null,
         /** The field's kind (VAULT-MESSAGING 0.21.0 §10.13), as the vault recorded it; null from an older vault. */
         val kind: String? = null,
+        override val connectionService: Boolean = false,
     ) : Approval {
         override val key: String get() = "critical:$requestId"
 
@@ -437,6 +449,7 @@ sealed interface Approval {
         val tags: List<String> = emptyList(),
         /** The subject's rules (this one included), to name the rule that asks (§10.12, 0.23.0); empty when unknown. */
         val rules: List<com.vettid.core.data.items.ShareRule> = emptyList(),
+        override val connectionService: Boolean = false,
     ) : Approval {
         override val key: String get() = "share:$ruleId"
 

@@ -264,4 +264,6 @@
     <string name="data_feed_vote_problem_body">Something about your vote needs your attention.</string>
     <string name="data_feed_vote_line">%1$s: %2$s</string>
     <string name="data_feed_unknown">Activity: %1$s</string>
+    <!-- DRAFT for owner approval: ANDROID-PLAN §4 Service connections (0.1.90) -->
+    <string name="service_forbidden">Services can\'t do that.</string>
 </resources>

@@ -216,6 +216,93 @@ class MessagesViewModelsTest {
         assertEquals(listOf("c1", "c2"), vm.uiState.value.connections.map { it.id })
     }
 
+    private val acme = com.vettid.core.data.social.ConnectionInfo(
+        "s1", "Acme", ConnectionState.ACTIVE, firstName = "Acme", lastName = "Co-op", service = true,
+    )
+
+    /** ANDROID-PLAN 0.1.90: a service is never listed in Messages and the new-message picker does not offer it. */
+    @Test
+    fun aServiceIsNotListedInMessagesNorOfferedInThePicker() = runTest {
+        social.seed(
+            social.connections.value + acme,
+            social.messageMap.value + ("s1" to listOf(FakeSocial.message("s1", "m9", "hello", outgoing = false))),
+        )
+        val vm = MessagesViewModel(social, FakeVault())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.conversations.none { it.connection.id == "s1" })
+        assertEquals(listOf("c2", "c1"), vm.uiState.value.conversations.map { it.connection.id })
+        val picker = NewMessageViewModel(social)
+        advanceUntilIdle()
+        assertTrue(picker.uiState.value.connections.none { it.id == "s1" })
+        assertEquals(listOf("c1", "c2"), picker.uiState.value.connections.map { it.id })
+    }
+
+    @Test
+    fun forbiddenToAMessageIsSaidOnceAndTheComposerGoes() = runTest {
+        social.fail["send"] = VaultFailure(FailureKind.OTHER, "forbidden")
+        // The vault's list, read again after the refusal, says c2 is a service.
+        social.onRefresh = { social.seed(social.connections.value.map { if (it.id == "c2") it.copy(service = true) else it }) }
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
+        advanceUntilIdle()
+        vm.setDraft("hello")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(FailureKind.SERVICE_FORBIDDEN, vm.uiState.value.error)
+        assertTrue(vm.uiState.value.noComposer)
+        assertFalse(vm.uiState.value.canSend)
+        // The connections are read again; the vault now says `peer_kind: service` for c2.
+        assertTrue("refresh" in social.calls.drop(1))
+        vm.dismissError()
+        vm.setDraft("again")
+        vm.send()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.error)
+        assertEquals(1, social.calls.count { it == "send" })
+        // A new view model (after leaving the screen) has no composer either: the removal holds.
+        val again = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
+        advanceUntilIdle()
+        assertTrue(again.uiState.value.noComposer)
+    }
+
+    /** `forbidden` also comes from a recovering app (VAULT-MESSAGING 0.51.2): a person keeps the composer and the draft. */
+    @Test
+    fun forbiddenToAPersonIsTheGenericFailureWithTheDraftKept() = runTest {
+        social.fail["send"] = VaultFailure(FailureKind.OTHER, "forbidden")
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
+        advanceUntilIdle()
+        vm.setDraft("hello")
+        vm.send()
+        advanceUntilIdle()
+        assertEquals(FailureKind.OTHER, vm.uiState.value.error)
+        assertFalse(vm.uiState.value.noComposer)
+        assertEquals("hello", vm.uiState.value.draft)
+        assertTrue(vm.uiState.value.canSend)
+    }
+
+    @Test
+    fun forbiddenToAPhotoDropsTheDraftAndTheComposer() = runTest {
+        social.onRefresh = { social.seed(social.connections.value.map { if (it.id == "c1") it.copy(service = true) else it }) }
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1)))
+        advanceUntilIdle()
+        attachments.fail["send"] = VaultFailure(FailureKind.OTHER, "forbidden")
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals(FailureKind.SERVICE_FORBIDDEN, vm.uiState.value.error)
+        assertTrue(vm.uiState.value.noComposer)
+    }
+
+    @Test
+    fun aServiceConversationOpenedByALinkHasNoComposerAndNoCall() = runTest {
+        social.seed(social.connections.value + acme)
+        val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "s1")), social, social, attachments)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noComposer)
+        assertFalse(vm.uiState.value.callShown)
+    }
+
     // --- calls (CALLS-PLAN C1) ---
 
     private fun conversation(calls: FakeCalls, id: String = "c2") =

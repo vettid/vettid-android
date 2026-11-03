@@ -22,6 +22,7 @@ import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.VaultCodes
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -70,7 +71,9 @@ class MessagesViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(MessagesUiState())
 
-    val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations) { s, all ->
+    val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations) { s, everything ->
+        // ANDROID-PLAN 0.1.90: a service is never listed here and has no conversation (it can't message the member).
+        val all = everything.filterNot { it.connection.service }
         s.copy(
             conversations = (if (s.unreadOnly) all.filter { it.unread > 0 } else all).filter { it.matches(s.query) },
             noConnections = all.none { it.connection.state == ConnectionState.ACTIVE },
@@ -136,17 +139,24 @@ data class ConversationUiState(
     val photosAvailable: Boolean = false,
     /** The app's own camera screen is open (ANDROID-PLAN 0.1.39 "Take a photo"). */
     val capturing: Boolean = false,
+    /** The vault answered `forbidden` to a message here (ANDROID-PLAN 0.1.90): the composer is gone for good. */
+    val serviceRefused: Boolean = false,
     /** Photos picked or taken, prepared in memory, waiting for Send or Cancel. */
     val photoDraft: PhotoDraft? = null,
     /** Changes at every clear of the attachment memory: the bubbles drop their decoded thumbnails. */
     val photoGeneration: Long = 0,
 ) {
-    val canSend: Boolean get() = connection?.state == ConnectionState.ACTIVE && draft.isNotBlank() && !sending && !tooLong
+    val canSend: Boolean
+        get() = connection?.state == ConnectionState.ACTIVE && draft.isNotBlank() && !sending && !tooLong && !noComposer
+
+    /** No composer: the connection is a service, or the vault said `forbidden` to a message here (ANDROID-PLAN 0.1.90). */
+    val noComposer: Boolean get() = serviceRefused || connection?.service == true
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
 
     /** A call button is shown: the connection is active and this build has calls that the vault was asked about. */
     val callShown: Boolean
-        get() = active && (call == CallAvailability.READY || call == CallAvailability.IN_CALL || call == CallAvailability.NOT_IN_VAULT)
+        get() = active && !noComposer &&
+            (call == CallAvailability.READY || call == CallAvailability.IN_CALL || call == CallAvailability.NOT_IN_VAULT)
 
     /** Disabled while a call is going on. */
     val callEnabled: Boolean get() = call != CallAvailability.IN_CALL
@@ -260,10 +270,27 @@ class ConversationViewModel @Inject constructor(
                 messages.send(connectionId, text)
                 local.update { it.copy(sending = false, draft = "") }
             } catch (e: VaultFailure) {
+                if (e.code == VaultCodes.FORBIDDEN && serviceAfterForbidden()) {
+                    // ANDROID-PLAN 0.1.90: `forbidden` to a message of a service. Said once; the composer goes.
+                    local.update { it.copy(sending = false, draft = "", error = FailureKind.SERVICE_FORBIDDEN, serviceRefused = true) }
+                    return@launch
+                }
                 // The draft stays so that the member can retry.
                 local.update { it.copy(sending = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
+    }
+
+    /**
+     * Reads the connections again after a `forbidden`, so that the vault's `peer_kind` arrives and the removal holds after the member
+     * leaves the screen, and says whether this connection is a service (known before, or by the read). `forbidden` can also come from
+     * a recovering app (VAULT-MESSAGING 0.51.2), where conversations aren't reachable and the read may fail: for a person it is
+     * the generic failure, as before, with the draft kept.
+     */
+    private suspend fun serviceAfterForbidden(): Boolean {
+        runCatching { connections.refresh() }
+        val known = uiState.value.connection?.service == true
+        return known || connections.connections.value.firstOrNull { it.id == connectionId }?.service == true
     }
 
     /**
@@ -428,6 +455,14 @@ class ConversationViewModel @Inject constructor(
                     local.update { it.copy(photoDraft = d.copy(sending = true, inFlight = false)) }
                 } catch (e: VaultFailure) {
                     if (photosCancelled) return@launch
+                    if (e.code == VaultCodes.FORBIDDEN && serviceAfterForbidden()) {
+                        // ANDROID-PLAN 0.1.90: as a refused message of a service: the photos go, the composer goes.
+                        pendingPhoto?.let { runCatching { attachments.abandon(it) } }
+                        pendingPhoto = null
+                        d.photos.forEach { it.wipe() }
+                        local.update { it.copy(photoDraft = null, error = FailureKind.SERVICE_FORBIDDEN, serviceRefused = true) }
+                        return@launch
+                    }
                     val retry = AttachmentManager.retryable(e)
                     val problem = when {
                         e.code == AttachmentManager.CODE_QUOTA -> PhotoProblem.MAILBOX_FULL
@@ -516,7 +551,8 @@ class NewMessageViewModel @Inject constructor(private val repo: ConnectionsRepos
 
     val uiState: StateFlow<NewMessageUiState> = combine(local, repo.connections) { s, cs ->
         s.copy(
-            connections = cs.filter { it.state == ConnectionState.ACTIVE }
+            // A service is not offered: it can't be messaged (ANDROID-PLAN 0.1.90).
+            connections = cs.filter { it.state == ConnectionState.ACTIVE && !it.service }
                 .sortedWith(
                     compareByDescending<ConnectionInfo> { it.favorite }
                         .thenBy { AccountNames.cleaned(it.displayName).orEmpty().lowercase() },

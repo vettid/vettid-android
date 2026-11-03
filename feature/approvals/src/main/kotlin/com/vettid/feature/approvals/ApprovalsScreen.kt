@@ -63,6 +63,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SafetyCode
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.ServiceRequestLine
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.VettIdListRow
@@ -270,7 +271,7 @@ private fun ApprovalRow(
         supporting = if (a is Approval.DeviceRequest) {
             deviceSupporting(a, rememberNow())
         } else {
-            listOfNotNull(who, summaryOf(a)).joinToString(" · ")
+            listOfNotNull(who, serviceLabelOf(a), summaryOf(a)).joinToString(" · ")
         },
         meta = Times.short(a.receivedAt),
         tileName = AccountNames.cleaned(who) ?: "?",
@@ -367,6 +368,13 @@ private fun whoOf(a: Approval): String? = when (a) {
     is Approval.ShareDecision -> AccountNames.isolateOrNull(a.connectionName)
         ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
     else -> AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection)
+}
+
+/** "Service" beside the name of a row that names a service connection (ANDROID-PLAN 0.1.90). */
+@Composable
+internal fun serviceLabelOf(a: Approval): String? {
+    val named = if (a is Approval.OutgoingRequest) a.name else a.connectionName
+    return if (a.connectionService && AccountNames.isolateOrNull(named) != null) stringResource(UiR.string.service_label) else null
 }
 
 @Composable
@@ -476,7 +484,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         when (a) {
             is Approval.ShareDecision -> ShareFacts(a, state.shareExcluded, actions.onToggleShareItem)
             is Approval.GrantRequest -> GrantFacts(a, state, actions)
-            else -> Facts(a)
+            else -> Facts(a, peerFingerprint = state.peerFingerprint)
         }
         if (state.needs == Needs.PASSWORD) {
             Spacer(Modifier.height(Spacing.l))
@@ -686,7 +694,7 @@ private fun CriticalResult(status: String, a: Approval, onFinish: () -> Unit, mo
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, actions: DecisionActions) {
     Label(stringResource(R.string.approvals_from))
-    Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+    Value(fromName(a))
     a.reason?.let { AuthContext.isolated(it) }?.let {
         Label(stringResource(R.string.approvals_reason))
         Value(it)
@@ -1017,6 +1025,13 @@ internal fun Label(text: String) {
 @Composable
 private fun themOf(name: String?): String = AccountNames.isolateOrNull(name) ?: stringResource(R.string.approvals_them)
 
+/** The "From" value: the connection's name, with "Service" after it for a service (ANDROID-PLAN 0.1.90). */
+@Composable
+internal fun fromName(a: Approval): String {
+    val name = AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline)
+    return serviceLabelOf(a)?.let { "$name · $it" } ?: name
+}
+
 @Composable
 internal fun Value(text: String, modifier: Modifier = Modifier) {
     Text(text, style = MaterialTheme.typography.bodyLarge, modifier = modifier.padding(bottom = Spacing.m))
@@ -1024,7 +1039,7 @@ internal fun Value(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
-private fun Facts(a: Approval, withdrawn: Boolean = false) {
+private fun Facts(a: Approval, withdrawn: Boolean = false, peerFingerprint: String? = null) {
     when (a) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
@@ -1082,12 +1097,19 @@ private fun Facts(a: Approval, withdrawn: Boolean = false) {
             a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
         }
         is Approval.OutgoingRequest -> {
-            Label(stringResource(R.string.approvals_outgoing_name))
+            // ANDROID-PLAN 0.1.90: a service's request says so under the name, above the code, and the name is its own.
+            Label(stringResource(if (a.service) UiR.string.service_name_label else R.string.approvals_outgoing_name))
             Text(
                 AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
+            if (a.service) {
+                ServiceRequestLine(
+                    fingerprint = peerFingerprint,
+                    fingerprintLabel = stringResource(UiR.string.core_ui_vault_key_fingerprint),
+                )
+            }
             a.sas?.let { sas ->
                 Spacer(Modifier.height(Spacing.l))
                 Label(stringResource(R.string.approvals_safety_code))
@@ -1117,10 +1139,15 @@ private fun Facts(a: Approval, withdrawn: Boolean = false) {
             // A withdrawn ask shows no code and no "Check that…" line: nothing is left to compare.
             val code = shownMatchCode(a)?.takeIf { !withdrawn }
             if (code != null) {
+                // The title names who; a service's sign-in carries the label here (ANDROID-PLAN 0.1.90).
+                if (a.connectionService) {
+                    com.vettid.core.ui.components.ServiceTag()
+                    Spacer(Modifier.height(Spacing.s))
+                }
                 MatchCodeBlock(code)
             } else {
                 Label(stringResource(R.string.approvals_from))
-                Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+                Value(fromName(a))
             }
             // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
             val note = a.context?.let { AuthContext.isolated(it) }
@@ -1145,7 +1172,7 @@ private fun Facts(a: Approval, withdrawn: Boolean = false) {
         is Approval.GrantRequest -> Unit
         is Approval.CriticalUse -> {
             Label(stringResource(R.string.approvals_from))
-            Value(AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection_inline))
+            Value(fromName(a))
             criticalItem(a)?.let {
                 Label(stringResource(R.string.approvals_critical_item))
                 Value(it)

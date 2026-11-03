@@ -85,6 +85,8 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.CREDENTIAL_REQUIRED -> R.string.vault_credential_required_title
     // Its title is "Your vault moved to a new phone" (data_feed_device_replaced) where a screen shows one.
     FailureKind.NOT_HOLDER -> R.string.vault_not_holder
+    // (ANDROID-PLAN 0.1.90) The vault answered `forbidden` to something sent to a service.
+    FailureKind.SERVICE_FORBIDDEN -> R.string.service_forbidden
     FailureKind.OTHER -> R.string.data_failure_other
 }
 

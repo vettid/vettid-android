@@ -550,6 +550,12 @@ enum class FailureKind {
      * change): another app holds the vault's credential. `vault_not_holder`. Not a proof for an erase.
      */
     NOT_HOLDER,
+
+    /**
+     * (ANDROID-PLAN 0.1.90) `forbidden` to something sent to a service (VAULT-MESSAGING §6.4): "Services can't do that."
+     * Set by the screen that sent it (it knows the connection); the vault's code alone is not enough.
+     */
+    SERVICE_FORBIDDEN,
     OTHER,
 }
 
