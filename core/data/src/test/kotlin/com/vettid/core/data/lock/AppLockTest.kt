@@ -44,11 +44,12 @@ internal class MemFile : WrappedKeyFile {
 }
 
 class AppLockTest {
-    private var clock = 0L
+    private var clock = 0L // the monotonic clock
+    private var wallSkew = 0L // the date set by hand: the wall clock is the monotonic one plus this
     private val prefs = InMemoryPreferencesRepository()
     private val keys = SoftKeys()
     private val file = MemFile()
-    private fun lock() = AppLock(prefs, keys, file) { clock }
+    private fun lock() = AppLock(prefs, keys, file, now = { clock + wallSkew }, elapsed = { clock })
 
     @Test
     fun offByDefault() = runTest {
@@ -108,7 +109,7 @@ class AppLockTest {
             override suspend fun setAppLockEnabled(enabled: Boolean) = throw java.io.IOException("read-only")
         }
         prefs.setAppLockEnabled(true) // on, but its key is gone: start turns it off and tries to write that down
-        val l = AppLock(readOnly, keys, file) { clock }
+        val l = AppLock(readOnly, keys, file, now = { clock + wallSkew }, elapsed = { clock })
         l.start()
         assertEquals(AppLockState.DISABLED, l.state.value)
     }
@@ -127,6 +128,90 @@ class AppLockTest {
         clock += 60_000
         l.onForeground()
         assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun theMonotonicTimeAtTheTimeoutLocksAndOneMillisecondBeforeDoesNot() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.setTimeout(AppLockTimeout.ONE_MINUTE)
+        l.onBackground()
+        clock += 60_000 - 1
+        l.onForeground()
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+        l.onBackground()
+        clock += 60_000
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun aDateSetBackInTheBackgroundLocksOnReturn() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.setTimeout(AppLockTimeout.ONE_HOUR)
+        l.onBackground()
+        clock += 10_000
+        wallSkew = -24 * 3_600_000L // a day back: wall now is earlier than at the background
+        assertTrue(l.wouldShowLock())
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun aSmallCorrectionBackwardsIsNotADateSetBack() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.setTimeout(AppLockTimeout.ONE_MINUTE)
+        l.onBackground()
+        clock += 10_000
+        wallSkew = -5_000 // a step of exactly the tolerance: still a correction
+        assertFalse(l.wouldShowLock())
+        wallSkew = -5_001
+        assertTrue(l.wouldShowLock())
+    }
+
+    @Test
+    fun aDateSetBackToAnEarlierTimeThanTheMonotonicOneLocksEvenAfterTheBackgroundTime() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.setTimeout(AppLockTimeout.ONE_HOUR)
+        val min = 60_000L
+        clock = 12 * 60 * min // 12:00 (the wall clock is the same)
+        l.onBackground()
+        clock += 30 * min // 12:30
+        wallSkew = -20 * min // the date reads 12:10: after the background time, but 20 minutes short
+        assertTrue(l.wouldShowLock())
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun aDateSetForwardDoesNotLockByItself() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.setTimeout(AppLockTimeout.ONE_MINUTE)
+        l.onBackground()
+        clock += 10_000
+        wallSkew = 30L * 24 * 3_600_000 // a month forward: the monotonic time decides
+        assertFalse(l.wouldShowLock())
+        l.onForeground()
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+    }
+
+    @Test
+    fun aNewProcessStartsLockedWhateverTheClocks() = runTest {
+        prefs.setAppLockEnabled(true)
+        val l = AppLock(prefs, keys.also { it.create(AppLockMethod.BIOMETRICS) }, file, now = { 5L }, elapsed = { 3L })
+        assertTrue("before start: covered", l.wouldShowLock())
+        l.start()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+        assertTrue(l.wouldShowLock())
     }
 
     /** A6 audit R3: a rotation, fold or theme change recreates the activity; with "Immediately" that locked the app. */

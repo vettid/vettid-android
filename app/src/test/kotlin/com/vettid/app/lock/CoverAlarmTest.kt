@@ -16,7 +16,10 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/** The cover's alarm: an inexact RTC alarm with an immutable, explicit, empty broadcast; the receiver asks the notifier. */
+/**
+ * The cover's alarm: an inexact, non-waking ELAPSED_REALTIME alarm with an immutable, explicit, empty broadcast;
+ * the receiver asks the notifier.
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class CoverAlarmTest {
@@ -24,10 +27,10 @@ class CoverAlarmTest {
     private val manager = shadowOf(context.getSystemService(AlarmManager::class.java))
 
     @Test
-    fun setIsInexactRtcImmutableExplicitAndCarriesNothing() {
+    fun setIsInexactElapsedRealtimeImmutableExplicitAndCarriesNothing() {
         AndroidCoverAlarm(context).set(1_234_567L)
         val alarm = manager.nextScheduledAlarm!!
-        assertEquals(AlarmManager.RTC, alarm.type)
+        assertEquals(AlarmManager.ELAPSED_REALTIME, alarm.type)
         assertEquals(1_234_567L, alarm.triggerAtMs)
         assertEquals("not exact, not while idle", 0L, alarm.interval)
         val s = shadowOf(alarm.operation)
@@ -46,7 +49,7 @@ class CoverAlarmTest {
         val a = AndroidCoverAlarm(context) { now }
         a.set(now + 15 * 60_000L)
         val long = manager.nextScheduledAlarm!!
-        assertEquals(AlarmManager.RTC, long.type)
+        assertEquals(AlarmManager.ELAPSED_REALTIME, long.type)
         assertEquals(now + 15 * 60_000L, long.triggerAtMs)
         assertEquals("a window of 10 minutes", 10 * 60_000L, long.windowLengthMs)
         a.set(now + 15 * 60_000L - 1)
@@ -58,6 +61,33 @@ class CoverAlarmTest {
         val s = shadowOf(manager.nextScheduledAlarm!!.operation)
         assertTrue(s.flags and PendingIntent.FLAG_IMMUTABLE != 0)
         assertEquals(CoverAlarmReceiver::class.java.name, s.savedIntent.component!!.className)
+    }
+
+    @Test
+    fun theWaitIsMeasuredOnTheMonotonicClockAndTheTypeDoesNotWake() {
+        // The wait is deadline - elapsed: 14 min 59 s is a plain set, 15 min a window; the type is never a *_WAKEUP.
+        val elapsed = 5_000_000L
+        val a = AndroidCoverAlarm(context) { elapsed }
+        a.set(elapsed + 15 * 60_000L)
+        val alarm = manager.nextScheduledAlarm!!
+        assertEquals(AlarmManager.ELAPSED_REALTIME, alarm.type)
+        assertEquals(elapsed + 15 * 60_000L, alarm.triggerAtMs)
+        assertEquals(10 * 60_000L, alarm.windowLengthMs)
+        a.set(elapsed + 5 * 60_000L)
+        val short = manager.nextScheduledAlarm!!
+        assertEquals(AlarmManager.ELAPSED_REALTIME, short.type)
+        assertEquals(elapsed + 5 * 60_000L, short.triggerAtMs)
+    }
+
+    @Test
+    fun theClockChangedReceiverReactsOnlyToTimeChanged() {
+        var n = 0
+        val r = ClockChangedReceiver { n++ }
+        r.onReceive(context, Intent(Intent.ACTION_TIME_CHANGED))
+        assertEquals(1, n)
+        r.onReceive(context, Intent(Intent.ACTION_TIMEZONE_CHANGED))
+        r.onReceive(context, Intent("something.else"))
+        assertEquals(1, n)
     }
 
     @Test
