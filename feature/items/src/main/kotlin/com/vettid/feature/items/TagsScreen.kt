@@ -25,7 +25,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material3.AlertDialog
+import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +56,7 @@ import com.vettid.core.data.items.TagRegistry
 import com.vettid.core.data.items.TagView
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailScaffold
@@ -471,6 +472,7 @@ private fun changeText(c: TagChange, renaming: Boolean): String {
 @Composable
 @Suppress("LongParameterList")
 private fun TagForm(title: String, name: String, description: String, tag: TagView?, busy: Boolean, actions: TagsActions) {
+    HoldsInput(name.isNotEmpty() || description.isNotEmpty())
     val invalid = name.isNotBlank() && ItemChecks.normalizeTag(name, reserved = false) == null
     AlertDialog(
         onDismissRequest = actions.onDismiss,

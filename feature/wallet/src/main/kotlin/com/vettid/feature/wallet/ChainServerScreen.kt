@@ -15,6 +15,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.UrlProblem
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.theme.Spacing
 
@@ -29,6 +30,7 @@ data class ChainServerActions(
 /** Wallet → ⋯ → Chain server (ANDROID-PLAN §4 "The chain source"): the setting, "Use my own server", "Reset to default", the note. */
 @Composable
 fun ChainServerScreen(state: ChainServerUiState, actions: ChainServerActions, modifier: Modifier = Modifier) {
+    HoldsInput(state.text.isNotEmpty() && !state.saved)
     val offered = state.server != ChainServer.NotOffered
     FormScaffold(
         title = stringResource(R.string.wallet_menu_chain_server),

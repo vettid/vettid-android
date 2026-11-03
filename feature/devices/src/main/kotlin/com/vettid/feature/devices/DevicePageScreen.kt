@@ -19,7 +19,6 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +59,7 @@ import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
+import com.vettid.core.ui.components.DropdownMenu
 import com.vettid.core.ui.components.FloatingPillActionBar
 import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.NoticeCard

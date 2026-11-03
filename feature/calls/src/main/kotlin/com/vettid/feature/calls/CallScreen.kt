@@ -36,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -61,6 +62,7 @@ import com.vettid.core.calls.CallEnd
 import com.vettid.core.calls.CallPhase
 import com.vettid.core.calls.CallState
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.ui.components.LocalCallScreenShown
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.PrimaryButton
@@ -90,7 +92,8 @@ fun CallOverlay(modifier: Modifier = Modifier, content: @Composable () -> Unit) 
     val vm: CallViewModel = hiltViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
     Box(modifier.fillMaxSize()) {
-        content()
+        // The shell under it knows a call screen is over it: the owner check's Back stays off then (the call screen's Back wins).
+        CompositionLocalProvider(LocalCallScreenShown provides (state.call !is CallState.Idle)) { content() }
         val ended = state.call as? CallState.Ended
         if (ended != null && !CallTexts.staysOpen(ended.reason)) {
             // An ending that only reports goes straight back: the conversation's call line says how it ended (owner

@@ -4,6 +4,17 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.focusable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +47,10 @@ import com.vettid.core.data.wallet.TransactionsRoute
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
+import com.vettid.core.ui.components.InputGuard
+import com.vettid.core.ui.components.LocalCallScreenShown
+import com.vettid.core.ui.components.LocalCheckCovered
+import com.vettid.core.ui.components.LocalInputGuard
 import com.vettid.feature.settings.NotificationSettingsRoute
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.toRoute
@@ -109,7 +124,6 @@ import com.vettid.feature.settings.SharedProfileRoute
 import com.vettid.feature.settings.helpDestination
 import com.vettid.feature.settings.settingsDestination
 import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -164,22 +178,22 @@ fun AppShell(
     val navigate: (Any) -> Unit = { navController.navigate(it) }
     val back: () -> Unit = { navController.popBackStack() }
 
-    // The daily owner check (VAULT-MESSAGING §3.6.5): past the deadline the check comes before any other use of the
-    // app, at the first open or return to the foreground, or when the member leaves the screen they are on; never
-    // over an action in progress (a detail screen, a draft), whose refused requests keep their input.
+    // The daily owner check (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03): past the deadline the check comes at
+    // once, on every screen, including a read-only pushed one (nothing cached of the vault stays shown while held). It waits
+    // only for what §3.6.5 says it must not interrupt: a call (until it ends), and input or an operation in progress (a screen
+    // reports it with `HoldsInput` / `LocalInputGuard`: an editor with changes, a draft, an approval open for a decision, a
+    // PIN or password prompt), until the member leaves that screen or the deadline plus 5 minutes ([OWNER_CHECK_DEFERRAL_S],
+    // read from the vault's deadline in `gate.overdue`). A drawer screen never waits. The check is drawn over the shell
+    // (below), which stays composed, so what was typed is still there when it passes; once shown it stays until it is passed.
     val deletionVm: PendingDeletionViewModel = hiltViewModel()
     val deletion by deletionVm.deletion.collectAsStateWithLifecycle()
     val deletionPath = stringResource(R.string.deletion_path)
     val gateVm: OwnerCheckGateViewModel = hiltViewModel()
     val gate by gateVm.gate.collectAsStateWithLifecycle()
-    val gated by rememberUpdatedState(gate.gated)
-    var armed by remember { mutableStateOf(false) }
+    val inputGuard = remember { InputGuard() }
     var asked by rememberSaveable { mutableStateOf<OwnerCheckMode?>(null) }
-    LaunchedEffect(gate.gated) { if (!gate.gated) armed = false }
-    LaunchedEffect(backStackEntry?.id) { if (gated) armed = true }
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         gateVm.onForeground()
-        if (gated) armed = true
         shell.setVisible(visibleOf(backStackEntry))
     }
     // What is on screen is not notified (ANDROID-PLAN 0.1.23, Notification modes 7); in the background, everything is.
@@ -230,7 +244,8 @@ fun AppShell(
     }
 
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
-    val checkMode = if (gate.gated && (armed || onList)) OwnerCheckMode.GATED else asked
+    val cover = rememberOwnerCheckMode(gate, onList, inputGuard, asked)
+    val checkMode = cover.mode
     // Release R: the owner check sent right after an unlock that cancelled a recovery did not pass; the check screen
     // shows its answer at once, so that the member's presence is recorded.
     val checkAfterCancel by gateVm.checkAfterCancel.collectAsStateWithLifecycle()
@@ -241,12 +256,26 @@ fun AppShell(
         }
     }
     LaunchedEffect(checkMode) { if (checkMode == OwnerCheckMode.GATED) showAccount = false }
+    // The check takes the focus and the keyboard from what is under it: a field that was focused (a composer, an editor)
+    // must not receive what is typed for the check, nor keep the keyboard's connection (as the app lock does).
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val covered = checkMode != null
+    LaunchedEffect(covered) {
+        if (covered) {
+            focus.clearFocus(force = true)
+            keyboard?.hide()
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             // While the check is shown, nothing of the vault under it is visible or reachable (§3.6.5).
-            modifier = if (checkMode != null) Modifier.clearAndSetSemantics {} else Modifier,
+            modifier = (if (checkMode != null || cover.undecided) Modifier.clearAndSetSemantics {} else Modifier)
+                // A frame while it is not known whether the check waits (a new composition): nothing of the vault is drawn,
+                // read out or touched.
+                .then(if (cover.undecided) Modifier.alpha(0f).consumeAllPointers() else Modifier),
             gesturesEnabled = drawerState.isOpen,
             drawerContent = {
                 VettIdDrawerSheet(
@@ -311,145 +340,165 @@ fun AppShell(
                         .fillMaxSize()
                         .then(if (bannerShown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
                 ) {
-                    NavHost(navController = navController, startDestination = MessagesRoute) {
-                        messagesDestination(
-                            chrome,
-                            MessagesHost(
+                    CompositionLocalProvider(LocalInputGuard provides inputGuard, LocalCheckCovered provides covered) {
+                        NavHost(navController = navController, startDestination = MessagesRoute) {
+                            messagesDestination(
+                                chrome,
+                                MessagesHost(
+                                    navigate = navigate,
+                                    onBack = back,
+                                    onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) },
+                                    onInvite = { navController.navigate(InviteRoute) },
+                                ),
+                            )
+                            connectionsDestination(
+                                chrome,
+                                ConnectionsHost(
+                                    navigate = navigate,
+                                    onBack = back,
+                                    replace = { route ->
+                                        navController.popBackStack()
+                                        navController.navigate(route)
+                                    },
+                                    onOpenConversation = { id ->
+                                        navController.navigate(ConversationRoute(id)) { launchSingleTop = true }
+                                    },
+                                    onOpenHistory = { id -> navController.navigate(ConnectionHistoryRoute(id)) { launchSingleTop = true } },
+                                    onOpenSharing = { id -> navController.navigate(ConnectionSharingRoute(id)) { launchSingleTop = true } },
+                                    onOpenShared = { id -> navController.navigate(SharedWithYouRoute(id)) { launchSingleTop = true } },
+                                    onNewShareRule = { id -> navController.navigate(RuleEditRoute(id)) { launchSingleTop = true } },
+                                    onOpenShareRule = { id, rule ->
+                                        navController.navigate(RuleEditRoute(id, rule)) { launchSingleTop = true }
+                                    },
+                                    onAskFor = { id ->
+                                        navController.navigate(SharedWithYouRoute(id, ask = true)) { launchSingleTop = true }
+                                    },
+                                    onOpenVotes = { id -> navController.navigate(ConnectionVotesRoute(id)) { launchSingleTop = true } },
+                                ),
+                            )
+                            approvalsDestination(
+                                chrome,
                                 navigate = navigate,
                                 onBack = back,
-                                onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) },
-                                onInvite = { navController.navigate(InviteRoute) },
-                            ),
-                        )
-                        connectionsDestination(
-                            chrome,
-                            ConnectionsHost(
-                                navigate = navigate,
-                                onBack = back,
-                                replace = { route ->
-                                    navController.popBackStack()
-                                    navController.navigate(route)
-                                },
-                                onOpenConversation = { id ->
-                                    navController.navigate(ConversationRoute(id)) { launchSingleTop = true }
-                                },
-                                onOpenHistory = { id -> navController.navigate(ConnectionHistoryRoute(id)) { launchSingleTop = true } },
-                                onOpenSharing = { id -> navController.navigate(ConnectionSharingRoute(id)) { launchSingleTop = true } },
-                                onOpenShared = { id -> navController.navigate(SharedWithYouRoute(id)) { launchSingleTop = true } },
-                                onNewShareRule = { id -> navController.navigate(RuleEditRoute(id)) { launchSingleTop = true } },
-                                onOpenShareRule = { id, rule ->
-                                    navController.navigate(RuleEditRoute(id, rule)) { launchSingleTop = true }
-                                },
-                                onAskFor = { id -> navController.navigate(SharedWithYouRoute(id, ask = true)) { launchSingleTop = true } },
-                                onOpenVotes = { id -> navController.navigate(ConnectionVotesRoute(id)) { launchSingleTop = true } },
-                            ),
-                        )
-                        approvalsDestination(
-                            chrome,
-                            navigate = navigate,
-                            onBack = back,
-                            onLeaveDetail = navController::leaveApprovalDetail,
-                            onOpenPairing = { navigate(PairRoute(held = true)) },
-                        )
-                        walletDestinations(chrome, navigate = navigate, leave = navController::leaveEntry)
-                        votesDestination(
-                            chrome,
-                            VotesHost(
-                                navigate = navigate,
-                                onBack = back,
-                                onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
-                            ),
-                        )
-                        itemsDestination(
-                            chrome,
-                            ItemsHost(
-                                navigate = navigate,
-                                onBack = back,
-                                replace = { route ->
-                                    navController.popBackStack()
-                                    navController.navigate(route)
-                                },
-                                onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
-                                onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
-                            ),
-                        )
-                        historyDestination(
-                            chrome,
-                            HistoryHost(
-                                navigate = navigate,
-                                onBack = back,
-                                onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
-                                onOpenItem = { navController.navigate(ItemDetailRoute(it)) { launchSingleTop = true } },
-                                // A signed payment's entry opens its transaction (W2-3), while the wallet's entry is shown.
-                                onOpenTransaction = if (badges.walletShown) {
-                                    { txid -> navController.openTransaction(txid) }
-                                } else {
-                                    null
-                                },
-                                onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
-                                onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
-                            ),
-                        )
-                        devicesDestination(
-                            chrome,
-                            DevicesHost(
-                                navigate = navigate,
-                                onBack = back,
-                                onOpenHistory = { q -> navController.navigate(DeviceHistoryRoute(q)) { launchSingleTop = true } },
-                                onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
-                            ),
-                        )
-                        credentialDestination(
-                            chrome,
-                            navigate = { navController.navigate(it) },
-                            onBack = { navController.popBackStack() },
-                            onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
-                        )
-                        settingsDestination(
-                            SettingsHost(
-                                onBack = { navController.popBackStack() },
+                                onLeaveDetail = navController::leaveApprovalDetail,
+                                onOpenPairing = { navigate(PairRoute(held = true)) },
+                            )
+                            walletDestinations(chrome, navigate = navigate, leave = navController::leaveEntry)
+                            votesDestination(
+                                chrome,
+                                VotesHost(
+                                    navigate = navigate,
+                                    onBack = back,
+                                    onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
+                                ),
+                            )
+                            itemsDestination(
+                                chrome,
+                                ItemsHost(
+                                    navigate = navigate,
+                                    onBack = back,
+                                    replace = { route ->
+                                        navController.popBackStack()
+                                        navController.navigate(route)
+                                    },
+                                    onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
+                                    onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
+                                ),
+                            )
+                            historyDestination(
+                                chrome,
+                                HistoryHost(
+                                    navigate = navigate,
+                                    onBack = back,
+                                    onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
+                                    onOpenItem = { navController.navigate(ItemDetailRoute(it)) { launchSingleTop = true } },
+                                    // A signed payment's entry opens its transaction (W2-3), while the wallet's entry is shown.
+                                    onOpenTransaction = if (badges.walletShown) {
+                                        { txid -> navController.openTransaction(txid) }
+                                    } else {
+                                        null
+                                    },
+                                    onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
+                                    onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
+                                ),
+                            )
+                            devicesDestination(
+                                chrome,
+                                DevicesHost(
+                                    navigate = navigate,
+                                    onBack = back,
+                                    onOpenHistory = { q -> navController.navigate(DeviceHistoryRoute(q)) { launchSingleTop = true } },
+                                    onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
+                                ),
+                            )
+                            credentialDestination(
+                                chrome,
                                 navigate = { navController.navigate(it) },
-                                // Not a drawer destination any more: Settings → Security → Credential, and back to Settings.
-                                onOpenCredential = { navController.navigate(CredentialRoute) { launchSingleTop = true } },
-                                onChangePassword = { navController.navigate(CredentialPasswordRoute) { launchSingleTop = true } },
-                                onEnableAppLock = onEnableAppLock,
-                                confirmAppLockOff = { presence.confirm(lockOffTitle, lockOffSubtitle) },
-                                onAccountClick = { showAccount = true },
-                                onOpenAccountSite = { uri.openUri(portal) },
-                                onOwnerCheck = { holdOff -> asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY },
-                                onOpenItem = { id -> navController.navigate(ItemDetailRoute(id)) { launchSingleTop = true } },
-                                onReleaseUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
-                                onReplaceKeys = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
-                                bell = bell,
-                            ),
-                        )
-                        releaseUpdateDestination(onBack = { navController.popBackStack() })
-                        helpDestination(onBack = { navController.popBackStack() }, bell = bell)
-                        notificationsDestination(
-                            NotificationsHost(
-                                onBack = back,
-                                onOpenArchived = { navController.navigate(NotificationsRoute(archived = true)) { launchSingleTop = true } },
-                                onOpen = { t -> navController.openFeedTarget(t, badges.walletShown) },
-                            ),
-                        )
-                        debugTools.register(
-                            this,
-                            DebugHost(theme.mode, theme.set, onBack = { navController.popBackStack() }),
-                        )
+                                onBack = { navController.popBackStack() },
+                                onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
+                            )
+                            settingsDestination(
+                                SettingsHost(
+                                    onBack = { navController.popBackStack() },
+                                    navigate = { navController.navigate(it) },
+                                    // Not a drawer destination any more: Settings → Security → Credential, and back to Settings.
+                                    onOpenCredential = { navController.navigate(CredentialRoute) { launchSingleTop = true } },
+                                    onChangePassword = { navController.navigate(CredentialPasswordRoute) { launchSingleTop = true } },
+                                    onEnableAppLock = onEnableAppLock,
+                                    confirmAppLockOff = { presence.confirm(lockOffTitle, lockOffSubtitle) },
+                                    onAccountClick = { showAccount = true },
+                                    onOpenAccountSite = { uri.openUri(portal) },
+                                    onOwnerCheck = { holdOff ->
+                                        asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY
+                                    },
+                                    onOpenItem = { id -> navController.navigate(ItemDetailRoute(id)) { launchSingleTop = true } },
+                                    onReleaseUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
+                                    onReplaceKeys = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
+                                    bell = bell,
+                                ),
+                            )
+                            releaseUpdateDestination(onBack = { navController.popBackStack() })
+                            helpDestination(onBack = { navController.popBackStack() }, bell = bell)
+                            notificationsDestination(
+                                NotificationsHost(
+                                    onBack = back,
+                                    onOpenArchived = {
+                                        navController.navigate(NotificationsRoute(archived = true)) { launchSingleTop = true }
+                                    },
+                                    onOpen = { t -> navController.openFeedTarget(t, badges.walletShown) },
+                                ),
+                            )
+                            debugTools.register(
+                                this,
+                                DebugHost(theme.mode, theme.set, onBack = { navController.popBackStack() }),
+                            )
+                        }
                     }
                 }
             }
         }
 
+        // Over the shell, never in place of it. Its own password fields are not input in progress, and its dialogs are its own.
+        // A layer takes the focus and the keys it does not use, so nothing under it is typed into (as the app lock's layer);
+        // Back passes, so that a check the member asked for can still be closed with it on Android 12 (API 31-32), and so do the
+        // volume, headset, media and call keys (`ownerCheckLayerEats`).
         checkMode?.let { mode ->
-            OwnerCheckRoute(
-                mode = mode,
-                onDone = {
-                    asked = null
-                    armed = false
-                },
-                onCancel = { asked = null },
-            )
+            val layer = remember { FocusRequester() }
+            CompositionLocalProvider(LocalInputGuard provides null, LocalCheckCovered provides false) {
+                val keys = Modifier.focusRequester(layer).focusable().onKeyEvent { ownerCheckLayerEats(it.key) }
+                Box(Modifier.fillMaxSize().testTag("owner_check_layer").then(keys)) {
+                    OwnerCheckRoute(
+                        mode = mode,
+                        onDone = {
+                            asked = null
+                            cover.release()
+                        },
+                        onCancel = { asked = null },
+                        backEnabled = !LocalCallScreenShown.current,
+                    )
+                }
+            }
+            LaunchedEffect(Unit) { runCatching { layer.requestFocus() } }
         }
     }
 
@@ -491,7 +540,7 @@ fun AppShell(
         navController.navigate(AcceptRoute(link, opened = true)) { launchSingleTop = true }
     }
 
-    if (showAccount) {
+    if (showAccount && !covered) {
         AccountSheet(
             account = account,
             portalUrl = portal,
@@ -667,5 +716,12 @@ internal fun NavHostController.navigateTopLevel(route: Any) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
         restoreState = true
+    }
+}
+
+/** Takes every touch before the content under it sees it (the hidden frame in which nothing is yet decided). */
+private fun Modifier.consumeAllPointers(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
     }
 }

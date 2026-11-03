@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.SecretField
@@ -53,6 +54,7 @@ data class SpendingLimitsActions(
  */
 @Composable
 fun SpendingLimitsScreen(state: SpendingLimitsUiState, actions: SpendingLimitsActions, modifier: Modifier = Modifier) {
+    HoldsInput(state.holdsInput)
     BackHandler(enabled = state.step != LimitsStep.OVERVIEW) { actions.onStepBack() }
     when (state.step) {
         LimitsStep.OVERVIEW -> Overview(state, actions, modifier)

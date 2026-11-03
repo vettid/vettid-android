@@ -77,6 +77,11 @@ data class SpendingLimitsUiState(
     /** Nothing can be started while something is under way. */
     val idle: Boolean get() = !busy && !closed
 
+    /** Unsent input: a limit typed, or "no limit" chosen, in the lower or raise form (the confirm steps ask with fields). */
+    val holdsInput: Boolean
+        get() = (step == LimitsStep.LOWER || step == LimitsStep.RAISE) &&
+            (form.perTx.isNotEmpty() || form.perPeriod.isNotEmpty() || form.removeTx || form.removePeriod)
+
     override fun toString(): String = "SpendingLimitsUiState"
 }
 

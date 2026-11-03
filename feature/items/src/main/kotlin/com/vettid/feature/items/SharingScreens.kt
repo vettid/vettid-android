@@ -54,6 +54,7 @@ import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharedContent
 import com.vettid.core.data.items.TagMatch
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
@@ -513,8 +514,9 @@ private fun askState(s: String): String = when (s) {
 
 @Composable
 private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActions) {
+    HoldsInput(f.label.isNotEmpty() || f.reason.isNotEmpty())
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
-    androidx.compose.material3.AlertDialog(
+    com.vettid.core.ui.components.AlertDialog(
         onDismissRequest = { actions.onOpenAsk(false) },
         title = { Text(stringResource(R.string.items_ask_button, name)) },
         text = {
@@ -523,7 +525,7 @@ private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActio
                     TextButton(onClick = { open = true }, modifier = Modifier.testTag("ask_category")) {
                         Text(stringResource(R.string.items_ask_category, ItemsText.category(f.category)))
                     }
-                    androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    com.vettid.core.ui.components.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                         ItemTemplates.categories.forEach { c ->
                             androidx.compose.material3.DropdownMenuItem(text = { Text(stringResource(c.label)) }, onClick = {
                                 open = false
