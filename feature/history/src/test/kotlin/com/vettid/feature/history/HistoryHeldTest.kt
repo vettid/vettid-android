@@ -3,12 +3,14 @@ package com.vettid.feature.history
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.ShellChrome
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -51,6 +53,10 @@ class HistoryHeldTest {
         }
         rule.onNodeWithTag("history_held_notice").assertIsDisplayed()
         rule.onNodeWithText(title).assertIsDisplayed()
+        rule.onNodeWithTag("history_entry_1").assertIsDisplayed()
+        val notice = rule.onNodeWithTag("history_held_notice").getUnclippedBoundsInRoot()
+        val row = rule.onNodeWithTag("history_entry_1").getUnclippedBoundsInRoot()
+        assertTrue("the notice sits above the first row", notice.bottom <= row.top)
         rule.onNodeWithText("Try again").assertDoesNotExist()
     }
 

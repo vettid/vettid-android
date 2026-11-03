@@ -81,13 +81,13 @@ import com.vettid.core.ui.theme.CategoryHue
 import com.vettid.core.ui.theme.categoryColor
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FilterChipRow
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.LargeTitle
-import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.ShellChrome
@@ -258,7 +258,7 @@ fun categoryIcon(c: AuditCategory): ImageVector = when (c) {
  * History (owner request 2026-10-07): newest first, more as the list scrolls (`before_seq` cursors), each entry
  * with its title, time and connection; a search, the date range, a connection and the groups filter it. Read-only.
  */
-@Suppress("LongMethod", "CyclomaticComplexMethod")
+@Suppress("LongMethod")
 @Composable
 fun HistoryScreen(
     state: HistoryUiState,
@@ -294,17 +294,8 @@ fun HistoryScreen(
                     state.loading && state.entries.isEmpty() -> Centered {
                         CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     }
-                    error == FailureKind.OWNER_CHECK_REQUIRED && state.entries.isEmpty() -> Centered {
-                        HistoryHeldNotice(Modifier.padding(Spacing.xl))
-                    }
                     error != null && state.entries.isEmpty() -> Centered {
-                        NoticeCard(
-                            kind = NoticeKind.WARNING,
-                            title = stringResource(R.string.history_error_title),
-                            body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
-                            modifier = Modifier.padding(Spacing.xl),
-                            actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) } },
-                        )
+                        HistoryErrorNotice(error, state.errorCode, actions.onRetry, Modifier.padding(Spacing.xl))
                     }
                     state.emptyHistory -> EmptyState(
                         icon = Icons.Outlined.History,
@@ -339,6 +330,22 @@ fun HistoryScreen(
             actions = { MoreMenu(actions.onExport) },
         ) { body() }
     }
+}
+
+/** The list could not be read: a held vault (daily check due) is said to be held, with nothing to retry; else the error. */
+@Composable
+private fun HistoryErrorNotice(error: FailureKind, code: String?, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    if (error == FailureKind.OWNER_CHECK_REQUIRED) {
+        HistoryHeldNotice(modifier)
+        return
+    }
+    NoticeCard(
+        kind = NoticeKind.WARNING,
+        title = stringResource(R.string.history_error_title),
+        body = failureText(error.messageRes(), error.vaultCode(code)),
+        modifier = modifier,
+        actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.history_retry)) } },
+    )
 }
 
 /** The vault holds requests while the daily owner check is due: said to be held, not failed; nothing to retry. */

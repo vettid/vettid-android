@@ -1085,6 +1085,7 @@ object ScreenCatalog {
                 chrome,
             )
         },
+        "messages.held_empty" to { MessagesScreen(MessagesUiState(loading = false, error = FailureKind.OWNER_CHECK_REQUIRED), chrome) },
         "messages.empty" to { MessagesScreen(MessagesUiState(loading = false), chrome) },
         "messages.unread" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations.filter { it.unread > 0 }, unreadOnly = true, noConnections = false, searchable = true), chrome) },
         "messages.conversation" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, draft = "See you there"), ConversationActions()) },
@@ -1465,6 +1466,9 @@ object ScreenCatalog {
                 chrome,
                 HistoryActions(),
             )
+        },
+        "history.held_empty" to {
+            HistoryScreen(HistoryUiState(loading = false, error = FailureKind.OWNER_CHECK_REQUIRED), chrome, HistoryActions())
         },
         "history.empty" to { HistoryScreen(HistoryUiState(loading = false, end = true), chrome, HistoryActions()) },
         "history.no_match" to {

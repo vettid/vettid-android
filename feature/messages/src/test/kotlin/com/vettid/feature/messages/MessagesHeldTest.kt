@@ -6,6 +6,7 @@ package com.vettid.feature.messages
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import com.vettid.core.data.social.ConversationSummary
@@ -13,6 +14,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.ui.components.ShellChrome
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,7 +56,9 @@ class MessagesHeldTest {
         }
         rule.onNodeWithText(title).assertIsDisplayed()
         rule.onNodeWithTag("conversation_c1").assertIsDisplayed()
-        rule.onNodeWithText("Try again").assertDoesNotExist()
+        val notice = rule.onNodeWithTag("messages_held_notice").getUnclippedBoundsInRoot()
+        val row = rule.onNodeWithTag("conversation_c1").getUnclippedBoundsInRoot()
+        assertTrue("the notice sits above the first row", notice.bottom <= row.top)
     }
 
     @Test

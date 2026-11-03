@@ -307,14 +307,14 @@ internal fun ErrorState(kind: FailureKind, onRetry: () -> Unit, shownCode: Strin
     Column(Modifier.fillMaxSize().padding(Spacing.xl), verticalArrangement = Arrangement.Center) {
         if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
             MessagesHeldNotice()
-            return@Column
+        } else {
+            NoticeCard(
+                kind = NoticeKind.WARNING,
+                title = stringResource(R.string.messages_error_title),
+                body = failureText(kind.messageRes(), kind.vaultCode(shownCode)),
+                actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
+            )
         }
-        NoticeCard(
-            kind = NoticeKind.WARNING,
-            title = stringResource(R.string.messages_error_title),
-            body = failureText(kind.messageRes(), kind.vaultCode(shownCode)),
-            actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
-        )
     }
 }
 
