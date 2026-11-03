@@ -955,6 +955,11 @@ class VaultManager(
         gated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
     )
 
+    /** Asks known only from their feed item (ANDROID-PLAN 0.1.116 AA5) follow the feed in memory. */
+    init {
+        scope.launch { feed.items.collect { social.setFeedItems(it) } }
+    }
+
     /**
      * The member's shared profile and the account's names (VAULT-MESSAGING 0.18.0 §10.8): the display name, and the
      * name change, which counts as an owner check for its PIN and password (§3.6.4).

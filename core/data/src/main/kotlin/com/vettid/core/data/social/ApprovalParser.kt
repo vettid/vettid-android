@@ -86,11 +86,13 @@ object ApprovalParser {
         "approval.pending" -> body.s("approval_id")?.let {
             Approval.DeviceRequest(
                 type, it, body.s("name"), body.s("role"), body.s("type"), at, instant(body.s("exp")), deviceId = body.s("device_id"),
+                held = HeldRequests.of(body.s("role"), body.s("type"), body.o("body")),
             )
         }
         "device.session.pending" -> body.s("request_id")?.let {
             Approval.DeviceRequest(
                 type, it, body.s("name"), body.s("role"), null, at, instant(body.s("exp")), deviceId = body.s("device_id"),
+                seconds = body.l("seconds")?.takeIf { s -> s in 1..Int.MAX_VALUE }?.toInt(),
             )
         }
         else -> null
