@@ -76,3 +76,9 @@ fun HoldsInput(active: Boolean) {
  * state lives in the screens' view models and comes back when the check has passed.
  */
 val LocalCheckCovered = compositionLocalOf { false }
+
+/**
+ * True while a call screen is drawn over the shell (`CallOverlay` provides it around the shell). Back then belongs to the call
+ * screen, which is above the owner check: the check's own Back handler stays off so that it does not take the call's.
+ */
+val LocalCallScreenShown = compositionLocalOf { false }

@@ -562,8 +562,15 @@ vettid.org repo's `local/android-ui/`).
   `AlertDialog`, `ModalBottomSheet`, `DatePickerDialog` and `DropdownMenu` outside `core/ui`. The check also waits through a
   recreation (rotation, an app-lock unlock, a restored process): until one frame has passed after a new composition it is not
   shown, because the screens report their input in effects after the first frame. The gate's clock wakes at the next boundary
-  (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets `Key.Back` through (the app lock's
-  `AppLockGate` layer still eats every key, Back included). `ShellOverlayRulesTest` lists the files that may call `HoldsInput` /
+  (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets through Back (a voluntary check closes with it on API 31-32) and the phone's own keys (`ownerCheckLayerEats`:
+  volume up, down and mute, the headset hook, media play, pause, play/pause, stop, next and previous, call and end call), so a
+  call or music keeps its keys; every other key is eaten (the app lock's `AppLockGate` layer still eats every key). While a
+  call screen is shown (`LocalCallScreenShown`, provided by `CallOverlay`) the check's own Back handler is off, so Back is the
+  call screen's. A check that said it passed keeps the shell uncovered while `gated` is still true for at most
+  `OWNER_CHECK_PASSED_MS` (10 s) and not for a new deadline (saved). The undecided frame also clears semantics and takes every
+  touch. **Known limit of the wipe:** only screens composed when the check latches are wiped; a typed secret in a screen under
+  another on the back stack, or in a dialog a voluntary (asked) check had already hidden, stays in its view model (a form is
+  normally popped, not stacked under). `ShellOverlayRulesTest` lists the files that may call `HoldsInput` /
   `WipesOnCover` and refuses fully qualified windows of their own outside `VettIdApp.kt`. Rule: `ownerCheckMode()` /
   `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). The refused-request text "What you entered is
   kept: the check opens when you leave this screen" is unchanged (owner decision a).

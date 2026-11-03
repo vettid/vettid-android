@@ -10,6 +10,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
@@ -277,6 +278,30 @@ internal const val OWNER_CHECK_UNLATCH_MS = 2_000L
 
 private const val NANOS_PER_MS = 1_000_000L
 
+private const val NOT_PASSED = Long.MIN_VALUE
+
+/** How long a check that said it passed keeps the shell uncovered while `gated` is still true (the vault's state not yet updated). */
+internal const val OWNER_CHECK_PASSED_MS = 10_000L
+
+/** Waits [ms] of frame time (so that a test clock drives it). */
+private suspend fun waitFrames(ms: Long) {
+    val from = withFrameNanos { it }
+    while (withFrameNanos { it } - from < ms * NANOS_PER_MS) { /* wait */ }
+}
+
+/**
+ * Whether the check's key layer takes [key]. It takes the keys that would type into what is under it, but lets through Back (a
+ * check the member asked for closes with it on Android 12) and the keys of the phone itself: volume, mute, the headset button,
+ * media play/pause/next/previous/stop and answer/end call, so that a call or music goes on with its keys while the check is up.
+ */
+internal fun ownerCheckLayerEats(key: Key): Boolean = key !in PASSING_KEYS
+
+private val PASSING_KEYS = setOf(
+    Key.Back, Key.VolumeUp, Key.VolumeDown, Key.VolumeMute, Key.HeadsetHook,
+    Key.MediaPlay, Key.MediaPause, Key.MediaPlayPause, Key.MediaStop, Key.MediaNext, Key.MediaPrevious,
+    Key.Call, Key.EndCall,
+)
+
 /**
  * Calls [letGo] once [gated] has stayed false for [OWNER_CHECK_UNLATCH_MS] while the check is latched ([isLatched]); a `gated` that
  * comes back before restarts the wait. Counted in frames' time (the screen draws while the check is up), so a test clock drives it.
@@ -285,12 +310,29 @@ private const val NANOS_PER_MS = 1_000_000L
 private fun LetGoWhenNotGated(gated: Boolean, isLatched: () -> Boolean, letGo: () -> Unit) {
     LaunchedEffect(gated) {
         if (gated) return@LaunchedEffect
-        if (isLatched()) {
-            val from = withFrameNanos { it }
-            while (withFrameNanos { it } - from < OWNER_CHECK_UNLATCH_MS * NANOS_PER_MS) { /* wait */ }
-        }
+        if (isLatched()) waitFrames(OWNER_CHECK_UNLATCH_MS)
         letGo()
     }
+}
+
+/** A check that said it passed ([passed]) is not covered again for the deadline it was passed at. */
+private class PassedMark(val passed: Boolean, val set: () -> Unit, val clear: () -> Unit)
+
+/**
+ * A check that was just passed does not cover again before `gated` has turned false once: not for longer than
+ * [OWNER_CHECK_PASSED_MS] either, nor once the deadline is a new one (it is kept as the deadline it was passed at). Saved: a
+ * rotation between the pass and the vault's update does not bring the check back.
+ */
+@Composable
+private fun rememberPassedMark(deadlineKey: Long): PassedMark {
+    var passedAt by rememberSaveable { mutableStateOf(NOT_PASSED) }
+    val passed = passedAt == deadlineKey
+    LaunchedEffect(passed) {
+        if (!passed) return@LaunchedEffect
+        waitFrames(OWNER_CHECK_PASSED_MS)
+        passedAt = NOT_PASSED
+    }
+    return PassedMark(passed, set = { passedAt = deadlineKey }, clear = { passedAt = NOT_PASSED })
 }
 
 /**
@@ -313,17 +355,16 @@ internal fun rememberOwnerCheckMode(
 ): OwnerCheckCover {
     var latched by rememberSaveable { mutableStateOf(false) }
     var settled by remember { mutableStateOf(false) }
-    // A check that was just passed does not cover again before `gated` has turned false once.
-    var passed by remember { mutableStateOf(false) }
+    val mark = rememberPassedMark(gate.deadline?.toEpochMilli() ?: 0L)
     LaunchedEffect(Unit) {
         withFrameNanos { }
         settled = true
     }
     LetGoWhenNotGated(gate.gated, isLatched = { latched }) {
-        passed = false
+        mark.clear()
         latched = false
     }
-    val wantsCover = gate.gated && !passed && !latched &&
+    val wantsCover = gate.gated && !mark.passed && !latched &&
         ownerCheckMode(gate.gated, onList, guard.active, gate.overdue, asked) == OwnerCheckMode.GATED
     LaunchedEffect(wantsCover, settled) {
         if (wantsCover && settled) {
@@ -331,13 +372,13 @@ internal fun rememberOwnerCheckMode(
             latched = true
         }
     }
-    val undecided = wantsCover || (gate.gated && !passed && !latched && !settled && !gate.overdue)
+    val undecided = wantsCover || (gate.gated && !mark.passed && !latched && !settled && !gate.overdue)
     return OwnerCheckCover(
         mode = if (latched) OwnerCheckMode.GATED else asked,
         undecided = undecided,
         release = {
             latched = false
-            passed = gate.gated
+            if (gate.gated) mark.set()
         },
     )
 }

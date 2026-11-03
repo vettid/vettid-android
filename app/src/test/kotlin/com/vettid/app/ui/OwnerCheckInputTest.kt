@@ -11,7 +11,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -53,8 +55,12 @@ class OwnerCheckInputTest {
     private var pin by mutableStateOf("")
     private var callUp by mutableStateOf(false)
 
-    private fun due(overdue: Boolean = false) {
-        gate = OwnerCheckGateState(gated = true, overdue = overdue)
+    private var cover: OwnerCheckCover? = null
+
+    private fun due(overdue: Boolean = false, deadline: Instant? = null) {
+        gate = OwnerCheckGateState(gated = true, overdue = overdue, deadline = deadline)
+        // With the clock held by hand nothing else tells the composition that state changed.
+        Snapshot.sendApplyNotifications()
     }
 
     /** The check is passed: the vault says so (`gated` false) and the shell lets go of the covering after its debounce. */
@@ -70,7 +76,9 @@ class OwnerCheckInputTest {
     @Composable
     private fun Shell() {
         val guard = remember { InputGuard() }
-        val mode = rememberOwnerCheckMode(gate, onList = screen == Screen.DRAWER, guard = guard, asked = null).mode
+        val covering = rememberOwnerCheckMode(gate, onList = screen == Screen.DRAWER, guard = guard, asked = null)
+        cover = covering
+        val mode = covering.mode
         Box {
             CompositionLocalProvider(LocalInputGuard provides guard, LocalCheckCovered provides (mode != null)) {
                 when (screen) {
@@ -268,6 +276,46 @@ class OwnerCheckInputTest {
         rule.mainClock.autoAdvance = true
         passCheck()
         checkNotShown()
+    }
+
+    @Test
+    fun `a pass keeps the check off for ten seconds while gated stays true, and not for a new deadline`() {
+        show()
+        rule.waitForIdle()
+        rule.mainClock.autoAdvance = false
+        due(deadline = Instant.parse("2026-11-03T08:00:00Z"))
+        rule.mainClock.advanceTimeBy(500)
+        checkShown()
+        rule.runOnUiThread {
+            cover!!.release()
+            Snapshot.sendApplyNotifications()
+        }
+        rule.mainClock.advanceTimeBy(500)
+        checkNotShown()
+        // The vault still says gated: the check comes back after OWNER_CHECK_PASSED_MS.
+        rule.mainClock.advanceTimeBy(OWNER_CHECK_PASSED_MS + 200)
+        checkShown()
+        // A new deadline (the next check came due) is covered at once, not after the ten seconds.
+        rule.runOnUiThread {
+            cover!!.release()
+            Snapshot.sendApplyNotifications()
+        }
+        rule.mainClock.advanceTimeBy(500)
+        checkNotShown()
+        due(deadline = Instant.parse("2026-11-04T08:00:00Z"))
+        rule.mainClock.advanceTimeBy(500)
+        checkShown()
+    }
+
+    @Test
+    fun `the keys of the phone pass the check's layer, the others do not`() {
+        listOf(
+            Key.Back, Key.VolumeUp, Key.VolumeDown, Key.VolumeMute, Key.HeadsetHook, Key.MediaPlayPause, Key.MediaPlay,
+            Key.MediaPause, Key.MediaNext, Key.MediaPrevious, Key.Call, Key.EndCall,
+        ).forEach { assertEquals("$it", false, ownerCheckLayerEats(it)) }
+        listOf(Key.A, Key.Five, Key.Enter, Key.Backspace, Key.Tab, Key.DirectionDown).forEach {
+            assertEquals("$it", true, ownerCheckLayerEats(it))
+        }
     }
 
     @Test

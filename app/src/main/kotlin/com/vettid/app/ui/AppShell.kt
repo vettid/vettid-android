@@ -7,9 +7,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.foundation.focusable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalFocusManager
@@ -47,6 +48,7 @@ import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.InputGuard
+import com.vettid.core.ui.components.LocalCallScreenShown
 import com.vettid.core.ui.components.LocalCheckCovered
 import com.vettid.core.ui.components.LocalInputGuard
 import com.vettid.feature.settings.NotificationSettingsRoute
@@ -266,9 +268,10 @@ fun AppShell(
         ModalNavigationDrawer(
             drawerState = drawerState,
             // While the check is shown, nothing of the vault under it is visible or reachable (§3.6.5).
-            modifier = (if (checkMode != null) Modifier.clearAndSetSemantics {} else Modifier)
-                // A frame while it is not known whether the check waits (a new composition): nothing of the vault is drawn.
-                .alpha(if (cover.undecided) 0f else 1f),
+            modifier = (if (checkMode != null || cover.undecided) Modifier.clearAndSetSemantics {} else Modifier)
+                // A frame while it is not known whether the check waits (a new composition): nothing of the vault is drawn,
+                // read out or touched.
+                .then(if (cover.undecided) Modifier.alpha(0f).consumeAllPointers() else Modifier),
             gesturesEnabled = drawerState.isOpen,
             drawerContent = {
                 VettIdDrawerSheet(
@@ -472,11 +475,12 @@ fun AppShell(
 
         // Over the shell, never in place of it. Its own password fields are not input in progress, and its dialogs are its own.
         // A layer takes the focus and the keys it does not use, so nothing under it is typed into (as the app lock's layer);
-        // Back passes, so that a check the member asked for can still be closed with it on Android 12 (API 31-32).
+        // Back passes, so that a check the member asked for can still be closed with it on Android 12 (API 31-32), and so do the
+        // volume, headset, media and call keys (`ownerCheckLayerEats`).
         checkMode?.let { mode ->
             val layer = remember { FocusRequester() }
             CompositionLocalProvider(LocalInputGuard provides null, LocalCheckCovered provides false) {
-                val keys = Modifier.focusRequester(layer).focusable().onKeyEvent { it.key != Key.Back }
+                val keys = Modifier.focusRequester(layer).focusable().onKeyEvent { ownerCheckLayerEats(it.key) }
                 Box(Modifier.fillMaxSize().testTag("owner_check_layer").then(keys)) {
                     OwnerCheckRoute(
                         mode = mode,
@@ -485,6 +489,7 @@ fun AppShell(
                             cover.release()
                         },
                         onCancel = { asked = null },
+                        backEnabled = !LocalCallScreenShown.current,
                     )
                 }
             }
@@ -706,5 +711,12 @@ internal fun NavHostController.navigateTopLevel(route: Any) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
         restoreState = true
+    }
+}
+
+/** Takes every touch before the content under it sees it (the hidden frame in which nothing is yet decided). */
+private fun Modifier.consumeAllPointers(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
     }
 }
