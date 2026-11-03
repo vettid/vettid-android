@@ -62,6 +62,18 @@ internal object NotificationsCatalog {
         FeedItem("f13", 19, "grant.request", at(60 * 24 * 7), "archived", connectionId = "c2", ref = "g0", count = 2),
     )
 
+    // AA5 (ANDROID-PLAN 0.1.116 "Notifications and the feed"): the device and agent rows, named from the device list.
+    private val agentNames = names.copy(devices = mapOf("dev-a" to "Build bot"), pairingName = "New bot", pairingPendingId = "p1")
+    private val agentItems = listOf(
+        FeedItem("g01", 43, "leash.agent.suspended", at(1), "active", "high", deviceId = "dev-a"),
+        FeedItem("g02", 42, "leash.referrals_limited", at(2), "active", "high", deviceId = "dev-a"),
+        FeedItem("g03", 41, "device.session.pending", at(3), "active", "high", deviceId = "dev-a", ref = "s1"),
+        FeedItem("g04", 40, "approval.pending", at(4), "active", "high", deviceId = "dev-a", ref = "h1"),
+        FeedItem("g05", 39, "device.pair.pending", at(5), "active", "high", ref = "p1"),
+        FeedItem("g06", 38, "device.paired", at(6), "read", deviceId = "dev-a"),
+        FeedItem("g07", 37, "leash.rate_limited", at(7), "read", deviceId = "dev-a", ref = "gr1"),
+    )
+
     private val loaded = NotificationsUiState(items = items, names = names, load = ListLoad.LOADED)
 
     @Composable
@@ -87,6 +99,8 @@ internal object NotificationsCatalog {
         "notifications.signer_changed" to {
             Screen(loaded.copy(items = listOf(FeedItem("f00", 32, "device.signer_changed", at(1), "active", "high", ref = "vettid:google_play")) + items.take(3)))
         },
+        "notifications.devices" to { Screen(loaded.copy(items = agentItems, names = agentNames)) },
+        "notifications.devices_unnamed" to { Screen(loaded.copy(items = agentItems, names = names)) },
         "notifications.delete_confirm" to { Screen(loaded.copy(archived = true, confirmDelete = items.last())) },
         "notifications.sheet_gone" to { DetailSheetContent(items[3], names, gone = true) },
         "notifications.sheet_removed" to { DetailSheetContent(items[9], names, gone = false) },

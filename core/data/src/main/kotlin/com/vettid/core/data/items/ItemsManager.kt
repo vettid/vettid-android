@@ -325,6 +325,7 @@ class ItemsManager(
             tags = i.tags,
             labels = i.fields.map { it.label },
             updatedAt = instant(i.updatedAt),
+            fieldLabels = i.fields.mapNotNull { f -> f.fieldId?.let { FieldLabel(it, f.label, f.kind) } },
         )
 
         fun detail(i: Item): ItemDetail {

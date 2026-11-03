@@ -180,10 +180,23 @@ interface ApprovalsRepository {
     suspend fun declineDeviceRequest(key: String)
 
     /**
+     * Approves a desktop's or agent's request (ANDROID-PLAN 0.1.116 AA5): a session request with [seconds]
+     * (`device.session.approve`), a held approval (`approval.decide{approve: true}`) whose answer is in
+     * [DeviceDecision.result]. A request the vault no longer knows is dropped and thrown as the vault's failure.
+     */
+    suspend fun approveDeviceRequest(key: String, seconds: Int? = null): DeviceDecision =
+        throw com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.NOT_SUPPORTED)
+
+    /**
      * A device's access ended or the device was removed here (ANDROID-PLAN 0.1.53 AA1): its waiting requests are gone
      * (the vault declined them, §6.8), so its entries leave the list at once.
      */
     suspend fun dropDeviceRequests(deviceId: String) {}
+}
+
+/** What approving a device request came to: a session's end ([expiresAt]), or a held approval's `result`. */
+class DeviceDecision(val result: String? = null, val expiresAt: java.time.Instant? = null) {
+    override fun toString(): String = "DeviceDecision(result=$result)"
 }
 
 private val NO_WITHDRAWN: StateFlow<Set<String>> = kotlinx.coroutines.flow.MutableStateFlow(emptySet())
