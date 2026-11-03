@@ -82,8 +82,6 @@ data class InviteActions(
     val onTick: () -> Unit = {},
     val onApprove: () -> Unit = {},
     val onDecline: () -> Unit = {},
-    val onAskBlock: (Boolean) -> Unit = {},
-    val onBlock: () -> Unit = {},
     val onCancelInvite: () -> Unit = {},
     val onAgain: () -> Unit = {},
     val onMessage: (String) -> Unit = {},
@@ -125,16 +123,6 @@ fun InviteScreen(state: InviteUiState, actions: InviteActions, modifier: Modifie
             onBack = actions.onBack,
             modifier = modifier.testTag("invite_peer_declined"),
         ) {}
-    }
-    if (state.confirmBlock) {
-        ConfirmDialog(
-            title = stringResource(R.string.connections_block_request_title),
-            text = stringResource(R.string.connections_block_request_body),
-            confirmLabel = stringResource(R.string.connections_block),
-            onConfirm = actions.onBlock,
-            onDismiss = { actions.onAskBlock(false) },
-            destructive = true,
-        )
     }
 }
 
@@ -306,7 +294,6 @@ private fun Request(state: InviteUiState, actions: InviteActions, back: () -> Un
         errorCode = state.errorCode,
         onApprove = actions.onApprove,
         onDecline = actions.onDecline,
-        onBlock = { actions.onAskBlock(true) },
         onBack = back,
         modifier = modifier,
     )
@@ -358,7 +345,7 @@ private fun WaitingRow(text: String) {
  * A connection request at the inviter (§6.4, 0.10.3): the requester's "First Last" from its `hs.init` profile (the
  * names on its VettID account, never called verified, 0.18.0 §6.2, §10.8) and its display name, if any
  * (self-asserted, labelled so), the safety code to compare with them, and
- * approve / decline / block. After this member's approval ([approved]) the code
+ * approve / decline. After this member's approval ([approved]) the code
  * stays on screen while the other member approves on their phone.
  */
 @Composable
@@ -371,7 +358,6 @@ fun ConnectionRequestContent(
     error: com.vettid.core.data.vault.FailureKind?,
     onApprove: () -> Unit,
     onDecline: () -> Unit,
-    onBlock: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     approved: Boolean = false,
@@ -444,12 +430,6 @@ fun ConnectionRequestContent(
             Spacer(Modifier.height(Spacing.l))
             WaitingRow(stringResource(R.string.connections_waiting_peer, who))
         }
-        Spacer(Modifier.height(Spacing.l))
-        androidx.compose.material3.TextButton(
-            onClick = onBlock,
-            enabled = !busy,
-            modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("block_request"),
-        ) { Text(stringResource(R.string.connections_block_request), color = MaterialTheme.colorScheme.error) }
         FailureText(error, Modifier.padding(top = Spacing.s), errorCode)
     }
 }

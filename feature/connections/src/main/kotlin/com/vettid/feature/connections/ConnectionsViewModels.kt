@@ -172,7 +172,6 @@ data class InviteUiState(
     /** [InviteStep.DECLINED]: the name the decline carried (the screen falls back to the request's). */
     val declinedName: String? = null,
     val busy: Boolean = false,
-    val confirmBlock: Boolean = false,
     /** The request arrived already approved by in-person auto-approval (§6.4), not by this member here. */
     val autoApproved: Boolean = false,
     val error: FailureKind? = null,
@@ -292,14 +291,6 @@ class InviteViewModel @Inject constructor(
     fun decline() {
         val req = state.value.request ?: return
         decide(finish = true) { approvals.declineConnection(req.pendingId) }
-    }
-
-    fun askBlock(show: Boolean) = state.update { it.copy(confirmBlock = show) }
-
-    fun block() {
-        val req = state.value.request ?: return
-        state.update { it.copy(confirmBlock = false) }
-        decide(finish = true) { approvals.blockConnectionRequest(req.pendingId) }
     }
 
     /** Cancels the invitation before anyone used it (the vault revokes its token and deletes the claim). */

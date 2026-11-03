@@ -87,7 +87,7 @@ class ConnectionNamesScreenTest {
         rule.setContent {
             ConnectionRequestContent(
                 name = "Morgan Lee", displayName = "Mo", sas = "042817", remote = false, busy = false, error = null,
-                onApprove = {}, onDecline = {}, onBlock = {}, onBack = {},
+                onApprove = {}, onDecline = {}, onBack = {},
             )
         }
         rule.onNodeWithTag("request_name").assertTextContains("Morgan Lee")

@@ -128,8 +128,6 @@ fun NavGraphBuilder.approvalsDestination(
                 onPassword = vm::setPassword,
                 onApprove = { vm.approve(shown) },
                 onDeny = { vm.deny(shown) },
-                onAskBlock = vm::askBlock,
-                onBlock = vm::block,
                 onToggleShareItem = vm::toggleShareItem,
                 onToggleGrant = vm::toggleGrantEntry,
                 onAnswerGrant = vm::answerGrantEntry,
@@ -414,8 +412,6 @@ data class DecisionActions(
     val onPassword: (String) -> Unit = {},
     val onApprove: () -> Unit = {},
     val onDeny: () -> Unit = {},
-    val onAskBlock: (Boolean) -> Unit = {},
-    val onBlock: () -> Unit = {},
     /** Ticks or unticks an item of a share decision. */
     val onToggleShareItem: (String) -> Unit = {},
     /** A grant request (§10.12): tick an entry, answer a category entry with an item, set uses and lifetime. */
@@ -493,14 +489,6 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
                 modifier = Modifier.testTag("approval_password"),
             )
         }
-        if (a is Approval.ConnectionRequest) {
-            Spacer(Modifier.height(Spacing.m))
-            TextButton(
-                onClick = { actions.onAskBlock(true) },
-                enabled = !state.busy,
-                modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("block_request"),
-            ) { Text(stringResource(R.string.approvals_block), color = MaterialTheme.colorScheme.error) }
-        }
         RenewalNotices(state, a, actions)
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
@@ -512,16 +500,6 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         }
     }
     if (state.confirmEnd) EndAccessDialog(a, actions)
-    if (state.confirmBlock) {
-        ConfirmDialog(
-            title = stringResource(R.string.approvals_block_title),
-            text = stringResource(R.string.approvals_block_body),
-            confirmLabel = stringResource(R.string.approvals_block),
-            onConfirm = actions.onBlock,
-            onDismiss = { actions.onAskBlock(false) },
-            destructive = true,
-        )
-    }
 }
 
 /**

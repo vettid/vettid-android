@@ -860,11 +860,6 @@ class SocialManager(
         forget(id)
     }
 
-    override suspend fun block(id: String) {
-        vaultGuard { api().blockAdd(connectionId = id) }
-        forget(id)
-    }
-
     private fun forget(id: String) {
         connectionsFlow.update { l -> l.filterNot { it.id == id } }
         messagesFlow.update { it - id }
@@ -1424,11 +1419,6 @@ class SocialManager(
 
     override suspend fun declineConnection(pendingId: String) {
         decideRequest(pendingId) { it.connectionDecline(pendingId) }
-        endRequest(pendingId, RequestEnd.DECLINED)
-    }
-
-    override suspend fun blockConnectionRequest(pendingId: String) {
-        decideRequest(pendingId) { it.blockAdd(pendingId = pendingId) }
         endRequest(pendingId, RequestEnd.DECLINED)
     }
 
