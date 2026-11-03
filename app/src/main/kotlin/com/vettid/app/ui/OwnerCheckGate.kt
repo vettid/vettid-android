@@ -15,9 +15,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.R
-import com.vettid.core.data.calls.CallAccess
-import com.vettid.core.data.calls.CallAvailability
-import com.vettid.core.data.calls.NoCallAccess
 import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckView
@@ -67,8 +64,6 @@ data class OwnerCheckGateState(
      * background or a new process do not start the wait again.
      */
     val overdue: Boolean = false,
-    /** A call is live (`CallAvailability.IN_CALL`): the check waits for it to end, without a time limit (§3.6.5). */
-    val inCall: Boolean = false,
 ) {
     companion object {
         fun of(
@@ -106,7 +101,6 @@ data class OwnerCheckGateState(
 class OwnerCheckGateViewModel @Inject constructor(
     private val repo: OwnerCheckRepository,
     private val timeScale: TimeScaleSource = TimeScaleSource.RealTime,
-    private val calls: CallAccess = NoCallAccess,
 ) : ViewModel() {
     /** Now, again at the next moment that changes the state (a warning, the deadline, the end of the deferral), else every tick. */
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -120,12 +114,9 @@ class OwnerCheckGateViewModel @Inject constructor(
         }
 
     val gate: StateFlow<OwnerCheckGateState> =
-        combine(
-            combine(repo.ownerCheck, repo.notices, clock, repo.presenceUnrecorded, timeScale.timeScale) { v, n, now, p, t ->
-                OwnerCheckGateState.of(v, n, now, p, t.scale)
-            },
-            calls.availability,
-        ) { g, a -> g.copy(inCall = a == CallAvailability.IN_CALL) }
+        combine(repo.ownerCheck, repo.notices, clock, repo.presenceUnrecorded, timeScale.timeScale) { v, n, now, p, t ->
+            OwnerCheckGateState.of(v, n, now, p, t.scale)
+        }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(STOP_MS),
@@ -135,7 +126,7 @@ class OwnerCheckGateViewModel @Inject constructor(
                     Instant.now(),
                     repo.presenceUnrecorded.value,
                     timeScale.timeScale.value.scale,
-                ).copy(inCall = calls.availability.value == CallAvailability.IN_CALL),
+                ),
             )
 
     /** (Release R) The owner check right after an unlock that cancelled a recovery did not pass: show the check screen. */
@@ -262,27 +253,56 @@ private fun noticeText(n: OwnerCheckNotice, count: Int): String {
 internal const val OWNER_CHECK_DEFERRAL_S = 5 * 60L
 
 /**
- * What covers the app now. The check that is due ([gated]) comes at once, except while it must wait: a call is live
- * ([inCall], no time limit), or the screen in front holds input or an operation in progress ([inProgress]) and it is not a
- * drawer screen ([onList]) and the deferral has not run out ([overdue]). A check the member asked for ([asked]) shows as asked.
+ * What covers the app now. The check that is due ([gated]) comes at once, except while the screen in front holds input or an
+ * operation in progress ([inProgress]) and it is not a drawer screen ([onList]) and the deferral has not run out ([overdue]).
+ * A call does not defer it: the call screen is drawn above the whole shell, check included. A check the member asked for
+ * ([asked]) shows as asked.
  */
 internal fun ownerCheckMode(
     gated: Boolean,
     onList: Boolean,
     inProgress: Boolean,
     overdue: Boolean,
-    inCall: Boolean,
     asked: OwnerCheckMode?,
 ): OwnerCheckMode? {
-    val waits = inCall || (!onList && inProgress && !overdue)
+    val waits = !onList && inProgress && !overdue
     return if (gated && !waits) OwnerCheckMode.GATED else asked
 }
 
+/** What the shell does with the check: [mode] to show, [undecided] to hide the content for a frame, [release] when it passed. */
+internal class OwnerCheckCover(val mode: OwnerCheckMode?, val undecided: Boolean, val release: () -> Unit)
+
+/** How long `gated` must stay false before a covering check is let go without being confirmed passed (a flicker is not a pass). */
+internal const val OWNER_CHECK_UNLATCH_MS = 2_000L
+
+private const val NANOS_PER_MS = 1_000_000L
+
 /**
- * [ownerCheckMode] for the shell's [gate], and once the check covers the app it stays GATED until it is passed (`gate.gated`
- * turns false): input that appears under it (a focused field, a keyboard still open) must not take it away, which would also
- * dispose the check's own entry. Saved, so a new composition keeps it. The check is drawn over the screen, which stays
- * composed, so what was typed is there when it passes.
+ * Calls [letGo] once [gated] has stayed false for [OWNER_CHECK_UNLATCH_MS] while the check is latched ([isLatched]); a `gated` that
+ * comes back before restarts the wait. Counted in frames' time (the screen draws while the check is up), so a test clock drives it.
+ */
+@Composable
+private fun LetGoWhenNotGated(gated: Boolean, isLatched: () -> Boolean, letGo: () -> Unit) {
+    LaunchedEffect(gated) {
+        if (gated) return@LaunchedEffect
+        if (isLatched()) {
+            val from = withFrameNanos { it }
+            while (withFrameNanos { it } - from < OWNER_CHECK_UNLATCH_MS * NANOS_PER_MS) { /* wait */ }
+        }
+        letGo()
+    }
+}
+
+/**
+ * [ownerCheckMode] for the shell's [gate], with what covering means (VAULT-MESSAGING §3.6.5):
+ *  - The screens report their input in effects after their first frame. A new composition (rotation, an app-lock unlock, a
+ *    restored process) therefore decides nothing until one frame has passed; the content is hidden meanwhile ([OwnerCheckCover.undecided]).
+ *  - When the check is to cover, secrets typed and not sent (PINs, passwords, recovery words) are blanked first
+ *    ([InputGuard.wipeSecrets]), then the check is latched; drafts that are not secrets stay.
+ *  - Once latched it stays GATED (saved): input appearing under it cannot take it away, and a short dip of `gate.gated` (a refresh)
+ *    does not either. It is let go when the check says it passed ([OwnerCheckCover.release]), or when `gated` stays false for
+ *    [OWNER_CHECK_UNLATCH_MS].
+ * The check is drawn over the screen, which stays composed, so what was typed (the drafts) is there when it passes.
  */
 @Composable
 internal fun rememberOwnerCheckMode(
@@ -290,23 +310,36 @@ internal fun rememberOwnerCheckMode(
     onList: Boolean,
     guard: InputGuard,
     asked: OwnerCheckMode?,
-): OwnerCheckMode? {
+): OwnerCheckCover {
     var latched by rememberSaveable { mutableStateOf(false) }
-    // A new composition (rotation, an unlock of the app lock, a restored process) starts with the guard at 0: the screens
-    // report their input in effects that run after the first frame. Until one frame has passed, a check that may still wait
-    // is not shown (and so not latched); one that is overdue or already latched does not wait.
     var settled by remember { mutableStateOf(false) }
+    // A check that was just passed does not cover again before `gated` has turned false once.
+    var passed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         withFrameNanos { }
         settled = true
     }
-    val mode = when {
-        gate.gated && latched -> OwnerCheckMode.GATED
-        !settled && !gate.overdue -> asked
-        else -> ownerCheckMode(gate.gated, onList, guard.active, gate.overdue, gate.inCall, asked)
+    LetGoWhenNotGated(gate.gated, isLatched = { latched }) {
+        passed = false
+        latched = false
     }
-    SideEffect { latched = gate.gated && mode == OwnerCheckMode.GATED }
-    return mode
+    val wantsCover = gate.gated && !passed && !latched &&
+        ownerCheckMode(gate.gated, onList, guard.active, gate.overdue, asked) == OwnerCheckMode.GATED
+    LaunchedEffect(wantsCover, settled) {
+        if (wantsCover && settled) {
+            guard.wipeSecrets()
+            latched = true
+        }
+    }
+    val undecided = wantsCover || (gate.gated && !passed && !latched && !settled && !gate.overdue)
+    return OwnerCheckCover(
+        mode = if (latched) OwnerCheckMode.GATED else asked,
+        undecided = undecided,
+        release = {
+            latched = false
+            passed = gate.gated
+        },
+    )
 }
 
 /**

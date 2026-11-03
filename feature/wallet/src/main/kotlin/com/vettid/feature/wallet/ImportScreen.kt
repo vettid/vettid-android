@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.HoldsInput
+import com.vettid.core.ui.components.WipesOnCover
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.SecretField
@@ -61,6 +62,11 @@ data class ImportActions(
 @Composable
 fun ImportScreen(state: ImportUiState, actions: ImportActions, modifier: Modifier = Modifier, secure: Boolean = true) {
     HoldsInput(state.holdsInput)
+    // The recovery phrase and passphrase typed are secrets: blanked when the owner check covers the app (§3.6.5).
+    WipesOnCover {
+        if (state.typed.isNotEmpty()) actions.onWords("")
+        if (state.passphrase.isNotEmpty()) actions.onPassphrase("")
+    }
     if (secure) {
         SecureWindow()
         HiddenFromCapture()

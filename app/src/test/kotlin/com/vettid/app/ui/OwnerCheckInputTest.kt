@@ -21,7 +21,9 @@ import androidx.compose.ui.test.performTextInput
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.ui.components.HoldsInput
+import com.vettid.core.ui.components.AlertDialog
 import com.vettid.core.ui.components.InputGuard
+import com.vettid.core.ui.components.LocalCheckCovered
 import com.vettid.core.ui.components.LocalInputGuard
 import com.vettid.core.ui.components.SecretField
 import com.vettid.feature.onboarding.OwnerCheckMode
@@ -44,13 +46,22 @@ class OwnerCheckInputTest {
     @get:Rule
     val rule = createComposeRule()
 
-    private enum class Screen { READ_ONLY, EDITOR, DRAWER, OPEN_REQUEST, CREDENTIAL_PROMPT, NONE }
+    private enum class Screen { READ_ONLY, EDITOR, DRAWER, OPEN_REQUEST, CREDENTIAL_PROMPT, SECRET_DIALOG, NONE }
 
     private var gate by mutableStateOf(OwnerCheckGateState())
     private var screen by mutableStateOf(Screen.READ_ONLY)
+    private var pin by mutableStateOf("")
+    private var callUp by mutableStateOf(false)
 
-    private fun due(overdue: Boolean = false, inCall: Boolean = false) {
-        gate = OwnerCheckGateState(gated = true, overdue = overdue, inCall = inCall)
+    private fun due(overdue: Boolean = false) {
+        gate = OwnerCheckGateState(gated = true, overdue = overdue)
+    }
+
+    /** The check is passed: the vault says so (`gated` false) and the shell lets go of the covering after its debounce. */
+    private fun passCheck() {
+        gate = OwnerCheckGateState()
+        rule.mainClock.advanceTimeBy(OWNER_CHECK_UNLATCH_MS + 100)
+        rule.waitForIdle()
     }
 
     /** The shell in small: the screens under the guard, and the check over them as [rememberOwnerCheckMode] says. */
@@ -59,9 +70,9 @@ class OwnerCheckInputTest {
     @Composable
     private fun Shell() {
         val guard = remember { InputGuard() }
-        val mode = rememberOwnerCheckMode(gate, onList = screen == Screen.DRAWER, guard = guard, asked = null)
+        val mode = rememberOwnerCheckMode(gate, onList = screen == Screen.DRAWER, guard = guard, asked = null).mode
         Box {
-            CompositionLocalProvider(LocalInputGuard provides guard) {
+            CompositionLocalProvider(LocalInputGuard provides guard, LocalCheckCovered provides (mode != null)) {
                 when (screen) {
                     Screen.READ_ONLY, Screen.DRAWER -> Text("content", Modifier.testTag("content"))
                     Screen.EDITOR -> Editor()
@@ -71,11 +82,19 @@ class OwnerCheckInputTest {
                         Text("request", Modifier.testTag("content"))
                     }
                     // A credential prompt: a PIN field with nothing typed.
-                    Screen.CREDENTIAL_PROMPT -> SecretField("", {}, "PIN", isPin = true)
+                    Screen.CREDENTIAL_PROMPT -> SecretField(pin, { pin = it }, "PIN", isPin = true)
+                    // The same prompt in a dialog, which the shell hides when the check covers it.
+                    Screen.SECRET_DIALOG -> AlertDialog(
+                        onDismissRequest = {},
+                        confirmButton = {},
+                        text = { SecretField(pin, { pin = it }, "PIN", isPin = true, modifier = Modifier.testTag("dialog_pin")) },
+                    )
                     Screen.NONE -> Unit
                 }
             }
             if (mode == OwnerCheckMode.GATED) Text("check", Modifier.testTag("check"))
+            // The call screen is drawn after the shell, above everything in it (CallOverlay).
+            if (callUp) Text("call", Modifier.testTag("call"))
         }
     }
 
@@ -143,8 +162,7 @@ class OwnerCheckInputTest {
         rule.waitForIdle()
         checkShown()
         // The check passes: the same screen is there, with its input.
-        gate = OwnerCheckGateState()
-        rule.waitForIdle()
+        passCheck()
         checkNotShown()
         assertEquals("draft", rule.onNodeWithTag("editor").fetchSemanticsNode().config.editableText())
     }
@@ -159,8 +177,7 @@ class OwnerCheckInputTest {
         rule.onNodeWithTag("editor").performTextInput("typed under the check")
         rule.waitForIdle()
         checkShown()
-        gate = OwnerCheckGateState()
-        rule.waitForIdle()
+        passCheck()
         checkNotShown()
     }
 
@@ -189,15 +206,68 @@ class OwnerCheckInputTest {
     }
 
     @Test
-    fun `a call defers the check without a limit, on any screen, until it ends`() {
+    fun `a call does not defer the check, whose cover stays under the call screen`() {
         screen = Screen.DRAWER
+        callUp = true
         show()
-        due(overdue = true, inCall = true)
-        rule.waitForIdle()
-        checkNotShown()
-        due(overdue = true, inCall = false)
+        due(overdue = true)
         rule.waitForIdle()
         checkShown()
+        rule.onNodeWithTag("call").assertExists()
+    }
+
+    @Test
+    fun `a typed password is gone when the check covers, and a draft message is kept`() {
+        screen = Screen.CREDENTIAL_PROMPT
+        pin = "1234"
+        show()
+        due(overdue = true)
+        rule.waitForIdle()
+        checkShown()
+        assertEquals("", pin)
+        passCheck()
+        checkNotShown()
+        // A draft is not a secret.
+        screen = Screen.EDITOR
+        rule.waitForIdle()
+        rule.onNodeWithTag("editor").performTextInput("draft")
+        rule.waitForIdle()
+        due(overdue = true)
+        rule.waitForIdle()
+        checkShown()
+        assertEquals("draft", rule.onNodeWithTag("editor").fetchSemanticsNode().config.editableText())
+    }
+
+    @Test
+    fun `a password typed in a dialog is wiped before the dialog is hidden`() {
+        screen = Screen.SECRET_DIALOG
+        pin = "1234"
+        show()
+        rule.waitForIdle()
+        due(overdue = true)
+        rule.waitForIdle()
+        checkShown()
+        assertEquals("", pin)
+        rule.onNodeWithTag("dialog_pin").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a short dip of gated does not let the check go, a pass does`() {
+        show()
+        due()
+        rule.waitForIdle()
+        checkShown()
+        // By hand, frame by frame: with the clock running by itself the whole wait would pass in waitForIdle.
+        rule.mainClock.autoAdvance = false
+        gate = OwnerCheckGateState()
+        rule.mainClock.advanceTimeBy(500)
+        checkShown()
+        due()
+        rule.mainClock.advanceTimeBy(OWNER_CHECK_UNLATCH_MS + 100)
+        checkShown()
+        rule.mainClock.autoAdvance = true
+        passCheck()
+        checkNotShown()
     }
 
     @Test
@@ -279,13 +349,12 @@ class OwnerCheckInputTest {
 
     @Test
     fun `the rule in one place`() {
-        fun mode(gated: Boolean, onList: Boolean, busy: Boolean, overdue: Boolean, inCall: Boolean = false, asked: OwnerCheckMode? = null) =
-            ownerCheckMode(gated, onList, busy, overdue, inCall, asked)
+        fun mode(gated: Boolean, onList: Boolean, busy: Boolean, overdue: Boolean, asked: OwnerCheckMode? = null) =
+            ownerCheckMode(gated, onList, busy, overdue, asked)
         assertEquals(OwnerCheckMode.GATED, mode(gated = true, onList = true, busy = true, overdue = false))
         assertEquals(OwnerCheckMode.GATED, mode(gated = true, onList = false, busy = false, overdue = false))
         assertEquals(OwnerCheckMode.GATED, mode(gated = true, onList = false, busy = true, overdue = true))
         assertEquals(null, mode(gated = true, onList = false, busy = true, overdue = false))
-        assertEquals(null, mode(gated = true, onList = true, busy = false, overdue = true, inCall = true))
         assertEquals(null, mode(gated = false, onList = true, busy = true, overdue = true))
         assertEquals(
             OwnerCheckMode.VOLUNTARY,

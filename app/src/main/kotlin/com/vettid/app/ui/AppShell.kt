@@ -6,6 +6,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.focusable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
@@ -237,7 +238,8 @@ fun AppShell(
     }
 
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
-    val checkMode = rememberOwnerCheckMode(gate, onList, inputGuard, asked)
+    val cover = rememberOwnerCheckMode(gate, onList, inputGuard, asked)
+    val checkMode = cover.mode
     // Release R: the owner check sent right after an unlock that cancelled a recovery did not pass; the check screen
     // shows its answer at once, so that the member's presence is recorded.
     val checkAfterCancel by gateVm.checkAfterCancel.collectAsStateWithLifecycle()
@@ -264,7 +266,9 @@ fun AppShell(
         ModalNavigationDrawer(
             drawerState = drawerState,
             // While the check is shown, nothing of the vault under it is visible or reachable (§3.6.5).
-            modifier = if (checkMode != null) Modifier.clearAndSetSemantics {} else Modifier,
+            modifier = (if (checkMode != null) Modifier.clearAndSetSemantics {} else Modifier)
+                // A frame while it is not known whether the check waits (a new composition): nothing of the vault is drawn.
+                .alpha(if (cover.undecided) 0f else 1f),
             gesturesEnabled = drawerState.isOpen,
             drawerContent = {
                 VettIdDrawerSheet(
@@ -476,7 +480,10 @@ fun AppShell(
                 Box(Modifier.fillMaxSize().testTag("owner_check_layer").then(keys)) {
                     OwnerCheckRoute(
                         mode = mode,
-                        onDone = { asked = null },
+                        onDone = {
+                            asked = null
+                            cover.release()
+                        },
                         onCancel = { asked = null },
                     )
                 }

@@ -530,12 +530,11 @@ vettid.org repo's `local/android-ui/`).
 - The daily owner check in the shell (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03; iOS does the same): when it comes due
   (`gate.gated`) it covers the app at once on every screen: read-only pushed ones (a detail, a History entry, the photo viewer,
   Notifications, a device, a vote, a wallet), a drawer screen, and the return from the background. It waits only for what §3.6.5
-  says it must not interrupt. (1) **A call in progress** (`CallAvailability.IN_CALL`, `OwnerCheckGateState.inCall`): it waits
-  until the call ends, with no time limit. (2) **Input or an operation in progress** on a pushed screen: it waits until the
+  says it must not interrupt: **input or an operation in progress** on a pushed screen. It waits until the
   member leaves that screen, or until `OWNER_CHECK_DEFERRAL_S` (5 minutes, divided by the vault's time scale) after the vault's
   deadline (`OwnerCheckGateState.overdue`, derived from the deadline, so a recreation, an app lock, the background or a new
   process never restart the wait, and a return after the deadline plus 5 minutes is covered at once). A drawer screen never
-  waits. One signal serves (2): a screen reports with `HoldsInput(active)` (`:core:ui` `InputGuard.kt`; the shell provides
+  waits. A call does not defer it: the call screen (`CallOverlay`) is drawn above the whole shell, check included, and the app never ends a call. One signal serves the waiting: a screen reports with `HoldsInput(active)` (`:core:ui` `InputGuard.kt`; the shell provides
   `LocalInputGuard`). Reported: the item editor (`dirty`), the share-rule editors, a conversation with a draft or photos, Accept
   (typed or pasted text, not a link's), the tag form and ask dialogs, wallet Send, Import, a new wallet (name, limits, a word of
   the check; the shown phrase is covered at once), Spending limits and Chain server forms, the shared profile (edited name or
@@ -547,8 +546,15 @@ vettid.org repo's `local/android-ui/`).
   and a Receive amount are not input in progress. A new form screen with typed input, or a new credential flow without a
   `SecretField`, must call `HoldsInput`; put the condition in a UI-state property (`holdsInput`) and unit-test it.
   The check is drawn over the shell (`OwnerCheckRoute` after the `ModalNavigationDrawer`, never in place of the NavHost), so
-  the screen stays composed and what was typed is there when the check passes. Once the check covers the app it is latched
-  GATED (saved) until `gate.gated` turns false: input appearing under it cannot take it away. It takes the focus and the
+  the screen stays composed and what was typed is there when the check passes. When the check is to cover, **secrets typed and
+  not sent are blanked first** (§3.6.5's zeroize rule, as iOS): every `SecretField` with `holdsInput` calls its owner's setter
+  with `""` (the view model's state is cleared, not only the text field), and the recovery words typed in Import and in the
+  backup check do the same (`WipesOnCover`, `InputGuard.wipeSecrets()`); a secret item's value in the item editor is a draft
+  and stays. Drafts that are not secrets (messages, item and rule editors, forms) are kept. The wipe runs before dialogs
+  hide. Then the check is latched GATED (saved): input appearing under it cannot take it away, and a short dip of `gate.gated`
+  does not either; it is let go when `OwnerCheckRoute` says it passed (`onDone`) or after `OWNER_CHECK_UNLATCH_MS` of `gated`
+  false. On a new composition one frame is undecided (the shell is drawn at alpha 0) so that no vault content is shown before
+  the screens have reported. It takes the focus and the
   keyboard, with a layer that eats keys (as `AppLockGate`), and its own subtree gets a null `LocalInputGuard`. Dialogs and
   sheets are windows above it, so screens import `AlertDialog`, `ModalBottomSheet` and `DatePickerDialog` from
   `com.vettid.core.ui.components` (`ShellOverlays.kt`), which are not composed while `LocalCheckCovered`; their state lives in
@@ -557,7 +563,8 @@ vettid.org repo's `local/android-ui/`).
   recreation (rotation, an app-lock unlock, a restored process): until one frame has passed after a new composition it is not
   shown, because the screens report their input in effects after the first frame. The gate's clock wakes at the next boundary
   (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets `Key.Back` through (the app lock's
-  `AppLockGate` layer still eats every key, Back included). Rule: `ownerCheckMode()` /
+  `AppLockGate` layer still eats every key, Back included). `ShellOverlayRulesTest` lists the files that may call `HoldsInput` /
+  `WipesOnCover` and refuses fully qualified windows of their own outside `VettIdApp.kt`. Rule: `ownerCheckMode()` /
   `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). The refused-request text "What you entered is
   kept: the check opens when you leave this screen" is unchanged (owner decision a).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
