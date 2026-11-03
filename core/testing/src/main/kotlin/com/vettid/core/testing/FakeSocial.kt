@@ -127,11 +127,6 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         connections.update { l -> l.filterNot { it.id == id } }
     }
 
-    override suspend fun block(id: String) {
-        call("block")
-        connections.update { l -> l.filterNot { it.id == id } }
-    }
-
     override suspend fun requestAuthentication(id: String, context: String?): String {
         call("requestAuthentication")
         authentication.update { it + (id to AuthenticationState(id, lastResult = "requested")) }
@@ -261,11 +256,6 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         call("loadCriticalUse")
         val p = criticalPayloads[requestId] ?: return
         approvals.update { l -> l.map { if (it is Approval.CriticalUse && it.requestId == requestId) it.copy(payload = p) else it } }
-    }
-
-    override suspend fun blockConnectionRequest(pendingId: String) {
-        call("blockConnectionRequest")
-        drop("connection:$pendingId")
     }
 
     override suspend fun approveAuthentication(requestId: String, password: String) {

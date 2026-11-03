@@ -39,9 +39,6 @@ interface ConnectionsRepository {
 
     suspend fun remove(id: String)
 
-    /** Removes the connection and blocks its identity (§10.4 block list). */
-    suspend fun block(id: String)
-
     /** Asks the connection's member to prove presence (§10.4); returns the request id. */
     suspend fun requestAuthentication(id: String, context: String?): String
 
@@ -137,9 +134,6 @@ interface ApprovalsRepository {
      * when the app has only its hash; it is shown only if it matches the hash.
      */
     suspend fun loadCriticalUse(requestId: String)
-
-    /** Declines the request and blocks the requester's identity. */
-    suspend fun blockConnectionRequest(pendingId: String)
 
     /**
      * (VAULT-MESSAGING 0.80.0 §10.4) The `request_id`s of sign-in and approval challenges the challenger withdrew

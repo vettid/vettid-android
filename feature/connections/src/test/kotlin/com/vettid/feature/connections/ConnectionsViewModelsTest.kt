@@ -107,7 +107,7 @@ class ConnectionsViewModelsTest {
     }
 
     @Test
-    fun inviteExpiresAndCanBeDeclinedOrBlocked() = runTest {
+    fun inviteExpiresAndCanBeDeclined() = runTest {
         social.invite = social.invite.copy(exp = Instant.now().plusSeconds(60))
         val vm = InviteViewModel(social, social)
         vm.create()
@@ -121,10 +121,9 @@ class ConnectionsViewModelsTest {
         val id = vm.uiState.value.invite!!.inviteId
         social.approvals.value = listOf(Approval.ConnectionRequest("p1", id, "042817", true, null, null, Instant.now(), null))
         advanceUntilIdle()
-        vm.askBlock(true)
-        vm.block()
+        vm.decline()
         advanceUntilIdle()
-        assertTrue("blockConnectionRequest" in social.calls)
+        assertTrue("declineConnection" in social.calls)
         assertEquals(InviteStep.CHOOSE, vm.uiState.value.step)
     }
 
