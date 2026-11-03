@@ -218,8 +218,8 @@ class SpendingLimitsViewModel @Inject constructor(
         val seen = s.raiseSeen
         val ready = s.step == LimitsStep.CONFIRM_RAISE && plan.action == CapsAction.RAISE && s.secretsReady
         if (!s.idle || !ready || seen == null) return
-        val pin = s.pin
-        val password = s.password
+        val pin = Taken.of(s.pin)
+        val password = Taken.of(s.password)
         mutable.update { it.copy(busy = true, pin = "", password = "", error = null, errorCode = null) }
         viewModelScope.launch {
             val failure = try {
@@ -229,7 +229,7 @@ class SpendingLimitsViewModel @Inject constructor(
                 e
             }
             finish(failure, LimitsStep.CONFIRM_RAISE)
-        }
+        }.wipeWhenDone(pin, password)
     }
 
     /**

@@ -30,6 +30,9 @@ internal class FakeEngine : SendEngine {
     var prepared: SendPrepared = SendPrepared.Ready(sampleReview())
     val requests = mutableListOf<SendRequest>()
     val passwords = mutableListOf<String>()
+
+    /** The arrays handed to [approve], by reference: the view model must have wiped them once its call is over (N1). */
+    val passwordArrays = mutableListOf<CharArray>()
     var approveResult: SendResult = SendResult.Sent("ab".repeat(32))
     var approveFailure: VaultFailure? = null
     var retryResult: SendResult = SendResult.Sent("ab".repeat(32))
@@ -49,8 +52,20 @@ internal class FakeEngine : SendEngine {
         return prepared
     }
 
-    override suspend fun approve(password: String): SendResult {
-        passwords += password
+    /** When set, [approve] waits here (inside NonCancellable, like the manager's sign) before it answers. */
+    var approveGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Whether the array was intact at the moment the sign ran, and again when it was released. */
+    var intactAtSign: Boolean? = null
+    var intactAtRelease: Boolean? = null
+
+    override suspend fun approve(password: CharArray): SendResult {
+        passwords += String(password)
+        passwordArrays += password
+        approveGate?.let { gate ->
+            intactAtSign = password.none { it == '\u0000' }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { gate.await() }
+            intactAtRelease = password.none { it == '\u0000' }
+        }
         approveFailure?.let { throw it }
         approveThrows?.let { throw it }
         return approveResult

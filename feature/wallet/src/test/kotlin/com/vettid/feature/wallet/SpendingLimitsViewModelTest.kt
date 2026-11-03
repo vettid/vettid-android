@@ -131,6 +131,7 @@ class SpendingLimitsViewModelTest {
         assertEquals("", vm.state.value.password)
         eventually { vm.state.value.step == LimitsStep.OVERVIEW && !vm.state.value.busy }
         assertEquals(listOf("caps.raise:600000:2000000"), sent("caps."))
+        assertTrue(ops.handedSecrets.allWipedAndSome())
         assertEquals(600_000L, vm.state.value.perTx)
     }
 

@@ -303,7 +303,7 @@ class WalletsManagerTest {
         m.open()
         val running = async(Dispatchers.Default) { m.lookup(w.id) }
         delay(200)
-        m.delete(w.id, "pw")
+        m.delete(w.id, "pw".toCharArray())
         gate.complete(Unit)
         val r = running.await()
         assertFalse(r is LookupResult.Done)
@@ -338,7 +338,7 @@ class WalletsManagerTest {
     @Test
     fun createRevealsWithTheSamePasswordAndLeavesTheWalletNotBackedUp() = runBlocking {
         val m = manager()
-        val c = m.create("Savings", Network.TESTNET4, "pw")
+        val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray())
         assertEquals(listOf("create:testnet4", "reveal"), ops.calls)
         assertEquals(24, c.phrase!!.wordCount)
         assertEquals(listOf(c.wallet), m.wallets.value)
@@ -353,7 +353,7 @@ class WalletsManagerTest {
     fun aRevealThatFailsKeepsTheWallet() = runBlocking {
         ops.revealFails = true
         val m = manager()
-        val c = m.create("Savings", Network.SIGNET, "pw")
+        val c = m.create("Savings", Network.SIGNET, "pw".toCharArray())
         assertNull(c.phrase)
         assertNotNull(c.revealFailure)
         assertEquals(1, m.wallets.value.size)
@@ -364,7 +364,7 @@ class WalletsManagerTest {
     fun walletsAreCreatedOnlyOnTheOfferedTestNetworks() = runBlocking {
         for (n in listOf(Network.MAINNET, Network.TESTNET, Network.REGTEST)) {
             try {
-                manager().create("x", n, "pw")
+                manager().create("x", n, "pw".toCharArray())
                 fail("$n")
             } catch (_: IllegalArgumentException) {
                 // refused before anything is sent
@@ -376,9 +376,9 @@ class WalletsManagerTest {
     @Test
     fun deleteForgetsTheWalletAndItsFlag() = runBlocking {
         val m = manager()
-        val c = m.create("Savings", Network.TESTNET4, "pw")
+        val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray())
         m.confirmBackup(c.wallet.id)
-        m.delete(c.wallet.id, "pw")
+        m.delete(c.wallet.id, "pw".toCharArray())
         assertTrue(m.wallets.value.isEmpty())
         assertFalse(m.backedUp(c.wallet.id))
     }
@@ -446,12 +446,12 @@ class WalletsManagerTest {
         lateinit var m: WalletsManager
         // The vault is locked while the create is answered.
         val gated = object : WalletOps by ops {
-            override suspend fun create(name: String, network: String, password: String, item: WalletImport?): VaultWallet =
+            override suspend fun create(name: String, network: String, password: CharArray, item: WalletImport?): VaultWallet =
                 ops.create(name, network, password, item).also { m.clear() }
         }
         m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
         m.open()
-        val c = m.create("Savings", Network.TESTNET4, "pw")
+        val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray())
         assertNull(c.phrase)
         assertEquals(WalletsManager.CLEARED, c.revealFailure?.code)
         assertTrue(m.wallets.value.isEmpty())
@@ -509,14 +509,14 @@ class WalletsManagerTest {
         lateinit var m: WalletsManager
         var revealed: RevealedPhrase? = null
         val gated = object : WalletOps by ops {
-            override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase =
+            override suspend fun revealPhrase(walletId: String, password: CharArray, pin: CharArray?): RevealedPhrase =
                 ops.revealPhrase(walletId, password, pin).also {
                     revealed = it
                     m.clear()
                 }
         }
         m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
-        val e = runCatching { m.revealPhrase("01WALLET0000000000000000AA", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.revealPhrase("01WALLET0000000000000000AA", "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.CLEARED, e.code)
         assertTrue(revealed!!.words().isEmpty())
     }
@@ -613,14 +613,14 @@ class WalletsManagerTest {
         WalletFlags(file).setBackedUp(w.id)
         lateinit var job: kotlinx.coroutines.Job
         val gated = object : WalletOps by ops {
-            override suspend fun delete(walletId: String, password: String) {
+            override suspend fun delete(walletId: String, password: CharArray) {
                 ops.delete(walletId, password)
                 job.cancel()
             }
         }
         val m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(file), { it in offered }, { now })
         m.open()
-        job = CoroutineScope(Dispatchers.Default).launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { m.delete(w.id, "pw") }
+        job = CoroutineScope(Dispatchers.Default).launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { m.delete(w.id, "pw".toCharArray()) }
         job.start()
         job.join()
         assertTrue(m.wallets.value.isEmpty())

@@ -38,15 +38,19 @@ class WalletImport(val mnemonic: CharArray, val passphrase: CharArray? = null) {
  * acknowledges. No `address_type` (P2TR by default) and no `caps` (the app sets spending limits after the backup, W1d, with
  * [walletCapsSet]). `limit` at 16 wallets; `exists` for an import whose account keys equal an existing wallet's.
  */
-suspend fun VaultApi.walletCreate(name: String, network: String, password: String, item: WalletImport? = null): JsonObject =
-    credentialOps.credOp(
+suspend fun VaultApi.walletCreate(name: String, network: String, password: CharArray, item: WalletImport? = null): JsonObject {
+    // The one String copy of the password for this call: the payload lambda below runs several times per attempt (the gate, the
+    // sealing, a retry), so the copy is made here and captured, never inside it.
+    val pw = String(password)
+    return credentialOps.credOp(
         "wallet.create",
-        { createSealed(password, item).forEach { (k, v) -> put(k, v) } },
+        { createSealed(pw, item).forEach { (k, v) -> put(k, v) } },
         extra = {
             put("name", name)
             put("network", network)
         },
     ).first
+}
 
 /** The sealed payload of `wallet.create`: the password and, for an import, `item: {mnemonic, passphrase?}`. */
 internal fun createSealed(password: String, item: WalletImport?): JsonObject = buildJsonObject {
@@ -97,17 +101,28 @@ suspend fun VaultApi.walletCapsRaise(
     version: Long,
     perTx: Long?,
     perPeriod: Long?,
+    pin: CharArray,
+    password: CharArray,
+): JsonObject {
+    // One String copy of each for this call, captured by the payload lambda (which runs several times per attempt).
+    val pinText = String(pin)
+    val pw = String(password)
+    return credentialOps.credOp(
+        "wallet.caps.raise",
+        { capsRaiseSealed(walletId, version, perTx, perPeriod, pinText, pw).forEach { (k, v) -> put(k, v) } },
+        extra = { capsRaiseOuter(walletId, version, perTx, perPeriod).forEach { (k, v) -> put(k, v) } },
+    ).first
+}
+
+/** The sealed payload of `wallet.caps.raise`: `{pin, password, item_id, payload_sha256}` (the hash in standard base64). */
+internal fun capsRaiseSealed(
+    walletId: String,
+    version: Long,
+    perTx: Long?,
+    perPeriod: Long?,
     pin: String,
     password: String,
 ): JsonObject =
-    credentialOps.credOp(
-        "wallet.caps.raise",
-        { capsRaiseSealed(walletId, version, perTx, perPeriod, pin, password).forEach { (k, v) -> put(k, v) } },
-        extra = { capsRaiseOuter(walletId, version, perTx, perPeriod).forEach { (k, v) -> put(k, v) } },
-    ).first
-
-/** The sealed payload of `wallet.caps.raise`: `{pin, password, item_id, payload_sha256}` (the hash in standard base64). */
-internal fun capsRaiseSealed(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): JsonObject =
     buildJsonObject {
         put("pin", pin)
         put("password", password)
@@ -250,12 +265,14 @@ suspend fun VaultApi.walletPsbtInspect(walletId: String, psbtBase64: String): Js
 suspend fun VaultApi.walletSign(
     walletId: String,
     psbtBase64: String,
-    password: String,
+    password: CharArray,
     onSending: (() -> Unit)? = null,
-): JsonObject =
-    credentialOps.credOpKept(
+): JsonObject {
+    // One String copy for this call, captured by the payload lambda (which runs several times per attempt).
+    val pw = String(password)
+    return credentialOps.credOpKept(
         "wallet.sign",
-        { signSealed(walletId, psbtBase64, password).forEach { (k, v) -> put(k, v) } },
+        { signSealed(walletId, psbtBase64, pw).forEach { (k, v) -> put(k, v) } },
         extra = {
             put("wallet_id", walletId)
             put("psbt", psbtBase64)
@@ -263,6 +280,7 @@ suspend fun VaultApi.walletSign(
         walletId = walletId,
         onSending = onSending,
     )
+}
 
 /**
  * The same `wallet.sign` again after [ChangeUnansweredException] ([kept]): the answer, or null when there is still none. The vault's

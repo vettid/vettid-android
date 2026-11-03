@@ -24,6 +24,9 @@ import com.vettid.core.wallet.WalletTx
 import com.vettid.core.wallet.WalletsManager
 import kotlinx.coroutines.CoroutineScope
 
+/** Every array is all zeros, and there is at least one (N1: a secret handed down is wiped when the call ends). */
+internal fun List<CharArray>.allWipedAndSome(): Boolean = isNotEmpty() && all { a -> a.all { it == '\u0000' } }
+
 /** A vault for the screens: wallets as given, a 24-word phrase, and what was asked. */
 internal class FakeWallets : WalletOps {
     val wallets = linkedMapOf<String, VaultWallet>()
@@ -76,7 +79,11 @@ internal class FakeWallets : WalletOps {
     /** The PIN this vault takes. */
     var pin = "123456"
 
-    override suspend fun create(name: String, network: String, password: String, item: WalletImport?): VaultWallet {
+    /** Every password and PIN array handed to this fake, by reference: the manager wipes them (N1). */
+    val handedSecrets = mutableListOf<CharArray>()
+
+    override suspend fun create(name: String, network: String, password: CharArray, item: WalletImport?): VaultWallet {
+        handedSecrets += password
         calls += "create:$name:$network:${password.isNotEmpty()}"
         if (item != null) {
             calls += "import"
@@ -84,7 +91,7 @@ internal class FakeWallets : WalletOps {
             importedPassphrase = item.passphrase?.let(::String)
         }
         createFails?.let { throw VaultOpException("wallet.create", it) }
-        if (password != "pw") throw VaultOpException("wallet.create", "bad_password")
+        if (String(password) != "pw") throw VaultOpException("wallet.create", "bad_password")
         return wallet("01NEW000000000000000000000", name, network).let { w ->
             if (noCaps) w.copy(capsSupported = false).also { wallets[w.id] = it } else w
         }
@@ -100,11 +107,13 @@ internal class FakeWallets : WalletOps {
         }
     }
 
-    override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: String, password: String): Long {
+    override suspend fun capsRaise(walletId: String, version: Long, perTx: Long?, perPeriod: Long?, pin: CharArray, password: CharArray): Long {
+        handedSecrets += pin
+        handedSecrets += password
         calls += "caps.raise:$perTx:$perPeriod"
         capsRaiseFails?.let { throw VaultOpException("wallet.caps.raise", it) }
-        if (pin != this.pin) throw VaultOpException("wallet.caps.raise", "bad_pin")
-        if (password != "pw") throw VaultOpException("wallet.caps.raise", "bad_password")
+        if (String(pin) != this.pin) throw VaultOpException("wallet.caps.raise", "bad_pin")
+        if (String(password) != "pw") throw VaultOpException("wallet.caps.raise", "bad_password")
         val w = wallets.getValue(walletId)
         if (version != w.version) throw VaultOpException("wallet.caps.raise", "conflict")
         return (version + 1).also {
@@ -121,22 +130,25 @@ internal class FakeWallets : WalletOps {
     /** A vault error code for `wallet.caps.raise`, else none. */
     var capsRaiseFails: String? = null
 
-    override suspend fun revealPhrase(walletId: String, password: String, pin: String?): RevealedPhrase {
+    override suspend fun revealPhrase(walletId: String, password: CharArray, pin: CharArray?): RevealedPhrase {
+        handedSecrets += password
+        pin?.let { handedSecrets += it }
         calls += "reveal:$walletId" + if (pin != null) ":pin" else ""
         revealCode?.let { throw VaultOpException("item.reveal", it) }
         // A wallet the list shows without a limit may still need the PIN (it matches a capped wallet or a twin): the app cannot know.
         if (pinStubborn && pin != null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
         if (wallets[walletId]?.capped == true || walletId in needsPin) {
             if (pin == null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
-            if (pin != this.pin) throw VaultOpException("item.reveal", "bad_pin")
+            if (String(pin) != this.pin) throw VaultOpException("item.reveal", "bad_pin")
         }
-        if (revealFails || password != "pw") throw VaultOpException("item.reveal", "bad_password")
+        if (revealFails || String(password) != "pw") throw VaultOpException("item.reveal", "bad_password")
         return RevealedPhrase(words.joinToString(" ").toCharArray(), passphrase?.toCharArray())
     }
 
-    override suspend fun delete(walletId: String, password: String) {
+    override suspend fun delete(walletId: String, password: CharArray) {
+        handedSecrets += password
         calls += "delete:$walletId"
-        if (deleteFails || password != "pw") throw VaultOpException("item.delete", "bad_password")
+        if (deleteFails || String(password) != "pw") throw VaultOpException("item.delete", "bad_password")
         wallets.remove(walletId)
     }
 
@@ -173,7 +185,7 @@ internal class FakeWallets : WalletOps {
     // Sending (W2-1) has no screen yet: nothing here asks for it.
     override suspend fun inspect(walletId: String, psbtBase64: String): PsbtInspection = error("no screen sends yet")
 
-    override suspend fun sign(walletId: String, psbtBase64: String, password: String): SignOutcome = error("no screen sends yet")
+    override suspend fun sign(walletId: String, psbtBase64: String, password: CharArray): SignOutcome = error("no screen sends yet")
 
     override suspend fun signsOutstanding(): Set<String> = emptySet()
 

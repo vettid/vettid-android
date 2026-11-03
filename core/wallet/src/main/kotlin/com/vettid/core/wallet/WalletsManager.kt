@@ -577,7 +577,10 @@ class WalletsManager(
      * [caps] the member chose are kept on this phone as pending at once and sent by [settleCaps] after the phrase check, so the
      * phrase step never needs the PIN. Until then the wallet is held back from [open]'s send and has no Receive.
      */
-    suspend fun create(name: String, network: Network, password: String, caps: WalletCaps? = null): Created {
+    suspend fun create(name: String, network: Network, password: CharArray, caps: WalletCaps? = null): Created =
+        wiped(password) { createWith(name, network, password, caps) }
+
+    private suspend fun createWith(name: String, network: Network, password: CharArray, caps: WalletCaps?): Created {
         require(offered(network) && network != Network.MAINNET) { "not a network to create on" }
         require(caps == null || CapsRules.problem(caps) == null) { "limits" }
         val g = gen()
@@ -614,10 +617,19 @@ class WalletsManager(
     suspend fun import(
         name: String,
         network: Network,
-        password: String,
+        password: CharArray,
         words: CharArray,
         passphrase: CharArray?,
         caps: WalletCaps? = null,
+    ): Imported = wiped(password) { importWith(name, network, password, words, passphrase, caps) }
+
+    private suspend fun importWith(
+        name: String,
+        network: Network,
+        password: CharArray,
+        words: CharArray,
+        passphrase: CharArray?,
+        caps: WalletCaps?,
     ): Imported {
         require(offered(network) && network != Network.MAINNET) { "not a network to create on" }
         require(caps == null || CapsRules.problem(caps) == null) { "limits" }
@@ -797,8 +809,18 @@ class WalletsManager(
      * not sent a second time), and the pending `wallet.caps.set` of [settleCaps] is a different request that never raises. [seen] is
      * what the member's form was chosen against: if the wallet's version or limits moved since, nothing is sent ([CAPS_CHANGED]).
      */
+    suspend fun raiseCaps(walletId: String, seen: CapsSeen, perTx: Long?, perPeriod: Long?, pin: CharArray, password: CharArray) =
+        wiped(pin, password) { raiseCapsWith(walletId, seen, perTx, perPeriod, pin, password) }
+
     @Suppress("ThrowsCount") // a pending limit, no wallet, limits that moved since the form
-    suspend fun raiseCaps(walletId: String, seen: CapsSeen, perTx: Long?, perPeriod: Long?, pin: String, password: String) {
+    private suspend fun raiseCapsWith(
+        walletId: String,
+        seen: CapsSeen,
+        perTx: Long?,
+        perPeriod: Long?,
+        pin: CharArray,
+        password: CharArray,
+    ) {
         require(CapsRules.problem(perTx, perPeriod) == null) { "limits" }
         val g = gen()
         // The pending limits cannot be known while the settings file is unreadable: say so (the reset is on the wallet's screen).
@@ -848,7 +870,10 @@ class WalletsManager(
      * credential operation; [pin] too for a wallet with a spending limit (`pin_required` otherwise). A clear that
      * overtook it (a lock while it was answered): the phrase is wiped and a [VaultFailure] with [CLEARED] is thrown.
      */
-    suspend fun revealPhrase(walletId: String, password: String, pin: String? = null): RevealedPhrase {
+    suspend fun revealPhrase(walletId: String, password: CharArray, pin: CharArray? = null): RevealedPhrase =
+        wiped(password, pin) { revealPhraseWith(walletId, password, pin) }
+
+    private suspend fun revealPhraseWith(walletId: String, password: CharArray, pin: CharArray?): RevealedPhrase {
         val g = gen()
         // A pending limit goes first (a wallet made in this session waits for its check, which is this reveal).
         settleFirst(walletId)
@@ -867,6 +892,16 @@ class WalletsManager(
     }
 
     /**
+     * Every secret handed to the manager is wiped (`fill('\u0000')`) when the call ends, however it ends: the manager owns the arrays it
+     * is given, so the caller never reuses one. The `String` copies made on the way down are listed in the KDoc of [WalletOps].
+     */
+    private suspend inline fun <T> wiped(vararg secrets: CharArray?, block: () -> T): T = try {
+        block()
+    } finally {
+        secrets.forEach { it?.fill('\u0000') }
+    }
+
+    /**
      * The vault says `pin_required` as a `bad_request` with that message (VAULT-MESSAGING §10.18): the failure then carries it as
      * its code, so that the screen can tell it from any other `bad_request`.
      */
@@ -877,7 +912,9 @@ class WalletsManager(
     }
 
     /** "Delete wallet": `item.delete` of its item with the password. */
-    suspend fun delete(walletId: String, password: String) {
+    suspend fun delete(walletId: String, password: CharArray) = wiped(password) { deleteWith(walletId, password) }
+
+    private suspend fun deleteWith(walletId: String, password: CharArray) {
         val g = gen()
         // Not cancelled partway: once the request is sent, the vault's answer and what is kept here are taken in together
         // (a caller that leaves must not leave the deleted wallet shown).
@@ -1371,7 +1408,13 @@ class WalletsManager(
         val changeType = AccountType.fromVaultName(now.addressType) ?: return noAccount
         val changeIndex = now.account(now.addressType)?.nextChange ?: return noAccount
         val selected = try {
-            val coins = collectCoins(now, derived, spend.first, spend.second, g) ?: return PrepareResult.Cleared
+            val walk = collectCoins(now, derived, spend.first, spend.second, g) ?: return PrepareResult.Cleared
+            // The same range the walk covered: an own address beyond next + gap but within the gap after a used one (N3). No look-up
+            // of its own; still before the build and the compare.
+            if (withContext(compute) { isOwnAddress(now, derived, request.address, walk.lastUsed) }) {
+                return PrepareResult.SelfSend
+            }
+            val coins = walk.coins
             val s = CoinSelection.select(
                 coins, payee.scriptSize, request.amountSats, request.feeRate, changeType, request.includeUnconfirmed,
             )
@@ -1423,21 +1466,32 @@ class WalletsManager(
     }
 
     /**
-     * Whether [address] is one of this wallet's own: both accounts, receive and change, up to the vault's next index and the gap
-     * beyond it. A payment to oneself comes back from the vault with the output as change, so it could never match what was entered
+     * Whether [address] is one of this wallet's own: both accounts, receive and change, up to the further of the vault's next index
+     * and the last used index plus one, and the gap beyond it (the range [collectCoins] walks). [lastUsed] is what that walk found
+     * per chain; without it (the first look, before any chain look-up) the vault's next index is all there is.
+     * A payment to oneself comes back from the vault with the output as change, so it could never match what was entered
      * (`summary_mismatch`, review note 6): it is named before anything is built or sent.
      */
-    private fun isOwnAddress(vault: VaultWallet, wallet: Wallet, address: String): Boolean = AccountType.entries.any { type ->
+    private fun isOwnAddress(
+        vault: VaultWallet,
+        wallet: Wallet,
+        address: String,
+        lastUsed: Map<Pair<AccountType, Boolean>, Int> = emptyMap(),
+    ): Boolean = AccountType.entries.any { type ->
         val account = wallet.account(type)
         val stated = vault.account(type.vaultName)
         listOf(false, true).any { change ->
             val next = if (change) stated?.nextChange ?: 0 else stated?.nextReceive ?: 0
-            (0 until minOf(next + GAP, Account.MAX_INDEX)).any { i ->
+            val end = maxOf(next, (lastUsed[type to change] ?: -1) + 1) + GAP
+            (0 until minOf(end, Account.MAX_INDEX)).any { i ->
                 val own = account.address(change, i)
                 own == address || own == address.lowercase()
             }
         }
     }
+
+    /** What [collectCoins] found: the coins, and the last index with history per account and chain (absent: none). */
+    private class Walk(val coins: List<Spendable>, val lastUsed: Map<Pair<AccountType, Boolean>, Int>)
 
     /** Both accounts' receive and change chains as [scan] walks them, reading the unspent outputs of the addresses with funds. */
     @Suppress("NestedBlockDepth")
@@ -1447,9 +1501,10 @@ class WalletsManager(
         ready: ChainOpen.Ready,
         spend: SpendAccess,
         g: Long,
-    ): List<Spendable>? =
+    ): Walk? =
         coroutineScope {
             val out = ArrayList<Spendable>()
+            val used = HashMap<Pair<AccountType, Boolean>, Int>()
             for (type in AccountType.entries) {
                 val account = wallet.account(type)
                 val stated = vault.account(type.vaultName)
@@ -1474,9 +1529,10 @@ class WalletsManager(
                         }
                         index += batch.size
                     }
+                    used[type to change] = lastUsed
                 }
             }
-            out
+            Walk(out, used)
         }
 
     /** The fee rates the chain server gives for the wallet's network (sat/vB by confirmation target), for Slow, Normal and Fast. */
@@ -1501,7 +1557,10 @@ class WalletsManager(
      * and [retryBroadcast] sends the same bytes. An answer that does not come is [SendResult.Unanswered] and [retrySign] sends the
      * same request. Not cancelled once begun.
      */
-    suspend fun approveSend(prepared: PreparedSend, password: String): SendResult = withContext(NonCancellable) {
+    suspend fun approveSend(prepared: PreparedSend, password: CharArray): SendResult =
+        wiped(password) { approveSendWith(prepared, password) }
+
+    private suspend fun approveSendWith(prepared: PreparedSend, password: CharArray): SendResult = withContext(NonCancellable) {
         sendLock.withLock {
             if (gen() != prepared.generation) return@withLock SendResult.Cleared
             holdFor(prepared.walletId)?.let { return@withLock SendResult.Held(it) }
@@ -1529,9 +1588,10 @@ class WalletsManager(
         }
     }
 
-    private suspend fun openForSend(password: String): Boolean {
+    private suspend fun openForSend(password: CharArray): Boolean {
         try {
-            openWindow(password)
+            // The app's own unlock path (`VaultManager`, not wallet code) takes a String: the copy is made here, as late as possible.
+            openWindow(String(password))
         } catch (e: VaultFailure) {
             // Only a definite refusal opened nothing; any other failure may have come after the vault opened the window.
             if (e.kind in DEFINITE_REFUSALS) throw e
@@ -1566,7 +1626,7 @@ class WalletsManager(
      * when the request may have reached the vault without a definite answer ([SignOutcome.Unanswered], a failure thrown after the
      * send) and when the answer was `ok`, an unreadable one included: the vault may have signed.
      */
-    private suspend fun signOnce(prepared: PreparedSend, password: String): Outcome {
+    private suspend fun signOnce(prepared: PreparedSend, password: CharArray): Outcome {
         synchronized(lock) {
             consumed += prepared.unsignedTxid
             signCounts.merge(prepared.walletId, 1L, Long::plus)

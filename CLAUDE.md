@@ -323,7 +323,7 @@ The A2 exit test:
   network not chosen or not offered, and every `SendHold` (`SIGN_UNSETTLED`: "your vault may have signed a payment … check before you send
   again", which is also what a sign answer lost across a restart shows). `SendRoute` holds the password and a prepared payment: never
   saved with the stack, `popWalletSecrets` pops it. `SecureWindow()`; the password is typed once, in the state only until `approve()`
-  takes it (blanked at once), and the PSBT lives in `ManagerSendEngine` (a `SendEngine` the tests replace) and `:core:wallet` only.
+  takes it (blanked at once; N1: the password and PIN then travel as `CharArray`s (`Taken`, `Job.wipeWhenDone` in `:feature:wallet`) through `WalletsManager`, which wipes each array it is given when its call ends, to `WalletOps`/`WalletApi.kt`, where one `String` per call is made outside the payload lambda (it runs several times per attempt: the gate, the sealing, a retry) and captured; `String` copies remain in the text field and state before it is taken, in `credential.unlock` (`openWindow`, the app's own path), in the vault client's `item.reveal`/`item.delete`, and in the vault client itself, which this work leaves as it was: `VaultJson.bytes` encodes the payload to a JSON `String` (the password in it) before the bytes, and only the bytes are wiped; on a release-R vault `Normalizer.normalize` in `nfcPasswords` makes one more; a stale retry repeats both), and the PSBT lives in `ManagerSendEngine` (a `SendEngine` the tests replace) and `:core:wallet` only.
   Form: the payee is **trimmed at both ends** as typed or pasted (`SendInput.parse`; `Payee` refuses spaces), a `bitcoin:` URI gives its
   address and `amount` (other parameters ignored; a capital bech32 address is read in lower case), `QrScanner` for the scan, the network
   checked as typed with `Payee` ("This is a {network} address. This wallet is on {other}."), BTC or sats (a valid amount is converted
@@ -335,7 +335,7 @@ The A2 exit test:
   a `cap` with `ok: false` shows the `cap_exceeded` text and no password field. `PrepareResult.Different` is the plan's "Your vault saw a
   different payment…". **Self-send** (review note 6): `PrepareResult.SelfSend`, detected in `prepareSend` **before** the build and the
   compare (`isOwnAddress`: both accounts, both chains, up to the vault's next index plus the gap), so nothing is built or sent to any server;
-  the screen has its own text; an own address beyond that range still ends in `summary_mismatch`. Results: Sent ("in about" 20 minutes,
+  checked once more after `collectCoins`, with its `lastUsed` per chain, over the range the walk covers (`max(next, lastUsed + 1) + gap`; no look-up of its own, still before the build); the screen has its own text; the second check uses the wallet as reloaded; an own address beyond that range still ends in `summary_mismatch`. Results: Sent ("in about" 20 minutes,
   an hour or a day from the fee target, a custom rate by the quickest target it reaches), Broadcast failed ("Signed, but {host} didn't
   accept it: {reason}…", Try again = `retryBroadcast`, a way to Chain server), the `cap_exceeded` and `invalid_psbt` texts, and plain
   notices for `SignedDiffers`, `AlreadySigned`, `Unanswered`, a lapse, a superseded payment and `duplicate_wallet`; **Discard is on every
@@ -404,7 +404,7 @@ The A2 exit test:
   `acknowledgeRecent(walletId)` was called (per wallet, memory only, cleared at lock). `recentSends` returns a `RecentReport` that names
   the newest payment (time, amount, payee) and how many more, and maps any exception to UNREADABLE; the view model does the same. A
   refused `bitcoin:` link clears the address and the amount and blocks Review until the address is edited. The review asks about the 10%
-  fee again, naming the fee, when the vault's fee is more than 1.5 times the one agreed to. One fee dialog for two guards: above twice Fast, or more than 10% of the amount sent (asked before the build when even
+  fee again, naming the fee, when the vault's fee is more than 1.5 times the one agreed to, or the vault's `payeeSats` is below the one the agreement was for (`tenConfirmedPayee`, taken when the question is asked as `bigFeePayee`; Send all's payee shrinks with the fee unchanged; an agreement with no basis asks again; edits and `edit()` drop an open question). One fee dialog for two guards: above twice Fast, or more than 10% of the amount sent (asked before the build when even
   110 vB at that rate is over 10% of a typed amount, else on the review from the vault's own fee, e.g. Send all; both: the 10% text). Review note 3: `PreparedSend.signCount`
   against a per-wallet counter bumped when a `wallet.sign` goes out and restored when it is given back; a payment prepared before another
   signing is `SendResult.Superseded`. **`WalletOps.sign` returns a `SignOutcome`** (`NotSent(failure)` / `Answered(SignReply.Ok(body) |
