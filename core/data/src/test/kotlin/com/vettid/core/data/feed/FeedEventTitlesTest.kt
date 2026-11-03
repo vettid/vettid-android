@@ -84,6 +84,20 @@ class FeedEventTitlesTest {
         )
     }
 
+    /** AA6 part 2: "An agent read <item>", the no-name form, no name without details (the app-lock cover), and the sheet's action. */
+    @Test
+    fun anAgentsReadNamesTheItemAndOpensIt() {
+        val read = item("leash.item.read", "01ITEM")
+        assertEquals(FeedText(R.string.data_feed_leash_item_read, listOf("\u2068GitHub token\u2069")), title(read))
+        assertEquals(FeedText(R.string.data_feed_leash_item_read_any), title(read, details = false))
+        assertEquals(FeedText(R.string.data_feed_leash_item_read_any), title(item("leash.item.read", "01GONE")))
+        assertEquals(FeedText(R.string.data_feed_leash_item_read_any), title(item("leash.item.read", null)))
+        assertFalse(FeedKinds.notAvailable("leash.item.read"))
+        assertEquals(FeedTarget.Sheet, FeedKinds.target(read))
+        assertEquals("01ITEM", FeedKinds.sheetItemId(read, names))
+        assertNull(FeedKinds.sheetItemId(item("leash.item.read", "01GONE"), names))
+    }
+
     /** Decision 8: "An agent used <item>" for a run and a proxy; without details (Names only), no item name. */
     @Test
     fun anAgentsRunAndProxyNameTheItem() {
@@ -98,7 +112,8 @@ class FeedEventTitlesTest {
         }
         assertEquals(FeedText(R.string.data_feed_leash_item_run_detail), FeedKinds.sheetDetail(item("leash.item.run")))
         assertEquals(FeedText(R.string.data_feed_leash_item_proxy_detail), FeedKinds.sheetDetail(item("leash.item.proxy")))
-        assertNull(FeedKinds.sheetDetail(item("leash.item.read")))
+        assertEquals(FeedText(R.string.data_feed_leash_item_read_detail), FeedKinds.sheetDetail(item("leash.item.read")))
+        assertNull(FeedKinds.sheetDetail(item("leash.item.changed")))
     }
 
     @Test

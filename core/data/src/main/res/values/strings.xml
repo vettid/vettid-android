@@ -209,7 +209,10 @@
     <string name="data_feed_guide">A tip from VettID</string>
     <string name="data_feed_leash">Agent activity</string>
     <string name="data_feed_leash_rate_limited">An agent reached a limit</string> <!-- new: no name -->
-    <string name="data_feed_leash_item_read">An agent read an item</string>
+    <!-- AA6 part 2 (approved by the owner 2026-11-03): `leash.item.read`, named, and without the name. -->
+    <string name="data_feed_leash_item_read">An agent read %1$s</string>
+    <string name="data_feed_leash_item_read_any">An agent read an item</string>
+    <string name="data_feed_leash_item_read_detail">The agent was given the item\'s values. Its app may keep them in its history.</string>
     <string name="data_feed_leash_suspended">An agent was paused</string> <!-- new: no name -->
     <string name="data_feed_leash_referrals">An agent asked too often</string> <!-- new: no name -->
     <string name="data_feed_action_request">%1$s asks you to run an action</string>

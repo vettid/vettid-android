@@ -114,6 +114,7 @@ internal object NotificationsCatalog {
         "notifications.sheet_leash_run" to { DetailSheetContent(agentUse("leash.item.run", "i-known"), agentSheetNames, gone = false) },
         "notifications.sheet_leash_proxy" to { DetailSheetContent(agentUse("leash.item.proxy", "i-known"), agentSheetNames, gone = false) },
         "notifications.sheet_leash_deleted" to { DetailSheetContent(agentUse("leash.item.run", "i-deleted"), agentSheetNames, gone = false) },
+        "notifications.sheet_leash_read" to { DetailSheetContent(agentUse("leash.item.read", "i-known"), agentSheetNames, gone = false) },
         "shell.bell" to { Bars() },
     )
 }
