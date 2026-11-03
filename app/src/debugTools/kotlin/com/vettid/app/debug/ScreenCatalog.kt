@@ -104,6 +104,7 @@ import com.vettid.feature.approvals.ApprovalDetailUiState
 import com.vettid.feature.approvals.ApprovalsScreen
 import com.vettid.feature.approvals.ApprovalsUiState
 import com.vettid.feature.approvals.DecisionActions
+import com.vettid.feature.approvals.DeviceOutcome
 import com.vettid.feature.connections.AcceptActions
 import com.vettid.feature.connections.AcceptScreen
 import com.vettid.feature.connections.AcceptStep
@@ -462,6 +463,28 @@ object ScreenCatalog {
         introducedBy = null, receivedAt = t0, exp = t0.plusSeconds(691_200),
     )
     private val outgoingWaiting = outgoing.copy(connectionId = "c10", sas = null, state = RequestState.WAITING, name = "Riley Chen")
+    // AA5 (ANDROID-PLAN 0.1.116): access requests and held approvals of devices and agents.
+    private val agentItems = listOf(
+        com.vettid.core.data.items.ItemSummary(
+            "i1", 1, "Bank PIN", "other", com.vettid.core.data.items.Sensitivity.SECRET,
+            fieldLabels = listOf(
+                com.vettid.core.data.items.FieldLabel("f1", "PIN", "password"),
+                com.vettid.core.data.items.FieldLabel("f2", "Hint", "text"),
+            ),
+        ),
+    )
+    private fun agentSession(seconds: Int? = 3_600, fromFeed: Boolean = false) = Approval.DeviceRequest(
+        "device.session.pending", "s2", if (fromFeed) null else "Build bot", if (fromFeed) null else "agent", null, t0, t0.plusSeconds(500),
+        deviceId = "dev-a", seconds = seconds, fromFeed = fromFeed,
+    )
+    private fun agentHeld(h: com.vettid.core.data.social.HeldRequest?, fromFeed: Boolean = false) = Approval.DeviceRequest(
+        "approval.pending", "h2", if (fromFeed) null else "Build bot", "agent", "agent.request", t0, t0.plusSeconds(270),
+        deviceId = "dev-a", held = h, fromFeed = fromFeed,
+    )
+    private fun agentState(a: Approval.DeviceRequest, listed: Boolean = true, outcome: DeviceOutcome? = null) =
+        ApprovalDetailUiState(a.key, a, items = agentItems, deviceListed = listed, outcome = outcome)
+    private val pairingAsk = Approval.DeviceRequest("device.pair.pending", "p1", null, null, null, t0, t0.plusSeconds(500), fromFeed = true)
+
     private val approvals: List<Approval> = listOf(
         request,
         Approval.Authentication("a1", "c1", "Confirm before I send the keys", t0, t0.plusSeconds(600), "Sam Rivera"),
@@ -1248,6 +1271,85 @@ object ScreenCatalog {
             ApprovalDetailScreen(ApprovalDetailUiState(a.key, a), DecisionActions())
         },
         "approvals.device" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[5].key, approvals[5]), DecisionActions()) },
+        "approvals.device_agent" to { ApprovalDetailScreen(agentState(agentSession(seconds = 5_400)), DecisionActions()) },
+        "approvals.device_renewal" to {
+            ApprovalDetailScreen(agentState(agentSession()).copy(renewalUntil = t0.plusSeconds(1_800)), DecisionActions())
+        },
+        "approvals.device_feed" to { ApprovalDetailScreen(agentState(agentSession(null, fromFeed = true)), DecisionActions()) },
+        "approvals.device_feed_unlisted" to {
+            ApprovalDetailScreen(agentState(agentSession(null, fromFeed = true), listed = false), DecisionActions())
+        },
+        "approvals.device_allowed" to {
+            ApprovalDetailScreen(agentState(agentSession(), outcome = DeviceOutcome.Allowed(t0.plusSeconds(3_600))), DecisionActions())
+        },
+        "approvals.device_gone" to {
+            ApprovalDetailScreen(agentState(agentSession(), outcome = DeviceOutcome.NoLongerWaiting), DecisionActions())
+        },
+        "approvals.held_use" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.ItemUse("i1", "f1", "login challenge 7".toByteArray()))), DecisionActions())
+        },
+        "approvals.held_use_hex" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.ItemUse("i1", "f1", byteArrayOf(0, 1, 2, -2, -1)))), DecisionActions())
+        },
+        "approvals.held_get" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.ItemGet("i1", listOf("f1", "f2")))), DecisionActions())
+        },
+        "approvals.held_get_all" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.ItemGet("i1", null))), DecisionActions())
+        },
+        "approvals.held_catalog" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog)), DecisionActions())
+        },
+        "approvals.held_later" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Later("i1"))), DecisionActions())
+        },
+        "approvals.held_desktop" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.DesktopStepUp).copy(role = "desktop")), DecisionActions())
+        },
+        "approvals.held_other" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Unshown)), DecisionActions())
+        },
+        "approvals.held_no_item" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.ItemUse("gone", "f1", byteArrayOf(1)))), DecisionActions())
+        },
+        "approvals.held_gone" to { ApprovalDetailScreen(agentState(agentHeld(null, fromFeed = true)), DecisionActions()) },
+        "approvals.held_approved" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog), outcome = DeviceOutcome.Approved("ok")), DecisionActions())
+        },
+        "approvals.held_denied" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog), outcome = DeviceOutcome.Denied), DecisionActions())
+        },
+        "approvals.held_forbidden" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog), outcome = DeviceOutcome.Approved("forbidden")), DecisionActions())
+        },
+        "approvals.held_session_ended" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog), outcome = DeviceOutcome.Approved("session_required")), DecisionActions())
+        },
+        "approvals.held_way_not_allowed" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog), outcome = DeviceOutcome.Approved("way_not_allowed")), DecisionActions())
+        },
+        "approvals.held_other_result" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog), outcome = DeviceOutcome.Approved("rate_limited")), DecisionActions())
+        },
+        "approvals.pair_gone" to { ApprovalDetailScreen(ApprovalDetailUiState(pairingAsk.key, pairingAsk), DecisionActions()) },
+        "approvals.pair_held" to {
+            ApprovalDetailScreen(ApprovalDetailUiState(pairingAsk.key, pairingAsk, pairingHeld = true, pairingName = "Build bot"), DecisionActions())
+        },
+        "approvals.device_list" to {
+            ApprovalsScreen(
+                ApprovalsUiState(
+                    loading = false,
+                    approvals = listOf(
+                        agentSession(5_400),
+                        agentHeld(com.vettid.core.data.social.HeldRequest.ItemUse("i1", "f1", byteArrayOf(1))),
+                        agentSession(null, fromFeed = true).copy(id = "s3"),
+                        agentHeld(null, fromFeed = true).copy(id = "h3"),
+                    ),
+                    items = agentItems,
+                ),
+                chrome,
+            )
+        },
         "gallery" to { GalleryScreen(themeMode = LocalThemeController.current.mode, onThemeModeChange = {}, onBack = {}) },
         "account_sheet" to { AccountSheet(sampleAccount, "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
         "account_sheet.trial_expired" to {

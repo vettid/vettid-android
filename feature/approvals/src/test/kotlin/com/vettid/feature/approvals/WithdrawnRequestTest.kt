@@ -55,7 +55,7 @@ class WithdrawnRequestTest {
 
     private fun detail() = ApprovalDetailViewModel(
         SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to auth.key)), social, com.vettid.core.testing.FakeItems(),
-        com.vettid.core.testing.FakeDevices(), FakeVault(), social,
+        com.vettid.core.testing.FakeDevices(), FakeVault(), social, com.vettid.core.testing.FakePairing(),
     )
 
     /** What the real manager does with the ask a decision found `not_found`: it leaves the list. */
@@ -232,7 +232,7 @@ class WithdrawnRequestTest {
             social.withdrawn.value = emptySet()
             val vm = ApprovalDetailViewModel(
                 SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to nameless.key)), social, com.vettid.core.testing.FakeItems(),
-                com.vettid.core.testing.FakeDevices(), FakeVault(), social,
+                com.vettid.core.testing.FakeDevices(), FakeVault(), social, com.vettid.core.testing.FakePairing(),
             )
             advanceUntilIdle()
             vanish()

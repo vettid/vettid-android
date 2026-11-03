@@ -117,6 +117,8 @@ data class ItemSummary(
     /** The fields' labels, in order (shown as the row's second line). */
     val labels: List<String> = emptyList(),
     val updatedAt: Instant? = null,
+    /** The fields' ids with their labels and kinds (never values): names a field in an agent's request (AA5, `item.use`). */
+    val fieldLabels: List<FieldLabel> = emptyList(),
 )
 
 /**
@@ -145,7 +147,10 @@ data class ItemDetail(
     val size: Int? = null,
 ) {
     val summary: ItemSummary
-        get() = ItemSummary(itemId, version, name, category, sensitivity, template, tags, fields.map { it.label }, updatedAt)
+        get() = ItemSummary(
+            itemId, version, name, category, sensitivity, template, tags, fields.map { it.label }, updatedAt,
+            fields.mapNotNull { f -> f.fieldId?.let { FieldLabel(it, f.label, f.kind) } },
+        )
 
     /** The same item without its values, as `item.get` gives a secret or critical one (what the screen keeps when it hides them). */
     fun hidden(): ItemDetail = if (sensitivity == Sensitivity.DATA) {

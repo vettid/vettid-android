@@ -21,7 +21,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import java.time.Duration
@@ -46,14 +45,22 @@ class PairingCode(val pairingId: String, val link: String, val exp: Instant) {
  * was not for an agent, so that it cannot be compared and only rejected. [ends] is when this phone stops offering the
  * approval (10 minutes after the event, never later than the vault's own end).
  */
-class PendingPairing(val pairingId: String, val name: String, val sas: String?, val ends: Instant) {
+class PendingPairing(
+    val pairingId: String,
+    val name: String,
+    val sas: String?,
+    val ends: Instant,
+    /** The event's `pending_id` = the `ref` of the pairing's feed item (VAULT-MESSAGING 0.83.0 §10.3); null if absent. */
+    val pendingId: String? = null,
+) {
     /** An approval is offered only for a code that can be compared. */
     val comparable: Boolean get() = sas != null
 
     override fun toString(): String = "PendingPairing(ends=$ends)"
 
     override fun equals(other: Any?): Boolean =
-        other is PendingPairing && other.pairingId == pairingId && other.name == name && other.sas == sas && other.ends == ends
+        other is PendingPairing && other.pairingId == pairingId && other.name == name && other.sas == sas &&
+            other.ends == ends && other.pendingId == pendingId
 
     override fun hashCode(): Int = pairingId.hashCode()
 }
@@ -161,9 +168,38 @@ class PairingManager(
     private val knownDeviceIds: () -> Set<String>? = { null },
     private val readDevices: suspend () -> List<DeviceInfo> = { emptyList() },
     private val onPaired: () -> Unit = {},
+    /**
+     * The comparison of the pairing with this `pending_id` (the `ref` of its feed item) is over: approved, rejected, ended,
+     * expired or cleared. Its entry in Approvals goes (AA5).
+     */
+    private val onCompareLeft: (pendingId: String) -> Unit = {},
 ) : PairingRepository {
     private val lock = Any()
-    private val flow = MutableStateFlow(PairingState())
+    private val flow = Notifying()
+
+    /**
+     * The state, telling [onCompareLeft] when a comparison is left (any new state whose comparison is not the one it was in):
+     * approved, rejected, ended, expired or cleared.
+     */
+    private inner class Notifying {
+        private val inner = MutableStateFlow(PairingState())
+
+        var value: PairingState
+            get() = inner.value
+            set(v) {
+                val before = pendingOf(inner.value)
+                inner.value = v
+                if (before != null && before != pendingOf(v)) onCompareLeft(before)
+            }
+
+        fun update(f: (PairingState) -> PairingState) {
+            value = f(value)
+        }
+
+        fun asStateFlow(): StateFlow<PairingState> = inner.asStateFlow()
+
+        private fun pendingOf(s: PairingState): String? = (s.stage as? PairingStage.Compare)?.pending?.pendingId
+    }
     private var generation = 0
     private var timer: Job? = null
 
@@ -217,7 +253,10 @@ class PairingManager(
             val role = VaultJson.str(body, "role")
             val sas = if (role == ROLE_AGENT) readSas(VaultJson.str(body, "sas")) else null
             val ends = at.plus(WINDOW)
-            val p = PendingPairing(id, DeviceWire.cleanName(VaultJson.str(body, "name")), sas, ends)
+            val p = PendingPairing(
+                id, DeviceWire.cleanName(VaultJson.str(body, "name")), sas, ends,
+                VaultJson.str(body, "pending_id")?.takeIf { it.isNotEmpty() },
+            )
             timer?.cancel()
             val gen = generation
             timer = scope.launch { endAt(ends, gen) { it is PairingStage.Compare && it.pending.pairingId == id } }

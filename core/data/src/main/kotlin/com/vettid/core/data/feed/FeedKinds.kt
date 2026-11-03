@@ -58,7 +58,27 @@ data class FeedNames(
     val approvals: Map<String, Approval> = emptyMap(),
     /** Vote titles from the Votes list in memory, by [VoteTitles.key] (cleaned, one line); the second line of a vote item. */
     val votes: Map<String, String> = emptyMap(),
-)
+    /** The devices and agents of `device.list` (memory), by id: their own, self-asserted names (cleaned, not yet isolated). */
+    val devices: Map<String, String> = emptyMap(),
+    /** The name the pairing this phone holds gave itself (`device.pair.pending`, AA2); null when none is held. */
+    val pairingName: String? = null,
+    /** The `pending_id` of that pairing: only the feed item whose `ref` is this one is named by [pairingName]. */
+    val pairingPendingId: String? = null,
+) {
+    companion object {
+        /** Names for [devices]: the list's own names; this phone's entry too; an empty name is left out. */
+        fun deviceNames(list: List<com.vettid.core.data.devices.DeviceInfo>): Map<String, String> =
+            list.filter { it.name.isNotEmpty() }.associate { it.id to it.name }
+
+        /** The name of the pairing being compared on this phone, if one is. */
+        fun pairingName(state: com.vettid.core.data.devices.PairingState): String? =
+            (state.stage as? com.vettid.core.data.devices.PairingStage.Compare)?.pending?.name?.takeIf { it.isNotEmpty() }
+
+        /** The `pending_id` of the pairing being compared; null when none is, or when its event did not say. */
+        fun pairingPendingId(state: com.vettid.core.data.devices.PairingState): String? =
+            (state.stage as? com.vettid.core.data.devices.PairingStage.Compare)?.pending?.pendingId
+    }
+}
 
 /**
  * Where a feed item leads (ANDROID-PLAN 0.1.23, 4); the app maps each to its screen. [Sheet] is the detail sheet,
@@ -165,7 +185,16 @@ object FeedKinds {
 
     /** Kinds whose screens come later (§6): listed, with "Not available in this version of the app". */
     fun notAvailable(kind: String): Boolean =
-        kind.startsWith("leash.") || kind in LATER
+        (kind.startsWith("leash.") && kind !in AGENT_PAGE) || kind in LATER
+
+    /** (AA5) The `leash.*` kinds that open the agent's page. */
+    private val AGENT_PAGE = setOf("leash.rate_limited", "leash.referrals_limited", "leash.agent.suspended")
+
+    /** The device's (or agent's) own name for the item's `device_id`, isolated; null when not known. */
+    private fun deviceName(item: FeedItem, names: FeedNames): FeedText? =
+        item.deviceId?.let { names.devices[it] }?.let { AccountNames.isolateOrNull(it) }?.let { FeedText(literal = it) }
+
+    private fun named(res: Int, any: Int, name: FeedText?): FeedText = name?.let { FeedText(res, listOf(it)) } ?: FeedText(any)
 
     private val LATER = setOf("action.request", "intro.request", "location.shared", "location.request")
 
@@ -295,14 +324,21 @@ object FeedKinds {
             "critical-secret.use.request" -> thing?.let { FeedText(R.string.data_feed_critical_use, listOf(first, it)) }
                 ?: FeedText(R.string.data_feed_critical_use_any, listOf(first))
             "item.revealed" -> revealed(thing, details)
-            "device.pair.pending" -> FeedText(R.string.data_feed_device_pair_pending)
-            "device.paired" -> FeedText(R.string.data_feed_device_paired)
-            "device.unlinked" -> FeedText(R.string.data_feed_device_unlinked)
+            "device.pair.pending" -> named(
+                R.string.data_feed_device_pair_pending_named, R.string.data_feed_device_pair_pending,
+                names.pairingName?.takeIf { item.ref != null && item.ref == names.pairingPendingId }
+                    ?.let { AccountNames.isolateOrNull(it) }?.let { FeedText(literal = it) },
+            )
+            "device.paired" -> named(R.string.data_feed_device_paired_named, R.string.data_feed_device_paired, deviceName(item, names))
+            "device.unlinked" ->
+                named(R.string.data_feed_device_unlinked_named, R.string.data_feed_device_unlinked, deviceName(item, names))
             "device.transferred" -> FeedText(R.string.data_feed_device_transferred)
             "device.replaced" -> FeedText(R.string.data_feed_device_replaced)
             "device.signer_changed" -> FeedText(R.string.data_feed_device_signer_changed)
-            "device.session.pending" -> FeedText(R.string.data_feed_device_session)
-            "approval.pending" -> FeedText(R.string.data_feed_device_approval)
+            "device.session.pending" ->
+                named(R.string.data_feed_device_session_named, R.string.data_feed_device_session, deviceName(item, names))
+            "approval.pending" ->
+                named(R.string.data_feed_device_approval_named, R.string.data_feed_device_approval, deviceName(item, names))
             "credential.alarm" -> FeedText(R.string.data_feed_credential_alarm)
             "credential.password_failed" -> FeedText(R.string.data_feed_password_failed)
             "credential.rotated" -> FeedText(R.string.data_feed_credential_rotated)
@@ -317,10 +353,13 @@ object FeedKinds {
             "owner_check.locked" -> FeedText(R.string.data_feed_check_locked)
             "owner_check.hold_changed" -> holdChanged(item.ref)
             "guide" -> item.title?.takeIf { it.isNotBlank() }?.let { FeedText(literal = it) } ?: FeedText(R.string.data_feed_guide)
-            "leash.rate_limited" -> FeedText(R.string.data_feed_leash_rate_limited)
+            "leash.rate_limited" ->
+                named(R.string.data_feed_leash_rate_limited_named, R.string.data_feed_leash_rate_limited, deviceName(item, names))
             "leash.item.read" -> FeedText(R.string.data_feed_leash_item_read)
-            "leash.agent.suspended" -> FeedText(R.string.data_feed_leash_suspended)
-            "leash.referrals_limited" -> FeedText(R.string.data_feed_leash_referrals)
+            "leash.agent.suspended" ->
+                named(R.string.data_feed_leash_suspended_named, R.string.data_feed_leash_suspended, deviceName(item, names))
+            "leash.referrals_limited" ->
+                named(R.string.data_feed_leash_referrals_named, R.string.data_feed_leash_referrals, deviceName(item, names))
             "action.request" -> FeedText(R.string.data_feed_action_request, listOf(first))
             "intro.request" -> FeedText(R.string.data_feed_intro_request, listOf(first))
             "location.shared" -> FeedText(R.string.data_feed_location_shared, listOf(first))
@@ -488,6 +527,9 @@ object FeedKinds {
             "device.paired" -> item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
             "device.pair.pending" -> FeedTarget.Pairing
             "device.unlinked" -> FeedTarget.DeviceList
+            // AA5: the agent's page (the Resume banner for a paused agent); the list when the item names no device.
+            "leash.agent.suspended", "leash.referrals_limited", "leash.rate_limited" ->
+                item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
             "device.transferred", "device.replaced", "device.signer_changed" -> FeedTarget.Devices
             "vote.open", "vote.closing", "vote.result", "vote.problem" ->
                 if (c != null && !ref.isNullOrEmpty()) FeedTarget.Vote(c, ref) else FeedTarget.VoteList
