@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -401,7 +402,7 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
                     modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("shared_none"),
                 )
             }
-            state.received.forEach { g -> ReceivedCard(g, state, name, actions) }
+            state.received.forEach { g -> key(g.grantId) { ReceivedCard(g, state, name, actions) } }
             AskSection(state, name, actions)
         }
     }
@@ -568,9 +569,11 @@ private const val ASK_REASON_CHARS = 256
 private fun SharedFields(c: SharedContent) {
     // Which secret fields the member chose to show: in memory only, so leaving the screen (or locking) masks them
     // again; never in a SavedStateHandle (VAULT-MESSAGING §10.7, as the member's own item detail).
-    var shown by remember { mutableStateOf(emptySet<Int>()) }
+    // Keyed by the item, and each field by its id, so a re-sorted list never hands one grant's shown fields to another.
+    var shown by remember(c.itemId) { mutableStateOf(emptySet<String>()) }
     c.fields.forEachIndexed { i, f ->
-        SharedField(i, f, i in shown) { shown = if (i in shown) shown - i else shown + i }
+        val id = f.fieldId ?: "#$i"
+        SharedField(i, f, id in shown) { shown = if (id in shown) shown - id else shown + id }
     }
     c.notes?.let {
         Text(stringResource(R.string.items_notes), style = MaterialTheme.typography.labelMedium)
