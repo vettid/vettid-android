@@ -20,7 +20,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
+import com.vettid.core.ui.components.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.rememberDatePickerState
@@ -38,10 +38,10 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.AlertDialog
+import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
+import com.vettid.core.ui.components.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -80,6 +80,7 @@ import com.vettid.core.data.items.FieldKinds
 import com.vettid.core.data.items.ItemCategories
 import com.vettid.core.data.items.ItemChecks
 import com.vettid.core.data.items.Sensitivity
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -193,6 +194,8 @@ data class ItemEditActions(
 @Composable
 @Suppress("CyclomaticComplexMethod")
 fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: Modifier = Modifier) {
+    // Changes not yet saved (an item being typed or edited): the daily owner check waits for them, VAULT-MESSAGING §3.6.5.
+    HoldsInput(state.dirty)
     val prompt = state.prompt
     if (prompt != null) {
         return CredentialPasswordContent(
@@ -746,6 +749,8 @@ private fun ValueEditor(
             imeAction = ime.action,
             onImeAction = ime.run,
             modifier = tag,
+            // A stored value that was loaded is not input; the editor reports its own changes (`dirty`).
+            holdsInput = false,
         )
     }
     if (f.kind == FieldKinds.DATE) return DateEditor(i, f, caption, supporting, isError, tag, ime, onValue)

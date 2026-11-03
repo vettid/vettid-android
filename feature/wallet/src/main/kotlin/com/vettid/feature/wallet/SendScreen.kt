@@ -31,6 +31,7 @@ import com.vettid.core.chain.AddressFamily
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -80,12 +81,17 @@ data class SendActions(
     val onDismissRecentNote: () -> Unit = {},
 )
 
+/** A payment typed and not sent: the daily owner check waits for it (VAULT-MESSAGING §3.6.5). */
+private val SendUiState.holdsInput: Boolean
+    get() = step != SendStep.DONE && (address.isNotEmpty() || amountText.isNotEmpty() || customFee.isNotEmpty())
+
 /**
  * Send (ANDROID-PLAN §4 "Sending"): one screen with three steps. The screen is `SecureWindow()` ([secure]; off only in the debug
  * catalog): it shows a payment and takes the password.
  */
 @Composable
 fun SendScreen(state: SendUiState, actions: SendActions, modifier: Modifier = Modifier, secure: Boolean = true) {
+    HoldsInput(state.holdsInput)
     if (secure) SecureWindow()
     when {
         state.closed || state.loading && state.block == null && state.network == null -> FormScaffold(

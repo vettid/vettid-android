@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.TileStyle
@@ -142,6 +143,7 @@ data class SharedProfileActions(
  */
 @Composable
 fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActions) {
+    HoldsInput(state.saveAllowed || state.pendingPhoto != null)
     FormScaffold(
         title = stringResource(R.string.settings_profile_title),
         body = stringResource(R.string.settings_profile_body),
@@ -271,7 +273,7 @@ private fun ProfileItemsCard(state: SharedProfileUiState, actions: SharedProfile
 
 @Composable
 private fun ProfileItemPicker(state: SharedProfileUiState, actions: SharedProfileActions) {
-    androidx.compose.material3.AlertDialog(
+    com.vettid.core.ui.components.AlertDialog(
         onDismissRequest = { actions.onPickItem(false) },
         title = { Text(stringResource(R.string.settings_profile_items_pick)) },
         text = {
@@ -306,6 +308,7 @@ data class ChangeNameActions(
 /** The change-name flow for [state] (stateless): the names, then the PIN and password, then the request's state. */
 @Composable
 fun ChangeNameContent(state: ChangeNameUiState, actions: ChangeNameActions, now: Instant = Instant.now()) {
+    HoldsInput(state.holdsInput)
     when (state.step) {
         ChangeNameStep.NAMES -> NamesStep(state, actions, now)
         ChangeNameStep.CONFIRM -> ConfirmStep(state, actions)

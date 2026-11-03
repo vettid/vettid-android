@@ -595,6 +595,53 @@ vettid.org repo's `local/android-ui/`).
 
 ## Conventions
 
+- The daily owner check in the shell (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03; iOS does the same): when it comes due
+  (`gate.gated`) it covers the app at once on every screen: read-only pushed ones (a detail, a History entry, the photo viewer,
+  Notifications, a device, a vote, a wallet), a drawer screen, and the return from the background. It waits only for what §3.6.5
+  says it must not interrupt: **input or an operation in progress** on a pushed screen. It waits until the
+  member leaves that screen, or until `OWNER_CHECK_DEFERRAL_S` (5 minutes, divided by the vault's time scale) after the vault's
+  deadline (`OwnerCheckGateState.overdue`, derived from the deadline, so a recreation, an app lock, the background or a new
+  process never restart the wait, and a return after the deadline plus 5 minutes is covered at once). A drawer screen never
+  waits. A call does not defer it: the call screen (`CallOverlay`) is drawn above the whole shell, check included, and the app never ends a call. One signal serves the waiting: a screen reports with `HoldsInput(active)` (`:core:ui` `InputGuard.kt`; the shell provides
+  `LocalInputGuard`). Reported: the item editor (`dirty`), the share-rule editors, a conversation with a draft or photos, Accept
+  (typed or pasted text, not a link's), the tag form and ask dialogs, wallet Send, Import, a new wallet (name, limits, a word of
+  the check; the shown phrase is covered at once), Spending limits and Chain server forms, the shared profile (edited name or
+  photo), change name (a changed name), delete vault (the phrase), **an approval open for a decision, typed or not** (any
+  kind, devices and agents too: `ApprovalDetailUiState.openForDecision`), a transfer out under way, and **every `SecretField`
+  on screen, typed or not** (a PIN or password prompt is a credential operation in progress: credential change, new
+  credential, rotate, alarm, change PIN, release update, History export's PIN step, the unlock-window prompts of votes,
+  wallets and agent rules, a critical-item use; `holdsInput = false` for a secret item's value in the editor). Search boxes
+  and a Receive amount are not input in progress. A new form screen with typed input, or a new credential flow without a
+  `SecretField`, must call `HoldsInput`; put the condition in a UI-state property (`holdsInput`) and unit-test it.
+  The check is drawn over the shell (`OwnerCheckRoute` after the `ModalNavigationDrawer`, never in place of the NavHost), so
+  the screen stays composed and what was typed is there when the check passes. When the check is to cover, **secrets typed and
+  not sent are blanked first** (§3.6.5's zeroize rule, as iOS): every `SecretField` with `holdsInput` calls its owner's setter
+  with `""` (the view model's state is cleared, not only the text field), and the recovery words typed in Import and in the
+  backup check do the same (`WipesOnCover`, `InputGuard.wipeSecrets()`); a secret item's value in the item editor is a draft
+  and stays. Drafts that are not secrets (messages, item and rule editors, forms) are kept. The wipe runs before dialogs
+  hide. Then the check is latched GATED (saved): input appearing under it cannot take it away, and a short dip of `gate.gated`
+  does not either; it is let go when `OwnerCheckRoute` says it passed (`onDone`) or after `OWNER_CHECK_UNLATCH_MS` of `gated`
+  false. On a new composition one frame is undecided (the shell is drawn at alpha 0) so that no vault content is shown before
+  the screens have reported. It takes the focus and the
+  keyboard, with a layer that eats keys (as `AppLockGate`), and its own subtree gets a null `LocalInputGuard`. Dialogs and
+  sheets are windows above it, so screens import `AlertDialog`, `ModalBottomSheet` and `DatePickerDialog` from
+  `com.vettid.core.ui.components` (`ShellOverlays.kt`), which are not composed while `LocalCheckCovered`; their state lives in
+  the view models and comes back after the check. Dropdown menus are wrapped too (`DropdownMenu` in `ShellOverlays.kt`), and detekt's `ForbiddenImport` refuses Material's
+  `AlertDialog`, `ModalBottomSheet`, `DatePickerDialog` and `DropdownMenu` outside `core/ui`. The check also waits through a
+  recreation (rotation, an app-lock unlock, a restored process): until one frame has passed after a new composition it is not
+  shown, because the screens report their input in effects after the first frame. The gate's clock wakes at the next boundary
+  (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets through Back (a voluntary check closes with it on API 31-32) and the phone's own keys (`ownerCheckLayerEats`:
+  volume up, down and mute, the headset hook, media play, pause, play/pause, stop, next and previous, call and end call), so a
+  call or music keeps its keys; every other key is eaten (the app lock's `AppLockGate` layer still eats every key). While a
+  call screen is shown (`LocalCallScreenShown`, provided by `CallOverlay`) the check's own Back handler is off, so Back is the
+  call screen's. A check that said it passed keeps the shell uncovered while `gated` is still true for at most
+  `OWNER_CHECK_PASSED_MS` (10 s) and not for a new deadline (saved). The undecided frame also clears semantics and takes every
+  touch. **Known limit of the wipe:** only screens composed when the check latches are wiped; a typed secret in a screen under
+  another on the back stack, or in a dialog a voluntary (asked) check had already hidden, stays in its view model (a form is
+  normally popped, not stacked under). `ShellOverlayRulesTest` lists the files that may call `HoldsInput` /
+  `WipesOnCover` and refuses fully qualified windows of their own outside `VettIdApp.kt`. Rule: `ownerCheckMode()` /
+  `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). The refused-request text "What you entered is
+  kept: the check opens when you leave this screen" is unchanged (owner decision a).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
   (`@Serializable` route objects, one `NavGraphBuilder.xDestination()` per feature).
 - Features depend only on `:core:*`; no feature touches transport or crypto

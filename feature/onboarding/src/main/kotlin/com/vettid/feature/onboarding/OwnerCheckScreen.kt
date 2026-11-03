@@ -70,6 +70,8 @@ fun OwnerCheckRoute(
     mode: OwnerCheckMode,
     onDone: () -> Unit,
     onCancel: () -> Unit,
+    /** False while a call screen is over the shell: Back is the call screen's then. */
+    backEnabled: Boolean = true,
     viewModel: OwnerCheckViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(mode) { viewModel.start(mode) }
@@ -88,7 +90,7 @@ fun OwnerCheckRoute(
         onCancel()
     }
     // Back leaves a voluntary check; past the deadline it does nothing (the check is never dismissible).
-    BackHandler { if (mode != OwnerCheckMode.GATED) cancel() }
+    BackHandler(enabled = backEnabled) { if (mode != OwnerCheckMode.GATED) cancel() }
     OwnerCheckContent(state.copy(mode = mode), viewModel, onCancel = cancel)
 }
 

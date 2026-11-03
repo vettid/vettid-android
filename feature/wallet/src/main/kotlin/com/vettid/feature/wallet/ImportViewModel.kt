@@ -142,6 +142,14 @@ data class ImportUiState(
     /** "Continue" on the first step: a name, a network, words that are all of the list and fit a length, a passphrase that is allowed. */
     val formReady: Boolean get() = nameValid && network != null && status.ready && passphraseValid
 
+    /** Unsent input: the name, words or passphrase typed, or limits typed; the password step has its own field. */
+    val holdsInput: Boolean
+        get() = when (step) {
+            ImportStep.FORM -> name.isNotEmpty() || typed.isNotEmpty() || passphrase.isNotEmpty()
+            ImportStep.LIMITS -> limits.perTx.isNotEmpty() || limits.perPeriod.isNotEmpty()
+            else -> false
+        }
+
     override fun toString(): String = "ImportUiState(step=$step)"
 }
 

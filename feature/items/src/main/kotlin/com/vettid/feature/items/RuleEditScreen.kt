@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import com.vettid.core.data.items.RuleMatch
 import com.vettid.core.data.items.RulePreview
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.TagChip
 import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.theme.VettIdShape
@@ -33,10 +34,10 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material3.AlertDialog
+import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
+import com.vettid.core.ui.components.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -167,6 +168,7 @@ data class RuleEditActions(
  */
 @Composable
 fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: Modifier = Modifier) {
+    HoldsInput(state.dirty)
     val name = sharingNameOf(state.connectionName)
     val leave = { if (state.dirty) actions.onAskDiscard() else actions.onBack() }
     BackHandler(enabled = state.dirty && !state.confirmDiscard) { actions.onAskDiscard() }
