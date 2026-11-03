@@ -21,9 +21,9 @@ class PresenceTextTest {
 
     @Test
     fun theStatesWithTheirAgeOrWithout() {
-        assertEquals("Available · active 10 min ago", line(PresenceReading.Known(PresenceState.AVAILABLE, now.minusSeconds(600))))
-        assertEquals("Busy · active today", line(PresenceReading.Known(PresenceState.BUSY, now.minusSeconds(7200))))
-        assertEquals("Away · active just now", line(PresenceReading.Known(PresenceState.AWAY, now.minusSeconds(60))))
+        assertEquals("Available · last seen 10 min ago", line(PresenceReading.Known(PresenceState.AVAILABLE, now.minusSeconds(600))))
+        assertEquals("Busy · last seen today", line(PresenceReading.Known(PresenceState.BUSY, now.minusSeconds(7200))))
+        assertEquals("Away · last seen just now", line(PresenceReading.Known(PresenceState.AWAY, now.minusSeconds(60))))
         // Nothing after the state without last_active, or one that cannot be told.
         assertEquals("Away", line(PresenceReading.Known(PresenceState.AWAY, null)))
         assertEquals("Busy", line(PresenceReading.Known(PresenceState.BUSY, now.plusSeconds(60))))

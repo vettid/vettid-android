@@ -67,6 +67,24 @@ class PresenceConversationTest {
     }
 
     @Test
+    fun aHoldDuringTheConversationAsksAgainWhenPresenceIsBack() = runTest {
+        val vm = vm("c1")
+        advanceUntilIdle()
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        presence.readings.value = emptyMap()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.presence)
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        advanceUntilIdle()
+        assertEquals(listOf("c1", "c1"), presence.queries)
+        assertEquals(PresenceReading.Checking, vm.uiState.value.presence)
+        // A lost reading is "Status unknown", never "Checking…" for good.
+        presence.readings.value = emptyMap()
+        advanceUntilIdle()
+        assertEquals(PresenceReading.Unknown, vm.uiState.value.presence)
+    }
+
+    @Test
     fun aServiceConversationHasNoLineAndNothingIsAsked() = runTest {
         val vm = vm("s1")
         advanceUntilIdle()

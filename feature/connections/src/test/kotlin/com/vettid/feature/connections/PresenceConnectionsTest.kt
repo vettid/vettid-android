@@ -93,6 +93,40 @@ class PresenceConnectionsTest {
     }
 
     @Test
+    fun afterAHoldThatClearedTheReadingsThePageSaysUnknownAndAsksAgainWhenPresenceIsBack() = runTest {
+        social.seed(listOf(ada()))
+        val vm = detailVm()
+        advanceUntilIdle()
+        assertEquals(1, presence.queries.size)
+        // The hold: availability and readings go (the manager's clear).
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        presence.readings.value = emptyMap()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.presence)
+        // After the check: presence again; the reading was lost, so "Status unknown" until the question is asked, then Checking.
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        advanceUntilIdle()
+        assertEquals(2, presence.queries.size)
+        assertEquals(PresenceReading.Checking, vm.uiState.value.presence?.reading)
+        presence.readings.value = emptyMap()
+        advanceUntilIdle()
+        assertEquals(PresenceReading.Unknown, vm.uiState.value.presence?.reading)
+    }
+
+    @Test
+    fun theSwitchRefusesAnExceptionBeyond1024WithTheLimitText() = runTest {
+        social.seed(listOf(ada()))
+        presence.policy.value = PresencePolicy(3, except = (1..PresencePolicy.MAX_EXCEPT).map { "x$it" })
+        val vm = detailVm()
+        advanceUntilIdle()
+        vm.setPresenceShared(false)
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.vault.FailureKind.LIMIT, vm.uiState.value.error)
+        assertEquals(PresencePolicy.MAX_EXCEPT, presence.policy.value?.except?.size)
+        assertEquals(3L, presence.policy.value?.version)
+    }
+
+    @Test
     fun aServiceHasNoPresenceLineSwitchOrQuestion() = runTest {
         social.seed(listOf(service()))
         val vm = detailVm("s1")
@@ -164,14 +198,14 @@ class PresenceConnectionsTest {
     fun theLineUnderTheNameSaysTheStateWithHowLongAgo() {
         detail(PresenceReading.Known(PresenceState.AVAILABLE, Instant.now().minusSeconds(10 * 60)))
         rule.onNodeWithTag("detail_presence").assertIsDisplayed()
-        rule.onNodeWithText("Available · active 10 min ago").assertIsDisplayed()
+        rule.onNodeWithText("Available · last seen 10 min ago").assertIsDisplayed()
     }
 
     @Test
     fun anHourOrMoreAgoIsActiveTodayAndWithoutLastActiveNothingFollows() {
         // At most three hours back, so that it is still "today" whenever the test runs just after midnight too.
         detail(PresenceReading.Known(PresenceState.BUSY, Instant.now().minusSeconds(2 * 3600)))
-        val today = rule.onAllNodesWithText("Busy · active today").fetchSemanticsNodes().size
+        val today = rule.onAllNodesWithText("Busy · last seen today").fetchSemanticsNodes().size
         val sameDay = Instant.now().minusSeconds(2 * 3600).atZone(java.time.ZoneId.systemDefault()).toLocalDate() ==
             java.time.LocalDate.now()
         assertEquals(if (sameDay) 1 else 0, today)
@@ -181,7 +215,7 @@ class PresenceConnectionsTest {
     fun awayWithoutLastActiveIsJustAway() {
         detail(PresenceReading.Known(PresenceState.AWAY, null))
         rule.onNodeWithText("Away").assertIsDisplayed()
-        assertEquals(0, rule.onAllNodesWithText("active", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("last seen", substring = true).fetchSemanticsNodes().size)
     }
 
     @Test
@@ -321,7 +355,7 @@ class PresenceConnectionsTest {
             )
         }
         rule.onNodeWithText("Let your connections see when you're around?").assertIsDisplayed()
-        rule.onNodeWithText("They see Available, Busy or Away and roughly when you last used VettID.").assertIsDisplayed()
+        rule.onNodeWithText("They see Available, Busy or Away and roughly when their vault was last in use.").assertIsDisplayed()
         rule.onNodeWithText("Change this in Settings → Privacy → Presence").assertIsDisplayed()
         rule.onNodeWithText("Not now").performClick()
         rule.onNodeWithText("Share with everyone").performClick()

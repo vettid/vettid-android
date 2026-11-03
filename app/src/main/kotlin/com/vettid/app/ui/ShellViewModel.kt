@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -43,6 +45,9 @@ data class ShellBadges(
     /** The vault has wallets (ANDROID-PLAN §4 "Wallet"; never in a build without the wallet): the Wallet entry shows (W1c-2). */
     val walletShown: Boolean = false,
 )
+
+/** A refused change of the member's status: the failure and the vault code it may name (shown with `failureText`). */
+data class PresenceFailure(val kind: com.vettid.core.data.vault.FailureKind, val code: String?)
 
 /** The app shell (drawer badges, the Notifications bell, invitation links the app was opened with). */
 @HiltViewModel
@@ -116,14 +121,21 @@ class ShellViewModel @Inject constructor(
 
     /** The sheet's picker: the same `presence.set` as Settings → Privacy → Presence. A refused change leaves the row as it was. */
     fun setPresenceState(state: PresenceState) {
+        presenceFailure.value = null
         viewModelScope.launch {
             try {
                 presence.update { it.copy(state = state) }
-            } catch (_: VaultFailure) {
-                // The row keeps showing the state the vault still has; Settings → Privacy → Presence says what went wrong.
+            } catch (e: VaultFailure) {
+                // The row keeps the state the vault still has, and the sheet says why: a failed "Invisible" must not look done.
+                presenceFailure.value = PresenceFailure(e.kind, e.shownCode)
             }
         }
     }
+
+    private val presenceFailure = MutableStateFlow<PresenceFailure?>(null)
+
+    /** The last refused status pick of the avatar sheet, until the next pick. */
+    val presenceError: StateFlow<PresenceFailure?> = presenceFailure.asStateFlow()
 
     /** An opened invitation link waiting for the connect flow. */
     val inviteLink: StateFlow<String?> = invites.link

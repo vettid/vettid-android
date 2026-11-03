@@ -48,10 +48,21 @@ class PresenceManagerTest {
         var conflicts = 0
         var afterConflict: String? = null
         var ping = 0
+        var exp = "2026-11-03T12:00:30Z"
+
+        /** `presence.set`'s answer, when it is not `{"version": n+1}`. */
+        var setAnswer: String? = null
+
+        /** `presence.get` fails (the transport) that many times first. */
+        var getFailures = 0
 
         override suspend fun get(): JsonObject {
             synchronized(this) { gets += "get" }
             refuse["get"]?.let { throw VaultOpException("presence.get", it) }
+            if (getFailures > 0) {
+                getFailures--
+                throw java.io.IOException("offline")
+            }
             return obj(policy)
         }
 
@@ -63,13 +74,14 @@ class PresenceManagerTest {
                 afterConflict?.let { policy = it }
                 throw VaultOpException("presence.set", "conflict")
             }
+            setAnswer?.let { return obj(it) }
             return obj("""{"version":${version + 1}}""")
         }
 
         override suspend fun query(connectionId: String): JsonObject {
             synchronized(this) { queries += connectionId }
             refuse["query"]?.let { throw VaultOpException("presence.query", it) }
-            return obj("""{"ping_id":"ping-${++ping}","exp":"2026-11-03T12:00:30Z"}""")
+            return obj("""{"ping_id":"ping-${++ping}","exp":"$exp"}""")
         }
     }
 
@@ -212,6 +224,59 @@ class PresenceManagerTest {
     }
 
     @Test
+    fun anUnreadableSetAnswerReadsThePolicyInsteadOfGuessingTheVersion() = runTest {
+        val ops = Ops().apply { setAnswer = "{}" }
+        val m = open(ops)
+        ops.policy = """{"version":11,"state":"busy","share":"all","except":[]}"""
+        m.update { it.copy(state = PresenceState.BUSY) }
+        assertEquals(11L, m.policy.value?.version)
+        assertEquals(2, ops.gets.size)
+    }
+
+    @Test
+    fun anEventNotNewerThanThePolicyHeldIsNotReadAgain() = runTest {
+        val ops = Ops()
+        val m = open(ops)
+        m.onEvent(event("sync.event", """{"kind":"presence.changed","version":4}"""))
+        advanceUntilIdle()
+        assertEquals(1, ops.gets.size)
+    }
+
+    @Test
+    fun aFailedFirstReadIsTriedAgainWithABackoffUntilItWorks() = runTest {
+        val ops = Ops().apply { getFailures = 2 }
+        val m = PresenceManager(this, ops = { ops }, closed = { closed }, now = { clock })
+        m.start()
+        settle { ops.gets.size == 1 }
+        assertEquals(PresenceAvailability.UNKNOWN, m.availability.value)
+        advanceTimeBy(5_001)
+        settle { ops.gets.size == 2 }
+        assertEquals(PresenceAvailability.UNKNOWN, m.availability.value)
+        advanceTimeBy(15_001)
+        settle { m.availability.value == PresenceAvailability.AVAILABLE }
+        assertEquals(3, ops.gets.size)
+        advanceTimeBy(300_000)
+        assertEquals(3, ops.gets.size)
+    }
+
+    @Test
+    fun theRetryStopsWhileClosedAndWhenTheFeatureIsMissing() = runTest {
+        val ops = Ops()
+        val m = PresenceManager(this, ops = { ops }, closed = { closed }, now = { clock })
+        closed = true
+        m.start()
+        advanceTimeBy(300_000)
+        assertTrue(ops.gets.isEmpty())
+        closed = false
+        val missing = Ops().apply { refuse["get"] = "unsupported_type" }
+        val n = PresenceManager(this, ops = { missing }, closed = { closed }, now = { clock })
+        n.start()
+        settle { n.availability.value == PresenceAvailability.UNSUPPORTED }
+        advanceTimeBy(300_000)
+        assertEquals(1, missing.gets.size)
+    }
+
+    @Test
     fun theSyncEventReadsThePolicyAgain() = runTest {
         val ops = Ops()
         val m = open(ops)
@@ -240,8 +305,11 @@ class PresenceManagerTest {
         assertEquals(PresenceState.BUSY, known.state)
         assertEquals(Instant.parse("2026-11-03T11:50:00Z"), known.lastActive)
         // The timer found nothing left to do.
-        advanceTimeBy(60_000)
+        advanceTimeBy(59_000)
         assertEquals(known, m.readings.value["c1"])
+        // A reading older than a minute is not shown as current: it goes.
+        advanceTimeBy(2_000)
+        assertNull(m.readings.value["c1"])
     }
 
     @Test
@@ -280,6 +348,43 @@ class PresenceManagerTest {
         assertEquals(PresenceReading.Unknown, m.readings.value["c1"])
         m.onEvent(result("ping-1"))
         assertEquals(PresenceReading.Unknown, m.readings.value["c1"])
+    }
+
+    @Test
+    fun anExpAlreadyPastIsSkewAndWaitsTheFullTimeInsteadOfStickingOnChecking() = runTest {
+        val ops = Ops().apply { exp = "2026-11-03T11:59:00Z" }
+        val m = open(ops)
+        m.query("c1")
+        advanceTimeBy(1_000)
+        assertEquals(PresenceReading.Checking, m.readings.value["c1"])
+        advanceTimeBy(30_000)
+        assertEquals(PresenceReading.Unknown, m.readings.value["c1"])
+        // And a result inside the wait is taken, as the ask was registered before any timer could run.
+        val again = Ops().apply { exp = "2026-11-03T11:59:00Z" }
+        val n = open(again)
+        n.query("c2")
+        n.onEvent(result("ping-1", conn = "c2"))
+        assertTrue(n.readings.value["c2"] is PresenceReading.Known)
+    }
+
+    @Test
+    fun aResultBetweenTheAnswerAndItsRegistrationIsKept() = runTest {
+        val ops = Ops()
+        lateinit var m: PresenceManager
+        val gap = object : PresenceOps by ops {
+            override suspend fun query(connectionId: String): JsonObject = ops.query(connectionId).also {
+                // After the vault answered, before the manager registered the ask: the connection is still "being sent".
+                m.onEvent(result("ping-1"))
+            }
+        }
+        m = PresenceManager(this, ops = { gap }, closed = { closed }, now = { clock })
+        m.refreshPolicy()
+        m.query("c1")
+        assertTrue(m.readings.value["c1"] is PresenceReading.Known)
+        // Nothing is left "being sent": a later question is asked.
+        clock = clock.plusSeconds(120)
+        m.query("c1")
+        assertEquals(2, ops.queries.size)
     }
 
     @Test

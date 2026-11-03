@@ -5,7 +5,6 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultJson
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -117,16 +116,17 @@ sealed interface PresenceAge {
 
 /** The bodies of §10.17 as models. A body that does not read yields nothing: the app never shows what it cannot name. */
 object PresenceWire {
-    /** `presence.get`'s answer. A `state` or `share` it does not know takes the vault's default; no `version` is no policy. */
+    /** `presence.get`'s answer. No `version`, or a `state` or `share` the app does not know, is no policy (never a guessed default). */
     fun policy(body: JsonObject): PresencePolicy? {
-        val version = (body["version"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull() ?: return null
+        val version = version(body)
         val except = (body["except"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
-        return PresencePolicy(
-            version = version,
-            state = PresenceState.of(VaultJson.str(body, "state")) ?: PresenceState.AVAILABLE,
-            share = if (VaultJson.str(body, "share") == PresenceShare.NONE.wire) PresenceShare.NONE else PresenceShare.ALL,
-            except = PresencePolicy.cleaned(except),
-        )
+        val state = PresenceState.of(VaultJson.str(body, "state"))
+        val share = PresenceShare.entries.firstOrNull { it.wire == VaultJson.str(body, "share") }
+        return if (version == null || state == null || share == null) {
+            null
+        } else {
+            PresencePolicy(version = version, state = state, share = share, except = PresencePolicy.cleaned(except))
+        }
     }
 
     /** `presence.set`'s answer: the new version. */
@@ -206,12 +206,12 @@ interface PresenceRepository {
 }
 
 /**
- * [PresenceRepository.query] once the vault is known to have presence: waits for the answer to the first `presence.get` of
- * the vault's opening (a screen can open before it), asks if there is presence, and does nothing if there is none. A vault
- * that stays unknown (held, offline) keeps this waiting with the screen's scope.
+ * [PresenceRepository.query] each time the vault has presence: when the screen opens before the first `presence.get` is
+ * answered, and again when presence comes back after a hold or a failed read. Nothing is sent while there is none. Collects
+ * until the screen's scope ends.
  */
-suspend fun PresenceRepository.queryWhenKnown(connectionId: String) {
-    if (availability.first { it != PresenceAvailability.UNKNOWN } == PresenceAvailability.AVAILABLE) query(connectionId)
+suspend fun PresenceRepository.queryWhileAvailable(connectionId: String) {
+    availability.collect { if (it == PresenceAvailability.AVAILABLE) query(connectionId) }
 }
 
 /** Presence where there is none (a screen's default): never available, nothing sent. */

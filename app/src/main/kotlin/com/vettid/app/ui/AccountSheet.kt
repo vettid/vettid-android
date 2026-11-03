@@ -31,6 +31,11 @@ import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.SubscriptionInfo
 import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.ui.components.AvatarSheet
+import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.NoticeCard
+import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsInfoRow
@@ -46,7 +51,7 @@ import java.time.Instant
  * The avatar sheet's status row (ANDROID-PLAN §4 "Presence"): the member's own [state], and what picking another one does.
  * Passed only where the vault has presence.
  */
-data class SheetPresence(val state: PresenceState, val onPick: (PresenceState) -> Unit)
+data class SheetPresence(val state: PresenceState, val error: PresenceFailure? = null, val onPick: (PresenceState) -> Unit)
 
 /**
  * Avatar sheet (ANDROID-PLAN §4, 0.1.10): "Lock vault" first, right under the name (owner feedback 2026-10-08: at the
@@ -98,6 +103,7 @@ fun AccountSheetOptions(
     presence: SheetPresence? = null,
 ) {
     val uri = LocalUriHandler.current
+    presence?.let { StatusGroup(it) }
     SettingsGroup(Modifier.testTag("account_lock")) {
         SettingsRow(
             stringResource(R.string.account_lock_vault),
@@ -108,7 +114,6 @@ fun AccountSheetOptions(
             modifier = Modifier.testTag("account_lock_vault"),
         )
     }
-    presence?.let { StatusGroup(it) }
     AccountNamesGroup(account, now, onChangeName, onSharedProfile)
     AccountEmailGroup(account)
     AccountDetails(account, now)
@@ -143,6 +148,14 @@ fun StatusGroup(presence: SheetPresence) {
             icon = Icons.Outlined.Visibility,
             showChevron = false,
             modifier = Modifier.testTag("account_status_row"),
+        )
+    }
+    presence.error?.let { e ->
+        NoticeCard(
+            kind = NoticeKind.WARNING,
+            title = "",
+            body = failureText(e.kind.messageRes(), e.kind.vaultCode(e.code)),
+            modifier = Modifier.padding(horizontal = Spacing.s).testTag("account_status_error"),
         )
     }
     if (picking) {

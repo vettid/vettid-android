@@ -1139,8 +1139,13 @@ class VaultManager(
         // Held or due (§3.6.3): no cached feed content is shown; after the check (here or on another device), a full read.
         scope.launch {
             var held = false
+            var wasGated = false
             ownerCheck.ownerCheck.collectSurviving("owner check") { v ->
                 val now = OwnProfileStep.held(v)
+                // Presence is sent only while the check is neither due nor held: the probe is asked again when that ends.
+                val gated = v?.gated(java.time.Instant.now()) == true
+                val gatedEnded = wasGated && !gated
+                wasGated = gated
                 // Kept first: nothing that throws below leaves it wrong for the next value.
                 val wasHeld = held
                 held = now
@@ -1160,6 +1165,8 @@ class VaultManager(
                     steps.step { presence.start() } // whether the vault has presence, and the policy, again
                     steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
                 }
+                // The check passed while the state stayed OK (no hold): presence was only not sent meanwhile; ask again.
+                if (gatedEnded && !wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { presence.start() }
                 // Nor the member's own names, full email or photo; read again after the passed check.
                 steps.step {
                     when (OwnProfileStep.onCheck(wasHeld = wasHeld, held = now, phase = phaseFlow.value)) {

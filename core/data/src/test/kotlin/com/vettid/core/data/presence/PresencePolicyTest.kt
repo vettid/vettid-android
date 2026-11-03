@@ -81,8 +81,10 @@ class PresencePolicyTest {
             PresencePolicy(3, PresenceState.AWAY, PresenceShare.NONE, listOf("a", "b")),
             PresenceWire.policy(obj("""{"version":3,"state":"away","share":"none","except":["b","a","b"]}""")),
         )
-        // Unknown state or share: the vault's defaults; no version: no policy.
-        assertEquals(PresencePolicy(3), PresenceWire.policy(obj("""{"version":3,"state":"x","share":"y"}""")))
+        // A state or share the app does not know, or none, is no policy: never a guessed default.
+        assertNull(PresenceWire.policy(obj("""{"version":3,"state":"x","share":"all"}""")))
+        assertNull(PresenceWire.policy(obj("""{"version":3,"state":"busy","share":"y"}""")))
+        assertNull(PresenceWire.policy(obj("""{"version":3}""")))
         assertNull(PresenceWire.policy(obj("""{"state":"busy"}""")))
         val at = Instant.parse("2026-11-03T12:00:00Z")
         // A last_active a little ahead (skew) is now, far ahead is dropped; invisible is never an answer.

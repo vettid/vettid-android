@@ -44,9 +44,9 @@ class AccountSheetPresenceTest {
         show(SheetPresence(PresenceState.AVAILABLE) {})
         rule.onNodeWithText("Status: Available").assertIsDisplayed()
         val top = { tag: String -> rule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().positionInRoot.y }
-        // Under Lock vault (which stays right under the name, owner feedback 2026-10-08) and before the names.
-        assertTrue(top("account_lock") < top("account_status"))
-        assertTrue(top("account_status") < top("account_names"))
+        // One row under the name: before Lock vault and the names.
+        assertTrue(top("account_status") < top("account_lock"))
+        assertTrue(top("account_lock") < top("account_names"))
     }
 
     @Test
@@ -69,6 +69,19 @@ class AccountSheetPresenceTest {
         rule.onNodeWithText("Status: Away").performScrollTo().performClick()
         rule.onNodeWithText("Away").performClick()
         assertTrue(picked.isEmpty())
+    }
+
+    @Test
+    fun aRefusedPickShowsItsFailureTextInTheSheet() {
+        show(SheetPresence(PresenceState.AVAILABLE, PresenceFailure(com.vettid.core.data.vault.FailureKind.NETWORK, null)) {})
+        rule.onNodeWithTag("account_status_error").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Status: Available").assertIsDisplayed()
+    }
+
+    @Test
+    fun noErrorNoticeWithoutAFailure() {
+        show(SheetPresence(PresenceState.AVAILABLE) {})
+        assertEquals(0, rule.onAllNodesWithTag("account_status_error").fetchSemanticsNodes().size)
     }
 
     @Test

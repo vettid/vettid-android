@@ -17,10 +17,11 @@ import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.presence.NoPresence
 import com.vettid.core.data.presence.PresenceAvailability
+import com.vettid.core.data.presence.PresencePolicy
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceShare
-import com.vettid.core.data.presence.queryWhenKnown
+import com.vettid.core.data.presence.queryWhileAvailable
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.AuthenticationState
@@ -688,7 +689,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 auth = auth[id],
                 canCall = call == CallAvailability.READY,
                 votes = v,
-                presence = p?.takeIf { c?.askable == true }?.let { DetailPresence(it.reading ?: PresenceReading.Checking, it.shared) },
+                presence = p?.takeIf { c?.askable == true }?.let { DetailPresence(it.reading ?: PresenceReading.Unknown, it.shared) },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
 
@@ -730,7 +731,7 @@ class ConnectionDetailViewModel @Inject constructor(
         // Presence is asked when the page opens (and on refresh), never from a list (ANDROID-PLAN §4 "Presence").
         viewModelScope.launch {
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhenKnown(id)
+            if (c.askable) presence.queryWhileAvailable(id)
         }
     }
 
@@ -740,7 +741,15 @@ class ConnectionDetailViewModel @Inject constructor(
     }
 
     /** The switch "Share my status with <First>": adds the connection to or takes it out of the policy's `except`. */
-    fun setPresenceShared(shared: Boolean) = act { presence.update { it.withSharedWith(id, shared) } }
+    fun setPresenceShared(shared: Boolean) = act {
+        presence.update { p ->
+            val next = p.withSharedWith(id, shared)
+            // At most 1,024 exceptions (§10.17): refused here, with the vault's limit text, rather than sent.
+            val over = next.except.size > PresencePolicy.MAX_EXCEPT && next.except.size > p.except.size
+            if (over) throw VaultFailure(FailureKind.LIMIT, "limit")
+            next
+        }
+    }
 
     /**
      * Reads both directions again (`share.rule.list` for this connection, `grant.list`), e.g. when the screen comes

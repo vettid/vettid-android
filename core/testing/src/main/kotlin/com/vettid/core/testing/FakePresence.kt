@@ -35,5 +35,6 @@ class FakePresence(available: Boolean = true, initial: PresencePolicy? = Presenc
 
     override suspend fun query(connectionId: String) {
         queries += connectionId
+        readings.value = readings.value + (connectionId to (readings.value[connectionId] ?: PresenceReading.Checking))
     }
 }

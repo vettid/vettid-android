@@ -273,7 +273,7 @@
     <string name="connections_presence_unknown_detail">%1$s\'s vault didn\'t answer. They may be offline or locked, or not sharing their status with you.</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
     <string name="connections_presence_refresh">Check again</string> <!-- NEW: not in the plan's table -->
     <string name="connections_presence_card_title">Let your connections see when you\'re around?</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="connections_presence_card_body">They see Available, Busy or Away and roughly when you last used VettID.</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_card_body">They see Available, Busy or Away and roughly when their vault was last in use.</string> <!-- Owner-approved 2026-11-03 (last seen) -->
     <string name="connections_presence_card_share">Share with everyone</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
     <string name="connections_presence_card_not_now">Not now</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
     <string name="connections_presence_card_settings">Change this in Settings → Privacy → Presence</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->

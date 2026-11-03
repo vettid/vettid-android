@@ -49,8 +49,13 @@ class PresenceManager(
     private val ops: suspend () -> PresenceOps,
     private val closed: () -> Boolean = { false },
     private val now: () -> Instant = Instant::now,
+    /** The waits between the tries of the opening `presence.get`; the last one repeats. */
+    private val retryDelays: List<Duration> = RETRY,
 ) : PresenceRepository {
-    private class Ask(val pingId: String, val askedAt: Instant, val expiry: Job)
+    private class Ask(val pingId: String, val askedAt: Instant, val expiry: Job) {
+        /** Drops a result after a minute (a reading is not shown as current longer). */
+        var stale: Job? = null
+    }
 
     private val lock = Any()
     private val availabilityFlow = MutableStateFlow(PresenceAvailability.UNKNOWN)
@@ -69,6 +74,7 @@ class PresenceManager(
 
     @Volatile
     private var policyQueued = false
+    private var starter: Job? = null
 
     override val availability: StateFlow<PresenceAvailability> = availabilityFlow.asStateFlow()
     override val policy: StateFlow<PresencePolicy?> = policyFlow.asStateFlow()
@@ -79,7 +85,12 @@ class PresenceManager(
         synchronized(lock) {
             generation++
             policyQueued = false
-            asks.values.forEach { it.expiry.cancel() }
+            starter?.cancel()
+            starter = null
+            asks.values.forEach {
+                it.expiry.cancel()
+                it.stale?.cancel()
+            }
             asks.clear()
             sending.clear()
             strays.clear()
@@ -91,17 +102,44 @@ class PresenceManager(
 
     /** After an unlock and after the hold: asks whether the vault has presence and reads the policy (quietly). */
     fun start() {
-        scope.launch { runCatching { refreshPolicy() } }
+        synchronized(lock) {
+            starter?.cancel()
+            starter = scope.launch { probe() }
+        }
+    }
+
+    /**
+     * The opening `presence.get`, tried again after a failure that says nothing about the feature (transport, no response, an
+     * unreadable answer) while the vault is open; `unsupported_type` ends it as "no presence", a closed vault ends it (the
+     * check passing calls [start] again).
+     */
+    private suspend fun probe() {
+        var n = 0
+        while (true) {
+            try {
+                refreshPolicy()
+                return
+            } catch (e: VaultFailure) {
+                if (e.kind == FailureKind.NOT_SUPPORTED || e.kind == FailureKind.OWNER_CHECK_REQUIRED) return
+            }
+            delay(retryDelays[minOf(n++, retryDelays.size - 1)].toMillis())
+        }
     }
 
     /** `sync.event{presence.changed}` re-reads the policy; `presence.result` answers a question. */
     fun onEvent(m: VaultMessage) {
         when (m.type) {
-            "sync.event" -> if (VaultJson.str(m.body, "kind") == CHANGED && availabilityFlow.value == PresenceAvailability.AVAILABLE) {
-                refreshPolicyQuietly()
-            }
+            "sync.event" -> if (VaultJson.str(m.body, "kind") == CHANGED && changedBeyondHeld(m)) refreshPolicyQuietly()
             "presence.result" -> PresenceWire.result(m.body, now())?.let { onResult(it) }
         }
+    }
+
+    /** Presence is on, and the event's `version` (when it names one) is newer than the policy held: our own change echoes back. */
+    private fun changedBeyondHeld(m: VaultMessage): Boolean {
+        if (availabilityFlow.value != PresenceAvailability.AVAILABLE) return false
+        val version = (m.body["version"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull()
+        val held = policyFlow.value?.version
+        return version == null || held == null || version > held
     }
 
     private fun refreshPolicyQuietly() {
@@ -186,43 +224,66 @@ class PresenceManager(
                 next.except.takeIf { it != current.except },
             )
         }
-        val version = PresenceWire.version(body) ?: (current.version + 1)
-        synchronized(lock) { if (gen == generation) policyFlow.value = next.copy(version = version) }
+        val version = PresenceWire.version(body)
+        // An answer without a version is not guessed at: the policy is read again.
+        if (version == null) {
+            readPolicy()
+        } else {
+            synchronized(lock) { if (gen == generation) policyFlow.value = next.copy(version = version) }
+        }
     }
 
     override suspend fun query(connectionId: String) {
         val gen = synchronized(lock) { generationToAsk(connectionId) } ?: return
-        val asked = ask(connectionId, gen) ?: return
-        val at = now()
-        val expiry = scope.launch {
-            delay(expiryWait(asked.exp, at).toMillis())
-            expire(connectionId, asked.pingId)
-        }
-        synchronized(lock) {
-            if (gen != generation) {
-                expiry.cancel()
-            } else {
-                asks.put(connectionId, Ask(asked.pingId, at, expiry))?.expiry?.cancel()
-                // The result may have arrived before this answer did.
-                strays.remove(connectionId)?.takeIf { it.pingId == asked.pingId }?.let { applyResult(it) }
-            }
+        try {
+            register(connectionId, gen, ask(connectionId, gen))
+        } finally {
+            // Whatever happened (a lock, a cancellation), the connection is not left "being sent".
+            synchronized(lock) { sending -= connectionId }
         }
     }
 
-    /** Sends `presence.query` ("Checking…" meanwhile); null, with the reading unknown, when it cannot be sent or is refused. */
+    /** Sends `presence.query` ("Checking…" meanwhile); null when it cannot be sent or is refused. */
     private suspend fun ask(connectionId: String, gen: Int): PresenceWire.Asked? {
-        if (closed()) return null.also { setReading(connectionId, gen, PresenceReading.Unknown) }
+        if (closed()) return null
         synchronized(lock) { sending += connectionId }
         setReading(connectionId, gen, PresenceReading.Checking)
-        val asked = try {
+        return try {
             PresenceWire.asked(vaultGuard(resend = true) { ops().query(connectionId) })
         } catch (_: VaultFailure) {
             null
-        } finally {
-            synchronized(lock) { sending -= connectionId }
         }
-        if (asked == null) setReading(connectionId, gen, PresenceReading.Unknown)
-        return asked
+    }
+
+    /**
+     * The answer to the query, in one step under [lock]: the ask is registered before its timer can run, a result that came
+     * first is taken, and the connection is no longer "being sent". Without an answer the reading is unknown.
+     */
+    private fun register(connectionId: String, gen: Int, asked: PresenceWire.Asked?) {
+        synchronized(lock) {
+            sending -= connectionId
+            if (gen == generation) track(connectionId, asked)
+        }
+    }
+
+    /** Under [lock]. */
+    private fun track(connectionId: String, asked: PresenceWire.Asked?) {
+        if (asked == null) {
+            readingFlow.value = readingFlow.value + (connectionId to PresenceReading.Unknown)
+            return
+        }
+        val at = now()
+        val wait = expiryWait(asked.exp, at)
+        val expiry = scope.launch {
+            delay(wait.toMillis())
+            expire(connectionId, asked.pingId)
+        }
+        asks.put(connectionId, Ask(asked.pingId, at, expiry))?.let {
+            it.expiry.cancel()
+            it.stale?.cancel()
+        }
+        // The result may have arrived before this answer did.
+        strays.remove(connectionId)?.takeIf { it.pingId == asked.pingId }?.let { applyResult(it) }
     }
 
     /**
@@ -239,10 +300,9 @@ class PresenceManager(
     /** How long to wait for the result: until `exp` (the vault says 30 s), never longer than that, whatever the clocks say. */
     private fun expiryWait(exp: Instant?, at: Instant): Duration {
         val left = exp?.let { Duration.between(at, it) } ?: return EXP
-        return if (left > EXP) EXP else left.coerceAtLeast(Duration.ZERO)
+        // An `exp` already past, or further than the vault's 30 s, is clock skew (or a reused ping): wait the full time.
+        return if (left <= Duration.ZERO || left > EXP) EXP else left
     }
-
-    private fun Duration.coerceAtLeast(min: Duration) = if (this < min) min else this
 
     private fun setReading(id: String, gen: Int, reading: PresenceReading) {
         synchronized(lock) { if (gen == generation) readingFlow.value = readingFlow.value + (id to reading) }
@@ -272,12 +332,25 @@ class PresenceManager(
     private fun applyResult(r: PresenceWire.Result) {
         val held = readingFlow.value[r.connectionId]
         if (held == PresenceReading.Unknown) return // `exp` passed: the vault would not have sent it
-        readingFlow.value = readingFlow.value + (r.connectionId to PresenceReading.Known(r.state, r.lastActive))
+        val known = PresenceReading.Known(r.state, r.lastActive)
+        readingFlow.value = readingFlow.value + (r.connectionId to known)
+        // A reading older than a minute is not shown as current: it goes (the page asks again or says unknown).
+        val ask = asks[r.connectionId] ?: return
+        ask.stale?.cancel()
+        ask.stale = scope.launch {
+            delay(MINUTE.toMillis())
+            synchronized(lock) {
+                if (asks[r.connectionId] === ask && readingFlow.value[r.connectionId] == known) {
+                    readingFlow.value = readingFlow.value - r.connectionId
+                }
+            }
+        }
     }
 
     private companion object {
         val MINUTE: Duration = Duration.ofMinutes(1)
         val EXP: Duration = Duration.ofSeconds(30)
         const val CHANGED = "presence.changed"
+        val RETRY: List<Duration> = listOf(5L, 15L, 60L).map { Duration.ofSeconds(it) }
     }
 }

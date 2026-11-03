@@ -13,7 +13,7 @@ import com.vettid.core.data.presence.NoPresence
 import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
-import com.vettid.core.data.presence.queryWhenKnown
+import com.vettid.core.data.presence.queryWhileAvailable
 import com.vettid.core.data.social.AttachmentManager
 import com.vettid.core.data.social.AttachmentsRepository
 import com.vettid.core.data.social.ConnectionInfo
@@ -214,7 +214,7 @@ class ConversationViewModel @Inject constructor(
         }.combine(calls.availability) { s, call -> s.copy(call = call) }
             .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
             .combine(presence.readings) { (s, on), r ->
-                s.copy(presence = if (on && s.connection?.askable == true) r[connectionId] ?: PresenceReading.Checking else null)
+                s.copy(presence = if (on && s.connection?.askable == true) r[connectionId] ?: PresenceReading.Unknown else null)
             }
             .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
@@ -262,7 +262,7 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             // Presence is asked when the conversation opens, and only then (ANDROID-PLAN §4 "Presence"): never from a list.
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhenKnown(connectionId)
+            if (c.askable) presence.queryWhileAvailable(connectionId)
         }
         viewModelScope.launch {
             // Read while open: every new incoming message is marked read (best effort).
