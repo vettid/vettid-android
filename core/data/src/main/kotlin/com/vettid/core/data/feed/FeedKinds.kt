@@ -185,9 +185,12 @@ object FeedKinds {
 
     /** Kinds whose screens come later (§6): listed, with "Not available in this version of the app". */
     fun notAvailable(kind: String): Boolean =
-        (kind.startsWith("leash.") && kind !in AGENT_PAGE) || kind in LATER
+        (kind.startsWith("leash.") && kind !in AGENT_PAGE && kind !in AGENT_USE) || kind in LATER
 
-    /** (AA5) The `leash.*` kinds that open the agent's page. */
+    /**
+     * (AA5) The `leash.*` kinds that open the agent's page. AA6: the agent-use kinds have their detail sheet,
+     * with the item opened from it.
+     */
     private val AGENT_PAGE = setOf("leash.rate_limited", "leash.referrals_limited", "leash.agent.suspended")
 
     /** The device's (or agent's) own name for the item's `device_id`, isolated; null when not known. */
@@ -276,7 +279,7 @@ object FeedKinds {
             ?.entries?.singleOrNull()?.let { it.name ?: it.label }
         "critical-secret.use.request" ->
             (names.approvals[FeedAsks.approvalKey(item.kind, item.ref) ?: ""] as? Approval.CriticalUse)?.itemName
-        "leash.item.run", "leash.item.proxy" -> item.ref?.let { names.items[it] }
+        "leash.item.run", "leash.item.proxy", "leash.item.read" -> item.ref?.let { names.items[it] }
         in WALLET_CAPS -> item.ref?.let { names.items[it] }
         else -> null
     }.let { AccountNames.isolateOrNull(it) }
@@ -355,7 +358,8 @@ object FeedKinds {
             "guide" -> item.title?.takeIf { it.isNotBlank() }?.let { FeedText(literal = it) } ?: FeedText(R.string.data_feed_guide)
             "leash.rate_limited" ->
                 named(R.string.data_feed_leash_rate_limited_named, R.string.data_feed_leash_rate_limited, deviceName(item, names))
-            "leash.item.read" -> FeedText(R.string.data_feed_leash_item_read)
+            "leash.item.read" -> thing?.let { FeedText(R.string.data_feed_leash_item_read, listOf(it)) }
+                ?: FeedText(R.string.data_feed_leash_item_read_any)
             "leash.agent.suspended" ->
                 named(R.string.data_feed_leash_suspended_named, R.string.data_feed_leash_suspended, deviceName(item, names))
             "leash.referrals_limited" ->
@@ -465,6 +469,20 @@ object FeedKinds {
         SignerClass.DEVELOPMENT -> R.string.data_signer_development
         null -> R.string.data_signer_other
     }
+
+    /** The detail sheet's own line under the title (AA6): what an agent's use of a secret did, as History says it; null for other kinds. */
+    fun sheetDetail(item: FeedItem): FeedText? = when (item.kind) {
+        "leash.item.run" -> FeedText(R.string.data_feed_leash_item_run_detail)
+        "leash.item.proxy" -> FeedText(R.string.data_feed_leash_item_proxy_detail)
+        "leash.item.read" -> FeedText(R.string.data_feed_leash_item_read_detail)
+        else -> null
+    }
+
+    /** The item the sheet can open (AA6): the agent-use kinds' `ref`, only while [FeedNames.items] still knows it. */
+    fun sheetItemId(item: FeedItem, names: FeedNames): String? =
+        item.ref?.takeIf { item.kind in AGENT_USE && it in names.items }
+
+    private val AGENT_USE = setOf("leash.item.run", "leash.item.proxy", "leash.item.read")
 
     /** The row's second line: the item's name or the batch's "3 things"; null for none. */
     fun supporting(item: FeedItem, names: FeedNames): FeedText? = when {

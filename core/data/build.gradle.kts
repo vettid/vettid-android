@@ -13,7 +13,11 @@ android {
         }
     }
     // Robolectric's API 36 runtime reaches into the JDK's file descriptor internals (AttachmentClearTest).
-    testOptions.unitTests.all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    testOptions.unitTests {
+        // The feed texts are checked as rendered text (FeedAgentUseTextTest).
+        isIncludeAndroidResources = true
+        all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
 }
 
 dependencies {

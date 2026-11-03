@@ -56,6 +56,7 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -173,6 +174,7 @@ fun NavGraphBuilder.notificationsDestination(host: NotificationsHost) {
                 onArchived = host.onOpenArchived,
                 onUnreadOnly = vm::setUnreadOnly,
                 onCloseSheet = vm::closeSheet,
+                onOpenSheetItem = vm::openSheetItem,
                 onRetry = vm::refresh,
                 onErrorShown = vm::errorShown,
             ),
@@ -195,6 +197,7 @@ data class NotificationsActions(
     val onArchived: () -> Unit = {},
     val onUnreadOnly: (Boolean) -> Unit = {},
     val onCloseSheet: () -> Unit = {},
+    val onOpenSheetItem: () -> Unit = {},
     val onRetry: () -> Unit = {},
     val onErrorShown: () -> Unit = {},
 )
@@ -278,7 +281,7 @@ fun NotificationsScreen(state: NotificationsUiState, actions: NotificationsActio
             }
         }
     }
-    state.sheet?.let { DetailSheet(it, state.names, state.sheetGone, actions.onCloseSheet) }
+    state.sheet?.let { DetailSheet(it, state.names, state.sheetGone, actions.onCloseSheet, actions.onOpenSheetItem) }
     state.confirmDelete?.let { item ->
         ConfirmDialog(
             title = stringResource(R.string.notifications_delete_title),
@@ -632,16 +635,16 @@ object FeedIcons {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DetailSheet(item: FeedItem, names: FeedNames, gone: Boolean, onDismiss: () -> Unit) {
+fun DetailSheet(item: FeedItem, names: FeedNames, gone: Boolean, onDismiss: () -> Unit, onOpenItem: () -> Unit = {}) {
     ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("feed_sheet")) {
-        DetailSheetContent(item, names, gone)
+        DetailSheetContent(item, names, gone, onOpenItem)
     }
 }
 
 /** The sheet's content (also shown on its own in the screen catalog). */
 @Suppress("CyclomaticComplexMethod") // one line per thing the item names
 @Composable
-fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean) {
+fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean, onOpenItem: () -> Unit = {}) {
     Column(Modifier.navigationBarsPadding().padding(horizontal = Spacing.xl).padding(bottom = Spacing.xl)) {
         Text(
             FeedKinds.title(item, names).text(),
@@ -653,6 +656,10 @@ fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean) {
         FeedKinds.supporting(item, names)?.takeIf { item.kind != "guide" }?.let { line ->
             Spacer(Modifier.height(Spacing.xs))
             Text(line.text(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("feed_sheet_second_line"))
+        }
+        FeedKinds.sheetDetail(item)?.let { line ->
+            Spacer(Modifier.height(Spacing.xs))
+            Text(line.text(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("feed_sheet_detail"))
         }
         Spacer(Modifier.height(Spacing.s))
         FeedManager.at(item)?.let { SheetLine(stringResource(R.string.notifications_sheet_time), Times.full(it)) }
@@ -668,6 +675,12 @@ fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean) {
         if (item.kind == "guide") item.body?.takeIf { it.isNotBlank() }?.let { body ->
             Spacer(Modifier.height(Spacing.s))
             Text(body, style = MaterialTheme.typography.bodyLarge)
+        }
+        if (FeedKinds.sheetItemId(item, names) != null) {
+            TextButton(
+                onClick = onOpenItem,
+                modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("feed_sheet_open_item"),
+            ) { Text(stringResource(R.string.notifications_sheet_open_item)) }
         }
         val note = when {
             FeedKinds.notAvailable(item.kind) -> R.string.notifications_sheet_not_available

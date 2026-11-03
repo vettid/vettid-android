@@ -82,8 +82,9 @@ class FeedDeviceItemsTest {
             assertEquals(FeedTarget.DeviceList, FeedKinds.target(item(kind, device = null)))
             assertFalse("$kind is no longer 'not available'", FeedKinds.notAvailable(kind))
         }
-        // The others stay as they were until AA6.
-        assertTrue(FeedKinds.notAvailable("leash.item.read"))
+        // AA6: the agent-use kinds have their detail sheet; the other leash kinds stay "not available".
+        assertFalse(FeedKinds.notAvailable("leash.item.read"))
+        assertTrue(FeedKinds.notAvailable("leash.allowed"))
         assertEquals(FeedTarget.Sheet, FeedKinds.target(item("leash.item.read")))
     }
 

@@ -287,6 +287,8 @@ object AuditKinds {
         "push.token_gone" -> listOf(Detail.Line(R.string.history_detail_push_token_gone))
         "leash.item.run" -> listOf(Detail.Line(R.string.history_detail_leash_item_run))
         "leash.item.proxy" -> listOf(Detail.Line(R.string.history_detail_leash_item_proxy))
+        "leash.item.read" -> listOf(Detail.Line(R.string.history_detail_leash_item_read))
+        "leash.item.used" -> listOf(Detail.Line(R.string.history_detail_leash_item_used))
         "credential.utk_resync" -> listOf(Detail.Line(R.string.history_detail_credential_utk_resync))
         "credential.holder_cleared" -> listOf(Detail.Line(R.string.history_detail_credential_holder_cleared))
         KIND_AUTHN_WITHDRAWN -> listOf(Detail.Connection(R.string.history_detail_authn_withdrawn))
@@ -380,6 +382,10 @@ object AuditKinds {
             Title.Named(R.string.history_kind_push_token_gone, R.string.history_kind_push_token_gone_any, Who.DEVICE),
         "leash.item.run" to SECRET_USED,
         "leash.item.proxy" to SECRET_USED,
+        "leash.item.read" to
+            Title.Named(R.string.history_kind_leash_item_read_named, R.string.history_kind_leash_item_read, Who.ITEM),
+        "leash.item.used" to
+            Title.Named(R.string.history_kind_leash_item_used_named, R.string.history_kind_leash_item_used, Who.ITEM),
         "leash.item.changed" to
             Title.Named(R.string.history_kind_leash_item_changed, R.string.history_kind_leash_item_changed_any, Who.ITEM),
     )
