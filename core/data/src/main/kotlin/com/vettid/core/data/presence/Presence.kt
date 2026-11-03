@@ -1,0 +1,230 @@
+package com.vettid.core.data.presence
+
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.vault.VaultJson
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeParseException
+
+/** The member's own state (VAULT-MESSAGING §10.17): `available` is the vault's default. */
+enum class PresenceState(val wire: String) {
+    AVAILABLE("available"),
+    BUSY("busy"),
+    AWAY("away"),
+    INVISIBLE("invisible"),
+    ;
+
+    companion object {
+        fun of(wire: String?): PresenceState? = entries.firstOrNull { it.wire == wire }
+    }
+}
+
+/** Who may see the state: [ALL] (`all`, the vault's default) or [NONE] (`none`); `except` turns it round for some connections. */
+enum class PresenceShare(val wire: String) { ALL("all"), NONE("none") }
+
+/**
+ * The member's presence policy, one versioned object (§10.17, §10.1). [except] (0 to [MAX_EXCEPT] connection ids, here
+ * deduplicated and sorted as the vault keeps them) inverts [share] for those connections. Memory only.
+ */
+data class PresencePolicy(
+    val version: Long,
+    val state: PresenceState = PresenceState.AVAILABLE,
+    val share: PresenceShare = PresenceShare.ALL,
+    val except: List<String> = emptyList(),
+) {
+    /** Whether the member's status is shared with [connectionId]: [share] turned round for the connections in [except]. */
+    fun sharesWith(connectionId: String): Boolean = (share == PresenceShare.ALL) != (connectionId in except)
+
+    /** The policy with [connectionId] shared with, or not (adds or removes it in [except]). Unchanged when it already is so. */
+    fun withSharedWith(connectionId: String, shared: Boolean): PresencePolicy {
+        if (sharesWith(connectionId) == shared) return this
+        val inverted = share == PresenceShare.ALL != shared // the connection is to be an exception
+        return copy(except = if (inverted) cleaned(except + connectionId) else except - connectionId)
+    }
+
+    /**
+     * The policy with [share] chosen. A change starts the exceptions again: they turn the other choice round, so the same ids
+     * would mean the opposite (a connection hidden from the member's status would see it).
+     */
+    fun withShare(share: PresenceShare): PresencePolicy = if (this.share == share) this else copy(share = share, except = emptyList())
+
+    /** The policy with the exceptions [ids] (deduplicated and sorted). */
+    fun withExcept(ids: Collection<String>): PresencePolicy = copy(except = cleaned(ids))
+
+    companion object {
+        /** `except` holds at most 1,024 connection ids (§10.17). */
+        const val MAX_EXCEPT = 1_024
+
+        fun cleaned(ids: Collection<String>): List<String> = ids.filter { it.isNotEmpty() }.distinct().sorted()
+    }
+}
+
+/** What the app knows of one connection's presence, in memory only. */
+sealed interface PresenceReading {
+    /** Asked; no `presence.result` yet and `exp` not reached: "Checking…". */
+    data object Checking : PresenceReading
+
+    /** No answer by `exp` (30 s), or the question could not be sent: "Status unknown". Not told apart, as the vault does not. */
+    data object Unknown : PresenceReading
+
+    /** The connection answered: [state] is available, busy or away; [lastActive] is rounded down to 5 minutes by the vault. */
+    data class Known(val state: PresenceState, val lastActive: Instant?) : PresenceReading
+}
+
+/** Whether this vault has presence: learnt by asking (`presence.get`), since no message lists a release's features. */
+enum class PresenceAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
+
+/** How long ago a connection was last active, as the line shows it (ANDROID-PLAN §4 "Presence"). */
+sealed interface PresenceAge {
+    /** Under 5 minutes: the vault rounds `last_active` down to 5 minutes, so "0 min ago" would be said. */
+    data object JustNow : PresenceAge
+
+    /** "active {n} min ago", up to the hour. */
+    data class Minutes(val minutes: Int) : PresenceAge
+
+    /** "active today": an hour or more ago, on this calendar day. */
+    data object Today : PresenceAge
+
+    companion object {
+        private const val SMALLEST_MINUTES = 5L
+        private const val HOUR_MINUTES = 60L
+
+        /**
+         * [lastActive] seen at [now]; null (nothing shown) without it, in the future, or on an earlier day than [now]'s in
+         * [zone] and more than an hour ago (the plan names no wording for those).
+         */
+        fun of(lastActive: Instant?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): PresenceAge? {
+            if (lastActive == null) return null
+            val minutes = Duration.between(lastActive, now).toMinutes()
+            return when {
+                minutes < 0 -> null
+                minutes < SMALLEST_MINUTES -> JustNow
+                minutes < HOUR_MINUTES -> Minutes(minutes.toInt())
+                lastActive.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate() -> Today
+                else -> null
+            }
+        }
+    }
+}
+
+/** The bodies of §10.17 as models. A body that does not read yields nothing: the app never shows what it cannot name. */
+object PresenceWire {
+    /** `presence.get`'s answer. A `state` or `share` it does not know takes the vault's default; no `version` is no policy. */
+    fun policy(body: JsonObject): PresencePolicy? {
+        val version = (body["version"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull() ?: return null
+        val except = (body["except"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+        return PresencePolicy(
+            version = version,
+            state = PresenceState.of(VaultJson.str(body, "state")) ?: PresenceState.AVAILABLE,
+            share = if (VaultJson.str(body, "share") == PresenceShare.NONE.wire) PresenceShare.NONE else PresenceShare.ALL,
+            except = PresencePolicy.cleaned(except),
+        )
+    }
+
+    /** `presence.set`'s answer: the new version. */
+    fun version(body: JsonObject): Long? = (body["version"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull()
+
+    /** `presence.query`'s answer. */
+    data class Asked(val pingId: String, val exp: Instant?)
+
+    fun asked(body: JsonObject): Asked? {
+        val ping = VaultJson.str(body, "ping_id")?.takeIf { it.isNotEmpty() } ?: return null
+        return Asked(ping, instant(VaultJson.str(body, "exp")))
+    }
+
+    /** `presence.result`'s body. */
+    data class Result(val connectionId: String, val pingId: String, val state: PresenceState, val lastActive: Instant?)
+
+    /**
+     * The event, or null when it does not read: no ids, or a `state` other than available, busy or away (the asking vault
+     * accepts nothing else, §10.17). A `last_active` more than 5 minutes ahead of [now] is left out, a smaller skew is [now].
+     */
+    fun result(body: JsonObject, now: Instant): Result? {
+        val connection = VaultJson.str(body, "connection_id")?.takeIf { it.isNotEmpty() }
+        val ping = VaultJson.str(body, "ping_id")?.takeIf { it.isNotEmpty() }
+        val state = PresenceState.of(VaultJson.str(body, "state"))?.takeIf { it != PresenceState.INVISIBLE }
+        if (connection == null || ping == null || state == null) return null
+        val active = instant(VaultJson.str(body, "last_active"))?.takeUnless { it.isAfter(now.plus(SKEW)) }
+        return Result(connection, ping, state, active?.let { if (it.isAfter(now)) now else it })
+    }
+
+    private val SKEW: Duration = Duration.ofMinutes(5)
+
+    private fun instant(s: String?): Instant? = try {
+        s?.let { Instant.parse(it) }
+    } catch (_: DateTimeParseException) {
+        null
+    }
+}
+
+/** The vault calls behind [PresenceManager] (§10.17), so that it can be tested without a vault. */
+interface PresenceOps {
+    suspend fun get(): JsonObject
+
+    /** `presence.set`: only the members that change are sent. */
+    suspend fun set(version: Long, state: String?, share: String?, except: List<String>?): JsonObject
+
+    suspend fun query(connectionId: String): JsonObject
+}
+
+/**
+ * The member's presence (ANDROID-PLAN §4 "Presence"; VAULT-MESSAGING §10.17). Everything is in memory: nothing is kept
+ * past a lock or the owner check's hold, and none of it is sent while the vault is locked, due or held.
+ */
+interface PresenceRepository {
+    /** Whether this vault has presence. Nothing of presence is shown unless [PresenceAvailability.AVAILABLE]. */
+    val availability: StateFlow<PresenceAvailability>
+
+    /** The member's policy; null until read, and after a lock. */
+    val policy: StateFlow<PresencePolicy?>
+
+    /** What each asked connection answered (or not), by connection id. */
+    val readings: StateFlow<Map<String, PresenceReading>>
+
+    /** Reads the policy again (`presence.get`). Throws the vault's failure; `unsupported_type` also ends [availability]. */
+    suspend fun refreshPolicy()
+
+    /**
+     * Changes the policy: [change] is applied to the current one and the difference is sent with its `version`. On
+     * `conflict` the policy is read again and [change] applied once more to the fresh one; a second `conflict` is thrown.
+     */
+    suspend fun update(change: (PresencePolicy) -> PresencePolicy)
+
+    /**
+     * Asks [connectionId]'s vault how it is (`presence.query`), at most once a minute per connection: inside the minute the
+     * earlier answer stands. Never throws: whatever goes wrong reads as [PresenceReading.Unknown].
+     */
+    suspend fun query(connectionId: String)
+}
+
+/**
+ * [PresenceRepository.query] once the vault is known to have presence: waits for the answer to the first `presence.get` of
+ * the vault's opening (a screen can open before it), asks if there is presence, and does nothing if there is none. A vault
+ * that stays unknown (held, offline) keeps this waiting with the screen's scope.
+ */
+suspend fun PresenceRepository.queryWhenKnown(connectionId: String) {
+    if (availability.first { it != PresenceAvailability.UNKNOWN } == PresenceAvailability.AVAILABLE) query(connectionId)
+}
+
+/** Presence where there is none (a screen's default): never available, nothing sent. */
+object NoPresence : PresenceRepository {
+    override val availability: StateFlow<PresenceAvailability> =
+        MutableStateFlow(PresenceAvailability.UNSUPPORTED)
+    override val policy: StateFlow<PresencePolicy?> = MutableStateFlow(null)
+    override val readings: StateFlow<Map<String, PresenceReading>> =
+        MutableStateFlow(emptyMap())
+
+    override suspend fun refreshPolicy() = throw VaultFailure(FailureKind.NOT_SUPPORTED)
+
+    override suspend fun update(change: (PresencePolicy) -> PresencePolicy) = throw VaultFailure(FailureKind.NOT_SUPPORTED)
+
+    override suspend fun query(connectionId: String) = Unit
+}

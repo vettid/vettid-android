@@ -266,4 +266,15 @@
     <string name="data_feed_unknown">Activity: %1$s</string>
     <!-- DRAFT for owner approval: ANDROID-PLAN §4 Service connections (0.1.90) -->
     <string name="service_forbidden">Services can\'t do that.</string>
+    <!-- Presence (ANDROID-PLAN §4 "Presence"): the line under a connection's name and the state names. -->
+    <string name="data_presence_available">Available</string> <!-- NEW: not in the plan's table -->
+    <string name="data_presence_busy">Busy</string> <!-- NEW: not in the plan's table -->
+    <string name="data_presence_away">Away</string> <!-- NEW: not in the plan's table -->
+    <string name="data_presence_invisible">Invisible</string> <!-- NEW: not in the plan's table -->
+    <string name="data_presence_checking">Checking…</string> <!-- NEW: not in the plan's table -->
+    <string name="data_presence_unknown">Status unknown</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="data_presence_active_minutes">active %1$d min ago</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="data_presence_active_just_now">active just now</string> <!-- NEW: not in the plan's table -->
+    <string name="data_presence_active_today">active today</string> <!-- NEW: not in the plan's table -->
+    <string name="data_presence_with_age">%1$s · %2$s</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
 </resources>
