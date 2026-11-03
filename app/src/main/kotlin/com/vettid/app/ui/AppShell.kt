@@ -340,7 +340,13 @@ fun AppShell(
                                 onOpenVotes = { id -> navController.navigate(ConnectionVotesRoute(id)) { launchSingleTop = true } },
                             ),
                         )
-                        approvalsDestination(chrome, navigate = navigate, onBack = back, onLeaveDetail = navController::leaveApprovalDetail)
+                        approvalsDestination(
+                            chrome,
+                            navigate = navigate,
+                            onBack = back,
+                            onLeaveDetail = navController::leaveApprovalDetail,
+                            onOpenPairing = { navigate(PairRoute(held = true)) },
+                        )
                         walletDestinations(chrome, navigate = navigate, leave = navController::leaveEntry)
                         votesDestination(
                             chrome,

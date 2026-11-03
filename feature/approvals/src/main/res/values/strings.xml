@@ -20,8 +20,6 @@
     <string name="approvals_type_grant">Request to see your items</string>
     <string name="approvals_type_critical">Use of a critical item</string>
     <string name="approvals_type_share">Share with a connection?</string>
-    <string name="approvals_type_device">Request from a device</string>
-    <string name="approvals_type_session">Access session request</string>
     <string name="approvals_name_not_shared">Name not shared yet</string>
     <string name="approvals_a_connection">A connection</string>
     <string name="approvals_an_agent">An agent</string>
@@ -159,13 +157,9 @@
     <string name="approvals_paused_remove">Remove connection</string>
     <string name="approvals_remove_title">Remove %1$s?</string>
     <string name="approvals_remove_body">The connection ends and they are told it was removed. Connecting again needs a new invitation.</string>
-    <string name="approvals_device_body">A desktop or agent of yours asks for a decision.</string>
-    <string name="approvals_device">Device</string>
-    <string name="approvals_request">Request</string>
     <!-- VAULT-MESSAGING 0.78.0 §6.8 step 3, texts approved by the owner. -->
     <string name="approvals_renewal_notice">Denying refuses only the extra time. %1$s keeps its current access until %2$s.</string>
     <string name="approvals_deny_end_access">Deny and end access now</string>
-    <string name="approvals_device_v1">This version of the app does not pair desktops or agents, so it can only decline.</string>
     <string name="approvals_grant_their_words">They asked for: %1$s</string>
     <string name="approvals_grant_answer">Choose one of your items</string>
     <string name="approvals_grant_answer_chosen">%1$s (change)</string>
@@ -184,4 +178,63 @@
     <string name="approvals_critical_failed_title">Not used</string>
     <string name="approvals_critical_unsuitable">This field cannot be used this way: it must hold an Ed25519 key (a base64 seed of 32 bytes). They were told it is unsuitable.</string>
     <string name="approvals_critical_unavailable">The item or field is no longer available to them. They were told.</string>
+
+    <!-- AA5, ANDROID-PLAN 0.1.116 §4 "Approvals for devices and agents": "draft" = the plan's text word for word, "new" = proposed here. -->
+    <string name="approvals_session_title">%1$s asks for access</string> <!-- draft -->
+    <string name="approvals_session_title_feed">%1$s asked for access</string> <!-- draft -->
+    <string name="approvals_session_for">%1$s · for %2$s</string> <!-- draft: "Agent · for 1 hour" -->
+    <string name="approvals_kind_agent">Agent</string> <!-- draft -->
+    <string name="approvals_kind_desktop">Desktop</string> <!-- new -->
+    <string name="approvals_kind_device">Device</string> <!-- new -->
+    <plurals name="approvals_duration_minutes">
+        <item quantity="one">%1$d minute</item> <!-- new: the singular of the draft -->
+        <item quantity="other">%1$d minutes</item> <!-- draft -->
+    </plurals>
+    <plurals name="approvals_duration_hours">
+        <item quantity="one">%1$d hour</item> <!-- draft -->
+        <item quantity="other">%1$d hours</item> <!-- draft -->
+    </plurals>
+    <string name="approvals_duration_seconds">%1$d seconds</string> <!-- new -->
+    <plurals name="approvals_waiting_minutes">
+        <item quantity="one">Waiting for %1$d more minute</item> <!-- new: the singular of the draft -->
+        <item quantity="other">Waiting for %1$d more minutes</item> <!-- draft -->
+    </plurals>
+    <string name="approvals_waiting_less">Waiting for less than a minute</string> <!-- new -->
+    <string name="approvals_session_allow_for">Allow %1$s to act for you for:</string> <!-- draft -->
+    <string name="approvals_session_agent_note">It can use only the permissions you gave it.</string> <!-- draft -->
+    <string name="approvals_session_allow">Allow</string> <!-- draft -->
+    <string name="approvals_session_allowed">Access allowed until %1$s</string> <!-- draft -->
+    <string name="approvals_session_length_unknown">The length it asked for isn\'t known on this phone any more</string> <!-- draft -->
+    <string name="approvals_session_not_listed">%1$s isn\'t in your list of devices, so you can only deny this request.</string> <!-- new -->
+    <string name="approvals_no_longer_waiting">This request is no longer waiting.</string> <!-- draft -->
+    <string name="approvals_approve">Approve</string> <!-- draft -->
+    <string name="approvals_held_use_title">%1$s wants to use %2$s without seeing it</string> <!-- draft -->
+    <string name="approvals_held_use_body">Field: %1$s. Your vault uses the value for the agent and gives it only the result. For a short or guessable value, such as a PIN or a common password, the agent could work the value out from that result.</string> <!-- draft -->
+    <string name="approvals_held_use_data">Data from the agent</string> <!-- draft -->
+    <string name="approvals_held_use_data_hex">Not text, so shown as hexadecimal</string> <!-- new -->
+    <string name="approvals_held_get_title">%1$s wants to see %2$s</string> <!-- draft -->
+    <string name="approvals_held_get_fields">Fields: %1$s</string> <!-- draft -->
+    <string name="approvals_held_get_all">All fields and notes</string> <!-- draft -->
+    <string name="approvals_held_get_history">The agent\'s app may keep the value in its history.</string> <!-- draft -->
+    <string name="approvals_held_catalog_title">%1$s wants to list the items it may use</string> <!-- draft -->
+    <string name="approvals_held_catalog_body">It sees their names and field labels, never their values.</string> <!-- draft -->
+    <string name="approvals_held_later_title">%1$s wants to use %2$s in a way this version of VettID can\'t show</string> <!-- draft -->
+    <string name="approvals_held_later_body">Update VettID to see the details. Until then you can only deny it.</string> <!-- draft -->
+    <string name="approvals_held_other_title">%1$s asks to approve a request</string> <!-- draft -->
+    <string name="approvals_held_desktop_body">Desktop requests can\'t be shown in this version of VettID, so you can only deny them.</string> <!-- draft -->
+    <string name="approvals_held_other_body">This version of VettID can\'t show this request, so you can only deny it.</string> <!-- draft -->
+    <string name="approvals_held_gone_body">%1$s asked for something this phone can no longer show. Deny it, or let it expire.</string> <!-- draft -->
+    <string name="approvals_held_no_item">an item you no longer have</string> <!-- draft -->
+    <string name="approvals_held_no_item_body">This phone can\'t find that item or field any more, so you can only deny the request.</string> <!-- new -->
+    <string name="approvals_held_approved">Approved</string> <!-- draft -->
+    <string name="approvals_held_denied">Denied</string> <!-- draft -->
+    <string name="approvals_held_forbidden">Approved, but %1$s no longer has a permission that covers it, or is paused, so nothing was done.</string> <!-- draft -->
+    <string name="approvals_held_session_ended">Approved, but %1$s\'s access ended first, so nothing was done.</string> <!-- draft -->
+    <string name="approvals_held_way_not_allowed">Approved, but this item no longer allows that, so nothing was done.</string> <!-- draft -->
+    <string name="approvals_held_other_result">Approved, but your vault answered: %1$s.</string> <!-- draft -->
+    <string name="approvals_pair_title">A device asks to pair</string> <!-- draft -->
+    <string name="approvals_pair_title_named">%1$s asks to pair</string> <!-- draft -->
+    <string name="approvals_pair_body">This pairing can\'t be checked on this phone any more. Let it expire: it ends by itself within 10 minutes and nothing is paired. If you want to pair, start again.</string> <!-- draft -->
+    <string name="approvals_pair_compare_body">Compare the code on the agent with the one in VettID before you allow it.</string> <!-- new -->
+    <string name="approvals_pair_compare">Compare the code</string> <!-- new -->
 </resources>
