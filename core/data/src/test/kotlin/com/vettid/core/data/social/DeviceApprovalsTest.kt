@@ -59,6 +59,8 @@ class DeviceApprovalsTest {
 
         override suspend fun sessionDeny(requestId: String) = hit("session.deny:$requestId")
 
+        override suspend fun pairReject(pendingId: String) = hit("pair.reject:$pendingId")
+
         override suspend fun approvalDecide(approvalId: String, approve: Boolean): String? {
             hit("approval.decide:$approvalId:$approve")
             return result
@@ -428,6 +430,79 @@ class DeviceApprovalsTest {
         m.closePairing("pend-1")
         runCurrent()
         assertEquals(listOf("device:device.pair.pending:pend-2"), m.keys())
+    }
+
+    // --- Reject of a pairing this phone can't check (owner decision 2026-11-03) ---
+
+    private suspend fun TestScope.pairingManager(): SocialManager {
+        val m = manager()
+        m.setFeedItems(listOf(feed("device.pair.pending", "pend-1", device = null), feed("device.pair.pending", "pend-2", device = null)))
+        runCurrent()
+        return m
+    }
+
+    @Test
+    fun rejectOfAFeedOnlyPairingSendsPairRejectWithTheRefAndTheEntryGoes() = runTest {
+        val m = pairingManager()
+        m.rejectPairingRequest("device:device.pair.pending:pend-1")
+        runCurrent()
+        assertEquals(listOf("pair.reject:pend-1"), ops.calls)
+        assertEquals(listOf("device:device.pair.pending:pend-2"), m.keys())
+    }
+
+    @Test
+    fun rejectNotFoundDropsTheEntryAndAnotherErrorKeepsIt() = runTest {
+        val m = pairingManager()
+        ops.fail = VaultFailure(FailureKind.OTHER, "internal")
+        try {
+            m.rejectPairingRequest("device:device.pair.pending:pend-1")
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.OTHER, e.kind)
+        }
+        runCurrent()
+        assertEquals(2, m.keys().size)
+        ops.fail = VaultFailure(FailureKind.NOT_FOUND)
+        try {
+            m.rejectPairingRequest("device:device.pair.pending:pend-1")
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.NOT_FOUND, e.kind)
+        }
+        runCurrent()
+        assertEquals(listOf("device:device.pair.pending:pend-2"), m.keys())
+    }
+
+    @Test
+    fun rejectOfAnUnknownKeySendsNothing() = runTest {
+        val m = pairingManager()
+        try {
+            m.rejectPairingRequest("device:device.pair.pending:")
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.NOT_FOUND, e.kind)
+        }
+        assertTrue(ops.calls.isEmpty())
+        assertEquals(2, m.keys().size)
+    }
+
+    @Test
+    fun rejectIsOnlyForAPairingAndADenyOfAPairingSendsNothing() = runTest {
+        val m = pairingManager()
+        m.onEvent(event("device.session.pending", session()))
+        runCurrent()
+        for (f in listOf<suspend () -> Unit>(
+            { m.rejectPairingRequest("device:device.session.pending:s1") },
+            { m.declineDeviceRequest("device:device.pair.pending:pend-1") },
+        )) {
+            try {
+                f()
+                fail()
+            } catch (e: VaultFailure) {
+                assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
+            }
+        }
+        assertTrue(ops.calls.isEmpty())
     }
 
     @Test
