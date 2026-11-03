@@ -66,12 +66,31 @@ class PresencePolicyTest {
     }
 
     @Test
-    fun nothingIsShownWithoutLastActiveOrWhenItIsNotToday() {
+    fun nothingIsShownWithoutLastActiveOrInTheFuture() {
         assertNull(age(null))
-        // Past an hour but on an earlier day: the plan has no words for it, so none are said.
-        assertNull(PresenceAge.of(Instant.parse("2026-11-02T23:00:00Z"), now, zone))
         // In the future: not shown.
         assertNull(PresenceAge.of(now.plusSeconds(600), now, zone))
+    }
+
+    @Test
+    fun anEarlierDayIsItsDateWithTheYearOnlyWhenNotThisYear() {
+        // Yesterday evening, an earlier date this year, a date last year.
+        assertEquals(PresenceAge.Date(java.time.LocalDate.of(2026, 11, 2), false), PresenceAge.of(Instant.parse("2026-11-02T23:00:00Z"), now, zone))
+        assertEquals(PresenceAge.Date(java.time.LocalDate.of(2026, 3, 9), false), PresenceAge.of(Instant.parse("2026-03-09T10:00:00Z"), now, zone))
+        assertEquals(PresenceAge.Date(java.time.LocalDate.of(2025, 12, 31), true), PresenceAge.of(Instant.parse("2025-12-31T10:00:00Z"), now, zone))
+    }
+
+    @Test
+    fun theBoundaryIsLocalMidnightNotUtc() {
+        val oslo = ZoneId.of("Europe/Oslo") // UTC+1 in November
+        val at = Instant.parse("2026-11-03T08:00:00Z") // 09:00 on the 3rd, local
+        // 23:30 local on the 2nd is 22:30Z: an hour and a half before 00:00 local, 9.5 h before `at`: the 2nd.
+        assertEquals(PresenceAge.Date(java.time.LocalDate.of(2026, 11, 2), false), PresenceAge.of(Instant.parse("2026-11-02T22:30:00Z"), at, oslo))
+        // 00:30 local on the 3rd is 23:30Z on the 2nd: still today (UTC would say the 2nd).
+        assertEquals(PresenceAge.Today, PresenceAge.of(Instant.parse("2026-11-02T23:30:00Z"), at, oslo))
+        // Under an hour across midnight stays minutes.
+        val early = Instant.parse("2026-11-02T23:20:00Z") // 00:20 local on the 3rd
+        assertEquals(PresenceAge.Minutes(20), PresenceAge.of(Instant.parse("2026-11-02T23:00:00Z"), early, oslo))
     }
 
     @Test

@@ -267,14 +267,15 @@
     <!-- DRAFT for owner approval: ANDROID-PLAN §4 Service connections (0.1.90) -->
     <string name="service_forbidden">Services can\'t do that.</string>
     <!-- Presence (ANDROID-PLAN §4 "Presence"): the line under a connection's name and the state names. -->
-    <string name="data_presence_available">Available</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="data_presence_busy">Busy</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="data_presence_away">Away</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="data_presence_invisible">Invisible</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="data_presence_checking">Checking…</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="data_presence_unknown">Status unknown</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="data_presence_available">Available</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="data_presence_busy">Busy</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="data_presence_away">Away</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="data_presence_invisible">Invisible</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="data_presence_checking">Checking…</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="data_presence_unknown">Status unknown</string> <!-- Owner-approved 2026-11-03 -->
     <string name="data_presence_active_minutes">last seen %1$d min ago</string> <!-- Owner-approved 2026-11-03 (last seen) -->
     <string name="data_presence_active_just_now">last seen just now</string> <!-- Owner-approved 2026-11-03 (last seen) -->
+    <string name="data_presence_active_date">last seen %1$s</string> <!-- Owner-approved 2026-11-03 (2a) -->
     <string name="data_presence_active_today">last seen today</string> <!-- Owner-approved 2026-11-03 (last seen) -->
-    <string name="data_presence_with_age">%1$s · %2$s</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="data_presence_with_age">%1$s · %2$s</string> <!-- Owner-approved 2026-11-03 -->
 </resources>

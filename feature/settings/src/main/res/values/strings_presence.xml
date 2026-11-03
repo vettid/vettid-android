@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Settings → Privacy → Presence (ANDROID-PLAN §4 "Presence", VAULT-MESSAGING §10.17, P1). The state names are in :core:data (data_presence_*). -->
-    <string name="settings_presence_title">Presence</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_status">Status</string> <!-- NEW: not in the plan's table -->
-    <string name="settings_presence_invisible_option">You appear offline to everyone</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_invisible_note">Invisible: you appear offline to everyone.</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_who">Who can see it</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_all">All my connections</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_none">No one</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_exceptions">Exceptions</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_except">Except…</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
-    <string name="settings_presence_only">Only…</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="settings_presence_title">Presence</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_status">Status</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_invisible_option">You appear offline to everyone</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_invisible_note">Invisible: you appear offline to everyone.</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_who">Who can see it</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_all">All my connections</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_none">No one</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_exceptions">Exceptions</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_except">Except…</string> <!-- Owner-approved 2026-11-03 -->
+    <string name="settings_presence_only">Only…</string> <!-- Owner-approved 2026-11-03 -->
     <!-- The same words as connections_name_not_shared (approved). -->
-    <string name="settings_presence_name_not_shared">Name not shared yet</string>
+    <string name="settings_presence_name_not_shared">Name not shared yet</string> <!-- Owner-approved 2026-11-03 -->
 </resources>

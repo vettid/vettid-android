@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeParseException
 
@@ -103,13 +104,16 @@ sealed interface PresenceAge {
     /** "active today": an hour or more ago, on this calendar day. */
     data object Today : PresenceAge
 
+    /** An hour or more ago on an earlier calendar day: "last seen 2 Nov"; [withYear] when it is not this year. */
+    data class Date(val date: LocalDate, val withYear: Boolean) : PresenceAge
+
     companion object {
         private const val SMALLEST_MINUTES = 5L
         private const val HOUR_MINUTES = 60L
 
         /**
-         * [lastActive] seen at [now]; null (nothing shown) without it, in the future, or on an earlier day than [now]'s in
-         * [zone] and more than an hour ago (the plan names no wording for those).
+         * [lastActive] seen at [now]; null (nothing shown) without it or in the future. An hour or more ago it is today, or the
+         * date of an earlier day (in [zone]), with the year when that is not [now]'s year.
          */
         fun of(lastActive: Instant?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): PresenceAge? {
             if (lastActive == null) return null
@@ -118,9 +122,14 @@ sealed interface PresenceAge {
                 minutes < 0 -> null
                 minutes < SMALLEST_MINUTES -> JustNow
                 minutes < HOUR_MINUTES -> Minutes(minutes.toInt())
-                lastActive.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate() -> Today
-                else -> null
+                else -> dayOf(lastActive, now, zone)
             }
+        }
+
+        private fun dayOf(lastActive: Instant, now: Instant, zone: ZoneId): PresenceAge {
+            val day = lastActive.atZone(zone).toLocalDate()
+            val today = now.atZone(zone).toLocalDate()
+            return if (day == today) Today else Date(day, withYear = day.year != today.year)
         }
     }
 }

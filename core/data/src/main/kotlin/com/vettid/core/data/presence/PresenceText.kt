@@ -1,9 +1,11 @@
 package com.vettid.core.data.presence
 
 import android.content.res.Resources
+import android.text.format.DateFormat
 import androidx.annotation.StringRes
 import com.vettid.core.data.R
 import java.time.Instant
+import java.time.format.DateTimeFormatter
 import java.time.ZoneId
 
 /** The words of a presence line (ANDROID-PLAN §4 "Presence"), shared by the connection's page, the conversation and the settings. */
@@ -22,6 +24,14 @@ object PresenceText {
         PresenceAge.JustNow -> res.getString(R.string.data_presence_active_just_now)
         is PresenceAge.Minutes -> res.getString(R.string.data_presence_active_minutes, age.minutes)
         PresenceAge.Today -> res.getString(R.string.data_presence_active_today)
+        is PresenceAge.Date -> res.getString(R.string.data_presence_active_date, dateText(res, age))
+    }
+
+    /** "2 Nov" in the device's locale (day and month; with the year when it is not this year). */
+    private fun dateText(res: Resources, age: PresenceAge.Date): String {
+        val locale = res.configuration.locales[0]
+        val skeleton = if (age.withYear) "dMMMyyyy" else "dMMM"
+        return DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(age.date)
     }
 
     /**

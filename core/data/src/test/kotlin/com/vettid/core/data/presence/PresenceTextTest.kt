@@ -1,3 +1,6 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.core.data.presence
 
 import org.robolectric.RuntimeEnvironment
@@ -27,6 +30,20 @@ class PresenceTextTest {
         // Nothing after the state without last_active, or one that cannot be told.
         assertEquals("Away", line(PresenceReading.Known(PresenceState.AWAY, null)))
         assertEquals("Busy", line(PresenceReading.Known(PresenceState.BUSY, now.plusSeconds(60))))
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "en-rGB")
+    fun anEarlierDayIsItsDateInTheDevicesLocale() {
+        assertEquals("Available · last seen 2 Nov", line(PresenceReading.Known(PresenceState.AVAILABLE, Instant.parse("2026-11-02T23:00:00Z"))))
+        assertEquals("Busy · last seen 9 Mar", line(PresenceReading.Known(PresenceState.BUSY, Instant.parse("2026-03-09T10:00:00Z"))))
+        assertEquals("Away · last seen 31 Dec 2025", line(PresenceReading.Known(PresenceState.AWAY, Instant.parse("2025-12-31T10:00:00Z"))))
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "en-rUS")
+    fun theOrderFollowsTheLocale() {
+        assertEquals("Available · last seen Nov 2", line(PresenceReading.Known(PresenceState.AVAILABLE, Instant.parse("2026-11-02T23:00:00Z"))))
     }
 
     @Test
