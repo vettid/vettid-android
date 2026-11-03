@@ -128,6 +128,32 @@ class PresenceConnectionsTest {
     }
 
     @Test
+    fun nothingIsSentWhileTheScreenIsStoppedAndOneQuestionWhenItComesBack() = runTest {
+        social.seed(listOf(ada()))
+        val vm = detailVm()
+        advanceUntilIdle()
+        assertEquals(1, presence.queries.size)
+        vm.setVisible(false)
+        advanceUntilIdle()
+        // A reading that goes stale, a hold and presence coming back: nothing is asked while stopped.
+        presence.readings.value = emptyMap()
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        advanceUntilIdle()
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        advanceUntilIdle()
+        assertEquals(1, presence.queries.size)
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(2, presence.queries.size)
+        // Stopped and started again with a reading held: one more question (the manager sends it only after the minute).
+        vm.setVisible(false)
+        advanceUntilIdle()
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(3, presence.queries.size)
+    }
+
+    @Test
     fun notAskedYetIsCheckingAndAClosedVaultShowsNoLine() = runTest {
         social.seed(listOf(ada()))
         val quiet = object : com.vettid.core.data.presence.PresenceRepository by presence {

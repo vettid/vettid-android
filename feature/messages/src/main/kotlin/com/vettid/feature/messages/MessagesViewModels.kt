@@ -264,7 +264,7 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             // Presence is asked when the conversation opens, and only then (ANDROID-PLAN §4 "Presence"): never from a list.
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhileAvailable(connectionId)
+            if (c.askable) presence.queryWhileAvailable(connectionId, shown)
         }
         viewModelScope.launch {
             // Read while open: every new incoming message is marked read (best effort).
@@ -278,6 +278,13 @@ class ConversationViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private val shown = MutableStateFlow(true)
+
+    /** The screen is at least STARTED ([shown]) or stopped: presence is asked only while it is shown. */
+    fun setVisible(visible: Boolean) {
+        shown.value = visible
     }
 
     /** Presence is asked of a person who is connected, never of a service (a service is not a person). */

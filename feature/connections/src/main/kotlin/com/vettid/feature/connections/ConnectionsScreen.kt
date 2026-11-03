@@ -171,6 +171,9 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
         val state by vm.uiState.collectAsStateWithLifecycle()
         // Back from the rule editor or the shared items: both directions are read again.
         LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.loadSharing() }
+        // Presence is asked only while the page is shown (a question counts as activity).
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
         ConnectionDetailScreen(
             state = state,
             actions = DetailActions(

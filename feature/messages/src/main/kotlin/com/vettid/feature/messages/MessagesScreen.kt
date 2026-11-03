@@ -54,6 +54,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -139,6 +141,9 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
     }
     composable<ConversationRoute> {
         val vm: ConversationViewModel = hiltViewModel()
+        // Presence is asked only while the conversation is shown (a question counts as activity).
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
         val state by vm.uiState.collectAsStateWithLifecycle()
         ConversationScreen(
             state = state,

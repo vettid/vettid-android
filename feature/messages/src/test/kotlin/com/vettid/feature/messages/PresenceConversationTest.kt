@@ -94,6 +94,24 @@ class PresenceConversationTest {
     }
 
     @Test
+    fun nothingIsSentWhileTheConversationIsStoppedAndOneQuestionWhenItComesBack() = runTest {
+        val vm = vm("c1")
+        advanceUntilIdle()
+        assertEquals(1, presence.queries.size)
+        vm.setVisible(false)
+        advanceUntilIdle()
+        presence.readings.value = emptyMap()
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        advanceUntilIdle()
+        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        advanceUntilIdle()
+        assertEquals(1, presence.queries.size)
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(2, presence.queries.size)
+    }
+
+    @Test
     fun aServiceConversationHasNoLineAndNothingIsAsked() = runTest {
         val vm = vm("s1")
         advanceUntilIdle()

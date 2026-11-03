@@ -4,7 +4,9 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultJson
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -243,13 +245,21 @@ private val NO_RECENT: StateFlow<Set<String>> = MutableStateFlow(emptySet())
  * answered, and again when presence comes back after a hold or a failed read. Nothing is sent while there is none. Collects
  * until the screen's scope ends.
  */
-suspend fun PresenceRepository.queryWhileAvailable(connectionId: String) {
-    // Asks when presence is there and the connection has no reading: on opening, after a hold took the readings, and when a
-    // reading went stale (a minute) while the page is open.
+suspend fun PresenceRepository.queryWhileAvailable(connectionId: String, visible: Flow<Boolean> = flowOf(true)) {
+    // Asks, only while the screen is shown ([visible]: at least STARTED), when presence is there and the connection has no
+    // reading (on opening, after a hold took the readings, when a reading went stale) and once each time the screen comes back.
+    // While it is not shown nothing is sent: a question counts as the member's activity (§10.17), so a page left open in the
+    // background must not keep asking.
     val held = readings.map { connectionId in it }.distinctUntilChanged()
-    combine(availability, held) { a, has -> a == PresenceAvailability.AVAILABLE && !has }
+    var shown = false
+    combine(availability, held, visible) { a, has, v -> Triple(a == PresenceAvailability.AVAILABLE, has, v) }
         .distinctUntilChanged()
-        .collect { if (it) query(connectionId) }
+        .collect { (on, has, v) ->
+            val appeared = v && !shown
+            shown = v
+            val wanted = !has || appeared
+            if (on && v && wanted) query(connectionId)
+        }
 }
 
 /** Presence where there is none (a screen's default): never available, nothing sent. */

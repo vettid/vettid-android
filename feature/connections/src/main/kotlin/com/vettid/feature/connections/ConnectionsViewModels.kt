@@ -747,8 +747,15 @@ class ConnectionDetailViewModel @Inject constructor(
         // Presence is asked when the page opens (and on refresh), never from a list (ANDROID-PLAN §4 "Presence").
         viewModelScope.launch {
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhileAvailable(id)
+            if (c.askable) presence.queryWhileAvailable(id, shown)
         }
+    }
+
+    private val shown = MutableStateFlow(true)
+
+    /** The screen is at least STARTED ([shown]) or stopped: presence is asked only while it is shown. */
+    fun setVisible(visible: Boolean) {
+        shown.value = visible
     }
 
     /** The refresh icon: asks again (the vault answers a second question within the minute with the first answer). */
