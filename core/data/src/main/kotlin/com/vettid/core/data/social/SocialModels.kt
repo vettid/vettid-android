@@ -63,7 +63,8 @@ data class ConnectionInfo(
 
     /**
      * The title (§10.8): "First Last"; "" before the names arrived, for which the UI shows "Name not shared yet".
-     * Never the display name alone, never an alias.
+     * Never the display name alone for a person, never an alias. A service (`peer_kind`, ANDROID-PLAN 0.1.90) without names
+     * falls back to its cleaned display name: every name of a service is "Name given by the service".
      */
     val displayName: String get() = accountName ?: if (service) AccountNames.cleaned(name).orEmpty() else ""
 
