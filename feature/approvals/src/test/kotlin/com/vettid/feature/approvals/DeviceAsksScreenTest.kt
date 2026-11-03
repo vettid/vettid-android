@@ -284,7 +284,7 @@ class DeviceAsksScreenTest {
     private fun pairing() = Approval.DeviceRequest("device.pair.pending", "p1", null, null, null, now, now.plusSeconds(600), fromFeed = true)
 
     @Test
-    fun aPairingWithoutItsComparisonOffersNothing() {
+    fun aPairingWithoutItsComparisonOffersOnlyReject() {
         show(state(pairing()))
         rule.onNodeWithText("A device asks to pair").assertExists()
         rule.onNodeWithText(
@@ -294,6 +294,15 @@ class DeviceAsksScreenTest {
         assertEquals(false, has("Approve"))
         assertEquals(false, has("Allow"))
         assertEquals(false, has("Compare the code"))
+        assertEquals(true, has("Reject"))
+    }
+
+    @Test
+    fun rejectOfAPairingTheyCannotCheckIsClicked() {
+        var denied = false
+        show(state(pairing()), DecisionActions(onDeny = { denied = true }))
+        rule.onNodeWithText("Reject").performClick()
+        assertEquals(true, denied)
     }
 
     @Test
@@ -303,6 +312,7 @@ class DeviceAsksScreenTest {
         rule.onNodeWithText("⁨New bot⁩ asks to pair").assertExists()
         rule.onNodeWithText("Compare the code").performClick()
         assertEquals(true, opened)
+        assertEquals(false, has("Reject"))
     }
 
     // --- the list's rows ---
