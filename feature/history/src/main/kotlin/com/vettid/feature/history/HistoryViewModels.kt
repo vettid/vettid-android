@@ -58,6 +58,8 @@ data class HistoryUiState(
     val datePreset: DatePreset = DatePreset.ANY,
     /** id → title of the member's connections, for the rows and the connection filter. */
     val connectionNames: Map<String, String> = emptyMap(),
+    /** The connections that declared themselves services (ANDROID-PLAN 0.1.90): their rows carry the label "Service". */
+    val serviceConnections: Set<String> = emptySet(),
     /** id → name of the member's items (the Vault list), for the rows of item entries (§10.9). */
     val itemNames: Map<String, String> = emptyMap(),
     /** The ids of the items that are wallets' (template `wallet.btc`), for the title of their `item.revealed`. */
@@ -166,7 +168,8 @@ class HistoryViewModel @Inject constructor(
         viewModelScope.launch {
             connections.connections.collect { list ->
                 known = list.associateBy { it.id }
-                state.update { it.copy(connectionNames = names(list)) }
+                val services = list.filter { c -> c.service }.map { c -> c.id }.toSet()
+                state.update { it.copy(connectionNames = names(list), serviceConnections = services) }
             }
         }
         viewModelScope.launch { runCatching { connections.refresh() } }

@@ -401,6 +401,11 @@ object ScreenCatalog {
     // --- A4 sample data (made up) ---
     private val t0: Instant = Instant.parse("2026-10-04T09:00:00Z")
     // VAULT-MESSAGING 0.18.0 §10.8: titled from the names on the peer's account; the display name is secondary.
+    private val acme = ConnectionInfo(
+        "s1", "Acme", ConnectionState.ACTIVE, favorite = true, firstName = "Acme", lastName = "Co-op", service = true,
+        keyFingerprint = "9a1f bb7d 873e eafb 494b ef94 f072 7b25",
+    )
+    private val depot = ConnectionInfo("s2", "Depot", ConnectionState.ACTIVE, firstName = "Depot", lastName = "Library", service = true)
     private val sam = ConnectionInfo("c1", "Sam", ConnectionState.ACTIVE, favorite = true, firstName = "Samira", lastName = "Rivera",
         sharedItems = listOf(SharedProfileItem("i1", "Where I live", listOf("City" to "Lisbon"))),
         keyFingerprint = "9a1f bb7d 873e eafb 494b ef94 f072 7b25", createdAt = t0.minusSeconds(86_400 * 30), lastActiveAt = t0.plusSeconds(600))
@@ -1157,6 +1162,17 @@ object ScreenCatalog {
                 chrome, ConnectionsActions(),
             )
         },
+        // ANDROID-PLAN 0.1.90: a Services section below the people, starred services first, a service icon and the label.
+        "connections.services" to {
+            ConnectionsScreen(
+                ConnectionsUiState(loading = false, connections = connections, services = listOf(acme, depot), searchable = true),
+                chrome, ConnectionsActions(),
+            )
+        },
+        // A service's detail: the label, the names it gave, its `ik` fingerprint, what it can ask; no message, call or sharing rows.
+        "connections.service_detail" to {
+            ConnectionDetailScreen(ConnectionDetailUiState("s1", acme, loading = false), DetailActions())
+        },
         "connections.search" to {
             ConnectionsScreen(ConnectionsUiState(loading = false, connections = connections.take(1), query = "sam", searchable = true), chrome, ConnectionsActions())
         },
@@ -1222,6 +1238,16 @@ object ScreenCatalog {
         "accept.opened" to { AcceptScreen(AcceptUiState(input = "https://relay.vettid.org/connect#${invite.link}", fromLink = true), AcceptActions()) },
         "accept.waiting" to { AcceptScreen(AcceptUiState(step = AcceptStep.WAITING, connectionId = "c4", name = "Morgan Lee"), AcceptActions()) },
         "accept.compare" to { AcceptScreen(AcceptUiState(step = AcceptStep.COMPARE, connectionId = "c4", name = "Morgan Lee", sas = "042817"), AcceptActions()) },
+        // The same screen for a request from a service (`peer_kind`): "This is a service, not a person." and its caveat.
+        "invite.request_service" to {
+            AcceptScreen(
+                AcceptUiState(
+                    step = AcceptStep.COMPARE, connectionId = "s1", name = "Acme Co-op", sas = "042817", service = true,
+                    keyFingerprint = "9a1f bb7d 873e eafb 494b ef94 f072 7b25",
+                ),
+                AcceptActions(),
+            )
+        },
         "accept.approved" to { AcceptScreen(AcceptUiState(step = AcceptStep.APPROVED, connectionId = "c4", name = "Morgan Lee", sas = "042817"), AcceptActions()) },
         "accept.exists" to { AcceptScreen(AcceptUiState(step = AcceptStep.EXISTS, connectionId = "c1", connectionName = "Sam Rivera"), AcceptActions()) },
         "accept.peer_declined" to {

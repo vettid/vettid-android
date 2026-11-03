@@ -331,6 +331,7 @@ data class ConversationActions(
 
 /** A conversation (ANDROID-PLAN §4): bubbles by day, the reply field at the bottom. */
 @Composable
+@Suppress("CyclomaticComplexMethod") // one branch per notice of the conversation
 fun ConversationScreen(state: ConversationUiState, actions: ConversationActions, modifier: Modifier = Modifier) {
     val name = AccountNames.isolateOrNull(state.connection?.displayName) ?: stringResource(R.string.messages_name_not_shared)
     val listState = rememberLazyListState()
@@ -395,7 +396,7 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.messages_ok)) } },
                 )
             }
-            Composer(state, name, actions)
+            if (!state.noComposer) Composer(state, name, actions)
         }
     }
     if (state.deleting != null) {

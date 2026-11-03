@@ -29,8 +29,10 @@ import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.votes.NoVotes
 import com.vettid.core.data.votes.VoteRules
+import com.vettid.core.data.votes.VotesAvailability
 import com.vettid.core.data.votes.VotesRepository
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.VaultCodes
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -50,6 +52,8 @@ import javax.inject.Inject
 data class ConnectionsUiState(
     val loading: Boolean = true,
     val connections: List<ConnectionInfo> = emptyList(),
+    /** The services among the connections (ANDROID-PLAN 0.1.90), starred ones first; they have a section of their own. */
+    val services: List<ConnectionInfo> = emptyList(),
     val invites: List<OutstandingInvite> = emptyList(),
     val addSheet: Boolean = false,
     /** The invitation the member asked to cancel (confirmed first). */
@@ -65,6 +69,9 @@ data class ConnectionsUiState(
     val searchable: Boolean = false,
 ) {
     val searching: Boolean get() = query.isNotBlank()
+
+    /** There is no person and no service to list. */
+    val noneListed: Boolean get() = connections.isEmpty() && services.isEmpty()
 }
 
 /** Whether [c] matches [query]: its title ("First Last") or display name, ignoring case. */
@@ -88,12 +95,12 @@ class ConnectionsViewModel @Inject constructor(
     private val local = MutableStateFlow(ConnectionsUiState())
 
     val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections, approvals.peerDeclines) { s, cs, declines ->
+        val order = compareByDescending<ConnectionInfo> { it.favorite }
+            .thenBy { AccountNames.cleaned(it.displayName).orEmpty().lowercase() }
+        val shown = cs.filter { it.matches(s.query) }.sortedWith(order)
         s.copy(
-            connections = cs.filter { it.matches(s.query) }
-                .sortedWith(
-                    compareByDescending<ConnectionInfo> { it.favorite }
-                        .thenBy { AccountNames.cleaned(it.displayName).orEmpty().lowercase() },
-                ),
+            connections = shown.filterNot { it.service },
+            services = shown.filter { it.service },
             peerDeclines = declines,
             searchable = cs.isNotEmpty(),
         )
@@ -351,6 +358,13 @@ data class AcceptUiState(
     val step: AcceptStep = AcceptStep.INPUT,
     /** [AcceptStep.CONNECTED]: the new connection declared itself a service (it cannot message the member). */
     val connectedService: Boolean = false,
+    /**
+     * (VAULT-MESSAGING 0.69.0 §6.4) The request is from a service (`peer_kind` of the accept's answer or of
+     * `connection.request.outgoing`): the safety code screen says so, and the name is "Name given by the service".
+     */
+    val service: Boolean = false,
+    /** The fingerprint of the service's `ik` (§10.8) when the connection list has it; null otherwise. */
+    val keyFingerprint: String? = null,
     val input: String = "",
     /** The member typed or pasted [input]; a value that came with a link or a scan is theirs to confirm, not input of theirs. */
     val typed: Boolean = false,
@@ -427,6 +441,8 @@ class AcceptViewModel @Inject constructor(
                         end != null && req == null -> it.copy(step = AcceptStep.ENDED, end = end)
                         req == null -> it
                         else -> it.copy(
+                            service = it.service || req.service,
+                            keyFingerprint = cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint,
                             sas = req.sas ?: it.sas,
                             name = it.name ?: req.name,
                             remote = req.remote,
@@ -458,7 +474,7 @@ class AcceptViewModel @Inject constructor(
                     }
                     return@launch
                 }
-                state.update { it.copy(step = AcceptStep.WAITING, connectionId = r.connectionId, name = r.name) }
+                state.update { it.copy(step = AcceptStep.WAITING, connectionId = r.connectionId, name = r.name, service = r.service) }
                 // The code may have arrived already (the handshake is quick): show it.
                 runCatching { approvals.refreshRequests() }
             } catch (e: VaultFailure) {
@@ -555,6 +571,11 @@ data class ConnectionDetailUiState(
     val deleteRule: ShareRule? = null,
     /** This connection's votes (ANDROID-PLAN 0.1.102 "Votes"); nothing where the vault has none. */
     val votes: ConnectionVotes = ConnectionVotes(),
+    /**
+     * The vault answered `forbidden` to an authentication request (ANDROID-PLAN 0.1.90: the connection is a service this app
+     * did not know): the text was shown once (as [error]) and the action is gone, whatever the connection list says.
+     */
+    val authRefused: Boolean = false,
 )
 
 /**
@@ -562,7 +583,13 @@ data class ConnectionDetailUiState(
  * <name>"), whether one is [unfinished] (removing the connection asks first), and whether VettID's service list names this
  * person connection as a service ([reconnect]: "Connect again to vote").
  */
-data class ConnectionVotes(val count: Int = 0, val unfinished: Boolean = false, val reconnect: Boolean = false)
+data class ConnectionVotes(
+    val count: Int = 0,
+    val unfinished: Boolean = false,
+    val reconnect: Boolean = false,
+    /** The vault has the vote feature ([VotesAvailability.AVAILABLE]): a service's "what it can ask" line mentions voting. */
+    val available: Boolean = false,
+)
 
 /**
  * Sharing with one connection, both ways (§10.12): what the member shares with it ([rules] for this connection and
@@ -626,9 +653,14 @@ class ConnectionDetailViewModel @Inject constructor(
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
 
-    private fun ownVotes() = combine(votes.votes, votes.reconnect) { v, r ->
+    private fun ownVotes() = combine(votes.votes, votes.reconnect, votes.availability) { v, r, a ->
         val mine = v.filter { it.connectionId == id }
-        ConnectionVotes(count = mine.size, unfinished = mine.any(VoteRules::unfinished), reconnect = r.any { it.connectionId == id })
+        ConnectionVotes(
+            count = mine.size,
+            unfinished = mine.any(VoteRules::unfinished),
+            reconnect = r.any { it.connectionId == id },
+            available = a == VotesAvailability.AVAILABLE,
+        )
     }
 
     /** The pill's "Call": the call screen follows from the call's state. */
@@ -686,8 +718,14 @@ class ConnectionDetailViewModel @Inject constructor(
     fun resumeAsks() = act { repo.resumeAsks(id) }
 
     fun requestAuthentication() = act {
-        repo.requestAuthentication(id, null)
-        local.update { it.copy(notice = DetailNotice.AUTH_REQUESTED) }
+        try {
+            repo.requestAuthentication(id, null)
+            local.update { it.copy(notice = DetailNotice.AUTH_REQUESTED) }
+        } catch (e: VaultFailure) {
+            if (e.code != VaultCodes.FORBIDDEN) throw e
+            // ANDROID-PLAN 0.1.90: `forbidden` to something sent to a service: "Services can't do that." and the action goes.
+            local.update { it.copy(authRefused = true, error = FailureKind.SERVICE_FORBIDDEN, errorCode = null) }
+        }
     }
 
     fun ask(confirm: DetailConfirm?) = local.update { it.copy(confirm = confirm) }

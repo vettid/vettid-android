@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Call
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Star
@@ -52,6 +53,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PillAction
 import com.vettid.core.ui.components.SecondaryButton
+import com.vettid.core.ui.components.ServiceTag
 import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.R as UiR
@@ -119,9 +121,10 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                             stringResource(R.string.connections_detail_message, name),
                             actions.onMessage,
                         )
-                            .takeIf { c.state == ConnectionState.ACTIVE },
+                            // A service can't message or call (ANDROID-PLAN 0.1.90): the buttons are simply absent.
+                            .takeIf { c.state == ConnectionState.ACTIVE && !c.service },
                         PillAction(Icons.Outlined.Call, stringResource(R.string.connections_detail_call), actions.onCall)
-                            .takeIf { c.state == ConnectionState.ACTIVE && state.canCall },
+                            .takeIf { c.state == ConnectionState.ACTIVE && state.canCall && !c.service },
                         PillAction(
                             if (c.favorite) Icons.Outlined.Star else Icons.Outlined.StarOutline,
                             stringResource(
@@ -169,6 +172,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                 size = 72,
                 style = if (c.favorite) TileStyle.Favorite else TileStyle.Connection,
                 photo = com.vettid.core.ui.components.rememberProfilePhoto(c.photo),
+                icon = if (c.service) Icons.Outlined.Dns else null,
             )
             Spacer(Modifier.height(Spacing.m))
             Text(
@@ -177,6 +181,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() }.testTag("detail_name"),
             )
+            if (c.service) ServiceTag(Modifier.semantics { heading() })
             c.secondaryName?.let {
                 Text(
                     it,
@@ -224,6 +229,11 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             )
         }
         ProfileCard(c)
+        if (c.service) {
+            // The `ik` fingerprint is part of what the service shared (ANDROID-PLAN 0.1.90); the rest of the card stays at the end.
+            c.keyFingerprint?.let { FingerprintCard(it) }
+            CanAskCard(state.votes.available)
+        }
         if (c.service && state.votes.count > 0) {
             DetailCard(Modifier.testTag("detail_votes")) {
                 Row(
@@ -238,20 +248,36 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                 }
             }
         }
-        if (c.state == ConnectionState.ACTIVE) {
+        // A service shares nothing with the member and is asked for nothing (ANDROID-PLAN 0.1.90).
+        if (c.state == ConnectionState.ACTIVE && !c.service) {
             // Two directions, two cards (owner request 2026-10-08): what goes out of the vault, what comes in.
             val first = sharingName(c)
             OutgoingSharingCard(state.sharing, first, actions.onShareItems, actions.onOpenRule, actions.onSharing, actions.onAskDeleteRule)
             IncomingSharingCard(state.sharing, first, actions.onAskForSomething, actions.onSharedWithYou)
         }
         if (asks != null && !asks.prominent) AsksCard(asks, asksName, state.busy, actions.onMuteAsks, actions.onResumeAsks)
-        AuthCard(state.auth, name, state.busy, c.state == ConnectionState.ACTIVE, actions.onAuthenticate)
+        // The member does not challenge a service; nor can they once the vault said `forbidden` to it.
+        if (!c.service && !state.authRefused) {
+            AuthCard(state.auth, name, state.busy, c.state == ConnectionState.ACTIVE, actions.onAuthenticate)
+        }
         DetailCard {
             CardTitle(stringResource(R.string.connections_detail_about))
             c.createdAt?.let { InfoLine(stringResource(R.string.connections_detail_since), Times.full(it)) }
             c.lastActiveAt?.let { InfoLine(stringResource(R.string.connections_detail_last_active), Times.full(it)) }
         }
-        c.keyFingerprint?.let { FingerprintCard(it) }
+        if (!c.service) c.keyFingerprint?.let { FingerprintCard(it) }
+    }
+}
+
+/** "What this service can ask" and the vault's rule for this release (ANDROID-PLAN 0.1.90; the votes line where the vault has votes). */
+@Composable
+private fun CanAskCard(votes: Boolean) {
+    DetailCard(Modifier.testTag("service_can_ask")) {
+        CardTitle(stringResource(UiR.string.service_detail_can_ask_title))
+        Text(
+            stringResource(if (votes) UiR.string.service_detail_can_ask_body_votes else UiR.string.service_detail_can_ask_body),
+            modifier = Modifier.testTag("service_can_ask_body"),
+        )
     }
 }
 
@@ -282,16 +308,21 @@ private fun ProfileCard(c: ConnectionInfo) {
             Text(stringResource(R.string.connections_detail_profile_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (account != null) {
-            InfoLine(stringResource(R.string.connections_detail_account_name), account)
-            Text(
-                stringResource(R.string.connections_names_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // A service's names are its own: "Name given by the service", not the name on a VettID account.
+            InfoLine(stringResource(if (c.service) UiR.string.service_name_label else R.string.connections_detail_account_name), account)
+            if (!c.service) {
+                Text(
+                    stringResource(R.string.connections_names_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(Spacing.s))
         }
         if (display != null || c.sharedItems.isNotEmpty()) {
-            display?.let { InfoLine(stringResource(R.string.connections_detail_profile_name), it) }
+            display?.let {
+                InfoLine(stringResource(if (c.service) UiR.string.service_name_label else R.string.connections_detail_profile_name), it)
+            }
             if (c.sharedItems.isNotEmpty()) {
                 Spacer(Modifier.height(Spacing.s))
                 Text(stringResource(R.string.connections_detail_shared_items), style = MaterialTheme.typography.labelLarge)

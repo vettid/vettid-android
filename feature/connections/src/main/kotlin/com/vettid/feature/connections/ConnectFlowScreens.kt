@@ -66,6 +66,8 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.QrCode
 import com.vettid.core.ui.components.SafetyCode
+import com.vettid.core.ui.components.ServiceRequestLine
+import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
@@ -570,6 +572,21 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
                 onSecondary = actions.onDecline,
                 modifier = modifier.testTag(if (approved) "accept_approved" else "accept_compare"),
             ) {
+                if (state.service) {
+                    // ANDROID-PLAN 0.1.90: under the name, above the code; the name is the service's own, never an account's.
+                    Text(stringResource(UiR.string.service_name_label), style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        AccountNames.isolateOrNull(state.name) ?: stringResource(R.string.connections_request_no_name),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag("request_name"),
+                    )
+                    ServiceRequestLine(
+                        fingerprint = state.keyFingerprint,
+                        fingerprintLabel = stringResource(R.string.connections_detail_key),
+                    )
+                    Spacer(Modifier.height(Spacing.xl))
+                }
                 state.sas?.let {
                     Text(stringResource(R.string.connections_safety_code), style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.height(Spacing.s))

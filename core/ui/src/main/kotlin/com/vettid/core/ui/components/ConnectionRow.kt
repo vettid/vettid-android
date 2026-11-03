@@ -1,6 +1,7 @@
 package com.vettid.core.ui.components
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.runtime.Composable
@@ -25,16 +26,22 @@ fun ConnectionRow(
     emphasized: Boolean = false,
     onClick: (() -> Unit)? = null,
     photo: ImageBitmap? = null,
+    /**
+     * "Service" (ANDROID-PLAN 0.1.90): the row is a service's, which is not a person: the label stands first in the supporting
+     * line and a service icon replaces the initial tile.
+     */
+    serviceLabel: String? = null,
 ) {
     VettIdListRow(
         title = name,
         modifier = modifier,
-        supporting = supporting,
+        supporting = if (serviceLabel != null) listOfNotNull(serviceLabel, supporting).joinToString(" · ") else supporting,
         meta = meta,
         tileStyle = if (favorite) TileStyle.Favorite else TileStyle.Connection,
         emphasized = emphasized,
         onClick = onClick,
-        tilePhoto = photo,
+        tilePhoto = if (serviceLabel != null) null else photo,
+        tileIcon = if (serviceLabel != null) Icons.Outlined.Dns else null,
         action = RowAction(
             icon = if (favorite) Icons.Outlined.Star else Icons.Outlined.StarOutline,
             contentDescription = stringResource(

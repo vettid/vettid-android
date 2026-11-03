@@ -445,7 +445,10 @@ class SocialManager(
                 old is Approval.ConnectionRequest && a is Approval.ConnectionRequest ->
                     a.copy(state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved)
                 old is Approval.OutgoingRequest && a is Approval.OutgoingRequest ->
-                    a.copy(state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved, name = a.name ?: old.name)
+                    a.copy(
+                        state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved, name = a.name ?: old.name,
+                        service = old.service || a.service,
+                    )
                 else -> a
             }
             l.filterNot { requestId(it) == id } + next
@@ -818,7 +821,10 @@ class SocialManager(
         val r = vaultGuard {
             try {
                 val a = api().inviteAccept(link)
-                AcceptedConnection(a.connectionId, a.name?.takeIf { it.isNotBlank() }, exists = false, exp = ApprovalParser.instant(a.exp))
+                AcceptedConnection(
+                    a.connectionId, a.name?.takeIf { it.isNotBlank() }, exists = false, exp = ApprovalParser.instant(a.exp),
+                    service = ApprovalParser.isService(a.peerKind),
+                )
             } catch (e: com.vettid.core.vault.VaultOpException) {
                 // §6.4 "Already connected" (0.10.2): the vault's own id for that peer; no handshake was made.
                 val existing = e.body?.let { VaultJson.str(it, "connection_id") }
@@ -829,7 +835,7 @@ class SocialManager(
         if (!r.exists) {
             val waiting = Approval.OutgoingRequest(
                 r.connectionId, null, remote = false, name = r.name, state = RequestState.WAITING, peerApproved = false,
-                introducedBy = null, receivedAt = now(), exp = r.exp,
+                introducedBy = null, receivedAt = now(), exp = r.exp, service = r.service,
             )
             // The outgoing event may already have arrived (it follows hs.resp): keep it then.
             requestsFlow.update { l -> if (l.any { requestId(it) == r.connectionId }) l else l + waiting }
@@ -1316,6 +1322,7 @@ class SocialManager(
 
     private fun merge(stored: List<StoredEvent>, listed: List<Approval>, cs: List<ConnectionInfo>, now: Instant): List<Approval> {
         val names = cs.filter { it.displayName.isNotBlank() }.associate { it.id to it.displayName }
+        val services = cs.filter { it.service }.map { it.id }.toSet()
         val fromEvents = stored.mapNotNull(::parsed)
         // Events carry what lists leave out (a critical request's payload): they win for the same key. A share
         // decision's event names its items; the rule's list says which are still pending, with the rule's tags.
@@ -1341,16 +1348,19 @@ class SocialManager(
             .filter { a -> a.exp?.isAfter(now) ?: true }
             .distinctBy { it.key }
         // One question per item and subject (0.23.0 §10.12).
-        return ShareQuestions.dedupe(all.map { a -> withName(a, names) }).sortedByDescending { it.receivedAt }
+        return ShareQuestions.dedupe(all.map { a -> withName(a, names, services) }).sortedByDescending { it.receivedAt }
     }
 
-    private fun withName(a: Approval, names: Map<String, String>): Approval = when (a) {
+    private fun withName(a: Approval, names: Map<String, String>, services: Set<String>): Approval = when (a) {
         is Approval.ConnectionRequest -> a
         is Approval.OutgoingRequest -> a
-        is Approval.Authentication -> a.copy(connectionName = names[a.connectionId])
-        is Approval.GrantRequest -> a.copy(connectionName = names[a.connectionId])
-        is Approval.CriticalUse -> a.copy(connectionName = names[a.connectionId])
-        is Approval.ShareDecision -> a.copy(connectionName = a.subjectConnectionId?.let { names[it] })
+        is Approval.Authentication -> a.copy(connectionName = names[a.connectionId], connectionService = a.connectionId in services)
+        is Approval.GrantRequest -> a.copy(connectionName = names[a.connectionId], connectionService = a.connectionId in services)
+        is Approval.CriticalUse -> a.copy(connectionName = names[a.connectionId], connectionService = a.connectionId in services)
+        is Approval.ShareDecision -> a.copy(
+            connectionName = a.subjectConnectionId?.let { names[it] },
+            connectionService = a.subjectConnectionId in services,
+        )
         is Approval.DeviceRequest -> a
     }
 

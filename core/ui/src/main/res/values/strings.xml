@@ -85,4 +85,15 @@
     <string name="core_ui_authn_withdrawn_mute_confirm_service">You won\'t be asked to sign in or approve anything for %1$s until you unmute.</string>
     <string name="core_ui_authn_withdrawn_mute_confirm_button">Mute</string>
     <string name="core_ui_authn_withdrawn_mute_cancel_button">Cancel</string>
+    <!-- DRAFT for owner approval: ANDROID-PLAN §4 Service connections (0.1.90) -->
+    <string name="service_label">Service</string>
+    <string name="services_section_title">Services</string>
+    <string name="service_request_line">This is a service, not a person.</string>
+    <string name="service_request_caveat">The invitation says so. VettID has not checked who runs it.</string>
+    <string name="service_name_label">Name given by the service</string>
+    <string name="service_detail_can_ask_title">What this service can ask</string>
+    <string name="service_detail_can_ask_body">It can ask you to confirm a sign-in or approve an action. It can\'t message or call you, and it can\'t ask for your data.</string>
+    <string name="service_detail_can_ask_body_votes">It can ask you to confirm a sign-in, approve an action or vote. It can\'t message or call you, and it can\'t ask for your data.</string>
+    <string name="service_no_calls">Services can\'t be called.</string>
+    <string name="services_empty">No services yet</string>
 </resources>

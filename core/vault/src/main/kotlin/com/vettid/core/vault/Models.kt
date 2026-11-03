@@ -154,6 +154,8 @@ data class AcceptedInvite(
     val remote: Boolean = false,
     val exp: String? = null,
     val name: String? = null,
+    /** (VAULT-MESSAGING 0.69.0 §6.4) `"service"` when the invitation declared itself a service; absent, or any other value: a person. */
+    @SerialName("peer_kind") val peerKind: String? = null,
 )
 
 /**
@@ -191,6 +193,8 @@ data class OutgoingRequest(
     val exp: String? = null,
     val name: String? = null,
     @SerialName("introduced_by") val introducedBy: String? = null,
+    /** (VAULT-MESSAGING 0.69.0 §6.4) `"service"` for a service's request; absent, or any other value: a person. */
+    @SerialName("peer_kind") val peerKind: String? = null,
 )
 
 /** `connection.event` (§10.4). */

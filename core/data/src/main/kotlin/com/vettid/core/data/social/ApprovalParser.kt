@@ -152,8 +152,12 @@ object ApprovalParser {
             introducedBy = body.s("introduced_by"),
             receivedAt = instant(body.s("created_at")) ?: at,
             exp = instant(body.s("exp")),
+            service = isService(body.s("peer_kind")),
         )
     }
+
+    /** `peer_kind` (0.69.0): only `"service"` marks a service; absent or any other value is a person. */
+    fun isService(peerKind: String?): Boolean = peerKind == "service"
 
     /** `grant.pending`, or an entry of `grant.list`'s `pending`. */
     @Suppress("ReturnCount")
@@ -228,7 +232,7 @@ object ApprovalParser {
             keyFingerprint = IkFingerprint.formatB64(c.ik),
             createdAt = instant(c.createdAt),
             lastActiveAt = instant(c.lastActiveAt),
-            service = c.peerKind == "service",
+            service = isService(c.peerKind),
             asks = c.asks?.let { AskState(it.muted, it.paused, instant(it.pausedAt), it.cooldowns.coerceAtLeast(0)) },
         )
     }

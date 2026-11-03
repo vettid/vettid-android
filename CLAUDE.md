@@ -120,6 +120,19 @@ The A2 exit test:
   runs as the fallback, the mode preference is never changed, `push.unregister` goes to the vault at its next open if
   a registration may still exist, and the registration resumes when the push service is back
   (`settings.notifications_push_not_on_phone`).
+- Service connections (ANDROID-PLAN 0.1.90, VAULT-MESSAGING 0.69.0 §6.4; texts DRAFT in `core/ui` `strings.xml`, `service_forbidden` in
+  `core/data`): `peer_kind == "service"` (`ApprovalParser.isService`; absent or any other value is a person; never inferred) is read from
+  `connection.get`/`.list` (`ConnectionInfo.service`), `connection.invite.accept` (`AcceptedConnection.service`) and the outgoing request
+  (`Approval.OutgoingRequest.service`, event and list entry). The outgoing request's compare screens (`AcceptScreen` COMPARE/APPROVED, the
+  Approvals decision) show "Name given by the service", `ServiceRequestLine` (line, caveat, `ik` fingerprint when the connection list has
+  it) above the code. Messages never lists a service (`MessagesViewModel`, `NewMessageViewModel`; a service conversation has no composer or
+  call, `ConversationUiState.noComposer`); Connections has a "Services" section below the people (`ConnectionsUiState.services`, starred
+  first, `ConnectionRow(serviceLabel)`); Approvals (`Approval.connectionService`), History and Notifications rows append "Service". A service's
+  detail has the label, the names as "Name given by the service", the fingerprint, "What this service can ask" (the `_votes` line where
+  `VotesAvailability.AVAILABLE`), asks, History and remove, and none of message, Call, sharing in either direction, authentication.
+  `forbidden` to an authentication request or a message is `FailureKind.SERVICE_FORBIDDEN` ("Services can't do that."), shown once; the
+  state remembers it (`authRefused`, `serviceRefused`) and the action is gone. `service_no_calls` and `services_empty` are unused.
+  Screens: `connections.services`, `connections.service_detail`, `invite.request_service`.
 - Notifications and the app lock (owner decisions 2026-11-02): no names whenever opening VettID would show the app lock.
   `AppLock.wouldShowLock()` is true when the state is `LOCKED` or `PENDING`, or the lock is on, the app is in the background
   and the background is due (one shared decision with `onForeground()`, which still alone engages the lock; see the clock rule below); `DISABLED` is never

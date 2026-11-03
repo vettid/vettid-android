@@ -57,6 +57,7 @@ import com.vettid.core.data.social.OutstandingInvite
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.ConnectionRow
@@ -298,10 +299,10 @@ fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: C
     ) {
         val error = state.error
         when {
-            state.loading && state.connections.isEmpty() -> Centered {
+            state.loading && state.noneListed -> Centered {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
-            error != null && state.connections.isEmpty() && state.invites.isEmpty() && state.peerDeclines.isEmpty() -> Centered {
+            error != null && state.noneListed && state.invites.isEmpty() && state.peerDeclines.isEmpty() -> Centered {
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.connections_error_title),
@@ -310,13 +311,13 @@ fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: C
                     actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.connections_retry)) } },
                 )
             }
-            state.searching && state.connections.isEmpty() -> EmptyState(
+            state.searching && state.noneListed -> EmptyState(
                 icon = Icons.Outlined.Search,
                 title = stringResource(R.string.connections_no_match_title),
                 body = stringResource(R.string.connections_no_match_body),
                 modifier = Modifier.testTag("connections_no_match"),
             )
-            state.connections.isEmpty() && state.invites.isEmpty() && state.peerDeclines.isEmpty() -> EmptyState(
+            state.noneListed && state.invites.isEmpty() && state.peerDeclines.isEmpty() -> EmptyState(
                 icon = Icons.Outlined.People,
                 title = stringResource(R.string.connections_empty_title),
                 body = stringResource(R.string.connections_empty_body),
@@ -371,6 +372,11 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
             item { SectionHeader(stringResource(R.string.connections_header)) }
         }
         items(state.connections, key = { it.id }) { c -> ConnectionItem(c, actions) }
+        // ANDROID-PLAN 0.1.90: services below the people, only when there is one; starred ones first.
+        if (state.services.isNotEmpty()) {
+            item(key = "services-header") { SectionHeader(stringResource(UiR.string.services_section_title)) }
+            items(state.services, key = { it.id }) { c -> ConnectionItem(c, actions) }
+        }
     }
 }
 
@@ -378,6 +384,7 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
 private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
     val name = AccountNames.cleaned(c.displayName) ?: stringResource(R.string.connections_name_not_shared)
     ConnectionRow(
+        serviceLabel = if (c.service) stringResource(UiR.string.service_label) else null,
         name = name,
         favorite = c.favorite,
         onFavoriteChange = { actions.onFavorite(c.id, it) },
