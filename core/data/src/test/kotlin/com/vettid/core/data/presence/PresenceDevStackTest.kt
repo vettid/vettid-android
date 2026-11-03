@@ -11,6 +11,8 @@ import com.vettid.core.testing.TestAndroidAttester
 import com.vettid.core.vault.DeviceSecrets
 import com.vettid.core.vault.InMemoryDeviceStateStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assume.assumeTrue
@@ -40,6 +42,16 @@ class PresenceDevStackTest {
 
     private suspend fun CoroutineScope.scenario(c: ExitScenario.Connected) {
         val m = PresenceManager(this, ops = { VaultPresenceOps(c.vault) })
+        // The vault's events reach the manager as in VaultManager: presence.result and sync.event{presence.changed}.
+        val events = launch { c.device.events.collect { m.onEvent(it) } }
+        try {
+            scenarioWith(m, c)
+        } finally {
+            events.cancel()
+        }
+    }
+
+    private suspend fun scenarioWith(m: PresenceManager, c: ExitScenario.Connected) {
         try {
             m.refreshPolicy()
         } catch (e: VaultFailure) {
@@ -59,9 +71,17 @@ class PresenceDevStackTest {
         check(m.policy.value?.except == listOf(c.connectionId)) { "except: ${m.policy.value}" }
         check(m.policy.value?.sharesWith(c.connectionId) == false)
 
+        // The peer (vaultctl) keeps the vault's default policy, Available shared with all: its answer arrives as
+        // presence.result before exp (30 s).
         m.query(c.connectionId)
-        check(m.readings.value[c.connectionId] != null) { "no reading after the query" }
-        println("presence: ${m.readings.value[c.connectionId]}")
+        var waited = 0L
+        while (m.readings.value[c.connectionId] is PresenceReading.Checking && waited < RESULT_WAIT_MS) {
+            delay(POLL_MS)
+            waited += POLL_MS
+        }
+        val reading = m.readings.value[c.connectionId]
+        println("presence: $reading")
+        check(reading is PresenceReading.Known && reading.state == PresenceState.AVAILABLE) { "peer reading: $reading" }
 
         // Back to the default.
         m.update { it.copy(state = PresenceState.AVAILABLE).withSharedWith(c.connectionId, true) }
@@ -71,5 +91,7 @@ class PresenceDevStackTest {
 
     private companion object {
         const val TIMEOUT_MS = 180_000L
+        const val RESULT_WAIT_MS = 35_000L
+        const val POLL_MS = 250L
     }
 }
