@@ -458,8 +458,9 @@ class ApprovalDetailViewModel @Inject constructor(
             val withdrawn = (shown as? Approval.Authentication)?.requestId?.let { it in x.withdrawn } == true
             // Gone from the list, or expired while open: both read as "Already decided … or it expired" (no actions).
             val over = (a == null || a.expiredAt(now)) && shown != null && !withdrawn
-            // The hold drops a session request (§3.6.3): it leaves the screen even before the list says so.
-            val held = x.check?.state == OwnerCheckState.HELD && (shown as? Approval.DeviceRequest)?.isSession == true
+            // The hold drops a session request and a held approval (§3.6.3): they leave the screen even before the list says so.
+            val held = x.check?.state == OwnerCheckState.HELD &&
+                (shown as? Approval.DeviceRequest)?.let { it.isSession || it.isHeld } == true
             val peer = (shown as? Approval.Authentication)?.connectionId?.let { id -> x.connections.firstOrNull { it.id == id } }
             s.copy(
                 approval = shown,
@@ -584,7 +585,10 @@ class ApprovalDetailViewModel @Inject constructor(
     /** Allow (a session request, for [seconds]) or Approve (a held approval); the answer is kept for the screen to say. */
     private suspend fun approveDevice(a: Approval.DeviceRequest, seconds: Int) {
         val d = repo.approveDeviceRequest(a.key, if (a.isSession) seconds else null)
-        val outcome = if (a.isSession) {
+        val outcome = if (!a.isSession && d.result == "not_found") {
+            // The approval ended first (`{result: "not_found"}`, §10.3): not "Approved".
+            DeviceOutcome.NoLongerWaiting
+        } else if (a.isSession) {
             DeviceOutcome.Allowed(d.expiresAt)
         } else {
             DeviceOutcome.Approved(d.result)

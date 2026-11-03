@@ -44,6 +44,7 @@ class DeviceApprovalsViewModelTest {
     private val social = FakeSocial()
     private val devices = FakeDevices()
     private val pairing = FakePairing()
+    private val vault = FakeVault()
     private val items = FakeItems().apply { add(FakeItems.item("i1", "Bank PIN", Sensitivity.SECRET, fields = listOf("PIN" to "1234"))) }
 
     private fun agent(session: Instant? = null) = DeviceInfo("A", "agent", "Build bot", null, null, null, session)
@@ -63,7 +64,7 @@ class DeviceApprovalsViewModelTest {
     private fun vm(a: Approval.DeviceRequest, list: List<DeviceInfo> = listOf(agent())): ApprovalDetailViewModel {
         social.approvals.value = listOf(a)
         devices.devices.value = list
-        return ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, FakeVault(), social, pairing)
+        return ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social, pairing)
     }
 
     // --- an access request ---
@@ -150,6 +151,33 @@ class DeviceApprovalsViewModelTest {
         val m = vm(session(fromFeed = true))
         runCurrent()
         assertFalse(m.uiState.value.canApprove)
+    }
+
+    @Test
+    fun aHeldApprovalLeavesDuringTheHoldAsASessionRequestDoes() = runTest {
+        val m = vm(heldAsk(use))
+        runCurrent()
+        assertFalse(m.uiState.value.gone)
+        vault.ownerCheck.value = com.vettid.core.data.vault.OwnerCheckView(
+            com.vettid.core.data.vault.OwnerCheckState.HELD, null, 86_400, 0, hold = true, holdOffUntil = null,
+        )
+        runCurrent()
+        assertTrue(m.uiState.value.held)
+        assertTrue(m.uiState.value.gone)
+        // The session request too, and a pairing is not affected.
+        val s = vm(session())
+        runCurrent()
+        assertTrue(s.uiState.value.gone)
+    }
+
+    @Test
+    fun aNotFoundResultOfApproveIsNoLongerWaitingNotApproved() = runTest {
+        social.deviceDecision = DeviceDecision(result = "not_found")
+        val m = vm(heldAsk(use))
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.NoLongerWaiting, m.uiState.value.outcome)
     }
 
     @Test

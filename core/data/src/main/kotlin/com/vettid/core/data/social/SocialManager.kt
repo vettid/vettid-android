@@ -176,11 +176,18 @@ class SocialManager(
             // (0.83.0), so a pairing's entry is kept either way.
             val extra = FeedOnlyAsks.entries(feed, base.mapTo(HashSet()) { it.key }, closed, now())
                 .filter { !listRead || it.isPairing }
-            if (extra.isEmpty()) base else (base + extra).sortedByDescending { it.receivedAt }
+            replaceSessions(if (extra.isEmpty()) base else (base + extra).sortedByDescending { it.receivedAt })
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /** The pairing with this `pending_id` was approved, rejected or ended: its entry (from the feed item) goes. */
     fun closePairing(pendingId: String) = closeFeedKey("device:${Approval.DeviceRequest.PAIR_PENDING}:$pendingId")
+
+    /** A device has one access request (§6.8): of several shown, the newest stays. */
+    private fun replaceSessions(list: List<Approval>): List<Approval> {
+        val newest = list.mapNotNull { it as? Approval.DeviceRequest }.filter { it.sessionDeviceId != null }
+            .groupBy { it.sessionDeviceId }.mapValues { (_, v) -> v.maxBy { it.receivedAt }.key }
+        return list.filter { a -> val d = (a as? Approval.DeviceRequest)?.sessionDeviceId; d == null || newest[d] == a.key }
+    }
 
     private fun closeFeedKey(key: String) = feedClosedFlow.update { it.copy(keys = it.keys + key) }
 
@@ -339,7 +346,7 @@ class SocialManager(
                 val admit = p?.let { a ->
                     { pending.acceptCreate(a.key, m.ts, (a as? Approval.DeviceRequest)?.deviceId, m.type == PendingAsks.SESSION) }
                 }
-                store(m.type, b, admit)
+                store(m.type, b, admit, m.ts)
             }
             "connection.request.pending" -> ApprovalParser.incoming(b, now())?.let { onRequest(it, it.pendingId) }
             "connection.request.outgoing" -> ApprovalParser.outgoing(b, now())?.let { onRequest(it, it.connectionId) }
@@ -353,15 +360,29 @@ class SocialManager(
         nowFlow.value = now()
     }
 
-    private suspend fun store(type: String, body: JsonObject, admit: (() -> Boolean)? = null) {
+    /** The held `device.session.pending` events of the same device as [parsed] (a session request), with their keys. */
+    private fun sessionsOfSameDevice(events: List<StoredEvent>, parsed: Approval): List<Pair<String, StoredEvent>> {
+        val req = parsed as? Approval.DeviceRequest
+        val device = req?.sessionDeviceId ?: return emptyList()
+        return events.mapNotNull { e ->
+            val p = parsed(e) as? Approval.DeviceRequest
+            if (p != null && p.sessionDeviceId == device && p.key != parsed.key) p.key to e else null
+        }
+    }
+
+    private suspend fun store(type: String, body: JsonObject, admit: (() -> Boolean)? = null, ts: Instant? = null) {
         val parsed = ApprovalParser.parse(type, body, now()) ?: return
         val at = now().toEpochMilli()
         val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
         // Noted before the suspending write, so a read that reaches its prune step in the gap keeps the batch.
         if (parsed is Approval.ShareDecision) noteBatch(parsed)
         edit { l ->
+            // A newer session request of the same device replaces an older (§6.8, by the event's ts): an older one that
+            // arrives late is not shown, and the older ones already held go.
+            val older = sessionsOfSameDevice(l.events, parsed)
+            if (ts != null && older.any { (k, e) -> (pending.createdTs(k) ?: Instant.ofEpochMilli(e.at)).isAfter(ts) }) return@edit l
             if (admit != null && !admit()) return@edit l
-            val others = l.events.filterNot { e -> keyOf(e) == parsed.key }
+            val others = l.events.filterNot { e -> keyOf(e) == parsed.key || older.any { (_, o) -> o === e } }
             val merged = if (parsed is Approval.ShareDecision) mergeShare(l.events, parsed, body) else text
             l.copy(events = others + StoredEvent(type, merged, at))
         }

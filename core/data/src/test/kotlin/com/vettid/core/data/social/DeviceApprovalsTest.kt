@@ -431,6 +431,40 @@ class DeviceApprovalsTest {
     }
 
     @Test
+    fun aNewerSessionRequestOfTheSameDeviceReplacesTheOlder() = runTest {
+        val m = manager()
+        m.onEvent(event("device.session.pending", session("s1", device = "A"), now))
+        m.onEvent(event("device.session.pending", session("s9", device = "B"), now))
+        runCurrent()
+        m.onEvent(event("device.session.pending", session("s2", device = "A", seconds = 900), now.plusSeconds(5)))
+        runCurrent()
+        assertEquals(listOf("device:device.session.pending:s2", "device:device.session.pending:s9"), m.keys())
+        assertEquals(900, req(m, "device:device.session.pending:s2").seconds)
+    }
+
+    @Test
+    fun anOlderSessionRequestThatArrivesLateIsNotShown() = runTest {
+        val m = manager()
+        m.onEvent(event("device.session.pending", session("s2", device = "A"), now.plusSeconds(5)))
+        m.onEvent(event("device.session.pending", session("s1", device = "A"), now))
+        runCurrent()
+        assertEquals(listOf("device:device.session.pending:s2"), m.keys())
+        // Closing the newer one does not bring the older back.
+        m.declineDeviceRequest("device:device.session.pending:s2")
+        runCurrent()
+        assertTrue(m.keys().isEmpty())
+    }
+
+    @Test
+    fun aFeedOnlySessionRequestYieldsToANewerEventOfTheSameDevice() = runTest {
+        val m = manager()
+        m.setFeedItems(listOf(feed("device.session.pending", "s-old", device = "A", at = now.minusSeconds(60))))
+        m.onEvent(event("device.session.pending", session("s-new", device = "A"), now))
+        runCurrent()
+        assertEquals(listOf("device:device.session.pending:s-new"), m.keys())
+    }
+
+    @Test
     fun theEventWinsOverTheFeedItem() = runTest {
         val m = manager()
         m.setFeedItems(listOf(feed("approval.pending", "h1")))

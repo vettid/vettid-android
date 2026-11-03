@@ -179,7 +179,11 @@ internal fun DeviceRequestScreen(
             Spacer(Modifier.height(Spacing.m))
         }
         if (a.isSession) SessionFacts(a, who, state, actions)
-        if (a.isHeld) HeldFacts(held)
+        if (a.isHeld) {
+            // The kind of device, so that an agent calling itself "Work desktop" still shows "Agent".
+            Text(kindWord(a), style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("device_kind"))
+            HeldFacts(held)
+        }
         RenewalNotices(state, a, actions)
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
@@ -289,6 +293,7 @@ private fun HeldFacts(held: HeldShow?) {
 
 /** How a decision on a device request ended; [DeviceOutcome.NoLongerWaiting] is the entry going. */
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, actions: DecisionActions, modifier: Modifier) {
     val who = deviceSentenceInline(a)
     val text = when (o) {
@@ -301,6 +306,7 @@ private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, act
             // The vault did not say whether it was done: not "Approved".
             null -> stringResource(R.string.approvals_held_no_result)
             "ok" -> stringResource(R.string.approvals_held_approved)
+            "not_found" -> stringResource(R.string.approvals_no_longer_waiting)
             "forbidden" -> stringResource(R.string.approvals_held_forbidden, who)
             "session_required", "denied" -> stringResource(R.string.approvals_held_session_ended, who)
             "way_not_allowed" -> stringResource(R.string.approvals_held_way_not_allowed)

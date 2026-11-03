@@ -165,6 +165,14 @@ class DeviceAsksScreenTest {
     }
 
     @Test
+    fun aHeldRequestShowsTheKindOfDeviceWhateverItCallsItself() {
+        show(state(held(HeldRequest.Catalog).copy(deviceName = "Work desktop")))
+        rule.onNodeWithTag("device_kind").assertExists()
+        rule.onNodeWithText("Agent").assertExists()
+        rule.onNodeWithText("\u2068Work desktop\u2069 wants to list the items it may use", substring = true).assertExists()
+    }
+
+    @Test
     fun theCatalog() {
         show(state(held(HeldRequest.Catalog)))
         rule.onNodeWithText("$bot wants to list the items it may use").assertExists()
@@ -218,6 +226,7 @@ class DeviceAsksScreenTest {
     fun eachResultOfApproveHasItsText() {
         val cases = mapOf(
             "ok" to "Approved",
+            "not_found" to "This request is no longer waiting.",
             null to "Your vault didn't say whether it was done.",
             "forbidden" to "Approved, but $bot no longer has a permission that covers it, or is paused, so nothing was done.",
             "session_required" to "Approved, but $bot's access ended first, so nothing was done.",
