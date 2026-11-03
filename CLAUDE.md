@@ -532,6 +532,8 @@ vettid.org repo's `local/android-ui/`).
   at most 1 hour; debug and devStack builds start with it on (the catalog is screenshotted). A screen that must stay
   protected regardless calls `SecureWindow()`. A field that holds a secret the member must see uses
   `visibleSecretKeyboard()` inside `NoKeyboardLearning { }` (S2); copy secrets with `textClip(…, sensitive = true)`.
+  "Shared with you" masks a connection's shared passwords and one-time codes (`FieldKinds.masked`, as the item detail) until the
+  member taps the field's eye; the shown state is in memory only (never `SavedStateHandle`), so leaving the screen masks them (VAULT-MESSAGING §10.7).
 - The member's lock fails secure (owner decision 2026-10-12; `LockGuard`, `LockKeeper`, `LockSequence`,
   `VaultManager.lock()`): the phone is `AppPhase.Locked` from the moment the member asks, in every outcome, and the
   vault is *known* locked only when it answered the relay `vault.lock`, a status read no longer says `unlocked`, or

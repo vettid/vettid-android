@@ -33,6 +33,7 @@ import com.vettid.core.data.items.TagMatch
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultLimit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import java.time.Instant
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharedContent
@@ -392,5 +393,78 @@ class SharingScreensTest {
             }
         }
         rule.onNodeWithText("(650) 253-0000").assertExists()
+    }
+
+    // --- shared secrets are masked until the member shows them (VAULT-MESSAGING §10.7; iOS d27f000) ---
+
+    private val fakeSecret = "fake-shared-secret-0001"
+    private val fakeSeed = "fake-shared-seed-0002"
+    private val maskedGrant = GrantView("g5", "c1", GrantDirection.RECEIVED, "x1", "Logins", "login")
+    private val maskedContent = SharedContent(
+        "x1", "Logins", "login",
+        listOf(
+            ItemFieldView("f1", "Username", "text", FieldValue.Text("fake-user")),
+            ItemFieldView("f2", "Password", "password", FieldValue.Text(fakeSecret)),
+            ItemFieldView("f3", "Code", "otp", FieldValue.Text(fakeSeed)),
+            ItemFieldView("f4", "Phone", "phone", FieldValue.Text("+1 650-253-0000")),
+        ),
+        "fake note", null,
+    )
+
+    private fun setSharedScreen(shown: () -> Boolean = { true }) {
+        rule.setContent {
+            if (shown()) {
+                SharedWithYouScreen(
+                    SharedWithYouUiState("c1", "Dana Lee", received = listOf(maskedGrant), loading = false, opened = mapOf("g5" to maskedContent)),
+                    SharedWithYouActions(),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun sharedPasswordsAndCodesAreMaskedByDefaultAndOthersAreNot() {
+        setSharedScreen()
+        rule.onNodeWithText(fakeSecret).assertDoesNotExist()
+        rule.onNodeWithText(fakeSeed).assertDoesNotExist()
+        rule.onNodeWithTag("shared_value_1").assertTextEquals("••••••••")
+        rule.onNodeWithTag("shared_value_2").assertTextEquals("••••••••")
+        rule.onNodeWithText("fake-user").assertIsDisplayed()
+        rule.onNodeWithText("(650) 253-0000").assertExists()
+        rule.onNodeWithText("fake note").assertExists()
+        // Only secret kinds have a Show control; and no Copy is added.
+        rule.onNodeWithTag("shared_toggle_0").assertDoesNotExist()
+        rule.onNodeWithTag("shared_toggle_3").assertDoesNotExist()
+    }
+
+    @Test
+    fun showRevealsOneFieldAndHideMasksItAgain() {
+        setSharedScreen()
+        rule.onNodeWithContentDescription("Show Password").performClick()
+        rule.onNodeWithText(fakeSecret).assertIsDisplayed()
+        rule.onNodeWithText(fakeSeed).assertDoesNotExist()
+        rule.onNodeWithContentDescription("Hide Password").performClick()
+        rule.onNodeWithText(fakeSecret).assertDoesNotExist()
+        rule.onNodeWithTag("shared_value_1").assertTextEquals("••••••••")
+    }
+
+    @Test
+    fun leavingTheScreenAndReturningMasksAgain() {
+        var on by mutableStateOf(true)
+        setSharedScreen { on }
+        rule.onNodeWithContentDescription("Show Password").performClick()
+        rule.onNodeWithText(fakeSecret).assertIsDisplayed()
+        on = false
+        rule.waitForIdle()
+        on = true
+        rule.waitForIdle()
+        rule.onNodeWithText(fakeSecret).assertDoesNotExist()
+        rule.onNodeWithTag("shared_value_1").assertTextEquals("••••••••")
+    }
+
+    @Test
+    fun sharedContentNeverPutsValuesInItsText() {
+        val text = maskedContent.toString()
+        listOf(fakeSecret, fakeSeed, "fake-user", "fake note").forEach { assertFalse(text.contains(it)) }
     }
 }
