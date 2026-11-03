@@ -285,7 +285,7 @@
     <string name="items_agent_rule_per_day">Uses a day</string> <!-- new: the field\'s label -->
     <string name="items_agent_rule_per_note">Up to %1$s uses an hour and %2$s a day. Past that, each use asks you.</string> <!-- draft, with the two numbers from the fields -->
     <string name="items_agent_rule_uses">Uses of each item (optional)</string> <!-- new: the field\'s label -->
-    <string name="items_agent_rule_uses_note">Stop after %1$s uses of each item.</string> <!-- draft, with [n] from the field ("n" while empty) -->
+    <string name="items_agent_rule_uses_note">Stop after %1$s uses of each item.</string> <!-- draft, with [n] from the field; shown only once the field has a number -->
     <string name="items_agent_rule_more">More options</string> <!-- new -->
     <string name="items_agent_rule_status_ttl">Status lifetime</string> <!-- draft -->
     <string name="items_agent_rule_status_ttl_note">If you remove this permission, services the agent showed it to may still accept it for up to this long, plus 1 minute. Shorter is safer; the agent then checks with your vault more often.</string> <!-- draft -->

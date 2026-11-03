@@ -233,7 +233,7 @@ The A2 exit test:
   offered: `saveAgentRule` refuses `auto` for every rule, new or existing, before anything is unlocked, and an agent's draft cannot go
   through `saveRule`. Owner decision 2026-11-02 (b): an existing automatic agent rule on a vault without `item_ways` opens as Ask
   (Automatic shown, disabled, with "This vault can't keep the agent from receiving item values, so this rule now asks you first.")
-  and saves only as ask (`RuleEditUiState.autoShown` / `autoEnabled` / `autoDemoted`, `RuleDraft.storedMode`). The editor and and every row carry "On this vault, the agent
+  and saves only as ask (`RuleEditUiState.autoShown` / `autoEnabled` / `autoDemoted`, `RuleDraft.storedMode`). The editor and every row carry "On this vault, the agent
   may receive the values of the items it uses, and its app may keep them in its history." (`core_ui_agent_ways_warning`). Texts in
   `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
   for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it

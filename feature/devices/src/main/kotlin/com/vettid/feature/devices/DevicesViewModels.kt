@@ -137,6 +137,9 @@ class DeviceViewModel @Inject constructor(
     private val id: String = saved.get<String>(DeviceRoute.ARG).orEmpty()
     private val local = MutableStateFlow(DeviceUiState())
 
+    /** The number of the latest rules read; declared before `init`, which may start the first read at once. */
+    private var rulesRead = 0
+
     val uiState: StateFlow<DeviceUiState> = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
         s.copy(device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED, ruleSaved = saved, itemWays = sharing.itemWays)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
@@ -181,7 +184,6 @@ class DeviceViewModel @Inject constructor(
         }
     }
 
-    private var rulesRead = 0
 
     fun ruleSavedShown() = sharing.ruleSavedShown()
 

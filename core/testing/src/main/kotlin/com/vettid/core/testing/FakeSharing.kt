@@ -155,9 +155,15 @@ class FakeSharing : SharingRepository {
     val windowNotClosedFlow = MutableStateFlow<com.vettid.core.data.votes.WindowNotClosed?>(null)
     override val windowNotClosed: kotlinx.coroutines.flow.StateFlow<com.vettid.core.data.votes.WindowNotClosed?> = windowNotClosedFlow
 
+    /** Gates for the next [agentRules] calls, in order: each call waits for its gate. */
+    val agentRulesGates = ArrayDeque<kotlinx.coroutines.CompletableDeferred<Unit>>()
+
     override suspend fun agentRules(agentId: String): List<ShareRule> {
         call("agentRules")
-        return rulesStored.filter { it.agentId == agentId }
+        val snapshot = rulesStored.filter { it.agentId == agentId }
+        // A slow answer: what the vault knew when it was asked, delivered once its gate opens.
+        agentRulesGates.removeFirstOrNull()?.await()
+        return snapshot
     }
 
     override suspend fun saveAgentRule(draft: RuleDraft, password: String): ShareRule {
