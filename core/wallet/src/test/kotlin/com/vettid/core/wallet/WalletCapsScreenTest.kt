@@ -152,7 +152,7 @@ class WalletCapsScreenTest {
         assertTrue(m.isCapsPending(w.id))
         ops.calls.clear()
         // The set fails again: the raise is not sent at all.
-        val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, "123456".toCharArray(), "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals("internal", e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.raise") })
         assertNull(ops.wallets.getValue(w.id).perTxSats)
@@ -161,14 +161,14 @@ class WalletCapsScreenTest {
         ops.capsSetFails = null
         ops.calls.clear()
         val seenNow = m.capsSeen(w.id)!!
-        val settled = runCatching { m.raiseCaps(w.id, seenNow, 100_000, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val settled = runCatching { m.raiseCaps(w.id, seenNow, 100_000, 3_000_000, "123456".toCharArray(), "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.CAPS_SETTLED, settled.code)
         assertEquals(listOf("caps.set:100000:null"), ops.calls.filter { it.startsWith("caps.") })
         assertFalse(m.isCapsPending(w.id))
         assertNull(WalletFlags(flagsFile).pendingCaps(w.id))
         assertEquals(100_000L, m.wallets.value.single().perTxSats)
         // Asked again against the limits as they now are, it is raised.
-        m.raiseCaps(w.id, m.capsSeen(w.id)!!, 100_000, 3_000_000, "123456", "pw")
+        m.raiseCaps(w.id, m.capsSeen(w.id)!!, 100_000, 3_000_000, "123456".toCharArray(), "pw".toCharArray())
         assertEquals("caps.raise:100000:3000000", ops.calls.last())
         assertEquals(3_000_000L, m.wallets.value.single().perPeriodSats)
     }
@@ -184,7 +184,7 @@ class WalletCapsScreenTest {
         ops.wallets[w.id] = ops.wallets.getValue(w.id).copy(version = w.version + 1, perTxSats = 100_000)
         m.refresh()
         ops.calls.clear()
-        val e = runCatching { m.raiseCaps(w.id, seen, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(w.id, seen, null, 3_000_000, "123456".toCharArray(), "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.CONFLICT, e.kind)
         assertEquals(WalletsManager.CAPS_CHANGED, e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.raise") })
@@ -193,7 +193,7 @@ class WalletCapsScreenTest {
         val now = m.capsSeen(w.id)!!
         ops.wallets[w.id] = ops.wallets.getValue(w.id).copy(version = w.version + 2)
         m.refresh()
-        val v = runCatching { m.raiseCaps(w.id, now, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val v = runCatching { m.raiseCaps(w.id, now, null, 3_000_000, "123456".toCharArray(), "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.CAPS_CHANGED, v.code)
         assertTrue(ops.calls.none { it.startsWith("caps.raise") })
     }
@@ -206,7 +206,7 @@ class WalletCapsScreenTest {
         m.open()
         assertTrue(WalletsManager.UNKNOWN in m.capsPending.value)
         ops.calls.clear()
-        val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(w.id, m.capsSeen(w.id)!!, null, 3_000_000, "123456".toCharArray(), "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.SETTINGS_UNREADABLE, e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.") })
         assertEquals(500_000L, ops.wallets.getValue(w.id).perTxSats)
@@ -378,7 +378,7 @@ class WalletCapsScreenTest {
         m.open()
         // Chosen now, not sent (the vault refuses), so pending in memory; then the file becomes unreadable and is reset.
         ops.capsSetFails = "internal"
-        runCatching { m.create("New", Network.TESTNET4, "pw", caps) }
+        runCatching { m.create("New", Network.TESTNET4, "pw".toCharArray(), caps) }
         val pendingId = m.capsPending.value.single()
         flagsFile.bytes = unreadable.encodeToByteArray()
         assertTrue(m.resetSettings())
@@ -397,7 +397,7 @@ class WalletCapsScreenTest {
         assertTrue(m.resetSettings())
         assertEquals(true, WalletFlags(flagsFile).asksCaps(old))
         // Made here with No limit: not asked, and its flag says so.
-        val made = m.create("New", Network.TESTNET4, "pw", null).wallet
+        val made = m.create("New", Network.TESTNET4, "pw".toCharArray(), null).wallet
         assertEquals(false, WalletFlags(flagsFile).asksCaps(made.id))
         assertTrue(m.receiveAddress(made.id) !is ReceiveResult.LimitsAsk)
         // Made elsewhere after the reset: the list read later does not ask it either.
@@ -419,7 +419,7 @@ class WalletCapsScreenTest {
         kotlinx.coroutines.delay(300)
         assertTrue(m.resetSettings())
         // A wallet made before the first list read.
-        val made = m.create("New", Network.TESTNET4, "pw", null).wallet
+        val made = m.create("New", Network.TESTNET4, "pw".toCharArray(), null).wallet
         ops.listGate!!.complete(Unit)
         opening.join()
         assertEquals(true, WalletFlags(flagsFile).asksCaps(old))
@@ -436,7 +436,7 @@ class WalletCapsScreenTest {
         m.open()
         assertTrue(m.resetSettings())
         m.lowerCaps(id, 100_000, null)
-        m.raiseCaps(id, m.capsSeen(id)!!, null, null, "123456", "pw")
+        m.raiseCaps(id, m.capsSeen(id)!!, null, null, "123456".toCharArray(), "pw".toCharArray())
         assertFalse(m.wallets.value.single().capped)
         assertEquals(false, WalletFlags(flagsFile).asksCaps(id))
         assertTrue(m.receiveAddress(id) is ReceiveResult.Address)
@@ -481,7 +481,7 @@ class WalletCapsScreenTest {
         // Receive stays off, with the reason.
         assertEquals(ReceiveResult.CapsDuplicate, m.receiveAddress(id))
         // A raise is refused too, without a raise being sent.
-        val e = runCatching { m.raiseCaps(id, m.capsSeen(id)!!, null, 3_000_000, "123456", "pw") }.exceptionOrNull() as VaultFailure
+        val e = runCatching { m.raiseCaps(id, m.capsSeen(id)!!, null, 3_000_000, "123456".toCharArray(), "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.DUPLICATE_WALLET, e.code)
         assertTrue(ops.calls.none { it.startsWith("caps.raise") })
         // The twin is deleted: the next try sets it and everything clears.
@@ -502,7 +502,7 @@ class WalletCapsScreenTest {
         ops.listGate = kotlinx.coroutines.CompletableDeferred()
         val opening = CoroutineScope(Dispatchers.Default).launch { runCatching { m.open() } }
         kotlinx.coroutines.delay(300)
-        val made = m.create("New", Network.TESTNET4, "pw", null).wallet
+        val made = m.create("New", Network.TESTNET4, "pw".toCharArray(), null).wallet
         assertEquals(listOf(made.id), m.wallets.value.map { it.id })
         assertTrue(m.resetSettings())
         // The older wallet is not in the file's ask list yet; the first real list fills it (the new wallet existed at the reset too).
@@ -512,7 +512,7 @@ class WalletCapsScreenTest {
         assertEquals(true, WalletFlags(flagsFile).asksCaps(older))
         assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(older))
         // A wallet made after the reset is still not asked.
-        val later = m.create("Later", Network.TESTNET4, "pw", null).wallet
+        val later = m.create("Later", Network.TESTNET4, "pw".toCharArray(), null).wallet
         assertEquals(false, WalletFlags(flagsFile).asksCaps(later.id))
     }
 }

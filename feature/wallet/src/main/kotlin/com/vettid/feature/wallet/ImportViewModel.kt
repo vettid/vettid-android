@@ -258,7 +258,7 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
             mutable.update { it.copy(step = ImportStep.FORM, invalidPhrase = true, password = "") }
             return
         }
-        val pw = s.password
+        val pw = Taken.of(s.password)
         mutable.update { it.copy(busy = true, password = "", error = null, problem = null) }
         viewModelScope.launch {
             val phrase = PhraseInput.normalised(s.typed)
@@ -280,7 +280,7 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
             } finally {
                 phrase.fill(Char(0))
             }
-        }
+        }.wipeWhenDone(pw)
     }
 
     private fun refused(e: VaultFailure) {

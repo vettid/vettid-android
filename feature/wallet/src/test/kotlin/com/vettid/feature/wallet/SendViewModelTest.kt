@@ -649,6 +649,138 @@ class SendViewModelTest {
         assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
     }
 
+    /** Send all, agreed to at the review (10% question answered) with this payee and fee; then back to the form (an edit that keeps it). */
+    private suspend fun TestScope.sendAllAgreedAt(payee: Long, fee: Long): SendViewModel {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setSendAll(true)
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("30")
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, payee, 0, fee, 150, payee + fee, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        vm.confirmBigFee()
+        assertEquals(fee, vm.state.value.tenConfirmedFee)
+        assertEquals(payee, vm.state.value.tenConfirmedPayee)
+        vm.edit()
+        return vm
+    }
+
+    @Test
+    fun sendAllAsksAgainWhenThePayeeShrinksWithTheSameFee() = runTest {
+        val vm = sendAllAgreedAt(40_000, 4_500)
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+    }
+
+    @Test
+    fun sendAllDoesNotAskAgainForTheSamePayee() = runTest {
+        val vm = sendAllAgreedAt(40_000, 4_500)
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertNull(vm.state.value.bigFeeAsk)
+    }
+
+    @Test
+    fun aTypedAmountKeepsItsOwnBasisAndDoesNotAskAgain() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("40")
+        vm.review()
+        assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+        vm.confirmBigFee()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertEquals(40_000L, vm.state.value.tenConfirmedPayee)
+        assertNull(vm.state.value.bigFeeAsk)
+    }
+
+    @Test
+    fun aPayeeThatGrowsWithTheSameFeeDoesNotAskAgain() = runTest {
+        val vm = sendAllAgreedAt(40_000, 4_500)
+        // 44,000: the fee is still over 10% of it, but the payee is not below the one agreed to.
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 44_000, 0, 4_500, 150, 48_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW }
+        assertNull(vm.state.value.bigFeeAsk)
+    }
+
+    private val resets = listOf<Pair<String, (SendViewModel) -> Unit>>(
+        "amount" to { it.setAmount("1000") },
+        "send all" to { it.setSendAll(false) },
+        "fee choice" to { it.setFeeChoice(FeeChoice.NORMAL) },
+        "custom fee" to { it.setCustomFee("31") },
+        "unconfirmed" to { it.setIncludeUnconfirmed(true) },
+        "link with an amount" to { it.setAddress("bitcoin:$PAYEE?amount=0.0003") },
+        "link without an amount" to { it.setAddress("bitcoin:$PAYEE") },
+        "refused link" to { it.setAddress("bitcoin:$PAYEE?amount=-1") },
+    )
+
+    private fun assertNothingAgreedOrAsked(name: String, vm: SendViewModel) {
+        val s = vm.state.value
+        assertNull(name, s.tenConfirmedFee)
+        assertNull(name, s.tenConfirmedPayee)
+        assertNull(name, s.bigFeeAsk)
+        assertNull(name, s.bigFeePayee)
+    }
+
+    /** The agreement stands and the review's 10% question (the payee shrank) is pending when the member edits the form. */
+    @Test
+    fun everyEditDropsTheAgreementAndTheReviewQuestionThatIsPending() = runTest {
+        for ((name, edit) in resets) {
+            val vm = sendAllAgreedAt(40_000, 4_500)
+            engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0, true))
+            vm.review()
+            eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+            assertEquals(name, 35_000L, vm.state.value.bigFeePayee)
+            assertEquals(name, 4_500L, vm.state.value.tenConfirmedFee)
+            vm.edit()
+            vm.state.value.let { assertNull(name, it.bigFeeAsk) }
+            vm.review()
+            eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+            edit(vm)
+            assertNothingAgreedOrAsked(name, vm)
+        }
+    }
+
+    /** The form's own 10% question (a typed amount, the lowest possible size already over 10%) is pending when the member edits. */
+    @Test
+    fun everyEditDropsTheFormQuestionThatIsPending() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        for ((name, edit) in resets) {
+            val vm = ready()
+            vm.setFeeChoice(FeeChoice.CUSTOM)
+            vm.setCustomFee("40")
+            vm.review()
+            assertEquals(name, BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
+            assertEquals(name, 40_000L, vm.state.value.bigFeePayee)
+            edit(vm)
+            assertNothingAgreedOrAsked(name, vm)
+        }
+    }
+
+    @Test
+    fun aQuestionLeftOpenAndDroppedByEditRecordsNoAgreementWhenConfirmedLater() = runTest {
+        engine.estimates = FeeEstimates.Done(mapOf(2 to 100.0, 6 to 50.0, 144 to 1.0))
+        val vm = ready()
+        vm.setSendAll(true)
+        vm.setFeeChoice(FeeChoice.CUSTOM)
+        vm.setCustomFee("30")
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0, true))
+        vm.review()
+        eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
+        assertEquals(40_000L, vm.state.value.bigFeePayee)
+        vm.edit()
+        assertNull(vm.state.value.bigFeeAsk)
+        assertNull(vm.state.value.bigFeePayee)
+        vm.confirmBigFee()
+        assertNull(vm.state.value.tenConfirmedFee)
+        assertNull(vm.state.value.tenConfirmedPayee)
+    }
+
     @Test
     fun aConfirmedPaymentIsASoftNoteThatKeepsReviewOnAndStaysDismissed() = runTest {
         val tx = com.vettid.core.wallet.WalletTx("ab".repeat(32), Instant.parse("2026-11-02T09:05:00Z"), 40_000, 1, 1, emptyList(), null, null)
@@ -826,9 +958,40 @@ class SendViewModelTest {
         assertEquals("", vm.state.value.password)
         eventually { vm.state.value.step == SendStep.DONE }
         assertEquals(listOf("pw"), engine.passwords)
+        // The array handed down is wiped once the call is over (N1).
+        eventually { engine.passwordArrays.all { a -> a.all { it == '\u0000' } } }
+        assertEquals(1, engine.passwordArrays.size)
         assertEquals("", vm.state.value.password)
         assertEquals(SendOutcome.Sent(ConfirmTime.HOUR), vm.state.value.outcome)
         assertFalse("pw" in vm.state.value.toString())
+    }
+
+    /** The view model is cleared while the sign is in flight: the array is not wiped before the sign completes, only after. */
+    @Test
+    fun clearingTheViewModelDuringAnApproveDoesNotWipeThePasswordBeforeTheSignEnds() = runTest {
+        val vm = review()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        engine.approveGate = gate
+        vm.setPassword("pw")
+        vm.approve()
+        eventually { engine.intactAtSign != null }
+        assertEquals(true, engine.intactAtSign)
+        val store = androidx.lifecycle.ViewModelStore()
+        androidx.lifecycle.ViewModelProvider(
+            store,
+            object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T = vm as T
+            },
+        )[SendViewModel::class.java]
+        store.clear()
+        // Cleared and the scope cancelled, the sign still waiting: the array is as it was handed down.
+        assertEquals(1, engine.passwordArrays.size)
+        assertTrue(engine.passwordArrays.single().concatToString() == "pw")
+        gate.complete(Unit)
+        eventually { engine.intactAtRelease != null }
+        assertEquals(true, engine.intactAtRelease)
+        eventually { engine.passwordArrays.single().all { it == '\u0000' } }
     }
 
     @Test
@@ -865,6 +1028,8 @@ class SendViewModelTest {
         vm.setPassword("nope")
         vm.approve()
         eventually { vm.state.value.error == FailureKind.BAD_PASSWORD }
+        // Also after a failure the array is wiped (N1).
+        eventually { engine.passwordArrays.single().all { it == '\u0000' } }
         assertEquals(SendStep.REVIEW, vm.state.value.step)
         assertEquals("", vm.state.value.password)
         assertFalse(vm.state.value.busy)

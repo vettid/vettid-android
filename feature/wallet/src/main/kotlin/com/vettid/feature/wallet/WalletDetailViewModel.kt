@@ -322,7 +322,7 @@ class WalletDetailViewModel @Inject constructor(
     fun delete() {
         val s = mutable.value
         if (s.delete != DeleteStep.PASSWORD || !s.idle || s.password.isEmpty()) return
-        val pw = s.password
+        val pw = Taken.of(s.password)
         mutable.update { it.copy(deleting = true, password = "", deleteError = null) }
         viewModelScope.launch {
             try {
@@ -331,6 +331,6 @@ class WalletDetailViewModel @Inject constructor(
             } catch (e: VaultFailure) {
                 mutable.update { it.copy(deleting = false, deleteError = e.kind) }
             }
-        }
+        }.wipeWhenDone(pw)
     }
 }

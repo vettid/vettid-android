@@ -34,7 +34,7 @@ interface SendEngine {
     suspend fun prepare(walletId: String, request: SendRequest): SendPrepared
 
     /** Approve the payment prepared last, with the password (typed once). */
-    suspend fun approve(password: String): SendResult
+    suspend fun approve(password: CharArray): SendResult
 
     /** Try again: the signed transaction is broadcast again, else the unanswered signing is sent again (the same request). */
     suspend fun retry(walletId: String): SendResult
@@ -83,7 +83,7 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
         }
     }
 
-    override suspend fun approve(password: String): SendResult {
+    override suspend fun approve(password: CharArray): SendResult {
         val p = prepared ?: return SendResult.NothingToSend
         val result = wallets.approveSend(p, password)
         // The password was not accepted, or the unlock window asks again: the same payment can be approved once more.
