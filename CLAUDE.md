@@ -140,10 +140,11 @@ The A2 exit test:
   alias `vettid.app_data.v1`). Turning the lock off in Settings first asks for the phone's biometric or screen lock (`SettingsHost.confirmAppLockOff`, the lock prompt's texts); a refused check leaves it on. `abandonPrompt()` (rotation) clears `authenticating`, drops a pending key and keeps the mark. A callback that arrives after `onDestroy` is ignored (`UnlockPromptGate.finished(owner, outcome)` is false for a
   destroyed owner, and `MainActivity` checks `isDestroyed`), so a rotation records no mark. Accepted fail-closed false locks:
   cancelling a credential presence check after the PIN screen was up at least the timeout locks (the time counts from the first
-  stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; "Immediately" + a method change + cancelling the PIN screen locks (the old key unlocks);
-  and `authenticating` has
-  no time limit, so a callback lost in the background (no cancel, no `onDestroy`) keeps the cover down until the next
-  `promptEnded`. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
+  stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; "Immediately" + a
+  method change + cancelling the PIN screen locks (the old key unlocks); a marked slot whose key was lost from outside the app
+  makes `recover` keep the other slot's key, which may be of the other method (a fingerprint may then fail and the phone's PIN
+  unlocks); and `authenticating` has no time limit, so a callback lost in the background (no cancel, no `onDestroy`) keeps the
+  cover down until the next `promptEnded`. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
   a timer that turns it true when the monotonic timeout elapses in the background (cancelled on return or lock off; it does not survive
   the process, whose next start is `LOCKED`, and it stops while the process is frozen (a cached process on Android 14+) as well as in deep sleep); `NotifySource.covered` is that flow, `coveredNow()` the direct read. `FeedNotifier`
   reads `coveredNow()` at post time inside its lock: item notifications are then in public form only
