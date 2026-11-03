@@ -84,6 +84,7 @@ class FeedDeviceItemsTest {
         }
         // AA6: the agent-use kinds have their detail sheet; the other leash kinds stay "not available".
         assertFalse(FeedKinds.notAvailable("leash.item.read"))
+        assertTrue(FeedKinds.notAvailable("leash.allowed"))
         assertEquals(FeedTarget.Sheet, FeedKinds.target(item("leash.item.read")))
     }
 
