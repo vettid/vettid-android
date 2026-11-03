@@ -529,19 +529,33 @@ vettid.org repo's `local/android-ui/`).
 ## Conventions
 
 - The daily owner check in the shell (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03; iOS does the same): when it comes due
-  (`gate.gated`) it covers the app at once on every screen, read-only pushed ones included (a detail, History entry, photo viewer,
-  Notifications, a device, a vote, a wallet), a drawer screen, and the return from the background. The one exception is input in
-  progress: a screen that holds input not yet sent reports it with `HoldsInput(active)` (`:core:ui` `InputGuard.kt`; the shell
-  provides `LocalInputGuard`; a `SecretField` with text reports by itself), and the check waits until the member leaves that
-  screen or `OWNER_CHECK_DEFERRAL_MS` (5 minutes) after it came due, then covers it anyway. The check is drawn over the shell
-  (`OwnerCheckRoute` after the `ModalNavigationDrawer`, never in place of the NavHost), so the screen stays composed and what
-  was typed is there when the check passes. Screens that report: the item editor (`dirty`), the share-rule editors, a
-  conversation with a draft or photos, Accept (invitation text), the tag form and ask dialogs, wallet Send, Import, a new
-  wallet or backup under way, Spending limits form, Chain server, shared profile (edited name or taken photo), change name,
-  delete vault (phrase), and every PIN / password `SecretField`. Search boxes are not input in progress. Rule:
-  `ownerCheckMode()` / `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). A new form screen with typed
-  input must call `HoldsInput`. The refused-request text "What you entered is kept: the check opens when you leave this screen" is
-  unchanged (owner decision a).
+  (`gate.gated`) it covers the app at once on every screen: read-only pushed ones (a detail, a History entry, the photo viewer,
+  Notifications, a device, a vote, a wallet), a drawer screen, and the return from the background. It waits only for what §3.6.5
+  says it must not interrupt. (1) **A call in progress** (`CallAvailability.IN_CALL`, `OwnerCheckGateState.inCall`): it waits
+  until the call ends, with no time limit. (2) **Input or an operation in progress** on a pushed screen: it waits until the
+  member leaves that screen, or until `OWNER_CHECK_DEFERRAL_S` (5 minutes, divided by the vault's time scale) after the vault's
+  deadline (`OwnerCheckGateState.overdue`, derived from the deadline, so a recreation, an app lock, the background or a new
+  process never restart the wait, and a return after the deadline plus 5 minutes is covered at once). A drawer screen never
+  waits. One signal serves (2): a screen reports with `HoldsInput(active)` (`:core:ui` `InputGuard.kt`; the shell provides
+  `LocalInputGuard`). Reported: the item editor (`dirty`), the share-rule editors, a conversation with a draft or photos, Accept
+  (typed or pasted text, not a link's), the tag form and ask dialogs, wallet Send, Import, a new wallet (name, limits, a word of
+  the check; the shown phrase is covered at once), Spending limits and Chain server forms, the shared profile (edited name or
+  photo), change name (a changed name), delete vault (the phrase), **an approval open for a decision, typed or not** (any
+  kind, devices and agents too: `ApprovalDetailUiState.openForDecision`), a transfer out under way, and **every `SecretField`
+  on screen, typed or not** (a PIN or password prompt is a credential operation in progress: credential change, new
+  credential, rotate, alarm, change PIN, release update, History export's PIN step, the unlock-window prompts of votes,
+  wallets and agent rules, a critical-item use; `holdsInput = false` for a secret item's value in the editor). Search boxes
+  and a Receive amount are not input in progress. A new form screen with typed input, or a new credential flow without a
+  `SecretField`, must call `HoldsInput`; put the condition in a UI-state property (`holdsInput`) and unit-test it.
+  The check is drawn over the shell (`OwnerCheckRoute` after the `ModalNavigationDrawer`, never in place of the NavHost), so
+  the screen stays composed and what was typed is there when the check passes. Once the check covers the app it is latched
+  GATED (saved) until `gate.gated` turns false: input appearing under it cannot take it away. It takes the focus and the
+  keyboard, with a layer that eats keys (as `AppLockGate`), and its own subtree gets a null `LocalInputGuard`. Dialogs and
+  sheets are windows above it, so screens import `AlertDialog`, `ModalBottomSheet` and `DatePickerDialog` from
+  `com.vettid.core.ui.components` (`ShellOverlays.kt`), which are not composed while `LocalCheckCovered`; their state lives in
+  the view models and comes back after the check. Dropdown menus are not wrapped. Rule: `ownerCheckMode()` /
+  `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). The refused-request text "What you entered is
+  kept: the check opens when you leave this screen" is unchanged (owner decision a).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
   (`@Serializable` route objects, one `NavGraphBuilder.xDestination()` per feature).
 - Features depend only on `:core:*`; no feature touches transport or crypto

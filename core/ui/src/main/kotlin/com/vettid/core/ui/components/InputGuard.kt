@@ -6,6 +6,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
@@ -38,3 +39,10 @@ fun HoldsInput(active: Boolean) {
         onDispose { if (active) guard.release() }
     }
 }
+
+/**
+ * True while the daily owner check covers the shell (VAULT-MESSAGING §3.6.5). Dialogs and sheets are windows of their own,
+ * drawn above anything the shell draws, so while this is true the wrappers in `ShellOverlays.kt` do not compose them; their
+ * state lives in the screens' view models and comes back when the check has passed.
+ */
+val LocalCheckCovered = compositionLocalOf { false }

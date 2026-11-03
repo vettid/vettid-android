@@ -215,6 +215,18 @@ data class BackupUiState(
     /** An answer may be given: the check is shown, idle, and not ended by a wrong answer. */
     val answering: Boolean get() = step == BackupStep.CHECK && idle && wrong == null
 
+    /**
+     * Unsent input: the name or a limit typed, or a word of the check typed. The phrase is shown on a screen that stays
+     * composed under the owner check, so it does not wait for the member; the password has its own field.
+     */
+    val holdsInput: Boolean
+        get() = when (step) {
+            BackupStep.FORM -> name.isNotEmpty()
+            BackupStep.LIMITS -> limits.perTx.isNotEmpty() || limits.perPeriod.isNotEmpty()
+            BackupStep.CHECK -> typed.isNotEmpty()
+            else -> false
+        }
+
     override fun toString(): String = "BackupUiState(step=$step)"
 }
 

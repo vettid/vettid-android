@@ -210,8 +210,7 @@ data class BackupActions(
 /** Make a wallet and back it up, or back up one (ANDROID-PLAN §4 "Creating and backing up"): one step at a time. */
 @Composable
 fun BackupScreen(state: BackupUiState, actions: BackupActions, modifier: Modifier = Modifier) {
-    // A wallet being made: the name typed, or the phrase and its check under way (a new wallet or a backup).
-    HoldsInput(state.step != BackupStep.DONE && (state.name.isNotEmpty() || state.step != BackupStep.FORM))
+    HoldsInput(state.holdsInput)
     // One hold for the phrase and the check together, at one place in the composition: moving between them toggles nothing.
     if (state.step == BackupStep.PHRASE || state.step == BackupStep.CHECK) {
         SecureWindow()

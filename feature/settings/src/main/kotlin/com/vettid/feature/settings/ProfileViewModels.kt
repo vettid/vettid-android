@@ -365,6 +365,11 @@ data class ChangeNameUiState(
         get() = account?.firstName != null && AccountNames.normalize(first) == account.firstName &&
             AccountNames.normalize(last) == account.lastName
 
+    /** Names typed that differ from the account's (the fields start with them): unsent input; a later step has its own fields. */
+    val holdsInput: Boolean
+        get() = step == ChangeNameStep.NAMES &&
+            (first != (account?.firstName ?: "") || last != (account?.lastName ?: ""))
+
     val namesValid: Boolean get() = firstCheck == AccountNames.Check.OK && lastCheck == AccountNames.Check.OK && !same
 
     /** "First Last" as it will be sent. */

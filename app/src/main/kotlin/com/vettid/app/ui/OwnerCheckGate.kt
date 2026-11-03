@@ -1,11 +1,10 @@
 package com.vettid.app.ui
 
-import android.os.SystemClock
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -13,10 +12,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.R
+import com.vettid.core.data.calls.CallAccess
+import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.NoCallAccess
 import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.TimeScaleSource
+import com.vettid.core.data.vault.TimeScales
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.InputGuard
@@ -52,6 +55,14 @@ data class OwnerCheckGateState(
     val notices: List<OwnerCheckNotice> = emptyList(),
     /** (Release R, §11.14.5) The vault could not record that the member was here: the presence notice. */
     val presenceUnrecorded: Boolean = false,
+    /**
+     * Gated, and [OWNER_CHECK_DEFERRAL_S] (divided by the time scale) have passed since the deadline: the check no longer
+     * waits for input in progress. Derived from the vault's deadline, so a new composition, an app lock, a stay in the
+     * background or a new process do not start the wait again.
+     */
+    val overdue: Boolean = false,
+    /** A call is live (`CallAvailability.IN_CALL`): the check waits for it to end, without a time limit (§3.6.5). */
+    val inCall: Boolean = false,
 ) {
     companion object {
         fun of(
@@ -69,7 +80,18 @@ data class OwnerCheckGateState(
             holdOffUntil = v?.holdOffUntil,
             notices = notices,
             presenceUnrecorded = presenceUnrecorded,
+            overdue = v?.overdue(now, timeScale) == true,
         )
+
+        /** Past the deadline by the deferral; due for a reason other than the clock (no moment to count from): at once. */
+        private fun OwnerCheckView.overdue(now: Instant, timeScale: Long): Boolean {
+            val d = deadline
+            return when {
+                !gated(now) -> false
+                d == null || now.isBefore(d) -> true
+                else -> !now.isBefore(d.plusSeconds(TimeScales.divide(OWNER_CHECK_DEFERRAL_S, timeScale)))
+            }
+        }
     }
 }
 
@@ -78,6 +100,7 @@ data class OwnerCheckGateState(
 class OwnerCheckGateViewModel @Inject constructor(
     private val repo: OwnerCheckRepository,
     private val timeScale: TimeScaleSource = TimeScaleSource.RealTime,
+    private val calls: CallAccess = NoCallAccess,
 ) : ViewModel() {
     private val clock = flow {
         while (true) {
@@ -87,9 +110,12 @@ class OwnerCheckGateViewModel @Inject constructor(
     }
 
     val gate: StateFlow<OwnerCheckGateState> =
-        combine(repo.ownerCheck, repo.notices, clock, repo.presenceUnrecorded, timeScale.timeScale) { v, n, now, p, t ->
-            OwnerCheckGateState.of(v, n, now, p, t.scale)
-        }
+        combine(
+            combine(repo.ownerCheck, repo.notices, clock, repo.presenceUnrecorded, timeScale.timeScale) { v, n, now, p, t ->
+                OwnerCheckGateState.of(v, n, now, p, t.scale)
+            },
+            calls.availability,
+        ) { g, a -> g.copy(inCall = a == CallAvailability.IN_CALL) }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(STOP_MS),
@@ -99,7 +125,7 @@ class OwnerCheckGateViewModel @Inject constructor(
                     Instant.now(),
                     repo.presenceUnrecorded.value,
                     timeScale.timeScale.value.scale,
-                ),
+                ).copy(inCall = calls.availability.value == CallAvailability.IN_CALL),
             )
 
     /** (Release R) The owner check right after an unlock that cancelled a recovery did not pass: show the check screen. */
@@ -219,53 +245,48 @@ private fun noticeText(n: OwnerCheckNotice, count: Int): String {
     return if (count > 1) stringResource(R.string.owner_check_notice_more, withTime, count - 1) else withTime
 }
 
-/** How long the daily owner check waits for input in progress once it is due (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03). */
-internal const val OWNER_CHECK_DEFERRAL_MS = 5 * 60 * 1000L
+/**
+ * How long the daily owner check waits for input in progress once it came due (VAULT-MESSAGING §3.6.5, owner decision
+ * 2026-11-03): 5 minutes (divided by the vault's time scale on staging), counted from the vault's deadline.
+ */
+internal const val OWNER_CHECK_DEFERRAL_S = 5 * 60L
 
 /**
- * What covers the app now. The check that is due ([gated]) comes at once, except while the screen in front holds input
- * the member has not sent ([inputInProgress]) and it is not a drawer screen ([onList]) and the deferral has not run out
- * ([overdue]); a check the member asked for ([asked]) shows as asked.
+ * What covers the app now. The check that is due ([gated]) comes at once, except while it must wait: a call is live
+ * ([inCall], no time limit), or the screen in front holds input or an operation in progress ([inProgress]) and it is not a
+ * drawer screen ([onList]) and the deferral has not run out ([overdue]). A check the member asked for ([asked]) shows as asked.
  */
 internal fun ownerCheckMode(
     gated: Boolean,
     onList: Boolean,
-    inputInProgress: Boolean,
+    inProgress: Boolean,
     overdue: Boolean,
+    inCall: Boolean,
     asked: OwnerCheckMode?,
 ): OwnerCheckMode? {
-    val waits = !onList && inputInProgress && !overdue
+    val waits = inCall || (!onList && inProgress && !overdue)
     return if (gated && !waits) OwnerCheckMode.GATED else asked
 }
 
 /**
- * [ownerCheckMode] with its time limit: [overdue] turns true [deferralMs] after the check came due (by [clock], which counts
- * the time the phone slept), and false again when it is passed. The check is drawn over the screen, which stays composed, so the
- * input is still there when it passes.
+ * [ownerCheckMode] for the shell's [gate], and once the check covers the app it stays GATED until it is passed (`gate.gated`
+ * turns false): input that appears under it (a focused field, a keyboard still open) must not take it away, which would also
+ * dispose the check's own entry. Saved, so a new composition keeps it. The check is drawn over the screen, which stays
+ * composed, so what was typed is there when it passes.
  */
 @Composable
 internal fun rememberOwnerCheckMode(
-    gated: Boolean,
+    gate: OwnerCheckGateState,
     onList: Boolean,
     guard: InputGuard,
     asked: OwnerCheckMode?,
-    deferralMs: Long = OWNER_CHECK_DEFERRAL_MS,
-    clock: () -> Long = SystemClock::elapsedRealtime,
 ): OwnerCheckMode? {
-    var overdue by remember { mutableStateOf(false) }
-    LaunchedEffect(gated) {
-        overdue = false
-        if (!gated) return@LaunchedEffect
-        val dueAt = clock()
-        while (true) {
-            val left = deferralMs - (clock() - dueAt)
-            if (left <= 0) break
-            // In short steps, so that a phone that slept notices the time at once when it wakes.
-            delay(minOf(left, OVERDUE_STEP_MS))
-        }
-        overdue = true
+    var latched by rememberSaveable { mutableStateOf(false) }
+    val mode = if (gate.gated && latched) {
+        OwnerCheckMode.GATED
+    } else {
+        ownerCheckMode(gate.gated, onList, guard.active, gate.overdue, gate.inCall, asked)
     }
-    return ownerCheckMode(gated, onList, guard.active, overdue, asked)
+    SideEffect { latched = gate.gated && mode == OwnerCheckMode.GATED }
+    return mode
 }
-
-private const val OVERDUE_STEP_MS = 1_000L

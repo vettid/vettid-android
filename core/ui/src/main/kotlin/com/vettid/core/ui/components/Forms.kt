@@ -91,9 +91,12 @@ fun SecretField(
     imeAction: ImeAction = ImeAction.Done,
     onImeAction: () -> Unit = {},
     enabled: Boolean = true,
+    holdsInput: Boolean = true,
 ) {
     var visible by rememberSaveable { mutableStateOf(false) }
-    HoldsInput(value.isNotEmpty())
+    // A PIN or password prompt on screen is a credential operation in progress, typed or not: the daily owner check waits
+    // for it (VAULT-MESSAGING §3.6.5). [holdsInput] false: a field that is not such a prompt (a secret item's value).
+    HoldsInput(holdsInput)
     OutlinedTextField(
         value = value,
         onValueChange = { v -> onValueChange(if (isPin) v.filter { it in '0'..'9' } else v) },

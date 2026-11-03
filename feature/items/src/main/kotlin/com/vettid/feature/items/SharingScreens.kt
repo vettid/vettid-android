@@ -505,7 +505,7 @@ private fun askState(s: String): String = when (s) {
 private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActions) {
     HoldsInput(f.label.isNotEmpty() || f.reason.isNotEmpty())
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
-    androidx.compose.material3.AlertDialog(
+    com.vettid.core.ui.components.AlertDialog(
         onDismissRequest = { actions.onOpenAsk(false) },
         title = { Text(stringResource(R.string.items_ask_button, name)) },
         text = {

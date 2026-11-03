@@ -4,7 +4,13 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.focusable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +44,7 @@ import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.InputGuard
+import com.vettid.core.ui.components.LocalCheckCovered
 import com.vettid.core.ui.components.LocalInputGuard
 import com.vettid.feature.settings.NotificationSettingsRoute
 import androidx.navigation.NavBackStackEntry
@@ -163,12 +170,12 @@ fun AppShell(
     val back: () -> Unit = { navController.popBackStack() }
 
     // The daily owner check (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03): past the deadline the check comes at
-    // once, on every screen, including a read-only pushed one (nothing cached of the vault stays shown while held). The
-    // one exception is input in progress: a screen that holds input not yet sent (the item and share-rule editors, a
-    // conversation with a draft, a form with something typed; `HoldsInput` / `LocalInputGuard`) makes the check wait,
-    // until the member leaves that screen or [OWNER_CHECK_DEFERRAL_MS] (5 minutes) have passed since it came due. A
-    // drawer screen never waits. The check is drawn over the shell (below), which stays composed, so what was typed is
-    // still there when it passes.
+    // once, on every screen, including a read-only pushed one (nothing cached of the vault stays shown while held). It waits
+    // only for what §3.6.5 says it must not interrupt: a call (until it ends), and input or an operation in progress (a screen
+    // reports it with `HoldsInput` / `LocalInputGuard`: an editor with changes, a draft, an approval open for a decision, a
+    // PIN or password prompt), until the member leaves that screen or the deadline plus 5 minutes ([OWNER_CHECK_DEFERRAL_S],
+    // read from the vault's deadline in `gate.overdue`). A drawer screen never waits. The check is drawn over the shell
+    // (below), which stays composed, so what was typed is still there when it passes; once shown it stays until it is passed.
     val deletionVm: PendingDeletionViewModel = hiltViewModel()
     val deletion by deletionVm.deletion.collectAsStateWithLifecycle()
     val deletionPath = stringResource(R.string.deletion_path)
@@ -228,7 +235,7 @@ fun AppShell(
     }
 
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
-    val checkMode = rememberOwnerCheckMode(gate.gated, onList, inputGuard, asked)
+    val checkMode = rememberOwnerCheckMode(gate, onList, inputGuard, asked)
     // Release R: the owner check sent right after an unlock that cancelled a recovery did not pass; the check screen
     // shows its answer at once, so that the member's presence is recorded.
     val checkAfterCancel by gateVm.checkAfterCancel.collectAsStateWithLifecycle()
@@ -239,6 +246,17 @@ fun AppShell(
         }
     }
     LaunchedEffect(checkMode) { if (checkMode == OwnerCheckMode.GATED) showAccount = false }
+    // The check takes the focus and the keyboard from what is under it: a field that was focused (a composer, an editor)
+    // must not receive what is typed for the check, nor keep the keyboard's connection (as the app lock does).
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val covered = checkMode != null
+    LaunchedEffect(covered) {
+        if (covered) {
+            focus.clearFocus(force = true)
+            keyboard?.hide()
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
@@ -309,7 +327,7 @@ fun AppShell(
                         .fillMaxSize()
                         .then(if (bannerShown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
                 ) {
-                    CompositionLocalProvider(LocalInputGuard provides inputGuard) {
+                    CompositionLocalProvider(LocalInputGuard provides inputGuard, LocalCheckCovered provides covered) {
                         NavHost(navController = navController, startDestination = MessagesRoute) {
                             messagesDestination(
                                 chrome,
@@ -446,15 +464,20 @@ fun AppShell(
             }
         }
 
-        // Over the shell, never in place of it. Its own password fields are not input in progress.
+        // Over the shell, never in place of it. Its own password fields are not input in progress, and its dialogs are its own.
+        // A layer takes the focus and the keys it does not use, so nothing under it is typed into (as the app lock's layer).
         checkMode?.let { mode ->
-            CompositionLocalProvider(LocalInputGuard provides null) {
-                OwnerCheckRoute(
-                    mode = mode,
-                    onDone = { asked = null },
-                    onCancel = { asked = null },
-                )
+            val layer = remember { FocusRequester() }
+            CompositionLocalProvider(LocalInputGuard provides null, LocalCheckCovered provides false) {
+                Box(Modifier.fillMaxSize().testTag("owner_check_layer").focusRequester(layer).focusable().onKeyEvent { true }) {
+                    OwnerCheckRoute(
+                        mode = mode,
+                        onDone = { asked = null },
+                        onCancel = { asked = null },
+                    )
+                }
             }
+            LaunchedEffect(Unit) { runCatching { layer.requestFocus() } }
         }
     }
 
@@ -496,7 +519,7 @@ fun AppShell(
         navController.navigate(AcceptRoute(link, opened = true)) { launchSingleTop = true }
     }
 
-    if (showAccount) {
+    if (showAccount && !covered) {
         AccountSheet(
             account = account,
             portalUrl = portal,

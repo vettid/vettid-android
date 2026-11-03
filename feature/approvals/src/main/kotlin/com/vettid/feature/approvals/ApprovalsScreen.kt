@@ -55,6 +55,7 @@ import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.R as UiR
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.FormScaffold
@@ -443,6 +444,7 @@ data class DecisionActions(
 @Composable
 @Suppress("CyclomaticComplexMethod", "ReturnCount")
 fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier = Modifier) {
+    HoldsInput(state.openForDecision)
     LaunchedEffect(state.done) { if (state.done) actions.onBack() }
     val a = state.approval
     if (a != null && state.withdrawn) {

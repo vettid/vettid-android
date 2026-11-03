@@ -60,11 +60,7 @@ data class ImportActions(
  */
 @Composable
 fun ImportScreen(state: ImportUiState, actions: ImportActions, modifier: Modifier = Modifier, secure: Boolean = true) {
-    HoldsInput(
-        state.step != ImportStep.DONE &&
-            (state.name.isNotEmpty() || state.typed.isNotEmpty() || state.passphrase.isNotEmpty() ||
-                state.limits.perTx.isNotEmpty() || state.limits.perPeriod.isNotEmpty()),
-    )
+    HoldsInput(state.holdsInput)
     if (secure) {
         SecureWindow()
         HiddenFromCapture()

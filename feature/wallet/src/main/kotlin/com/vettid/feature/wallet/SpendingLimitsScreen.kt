@@ -54,10 +54,7 @@ data class SpendingLimitsActions(
  */
 @Composable
 fun SpendingLimitsScreen(state: SpendingLimitsUiState, actions: SpendingLimitsActions, modifier: Modifier = Modifier) {
-    HoldsInput(
-        state.step != LimitsStep.OVERVIEW &&
-            (state.form.perTx.isNotEmpty() || state.form.perPeriod.isNotEmpty() || state.form.removeTx || state.form.removePeriod),
-    )
+    HoldsInput(state.holdsInput)
     BackHandler(enabled = state.step != LimitsStep.OVERVIEW) { actions.onStepBack() }
     when (state.step) {
         LimitsStep.OVERVIEW -> Overview(state, actions, modifier)

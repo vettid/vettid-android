@@ -20,7 +20,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
+import com.vettid.core.ui.components.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.rememberDatePickerState
@@ -38,7 +38,7 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.AlertDialog
+import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -749,6 +749,8 @@ private fun ValueEditor(
             imeAction = ime.action,
             onImeAction = ime.run,
             modifier = tag,
+            // A stored value that was loaded is not input; the editor reports its own changes (`dirty`).
+            holdsInput = false,
         )
     }
     if (f.kind == FieldKinds.DATE) return DateEditor(i, f, caption, supporting, isError, tag, ime, onValue)
