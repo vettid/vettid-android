@@ -49,8 +49,12 @@ class FakeSharing : SharingRepository {
         colors.value = registry.tags.mapNotNull { t -> t.color?.let { t.tag to it } }.toMap()
     }
 
+    /** Makes the next call of a name throw something that is not a [VaultFailure]. */
+    val throwOn = mutableMapOf<String, Throwable>()
+
     private fun call(n: String) {
         calls += n
+        throwOn.remove(n)?.let { throw it }
         fail.remove(n)?.let { throw it }
     }
 
@@ -176,15 +180,15 @@ class FakeSharing : SharingRepository {
         )
         rulesStored.removeAll { it.ruleId == r.ruleId }
         rulesStored += r
-        savedFlow.value = true
+        savedFlow.value = draft.agentId
         return r
     }
 
-    val savedFlow = MutableStateFlow(false)
-    override val ruleSaved: kotlinx.coroutines.flow.StateFlow<Boolean> = savedFlow
+    val savedFlow = MutableStateFlow<String?>(null)
+    override val ruleSaved: kotlinx.coroutines.flow.StateFlow<String?> = savedFlow
 
-    override fun ruleSavedShown() {
-        savedFlow.value = false
+    override fun ruleSavedShown(agentId: String) {
+        if (savedFlow.value == agentId) savedFlow.value = null
     }
 
     override suspend fun closeWindowNow() {

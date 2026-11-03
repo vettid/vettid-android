@@ -429,4 +429,69 @@ class AgentRuleEditViewModelTest {
         assertEquals("", v.uiState.value.password)
         assertTrue(sharing.agentSaves.isEmpty())
     }
+
+    @Test
+    fun aDemotedRuleIsDirtyBecauseTheVaultStillIncludesAutomaticallyUntilItIsSaved() = runTest {
+        sharing.rulesStored += existing(ShareMode.AUTO)
+        val v = vm("r1")
+        advanceUntilIdle()
+        assertTrue(v.uiState.value.autoDemoted)
+        assertEquals(ShareMode.ASK, v.uiState.value.draft.mode)
+        assertTrue(v.uiState.value.dirty)
+        // Back asks "Discard changes?".
+        v.askDiscard(true)
+        assertTrue(v.uiState.value.confirmDiscard)
+    }
+
+    @Test
+    fun anAskRuleIsNotDirtyWhenOpened() = runTest {
+        sharing.rulesStored += existing(ShareMode.ASK)
+        val v = vm("r1")
+        advanceUntilIdle()
+        assertFalse(v.uiState.value.dirty)
+    }
+
+    @Test
+    fun nothingChangesWhileThePasswordPromptIsUp() = runTest {
+        sharing.itemWays = true
+        val v = vm()
+        advanceUntilIdle()
+        v.selectTag("api")
+        advanceUntilIdle()
+        v.save()
+        val before = v.uiState.value.draft
+        v.setMode(ShareMode.AUTO)
+        v.setPerHour("5")
+        v.setPerDay("5")
+        v.setUses("5")
+        v.setStatusTtl(60)
+        v.selectTag("travel")
+        v.setIncludeExisting(false)
+        v.setExpiry(RuleExpiry.WEEK)
+        assertEquals(before, v.uiState.value.draft)
+        assertEquals("60", v.uiState.value.perHourText)
+        assertEquals("", v.uiState.value.usesText)
+        v.dismissPrompt()
+        v.setPerHour("5")
+        assertEquals(5, v.uiState.value.draft.perHour)
+    }
+
+    @Test
+    fun anUnexpectedExceptionClearsThePasswordShowsAnErrorAndSavesNothing() = runTest {
+        val v = vm()
+        advanceUntilIdle()
+        v.selectTag("api")
+        advanceUntilIdle()
+        v.save()
+        v.setPassword("pw-fake-1")
+        sharing.throwOn["saveAgentRule"] = RuntimeException("boom pw-fake-1")
+        v.submitPassword()
+        advanceUntilIdle()
+        val s = v.uiState.value
+        assertEquals("", s.password)
+        assertEquals(RulePrompt.NONE, s.prompt)
+        assertEquals(FailureKind.OTHER, s.error)
+        assertFalse(s.done)
+        assertFalse("$s".contains("pw-fake-1"))
+    }
 }

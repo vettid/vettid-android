@@ -65,6 +65,15 @@ class AgentRulesPageTest {
     }
 
     @Test
+    fun aStoredAutoRuleOnAVaultWithoutItemWaysStillSaysItIncludesAutomatically() {
+        show(state(auto, itemWays = false))
+        val row = rule.onNodeWithTag("rule_r2")
+        row.performScrollTo()
+        row.assertTextContains("Includes tagged items automatically", substring = true)
+        row.assertTextContains("On this vault, the agent may receive the values", substring = true)
+    }
+
+    @Test
     fun theWarningIsOnEveryRowWithoutItemWaysAndOnNoneWith() {
         show(state(ask, auto, itemWays = false))
         rule.onNodeWithTag("rule_ways_warning_r1", useUnmergedTree = true).assertExists()

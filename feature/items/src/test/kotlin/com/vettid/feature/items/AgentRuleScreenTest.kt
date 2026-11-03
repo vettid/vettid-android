@@ -77,7 +77,17 @@ class AgentRuleScreenTest {
         rule.onNodeWithTag("rule_mode_ask").assertIsSelected()
         rule.onNodeWithTag("rule_mode_auto").assertIsNotEnabled()
         rule.onNodeWithTag("agent_rule_auto_demoted").performScrollTo()
-            .assertTextContains("This vault can't keep the agent from receiving item values, so this rule now asks you first.")
+            .assertTextContains("Save to make this rule ask you first.")
+    }
+
+    @Test
+    fun leavingADemotedRuleAsksToDiscardAndTheDiscardPromptIsShown() {
+        val calls = mutableListOf<String>()
+        show(
+            state(itemWays = false, d = draft.copy(storedMode = ShareMode.AUTO, ruleId = "r1")) { it.copy(dirty = true, confirmDiscard = true) },
+            RuleEditActions(onDiscard = { calls += "discard" }),
+        )
+        rule.onNodeWithText("Discard changes to this rule?").assertExists()
     }
 
     @Test

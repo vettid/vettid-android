@@ -280,7 +280,10 @@ class DevicesViewModelsTest {
         val vm = page("a1")
         advanceUntilIdle()
         assertFalse(vm.uiState.value.ruleSaved)
-        sharing.savedFlow.value = true
+        sharing.savedFlow.value = "other"
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.ruleSaved) // another agent's rule was saved
+        sharing.savedFlow.value = "a1"
         advanceUntilIdle()
         assertTrue(vm.uiState.value.ruleSaved)
         vm.ruleSavedShown()

@@ -22,6 +22,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.votes.WindowNotClosed
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -392,6 +393,8 @@ class RuleEditViewModel @Inject constructor(
                         loading = false,
                         tags = (it.tags + r.tags).distinct().sorted(),
                         readOnly = r.multiTag,
+                        // What the vault holds (automatic) is not what the editor shows (Ask) until it is saved: leaving asks first.
+                        dirty = demote,
                     )
                 }
                 schedulePreview()
@@ -403,8 +406,11 @@ class RuleEditViewModel @Inject constructor(
         }
     }
 
+    /** The password prompt is up (or a save is running): the rule being signed does not change meanwhile. */
+    private val promptUp: Boolean get() = state.value.prompt != RulePrompt.NONE
+
     private fun change(f: (RuleDraft) -> RuleDraft) {
-        if (state.value.readOnly) return
+        if (state.value.readOnly || promptUp) return
         state.update { it.copy(draft = f(it.draft), error = null, dirty = true) }
         schedulePreview()
     }
@@ -421,7 +427,7 @@ class RuleEditViewModel @Inject constructor(
 
     fun setMode(m: ShareMode) {
         // Decision 17: without `item_ways` a new agent rule cannot be `auto`.
-        if (m == ShareMode.AUTO && !state.value.autoEnabled) return
+        if (promptUp || (m == ShareMode.AUTO && !state.value.autoEnabled)) return
         change { it.copy(mode = m) }
     }
 
@@ -435,6 +441,7 @@ class RuleEditViewModel @Inject constructor(
 
     /** Fetches of each item (§10.12 `uses`, 1–10,000; empty for none): digits only. */
     fun setUses(v: String) {
+        if (promptUp) return
         val digits = v.filter { it.isDigit() }.take(USES_DIGITS)
         state.update { it.copy(usesText = digits) }
         change { it.copy(uses = digits.toIntOrNull()) }
@@ -442,6 +449,7 @@ class RuleEditViewModel @Inject constructor(
 
     /** Fetches per hour of all the rule's items (0.23.0 §10.12 `per_hour`, 1–3,600; empty: no limit). */
     fun setPerHour(v: String) {
+        if (promptUp) return
         val digits = v.filter { it.isDigit() }.take(PER_HOUR_DIGITS)
         state.update { it.copy(perHourText = digits) }
         change { it.copy(perHour = digits.toIntOrNull()) }
@@ -449,6 +457,7 @@ class RuleEditViewModel @Inject constructor(
 
     /** Fetches per day of all the rule's items (0.23.0 §10.12 `per_day`, 1–86,400; empty: no limit). */
     fun setPerDay(v: String) {
+        if (promptUp) return
         val digits = v.filter { it.isDigit() }.take(PER_DAY_DIGITS)
         state.update { it.copy(perDayText = digits) }
         change { it.copy(perDay = digits.toIntOrNull()) }
@@ -456,7 +465,7 @@ class RuleEditViewModel @Inject constructor(
 
     /** A preset end from [now] in [zone]; [RuleExpiry.CUSTOM] opens the date picker (the end changes once a time is picked). */
     fun setExpiry(e: RuleExpiry, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()) {
-        if (state.value.readOnly) return
+        if (state.value.readOnly || promptUp) return
         when (e) {
             RuleExpiry.KEEP -> state.update { it.copy(expiry = e, endInvalid = false) }
             RuleExpiry.CUSTOM -> state.update { it.copy(endPicker = EndPicker.Date, endInvalid = false) }
@@ -475,7 +484,7 @@ class RuleEditViewModel @Inject constructor(
      * end not in the future, or more than 3,650 days ahead, is refused ([RuleEditUiState.endInvalid]) and the end stays.
      */
     fun pickEndTime(hour: Int, minute: Int, zone: ZoneId = ZoneId.systemDefault(), now: Instant = Instant.now()) {
-        val p = state.value.endPicker as? EndPicker.Time ?: return
+        val p = (state.value.endPicker as? EndPicker.Time)?.takeUnless { promptUp } ?: return
         val at = RuleEnds.of(p.dateUtcMillis, hour, minute, zone)
         if (!RuleEnds.allowed(at, now)) return state.update { it.copy(endPicker = null, endInvalid = true) }
         state.update { it.copy(endPicker = null, endInvalid = false, expiry = RuleExpiry.CUSTOM) }
@@ -547,8 +556,13 @@ class RuleEditViewModel @Inject constructor(
                 lockedOnce = false
                 // The password is held only while the request runs.
                 state.update { it.copy(prompt = RulePrompt.NONE, password = "", done = true, dirty = false) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: VaultFailure) {
                 onSaveFailure(e)
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                // Fail secure: whatever it was, the password is gone and the member is told the rule was not saved.
+                onSaveFailure(VaultFailure(FailureKind.OTHER, "unexpected", cause = e))
             }
         }
     }

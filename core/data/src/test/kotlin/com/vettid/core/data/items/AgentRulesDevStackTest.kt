@@ -27,11 +27,15 @@ import java.time.Instant
  * after the A2 exit scenario connected the app's vault to the vaultctl peer. Skipped when the stack is not running (CI):
  * `devstack/devstack.sh up`, then `./gradlew :core:data:testDebugUnitTest --tests '*AgentRulesDevStackTest*'`.
  *
+ * `hasItemWays` is fixed to false here, not read from the stack's capabilities, so every rule in this test is an ask rule.
+ *
+ * **Status: the branch with a paired agent (a dry run with matches, a save with the window already open, save, list, replace,
+ * delete) has not been run yet**, because no paired agent was available. Only the unpaired part has been run against a stack.
+ *
  * What runs on any stack: the password path (`credential.unlock` for every save, `credential.lock` after it, whether the
- * save worked or was refused), the vault's refusal of a rule for an agent that is not paired (`not_found`), a dry run that
- * needs no unlock window, and what the vault lists as `item_ways`. With an agent paired to the app's vault (`device.list`
- * answers a device of kind `agent`; the pairing itself is the AA2 flow with a `vaultctl` agent) the full flow also runs: a
- * rule, its listing, a replacement and its deletion.
+ * save worked or was refused), the vault's refusal of a rule for an agent that is not paired (`not_found`), and a wrong
+ * password. With an agent paired to the app's vault (`device.list` answers a device of kind `agent`; the pairing itself is the
+ * AA2 flow with a `vaultctl` agent) the full flow also runs, and the vault must list a rule saved as ask back as ask.
  */
 class AgentRulesDevStackTest {
     @Test
@@ -118,7 +122,9 @@ class AgentRulesDevStackTest {
         val saved = sharing.saveAgentRule(own, pw)
         check(saved.agentId == agent && saved.perHour == 60 && saved.perDay == 1_000) { "saved $saved" }
         check(events == listOf("unlock", "lock")) { "window events $events" }
-        check(sharing.agentRules(agent).any { it.ruleId == saved.ruleId })
+        val listed = sharing.agentRules(agent).firstOrNull { it.ruleId == saved.ruleId }
+        check(listed != null && listed.mode == ShareMode.ASK) { "a rule saved as ask is listed as $listed" }
+        check(saved.mode == ShareMode.ASK) { "saved as ${saved.mode}" }
         val replaced = sharing.saveAgentRule(own.copy(ruleId = saved.ruleId, version = saved.version, perHour = 30), pw)
         check(replaced.perHour == 30) { "replaced $replaced" }
         sharing.deleteRule(saved.ruleId)

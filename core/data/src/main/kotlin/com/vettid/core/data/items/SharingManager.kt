@@ -110,11 +110,12 @@ interface SharingRepository {
     val windowNotClosed: StateFlow<WindowNotClosed?>
         get() = MutableStateFlow(null)
 
-    /** An agent's rule was just saved: the agent's page says "Rule saved" once ([ruleSavedShown]). */
-    val ruleSaved: StateFlow<Boolean>
-        get() = MutableStateFlow(false)
+    /** The agent whose rule was just saved: that agent's page says "Rule saved" once ([ruleSavedShown]); null otherwise. */
+    val ruleSaved: StateFlow<String?>
+        get() = MutableStateFlow(null)
 
-    fun ruleSavedShown() {}
+    /** The page of [agentId] showed it. */
+    fun ruleSavedShown(agentId: String) {}
 
     /** **Close it now** on the notice of [windowNotClosed]: locks the window; the notice goes only when that went through. */
     suspend fun closeWindowNow() {}
@@ -216,11 +217,11 @@ class SharingManager(
     private val now: () -> Instant = Instant::now,
 ) : SharingRepository {
     override val itemWays: Boolean get() = hasItemWays()
-    private val savedFlow = MutableStateFlow(false)
-    override val ruleSaved: StateFlow<Boolean> = savedFlow.asStateFlow()
+    private val savedFlow = MutableStateFlow<String?>(null)
+    override val ruleSaved: StateFlow<String?> = savedFlow.asStateFlow()
 
-    override fun ruleSavedShown() {
-        savedFlow.value = false
+    override fun ruleSavedShown(agentId: String) {
+        if (savedFlow.value == agentId) savedFlow.value = null
     }
 
     private val notClosed = MutableStateFlow<WindowNotClosed?>(null)
@@ -233,7 +234,7 @@ class SharingManager(
 
     fun clear() {
         notClosed.value = null
-        savedFlow.value = false
+        savedFlow.value = null
         registry.value = null
         stored.value = emptyMap()
     }
@@ -412,7 +413,7 @@ class SharingManager(
             val o = vaultGuard { ops().ruleSet(ruleBody(draft, dryRun = false)) }
             runCatching { refreshTags() }
             val saved = rule(o) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_rule")
-            savedFlow.value = true
+            savedFlow.value = draft.agentId
             return saved
         } finally {
             // A window this prompt opened does not stay open for its full length; one that was open is left as it was.
@@ -596,7 +597,8 @@ class SharingManager(
             d.perDay?.let { put("per_day", it) }
             d.expiresAt?.let { put("expires_at", Timestamps.formatMillis(it)) }
             put("include_existing", d.includeExisting)
-            if (d.agentId != null) d.statusTtl?.let { put("status_ttl", it) }
+            // Always the shown value, a replacement too: the vault never resets it to its default behind the member.
+            if (d.agentId != null) put("status_ttl", d.statusTtl ?: RuleDraft.DEFAULT_STATUS_TTL)
             if (dryRun) put("dry_run", true)
         }
 

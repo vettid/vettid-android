@@ -141,7 +141,10 @@ class DeviceViewModel @Inject constructor(
     private var rulesRead = 0
 
     val uiState: StateFlow<DeviceUiState> = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
-        s.copy(device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED, ruleSaved = saved, itemWays = sharing.itemWays)
+        s.copy(
+            device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED, ruleSaved = saved == id,
+            itemWays = sharing.itemWays,
+        )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
 
     init {
@@ -185,7 +188,7 @@ class DeviceViewModel @Inject constructor(
     }
 
 
-    fun ruleSavedShown() = sharing.ruleSavedShown()
+    fun ruleSavedShown() = sharing.ruleSavedShown(id)
 
     fun askEndAccess() {
         val d = uiState.value.device

@@ -305,11 +305,13 @@ class AgentRulesManagerTest {
     @Test
     fun theSavedNoticeIsSetOnlyAfterASaveAndClearsOnce() = runTest {
         val m = manager()
-        assertFalse(m.ruleSaved.value)
+        assertNull(m.ruleSaved.value)
         m.saveAgentRule(draft(), "pw-fake-1")
-        assertTrue(m.ruleSaved.value)
-        m.ruleSavedShown()
-        assertFalse(m.ruleSaved.value)
+        assertEquals("a1", m.ruleSaved.value)
+        m.ruleSavedShown("other")
+        assertEquals("a1", m.ruleSaved.value)
+        m.ruleSavedShown("a1")
+        assertNull(m.ruleSaved.value)
     }
 
     @Test
@@ -415,5 +417,14 @@ class AgentRulesManagerTest {
             assertEquals("boom", e.message)
         }
         assertEquals(listOf("unlock", "lock"), log.events)
+    }
+
+    @Test
+    fun theShownStatusLifetimeIsAlwaysSentAReplacementIncluded() = runTest {
+        val m = manager()
+        m.saveAgentRule(draft().copy(statusTtl = 300), "pw-fake-1")
+        m.saveAgentRule(draft(ruleId = "r1").copy(statusTtl = 3_600), "pw-fake-1")
+        m.saveAgentRule(draft(ruleId = "r1").copy(statusTtl = null), "pw-fake-1")
+        assertEquals(listOf("300", "3600", "900"), log.bodies.map { it["status_ttl"]!!.jsonPrimitive.content })
     }
 }

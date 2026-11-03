@@ -324,6 +324,6 @@
     </plurals>
     <string name="items_agent_window_plain">VettID could not close the credential unlock window after saving the rule. It closes by itself.</string> <!-- new -->
     <string name="items_agent_window_close">Close it now</string> <!-- new: as the vote\'s -->
-    <string name="items_agent_rule_auto_demoted">This vault can\'t keep the agent from receiving item values, so this rule now asks you first.</string> <!-- new: owner decision 2026-11-02 (b) -->
+    <string name="items_agent_rule_auto_demoted">Save to make this rule ask you first.</string> <!-- new: owner decision 2026-11-02 (b); the vault still includes its items automatically until it is saved -->
     <string name="items_agent_saved">Rule saved</string> <!-- draft -->
 </resources>
