@@ -17,7 +17,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -25,7 +30,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -39,7 +47,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.vettid.core.data.devices.AgentGrant
 import com.vettid.core.data.devices.DeviceInfo
+import com.vettid.core.data.devices.DeviceWire
 import com.vettid.core.data.items.RuleNames
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.ShareRule
@@ -81,6 +91,11 @@ data class DevicePageActions(
     val onOpenRule: (String) -> Unit = {},
     val onRetryRules: () -> Unit = {},
     val onRuleSavedShown: () -> Unit = {},
+    /** AA3: Other permissions (a grant id) and the paused banner. */
+    val onRemovePermission: (String) -> Unit = {},
+    val onRetryPermissions: () -> Unit = {},
+    val onResume: () -> Unit = {},
+    val onNoticeShown: () -> Unit = {},
 )
 
 /**
@@ -106,6 +121,12 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         if (!state.ruleSaved) return@LaunchedEffect
         actions.onRuleSavedShown()
         snackbar.showSnackbar(savedText)
+    }
+    val noticeText = state.notice?.let { stringResource(PermissionText.noticeRes(it)) }
+    LaunchedEffect(state.notice) {
+        if (noticeText == null) return@LaunchedEffect
+        actions.onNoticeShown()
+        snackbar.showSnackbar(noticeText)
     }
     val d = state.device?.takeIf { !it.thisPhone }
     DetailScaffold(
@@ -158,6 +179,7 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = PILL_SPACE),
         verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
+        if (d.isAgent && d.paused) PausedBanner(DeviceText.sentenceName(d), busy = state.busy, onResume = actions.onResume)
         Column(Modifier.fillMaxWidth().padding(top = Spacing.s), horizontalAlignment = Alignment.CenterHorizontally) {
             InitialTile(
                 name = name,
@@ -183,6 +205,7 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
         state.failure?.let { f -> FailureNotice(state, f, DeviceText.sentenceName(d), actions.onDismissFailure) }
         AccessCard(d, now, busy = state.busy, onEndAccess = actions.onEndAccess)
         if (d.isAgent) RulesCard(state, actions)
+        if (d.isAgent) PermissionsCard(state, actions)
         DetailCard(Modifier.testTag("about_card")) {
             CardTitle(stringResource(R.string.devices_about))
             InfoLine(stringResource(R.string.devices_role), DeviceText.role(d))
@@ -219,12 +242,21 @@ private fun FailureNotice(state: DeviceUiState, f: DeviceFailure, name: String, 
     val body = if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
         failureText(kind.messageRes(), kind.vaultCode(state.errorCode))
     } else {
-        stringResource(if (f == DeviceFailure.END_ACCESS) UiR.string.devices_end_failed else R.string.devices_remove_failed, name)
+        when (f) {
+            DeviceFailure.END_ACCESS -> stringResource(UiR.string.devices_end_failed, name)
+            DeviceFailure.REMOVE -> stringResource(R.string.devices_remove_failed, name)
+            DeviceFailure.REMOVE_PERMISSION -> stringResource(R.string.devices_perm_remove_failed)
+            DeviceFailure.RESUME -> stringResource(R.string.devices_resume_failed, name)
+        }
     }
     NoticeCard(
         kind = NoticeKind.WARNING,
         title = stringResource(
-            if (f == DeviceFailure.END_ACCESS) UiR.string.devices_end_failed_title else R.string.devices_remove_failed_title,
+            when (f) {
+                DeviceFailure.END_ACCESS -> UiR.string.devices_end_failed_title
+                DeviceFailure.REMOVE, DeviceFailure.REMOVE_PERMISSION -> R.string.devices_remove_failed_title
+                DeviceFailure.RESUME -> R.string.devices_resume_failed_title
+            },
         ),
         body = body,
         modifier = Modifier.padding(horizontal = Spacing.s).testTag("device_failure"),
@@ -297,6 +329,76 @@ private fun RulesCard(state: DeviceUiState, actions: DevicePageActions) {
             enabled = !state.atRuleLimit,
             modifier = Modifier.testTag("rule_add"),
         )
+    }
+}
+
+/** "Paused by your vault" (AA3): in the error colour, with **Resume**; the vault paused all of the agent's permissions. */
+@Composable
+private fun PausedBanner(name: String, busy: Boolean, onResume: () -> Unit) {
+    NoticeCard(
+        kind = NoticeKind.URGENT,
+        title = stringResource(R.string.devices_paused_title),
+        body = stringResource(R.string.devices_paused_body, name),
+        modifier = Modifier.padding(horizontal = Spacing.s).testTag("paused_banner"),
+        actions = {
+            TextButton(onClick = onResume, enabled = !busy, modifier = Modifier.testTag("resume")) {
+                Text(stringResource(R.string.devices_resume))
+            }
+        },
+    )
+}
+
+/**
+ * Other permissions (AA3): the agent's grants that are not share rules, each with a ⋯ menu to **Remove**. Shown only when
+ * there are any (grants another device issued): there is no add action and no editor yet (decision 3a). A list that could
+ * not be read is said, with Try again, until one was read.
+ */
+@Composable
+private fun PermissionsCard(state: DeviceUiState, actions: DevicePageActions) {
+    val failed = state.permissionsError != null && !state.permissionsLoaded
+    if (state.permissions.isEmpty() && !failed) return
+    DetailCard(Modifier.testTag("permissions_card")) {
+        CardTitle(stringResource(R.string.devices_perms_title))
+        if (failed) {
+            Text(stringResource(R.string.devices_perms_failed), modifier = Modifier.testTag("permissions_failed"))
+            TextButton(onClick = actions.onRetryPermissions) { Text(stringResource(R.string.devices_retry)) }
+        }
+        state.permissions.forEach { PermissionRow(it, state.connectionNames, state.busy, actions.onRemovePermission) }
+    }
+}
+
+/** One permission: its scope's label, how it is allowed, and ⋯ → **Remove**. A tap opens nothing (no editor yet). */
+@Composable
+private fun PermissionRow(g: AgentGrant, names: Map<String, String>, busy: Boolean, onRemove: (String) -> Unit) {
+    val label = PermissionText.label(g.scope)
+    var open by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).padding(vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}.testTag("perm_${g.grantId}")) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                PermissionText.detail(g, names),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box {
+            IconButton(onClick = { open = true }, enabled = !busy, modifier = Modifier.testTag("perm_more_${g.grantId}")) {
+                Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.devices_perm_more_cd, label))
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.devices_remove)) },
+                    onClick = {
+                        open = false
+                        onRemove(g.grantId)
+                    },
+                    modifier = Modifier.testTag("perm_remove_${g.grantId}"),
+                )
+            }
+        }
     }
 }
 
@@ -375,6 +477,23 @@ private fun PageDialogs(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
             ConfirmDialog(
                 title = stringResource(R.string.devices_remove_title, name),
                 text = text,
+                confirmLabel = stringResource(R.string.devices_remove),
+                onConfirm = actions.onConfirm,
+                onDismiss = actions.onDismissConfirm,
+                destructive = true,
+            )
+        }
+        DeviceConfirm.REMOVE_PERMISSION -> state.confirmGrant?.let { g ->
+            val agent = DeviceText.sentenceName(d)
+            val bound = durationText(g.statusTtl + DeviceWire.SKEW_SECONDS)
+            val labelRes = PermissionText.labelRes(g.scope)
+            ConfirmDialog(
+                title = stringResource(R.string.devices_perm_remove_title),
+                text = if (labelRes != null) {
+                    stringResource(R.string.devices_perm_remove_body, agent, stringResource(labelRes).lowercase(), bound)
+                } else {
+                    stringResource(R.string.devices_perm_remove_body_unknown, agent, bound)
+                },
                 confirmLabel = stringResource(R.string.devices_remove),
                 onConfirm = actions.onConfirm,
                 onDismiss = actions.onDismissConfirm,

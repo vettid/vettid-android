@@ -206,7 +206,7 @@ The A2 exit test:
   by a lock shows "This pairing has ended" (`PairUiState.interrupted`); an approval with no answer is "Pairing not
   confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
   from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
-  Permissions (AA3) is a later PR; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
+  Permissions (AA3) is below; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
 
 - What an agent may use (ANDROID-PLAN 0.1.116 §4 AA4, decisions 1-8, 17 and 18; VAULT-MESSAGING 0.83.2 §10.12, §10.11, §11.10.9):
   an agent's share rules, on the agent's page under **What it may use** (`share.rule.list{agent_id}` via
@@ -237,7 +237,7 @@ The A2 exit test:
   `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
   for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it
   may use** (the agent's page with the editor on top; the list when the id is unknown) and **Later**. Left to later PRs: how the agent may use each
-  item (AA7), permissions (AA3). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
+  item (AA7). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
   full flow needs a `vaultctl` agent paired to the app's vault). Catalog: `items.agent_rule_new`, `items.agent_rule_new_ways`,
   `items.agent_rule_edit_auto`, `items.agent_rule_auto_no_ways`, `items.agent_rule_preview`, `items.agent_rule_more`, `items.agent_rule_invalid`,
   `items.agent_rule_password`, `items.agent_rule_password_wrong`, `items.agent_rule_password_backoff`, `items.agent_rule_password_alarm`,
@@ -246,6 +246,39 @@ The A2 exit test:
   `items.agent_rule_owner_check`, `items.agent_rule_delete_confirm`, `devices.page_agent_rules`, `devices.page_agent_rules_ways`,
   `devices.page_agent_rules_warning`, `devices.page_agent_rules_none`, `devices.page_agent_rules_failed`, `devices.page_agent_rules_limit`,
   `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
+
+- An agent's permissions (ANDROID-PLAN 0.1.116 §4 AA3, decisions 3a, 7, 8; VAULT-MESSAGING §10.11): on the agent's page,
+  **Other permissions** = the agent's grants of `leash.grant.list{agent_id}` that are not `items.read` (`PermissionWire.permissions`;
+  `DevicesRepository.permissions`, `refreshPermissions`, memory only, cleared with the list at lock and hold; an older answer never
+  replaces a newer one: a read number per agent). **One source per card:** **What it may use** stays `share.rule.list` (AA4, richer
+  rows); the `items.read` grants (`grant_id` = `rule_id`) are dropped from the permissions, never listed twice. The card is **not shown
+  at all without such grants** (decision 3a: no heading add action, no editor; a row's tap opens nothing); a list that never read
+  says "Other permissions could not be loaded." with Try again. A row: the scope's label (nine labels, "Another permission" for a scope
+  the app has no label for), "Asks you each time" or "Allowed automatically, up to N an hour and M a day without asking" (an `auto`
+  grant without limits shows the vault's defaults 60 and 1,000; an `approval` the app does not know is read as ask), then ", until
+  <date>" and ", only with <names>" (`DeviceUiState.connectionNames` from `ConnectionsRepository`; "Removed connection" for an id not
+  listed, "Name not shared yet" for a blank name). Trailing ⋯ → **Remove** (`ConfirmDialog`, destructive: "<name> can no longer <label,
+  lower case> from now on. Services it showed this permission to may accept it for up to <that grant's status_ttl + 1 min>.";
+  a scope without a label has its own sentence): `leash.grant.revoke{grant_id}` with **no unlock window and no password** (the
+  plan, not the task title); `{}` "Permission removed", `not_found` "It was already removed.", the grants are read again after both
+  (`DevicesManager.removePermission`: a read that fails after a done removal does not turn it into a failure); any other failure shows
+  its error, keeps the row and reads nothing. **Paused:** a banner at the top of the page (`NoticeKind.URGENT`, "Paused by your
+  vault") whenever `DeviceInfo.paused`, which every grants read keeps equal to `suspended`; **Resume** = `leash.agent.resume{agent_id}`,
+  no unlock window, no confirmation: `{}` "Resumed", `not_found` "It is no longer paused", read again after both. **Re-reads:**
+  `DevicesManager.onEvent` emits `AgentChange` (`changes`): `sync.event` `leash.grant.changed|revoked`, `leash.agent.suspended` with
+  this `agent_id`, and `share.rule.changed|deleted` (only `rule_id`: the app knows no rule it can tell is another subject's, so every
+  one re-reads the permissions and the rules); also on opening and on every return to the page. **`leash.grant.issue`, core only (no
+  UI):** `LeashApi.kt` (`LeashGrantRequest`, `leashGrantIssue`, prints nothing) and `GrantIssueAnswers` / `GrantIssueResult` in
+  `:core:data` `devices/`: `Saved(grant)`, `CredentialLocked` (the caller prompts once and resends once; a second one is `LockedAgain`,
+  `refused(e, resent = true)`), `Conflict`, `Limit` (`agent_grants`), `NotPaired`, `BadRequest(field?)` (the field only when it reads
+  as a plain member name), `OwnerCheck`, `AlarmOpen` (`unlockRefused`: `credential_frozen` / `rotation_required` from the prompt's
+  unlock), `Failed(failure)`. The plan's answer texts are not in strings (unused). Texts in `feature/devices/.../strings.xml`
+  (`devices_perm*`, `devices_scope_*`, `devices_paused_*`, `devices_resume*`) are marked `draft` or `new`; none is approved
+  (`AgentPermissionTextsTest`). Dev stack: `AgentPermissionsDevStackTest` (skips without the stack; the paired-agent branch needs a
+  `vaultctl` agent, and a real suspension needs an agent that sends 30 refused requests: never run). Catalog:
+  `devices.page_agent_permissions`, `devices.page_agent_permissions_failed`, `devices.page_agent_paused`,
+  `devices.page_agent_paused_failed`, `devices.page_agent_permission_remove`, `devices.page_agent_permission_remove_unknown`,
+  `devices.page_agent_permission_remove_failed`.
 
 - Approvals for devices and agents (ANDROID-PLAN 0.1.116 §4 AA5, decisions 6, 9, 10, 15, 16, 18; VAULT-MESSAGING 0.83.2 §6.8, §10.3,
   §10.4.2, §10.11): a device request is `Approval.DeviceRequest` (`seconds` of `device.session.pending`; `held`: `HeldRequests.of(role,

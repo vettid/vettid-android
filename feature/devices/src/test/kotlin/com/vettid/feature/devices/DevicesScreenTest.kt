@@ -175,8 +175,10 @@ class DevicesScreenTest {
         rule.onNodeWithText("was removed", substring = true).assertIsDisplayed()
     }
 
+    // The list needs a paused agent for its chip; the page of a paused agent opens with a banner (AgentPermissionsPageTest),
+    // which would push the facts these tests look at off the small screen: they show the agent as not paused.
     private fun page(state: DeviceUiState, actions: DevicePageActions = DevicePageActions()) =
-        rule.setContent { DevicePageScreen(state, actions, now = now) }
+        rule.setContent { DevicePageScreen(state.copy(device = state.device?.copy(paused = false)), actions, now = now) }
 
     @Test
     fun anAgentsPageShowsItsFactsTheAccessAndTheRule() {

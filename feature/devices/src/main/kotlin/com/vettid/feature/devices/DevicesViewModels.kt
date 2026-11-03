@@ -3,11 +3,16 @@ package com.vettid.feature.devices
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.devices.AgentChange
+import com.vettid.core.data.devices.AgentGrant
+import com.vettid.core.data.devices.AgentResumption
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.devices.DevicesRepository
+import com.vettid.core.data.devices.PermissionRemoval
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
+import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
@@ -84,10 +89,13 @@ class DevicesViewModel @Inject constructor(
 }
 
 /** What the page's confirmation dialog is for. */
-enum class DeviceConfirm { END_ACCESS, REMOVE }
+enum class DeviceConfirm { END_ACCESS, REMOVE, REMOVE_PERMISSION }
 
 /** What a failed request on a device's page says (the vault's own failure text for a refused owner check). */
-enum class DeviceFailure { END_ACCESS, REMOVE }
+enum class DeviceFailure { END_ACCESS, REMOVE, REMOVE_PERMISSION, RESUME }
+
+/** What the page says once, as a snackbar, after a change to an agent's permissions (AA3). */
+enum class PermissionNotice { REMOVED, ALREADY_REMOVED, RESUMED, NOT_PAUSED }
 
 /** Immutable UI state of a device's page. */
 data class DeviceUiState(
@@ -116,12 +124,25 @@ data class DeviceUiState(
     val itemWays: Boolean = false,
     /** "Rule saved", once. */
     val ruleSaved: Boolean = false,
+    /** AA3: the agent's grants that are not share rules, "Other permissions" (`leash.grant.list{agent_id}`); memory only. */
+    val permissions: List<AgentGrant> = emptyList(),
+    val permissionsLoaded: Boolean = false,
+    val permissionsError: FailureKind? = null,
+    /** The names of the member's connections by id (blank: no name yet); an id not in it is a removed connection. */
+    val connectionNames: Map<String, String> = emptyMap(),
+    /** With [DeviceConfirm.REMOVE_PERMISSION]: the permission the confirmation is about. */
+    val confirmGrant: AgentGrant? = null,
+    /** "Permission removed", "Resumed" and the like, once. */
+    val notice: PermissionNotice? = null,
 ) {
     /** The agent has the most rules it can have (64, §10.12 `share_rules_subject`): no new one. */
     val atRuleLimit: Boolean get() = rules.size >= RULE_LIMIT
 
     /** This phone's own entry has no page (it has no actions). */
     val gone: Boolean get() = loaded && (device == null || device.thisPhone)
+
+    /** Holds a device's name, its rules and the names of connections: nothing but the type is printed. */
+    override fun toString(): String = "DeviceUiState"
 }
 
 /**
@@ -129,10 +150,12 @@ data class DeviceUiState(
  * and never asks for the credential password. Fails secure: a request that fails leaves the page as it was and says so.
  */
 @HiltViewModel
+@Suppress("TooManyFunctions")
 class DeviceViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val repo: DevicesRepository,
     private val sharing: SharingRepository,
+    private val connections: ConnectionsRepository,
 ) : ViewModel() {
     private val id: String = saved.get<String>(DeviceRoute.ARG).orEmpty()
     private val local = MutableStateFlow(DeviceUiState())
@@ -140,10 +163,21 @@ class DeviceViewModel @Inject constructor(
     /** The number of the latest rules read; declared before `init`, which may start the first read at once. */
     private var rulesRead = 0
 
-    val uiState: StateFlow<DeviceUiState> = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
+    /** The same for the permissions read: only the latest read's failure is shown. */
+    private var permissionsRead = 0
+
+    private val base = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
         s.copy(
             device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED, ruleSaved = saved == id,
             itemWays = sharing.itemWays,
+        )
+    }
+
+    val uiState: StateFlow<DeviceUiState> = combine(base, repo.permissions, connections.connections) { s, perms, conns ->
+        val mine = perms[id]
+        s.copy(
+            permissions = mine?.others.orEmpty(), permissionsLoaded = mine != null,
+            connectionNames = conns.associate { it.id to it.displayName },
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
 
@@ -153,7 +187,19 @@ class DeviceViewModel @Inject constructor(
         // The rules are an agent's: read once the list shows this device is one (and on every return to the page).
         viewModelScope.launch {
             repo.devices.map { list -> list.firstOrNull { it.id == id }?.isAgent == true }.distinctUntilChanged().filter { it }
-                .collect { readRules() }
+                .collect {
+                    readRules()
+                    readPermissions()
+                }
+        }
+        // `sync.event`s of other devices: this agent's grants, its pause, and share rules (AA3, §10.1).
+        viewModelScope.launch {
+            repo.changes.collect { change ->
+                if (uiState.value.device?.isAgent != true || !change.concerns(id)) return@collect
+                readPermissions()
+                // A rule event carries only `rule_id`: the rules are read again with the grants.
+                if (change is AgentChange.Rule) readRules()
+            }
         }
     }
 
@@ -172,6 +218,23 @@ class DeviceViewModel @Inject constructor(
     /** The agent's share rules; on opening and on every return to the page (the editor may have changed them). */
     fun refreshRules() {
         if (uiState.value.device?.isAgent == true) readRules()
+    }
+
+    /** The agent's other permissions; on opening, on every return to the page, on Retry. */
+    fun refreshPermissions() {
+        if (uiState.value.device?.isAgent == true) readPermissions()
+    }
+
+    private fun readPermissions() {
+        val mine = ++permissionsRead
+        viewModelScope.launch {
+            try {
+                repo.refreshPermissions(id)
+                if (mine == permissionsRead) local.update { it.copy(permissionsError = null) }
+            } catch (e: VaultFailure) {
+                if (mine == permissionsRead) local.update { it.copy(permissionsError = e.kind) }
+            }
+        }
     }
 
     private fun readRules() {
@@ -210,17 +273,52 @@ class DeviceViewModel @Inject constructor(
         }
     }
 
-    fun dismissConfirm() = local.update { it.copy(confirm = null) }
+    /** The ⋯ menu's **Remove** on a permission: asks first; nothing is sent until the confirmation. */
+    fun askRemovePermission(grantId: String) {
+        val grant = uiState.value.permissions.firstOrNull { it.grantId == grantId }
+        if (local.value.busy || grant == null || uiState.value.device?.isAgent != true) return
+        local.update {
+            it.copy(confirm = DeviceConfirm.REMOVE_PERMISSION, confirmGrant = grant, failure = null, error = null, errorCode = null)
+        }
+    }
 
+    /** **Resume** on the paused banner: no confirmation and no unlock window (it signs nothing). */
+    fun resume() {
+        val d = uiState.value.device?.takeIf { it.isAgent && it.paused }
+        if (local.value.busy || d == null) return
+        local.update { it.copy(busy = true, failure = null, error = null, errorCode = null) }
+        viewModelScope.launch {
+            try {
+                val done = repo.resume(d.id)
+                val notice = if (done == AgentResumption.RESUMED) PermissionNotice.RESUMED else PermissionNotice.NOT_PAUSED
+                local.update { it.copy(busy = false, notice = notice) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(busy = false, failure = DeviceFailure.RESUME, error = e.kind, errorCode = e.shownCode) }
+            }
+        }
+    }
+
+    fun noticeShown() = local.update { it.copy(notice = null) }
+
+    fun dismissConfirm() = local.update { it.copy(confirm = null, confirmGrant = null) }
+
+    @Suppress("CyclomaticComplexMethod")
     fun confirm() {
         val s = local.value
         val d = uiState.value.device?.takeIf { it.actionable && !s.busy }
         val what = s.confirm
         if (d == null || what == null) return
-        local.update { it.copy(confirm = null, busy = true) }
+        val grant = s.confirmGrant
+        if (what == DeviceConfirm.REMOVE_PERMISSION && grant == null) return
+        local.update { it.copy(confirm = null, confirmGrant = null, busy = true) }
         viewModelScope.launch {
             try {
                 when (what) {
+                    DeviceConfirm.REMOVE_PERMISSION -> {
+                        val gone = repo.removePermission(d.id, checkNotNull(grant).grantId)
+                        val notice = if (gone == PermissionRemoval.REMOVED) PermissionNotice.REMOVED else PermissionNotice.ALREADY_REMOVED
+                        local.update { it.copy(busy = false, notice = notice) }
+                    }
                     DeviceConfirm.END_ACCESS -> {
                         repo.endAccess(d.id)
                         local.update { it.copy(busy = false, accessEnded = true) }
@@ -231,10 +329,15 @@ class DeviceViewModel @Inject constructor(
                     }
                 }
             } catch (e: VaultFailure) {
-                val failure = if (what == DeviceConfirm.END_ACCESS) DeviceFailure.END_ACCESS else DeviceFailure.REMOVE
+                val failure = when (what) {
+                    DeviceConfirm.END_ACCESS -> DeviceFailure.END_ACCESS
+                    DeviceConfirm.REMOVE -> DeviceFailure.REMOVE
+                    DeviceConfirm.REMOVE_PERMISSION -> DeviceFailure.REMOVE_PERMISSION
+                }
                 local.update { it.copy(busy = false, failure = failure, error = e.kind, errorCode = e.shownCode) }
-                // What the vault says now settles whether the device is still there, with or without access.
-                runCatching { repo.refresh() }
+                // What the vault says now settles whether the device is still there, with or without access. A refused
+                // permission removal keeps its row: the grants are not read again.
+                if (what != DeviceConfirm.REMOVE_PERMISSION) runCatching { repo.refresh() }
             }
         }
     }

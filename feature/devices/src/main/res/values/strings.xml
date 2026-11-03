@@ -157,4 +157,43 @@
     <string name="devices_rule_waiting">%1$d waiting for you</string> <!-- draft -->
     <string name="devices_rule_saved">Rule saved</string> <!-- draft -->
     <string name="devices_rule_row_cd">%1$s: edit this rule</string> <!-- new: a screen reader\'s name for the row -->
+
+    <!-- AA3, ANDROID-PLAN 0.1.116 §4 "An agent's permissions": "draft" = the plan's text word for word, "new" = proposed here. -->
+    <string name="devices_perms_title">Other permissions</string> <!-- draft -->
+    <string name="devices_perms_failed">Other permissions could not be loaded.</string> <!-- new -->
+    <string name="devices_scope_connection_list">See your list of connections</string> <!-- draft -->
+    <string name="devices_scope_connection_get">See a connection\'s details</string> <!-- draft -->
+    <string name="devices_scope_message_send">Send messages for you</string> <!-- draft -->
+    <string name="devices_scope_message_list">See your conversations</string> <!-- draft -->
+    <string name="devices_scope_message_get">Read your messages</string> <!-- draft -->
+    <string name="devices_scope_message_read">Mark messages as read</string> <!-- draft -->
+    <string name="devices_scope_profile_get">See your shared profile</string> <!-- draft -->
+    <string name="devices_scope_action_list">See shared actions</string> <!-- draft -->
+    <string name="devices_scope_action_invoke">Use shared actions</string> <!-- draft -->
+    <!-- A scope this app has no label for (a newer vault): still listed, and can be removed. -->
+    <string name="devices_scope_unknown">Another permission</string> <!-- new -->
+    <string name="devices_perm_ask">Asks you each time</string> <!-- draft -->
+    <string name="devices_perm_auto">Allowed automatically, up to %1$,d an hour and %2$,d a day without asking</string> <!-- draft -->
+    <string name="devices_perm_until">, until %1$s</string> <!-- draft -->
+    <string name="devices_perm_only_with">, only with %1$s</string> <!-- draft -->
+    <string name="devices_perm_removed_connection">Removed connection</string> <!-- draft -->
+    <!-- A listed connection whose name has not arrived (the same words as the connection screens). -->
+    <string name="devices_perm_unnamed_connection">Name not shared yet</string> <!-- new -->
+    <!-- The row's trailing menu: %1$s is the scope's label. -->
+    <string name="devices_perm_more_cd">More actions for %1$s</string> <!-- new -->
+    <string name="devices_perm_remove_title">Remove this permission?</string> <!-- draft -->
+    <!-- %1$s the agent's name, %2$s the scope's label in lower case, %3$s the permission's status lifetime plus 1 minute. -->
+    <string name="devices_perm_remove_body">%1$s can no longer %2$s from now on. Services it showed this permission to may accept it for up to %3$s.</string> <!-- draft -->
+    <!-- The same for a scope without a label (it would not read after "can no longer"). -->
+    <string name="devices_perm_remove_body_unknown">%1$s loses this permission from now on. Services it showed this permission to may accept it for up to %2$s.</string> <!-- new -->
+    <string name="devices_perm_removed">Permission removed</string> <!-- draft -->
+    <string name="devices_perm_already_removed">It was already removed.</string> <!-- draft -->
+    <string name="devices_perm_remove_failed">That permission could not be removed. Try again.</string> <!-- new -->
+    <string name="devices_paused_title">Paused by your vault</string> <!-- draft -->
+    <string name="devices_paused_body">%1$s made too many refused requests in an hour, so your vault paused all of its permissions. Resume it only if you know why this happened.</string> <!-- draft -->
+    <string name="devices_resume">Resume</string> <!-- draft -->
+    <string name="devices_resumed">Resumed</string> <!-- draft -->
+    <string name="devices_not_paused">It is no longer paused</string> <!-- draft -->
+    <string name="devices_resume_failed_title">Not resumed</string> <!-- new -->
+    <string name="devices_resume_failed">%1$s could not be resumed. Try again.</string> <!-- new -->
 </resources>
