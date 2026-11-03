@@ -455,7 +455,7 @@ private fun ReceivedCard(g: GrantView, state: SharedWithYouUiState, name: String
         }
         if (content != null) {
             Spacer(Modifier.height(Spacing.s))
-            SharedFields(content)
+            SharedFields(g.grantId, content)
         } else if (g.active) {
             TextButton(
                 onClick = { actions.onFetch(g.grantId) },
@@ -566,14 +566,14 @@ private const val ASK_LABEL_CHARS = 128
 private const val ASK_REASON_CHARS = 256
 
 @Composable
-private fun SharedFields(c: SharedContent) {
+private fun SharedFields(grantId: String, c: SharedContent) {
     // Which secret fields the member chose to show: in memory only, so leaving the screen (or locking) masks them
     // again; never in a SavedStateHandle (VAULT-MESSAGING §10.7, as the member's own item detail).
     // Keyed by the item, and each field by its id, so a re-sorted list never hands one grant's shown fields to another.
     var shown by remember(c.itemId) { mutableStateOf(emptySet<String>()) }
     c.fields.forEachIndexed { i, f ->
         val id = f.fieldId ?: "#$i"
-        SharedField(i, f, id in shown) { shown = if (id in shown) shown - id else shown + id }
+        SharedField(grantId, i, f, id in shown) { shown = if (id in shown) shown - id else shown + id }
     }
     c.notes?.let {
         Text(stringResource(R.string.items_notes), style = MaterialTheme.typography.labelMedium)
@@ -583,7 +583,7 @@ private fun SharedFields(c: SharedContent) {
 
 @Composable
 @Suppress("CyclomaticComplexMethod")
-private fun SharedField(index: Int, f: ItemFieldView, shown: Boolean, onToggle: () -> Unit) {
+private fun SharedField(grantId: String, index: Int, f: ItemFieldView, shown: Boolean, onToggle: () -> Unit) {
     val text = when (val v = f.value) {
         // A phone number as the member's own are shown (#95: formatted for the phone's region).
         is FieldValue.Text -> if (f.kind == FieldKinds.PHONE) PhoneInput.display(v.text, phoneRegion()) else v.text
@@ -604,10 +604,10 @@ private fun SharedField(index: Int, f: ItemFieldView, shown: Boolean, onToggle: 
             style = MaterialTheme.typography.bodyLarge,
             fontFamily = if (masked && visible) FontFamily.Monospace else null,
             color = if (masked && !visible) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f).testTag("shared_value_$index"),
+            modifier = Modifier.weight(1f).testTag("shared_value_${grantId}_$index"),
         )
         if (masked) {
-            IconButton(onClick = onToggle, modifier = Modifier.testTag("shared_toggle_$index")) {
+            IconButton(onClick = onToggle, modifier = Modifier.testTag("shared_toggle_${grantId}_$index")) {
                 Icon(
                     if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
                     contentDescription = stringResource(

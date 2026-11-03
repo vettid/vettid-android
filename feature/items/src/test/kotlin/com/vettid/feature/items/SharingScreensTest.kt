@@ -22,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.items.FieldValue
 import com.vettid.core.data.items.GrantDirection
 import com.vettid.core.data.items.GrantView
@@ -429,15 +430,15 @@ class SharingScreensTest {
         setSharedScreen()
         rule.onNodeWithText(fakeSecret).assertDoesNotExist()
         rule.onNodeWithText(fakeSeed).assertDoesNotExist()
-        rule.onNodeWithTag("shared_value_1").assertTextEquals("••••••••")
-        rule.onNodeWithTag("shared_value_2").assertTextEquals("••••••••")
+        rule.onNodeWithTag("shared_value_g5_1").assertTextEquals("••••••••")
+        rule.onNodeWithTag("shared_value_g5_2").assertTextEquals("••••••••")
         rule.onNodeWithText("fake-user").assertIsDisplayed()
-        rule.onNodeWithText("(650) 253-0000").assertExists()
-        rule.onNodeWithText("fake note").assertExists()
+        rule.onNodeWithText("(650) 253-0000").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("fake note").performScrollTo().assertIsDisplayed()
         // Only secret kinds have a Show control; and no Copy is added.
         rule.onAllNodesWithContentDescription("Copy", substring = true).assertCountEquals(0)
-        rule.onNodeWithTag("shared_toggle_0").assertDoesNotExist()
-        rule.onNodeWithTag("shared_toggle_3").assertDoesNotExist()
+        rule.onNodeWithTag("shared_toggle_g5_0").assertDoesNotExist()
+        rule.onNodeWithTag("shared_toggle_g5_3").assertDoesNotExist()
     }
 
     @Test
@@ -448,7 +449,7 @@ class SharingScreensTest {
         rule.onNodeWithText(fakeSeed).assertDoesNotExist()
         rule.onNodeWithContentDescription("Hide Password").performClick()
         rule.onNodeWithText(fakeSecret).assertDoesNotExist()
-        rule.onNodeWithTag("shared_value_1").assertTextEquals("••••••••")
+        rule.onNodeWithTag("shared_value_g5_1").assertTextEquals("••••••••")
     }
 
     @Test
@@ -462,7 +463,7 @@ class SharingScreensTest {
         on = true
         rule.waitForIdle()
         rule.onNodeWithText(fakeSecret).assertDoesNotExist()
-        rule.onNodeWithTag("shared_value_1").assertTextEquals("••••••••")
+        rule.onNodeWithTag("shared_value_g5_1").assertTextEquals("••••••••")
     }
 
     @Test
@@ -474,10 +475,10 @@ class SharingScreensTest {
     @Test
     fun aOneTimeCodeIsShownAndHiddenLikeAPassword() {
         setSharedScreen()
-        rule.onNodeWithContentDescription("Show Code").performSemanticsAction(SemanticsActions.OnClick)
-        rule.onNodeWithText(fakeSeed).assertExists()
+        rule.onNodeWithContentDescription("Show Code").performScrollTo().performClick()
+        rule.onNodeWithText(fakeSeed).assertIsDisplayed()
         rule.onNodeWithText(fakeSecret).assertDoesNotExist()
-        rule.onNodeWithContentDescription("Hide Code").performSemanticsAction(SemanticsActions.OnClick)
+        rule.onNodeWithContentDescription("Hide Code").performScrollTo().performClick()
         rule.onNodeWithText(fakeSeed).assertDoesNotExist()
     }
 
@@ -490,7 +491,7 @@ class SharingScreensTest {
                 SharedWithYouActions(),
             )
         }
-        rule.onNodeWithTag("shared_toggle_0").assertDoesNotExist()
+        rule.onNodeWithTag("shared_toggle_g5_0").assertDoesNotExist()
     }
 
     @Test
@@ -499,17 +500,17 @@ class SharingScreensTest {
         val otherSecret = "fake-other-secret-0003"
         val opened = mapOf(
             "g5" to maskedContent,
-            "g6" to SharedContent("x2", "Wifi", "login", listOf(ItemFieldView("f2", "Password", "password", FieldValue.Text(otherSecret))), null, null),
+            "g6" to SharedContent("x2", "Wifi", "login", listOf(ItemFieldView("f1", "Username", "text", FieldValue.Text("fake-other-user")), ItemFieldView("f2", "Password", "password", FieldValue.Text(otherSecret))), null, null),
         )
         var order by mutableStateOf(listOf(maskedGrant, other))
         rule.setContent {
             SharedWithYouScreen(SharedWithYouUiState("c1", "Dana Lee", received = order, loading = false, opened = opened), SharedWithYouActions())
         }
-        rule.onAllNodesWithContentDescription("Show Password")[0].performClick()
+        rule.onAllNodesWithContentDescription("Show Password")[0].performScrollTo().performClick()
         rule.onNodeWithText(fakeSecret).assertIsDisplayed()
         order = listOf(other, maskedGrant)
         rule.waitForIdle()
         rule.onNodeWithText(otherSecret).assertDoesNotExist()
-        rule.onNodeWithText(fakeSecret).assertExists()
+        rule.onNodeWithText(fakeSecret).performScrollTo().assertIsDisplayed()
     }
 }
