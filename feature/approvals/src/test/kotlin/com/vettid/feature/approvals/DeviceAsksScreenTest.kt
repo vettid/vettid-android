@@ -25,6 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.time.Instant
+import java.time.ZoneId
 
 /** The texts of ANDROID-PLAN 0.1.116 §4 "Approvals for devices and agents (AA5)", word for word (drafts), and their layout. */
 @RunWith(RobolectricTestRunner::class)
@@ -108,7 +109,12 @@ class DeviceAsksScreenTest {
     fun theOutcomesOfAnAccessRequest() {
         val until = now.plusSeconds(3_600)
         show(state(session(), outcome = DeviceOutcome.Allowed(until)))
-        rule.onNodeWithText("Access allowed until ${Times.time(until)}", substring = true).assertExists()
+        // The screen says the time alone on the same day, the date and time otherwise: in the last hour before midnight
+        // (CI runs in UTC) an hour from now is tomorrow.
+        val zone = ZoneId.systemDefault()
+        val sameDay = until.atZone(zone).toLocalDate() == Instant.now().atZone(zone).toLocalDate()
+        val shown = if (sameDay) Times.time(until) else Times.full(until)
+        rule.onNodeWithText("Access allowed until $shown", substring = true).assertExists()
     }
 
     @Test
