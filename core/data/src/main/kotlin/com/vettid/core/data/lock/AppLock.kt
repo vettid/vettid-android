@@ -182,9 +182,17 @@ class AppLock(
     /** One prompt at a time, and no automatic prompt after one the member dismissed ([UnlockPromptGate]). */
     val prompts = UnlockPromptGate()
 
-    /** Set while a prompt is showing: the device-credential screen sends the app to the background. */
+    /**
+     * True while a prompt is showing ([promptStarted] to [promptEnded] / [abandonPrompt]); the device-credential screen sends
+     * the app to the background. The background mark is still recorded meanwhile ([onBackground]) but never cleared
+     * ([onForeground] leaves it), and [wouldShowLock] is false until the prompt ends: its end decides ([promptEnded]).
+     */
     @Volatile
     var authenticating: Boolean = false
+        private set
+
+    /** When a prompt succeeded with the app not yet in the foreground (monotonic): the next return within the grace is that unlock. */
+    private var provenAtElapsed: Long? = null
 
     /** Reads the preference at start: an enabled lock starts locked. Always leaves [AppLockState.PENDING]. */
     suspend fun start() {
@@ -279,6 +287,11 @@ class AppLock(
     /** The wall clock was changed (`ACTION_TIME_CHANGED`): [coverFlow] decides again now, not at its timer. */
     fun onClockChanged() {
         backgroundAt?.let { backgroundDue(it, timeoutFlow.value.seconds * MS) } // remembers a step back before it is undone
+        recheck()
+    }
+
+    /** [coverFlow] decides again now. */
+    private fun recheck() {
         clockChanges.value++
     }
 
@@ -372,6 +385,7 @@ class AppLock(
         return try {
             cipher.doFinal(PROOF)
             stateFlow.value = AppLockState.UNLOCKED
+            syncCoverAlarm()
             true
         } catch (_: GeneralSecurityException) {
             false
@@ -397,7 +411,9 @@ class AppLock(
         timeoutFlow.value = AppLockTimeout.DEFAULT
         backgroundAt = null
         authenticating = false
+        provenAtElapsed = null
         syncCoverAlarm()
+        recheck()
     }
 
     fun acknowledgeInvalidated() {
@@ -413,23 +429,79 @@ class AppLock(
     }
 
     /**
-     * The activity stopped. Not counted as leaving the app while a prompt shows, nor when the activity is only being
-     * recreated for a configuration change ([changingConfigurations]: rotation, fold, theme): with the timeout
-     * "Immediately" either would lock the app in the member's hands.
+     * The activity stopped. Always recorded (owner rule 2026-11-03: a Home press during a prompt must not lose the
+     * background), except when the activity is only being recreated for a configuration change ([changingConfigurations]:
+     * rotation, fold, theme), which with "Immediately" would lock the app in the member's hands. While a prompt is up an
+     * earlier mark is kept (the first stop counts) and the mark is never cleared; the prompt's end decides ([promptEnded]).
      */
     fun onBackground(changingConfigurations: Boolean = false) {
-        if (authenticating || changingConfigurations) return
-        backgroundAt = Background(elapsed(), now())
+        if (changingConfigurations) return
+        if (!authenticating) provenAtElapsed = null
+        if (!(authenticating && backgroundAt != null)) backgroundAt = Background(elapsed(), now())
         syncCoverAlarm()
     }
 
+    /** The activity is in the foreground again. While a prompt is up the mark is left alone: [promptEnded] decides. */
     fun onForeground() {
         if (authenticating) return
-        val at = backgroundAt ?: return
+        returned()
+    }
+
+    /**
+     * The shared decision of a return: lock if the mark is due, then clear it. A return within [PROMPT_RETURN_GRACE_MS] of
+     * a prompt that succeeded while the app was not in the foreground is that unlock, not a leaving: no lock.
+     */
+    private fun returned() {
+        val at = backgroundAt
+        val proven = provenAtElapsed
+        provenAtElapsed = null
+        if (at == null) return
+        val grace = proven != null && elapsed() - proven <= PROMPT_RETURN_GRACE_MS
         // Locked before the background time is cleared: the cover (wouldShowLock) has no gap between the two.
-        if (stateFlow.value == AppLockState.UNLOCKED && backgroundDue(at, timeoutFlow.value.seconds * MS)) lockNow()
+        if (!grace && stateFlow.value == AppLockState.UNLOCKED && backgroundDue(at, timeoutFlow.value.seconds * MS)) lockNow()
         backgroundAt = null
         syncCoverAlarm()
+    }
+
+    /** A prompt is about to show (BiometricPrompt, the app lock's or a presence check). */
+    fun promptStarted() {
+        authenticating = true
+    }
+
+    /**
+     * The prompt ended (owner rule 2026-11-03: the mark is always recorded, kept while a prompt is up, and the end decides).
+     * [inForeground]: the activity is at least STARTED.
+     * - [PromptOutcome.SUCCEEDED] in the foreground: the member was just proven present, the mark is cleared.
+     * - [PromptOutcome.SUCCEEDED] not in the foreground (the device-credential screen's callback can come before the
+     *   activity's onStart): the mark is set to now, and the next [onForeground] within [PROMPT_RETURN_GRACE_MS] clears it
+     *   without locking, so "Immediately" does not lock the app straight after an unlock. Later, the normal decision applies.
+     * - [PromptOutcome.SYSTEM_CANCELED] or [PromptOutcome.DISMISSED] in the foreground: the decision of [onForeground]: lock
+     *   if the mark is due, then clear it (fail secure; with "Immediately", cancelling a presence check whose screen stopped
+     *   the activity therefore locks the app).
+     * - Either of those not in the foreground: the mark is kept; if there is none, one is recorded now.
+     */
+    fun promptEnded(outcome: PromptOutcome, inForeground: Boolean) {
+        authenticating = false
+        when {
+            outcome == PromptOutcome.SUCCEEDED && inForeground -> {
+                provenAtElapsed = null
+                backgroundAt = null
+            }
+            outcome == PromptOutcome.SUCCEEDED -> {
+                backgroundAt = Background(elapsed(), now())
+                provenAtElapsed = elapsed()
+            }
+            inForeground -> returned()
+            else -> if (backgroundAt == null) backgroundAt = Background(elapsed(), now())
+        }
+        syncCoverAlarm()
+        recheck()
+    }
+
+    /** The prompt's activity was destroyed for a configuration change: no outcome, the mark stays as it is. */
+    fun abandonPrompt() {
+        authenticating = false
+        recheck()
     }
 
     private companion object {
@@ -441,6 +513,9 @@ class AppLock(
         const val COVER_MARGIN_MS = 100L
         const val COVER_RETRY_MS = 1000L
         const val COVER_RETRY_MAX_MS = 60_000L
+
+        /** A return this soon after a prompt succeeded in the background is that unlock (the late onStart), not a leaving. */
+        const val PROMPT_RETURN_GRACE_MS = 3_000L
 
         /** A wall clock this much (or less) behind the one at the background is a correction, not a date set back. */
         const val WALL_BACK_TOLERANCE_MS = 5_000L

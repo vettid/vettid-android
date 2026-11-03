@@ -21,6 +21,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.vettid.app.debug.debugTools
@@ -231,7 +232,13 @@ class MainActivity : ComponentActivity() {
         // A prompt this activity showed ends with it; its callback will not come (a recreated activity may ask again).
         promptCancel?.cancel()
         promptCancel = null
-        if (appLock.prompts.ownerGone(this)) appLock.authenticating = false
+        if (appLock.prompts.ownerGone(this)) {
+            if (isChangingConfigurations) {
+                appLock.abandonPrompt()
+            } else {
+                appLock.promptEnded(PromptOutcome.SYSTEM_CANCELED, inForeground = false)
+            }
+        }
         super.onDestroy()
     }
 
@@ -299,16 +306,17 @@ class MainActivity : ComponentActivity() {
         if (bm == null || bm.canAuthenticate(allowed) != android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS) return true
         if (!appLock.prompts.tryStart(auto = false, owner = this)) return false
         return suspendCancellableCoroutine { cont ->
-            appLock.authenticating = true
+            appLock.promptStarted()
             val cancel = CancellationSignal()
             val prompt = BiometricPrompt.Builder(this)
                 .setTitle(title)
                 .apply { subtitle?.let { setSubtitle(it) } }
                 .setAllowedAuthenticators(allowed)
                 .build()
-            fun done(ok: Boolean) {
+            fun done(outcome: PromptOutcome) {
                 appLock.prompts.finished(PromptOutcome.SUCCEEDED) // a presence check never holds back the lock's prompt
-                appLock.authenticating = false
+                appLock.promptEnded(outcome, inForeground())
+                val ok = outcome == PromptOutcome.SUCCEEDED
                 if (cont.isActive) cont.resume(ok)
             }
             cont.invokeOnCancellation { cancel.cancel() }
@@ -316,13 +324,15 @@ class MainActivity : ComponentActivity() {
                 cancel,
                 mainExecutor,
                 object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = done(true)
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = done(PromptOutcome.SUCCEEDED)
 
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done(false)
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done(PromptOutcome.ofError(errorCode))
                 },
             )
         }
     }
+
+    private fun inForeground() = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
 
     private fun enableFailed() {
         appLock.prompts.finished(PromptOutcome.DISMISSED)
@@ -331,7 +341,7 @@ class MainActivity : ComponentActivity() {
 
     /** The app lock's prompt; the caller passed [AppLock.prompts]' tryStart. */
     private fun authenticate(cipher: Cipher, method: AppLockMethod, onCancel: () -> Unit = {}, onSuccess: (Cipher) -> Unit) {
-        appLock.authenticating = true
+        appLock.promptStarted()
         val cancel = CancellationSignal()
         promptCancel = cancel
         val subtitle = when (method) {
@@ -362,7 +372,7 @@ class MainActivity : ComponentActivity() {
                 private fun done(outcome: PromptOutcome) {
                     if (promptCancel === cancel) promptCancel = null
                     appLock.prompts.finished(outcome)
-                    appLock.authenticating = false
+                    appLock.promptEnded(outcome, inForeground())
                 }
             },
         )

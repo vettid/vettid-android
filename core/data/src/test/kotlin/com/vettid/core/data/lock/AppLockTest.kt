@@ -231,18 +231,137 @@ class AppLockTest {
         assertEquals(AppLockState.LOCKED, l.state.value)
     }
 
+    private suspend fun unlockedWith(t: AppLockTimeout): AppLock = lock().also {
+        it.start()
+        it.completeEnable(it.cipherToEnable())
+        it.setTimeout(t)
+    }
+
+    /** Was "promptsDoNotCountAsLeavingTheApp" (no mark while authenticating); now the mark is kept and a success clears it. */
     @Test
-    fun promptsDoNotCountAsLeavingTheApp() = runTest {
-        val l = lock()
+    fun aPromptThatSucceedsAfterABackgroundAndReturnDoesNotLock() = runTest {
+        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        l.promptStarted()
+        l.onBackground()
+        clock += 5_000
+        l.onForeground() // left alone while the prompt is up
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = true)
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+        assertFalse(l.wouldShowLock())
+        l.onForeground()
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+    }
+
+    @Test
+    fun homeDuringAPresencePromptStillTimesOut() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        l.promptStarted()
+        l.onBackground()
+        l.promptEnded(PromptOutcome.SYSTEM_CANCELED, inForeground = false)
+        assertFalse(l.wouldShowLock())
+        clock += 60_000
+        assertTrue(l.wouldShowLock())
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun theCallbackBeforeTheStopStillTimesOut() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        l.promptStarted()
+        l.promptEnded(PromptOutcome.SYSTEM_CANCELED, inForeground = true)
+        l.onBackground()
+        clock += 60_000
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun aPromptStillUpOnReturnAfterTheTimeoutIsDecidedByItsEnd() = runTest {
+        val cases = listOf(PromptOutcome.DISMISSED to true, PromptOutcome.SYSTEM_CANCELED to true, PromptOutcome.SUCCEEDED to false)
+        for ((outcome, locked) in cases) {
+            val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+            l.promptStarted()
+            l.onBackground()
+            clock += 120_000
+            l.onForeground()
+            assertEquals(AppLockState.UNLOCKED, l.state.value) // not cleared, not locked yet
+            l.promptEnded(outcome, inForeground = true)
+            assertEquals(outcome.name, if (locked) AppLockState.LOCKED else AppLockState.UNLOCKED, l.state.value)
+            if (!locked) assertFalse(l.wouldShowLock())
+            clock += 120_000
+            l.onForeground() // the mark is gone either way
+            assertEquals(if (locked) AppLockState.LOCKED else AppLockState.UNLOCKED, l.state.value)
+        }
+    }
+
+    @Test
+    fun aDeviceCredentialUnlockWithImmediatelyDoesNotLockOnTheLateStart() = runTest {
+        for ((wait, locked) in listOf(3_000L to false, 3_001L to true)) {
+            val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+            l.lockNow()
+            l.promptStarted()
+            l.onBackground()
+            l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+            assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+            clock += wait
+            l.onForeground()
+            assertEquals("$wait", if (locked) AppLockState.LOCKED else AppLockState.UNLOCKED, l.state.value)
+        }
+    }
+
+    @Test
+    fun theGraceIsEndedByANewBackground() = runTest {
+        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        l.promptStarted()
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+        l.onBackground() // a real stop after the callback: counted from here
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun aDismissedPromptInTheBackgroundWithNoMarkRecordsOne() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        l.promptStarted()
+        l.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
+        clock += 60_000
+        assertTrue(l.wouldShowLock())
+    }
+
+    @Test
+    fun aRotationDuringAPromptKeepsTheMarkAndAddsNone() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        l.promptStarted()
+        l.abandonPrompt()
+        assertFalse(l.authenticating)
+        clock += 60_000
+        assertFalse("no mark added", l.wouldShowLock())
+        val m = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        m.onBackground()
+        m.promptStarted()
+        clock += 30_000
+        m.abandonPrompt()
+        clock += 30_000
+        assertTrue("the earlier mark kept", m.wouldShowLock())
+    }
+
+    @Test
+    fun resetClearsThePromptState() = runTest {
+        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        l.promptStarted()
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+        l.promptStarted()
+        l.reset()
+        assertFalse(l.authenticating)
         l.start()
         l.completeEnable(l.cipherToEnable())
         l.setTimeout(AppLockTimeout.IMMEDIATELY)
-        l.authenticating = true
-        l.onBackground()
-        clock += 5_000
-        l.onForeground()
-        l.authenticating = false
+        l.onForeground() // no mark, no grace left over
         assertEquals(AppLockState.UNLOCKED, l.state.value)
+        l.onBackground()
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
     }
 
     @Test

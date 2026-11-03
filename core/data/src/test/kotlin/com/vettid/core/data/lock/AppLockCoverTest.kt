@@ -134,7 +134,7 @@ class AppLockCoverTest {
         val l = unlocked()
         l.onBackground()
         clock = timeoutMs * 2
-        l.authenticating = true
+        l.promptStarted()
         assertFalse(l.wouldShowLock())
     }
 
@@ -234,35 +234,32 @@ class AppLockCoverTest {
         runCurrent()
         l.onBackground()
         runCurrent()
-        l.authenticating = true
+        l.promptStarted()
         clock = timeoutMs
         advanceTimeBy(timeoutMs + 500)
         runCurrent()
         assertFalse(covered.value)
-        l.authenticating = false
+        l.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
         advanceTimeBy(5_000)
         runCurrent()
         assertTrue(covered.value)
     }
 
     @Test
-    fun theRetryBacksOffAndNeverWaitsMoreThanSixtySeconds() = runTest {
+    fun aLongPromptHoldsTheCoverBackAndItsEndBringsItAtOnce() = runTest {
         val l = unlocked()
         val covered = l.coverFlow(backgroundScope)
         runCurrent()
         l.onBackground()
         runCurrent()
-        l.authenticating = true
+        l.promptStarted()
         clock = timeoutMs
         advanceTimeBy(timeoutMs + 200_000) // looks at 1, 3, 7, 15, 31, 63, 123, 183 s after the timer: all false
         runCurrent()
-        l.authenticating = false
-        advanceTimeBy(1_500)
+        assertFalse("held back for the whole wait", covered.value)
+        l.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
         runCurrent()
-        assertFalse("backed off: not looking every second", covered.value)
-        advanceTimeBy(60_000)
-        runCurrent()
-        assertTrue("the cap: a look within 60 s", covered.value)
+        assertTrue("the end of the prompt decides at once, no waiting for the retry", covered.value)
     }
 
     @Test
