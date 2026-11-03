@@ -245,6 +245,10 @@ fun MessagesScreen(
                 ),
             )
             else -> LazyColumn(Modifier.fillMaxSize().testTag("conversations"), contentPadding = PaddingValues(bottom = LIST_BOTTOM)) {
+                // The daily check is due: the rows are what this phone knows; the list reads again when it passes.
+                if (error == FailureKind.OWNER_CHECK_REQUIRED) {
+                    item(key = "held-notice") { MessagesHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s)) }
+                }
                 items(state.conversations, key = { it.connection.id }) { c -> ConversationRow(c, onClick = { onOpen(c.connection.id) }) }
             }
         }
@@ -302,13 +306,29 @@ internal fun Loading() {
 @Composable
 internal fun ErrorState(kind: FailureKind, onRetry: () -> Unit, shownCode: String? = null) {
     Column(Modifier.fillMaxSize().padding(Spacing.xl), verticalArrangement = Arrangement.Center) {
-        NoticeCard(
-            kind = NoticeKind.WARNING,
-            title = stringResource(R.string.messages_error_title),
-            body = failureText(kind.messageRes(), kind.vaultCode(shownCode)),
-            actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
-        )
+        if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
+            MessagesHeldNotice()
+        } else {
+            NoticeCard(
+                kind = NoticeKind.WARNING,
+                title = stringResource(R.string.messages_error_title),
+                body = failureText(kind.messageRes(), kind.vaultCode(shownCode)),
+                actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
+            )
+        }
     }
+}
+
+/** The vault holds requests while the daily owner check is due: said to be held, not failed; nothing to retry. */
+@Composable
+internal fun MessagesHeldNotice(modifier: Modifier = Modifier) {
+    NoticeCard(
+        kind = NoticeKind.INFO,
+        title = stringResource(R.string.messages_held_title),
+        body = stringResource(R.string.messages_held_body),
+        actions = null,
+        modifier = modifier.testTag("messages_held_notice"),
+    )
 }
 
 /** What the conversation screen can ask for. */

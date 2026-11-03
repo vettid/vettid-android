@@ -95,6 +95,8 @@ The A2 exit test:
   `settings.transfer_signer_development`, `settings.transfer_signer_unknown`, `settings.transfer_signer_unconfirmed`,
   `history.signer`, `history.entry_signer`, `notifications.signer_changed`.
 
+- Held lists (owner-approved 2026-11-03, as vettid-ios #201): while the daily owner check is due, Messages' and History's lists show an INFO notice ("Messages are on hold" / "History is on hold", `*_held_title`/`*_held_body`), not the error, with no "Try again", above the rows when there are any; both ViewModels re-read when `checkCleared()` fires (History with rows reads the newest page again, rows kept; shown again while held it keeps the rows). The conversation and History-entry screens are not changed.
+
 - Two distributions (README "F-Droid build"; flavour dimension `distribution`): `full` (Google Play, VettID's
   releases; every build type) and `foss` (F-Droid; `fossRelease` only), same application id and version. `foss`
   contains no Google proprietary code: `:app:checkFossReleaseApk` fails on any Firebase, Google Play services,
@@ -582,7 +584,7 @@ Debug builds use application id `com.vettid.app.dev` (`devStack`:
 Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
 `app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `onboarding.setup_scan`, `onboarding.setup_type`, `onboarding.confirm_account`, `account_sheet`, `unlock.updated`,
 `credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
-`connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.no_backup`; the recovery code typed instead of scanned (ANDROID-PLAN 0.1.33, VAULT-MESSAGING 0.25.0 §11.11.10: `RecoveryCodes` / `TypedRecoveryCode` in `:core:altchan`, the claim by locator, `RecoverStep.TYPE`; the real screen sets `FLAG_SECURE` through `SecureWindow`, the catalog's does not), `recover.type`, `recover.type_partial`, `recover.type_complete`, `recover.type_refused`, `recover.type_bad_check`, `recover.type_short_code`, `recover.type_not_found`, `recover.type_bad_code`, `recover.type_rate_limited`;
+`connections.detail`, `approvals.critical`, `messages.held`, `messages.held_empty`, `history.held`, `history.held_empty`; recovery and transfer: `recover.pin`, `recover.no_backup`; the recovery code typed instead of scanned (ANDROID-PLAN 0.1.33, VAULT-MESSAGING 0.25.0 §11.11.10: `RecoveryCodes` / `TypedRecoveryCode` in `:core:altchan`, the claim by locator, `RecoverStep.TYPE`; the real screen sets `FLAG_SECURE` through `SecureWindow`, the catalog's does not), `recover.type`, `recover.type_partial`, `recover.type_complete`, `recover.type_refused`, `recover.type_bad_check`, `recover.type_short_code`, `recover.type_not_found`, `recover.type_bad_code`, `recover.type_rate_limited`;
 `transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
 did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
 repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`; the vault service paused for maintenance

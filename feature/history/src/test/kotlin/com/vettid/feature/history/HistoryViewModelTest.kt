@@ -317,6 +317,77 @@ class HistoryViewModelTest {
         assertEquals(2, vault.calls.size)
     }
 
+    private fun heldVault(vararg after: () -> AuditPage) = Vault(
+        { AuditPage(listOf(entry(5, "vault.unlocked", null), entry(4, "vault.unlocked", null)), seq = 5) },
+        { throw VaultOpException("connection.audit.list", "owner_check_required") },
+        *after,
+    )
+
+    /** Rows shown, then held: once the check passes the newest page is read again (not an older one), rows kept meanwhile. */
+    @Test
+    fun heldWithRowsReadsTheNewestPageWhenTheCheckPasses() = runTest(main.dispatcher) {
+        val owner = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        val vault = heldVault(
+            { AuditPage(listOf(entry(6, "audit.exported", null), entry(5, "vault.unlocked", null)), seq = 6, nextBeforeSeq = 5) },
+        )
+        val model = vm(vault, connectionId = null, owner = owner)
+        settle(model, ::idle)
+        model.refresh()
+        val held = settle(model) { idle(it) && it.error != null }
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, held.error)
+        assertEquals(listOf(5L, 4L), held.entries.map { it.seq })
+        owner.ownerCheck.value = check(OwnerCheckState.OK)
+        val s = settle(model) { idle(it) && it.error == null && it.entries.size == 3 }
+        assertEquals(listOf(6L, 5L, 4L), s.entries.map { it.seq })
+        assertNull(vault.calls.last()["before_seq"])
+    }
+
+    /** Shown again while held: the rows and the notice stay, nothing is cleared, and the newest page is read. */
+    @Test
+    fun shownAgainWhileHeldKeepsTheRows() = runTest(main.dispatcher) {
+        val vault = heldVault(
+            { throw VaultOpException("connection.audit.list", "owner_check_required") },
+            { AuditPage(listOf(entry(6, "audit.exported", null), entry(5, "vault.unlocked", null)), seq = 6, nextBeforeSeq = 5) },
+        )
+        val model = vm(vault, connectionId = null)
+        settle(model, ::idle)
+        model.refresh()
+        settle(model) { idle(it) && it.error != null }
+        model.refresh()
+        // Not loading with empty rows at any point: the rows are still there right after the call.
+        assertEquals(listOf(5L, 4L), model.uiState.value.entries.map { it.seq })
+        val s = settle(model) { idle(it) && it.error != null && vault.calls.size == 3 }
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, s.error)
+        assertEquals(listOf(5L, 4L), s.entries.map { it.seq })
+        model.refresh()
+        val ok = settle(model) { idle(it) && it.error == null && it.entries.size == 3 }
+        assertEquals(listOf(6L, 5L, 4L), ok.entries.map { it.seq })
+    }
+
+    /** The older page was refused as held: the check passes, the newest page is read, the error clears and more() can run. */
+    @Test
+    fun anOlderPageRefusedAsHeldLoadsOnceTheCheckPasses() = runTest(main.dispatcher) {
+        val owner = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        val vault = Vault(
+            { page(900, 700, next = 650) },
+            { throw VaultOpException("connection.audit.list", "owner_check_required") },
+            { page(900, 700, next = 650) },
+            { page(650, 600) },
+        )
+        val model = vm(vault, owner = owner)
+        settle(model, ::idle)
+        model.loadMore()
+        val held = settle(model) { idle(it) && it.error != null }
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, held.error)
+        owner.ownerCheck.value = check(OwnerCheckState.OK)
+        // Still held until the newest page answers; then the list's effect asks for more again.
+        settle(model) { idle(it) && it.error == null }
+        model.loadMore()
+        val s = settle(model) { idle(it) && it.entries.size == 4 }
+        assertEquals(listOf(900L, 700L, 650L, 600L), s.entries.map { it.seq })
+        assertEquals(650L, vault.calls.last()["before_seq"])
+    }
+
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
     @Test
