@@ -355,7 +355,7 @@ class PresenceConnectionsTest {
             )
         }
         rule.onNodeWithText("Let your connections see when you're around?").assertIsDisplayed()
-        rule.onNodeWithText("They see Available, Busy or Away and roughly when their vault was last in use.").assertIsDisplayed()
+        rule.onNodeWithText("They see Available, Busy or Away and roughly when your vault was last in use.").assertIsDisplayed()
         rule.onNodeWithText("Change this in Settings → Privacy → Presence").assertIsDisplayed()
         rule.onNodeWithText("Not now").performClick()
         rule.onNodeWithText("Share with everyone").performClick()
