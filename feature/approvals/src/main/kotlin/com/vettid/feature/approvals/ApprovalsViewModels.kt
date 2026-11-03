@@ -522,7 +522,6 @@ class ApprovalDetailViewModel @Inject constructor(
 
     fun setPassword(v: String) = local.update { it.copy(password = v, error = null) }
 
-
     /** Ticks or unticks one entry of a grant request. */
     private fun chosen(s: ApprovalDetailUiState): Set<Int> =
         s.grantSelected ?: (uiState.value.approval as? Approval.GrantRequest)?.grantable?.toSet() ?: emptySet()
