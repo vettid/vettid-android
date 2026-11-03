@@ -70,6 +70,19 @@ data class ApprovalsUiState(
     val entries: List<ApprovalEntry> get() = AskBatches.group(approvals)
 }
 
+/**
+ * Whether the item cache has been read at least once (loaded or failed): a later background re-read does not turn a held
+ * request's item back into "Loading…" or switch Approve off. One per screen; read on the main thread.
+ */
+internal class ItemsSettled {
+    private var settled = false
+
+    operator fun invoke(ld: ListLoad): Boolean {
+        if (ld == ListLoad.LOADED || ld == ListLoad.FAILED) settled = true
+        return settled
+    }
+}
+
 /** The inputs of the list's state, before the devices and the items are added. */
 private class ListIn(
     val s: ApprovalsUiState,
@@ -89,6 +102,7 @@ class ApprovalsViewModel @Inject constructor(
     private val items: ItemsRepository,
 ) : ViewModel() {
     private val local = MutableStateFlow(ApprovalsUiState())
+    private val settled = ItemsSettled()
 
     private val resumed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -110,7 +124,7 @@ class ApprovalsViewModel @Inject constructor(
                     ListIn(s, list, declines, cs, now)
                 },
                 devices.devices,
-                combine(items.items, items.load) { its, ld -> its to (ld == ListLoad.LOADED || ld == ListLoad.FAILED) },
+                combine(items.items, items.load) { its, ld -> its to settled(ld) },
             ) { q, ds, itl ->
                 val (its, loaded) = itl
                 val s = q.s
@@ -337,6 +351,7 @@ class ApprovalDetailViewModel @Inject constructor(
     private val pairing: PairingRepository,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
+    private val settled = ItemsSettled()
     private val local = MutableStateFlow(ApprovalDetailUiState(key, approval = repo.approvals.value.firstOrNull { it.key == key }))
 
     init {
@@ -419,7 +434,7 @@ class ApprovalDetailViewModel @Inject constructor(
         combine(devices.devices, ownerCheck.ownerCheck, repo.withdrawn, connections.connections, pairing.state) { d, o, w, c, p ->
             arrayOf<Any?>(d, o, w, c, p)
         },
-        combine(items.load, items.items) { ld, _ -> ld == ListLoad.LOADED || ld == ListLoad.FAILED },
+        combine(items.load, items.items) { ld, _ -> settled(ld) },
     ) { a, loaded ->
         @Suppress("UNCHECKED_CAST")
         Aux(

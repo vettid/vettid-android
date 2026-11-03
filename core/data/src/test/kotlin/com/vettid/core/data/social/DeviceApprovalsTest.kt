@@ -418,6 +418,19 @@ class DeviceApprovalsTest {
     }
 
     @Test
+    fun aPairingEntryGoesWhenItsPairingIsDoneAndOthersStay() = runTest {
+        val m = manager()
+        m.setFeedItems(listOf(feed("device.pair.pending", "pend-1", device = null), feed("device.pair.pending", "pend-2", device = null)))
+        runCurrent()
+        m.refreshPendingFrom { PendingPage(emptyList(), null, now) }
+        runCurrent()
+        assertEquals(2, m.keys().size)
+        m.closePairing("pend-1")
+        runCurrent()
+        assertEquals(listOf("device:device.pair.pending:pend-2"), m.keys())
+    }
+
+    @Test
     fun theEventWinsOverTheFeedItem() = runTest {
         val m = manager()
         m.setFeedItems(listOf(feed("approval.pending", "h1")))

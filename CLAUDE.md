@@ -260,7 +260,7 @@ The A2 exit test:
   done." (not Approved) and a session answer without `expires_at` is "Access allowed". `item.use` shows its item and field (names from the item cache, `ItemSummary.fieldLabels`) and `data` decoded
   (`DataView`: strict UTF-8 is text unless it has a control (other than LF and tab), format (bidi), Default_Ignorable (Hangul fillers, variation
   selectors, CGJ, tags), separator, private-use or unassigned code point, more than 2 combining marks in a row, or more than 8 lines; else
-  lower-case hex), shown in a bordered box with "N bytes",
+  lower-case hex; the braille blank U+2800 and a run of more than 8 blanks (tabs, Zs) too; some scripts (Burmese, Tibetan, Hebrew with cantillation) legitimately have 3 or more marks on one base and fall back to hex), shown in a bordered box with "N bytes",
   `item.get` its fields (an empty list, a repeated id or more than 64 are Unshown) or "All fields and notes" and always the history line, the catalog its line; `item.run` / `item.proxy` (decision 15),
   a desktop's step-up (decision 9), any other type or op, a body that does not read in full, and an item or field the cache cannot name ("an
   item you no longer have"; "Loading…" while the cache is still being read) are **Deny only**, enforced in
@@ -274,7 +274,7 @@ The A2 exit test:
   something this phone can no longer show. Deny it, or let it expire."; a feed-only session request names the device from `device.list`
   (`DeviceAsks.named`) and is Allow/Deny with 1 hour preselected, Deny-only when the device is not listed (or the list not read). A
   `device.pair.pending` feed item is an entry without buttons ("This pairing can't be checked on this phone any more …"), or, while
-  `PairingRepository` holds the comparison and the item's `ref` is the held pairing's `pending_id` (`PendingPairing.pendingId`; any other
+  `PairingRepository` holds the comparison and the item's `ref` is the held pairing's `pending_id` (`PendingPairing.pendingId`; the entry goes when that comparison is left, approved, rejected, ended or cleared: `PairingManager.onCompareLeft` -> `SocialManager.closePairing`; any other
   pairing item gets the unnamed title and no Compare), **Compare the code** (`DecisionActions.onOpenPairing`, `PairRoute(held = true)`); VAULT-MESSAGING
   0.83.0 says `device.pair.reject` accepts the item's `ref`: not used (the plan says no buttons; owner's call). **Feed and notifications:**
   titles with the device's name from `FeedNames.devices` (`device.list`, cleaned and isolated; fallbacks without a name) and

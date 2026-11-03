@@ -1001,6 +1001,7 @@ class VaultManager(
             devices.devices.value
         },
         onPaired = { devices.refreshQuietly() },
+        onCompareLeft = { social.closePairing(it) },
     )
 
     /**

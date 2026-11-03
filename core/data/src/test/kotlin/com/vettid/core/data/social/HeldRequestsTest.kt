@@ -176,6 +176,41 @@ class HeldRequestsTest {
     }
 
     @Test
+    fun nameableNeedsNamesThatCleanToSomething() {
+        val items = listOf(
+            com.vettid.core.data.items.ItemSummary(
+                "i1", 1, "\u202E\u2066\u2069", "other", com.vettid.core.data.items.Sensitivity.SECRET,
+                fieldLabels = listOf(com.vettid.core.data.items.FieldLabel("f1", "PIN", "password")),
+            ),
+            com.vettid.core.data.items.ItemSummary(
+                "i2", 1, "Bank", "other", com.vettid.core.data.items.Sensitivity.SECRET,
+                fieldLabels = listOf(
+                    com.vettid.core.data.items.FieldLabel("f1", "\u0007\u200B", "password"),
+                    com.vettid.core.data.items.FieldLabel("f2", "PIN", "password"),
+                ),
+            ),
+        )
+        assertFalse("an item whose name cleans to nothing", HeldRequests.nameable(HeldRequest.ItemUse("i1", "f1", byteArrayOf(1)), items))
+        assertFalse(HeldRequests.nameable(HeldRequest.ItemGet("i1", null), items))
+        assertFalse("a field whose label cleans to nothing", HeldRequests.nameable(HeldRequest.ItemUse("i2", "f1", byteArrayOf(1)), items))
+        assertFalse(HeldRequests.nameable(HeldRequest.ItemGet("i2", listOf("f1", "f2")), items))
+        assertTrue(HeldRequests.nameable(HeldRequest.ItemUse("i2", "f2", byteArrayOf(1)), items))
+    }
+
+    @Test
+    fun theBrailleBlankAndLongBlankRunsAreShownAsHex() {
+        assertTrue(DataView.of("a\u2800b".toByteArray()) is DataView.Hex)
+        assertTrue(DataView.of("\u2800".toByteArray()) is DataView.Hex)
+        for (space in listOf(" ", "\u00A0", "\u2000", "\u200A", "\u202F", "\u205F", "\u3000", "\t")) {
+            assertTrue("8 of ${space.codePointAt(0)} are text", DataView.of("a${space.repeat(8)}b".toByteArray()) is DataView.Text)
+            assertTrue("9 of ${space.codePointAt(0)} are hex", DataView.of("a${space.repeat(9)}b".toByteArray()) is DataView.Hex)
+        }
+        // A mixed run counts together; a visible character breaks it.
+        assertTrue(DataView.of("a \u00A0\u2003\t \u3000 \u202F b".toByteArray()) is DataView.Hex)
+        assertTrue(DataView.of("a        b        c".toByteArray()) is DataView.Text)
+    }
+
+    @Test
     fun hexIsLowerCaseTwoDigitsAByte() {
         assertEquals("de ad be ef", DataView.hex(byteArrayOf(0xDE.toByte(), 0xAD.toByte(), 0xBE.toByte(), 0xEF.toByte())))
     }

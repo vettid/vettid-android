@@ -21,7 +21,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import java.time.Duration
@@ -169,9 +168,38 @@ class PairingManager(
     private val knownDeviceIds: () -> Set<String>? = { null },
     private val readDevices: suspend () -> List<DeviceInfo> = { emptyList() },
     private val onPaired: () -> Unit = {},
+    /**
+     * The comparison of the pairing with this `pending_id` (the `ref` of its feed item) is over: approved, rejected, ended,
+     * expired or cleared. Its entry in Approvals goes (AA5).
+     */
+    private val onCompareLeft: (pendingId: String) -> Unit = {},
 ) : PairingRepository {
     private val lock = Any()
-    private val flow = MutableStateFlow(PairingState())
+    private val flow = Notifying()
+
+    /**
+     * The state, telling [onCompareLeft] when a comparison is left (any new state whose comparison is not the one it was in):
+     * approved, rejected, ended, expired or cleared.
+     */
+    private inner class Notifying {
+        private val inner = MutableStateFlow(PairingState())
+
+        var value: PairingState
+            get() = inner.value
+            set(v) {
+                val before = pendingOf(inner.value)
+                inner.value = v
+                if (before != null && before != pendingOf(v)) onCompareLeft(before)
+            }
+
+        fun update(f: (PairingState) -> PairingState) {
+            value = f(value)
+        }
+
+        fun asStateFlow(): StateFlow<PairingState> = inner.asStateFlow()
+
+        private fun pendingOf(s: PairingState): String? = (s.stage as? PairingStage.Compare)?.pending?.pendingId
+    }
     private var generation = 0
     private var timer: Job? = null
 

@@ -302,6 +302,33 @@ class DeviceApprovalsViewModelTest {
     }
 
     @Test
+    fun aBackgroundRereadDoesNotFlickerBackToLoading() = runTest {
+        val cache = FakeItems()
+        cache.add(FakeItems.item("i1", "Bank PIN", Sensitivity.SECRET, fields = listOf("PIN" to "1234")))
+        cache.load.value = com.vettid.core.data.items.ListLoad.LOADED
+        social.approvals.value = listOf(heldAsk(use))
+        val m = ApprovalDetailViewModel(
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to heldAsk(use).key)), social, cache, devices, FakeVault(), social, pairing,
+        )
+        runCurrent()
+        assertTrue(m.uiState.value.canApprove)
+        cache.load.value = com.vettid.core.data.items.ListLoad.LOADING
+        runCurrent()
+        assertTrue(m.uiState.value.itemsLoaded)
+        assertTrue(m.uiState.value.canApprove)
+        // Nor after a failed first load followed by a re-read.
+        val failed = FakeItems()
+        failed.load.value = com.vettid.core.data.items.ListLoad.FAILED
+        val f = ApprovalDetailViewModel(
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to heldAsk(use).key)), social, failed, devices, FakeVault(), social, pairing,
+        )
+        runCurrent()
+        failed.load.value = com.vettid.core.data.items.ListLoad.LOADING
+        runCurrent()
+        assertEquals(HeldShow.NoItem(use = true, loading = false), f.uiState.value.heldShow)
+    }
+
+    @Test
     fun aCacheThatFailedToLoadReadsAsAnItemYouNoLongerHave() = runTest {
         val failed = FakeItems()
         failed.load.value = com.vettid.core.data.items.ListLoad.FAILED
@@ -322,6 +349,20 @@ class DeviceApprovalsViewModelTest {
     }
 
     // --- a pairing known from its feed item ---
+
+    @Test
+    fun aPairingEntryThatIsNotTheHeldOnesGetsNoCompare() = runTest {
+        val theirs = Approval.DeviceRequest("device.pair.pending", "pend-9", null, null, null, now, now.plusSeconds(600), fromFeed = true)
+        social.approvals.value = listOf(theirs)
+        val m = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to theirs.key)), social, items, devices, FakeVault(), social, pairing)
+        // A held pairing with another pending_id, and one whose event carried none.
+        for (held in listOf("pend-1", null)) {
+            pairing.state.value = PairingState(PairingStage.Compare(PendingPairing("pp", "New bot", "123456", now.plusSeconds(600), held)))
+            runCurrent()
+            assertFalse("held=$held", m.uiState.value.pairingHeld)
+            assertNull(m.uiState.value.pairingName)
+        }
+    }
 
     @Test
     fun aPairingOffersNothingButTheComparisonWhenThePhoneHoldsIt() = runTest {

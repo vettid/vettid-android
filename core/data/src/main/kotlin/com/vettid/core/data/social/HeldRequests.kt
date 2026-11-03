@@ -1,5 +1,6 @@
 package com.vettid.core.data.social
 
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.VaultJson
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -45,14 +46,6 @@ sealed interface HeldRequest {
 }
 
 /** Reads a held request from the event's `role`, `type` and `body` (§6.8: `body` is the held request's body). */
-/** Default_Ignorable_Code_Point: soft hyphen, CGJ, the Hangul fillers, variation selectors, zero width and bidi controls, tags. */
-@Suppress("MagicNumber")
-private val IGNORABLE: List<IntRange> = listOf(
-    0x00AD..0x00AD, 0x034F..0x034F, 0x061C..0x061C, 0x115F..0x1160, 0x17B4..0x17B5, 0x180B..0x180F, 0x200B..0x200F,
-    0x202A..0x202E, 0x2060..0x206F, 0x3164..0x3164, 0xFE00..0xFE0F, 0xFEFF..0xFEFF, 0xFFA0..0xFFA0, 0xFFF0..0xFFF8,
-    0x1BCA0..0x1BCA3, 0x1D173..0x1D17A, 0xE0000..0xE0FFF,
-)
-
 object HeldRequests {
     /** `item.use`'s data bound (§10.11). */
     const val MAX_DATA = 16_384
@@ -78,7 +71,11 @@ object HeldRequests {
      * `item.use`, every field of an `item.get`. Anything else is not approved (nothing is shown unseen).
      */
     fun nameable(h: HeldRequest?, items: List<com.vettid.core.data.items.ItemSummary>): Boolean {
-        fun fields(id: String) = items.firstOrNull { it.itemId == id }?.fieldLabels?.map { it.fieldId }?.toSet()
+        // The same names the screen shows: an item or field whose name cleans to nothing is not named.
+        fun fields(id: String): Set<String>? {
+            val item = items.firstOrNull { it.itemId == id }?.takeIf { AccountNames.cleaned(it.name) != null } ?: return null
+            return item.fieldLabels.filter { AccountNames.cleaned(it.label) != null }.map { it.fieldId }.toSet()
+        }
         return when (h) {
             is HeldRequest.ItemUse -> fields(h.itemId)?.contains(h.fieldId) == true
             is HeldRequest.ItemGet -> fields(h.itemId)?.let { have -> h.fieldIds?.all { it in have } ?: true } == true
@@ -140,7 +137,8 @@ sealed interface DataView {
          * a control character other than a line feed or tab; a format character (the bidirectional overrides and isolates,
          * zero width characters); a Default_Ignorable code point (soft hyphen, the Hangul fillers U+115F, U+1160, U+3164,
          * U+FFA0, variation selectors, the combining grapheme joiner U+034F, tag characters); an unassigned, private-use or
-         * surrogate code point; a line or paragraph separator; a run of more than [MAX_MARKS] combining marks on one base;
+         * surrogate code point; the braille blank U+2800; a run of more than [MAX_BLANKS] blank characters; a line or
+         * paragraph separator; a run of more than [MAX_MARKS] combining marks on one base;
          * more than [MAX_LINES] lines (a text with many line feeds could fill the screen with the agent's own lines).
          * Up to [MAX_LINES] lines of text are kept.
          */
@@ -149,8 +147,14 @@ sealed interface DataView {
             return if (text != null && printable(text)) Text(text) else Hex(hex(data))
         }
 
+        /** The braille pattern blank: invisible, and not a space to the app. */
+        private const val BRAILLE_BLANK = 0x2800
+
         /** The most combining marks in a row. */
         const val MAX_MARKS = 2
+
+        /** The most whitespace characters in a row (tabs, spaces of any width). */
+        const val MAX_BLANKS = 8
 
         /** The most lines shown as text. */
         const val MAX_LINES = 8
@@ -170,15 +174,20 @@ sealed interface DataView {
             var i = 0
             var lines = 1
             var marks = 0
+            var blanks = 0
             while (i < s.length) {
                 val cp = s.codePointAt(i)
                 i += Character.charCount(cp)
                 if (cp == '\n'.code && ++lines > MAX_LINES) return false
                 marks = if (isMark(cp)) marks + 1 else 0
-                if (marks > MAX_MARKS || !shown(cp)) return false
+                blanks = if (blank(cp)) blanks + 1 else 0
+                if (marks > MAX_MARKS || blanks > MAX_BLANKS || !shown(cp)) return false
             }
             return true
         }
+
+        /** A character that shows as blank: a tab, or a space of any width (U+0020, U+00A0, U+2000-200A, U+202F, U+205F, U+3000). */
+        private fun blank(cp: Int): Boolean = cp == '\t'.code || Character.getType(cp).toByte() == Character.SPACE_SEPARATOR
 
         private fun isMark(cp: Int): Boolean = when (Character.getType(cp).toByte()) {
             Character.NON_SPACING_MARK, Character.ENCLOSING_MARK, Character.COMBINING_SPACING_MARK -> true
@@ -188,7 +197,7 @@ sealed interface DataView {
         @Suppress("ReturnCount")
         private fun shown(cp: Int): Boolean {
             if (cp == '\n'.code || cp == '\t'.code) return true
-            if (ignorable(cp)) return false
+            if (ignorable(cp) || cp == BRAILLE_BLANK) return false
             return when (Character.getType(cp).toByte()) {
                 Character.CONTROL, Character.FORMAT, Character.UNASSIGNED, Character.PRIVATE_USE, Character.SURROGATE,
                 Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR,
@@ -204,3 +213,11 @@ sealed interface DataView {
         fun hex(data: ByteArray): String = data.joinToString(" ") { "%02x".format(it) }
     }
 }
+
+/** Default_Ignorable_Code_Point: soft hyphen, CGJ, the Hangul fillers, variation selectors, zero width and bidi controls, tags. */
+@Suppress("MagicNumber")
+private val IGNORABLE: List<IntRange> = listOf(
+    0x00AD..0x00AD, 0x034F..0x034F, 0x061C..0x061C, 0x115F..0x1160, 0x17B4..0x17B5, 0x180B..0x180F, 0x200B..0x200F,
+    0x202A..0x202E, 0x2060..0x206F, 0x3164..0x3164, 0xFE00..0xFE0F, 0xFEFF..0xFEFF, 0xFFA0..0xFFA0, 0xFFF0..0xFFF8,
+    0x1BCA0..0x1BCA3, 0x1D173..0x1D17A, 0xE0000..0xE0FFF,
+)

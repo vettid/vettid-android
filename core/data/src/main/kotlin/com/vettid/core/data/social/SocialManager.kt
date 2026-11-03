@@ -179,6 +179,9 @@ class SocialManager(
             if (extra.isEmpty()) base else (base + extra).sortedByDescending { it.receivedAt }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /** The pairing with this `pending_id` was approved, rejected or ended: its entry (from the feed item) goes. */
+    fun closePairing(pendingId: String) = closeFeedKey("device:${Approval.DeviceRequest.PAIR_PENDING}:$pendingId")
+
     private fun closeFeedKey(key: String) = feedClosedFlow.update { it.copy(keys = it.keys + key) }
 
     private fun closeFeedDevice(deviceId: String, ts: Instant) = feedClosedFlow.update { it.copy(devices = it.devices + (deviceId to ts)) }
