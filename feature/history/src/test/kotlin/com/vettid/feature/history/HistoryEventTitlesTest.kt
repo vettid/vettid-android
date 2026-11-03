@@ -57,13 +57,25 @@ class HistoryEventTitlesTest {
         assertEquals(emptyList<AuditKinds.Detail>(), AuditKinds.details("leash.item.used.summary", "12", AuditKinds.Outcome.Unknown))
     }
 
-    /** AA6 part 2: the other agent titles that read "An agent …". */
+    /** AA6 part 2: the agent kinds' titles (approved by the owner 2026-11-03). */
     @Test
     fun theAgentKindsReadAsAnAgent() {
-        assertEquals("An agent slowed down", title("leash.rate_limited"))
-        assertEquals("An agent suspended", title("leash.agent.suspended"))
-        assertEquals("An agent resumed", title("leash.agent.resumed"))
-        assertEquals("An agent throttled", title("leash.throttled"))
+        val approved = mapOf(
+            "leash.agent.suspended" to "An agent was paused",
+            "leash.agent.resumed" to "An agent was resumed",
+            "leash.rate_limited" to "An agent reached a limit",
+            "leash.throttled" to "An agent's requests were slowed down",
+            "leash.grant.issued" to "You gave an agent access",
+            "leash.grant.updated" to "You changed an agent's access",
+            "leash.grant.revoked" to "An agent's access was removed",
+            "leash.referrals_limited" to "An agent asked too often",
+            "leash.allowed" to "An agent's request was allowed",
+            "leash.refused" to "An agent's request was refused",
+        )
+        for ((kind, text) in approved) assertEquals(kind, text, title(kind))
+        // The hourly summaries keep " (hourly summary)" after these.
+        assertEquals("An agent reached a limit (hourly summary)", title("leash.rate_limited.summary", "3"))
+        assertEquals("An agent's request was allowed (hourly summary)", title("leash.allowed.summary", "3"))
     }
 
     @Test
