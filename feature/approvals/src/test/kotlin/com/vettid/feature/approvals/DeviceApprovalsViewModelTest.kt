@@ -454,4 +454,18 @@ class DeviceApprovalsViewModelTest {
         runCurrent()
         assertEquals(DeviceOutcome.NoLongerWaiting, m.uiState.value.outcome)
     }
+
+    @Test
+    fun aHeldComparisonOfAnotherPairingStillOffersRejectWithTheEntrysRef() = runTest {
+        val p = Approval.DeviceRequest("device.pair.pending", "pend-9", null, null, null, now, now.plusSeconds(600), fromFeed = true)
+        social.approvals.value = listOf(p)
+        val m = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to p.key)), social, items, devices, FakeVault(), social, pairing)
+        pairing.state.value = PairingState(PairingStage.Compare(PendingPairing("pp", "New bot", "123456", now.plusSeconds(600), "pend-1")))
+        runCurrent()
+        assertFalse(m.uiState.value.pairingHeld)
+        m.deny()
+        runCurrent()
+        assertTrue("rejectPairingRequest" in social.calls)
+        assertEquals(p.key, social.lastPairingReject)
+    }
 }

@@ -474,7 +474,7 @@ class DeviceApprovalsTest {
     }
 
     @Test
-    fun rejectWithoutARefSendsNothing() = runTest {
+    fun rejectOfAnUnknownKeySendsNothing() = runTest {
         val m = pairingManager()
         try {
             m.rejectPairingRequest("device:device.pair.pending:")

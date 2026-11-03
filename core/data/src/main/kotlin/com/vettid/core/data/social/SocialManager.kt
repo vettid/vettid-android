@@ -1584,12 +1584,13 @@ class SocialManager(
 
     /**
      * Rejects a pairing this phone can no longer check (owner decision 2026-11-03): `device.pair.reject` with the entry's
-     * `ref` (the request's `pending_id`, VAULT-MESSAGING 0.83.0) in place of `pairing_id`. Nothing is sent without a ref;
+     * `ref` (the request's `pending_id`, VAULT-MESSAGING 0.83.0) in place of `pairing_id`. A key that matches no entry (so no ref)
+     * sends nothing;
      * only `not_found` drops the entry as already gone, any other failure keeps it. Nothing is ever approved here.
      */
     override suspend fun rejectPairingRequest(key: String) {
         val req = find(key) as? Approval.DeviceRequest ?: throw VaultFailure(FailureKind.NOT_FOUND)
-        if (!req.isPairing || req.id.isEmpty()) throw VaultFailure(FailureKind.NOT_SUPPORTED)
+        if (!req.isPairing) throw VaultFailure(FailureKind.NOT_SUPPORTED)
         deviceDecide(key) { ops -> ops.pairReject(req.id) }
     }
 

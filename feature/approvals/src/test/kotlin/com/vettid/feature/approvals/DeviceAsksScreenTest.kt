@@ -288,7 +288,7 @@ class DeviceAsksScreenTest {
         show(state(pairing()))
         rule.onNodeWithText("A device asks to pair").assertExists()
         rule.onNodeWithText(
-            "This pairing can't be checked on this phone any more. Let it expire: it ends by itself within 10 minutes and nothing is paired. If you want to pair, start again.",
+            "This pairing can't be checked on this phone any more, so it can't be approved here. Reject it, or let it expire: it ends by itself within 10 minutes and nothing is paired. If you want to pair, start again.",
         ).assertExists()
         assertEquals(false, has("Deny"))
         assertEquals(false, has("Approve"))
