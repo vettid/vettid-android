@@ -471,7 +471,9 @@ sealed interface Approval {
         /** Prints no name, id or body. */
         override fun toString(): String = "DeviceRequest(type=$type, fromFeed=$fromFeed)"
 
-        /** `device.pair.pending` known from its feed item (AA2 step 2): nothing to decide here. */
+        /** `device.pair.pending` known from its feed item (AA2 step 2): offers only Reject (owner decision
+         * 2026-11-03), or Compare when this phone holds it.
+         */
         val isPairing: Boolean get() = type == PAIR_PENDING
 
         /** `approval.pending`. */

@@ -50,6 +50,17 @@ class UnlockPromptGate {
         endedWithoutSuccess = outcome != PromptOutcome.SUCCEEDED
     }
 
+    /**
+     * As [finished], but only if [owner] still has the prompt: false (and nothing changes) for a callback of an activity
+     * that was destroyed ([ownerGone]) and may have been replaced by another one's prompt.
+     */
+    @Synchronized
+    fun finished(owner: Any, outcome: PromptOutcome): Boolean {
+        if (this.owner !== owner) return false
+        finished(outcome)
+        return true
+    }
+
     /** True when [owner] had the prompt in flight (it is then over). */
     @Synchronized
     fun ownerGone(owner: Any): Boolean {
@@ -57,6 +68,12 @@ class UnlockPromptGate {
         inFlight = false
         this.owner = null
         return true
+    }
+
+    /** A new lock whose first prompt waits for the member's "Unlock" (a lock just after a successful prompt: no loop). */
+    @Synchronized
+    fun holdAutomatic() {
+        endedWithoutSuccess = true
     }
 
     /** A new lock (start, timeout): its first prompt is automatic again. */

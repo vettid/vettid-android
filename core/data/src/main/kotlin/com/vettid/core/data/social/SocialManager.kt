@@ -8,6 +8,7 @@ import com.vettid.core.vault.DeviceStateStore
 import com.vettid.core.vault.PendingPage
 import com.vettid.core.vault.pendingList
 import com.vettid.core.vault.VaultApi
+import com.vettid.core.vault.devicePairReject
 import com.vettid.core.vault.connectionAsksMute
 import com.vettid.core.vault.connectionAsksResume
 import com.vettid.core.vault.VaultJson
@@ -1566,6 +1567,8 @@ class SocialManager(
 
     override suspend fun declineDeviceRequest(key: String) {
         val req = find(key) as? Approval.DeviceRequest ?: throw VaultFailure(FailureKind.NOT_FOUND)
+        // A pairing is rejected with rejectPairingRequest, never with a session deny.
+        if (req.isPairing) throw VaultFailure(FailureKind.NOT_SUPPORTED)
         deviceDecide(key) { ops ->
             if (req.isHeld) ops.approvalDecide(req.id, false) else ops.sessionDeny(req.id)
         }
@@ -1577,6 +1580,18 @@ class SocialManager(
      */
     private suspend fun deviceDecide(key: String, block: suspend (DeviceDecisionOps) -> Unit) {
         decideRun(key) { vaultGuard { block(deviceOps()) } }
+    }
+
+    /**
+     * Rejects a pairing this phone can no longer check (owner decision 2026-11-03): `device.pair.reject` with the entry's
+     * `ref` (the request's `pending_id`, VAULT-MESSAGING 0.83.0) in place of `pairing_id`. A key that matches no entry (so no ref)
+     * sends nothing;
+     * only `not_found` drops the entry as already gone, any other failure keeps it. Nothing is ever approved here.
+     */
+    override suspend fun rejectPairingRequest(key: String) {
+        val req = find(key) as? Approval.DeviceRequest ?: throw VaultFailure(FailureKind.NOT_FOUND)
+        if (!req.isPairing) throw VaultFailure(FailureKind.NOT_SUPPORTED)
+        deviceDecide(key) { ops -> ops.pairReject(req.id) }
     }
 
     override suspend fun approveDeviceRequest(key: String, seconds: Int?): DeviceDecision {
@@ -1644,6 +1659,9 @@ interface DeviceDecisionOps {
 
     suspend fun sessionDeny(requestId: String)
 
+    /** `device.pair.reject{pairing_id}` with a pairing's `pending_id` (VAULT-MESSAGING 0.83.0). */
+    suspend fun pairReject(pendingId: String)
+
     /** `approval.decide{approval_id, approve}`: the answer's `result`. */
     suspend fun approvalDecide(approvalId: String, approve: Boolean): String?
 }
@@ -1653,6 +1671,8 @@ internal class VaultDeviceDecisions(private val api: VaultApi) : DeviceDecisionO
         VaultJson.str(api.sessionApprove(requestId, seconds), "expires_at")
 
     override suspend fun sessionDeny(requestId: String) = api.sessionDeny(requestId)
+
+    override suspend fun pairReject(pendingId: String) = api.devicePairReject(pendingId)
 
     override suspend fun approvalDecide(approvalId: String, approve: Boolean): String? = api.approvalDecide(approvalId, approve)
 }

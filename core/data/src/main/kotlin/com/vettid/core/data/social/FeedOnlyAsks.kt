@@ -10,7 +10,7 @@ import java.time.Instant
  * `device_id`, its `at`) is all the app has until `pending.list` (§10.4.2) is read. Once a list has been merged it is
  * authoritative for sessions and approvals (an ask not in it is gone) and theirs are not made; the vault does not list
  * pairings yet (0.83.0), so a pairing's entry stays. They carry no body: an approval can only be
- * denied, a pairing offers nothing, a session request offers Allow with a default length when the device is listed.
+ * denied, a pairing offers only Reject, a session request offers Allow with a default length when the device is listed.
  */
 internal object FeedOnlyAsks {
     /** The vault drops an undecided session request or pairing after 10 minutes (§6.8, §6.7). */

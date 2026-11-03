@@ -14,9 +14,9 @@ class CoverAlarmTest {
         val sets = mutableListOf<Long>()
         var cancels = 0
 
-        override fun set(atEpochMs: Long) {
-            at = atEpochMs
-            sets += atEpochMs
+        override fun set(atElapsedMs: Long) {
+            at = atElapsedMs
+            sets += atElapsedMs
         }
 
         override fun cancel() {
@@ -25,11 +25,13 @@ class CoverAlarmTest {
         }
     }
 
-    private var clock = 1_000_000L
+    private var clock = 1_000_000L // the monotonic clock
+    private var wallSkew = 0L
     private val alarm = FakeAlarm()
     private val minute = 60_000L
 
-    private fun lock() = AppLock(InMemoryPreferencesRepository(), SoftKeys(), MemFile(), alarm) { clock }
+    private fun lock() =
+        AppLock(InMemoryPreferencesRepository(), SoftKeys(), MemFile(), alarm, now = { clock + wallSkew }, elapsed = { clock })
 
     private suspend fun unlocked(timeout: AppLockTimeout = AppLockTimeout.ONE_MINUTE): AppLock = lock().also {
         it.start()
@@ -43,6 +45,18 @@ class CoverAlarmTest {
         assertEquals(null, alarm.at)
         l.onBackground()
         assertEquals(clock + minute, alarm.at)
+    }
+
+    @Test
+    fun theDeadlineIsMonotonicAndNoDateMovesIt() = runTest {
+        val l = unlocked()
+        wallSkew = 5_000_000L // the wall clock is far from the monotonic one
+        l.onBackground()
+        val deadline = clock + minute
+        assertEquals(deadline, alarm.at)
+        wallSkew = -5_000_000L // set back, set forward: the alarm is not touched
+        l.setTimeout(AppLockTimeout.ONE_MINUTE)
+        assertEquals(deadline, alarm.at)
     }
 
     @Test
@@ -76,7 +90,7 @@ class CoverAlarmTest {
     }
 
     @Test
-    fun notArmedForImmediatelyOrWhenTheLockIsOffOrAPromptIsShowing() = runTest {
+    fun notArmedForImmediatelyOrWhenTheLockIsOffOrOnARotation() = runTest {
         val immediate = unlocked(AppLockTimeout.IMMEDIATELY)
         immediate.onBackground()
         assertTrue(alarm.sets.isEmpty())
@@ -84,21 +98,44 @@ class CoverAlarmTest {
         off.start()
         off.onBackground()
         assertTrue(alarm.sets.isEmpty())
-        val prompt = unlocked()
-        prompt.authenticating = true
-        prompt.onBackground()
-        prompt.onBackground(changingConfigurations = true)
+        val rotating = unlocked()
+        rotating.onBackground(changingConfigurations = true)
         assertTrue(alarm.sets.isEmpty())
+    }
+
+    @Test
+    fun armedAlsoWhileAPromptIsShowing() = runTest {
+        val prompt = unlocked()
+        prompt.promptStarted()
+        prompt.onBackground()
+        assertEquals(clock + minute, alarm.at)
+    }
+
+    @Test
+    fun completeUnlockAndCompleteEnableSyncTheAlarm() = runTest {
+        val l = unlocked()
+        l.onBackground()
+        l.lockNow()
+        l.onForeground()
+        l.promptStarted()
+        l.onBackground() // the mark is set while locked: no alarm
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+        assertEquals(null, alarm.at)
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+        assertEquals(clock + minute, alarm.at)
+        alarm.cancel()
+        l.completeEnable(l.cipherToEnable())
+        assertEquals(clock + minute, alarm.at)
     }
 
     @Test
     fun anAlarmThatFailsBreaksNothing() = runTest {
         val failing = object : CoverAlarm {
-            override fun set(atEpochMs: Long) = throw SecurityException("no")
+            override fun set(atElapsedMs: Long) = throw SecurityException("no")
 
             override fun cancel() = throw SecurityException("no")
         }
-        val l = AppLock(InMemoryPreferencesRepository(), SoftKeys(), MemFile(), failing) { clock }
+        val l = AppLock(InMemoryPreferencesRepository(), SoftKeys(), MemFile(), failing, now = { clock }, elapsed = { clock })
         l.start()
         l.completeEnable(l.cipherToEnable())
         l.onBackground()
