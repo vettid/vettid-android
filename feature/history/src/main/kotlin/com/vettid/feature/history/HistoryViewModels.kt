@@ -262,11 +262,16 @@ class HistoryViewModel @Inject constructor(
     }
 
     fun retry() {
-        if (state.value.entries.isEmpty()) {
-            reload()
-        } else {
-            state.update { it.copy(error = null) }
-            loadMore()
+        when {
+            state.value.entries.isEmpty() -> reload()
+            // The daily check was due: the rows stay, and the newest page is read again (not older ones).
+            // The error stays until the answer arrives: its clearing re-runs the list's load-more effect (an older
+            // page refused as held is then read), and a second hold keeps the notice.
+            state.value.error == FailureKind.OWNER_CHECK_REQUIRED -> refreshNewest()
+            else -> {
+                state.update { it.copy(error = null) }
+                loadMore()
+            }
         }
     }
 
@@ -298,10 +303,16 @@ class HistoryViewModel @Inject constructor(
     fun refresh() {
         val s = state.value
         if (s.loading) return
-        if (s.entries.isEmpty() || s.error != null) {
+        // Held for the daily check: the rows and the notice stay while the newest page is read again.
+        if (s.entries.isEmpty() || (s.error != null && s.error != FailureKind.OWNER_CHECK_REQUIRED)) {
             reload()
             return
         }
+        refreshNewest()
+    }
+
+    /** Reads the newest page again after the load in progress, keeping the rows shown. */
+    private fun refreshNewest() {
         // A device may have been paired or removed meanwhile.
         loadDevices(refresh = true)
         val before = job

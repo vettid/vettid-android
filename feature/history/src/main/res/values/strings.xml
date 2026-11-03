@@ -12,6 +12,9 @@
     <string name="history_no_match_body">Change the search, or tap “✕ Clear” above to show all activity</string>
     <string name="history_error_title">History could not be loaded</string>
     <string name="history_retry">Try again</string>
+    <!-- Owner-approved 2026-11-03: the daily check is due and the vault holds requests; as vettid-ios #201. Same words in both modules. -->
+    <string name="history_held_title">History is on hold</string>
+    <string name="history_held_body">Your daily check is due. They\'ll show again once it\'s done.</string>
     <string name="history_loading_more">Loading older entries</string>
     <string name="history_end">Start of your history</string>
 
