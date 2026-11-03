@@ -151,6 +151,8 @@ class VettIdApplication : DistributionApplication() {
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         // A date set back in the background is a lock (the lead's decision of 2026-11-03): decide again at once.
+        // On Android 14+ a cached (frozen) app's TIME_CHANGED may arrive late, or several merged into one, so "set back,
+        // then restored" is caught only on a best-effort basis; the monotonic timeout holds whatever this receiver sees.
         androidx.core.content.ContextCompat.registerReceiver(
             this,
             com.vettid.app.lock.ClockChangedReceiver {

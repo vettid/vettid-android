@@ -286,6 +286,9 @@ class AppLock(
      * [wouldShowLock] as a flow, true until the state is read. In the background it turns true by itself when the timeout
      * elapses (a timer in [scope], cancelled when the app comes back or the lock is turned off); it does not survive the
      * process, whose next start is [AppLockState.LOCKED] anyway.
+     *
+     * A wall clock set back during the wait is seen at once through [onClockChanged] (the `TIME_CHANGED` receiver);
+     * if that broadcast is late or never comes, it is seen when the timer looks again at the monotonic deadline.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun coverFlow(scope: CoroutineScope): StateFlow<Boolean> =

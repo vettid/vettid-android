@@ -190,6 +190,23 @@ class AppLockCoverTest {
     }
 
     @Test
+    fun aDateSetBackWithNoBroadcastIsSeenAtTheDeadline() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        clock = 1_000
+        wallSkew = -3_600_000 // set back, and TIME_CHANGED late or never: no onClockChanged()
+        advanceTimeBy(timeoutMs - 1)
+        runCurrent()
+        assertFalse("nothing looked yet", covered.value)
+        advanceTimeBy(2_000) // the timer's look at the monotonic deadline
+        runCurrent()
+        assertTrue(covered.value)
+    }
+
+    @Test
     fun theTimerRunsOnTheMonotonicClockNotTheWallClock() = runTest {
         val l = unlocked()
         val covered = l.coverFlow(backgroundScope)
