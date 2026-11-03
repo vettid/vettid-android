@@ -204,7 +204,7 @@ internal object ItemsCatalog {
     private val opened = mapOf(
         "g5" to SharedContent(
             "x1", "Practice address", "contact",
-            listOf(ItemFieldView("f1", "Address", "address", FieldValue.Address(AddressValue(street = "Hauptstraße 5", postalCode = "10827", city = "Berlin", country = "DE"))), text("f2", "Phone", "phone", "+49 30 1234567")),
+            listOf(ItemFieldView("f1", "Address", "address", FieldValue.Address(AddressValue(street = "Hauptstraße 5", postalCode = "10827", city = "Berlin", country = "DE"))), text("f2", "Phone", "phone", "+49 30 1234567"), text("f3", "Door code", "password", "0000-fake")),
             null, null,
         ),
     )
