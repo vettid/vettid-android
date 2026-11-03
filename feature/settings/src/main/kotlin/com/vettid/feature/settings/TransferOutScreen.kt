@@ -41,6 +41,7 @@ import com.vettid.core.data.vault.SignerClass
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.titleRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -57,6 +58,8 @@ private const val SECONDS_PER_MINUTE = 60
 private const val LINK_LINES = 3
 
 /** `m:ss`. */
+private val TRANSFER_UNDER_WAY = setOf(TransferOutStep.SHOWING, TransferOutStep.COMPARE, TransferOutStep.SIGNER, TransferOutStep.APPROVE)
+
 private fun mmss(seconds: Long): String = "%d:%02d".format(seconds / SECONDS_PER_MINUTE, seconds % SECONDS_PER_MINUTE)
 
 /** One step of the transfer on the old phone for [state] (stateless). [onBack] leaves Settings' sub-screen. */
@@ -67,6 +70,8 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
         actions.leave()
         onBack()
     }
+    // A transfer under way (the code shown, compared, approved): a credential operation the daily owner check waits for.
+    HoldsInput(state.step in TRANSFER_UNDER_WAY)
     BackHandler { leave() }
     when (state.step) {
         TransferOutStep.INTRO -> FormScaffold(

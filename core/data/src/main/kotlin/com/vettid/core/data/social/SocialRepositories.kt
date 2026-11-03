@@ -179,6 +179,10 @@ interface ApprovalsRepository {
     /** Declines a desktop's or agent's request (§6.8). */
     suspend fun declineDeviceRequest(key: String)
 
+    /** Rejects a pairing entry this phone can't check (`device.pair.reject` with its `ref`); never approves anything. */
+    suspend fun rejectPairingRequest(key: String): Unit =
+        throw com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.NOT_SUPPORTED)
+
     /**
      * Approves a desktop's or agent's request (ANDROID-PLAN 0.1.116 AA5): a session request with [seconds]
      * (`device.session.approve`), a held approval (`approval.decide{approve: true}`) whose answer is in

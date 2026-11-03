@@ -75,7 +75,10 @@ fun NavGraphBuilder.devicesDestination(chrome: ShellChrome, host: DevicesHost) {
 @Composable
 private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: DevicesHost) {
     // The editor (AA4) may have changed the rules: read them on every return to the page.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refreshRules() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        vm.refreshRules()
+        vm.refreshPermissions()
+    }
     DevicePageScreen(
         state,
         DevicePageActions(
@@ -92,6 +95,10 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
             onOpenRule = { rule -> state.device?.let { host.navigate(AgentRuleRoute(it.id, rule)) } },
             onRetryRules = vm::refreshRules,
             onRuleSavedShown = vm::ruleSavedShown,
+            onRemovePermission = vm::askRemovePermission,
+            onRetryPermissions = vm::refreshPermissions,
+            onResume = vm::resume,
+            onNoticeShown = vm::noticeShown,
         ),
         now = rememberNow(),
     )

@@ -47,6 +47,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -91,8 +92,18 @@ fun SecretField(
     imeAction: ImeAction = ImeAction.Done,
     onImeAction: () -> Unit = {},
     enabled: Boolean = true,
+    holdsInput: Boolean = true,
 ) {
     var visible by rememberSaveable { mutableStateOf(false) }
+    // A PIN or password prompt on screen is a credential operation in progress, typed or not: the daily owner check waits
+    // for it (VAULT-MESSAGING §3.6.5). [holdsInput] false: a field that is not such a prompt (a secret item's value).
+    HoldsInput(holdsInput)
+    // A typed PIN or password is blanked when the owner check covers the app (VAULT-MESSAGING §3.6.5): through the caller's own
+    // setter, so it is gone from the view model's state too. A stored value being edited (holdsInput false) is not wiped.
+    if (holdsInput) {
+        val current by rememberUpdatedState(value)
+        WipesOnCover { if (current.isNotEmpty()) onValueChange("") }
+    }
     OutlinedTextField(
         value = value,
         onValueChange = { v -> onValueChange(if (isPin) v.filter { it in '0'..'9' } else v) },

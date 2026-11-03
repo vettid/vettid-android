@@ -38,6 +38,21 @@ complexity:
     excludes: ['**/test/**', '**/androidTest/**', '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**']
 
 style:
+  # Dialogs, sheets and menus are windows above the daily owner check: screens use the wrappers in core/ui ShellOverlays.kt,
+  # which are not composed while the check covers the shell (VAULT-MESSAGING 3.6.5). core/ui holds the wrappers themselves;
+  # the root dialogs of VettIdApp and the call screens use `Dialog`/`ConfirmDialog`, not these.
+  ForbiddenImport:
+    active: true
+    imports:
+      - value: 'androidx.compose.material3.AlertDialog'
+        reason: 'use com.vettid.core.ui.components.AlertDialog (hidden while the owner check covers the shell)'
+      - value: 'androidx.compose.material3.ModalBottomSheet'
+        reason: 'use com.vettid.core.ui.components.ModalBottomSheet (hidden while the owner check covers the shell)'
+      - value: 'androidx.compose.material3.DatePickerDialog'
+        reason: 'use com.vettid.core.ui.components.DatePickerDialog (hidden while the owner check covers the shell)'
+      - value: 'androidx.compose.material3.DropdownMenu'
+        reason: 'use com.vettid.core.ui.components.DropdownMenu (hidden while the owner check covers the shell)'
+    excludes: ['**/core/ui/**', '**/test/**', '**/androidTest/**']
   MagicNumber:
     ignorePropertyDeclaration: true
     ignoreCompanionObjectPropertyDeclaration: true

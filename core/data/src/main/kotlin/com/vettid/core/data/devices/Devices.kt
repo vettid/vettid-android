@@ -9,12 +9,18 @@ import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.deviceSessionEnd
 import com.vettid.core.vault.deviceUnlink
+import com.vettid.core.vault.leashAgentResume
 import com.vettid.core.vault.leashGrantList
+import com.vettid.core.vault.leashGrantRevoke
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -46,6 +52,8 @@ data class DeviceInfo(
     val thisPhone: Boolean = false,
     /** The vault paused this agent (`leash.grant.list`'s `suspended`, §10.11). */
     val paused: Boolean = false,
+    /** False when no read of `suspended` has answered for this agent: [paused] is then unknown, not "not paused". */
+    val pausedKnown: Boolean = true,
 ) {
     val isAgent: Boolean get() = !thisPhone && kind == KIND_AGENT
 
@@ -133,15 +141,19 @@ object DeviceWire {
      * 900 when absent). A grant that does not read counts as the longest.
      */
     fun statusTtls(body: JsonObject): List<Long> = (body["grants"] as? JsonArray)?.map { g ->
-        val ttl = ((g as? JsonObject)?.get("status_ttl") as? JsonPrimitive)
-        when {
-            g !is JsonObject -> MAX_STATUS_TTL
+        if (g is JsonObject) statusTtl(g) else MAX_STATUS_TTL
+        // A body that does not read as a list of grants is the worst case, never "no permission".
+    } ?: listOf(MAX_STATUS_TTL)
+
+    /** One grant's `status_ttl` in seconds: 60-3,600, 900 when absent, the longest when it does not read. */
+    fun statusTtl(g: JsonObject): Long {
+        val ttl = g["status_ttl"] as? JsonPrimitive
+        return when {
             ttl == null -> DEFAULT_STATUS_TTL
             ttl.isString -> MAX_STATUS_TTL
             else -> ttl.longOrNull?.coerceIn(MIN_STATUS_TTL, MAX_STATUS_TTL) ?: MAX_STATUS_TTL
         }
-        // A body that does not read as a list of grants is the worst case, never "no permission".
-    } ?: listOf(MAX_STATUS_TTL)
+    }
 
     const val MIN_STATUS_TTL = 60L
     const val DEFAULT_STATUS_TTL = 900L
@@ -161,6 +173,12 @@ interface DevicesOps {
     suspend fun endAccess(deviceId: String)
 
     suspend fun unlink(deviceId: String)
+
+    /** `leash.grant.revoke{grant_id}` (AA3). */
+    suspend fun revokeGrant(grantId: String)
+
+    /** `leash.agent.resume{agent_id}` (AA3). */
+    suspend fun resumeAgent(agentId: String)
 }
 
 /** [DevicesOps] over the vault client. */
@@ -172,6 +190,10 @@ internal class VaultDevicesOps(private val api: VaultApi) : DevicesOps {
     override suspend fun endAccess(deviceId: String) = api.deviceSessionEnd(deviceId)
 
     override suspend fun unlink(deviceId: String) = api.deviceUnlink(deviceId)
+
+    override suspend fun revokeGrant(grantId: String) = api.leashGrantRevoke(grantId)
+
+    override suspend fun resumeAgent(agentId: String) = api.leashAgentResume(agentId)
 }
 
 /**
@@ -207,6 +229,31 @@ interface DevicesRepository {
     suspend fun removalBoundSeconds(agentId: String): Long
 
     fun dismissRemoved()
+
+    /**
+     * An agent's grants that are not share rules, and whether it is paused (`leash.grant.list{agent_id}`, AA3), by agent id;
+     * memory only, cleared with the list. The agent's [DeviceInfo.paused] follows each read.
+     */
+    val permissions: StateFlow<Map<String, AgentPermissions>>
+
+    /** What `sync.event`s say changed for an agent's page ([AgentChange]). */
+    val changes: SharedFlow<AgentChange>
+
+    /** Reads [agentId]'s grants into [permissions]. Throws the vault's failure; an older answer never replaces a newer one. */
+    suspend fun refreshPermissions(agentId: String)
+
+    /**
+     * `leash.grant.revoke{grant_id}`: no unlock window, nothing signed. `not_found` is [PermissionRemoval.ALREADY_GONE];
+     * any other failure is thrown. Reads nothing: the caller reads the grants again after either answer ([refreshPermissions]),
+     * so that a read that fails is shown.
+     */
+    suspend fun removePermission(grantId: String): PermissionRemoval
+
+    /**
+     * `leash.agent.resume{agent_id}`: no unlock window. `not_found` is [AgentResumption.NOT_PAUSED]; any other failure is
+     * thrown. Reads nothing: the caller reads the grants again after either answer ([refreshPermissions]).
+     */
+    suspend fun resume(agentId: String): AgentResumption
 }
 
 /**
@@ -218,6 +265,7 @@ interface DevicesRepository {
  * [onDeviceGone] runs when a device's access ended or the device was removed here: its entries leave Approvals at once
  * (the vault declines them, §6.8).
  */
+@Suppress("TooManyFunctions")
 class DevicesManager(
     private val scope: CoroutineScope,
     private val ops: suspend () -> DevicesOps,
@@ -231,6 +279,19 @@ class DevicesManager(
     private val loadState = MutableStateFlow(ListLoad.NOT_LOADED)
     private val removedFlow = MutableStateFlow<DeviceInfo?>(null)
     private val reads = Mutex()
+    private val permissionFlow = MutableStateFlow<Map<String, AgentPermissions>>(emptyMap())
+    private val changeFlow =
+        MutableSharedFlow<AgentChange>(extraBufferCapacity = CHANGE_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** The number of the latest permission read started, and of the one applied last, per agent (under [lock]). */
+    private var permissionReads = 0L
+    private val permissionApplied = mutableMapOf<String, Long>()
+
+    /**
+     * The number of the read that last set [DeviceInfo.paused] of an agent: the list read and the permissions read share
+     * one numbering ([permissionReads], taken when a read starts), and a read never overwrites `paused` set by a newer one.
+     */
+    private val pausedApplied = mutableMapOf<String, Long>()
 
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
@@ -241,6 +302,8 @@ class DevicesManager(
     override val devices: StateFlow<List<DeviceInfo>> = list.asStateFlow()
     override val load: StateFlow<ListLoad> = loadState.asStateFlow()
     override val removed: StateFlow<DeviceInfo?> = removedFlow.asStateFlow()
+    override val permissions: StateFlow<Map<String, AgentPermissions>> = permissionFlow.asStateFlow()
+    override val changes: SharedFlow<AgentChange> = changeFlow.asSharedFlow()
 
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
@@ -252,6 +315,9 @@ class DevicesManager(
             loadState.value = ListLoad.NOT_LOADED
             list.value = emptyList()
             removedFlow.value = null
+            permissionFlow.value = emptyMap()
+            permissionApplied.clear()
+            pausedApplied.clear()
         }
         onClear()
     }
@@ -260,6 +326,8 @@ class DevicesManager(
     fun onEvent(m: VaultMessage) {
         if (m.type != "sync.event") return
         if (VaultJson.str(m.body, "kind") in LIST_EVENTS) refreshQuietly()
+        // An open agent's page reads its own grants again (AA3); with none open nothing listens.
+        AgentChange.of(m)?.let { changeFlow.tryEmit(it) }
     }
 
     override fun refreshQuietly() {
@@ -273,21 +341,23 @@ class DevicesManager(
     private suspend fun read(fromQueue: Boolean) {
         reads.withLock {
             if (fromQueue) queued = false
-            val gen = synchronized(lock) { generation }
+            val (gen, mine) = synchronized(lock) { generation to ++permissionReads }
             if (list.value.isEmpty()) loadState.value = ListLoad.LOADING
             try {
                 val body = vaultGuard(resend = true) { ops().list() }
                 val me = self()
                 val parsed = DeviceWire.devices(body, me)
-                // The paused agents: only asked when there is an agent; a failure leaves the chips off, never the list.
-                val paused = if (parsed.any { it.isAgent }) {
-                    runCatching { DeviceWire.suspended(vaultGuard(resend = true) { ops().grants(null) }) }.getOrDefault(emptySet())
+                // The paused agents: only asked when there is an agent. A failure never fails the list and never clears a
+                // pause: null keeps the paused flags already held (fail closed).
+                val paused: Set<String>? = if (parsed.any { it.isAgent }) {
+                    runCatching { DeviceWire.suspended(vaultGuard(resend = true) { ops().grants(null) }) }.getOrNull()
                 } else {
                     emptySet()
                 }
-                val shown = DeviceWire.ordered(parsed.map { it.copy(paused = it.isAgent && it.id in paused) })
                 synchronized(lock) {
                     if (gen != generation) return@withLock
+                    val held = list.value.associateBy { it.id }
+                    val shown = DeviceWire.ordered(parsed.map { pausedOf(it, paused, held[it.id], mine) })
                     list.value = shown
                     loadState.value = ListLoad.LOADED
                 }
@@ -295,6 +365,20 @@ class DevicesManager(
                 synchronized(lock) { if (gen == generation) loadState.value = ListLoad.FAILED }
                 throw e
             }
+        }
+    }
+
+    /**
+     * [d] with `paused` for a list read numbered [mine] (under [lock]): from [read] (null: that call failed), unless a newer
+     * read set it. A failed read keeps what [held] (the entry already listed) knew; with nothing known, `paused` is unknown.
+     */
+    private fun pausedOf(d: DeviceInfo, read: Set<String>?, held: DeviceInfo?, mine: Long): DeviceInfo {
+        val keep = read == null || mine < (pausedApplied[d.id] ?: 0L)
+        if (d.isAgent && !keep) pausedApplied[d.id] = mine
+        return when {
+            !d.isAgent -> d.copy(paused = false, pausedKnown = true)
+            keep -> d.copy(paused = held?.paused == true, pausedKnown = held?.pausedKnown == true)
+            else -> d.copy(paused = read != null && d.id in read, pausedKnown = true)
         }
     }
 
@@ -340,6 +424,40 @@ class DevicesManager(
         removedFlow.value = null
     }
 
+    override suspend fun refreshPermissions(agentId: String) {
+        val (gen, mine) = synchronized(lock) { generation to ++permissionReads }
+        val read = PermissionWire.permissions(vaultGuard(resend = true) { ops().grants(agentId) }, agentId)
+        synchronized(lock) {
+            // A lock came meanwhile, or a newer read was applied first: this answer is not shown.
+            if (gen != generation || mine < (permissionApplied[agentId] ?: 0L)) return
+            permissionApplied[agentId] = mine
+            permissionFlow.value = permissionFlow.value + (agentId to read)
+            // `paused` follows only the newest read of either kind (the list's, or another permissions read).
+            if (mine >= (pausedApplied[agentId] ?: 0L)) {
+                pausedApplied[agentId] = mine
+                list.value = list.value.map {
+                    if (it.id == agentId && it.isAgent) it.copy(paused = read.suspended, pausedKnown = true) else it
+                }
+            }
+        }
+    }
+
+    override suspend fun removePermission(grantId: String): PermissionRemoval = try {
+        vaultGuard { ops().revokeGrant(grantId) }
+        PermissionRemoval.REMOVED
+    } catch (e: VaultFailure) {
+        if (e.kind != FailureKind.NOT_FOUND) throw e
+        PermissionRemoval.ALREADY_GONE
+    }
+
+    override suspend fun resume(agentId: String): AgentResumption = try {
+        vaultGuard { ops().resumeAgent(agentId) }
+        AgentResumption.RESUMED
+    } catch (e: VaultFailure) {
+        if (e.kind != FailureKind.NOT_FOUND) throw e
+        AgentResumption.NOT_PAUSED
+    }
+
     /** The app's own entry, and any other `app`, has no actions (`forbidden` from the vault): nothing is sent for it. */
     private fun guardActionable(deviceId: String) {
         val own = self()
@@ -360,6 +478,7 @@ class DevicesManager(
     }
 
     private companion object {
+        const val CHANGE_BUFFER = 64
         val LIST_EVENTS = setOf("device.paired", "device.unlinked", "device.session", "leash.agent.suspended")
     }
 }

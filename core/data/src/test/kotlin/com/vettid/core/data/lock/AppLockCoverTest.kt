@@ -19,12 +19,13 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppLockCoverTest {
-    private var clock = 0L
+    private var clock = 0L // the monotonic clock
+    private var wallSkew = 0L // the date set by hand
     private val prefs = InMemoryPreferencesRepository()
     private val keys = SoftKeys()
     private val timeoutMs = AppLockTimeout.DEFAULT.seconds * 1000L
 
-    private fun lock() = AppLock(prefs, keys, MemFile()) { clock }
+    private fun lock() = AppLock(prefs, keys, MemFile(), now = { clock + wallSkew }, elapsed = { clock })
 
     private suspend fun unlocked(): AppLock = lock().also {
         it.start()
@@ -85,12 +86,57 @@ class AppLockCoverTest {
     }
 
     @Test
-    fun aPromptInProgressDoesNotCover() = runTest {
+    fun aDateSetBackCoversAtOnceAndOneSetForwardDoesNot() = runTest {
         val l = unlocked()
         l.onBackground()
-        clock = timeoutMs * 2
-        l.authenticating = true
+        clock = 1_000
+        wallSkew = 10 * timeoutMs // forward: the monotonic time decides
         assertFalse(l.wouldShowLock())
+        wallSkew = -3_600_000
+        assertTrue("set back", l.wouldShowLock())
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun aDateSetBackAndRestoredIsRememberedAndStillLocksOnReturn() = runTest {
+        val l = unlocked()
+        l.setTimeout(AppLockTimeout.FIVE_MINUTES)
+        val min = 60_000L
+        val covered = l.coverFlow(backgroundScope)
+        clock = 12 * 60 * min
+        l.onBackground() // 12:00
+        runCurrent()
+        clock += min // 12:01
+        wallSkew = -61 * min // the date reads 11:00
+        l.onClockChanged() // TIME_CHANGED
+        runCurrent()
+        assertTrue("cover up", covered.value)
+        clock += min // 12:02
+        wallSkew = 0 // restored
+        l.onClockChanged()
+        runCurrent()
+        assertTrue("still up", covered.value)
+        assertTrue(l.wouldShowLock())
+        clock += min // 12:03, under the 5 minute timeout
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+        assertTrue(covered.value)
+        // A new background starts clean.
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+        l.onBackground()
+        assertFalse(l.wouldShowLock())
+    }
+
+    @Test
+    fun aPromptOpenAndABackgroundLongerThanTheTimeoutCovers() = runTest {
+        val l = unlocked()
+        l.onBackground()
+        l.promptStarted()
+        assertFalse(l.wouldShowLock())
+        clock = timeoutMs * 2
+        assertTrue(l.wouldShowLock())
     }
 
     @Test
@@ -130,41 +176,92 @@ class AppLockCoverTest {
     }
 
     @Test
-    fun aPromptInProgressAtTheTimerIsLookedAtAgain() = runTest {
+    fun theFlowTurnsTrueAtOnceWhenTheClockIsSetBackAndTheSystemSaysSo() = runTest {
         val l = unlocked()
         val covered = l.coverFlow(backgroundScope)
         runCurrent()
         l.onBackground()
         runCurrent()
-        l.authenticating = true
-        clock = timeoutMs
-        advanceTimeBy(timeoutMs + 500)
+        assertFalse(covered.value)
+        clock = 1_000
+        wallSkew = -3_600_000
+        l.onClockChanged() // ACTION_TIME_CHANGED
+        runCurrent() // no virtual time passes: not the timer
+        assertTrue(covered.value)
+    }
+
+    @Test
+    fun aDateSetBackWithNoBroadcastIsSeenAtTheDeadline() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        clock = 1_000
+        wallSkew = -3_600_000 // set back, and TIME_CHANGED late or never: no onClockChanged()
+        advanceTimeBy(timeoutMs - 1)
+        runCurrent()
+        assertFalse("nothing looked yet", covered.value)
+        advanceTimeBy(2_000) // the timer's look at the monotonic deadline
+        runCurrent()
+        assertTrue(covered.value)
+    }
+
+    @Test
+    fun theTimerRunsOnTheMonotonicClockNotTheWallClock() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        wallSkew = 100 * timeoutMs // a date set forward does not bring the timer forward
+        advanceTimeBy(timeoutMs - 1)
         runCurrent()
         assertFalse(covered.value)
-        l.authenticating = false
-        advanceTimeBy(5_000)
+        clock = timeoutMs - 1
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertFalse("1 ms short on the monotonic clock: it looked again and found no cover", covered.value)
+        clock = timeoutMs
+        advanceTimeBy(2_000)
         runCurrent()
         assertTrue(covered.value)
     }
 
     @Test
     fun theRetryBacksOffAndNeverWaitsMoreThanSixtySeconds() = runTest {
+        val looks = mutableListOf<Long>() // virtual time of each look at the monotonic clock
+        val l = AppLock(prefs, keys, MemFile(), now = { clock + wallSkew }, elapsed = { looks += testScheduler.currentTime; clock })
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        // The timer fires but the monotonic clock has not reached the deadline (it stays where it was): it keeps looking.
+        advanceTimeBy(timeoutMs)
+        runCurrent()
+        looks.clear()
+        advanceTimeBy(200_000)
+        runCurrent()
+        assertFalse(covered.value)
+        val times = looks.distinct()
+        assertTrue("backs off: ${times.size} looks", times.size <= 10)
+        assertTrue("no wait over 60 s: $times", times.zipWithNext().all { (a, b) -> b - a <= 61_000 })
+    }
+
+    @Test
+    fun aPromptStillOpenAtTheTimerCoversAtTheTimer() = runTest {
         val l = unlocked()
         val covered = l.coverFlow(backgroundScope)
         runCurrent()
         l.onBackground()
         runCurrent()
-        l.authenticating = true
+        l.promptStarted()
         clock = timeoutMs
-        advanceTimeBy(timeoutMs + 200_000) // looks at 1, 3, 7, 15, 31, 63, 123, 183 s after the timer: all false
+        advanceTimeBy(timeoutMs + 500)
         runCurrent()
-        l.authenticating = false
-        advanceTimeBy(1_500)
-        runCurrent()
-        assertFalse("backed off: not looking every second", covered.value)
-        advanceTimeBy(60_000)
-        runCurrent()
-        assertTrue("the cap: a look within 60 s", covered.value)
+        assertTrue("a prompt left up does not keep names showing", covered.value)
     }
 
     @Test

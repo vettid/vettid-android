@@ -46,6 +46,38 @@ class HistoryEventTitlesTest {
             }
         }
 
+    /** AA6 part 2: the hourly summaries (ref = a count, no item) read as the no-name titles plus "(hourly summary)", with no detail line. */
+    @Test
+    fun theAgentSummariesUseTheNoNameTitles() {
+        val n = EntryNames(item = "GitHub token")
+        assertEquals("An agent read an item (hourly summary)", title("leash.item.read.summary", "12", n))
+        assertEquals("An agent used an item without seeing it (hourly summary)", title("leash.item.used.summary", "12", n))
+        assertEquals(null, AuditKinds.itemOf("leash.item.read.summary", "12"))
+        assertEquals(emptyList<AuditKinds.Detail>(), AuditKinds.details("leash.item.read.summary", "12", AuditKinds.Outcome.Unknown))
+        assertEquals(emptyList<AuditKinds.Detail>(), AuditKinds.details("leash.item.used.summary", "12", AuditKinds.Outcome.Unknown))
+    }
+
+    /** AA6 part 2: the agent kinds' titles (approved by the owner 2026-11-03). */
+    @Test
+    fun theAgentKindsReadAsAnAgent() {
+        val approved = mapOf(
+            "leash.agent.suspended" to "An agent was paused",
+            "leash.agent.resumed" to "An agent was resumed",
+            "leash.rate_limited" to "An agent reached a limit",
+            "leash.throttled" to "An agent's requests were slowed down",
+            "leash.grant.issued" to "You gave an agent access",
+            "leash.grant.updated" to "You changed an agent's access",
+            "leash.grant.revoked" to "An agent's access was removed",
+            "leash.referrals_limited" to "An agent asked too often",
+            "leash.allowed" to "An agent's request was allowed",
+            "leash.refused" to "An agent's request was refused",
+        )
+        for ((kind, text) in approved) assertEquals(kind, text, title(kind))
+        // The hourly summaries keep " (hourly summary)" after these.
+        assertEquals("An agent reached a limit (hourly summary)", title("leash.rate_limited.summary", "3"))
+        assertEquals("An agent's request was allowed (hourly summary)", title("leash.allowed.summary", "3"))
+    }
+
     @Test
     fun theTitlesReadAsApproved() {
         val expected = listOf(
@@ -118,6 +150,8 @@ class HistoryEventTitlesTest {
         assertEquals("An agent used \u2068GitHub token\u2069", title("leash.item.run", "01ITEM", n))
         assertEquals("An agent used \u2068GitHub token\u2069", title("leash.item.proxy", "01ITEM", n))
         assertEquals("You changed how an agent may use \u2068GitHub token\u2069", title("leash.item.changed", "01ITEM", n))
+        assertEquals("An agent read \u2068GitHub token\u2069", title("leash.item.read", "01ITEM", n))
+        assertEquals("An agent used \u2068GitHub token\u2069 without seeing it", title("leash.item.used", "01ITEM", n))
         // Without the name (gone or not known), the title drops it.
         assertEquals("Connection paused", title("identity.rotate_conflict"))
         assertEquals("Connection checked and resumed", title("identity.rotate_resolved"))
@@ -127,11 +161,16 @@ class HistoryEventTitlesTest {
         assertEquals("Notifications turned off", title("push.unregistered", "app"))
         assertEquals("Notifications stopped", title("push.token_gone"))
         assertEquals("An agent used an item", title("leash.item.run", "01GONE"))
+        assertEquals("An agent read an item", title("leash.item.read", "01GONE"))
+        assertEquals("An agent used an item without seeing it", title("leash.item.used", "01GONE"))
+        assertEquals("01ITEM", AuditKinds.itemOf("leash.item.read", "01ITEM"))
+        assertEquals("01ITEM", AuditKinds.itemOf("leash.item.used", "01ITEM"))
         assertEquals("You changed how an agent may use an item", title("leash.item.changed"))
         assertEquals("01ITEM", AuditKinds.itemOf("leash.item.run", "01ITEM"))
         assertEquals("01ITEM", AuditKinds.itemOf("leash.item.changed", "01ITEM"))
     }
 
+    @Suppress("LongMethod") // one line per approved text
     @Test
     fun theDetailLinesReadAsApproved() {
         assertEquals(listOf("Successful."), lines("recovery.attempt", "2/4/success/counter"))
@@ -207,6 +246,11 @@ class HistoryEventTitlesTest {
         assertEquals(
             listOf("The secret went to your VettID connector, which added it to the agent's requests to a site you allowed. The agent was not given it."),
             lines("leash.item.proxy", "01ITEM"),
+        )
+        assertEquals(listOf("The agent was given the item's values. Its app may keep them in its history."), lines("leash.item.read", "01ITEM"))
+        assertEquals(
+            listOf("Your vault gave the agent a code worked out from the value, not the value itself."),
+            lines("leash.item.used", "01ITEM"),
         )
         assertEquals(emptyList<String>(), lines("vault.unlocked", null))
     }

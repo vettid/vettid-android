@@ -57,6 +57,7 @@ import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.titleRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.components.DetailScaffold
@@ -648,6 +649,7 @@ data class DeleteVaultActions(
 /** The vault deletion (§12.5), stateless: phrase, PIN, password, acknowledgement, then a final confirmation. */
 @Composable
 fun DeleteVaultContent(state: DeleteVaultUiState, actions: DeleteVaultActions) {
+    HoldsInput(state.phrase.isNotEmpty())
     FormScaffold(
         title = stringResource(R.string.settings_delete_title),
         body = stringResource(R.string.settings_delete_body),

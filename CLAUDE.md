@@ -124,9 +124,33 @@ The A2 exit test:
   (`settings.notifications_push_not_on_phone`).
 - Notifications and the app lock (owner decisions 2026-11-02): no names whenever opening VettID would show the app lock.
   `AppLock.wouldShowLock()` is true when the state is `LOCKED` or `PENDING`, or the lock is on, the app is in the background
-  and `now - backgroundAt >= timeout` (the inputs of `onForeground()`, which still alone engages the lock); `DISABLED` is never
-  covered; a prompt in progress (`authenticating`) is not. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
-  a timer that turns it true when the timeout elapses in the background (cancelled on return or lock off; it does not survive
+  and the background is due (one shared decision with `onForeground()`, which still alone engages the lock; see the clock rule below); `DISABLED` is never
+  covered; a prompt in progress (`authenticating`) does not change that: a prompt left up cannot keep names showing past the timeout.
+  The prompt rule (2026-11-03): `onBackground` always records the mark (not on a configuration change) and `onForeground` never
+  clears it while a prompt is up; `promptEnded(outcome, inForeground)` decides. Success in the foreground clears it. Success in the
+  background sets it to now with a 3 s grace for the late `onStart` (so "Immediately" does not lock right after an unlock); if
+  that `onStart` comes later than the grace and the return locks, it locks without the automatic prompt
+  (`UnlockPromptGate.holdAutomatic`, as iOS #203): the member taps Unlock once, never a lock-and-prompt loop. A late success for
+  an enable already dropped does nothing (`completeEnable` returns when nothing is pending).
+  Cancelled or dismissed in the foreground runs the return decision (lock if due, then clear; with "Immediately" this locks after a
+  presence check whose screen stopped the activity); in the background it keeps the mark, or records one. The prompt of an enable or
+  a method change (`promptStarted(enable = true)`) that does not succeed also drops its pending key (`enableCancelled()`) and then
+  follows the same decision as any prompt. The app lock key of a method change is made under a second alias
+  (`vettid.app_data.v1.next`, same Keystore parameters) and `completeEnable` swaps it in only after the proof worked
+  (`AppLockKeys.promote`); a cancel, a failure or a rotation deletes it and keeps the old key, the old method and the lock on, and a
+  first enable that is cancelled stays off with no key left over. A process that died mid-change leaves both keys: `start` calls `recover(appLockKeySlot)`, which keeps the key of the
+  persisted slot marker and deletes the other (the lock stays on with the old method).
+  `completeEnable` writes enabled, method and the new slot in one DataStore edit (`setAppLock`) and only then deletes the old key,
+  so a crash after the edit also leaves both keys and `recover` keeps the marked new one; a marker never written is slot 0 (the
+  alias `vettid.app_data.v1`). Turning the lock off in Settings first asks for the phone's biometric or screen lock (`SettingsHost.confirmAppLockOff`, the lock prompt's texts); a refused check leaves it on. `abandonPrompt()` (rotation) clears `authenticating`, drops a pending key and keeps the mark. A callback that arrives after `onDestroy` is ignored (`UnlockPromptGate.finished(owner, outcome)` is false for a
+  destroyed owner, and `MainActivity` checks `isDestroyed`), so a rotation records no mark. Accepted fail-closed false locks:
+  cancelling a credential presence check after the PIN screen was up at least the timeout locks (the time counts from the first
+  stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; "Immediately" + a
+  method change + cancelling the PIN screen locks (the old key unlocks); a marked slot whose key was lost from outside the app
+  makes `recover` keep the other slot's key, which may be of the other method (a fingerprint may then fail and the phone's PIN
+  unlocks); and `authenticating` has no time limit, so a callback lost in the background (no cancel, no `onDestroy`) keeps the
+  cover down until the next `promptEnded`. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
+  a timer that turns it true when the monotonic timeout elapses in the background (cancelled on return or lock off; it does not survive
   the process, whose next start is `LOCKED`, and it stops while the process is frozen (a cached process on Android 14+) as well as in deep sleep); `NotifySource.covered` is that flow, `coveredNow()` the direct read. `FeedNotifier`
   reads `coveredNow()` at post time inside its lock: item notifications are then in public form only
   (`LocalNotification.publicForm(quiet)`: the lock screen's "New activity in VettID" / "VettID needs your attention", no names, no
@@ -135,7 +159,7 @@ The A2 exit test:
   (`NotifyIntents.dismissed`: the delete intent, an immutable broadcast to this app's package carrying only the tag, received by a
   not-exported receiver in `VettIdApplication`, `FeedNotifier.onDismissed`, also called when a tap on an item notification reaches `NotificationOpenInbox`); a snoozed one is still in `posted`, and posting to a
   snoozed tag updates it without showing it, so the named original does not come back; it is also cancelled at the vault lock.
-  The timer runs on monotonic time (stops in deep sleep or while frozen), so the clock is also looked at (`FeedNotifier.recheckCover()`, once per cover) on every arrival and when the screen comes on or the phone is unlocked (`VettIdApplication`'s receiver). The timer looks again when it fires early, backing off from 1 s, doubling to 60 s. For a process that is frozen or asleep there is also an alarm (`CoverAlarm`, `AppLock.syncCoverAlarm`; `AndroidCoverAlarm`, `CoverAlarmReceiver` in `:app` `lock/`): while the lock is on and unlocked, the app in the background and the timeout above 0, an inexact `AlarmManager.set(RTC, backgroundAt + timeout)` (no exact-alarm permission; its PendingIntent is immutable and explicit to the not-exported receiver, carrying nothing), cancelled on return, lock, disable and set again when the timeout changes; the receiver calls `FeedNotifier.recheckCover()`, which asks `wouldShowLock()` itself, so an early or late alarm is harmless (an inexact `set` may fire up to about 75% of the wait late, 45 minutes for an hour, so from a wait of 15 minutes `setWindow(RTC, deadline, 10 min)` bounds the lateness to 10 minutes after the deadline, the shortest window without the exact-alarm permission; Doze may still defer it to a maintenance window). A dead process: the receiver starts a new one, whose app lock starts locked; nothing is tracked yet (`posted` is memory), and whatever the old process left showing is cancelled as before (`cancelItems` / `cancelLeftovers` when the vault is seen not open). Not restored when the cover goes. The ongoing call notice (`CallService`) keeps the caller's name under the app lock (owner decision 2026-11-02): by design, not a gap; `CallService` is not changed.
+  Clock rule (the lead's decision of 2026-11-03, same as IOS-PLAN §6.4; pending the ANDROID-PLAN erratum): the background time is measured with `SystemClock.elapsedRealtime()`, never the wall clock. `onBackground()` records both (`Background(elapsedMs, wallMs)`); the background is due when `elapsed() - elapsedMs >= timeout` OR the wall clock went back, strict reading (fail secure): `now() - wallMs < (elapsed() - elapsedMs) - 5 s` (`WALL_BACK_TOLERANCE_MS`, only so that a small network time correction does not lock a phone that was away a moment), which also catches a date set back to a time after `wallMs`; it is sticky (`Background.wentBack`, set by any look including `onClockChanged()`, cleared only by `onForeground()` or a new `onBackground()`), so a date set back and then restored still locks. The `elapsed` and `now` clocks of the constructor are passed by name. A date set forward does not lock by itself. `onForeground()` and `wouldShowLock()` call the one function `backgroundDue`; `onForeground()` still locks before clearing the background mark. A reboot resets `elapsedRealtime`, but it ends the process and a new one starts `LOCKED` (`start()`), so nothing compares across a reboot. `Intent.ACTION_TIME_CHANGED` is registered in `VettIdApplication` (`ClockChangedReceiver`): it calls `AppLock.onClockChanged()` (the cover flow decides again at once) and `FeedNotifier.recheckCover()`. The timer runs on monotonic time (stops in deep sleep or while frozen), so the clock is also looked at (`FeedNotifier.recheckCover()`, once per cover) on every arrival and when the screen comes on or the phone is unlocked (`VettIdApplication`'s receiver). The timer looks again when it fires early, backing off from 1 s, doubling to 60 s. For a process that is frozen or asleep there is also an alarm (`CoverAlarm`, `AppLock.syncCoverAlarm`; `AndroidCoverAlarm`, `CoverAlarmReceiver` in `:app` `lock/`): while the lock is on and unlocked, the app in the background and the timeout above 0, an inexact, non-waking `AlarmManager.set(ELAPSED_REALTIME, backgroundElapsed + timeout)` (`CoverAlarm.set(atElapsedMs)`) (no exact-alarm permission; its PendingIntent is immutable and explicit to the not-exported receiver, carrying nothing), cancelled on return, lock, disable and set again when the timeout changes; the receiver calls `FeedNotifier.recheckCover()`, which asks `wouldShowLock()` itself, so an early or late alarm is harmless (an inexact `set` may fire up to about 75% of the wait late, 45 minutes for an hour, so from a wait of 15 minutes `setWindow(ELAPSED_REALTIME, deadline, 10 min)` bounds the lateness to 10 minutes after the deadline, the shortest window without the exact-alarm permission; Doze may still defer it to a maintenance window). A dead process: the receiver starts a new one, whose app lock starts locked; nothing is tracked yet (`posted` is memory), and whatever the old process left showing is cancelled as before (`cancelItems` / `cancelLeftovers` when the vault is seen not open). Not restored when the cover goes. The ongoing call notice (`CallService`) keeps the caller's name under the app lock (owner decision 2026-11-02): by design, not a gap; `CallService` is not changed.
   The withdrawn-request mute (`ApprovalDetailUiState.canMute`) needs a named connection, as History does.
 
 - Calls (CALLS-PLAN 0.1.1 phase C1, in progress; `docs/calls/CALL-MEDIA.md` is the app's note; VAULT-MESSAGING §10.10 is normative): `:core:crypto` `call/`
@@ -208,7 +232,7 @@ The A2 exit test:
   by a lock shows "This pairing has ended" (`PairUiState.interrupted`); an approval with no answer is "Pairing not
   confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
   from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
-  Permissions (AA3) is a later PR; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
+  Permissions (AA3) is below; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
 
 - What an agent may use (ANDROID-PLAN 0.1.116 §4 AA4, decisions 1-8, 17 and 18; VAULT-MESSAGING 0.83.2 §10.12, §10.11, §11.10.9):
   an agent's share rules, on the agent's page under **What it may use** (`share.rule.list{agent_id}` via
@@ -239,7 +263,7 @@ The A2 exit test:
   `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
   for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it
   may use** (the agent's page with the editor on top; the list when the id is unknown) and **Later**. Left to later PRs: how the agent may use each
-  item (AA7), permissions (AA3). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
+  item (AA7). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
   full flow needs a `vaultctl` agent paired to the app's vault). Catalog: `items.agent_rule_new`, `items.agent_rule_new_ways`,
   `items.agent_rule_edit_auto`, `items.agent_rule_auto_no_ways`, `items.agent_rule_preview`, `items.agent_rule_more`, `items.agent_rule_invalid`,
   `items.agent_rule_password`, `items.agent_rule_password_wrong`, `items.agent_rule_password_backoff`, `items.agent_rule_password_alarm`,
@@ -248,6 +272,50 @@ The A2 exit test:
   `items.agent_rule_owner_check`, `items.agent_rule_delete_confirm`, `devices.page_agent_rules`, `devices.page_agent_rules_ways`,
   `devices.page_agent_rules_warning`, `devices.page_agent_rules_none`, `devices.page_agent_rules_failed`, `devices.page_agent_rules_limit`,
   `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
+
+- An agent's permissions (ANDROID-PLAN 0.1.117 §4 AA3, decisions 3a, 7, 8; VAULT-MESSAGING 0.83.3 §10.11): on the agent's page,
+  **Other permissions** = the agent's grants of `leash.grant.list{agent_id}` that are not `items.read` (`PermissionWire.permissions`;
+  `DevicesRepository.permissions`, `refreshPermissions`, memory only, cleared with the list at lock and hold; an older answer never
+  replaces a newer one: a read number per agent). **One source per card:** **What it may use** stays `share.rule.list` (AA4, richer
+  rows); the `items.read` grants (`grant_id` = `rule_id`) are dropped from the permissions, never listed twice. The "Other permissions"
+  heading is shown **only when the agent has such grants, or the latest read failed, or `suspended` was never read for the agent
+  (`DeviceInfo.pausedKnown`)**, and it **never has an add action** and there is no editor (decision 3a; a row's tap opens nothing); with no such grants the card is not shown at all. When the **latest** read failed
+  (even after an earlier success: the earlier rows stay below) or the agent's pause is unknown, the card says "Other permissions
+  could not be loaded." with Try again (`DeviceUiState.permissionsUnreadable`), so a grant issued elsewhere never goes unseen.
+  Grants that do not read are **not dropped**: each is a row "Another permission" (a grant without `grant_id` has no ⋯ menu, it
+  cannot be revoked). A row: the scope's label (nine labels, "Another permission" for a scope
+  the app has no label for), "Asks you each time" or "Allowed automatically, up to N an hour and M a day without asking" (an `auto`
+  grant without limits shows the vault's defaults 60 and 1,000; an absent `approval` is ask, the vault's default; one the app does
+  not know is `GrantApproval.UNKNOWN`: no approval line is shown, never "Asks you each time"), then ", until
+  <date>" and ", only with <names>" (`DeviceUiState.connectionNames` from `ConnectionsRepository`; "Removed connection" for an id not
+  listed **only once the list was read** (`connectionsLoaded` = the page's own `connections.refresh()` at opening answered; a cached list never counts, so a
+  new connection is not called removed; before that, or when it fails, no names are said); "Name not shared yet" for a blank name). Trailing ⋯ → **Remove** (`ConfirmDialog`, destructive: "<name> can no longer <label,
+  lower case> from now on. Services it showed this permission to may accept it for up to <that grant's status_ttl + 1 min>.";
+  a scope without a label has its own sentence): `leash.grant.revoke{grant_id}` with **no unlock window and no password** (the
+  plan, not the task title); `{}` "Permission removed", `not_found` "It was already removed.", and the view model reads the grants again after both
+  (`DevicesManager.removePermission` itself reads nothing; a re-read that fails is shown on the card and does not turn the done
+  removal into a failure); any other failure shows its error, keeps the row and reads nothing. **Paused:** a banner at the top of the page (`NoticeKind.URGENT`, "Paused by your
+  vault") whenever `DeviceInfo.paused`. `paused` has **one ordering**: the list read and the permissions read share one read numbering
+  (`DevicesManager.permissionReads`, `pausedApplied` per agent) and a read never overwrites a `paused` set by a newer one, so a
+  list read that started before Resume's re-read cannot bring the pause back; a list read whose `grants(null)` call fails keeps the
+  `paused` values it held (fail closed), and with nothing held `paused` is **unknown** (`pausedKnown = false`), never "not
+  paused": the page then shows the failed card; **Resume** = `leash.agent.resume{agent_id}`,
+  no unlock window, no confirmation: `{}` "Resumed", `not_found` "It is no longer paused", read again after both by the view
+  model (if that re-read fails the banner stays up and the failure shows). **Re-reads:**
+  `DevicesManager.onEvent` emits `AgentChange` (`changes`): `sync.event` `leash.grant.changed|revoked`, `leash.agent.suspended` with
+  this `agent_id`, and `share.rule.changed|deleted` (only `rule_id`: the app knows no rule it can tell is another subject's, so every
+  one re-reads the permissions and the rules); also on opening and on every return to the page. **`leash.grant.issue`, core only (no
+  UI):** `LeashApi.kt` (`LeashGrantRequest`, `leashGrantIssue`, prints nothing) and `GrantIssueAnswers` / `GrantIssueResult` in
+  `:core:data` `devices/`: `Saved(grant)`, `CredentialLocked` (the caller prompts once and resends once; a second one is `LockedAgain`,
+  `refused(e, resent = true)`), `Conflict`, `Limit` (`agent_grants`), `NotPaired`, `BadRequest(field?)` (the field only when it reads
+  as a plain member name), `OwnerCheck`, `AlarmOpen` (`unlockRefused`: `credential_frozen` / `rotation_required` from the prompt's
+  unlock), `Failed(failure)`. The plan's answer texts are not in strings (unused). Texts in `feature/devices/.../strings.xml`
+  (`devices_perm*`, `devices_scope_*`, `devices_paused_*`, `devices_resume*`) are **approved by the owner 2026-11-03**, the plan's words and the ones the plan
+  does not give (`AgentPermissionTextsTest` holds them). Dev stack: `AgentPermissionsDevStackTest` (skips without the stack; the paired-agent branch needs a
+  `vaultctl` agent, and a real suspension needs an agent that sends 30 refused requests: never run). Catalog:
+  `devices.page_agent_permissions`, `devices.page_agent_permissions_failed`, `devices.page_agent_permissions_failed_rows`, `devices.page_agent_permissions_unreadable_grant`, `devices.page_agent_paused`,
+  `devices.page_agent_paused_failed`, `devices.page_agent_permission_remove`, `devices.page_agent_permission_remove_unknown`,
+  `devices.page_agent_permission_remove_failed`.
 
 - Approvals for devices and agents (ANDROID-PLAN 0.1.116 §4 AA5, decisions 6, 9, 10, 15, 16, 18; VAULT-MESSAGING 0.83.2 §6.8, §10.3,
   §10.4.2, §10.11): a device request is `Approval.DeviceRequest` (`seconds` of `device.session.pending`; `held`: `HeldRequests.of(role,
@@ -275,10 +343,9 @@ The A2 exit test:
   decision here, and only 10 minutes (session, pairing) or 5 minutes (held) from `at`. A feed-only approval is Deny-only with "… asked for
   something this phone can no longer show. Deny it, or let it expire."; a feed-only session request names the device from `device.list`
   (`DeviceAsks.named`) and is Allow/Deny with 1 hour preselected, Deny-only when the device is not listed (or the list not read). A
-  `device.pair.pending` feed item is an entry without buttons ("This pairing can't be checked on this phone any more …"), or, while
+  `device.pair.pending` feed item is an entry whose only button is **Reject** (owner decision 2026-11-03: `device.pair.reject{pairing_id: <the item's ref, the request's pending_id>}` per VAULT-MESSAGING 0.83.0, `SocialManager.rejectPairingRequest`; the ViewModel's `deny()` routes there; only `not_found` is "This request is no longer waiting.", any other failure shows its error and keeps the entry, nothing is sent without a ref; no confirm dialog, as Deny has none; nothing is ever approved or paired from it) under "This pairing can't be checked on this phone any more …" (`approvals_pair_body`, now "… so it can't be approved here. Reject it, or let it expire …", owner-approved 2026-11-03), or, while
   `PairingRepository` holds the comparison and the item's `ref` is the held pairing's `pending_id` (`PendingPairing.pendingId`; the entry goes when that comparison is left, approved, rejected, ended or cleared: `PairingManager.onCompareLeft` -> `SocialManager.closePairing`; any other
-  pairing item gets the unnamed title and no Compare), **Compare the code** (`DecisionActions.onOpenPairing`, `PairRoute(held = true)`); VAULT-MESSAGING
-  0.83.0 says `device.pair.reject` accepts the item's `ref`: not used (the plan says no buttons; owner's call). **Feed and notifications:**
+  pairing item gets the unnamed title and no Compare), **Compare the code** (`DecisionActions.onOpenPairing`, `PairRoute(held = true)`). **Feed and notifications:**
   titles with the device's name from `FeedNames.devices` (`device.list`, cleaned and isolated; fallbacks without a name) and
   `FeedNames.pairingName` / `pairingPendingId`; `leash.agent.suspended` and `leash.referrals_limited` are on **Security alarms** (decision 16,
   `NotificationMapping`; the lock screen says "VettID needs your attention") and, with `leash.rate_limited`, open the agent's page
@@ -290,6 +357,7 @@ The A2 exit test:
   `approvals.held_session_ended`, `approvals.held_way_not_allowed`, `approvals.held_other_result`, `approvals.pair_gone`,
   `approvals.pair_held`, `approvals.device_list`, `notifications.devices`, `notifications.devices_unnamed`. Texts are marked `draft` (the
   plan's, word for word) or `new` in `feature/approvals/.../strings.xml` and `core/data/.../strings.xml` (`data_feed_*_named`); none is approved.
+- **AA6 part 1:** the detail sheet of `leash.item.run` / `leash.item.proxy` keeps its title and adds History's approved detail line (`data_feed_leash_item_run_detail` / `_proxy_detail` in `core/data/.../strings.xml`, copies of `history_detail_leash_item_run` / `_proxy`, word for word; `LeashItemDetailTextTest` in `:feature:history` holds both copies) and "Open the item" (`notifications_sheet_open_item`, the same text as `history_detail_open_item`; `NotificationsViewModel.openSheetItem` opens `FeedTarget.Item`), shown only while `FeedNames.items` knows the `ref` (`FeedKinds.sheetItemId`); a deleted item gets the line and no action. Catalog: `notifications.sheet_leash_run`, `notifications.sheet_leash_proxy`, `notifications.sheet_leash_deleted`. **AA6 parts 2-3** (texts approved by the owner 2026-11-03): `leash.item.read` is "An agent read %1$s" / "An agent read an item" in the feed (`data_feed_leash_item_read`, `_read_any`; name from `names.items[ref]`, none under the app-lock cover) and History (`history_kind_leash_item_read_named`, plain `history_kind_leash_item_read` is the no-name form and the hourly summary's), with the detail line "The agent was given the item's values. Its app may keep them in its history." (`data_feed_leash_item_read_detail`, `history_detail_leash_item_read`; its sheet opens the item like run/proxy; the catalog `notifications.sheet_leash_read`); `leash.item.used` in History is "An agent used %1$s without seeing it" (`history_kind_leash_item_used_named`; plain is the no-name form and the summary's) with "Your vault gave the agent a code worked out from the value, not the value itself." (`history_detail_leash_item_used`); the hourly `.summary` entries show the no-name title plus "(hourly summary)" and no detail line; the other History agent titles (owner-approved 2026-11-03, `history_kind_leash_*`): "An agent was paused / was resumed / reached a limit / asked too often", "An agent's requests were slowed down", "You gave an agent access", "You changed an agent's access", "An agent's access was removed", "An agent's request was allowed / was refused"; the hourly summaries keep " (hourly summary)" after them.
 
 - Votes (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes", item 5.1; VAULT-MESSAGING 0.81.3 §10.19; `:feature:votes`, `VotesManager` /
   `VotesRepository` in `:core:data` `votes/`, `VoteApi.kt` in `:core:vault`, `VaultManager.votes`): the drawer entry after Approvals
@@ -530,6 +598,53 @@ vettid.org repo's `local/android-ui/`).
 
 ## Conventions
 
+- The daily owner check in the shell (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03; iOS does the same): when it comes due
+  (`gate.gated`) it covers the app at once on every screen: read-only pushed ones (a detail, a History entry, the photo viewer,
+  Notifications, a device, a vote, a wallet), a drawer screen, and the return from the background. It waits only for what §3.6.5
+  says it must not interrupt: **input or an operation in progress** on a pushed screen. It waits until the
+  member leaves that screen, or until `OWNER_CHECK_DEFERRAL_S` (5 minutes, divided by the vault's time scale) after the vault's
+  deadline (`OwnerCheckGateState.overdue`, derived from the deadline, so a recreation, an app lock, the background or a new
+  process never restart the wait, and a return after the deadline plus 5 minutes is covered at once). A drawer screen never
+  waits. A call does not defer it: the call screen (`CallOverlay`) is drawn above the whole shell, check included, and the app never ends a call. One signal serves the waiting: a screen reports with `HoldsInput(active)` (`:core:ui` `InputGuard.kt`; the shell provides
+  `LocalInputGuard`). Reported: the item editor (`dirty`), the share-rule editors, a conversation with a draft or photos, Accept
+  (typed or pasted text, not a link's), the tag form and ask dialogs, wallet Send, Import, a new wallet (name, limits, a word of
+  the check; the shown phrase is covered at once), Spending limits and Chain server forms, the shared profile (edited name or
+  photo), change name (a changed name), delete vault (the phrase), **an approval open for a decision, typed or not** (any
+  kind, devices and agents too: `ApprovalDetailUiState.openForDecision`), a transfer out under way, and **every `SecretField`
+  on screen, typed or not** (a PIN or password prompt is a credential operation in progress: credential change, new
+  credential, rotate, alarm, change PIN, release update, History export's PIN step, the unlock-window prompts of votes,
+  wallets and agent rules, a critical-item use; `holdsInput = false` for a secret item's value in the editor). Search boxes
+  and a Receive amount are not input in progress. A new form screen with typed input, or a new credential flow without a
+  `SecretField`, must call `HoldsInput`; put the condition in a UI-state property (`holdsInput`) and unit-test it.
+  The check is drawn over the shell (`OwnerCheckRoute` after the `ModalNavigationDrawer`, never in place of the NavHost), so
+  the screen stays composed and what was typed is there when the check passes. When the check is to cover, **secrets typed and
+  not sent are blanked first** (§3.6.5's zeroize rule, as iOS): every `SecretField` with `holdsInput` calls its owner's setter
+  with `""` (the view model's state is cleared, not only the text field), and the recovery words typed in Import and in the
+  backup check do the same (`WipesOnCover`, `InputGuard.wipeSecrets()`); a secret item's value in the item editor is a draft
+  and stays. Drafts that are not secrets (messages, item and rule editors, forms) are kept. The wipe runs before dialogs
+  hide. Then the check is latched GATED (saved): input appearing under it cannot take it away, and a short dip of `gate.gated`
+  does not either; it is let go when `OwnerCheckRoute` says it passed (`onDone`) or after `OWNER_CHECK_UNLATCH_MS` of `gated`
+  false. On a new composition one frame is undecided (the shell is drawn at alpha 0) so that no vault content is shown before
+  the screens have reported. It takes the focus and the
+  keyboard, with a layer that eats keys (as `AppLockGate`), and its own subtree gets a null `LocalInputGuard`. Dialogs and
+  sheets are windows above it, so screens import `AlertDialog`, `ModalBottomSheet` and `DatePickerDialog` from
+  `com.vettid.core.ui.components` (`ShellOverlays.kt`), which are not composed while `LocalCheckCovered`; their state lives in
+  the view models and comes back after the check. Dropdown menus are wrapped too (`DropdownMenu` in `ShellOverlays.kt`), and detekt's `ForbiddenImport` refuses Material's
+  `AlertDialog`, `ModalBottomSheet`, `DatePickerDialog` and `DropdownMenu` outside `core/ui`. The check also waits through a
+  recreation (rotation, an app-lock unlock, a restored process): until one frame has passed after a new composition it is not
+  shown, because the screens report their input in effects after the first frame. The gate's clock wakes at the next boundary
+  (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets through Back (a voluntary check closes with it on API 31-32) and the phone's own keys (`ownerCheckLayerEats`:
+  volume up, down and mute, the headset hook, media play, pause, play/pause, stop, next and previous, call and end call), so a
+  call or music keeps its keys; every other key is eaten (the app lock's `AppLockGate` layer still eats every key). While a
+  call screen is shown (`LocalCallScreenShown`, provided by `CallOverlay`) the check's own Back handler is off, so Back is the
+  call screen's. A check that said it passed keeps the shell uncovered while `gated` is still true for at most
+  `OWNER_CHECK_PASSED_MS` (10 s) and not for a new deadline (saved). The undecided frame also clears semantics and takes every
+  touch. **Known limit of the wipe:** only screens composed when the check latches are wiped; a typed secret in a screen under
+  another on the back stack, or in a dialog a voluntary (asked) check had already hidden, stays in its view model (a form is
+  normally popped, not stacked under). `ShellOverlayRulesTest` lists the files that may call `HoldsInput` /
+  `WipesOnCover` and refuses fully qualified windows of their own outside `VettIdApp.kt`. Rule: `ownerCheckMode()` /
+  `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). The refused-request text "What you entered is
+  kept: the check opens when you leave this screen" is unchanged (owner decision a).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
   (`@Serializable` route objects, one `NavGraphBuilder.xDestination()` per feature).
 - Features depend only on `:core:*`; no feature touches transport or crypto
@@ -575,6 +690,9 @@ vettid.org repo's `local/android-ui/`).
   at most 1 hour; debug and devStack builds start with it on (the catalog is screenshotted). A screen that must stay
   protected regardless calls `SecureWindow()`. A field that holds a secret the member must see uses
   `visibleSecretKeyboard()` inside `NoKeyboardLearning { }` (S2); copy secrets with `textClip(…, sensitive = true)`.
+  "Shared with you" masks a connection's shared passwords and one-time codes (`FieldKinds.masked`, as in the item
+  detail) until the member taps the field's eye; the shown state is in memory only (never `SavedStateHandle`), so
+  leaving the screen masks them again (VAULT-MESSAGING §10.7, §10.12).
 - The member's lock fails secure (owner decision 2026-10-12; `LockGuard`, `LockKeeper`, `LockSequence`,
   `VaultManager.lock()`): the phone is `AppPhase.Locked` from the moment the member asks, in every outcome, and the
   vault is *known* locked only when it answered the relay `vault.lock`, a status read no longer says `unlocked`, or

@@ -70,4 +70,18 @@ class UnlockPromptGateTest {
         g.newLock()
         assertTrue(g.tryStart(auto = true, owner = activity))
     }
+
+    @Test
+    fun aDestroyedOwnersLateFinishIsIgnored() {
+        val g = UnlockPromptGate()
+        val a = Any()
+        val b = Any()
+        assertTrue(g.tryStart(auto = false, owner = a))
+        assertTrue(g.ownerGone(a))
+        assertTrue(g.tryStart(auto = false, owner = b))
+        assertFalse(g.finished(a, PromptOutcome.SYSTEM_CANCELED))
+        assertTrue(g.prompting)
+        assertTrue(g.finished(b, PromptOutcome.SUCCEEDED))
+        assertFalse(g.prompting)
+    }
 }

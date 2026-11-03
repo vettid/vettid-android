@@ -41,7 +41,7 @@ import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.VerifiedUser
-import androidx.compose.material3.AlertDialog
+import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -121,6 +121,8 @@ data class SettingsHost(
      * BiometricPrompt (a new key, asked for at once).
      */
     val onEnableAppLock: (AppLockMethod) -> Unit,
+    /** The phone owner's presence check before the app lock is turned off (the activity's BiometricPrompt); true when confirmed. */
+    val confirmAppLockOff: suspend () -> Boolean,
     val onAccountClick: () -> Unit,
     val onOpenAccountSite: () -> Unit,
     /** Opens the owner check (VAULT-MESSAGING §3.6.5): [holdOff] true turns the hold off with it (§3.6.7). */
@@ -163,7 +165,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 recovery = { host.navigate(RecoveryRoute) },
                 transfer = { host.navigate(TransferOutRoute) },
                 attestation = { host.navigate(AttestationRoute) },
-                setAppLock = { on -> if (on) host.onEnableAppLock(state.appLockMethod) else vm.disableAppLock() },
+                setAppLock = { on -> if (on) host.onEnableAppLock(state.appLockMethod) else vm.disableAppLock(host.confirmAppLockOff) },
                 setAppLockMethod = { m ->
                     when {
                         m == state.appLockMethod -> Unit

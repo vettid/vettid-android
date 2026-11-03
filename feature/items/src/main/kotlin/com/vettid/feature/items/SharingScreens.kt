@@ -14,19 +14,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -34,8 +43,10 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.FetchOutcome
+import com.vettid.core.data.items.FieldKinds
 import com.vettid.core.data.items.FieldValue
 import com.vettid.core.data.items.GrantView
+import com.vettid.core.data.items.ItemFieldView
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.RuleNames
 import com.vettid.core.data.items.RuleOverlaps
@@ -43,6 +54,7 @@ import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharedContent
 import com.vettid.core.data.items.TagMatch
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
@@ -391,7 +403,7 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
                     modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("shared_none"),
                 )
             }
-            state.received.forEach { g -> ReceivedCard(g, state, name, actions) }
+            state.received.forEach { g -> key(g.grantId) { ReceivedCard(g, state, name, actions) } }
             AskSection(state, name, actions)
         }
     }
@@ -444,7 +456,7 @@ private fun ReceivedCard(g: GrantView, state: SharedWithYouUiState, name: String
         }
         if (content != null) {
             Spacer(Modifier.height(Spacing.s))
-            SharedFields(content)
+            SharedFields(g.grantId, content)
         } else if (g.active) {
             TextButton(
                 onClick = { actions.onFetch(g.grantId) },
@@ -502,8 +514,9 @@ private fun askState(s: String): String = when (s) {
 
 @Composable
 private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActions) {
+    HoldsInput(f.label.isNotEmpty() || f.reason.isNotEmpty())
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
-    androidx.compose.material3.AlertDialog(
+    com.vettid.core.ui.components.AlertDialog(
         onDismissRequest = { actions.onOpenAsk(false) },
         title = { Text(stringResource(R.string.items_ask_button, name)) },
         text = {
@@ -512,7 +525,7 @@ private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActio
                     TextButton(onClick = { open = true }, modifier = Modifier.testTag("ask_category")) {
                         Text(stringResource(R.string.items_ask_category, ItemsText.category(f.category)))
                     }
-                    androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    com.vettid.core.ui.components.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                         ItemTemplates.categories.forEach { c ->
                             androidx.compose.material3.DropdownMenuItem(text = { Text(stringResource(c.label)) }, onClick = {
                                 open = false
@@ -555,25 +568,57 @@ private const val ASK_LABEL_CHARS = 128
 private const val ASK_REASON_CHARS = 256
 
 @Composable
-private fun SharedFields(c: SharedContent) {
-    val region = phoneRegion()
-    c.fields.forEach { f ->
-        val text = when (val v = f.value) {
-            // A phone number as the member's own are shown (#95: formatted for the phone's region).
-            is FieldValue.Text -> if (f.kind == com.vettid.core.data.items.FieldKinds.PHONE) PhoneInput.display(v.text, region) else v.text
-            is FieldValue.Address -> v.address.lines().joinToString("\n")
-            null -> ""
-        }
-        Text(f.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            text.ifEmpty { stringResource(R.string.items_empty_value) },
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(bottom = Spacing.s),
-        )
+private fun SharedFields(grantId: String, c: SharedContent) {
+    // Which secret fields the member chose to show: in memory only, so leaving the screen (or locking) masks them
+    // again; never in a SavedStateHandle (VAULT-MESSAGING §10.7, as the member's own item detail).
+    // Keyed by the item, and each field by its id, so a re-sorted list never hands one grant's shown fields to another.
+    var shown by remember(c.itemId) { mutableStateOf(emptySet<String>()) }
+    c.fields.forEachIndexed { i, f ->
+        val id = f.fieldId ?: "#$i"
+        SharedField(grantId, i, f, id in shown) { shown = if (id in shown) shown - id else shown + id }
     }
     c.notes?.let {
         Text(stringResource(R.string.items_notes), style = MaterialTheme.typography.labelMedium)
         Text(it, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun SharedField(grantId: String, index: Int, f: ItemFieldView, shown: Boolean, onToggle: () -> Unit) {
+    val text = when (val v = f.value) {
+        // A phone number as the member's own are shown (#95: formatted for the phone's region).
+        is FieldValue.Text -> if (f.kind == FieldKinds.PHONE) PhoneInput.display(v.text, phoneRegion()) else v.text
+        is FieldValue.Address -> v.address.lines().joinToString("\n")
+        null -> ""
+    }
+    // The kinds the item detail masks (passwords and one-time codes), decided by the same function.
+    val masked = FieldKinds.masked(f.kind) && text.isNotEmpty()
+    val visible = !masked || shown
+    Text(f.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = Spacing.s)) {
+        Text(
+            when {
+                text.isEmpty() -> stringResource(R.string.items_empty_value)
+                !visible -> stringResource(R.string.items_masked_value)
+                else -> text
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            fontFamily = if (masked && visible) FontFamily.Monospace else null,
+            color = if (masked && !visible) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f).testTag("shared_value_${grantId}_$index"),
+        )
+        if (masked) {
+            IconButton(onClick = onToggle, modifier = Modifier.testTag("shared_toggle_${grantId}_$index")) {
+                Icon(
+                    if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                    contentDescription = stringResource(
+                        if (visible) R.string.items_cd_hide_value else R.string.items_cd_show_value,
+                        f.label,
+                    ),
+                )
+            }
+        }
     }
 }
 

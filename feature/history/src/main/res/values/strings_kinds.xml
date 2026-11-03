@@ -132,18 +132,18 @@
     <string name="history_kind_location_history_deleted">Location history deleted</string>
     <string name="history_kind_location_history_shared">Location history shared</string>
     <string name="history_kind_location_history_received">Location history received</string>
-    <string name="history_kind_leash_grant_issued">Agent access granted</string>
-    <string name="history_kind_leash_grant_updated">Agent access changed</string>
-    <string name="history_kind_leash_grant_revoked">Agent access revoked</string>
-    <string name="history_kind_leash_rate_limited">Agent slowed down</string>
-    <string name="history_kind_leash_agent_suspended">Agent suspended</string>
-    <string name="history_kind_leash_agent_resumed">Agent resumed</string>
-    <string name="history_kind_leash_referrals_limited">Agent referrals limited</string>
-    <string name="history_kind_leash_allowed">Agent request allowed</string>
-    <string name="history_kind_leash_refused">Agent request refused</string>
-    <string name="history_kind_leash_item_read">Agent read an item</string>
-    <string name="history_kind_leash_item_used">Agent used an item</string>
-    <string name="history_kind_leash_throttled">Agent throttled</string>
+    <string name="history_kind_leash_grant_issued">You gave an agent access</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_grant_updated">You changed an agent\'s access</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_grant_revoked">An agent\'s access was removed</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_rate_limited">An agent reached a limit</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_agent_suspended">An agent was paused</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_agent_resumed">An agent was resumed</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_referrals_limited">An agent asked too often</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_allowed">An agent\'s request was allowed</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_refused">An agent\'s request was refused</string> <!-- approved 2026-11-03 -->
+    <string name="history_kind_leash_item_read">An agent read an item</string>
+    <string name="history_kind_leash_item_used">An agent used an item without seeing it</string>
+    <string name="history_kind_leash_throttled">An agent\'s requests were slowed down</string> <!-- approved 2026-11-03 -->
     <string name="history_kind_action_configured">Action set up</string>
     <string name="history_kind_action_invoked">Action requested</string>
     <string name="history_kind_action_approved">Action approved</string>
@@ -204,6 +204,9 @@
     <string name="history_kind_call_permission_on_any">Calls turned on</string>
     <string name="history_kind_leash_item_secret_used">An agent used %1$s</string>
     <string name="history_kind_leash_item_secret_used_any">An agent used an item</string>
+    <!-- AA6 part 2 (approved by the owner 2026-11-03): named forms; the plain history_kind_leash_item_read / _used are the no-name forms (and the hourly summaries'). -->
+    <string name="history_kind_leash_item_read_named">An agent read %1$s</string>
+    <string name="history_kind_leash_item_used_named">An agent used %1$s without seeing it</string>
     <string name="history_kind_leash_item_changed">You changed how an agent may use %1$s</string>
     <string name="history_kind_leash_item_changed_any">You changed how an agent may use an item</string>
     <string name="history_kind_drop_call_off">Call refused: calls are off</string>
@@ -257,4 +260,6 @@
     <string name="history_detail_credential_utk_resync">This phone\'s one-time keys were replaced with a fresh set.</string>
     <string name="history_detail_credential_holder_cleared">Your vault found its credential holder missing and cleared it. If you didn\'t remove a phone, contact VettID.</string>
     <string name="history_detail_leash_item_proxy">The secret went to your VettID connector, which added it to the agent\'s requests to a site you allowed. The agent was not given it.</string>
+    <string name="history_detail_leash_item_read">The agent was given the item\'s values. Its app may keep them in its history.</string>
+    <string name="history_detail_leash_item_used">Your vault gave the agent a code worked out from the value, not the value itself.</string>
 </resources>

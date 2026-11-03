@@ -16,7 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
+import com.vettid.core.ui.components.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +46,8 @@ import androidx.compose.ui.text.font.FontWeight
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.HoldsInput
+import com.vettid.core.ui.components.WipesOnCover
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.ExcludeScreenFromAutofill
 import com.vettid.core.ui.components.FormScaffold
@@ -209,6 +211,9 @@ data class BackupActions(
 /** Make a wallet and back it up, or back up one (ANDROID-PLAN §4 "Creating and backing up"): one step at a time. */
 @Composable
 fun BackupScreen(state: BackupUiState, actions: BackupActions, modifier: Modifier = Modifier) {
+    HoldsInput(state.holdsInput)
+    // A word of the phrase typed for the check is a secret: blanked when the owner check covers the app (§3.6.5).
+    WipesOnCover { if (state.typed.isNotEmpty()) actions.onTyped("") }
     // One hold for the phrase and the check together, at one place in the composition: moving between them toggles nothing.
     if (state.step == BackupStep.PHRASE || state.step == BackupStep.CHECK) {
         SecureWindow()

@@ -161,6 +161,27 @@ class NotificationsTest {
     }
 
     @Test
+    fun theSheetOfAnAgentUseOpensTheItemOnlyWhileItExists() = runTest {
+        val known = item("leash.item.run", "k", c = null, ref = "i1")
+        val gone = item("leash.item.proxy", "g", c = null, ref = "i9")
+        feed.seed(listOf(known, gone))
+        val m = vm()
+        advanceUntilIdle()
+        m.open(known)
+        assertEquals(known, m.uiState.value.sheet)
+        assertFalse(m.uiState.value.sheetGone)
+        m.openSheetItem()
+        assertEquals(FeedTarget.Item("i1"), m.uiState.value.open)
+        assertNull(m.uiState.value.sheet)
+        m.targetTaken()
+        m.open(gone)
+        assertEquals(gone, m.uiState.value.sheet)
+        m.openSheetItem()
+        assertNull(m.uiState.value.open)
+        assertEquals(gone, m.uiState.value.sheet)
+    }
+
+    @Test
     fun archiveUndoesToThePreviousStatusAndDeleteIsConfirmed() = runTest {
         val read = item("message.received", "f1", status = "read")
         feed.seed(listOf(read, item("message.received", "f2")))

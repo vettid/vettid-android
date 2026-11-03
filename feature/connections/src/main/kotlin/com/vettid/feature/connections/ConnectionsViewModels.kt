@@ -352,6 +352,8 @@ data class AcceptUiState(
     /** [AcceptStep.CONNECTED]: the new connection declared itself a service (it cannot message the member). */
     val connectedService: Boolean = false,
     val input: String = "",
+    /** The member typed or pasted [input]; a value that came with a link or a scan is theirs to confirm, not input of theirs. */
+    val typed: Boolean = false,
     /** The screen was opened from a link (App Link or `vettid://`): the member confirms first. */
     val fromLink: Boolean = false,
     val connectionId: String? = null,
@@ -365,7 +367,10 @@ data class AcceptUiState(
     val error: FailureKind? = null,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
-)
+) {
+    /** Unsent input: an invitation typed or pasted, not yet sent. */
+    val holdsInput: Boolean get() = step == AcceptStep.INPUT && typed && input.isNotEmpty()
+}
 
 /**
  * Accept an invitation (§6.4, 0.10.2/0.10.3): a pasted or opened link or a
@@ -437,7 +442,7 @@ class AcceptViewModel @Inject constructor(
         }
     }
 
-    fun setInput(v: String) = state.update { it.copy(input = v, error = null) }
+    fun setInput(v: String) = state.update { it.copy(input = v, typed = true, error = null) }
 
     fun accept() {
         val text = state.value.input

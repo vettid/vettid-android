@@ -150,6 +150,18 @@ class VettIdApplication : DistributionApplication() {
             },
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
         )
+        // A date set back in the background is a lock (the lead's decision of 2026-11-03): decide again at once.
+        // On Android 14+ a cached (frozen) app's TIME_CHANGED may arrive late, or several merged into one, so "set back,
+        // then restored" is caught only on a best-effort basis; the monotonic timeout holds whatever this receiver sees.
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            com.vettid.app.lock.ClockChangedReceiver {
+                appLock.onClockChanged()
+                feedNotifier.recheckCover()
+            },
+            android.content.IntentFilter(android.content.Intent.ACTION_TIME_CHANGED),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         // VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background.
         changeNotifier.start()
         // The member's pending lock: its job while it is pending (it survives the process), and its notice.

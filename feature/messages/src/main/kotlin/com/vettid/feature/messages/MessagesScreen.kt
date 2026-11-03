@@ -65,6 +65,7 @@ import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.CenteredTitle
 import com.vettid.core.ui.components.ConfirmDialog
@@ -543,6 +544,8 @@ private fun OlderRow(loading: Boolean, onLoad: () -> Unit) {
 
 @Composable
 private fun Composer(state: ConversationUiState, name: String, actions: ConversationActions) {
+    // An unsent message or photos: the daily owner check waits for them (with a time limit), VAULT-MESSAGING §3.6.5.
+    HoldsInput(state.draft.isNotEmpty() || state.photoDraft != null)
     if (state.connection != null && !state.active) {
         Text(
             stringResource(R.string.messages_inactive, name),

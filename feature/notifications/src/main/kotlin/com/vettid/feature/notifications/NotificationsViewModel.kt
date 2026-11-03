@@ -244,6 +244,13 @@ class NotificationsViewModel @Inject constructor(
 
     fun targetTaken() = state.update { it.copy(open = null) }
 
+    /** The sheet's "Open the item" (AA6): closes the sheet and opens the item, if it is still there. */
+    fun openSheetItem() {
+        val item = state.value.sheet ?: return
+        val id = FeedKinds.sheetItemId(item, state.value.names) ?: return
+        state.update { it.copy(sheet = null, sheetGone = false, open = FeedTarget.Item(id)) }
+    }
+
     fun closeSheet() = state.update { it.copy(sheet = null, sheetGone = false) }
 
     /** End-to-start swipe: archived, with an Undo that restores the previous status. */

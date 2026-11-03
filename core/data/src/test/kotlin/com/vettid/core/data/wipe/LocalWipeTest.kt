@@ -171,7 +171,9 @@ class LocalWipeTest {
         val attestation = listOf("vettid.device_attestation.v1") +
             (0..1).flatMap { s -> (0 until 64).map { "vettid.device_attestation.v1.slot$s.$it" } }
         assertEquals(
-            attestation + listOf("vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.app_api.v1", "vettid.local_files.v1"),
+            attestation + listOf(
+                "vettid.seed_wrap.v1", "vettid.app_data.v1", "vettid.app_data.v1.next", "vettid.app_api.v1", "vettid.local_files.v1",
+            ),
             LocalWipe.KNOWN_ALIASES,
         )
     }
