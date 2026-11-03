@@ -1,6 +1,10 @@
 package com.vettid.core.testing
 
+import com.vettid.core.data.devices.AgentChange
+import com.vettid.core.data.devices.AgentPermissions
+import com.vettid.core.data.devices.AgentResumption
 import com.vettid.core.data.devices.DeviceInfo
+import com.vettid.core.data.devices.PermissionRemoval
 import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.vault.VaultFailure
@@ -62,5 +66,42 @@ class FakeDevices : DevicesRepository {
     override fun dismissRemoved() {
         calls += "dismissRemoved"
         removed.value = null
+    }
+
+    // --- AA3: an agent's permissions ---
+
+    /** The grants [refreshPermissions] reads, by agent id (what the vault "holds"). */
+    val grantsHeld = mutableMapOf<String, AgentPermissions>()
+    override val permissions = MutableStateFlow<Map<String, AgentPermissions>>(emptyMap())
+    override val changes = kotlinx.coroutines.flow.MutableSharedFlow<AgentChange>(extraBufferCapacity = 16)
+
+    /** What [removePermission] and [resume] answer when they do not fail. */
+    var removal = PermissionRemoval.REMOVED
+    var resumption = AgentResumption.RESUMED
+
+    /** When set, [refreshPermissions] waits for the next gate before it answers (a slow older read). */
+    val permissionGates = ArrayDeque<kotlinx.coroutines.CompletableDeferred<Unit>>()
+
+    override suspend fun refreshPermissions(agentId: String) {
+        call("refreshPermissions:$agentId")
+        val snapshot = grantsHeld[agentId] ?: AgentPermissions(emptyList(), false)
+        permissionGates.removeFirstOrNull()?.await()
+        permissions.value = permissions.value + (agentId to snapshot)
+        devices.value = devices.value.map { if (it.id == agentId && it.isAgent) it.copy(paused = snapshot.suspended) else it }
+    }
+
+    override suspend fun removePermission(agentId: String, grantId: String): PermissionRemoval {
+        call("removePermission:$grantId")
+        val held = grantsHeld[agentId]
+        if (held != null) grantsHeld[agentId] = held.copy(others = held.others.filterNot { it.grantId == grantId })
+        refreshPermissions(agentId)
+        return removal
+    }
+
+    override suspend fun resume(agentId: String): AgentResumption {
+        call("resume:$agentId")
+        grantsHeld[agentId]?.let { grantsHeld[agentId] = it.copy(suspended = false) }
+        refreshPermissions(agentId)
+        return resumption
     }
 }

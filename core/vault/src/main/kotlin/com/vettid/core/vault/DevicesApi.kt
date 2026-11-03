@@ -27,6 +27,19 @@ suspend fun VaultApi.deviceUnlink(deviceId: String) {
 suspend fun VaultApi.leashGrantList(agentId: String? = null): JsonObject =
     device.op("leash.grant.list", buildJsonObject { agentId?.let { put("agent_id", it) } })
 
+/**
+ * `leash.grant.revoke{grant_id}` (§10.11, ANDROID-PLAN 0.1.116 §4 AA3): `{}`; no unlock window, nothing signed. Revoking an
+ * `items.read` grant deletes its share rule; `not_found` when the grant is already gone.
+ */
+suspend fun VaultApi.leashGrantRevoke(grantId: String) {
+    device.op("leash.grant.revoke", buildJsonObject { put("grant_id", grantId) })
+}
+
+/** `leash.agent.resume{agent_id}` (§10.11, AA3): `{}`; `not_found` unless the agent is suspended. No unlock window. */
+suspend fun VaultApi.leashAgentResume(agentId: String) {
+    device.op("leash.agent.resume", buildJsonObject { put("agent_id", agentId) })
+}
+
 /*
  * Pairing an agent (ANDROID-PLAN 0.1.53 AA2; VAULT-MESSAGING §6.7, §10.3). Only an agent is ever paired from the app
  * (decision 9: no "Pair a desktop"), so the role is not a parameter.
