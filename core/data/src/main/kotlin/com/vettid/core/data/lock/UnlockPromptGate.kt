@@ -70,6 +70,12 @@ class UnlockPromptGate {
         return true
     }
 
+    /** A new lock whose first prompt waits for the member's "Unlock" (a lock just after a successful prompt: no loop). */
+    @Synchronized
+    fun holdAutomatic() {
+        endedWithoutSuccess = true
+    }
+
     /** A new lock (start, timeout): its first prompt is automatic again. */
     @Synchronized
     fun newLock() {

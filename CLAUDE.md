@@ -126,7 +126,10 @@ The A2 exit test:
   covered; a prompt in progress (`authenticating`) does not change that: a prompt left up cannot keep names showing past the timeout.
   The prompt rule (2026-11-03): `onBackground` always records the mark (not on a configuration change) and `onForeground` never
   clears it while a prompt is up; `promptEnded(outcome, inForeground)` decides. Success in the foreground clears it. Success in the
-  background sets it to now with a 3 s grace for the late `onStart` (so "Immediately" does not lock right after an unlock).
+  background sets it to now with a 3 s grace for the late `onStart` (so "Immediately" does not lock right after an unlock); if
+  that `onStart` comes later than the grace and the return locks, it locks without the automatic prompt
+  (`UnlockPromptGate.holdAutomatic`, as iOS #203): the member taps Unlock once, never a lock-and-prompt loop. A late success for
+  an enable already dropped does nothing (`completeEnable` returns when nothing is pending).
   Cancelled or dismissed in the foreground runs the return decision (lock if due, then clear; with "Immediately" this locks after a
   presence check whose screen stopped the activity); in the background it keeps the mark, or records one. The prompt of an enable or
   a method change (`promptStarted(enable = true)`) that does not succeed also drops its pending key (`enableCancelled()`) and then

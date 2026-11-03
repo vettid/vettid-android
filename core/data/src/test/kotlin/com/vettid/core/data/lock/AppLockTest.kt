@@ -329,7 +329,21 @@ class AppLockTest {
             clock += wait
             l.onForeground()
             assertEquals("$wait", if (locked) AppLockState.LOCKED else AppLockState.UNLOCKED, l.state.value)
+            if (locked) {
+                // No lock-and-prompt loop: the lock after a successful prompt waits for the member's "Unlock".
+                assertFalse("no automatic prompt", l.prompts.tryStart(auto = true, owner = this))
+                assertTrue("Unlock still works", l.prompts.tryStart(auto = false, owner = this))
+            }
         }
+    }
+
+    @Test
+    fun aTimeoutLockStillPromptsAutomatically() = runTest {
+        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        l.onBackground()
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+        assertTrue(l.prompts.tryStart(auto = true, owner = this))
     }
 
     @Test
@@ -412,6 +426,18 @@ class AppLockTest {
         assertFalse(keys.exists())
         assertNull(keys.pendingKey)
         assertFalse(prefs.current.value.appLockEnabled)
+    }
+
+    @Test
+    fun aLateSuccessForADroppedEnableChangesNothingAndDoesNotThrow() = runTest {
+        val l = lock()
+        l.start()
+        val c = l.cipherToEnable(AppLockMethod.BIOMETRICS)
+        l.enableCancelled() // dropped (cancelled, abandoned or destroyed) before the success arrives
+        l.completeEnable(c)
+        assertEquals(AppLockState.DISABLED, l.state.value)
+        assertFalse(prefs.current.value.appLockEnabled)
+        assertNull(keys.pendingKey)
     }
 
     @Test

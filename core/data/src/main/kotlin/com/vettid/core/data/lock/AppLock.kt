@@ -471,7 +471,8 @@ class AppLock(
             enableCancelled()
             throw KeystoreException("app lock: not authenticated", e)
         }
-        val m = enabling ?: methodFlow.value
+        // A late success for an enable that was already dropped (cancelled, abandoned, destroyed): nothing pending to promote.
+        val m = enabling ?: return
         try {
             // One edit: enabled, method and the slot of the new key. A crash after it leaves both keys; recover keeps the marked one.
             prefs.setAppLock(true, m, keys.pendingSlot())
@@ -552,9 +553,11 @@ class AppLock(
     }
 
     /** Locks now. */
-    fun lockNow() {
+    fun lockNow() = lockNow(automaticPrompt = true)
+
+    private fun lockNow(automaticPrompt: Boolean) {
         if (stateFlow.value != AppLockState.UNLOCKED) return
-        prompts.newLock()
+        if (automaticPrompt) prompts.newLock() else prompts.holdAutomatic()
         stateFlow.value = AppLockState.LOCKED
         syncCoverAlarm()
     }
@@ -589,7 +592,11 @@ class AppLock(
         if (at == null) return
         val grace = proven != null && elapsed() - proven <= PROMPT_RETURN_GRACE_MS
         // Locked before the background time is cleared: the cover (wouldShowLock) has no gap between the two.
-        if (!grace && stateFlow.value == AppLockState.UNLOCKED && backgroundDue(at, timeoutFlow.value.seconds * MS)) lockNow()
+        if (!grace && stateFlow.value == AppLockState.UNLOCKED && backgroundDue(at, timeoutFlow.value.seconds * MS)) {
+            // Locking just after a prompt that succeeded while the app was stopped (its onStart later than the grace): no
+            // automatic prompt, so a prompt that stops the app can never loop (lock, prompt, lock); the member taps Unlock once.
+            lockNow(automaticPrompt = proven == null)
+        }
         backgroundAt = null
         syncCoverAlarm()
     }
