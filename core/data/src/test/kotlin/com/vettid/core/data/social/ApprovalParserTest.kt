@@ -78,6 +78,22 @@ class ApprovalParserTest {
         assertEquals(RequestState.PENDING, ApprovalParser.outgoing(o("""{"connection_id":"C2","sas":"000001","state":"waiting"}"""), at)!!.state)
     }
 
+    /** ANDROID-PLAN 0.1.90: only `peer_kind: "service"` marks a service; absent or any other value is a person. */
+    @Test
+    fun peerKindMarksAServiceInEveryPlaceTheVaultSendsIt() {
+        val svc = ApprovalParser.parse("connection.request.outgoing", o("""{"connection_id":"C1","sas":"315904","name":"Acme","peer_kind":"service"}"""), at)
+            as Approval.OutgoingRequest
+        assertTrue(svc.service)
+        val listed = ApprovalParser.outgoing(o("""{"connection_id":"C2","state":"pending","sas":"000001","peer_kind":"service"}"""), at)!!
+        assertTrue(listed.service)
+        assertFalse(ApprovalParser.outgoing(o("""{"connection_id":"C3","sas":"000002"}"""), at)!!.service)
+        assertFalse(ApprovalParser.outgoing(o("""{"connection_id":"C4","sas":"000003","peer_kind":"robot"}"""), at)!!.service)
+        assertTrue(ApprovalParser.connection(com.vettid.core.vault.Connection("c1", state = "active", peerKind = "service")).service)
+        assertFalse(ApprovalParser.connection(com.vettid.core.vault.Connection("c2", state = "active")).service)
+        assertFalse(ApprovalParser.connection(com.vettid.core.vault.Connection("c3", state = "active", peerKind = "Service")).service)
+        assertFalse(ApprovalParser.connection(com.vettid.core.vault.Connection("c4", state = "active", peerKind = "robot")).service)
+    }
+
     @Test
     fun criticalPayloadIsVerifiedAgainstItsHash() {
         val p = "SGVsbG8sIFZldHRJRCE="

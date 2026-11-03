@@ -94,6 +94,7 @@ import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.core.ui.components.VettIdListRow
+import com.vettid.core.ui.R as UiR
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
@@ -608,7 +609,9 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
             item(key = "held-notice") { HistoryHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s)) }
         }
         items(state.shown, key = { it.seq }) { e ->
-            val names = RowNames(state.connectionNames, state.itemNames, state.deviceNames, state.voteTitles, state.walletItems)
+            val names = RowNames(
+                state.connectionNames, state.itemNames, state.deviceNames, state.voteTitles, state.walletItems, state.serviceConnections,
+            )
             EntryRow(e, names, actions.onOpen)
         }
         item(key = "footer") {
@@ -642,18 +645,21 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
 }
 
 /** What a row resolves its ids with: connection, item and device names (devices null while not known). */
-private data class RowNames(
+internal data class RowNames(
     val connections: Map<String, String>,
     val items: Map<String, String>,
     val devices: Map<String, String>?,
     val votes: Map<String, String> = emptyMap(),
     val walletItems: Set<String> = emptySet(),
+    val services: Set<String> = emptySet(),
 )
 
 @Composable
-private fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
+internal fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
     val connection = e.connectionId?.let {
-        AccountNames.isolateOrNull(names.connections[it]) ?: stringResource(R.string.history_connection_removed)
+        val shown = AccountNames.isolateOrNull(names.connections[it]) ?: stringResource(R.string.history_connection_removed)
+        // ANDROID-PLAN 0.1.90: "Service" beside the name of a service connection.
+        if (it in names.services) "$shown · ${stringResource(UiR.string.service_label)}" else shown
     }
     // ANDROID-PLAN 0.1.11: the item's name where the entry refers to one; a removed one shows "Deleted item".
     val item = AuditKinds.itemOf(e.kind, e.ref)

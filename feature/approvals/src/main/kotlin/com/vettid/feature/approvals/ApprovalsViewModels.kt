@@ -259,6 +259,8 @@ data class ApprovalDetailUiState(
     val withdrawn: Boolean = false,
     /** The challenger's connection can be muted from the withdrawn notice (it exists and its requests are not muted). */
     val canMute: Boolean = false,
+    /** The fingerprint of an outgoing request's `ik` (§10.8) when the connection list has it (shown for a service). */
+    val peerFingerprint: String? = null,
     /** The connection is a service (`peer_kind`): muting asks first. */
     val connectionIsService: Boolean = false,
     /** "Mute requests from …" asked on a service connection: the confirmation is open. */
@@ -486,6 +488,8 @@ class ApprovalDetailViewModel @Inject constructor(
                 canMute = withdrawn && peer != null && peer.asks?.muted != true && !s.muted &&
                     AccountNames.isolateOrNull(shown?.connectionName) != null,
                 connectionIsService = peer?.service == true,
+                peerFingerprint = (shown as? Approval.OutgoingRequest)?.takeIf { it.service }
+                    ?.let { o -> x.connections.firstOrNull { it.id == o.connectionId }?.keyFingerprint },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 

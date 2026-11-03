@@ -117,7 +117,7 @@ class ShellViewModel @Inject constructor(
     ) { a, c, v, w ->
         ShellBadges(
             approvals = a.count { it.needsDecision },
-            unread = c.count { it.unread > 0 },
+            unread = unreadConversations(c),
             votes = v.badge,
             votesShown = v.shown,
             walletShown = w,
@@ -128,3 +128,7 @@ class ShellViewModel @Inject constructor(
         const val ITEM_WAIT_MS = 10_000L
     }
 }
+
+/** The Messages badge: conversations with unread messages. A service is never listed there, so it never counts (ANDROID-PLAN 0.1.90). */
+internal fun unreadConversations(c: List<com.vettid.core.data.social.ConversationSummary>): Int =
+    c.count { it.unread > 0 && !it.connection.service }

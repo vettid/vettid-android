@@ -463,7 +463,12 @@ fun FeedRow(
     val colors = MaterialTheme.colorScheme
     val bar = colors.error
     val title = FeedKinds.title(item, names).text()
-    val supporting = FeedKinds.supporting(item, names)?.text()
+    // ANDROID-PLAN 0.1.90: "Service" where a row names a service connection.
+    val service = item.connectionId?.let { names.connections[it]?.service } == true
+    val supporting = listOfNotNull(
+        FeedKinds.supporting(item, names)?.text(),
+        stringResource(com.vettid.core.ui.R.string.service_label).takeIf { service },
+    ).joinToString(" · ").ifEmpty { null }
     val at = FeedManager.at(item)
     var menu by remember { mutableStateOf(false) }
     val archive = stringResource(R.string.notifications_archive)
