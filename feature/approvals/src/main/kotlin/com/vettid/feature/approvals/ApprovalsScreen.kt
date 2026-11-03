@@ -374,8 +374,10 @@ private fun whoOf(a: Approval): String? = when (a) {
 
 /** "Service" beside the name of a row that names a service connection (ANDROID-PLAN 0.1.90). */
 @Composable
-internal fun serviceLabelOf(a: Approval): String? =
-    if (a.connectionService && AccountNames.isolateOrNull(a.connectionName) != null) stringResource(UiR.string.service_label) else null
+internal fun serviceLabelOf(a: Approval): String? {
+    val named = if (a is Approval.OutgoingRequest) a.name else a.connectionName
+    return if (a.connectionService && AccountNames.isolateOrNull(named) != null) stringResource(UiR.string.service_label) else null
+}
 
 @Composable
 private fun summaryOf(a: Approval): String? = when (a) {
@@ -1124,7 +1126,12 @@ private fun Facts(a: Approval, withdrawn: Boolean = false, peerFingerprint: Stri
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
-            if (a.service) ServiceRequestLine(fingerprint = peerFingerprint)
+            if (a.service) {
+                ServiceRequestLine(
+                    fingerprint = peerFingerprint,
+                    fingerprintLabel = stringResource(UiR.string.core_ui_vault_key_fingerprint),
+                )
+            }
             a.sas?.let { sas ->
                 Spacer(Modifier.height(Spacing.l))
                 Label(stringResource(R.string.approvals_safety_code))
@@ -1154,6 +1161,11 @@ private fun Facts(a: Approval, withdrawn: Boolean = false, peerFingerprint: Stri
             // A withdrawn ask shows no code and no "Check that…" line: nothing is left to compare.
             val code = shownMatchCode(a)?.takeIf { !withdrawn }
             if (code != null) {
+                // The title names who; a service's sign-in carries the label here (ANDROID-PLAN 0.1.90).
+                if (a.connectionService) {
+                    com.vettid.core.ui.components.ServiceTag()
+                    Spacer(Modifier.height(Spacing.s))
+                }
                 MatchCodeBlock(code)
             } else {
                 Label(stringResource(R.string.approvals_from))

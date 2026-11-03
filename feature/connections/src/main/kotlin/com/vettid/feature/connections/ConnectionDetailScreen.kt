@@ -42,6 +42,7 @@ import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.social.AuthenticationState
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
@@ -181,7 +182,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() }.testTag("detail_name"),
             )
-            if (c.service) ServiceTag(Modifier.semantics { heading() })
+            if (c.service) ServiceTag()
             c.secondaryName?.let {
                 Text(
                     it,
@@ -206,9 +207,11 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             )
         }
         state.error?.let { e ->
+            // "Services can't do that." stands alone, without the screen's generic title.
+            val refused = e == FailureKind.SERVICE_FORBIDDEN
             NoticeCard(
-                kind = NoticeKind.WARNING,
-                title = stringResource(R.string.connections_error_title),
+                kind = if (refused) NoticeKind.INFO else NoticeKind.WARNING,
+                title = if (refused) "" else stringResource(R.string.connections_error_title),
                 body = failureText(e.messageRes(), e.vaultCode(state.errorCode)),
                 modifier = Modifier.padding(horizontal = Spacing.s),
                 actions = { TextButton(onClick = actions.onDismissNotice) { Text(stringResource(R.string.connections_ok)) } },

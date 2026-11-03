@@ -725,6 +725,9 @@ class ConnectionDetailViewModel @Inject constructor(
             if (e.code != VaultCodes.FORBIDDEN) throw e
             // ANDROID-PLAN 0.1.90: `forbidden` to something sent to a service: "Services can't do that." and the action goes.
             local.update { it.copy(authRefused = true, error = FailureKind.SERVICE_FORBIDDEN, errorCode = null) }
+            // Read the connections again so the vault's `peer_kind` arrives and the removal holds after leaving the screen.
+            // `forbidden` can also come from a recovering app, where this read may fail: the refusal stays as said.
+            runCatching { repo.refresh() }
         }
     }
 

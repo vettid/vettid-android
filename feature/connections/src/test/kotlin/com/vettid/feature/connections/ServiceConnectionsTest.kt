@@ -4,6 +4,7 @@
 package com.vettid.feature.connections
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -141,9 +142,12 @@ class ServiceConnectionsTest {
                 ConnectionsUiState(loading = false, connections = listOf(person()), services = listOf(service())), chrome, ConnectionsActions(),
             )
         }
-        rule.onNodeWithText("Services").assertIsDisplayed()
+        val header = rule.onNodeWithText("Services").getUnclippedBoundsInRoot().top
+        val people = rule.onNodeWithTag("connection_c1").getUnclippedBoundsInRoot().top
+        assertTrue(people < header)
+        // The service row carries the label (the header is "Services", the label "Service · Active").
         rule.onNodeWithTag("connection_s1").assertIsDisplayed()
-        assertTrue(rule.onAllNodesWithText("Service", substring = true).fetchSemanticsNodes().size >= 2)
+        assertTrue(rule.onAllNodesWithText("Service · ", substring = true).fetchSemanticsNodes().isNotEmpty())
     }
 
     // --- the detail ---
@@ -200,8 +204,12 @@ class ServiceConnectionsTest {
         advanceUntilIdle()
         assertEquals(FailureKind.SERVICE_FORBIDDEN, vm.uiState.value.error)
         assertTrue(vm.uiState.value.authRefused)
-        rule.setContent { ConnectionDetailScreen(vm.uiState.value, DetailActions()) }
+        val shown = vm.uiState.value
+        rule.setContent { ConnectionDetailScreen(shown, DetailActions()) }
         rule.onNodeWithText("Services can't do that.").assertIsDisplayed()
+        // Alone: no generic title above it.
+        assertEquals(0, rule.onAllNodesWithText("Could not load", substring = true).fetchSemanticsNodes().size)
+        assertTrue("refresh" in social.calls.drop(1))
         rule.onNodeWithTag("auth_card").assertDoesNotExist()
         // Dismissed, it does not come back, and the action stays removed.
         vm.dismissNotice()
@@ -209,5 +217,14 @@ class ServiceConnectionsTest {
         assertNull(vm.uiState.value.error)
         assertTrue(vm.uiState.value.authRefused)
         assertEquals(1, social.calls.count { it == "requestAuthentication" })
+    }
+
+    @Test
+    fun aServiceWithoutFirstAndLastNameIsTitledByItsNameAPersonIsNot() {
+        val noNames = ConnectionInfo("s9", "Acme", ConnectionState.ACTIVE, service = true)
+        assertEquals("Acme", noNames.displayName)
+        assertEquals("", noNames.copy(service = false).displayName)
+        detail(noNames)
+        rule.onNodeWithTag("detail_name").assertTextEquals("Acme")
     }
 }

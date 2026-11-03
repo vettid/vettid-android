@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AuthPurpose
 import com.vettid.core.data.social.RequestState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -56,5 +57,31 @@ class ServiceRequestScreenTest {
         rule.setContent { ApprovalDetailScreen(ApprovalDetailUiState(key = a.key, approval = a), DecisionActions()) }
         assertTrue(rule.onAllNodesWithText("Acme", substring = true).fetchSemanticsNodes().isNotEmpty())
         assertTrue(rule.onAllNodesWithText("Service", substring = true).fetchSemanticsNodes().isNotEmpty())
+    }
+
+    private fun signIn(service: Boolean) = Approval.Authentication(
+        "a1", "c1", "Sign in", now, null, "Acme", AuthPurpose.SIGNIN, "42", connectionService = service,
+    )
+
+    @Test
+    fun aServiceSignInWithAMatchCodeStillCarriesTheServiceLabel() {
+        val a = signIn(true)
+        rule.setContent { ApprovalDetailScreen(ApprovalDetailUiState(key = a.key, approval = a), DecisionActions()) }
+        rule.onNodeWithTag("service_label").assertExists()
+        rule.onNodeWithTag("match_code").assertExists()
+    }
+
+    @Test
+    fun aPersonSignInHasNoServiceLabel() {
+        val a = signIn(false)
+        rule.setContent { ApprovalDetailScreen(ApprovalDetailUiState(key = a.key, approval = a), DecisionActions()) }
+        assertEquals(0, rule.onAllNodesWithText("Service", substring = true).fetchSemanticsNodes().size)
+        rule.onNodeWithTag("service_label").assertDoesNotExist()
+    }
+
+    @Test
+    fun theFingerprintHasTheVaultKeyLabel() {
+        show(outgoing(true), "9a1f bb7d 873e eafb")
+        rule.onNodeWithText("Vault key fingerprint").assertExists()
     }
 }

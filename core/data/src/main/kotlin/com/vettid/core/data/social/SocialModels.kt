@@ -65,7 +65,7 @@ data class ConnectionInfo(
      * The title (§10.8): "First Last"; "" before the names arrived, for which the UI shows "Name not shared yet".
      * Never the display name alone, never an alias.
      */
-    val displayName: String get() = accountName ?: ""
+    val displayName: String get() = accountName ?: if (service) AccountNames.cleaned(name).orEmpty() else ""
 
     /** The peer's display name when it adds something to the title (non-empty and different), for secondary text. */
     val secondaryName: String?
@@ -356,6 +356,7 @@ sealed interface Approval {
         val service: Boolean = false,
     ) : Approval {
         override val key: String get() = "outgoing:$connectionId"
+        override val connectionService: Boolean get() = service
     }
 
     /** `connection.authenticate.pending` (§10.4): sign a connection's challenge with the credential key. */

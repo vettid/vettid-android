@@ -523,7 +523,8 @@ class SocialManager(
         fun entries(k: String) = (list[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         val parsed = entries("incoming").mapNotNull { ApprovalParser.incoming(it, t) } +
             entries("outgoing").mapNotNull { ApprovalParser.outgoing(it, t) }
-        requestsFlow.value = parsed
+        // A request already known as a service stays one if the list entry lacks the marker.
+        requestsFlow.value = RequestKinds.keepServices(requestsFlow.value, parsed)
         rememberNames(parsed.mapNotNull { a -> requestId(a)?.let { id -> nameOf(a)?.let { id to it } } })
     }
 
@@ -838,7 +839,8 @@ class SocialManager(
                 introducedBy = null, receivedAt = now(), exp = r.exp, service = r.service,
             )
             // The outgoing event may already have arrived (it follows hs.resp): keep it then.
-            requestsFlow.update { l -> if (l.any { requestId(it) == r.connectionId }) l else l + waiting }
+            // An event that already arrived is kept, and learns the kind the accept's answer gave.
+            requestsFlow.update { l -> RequestKinds.withAccepted(l, waiting) }
             endsFlow.update { it - r.connectionId }
             r.name?.let { rememberNames(listOf(r.connectionId to it)) }
         }
@@ -1685,4 +1687,24 @@ internal class VaultDeviceDecisions(private val api: VaultApi) : DeviceDecisionO
     override suspend fun pairReject(pendingId: String) = api.devicePairReject(pendingId)
 
     override suspend fun approvalDecide(approvalId: String, approve: Boolean): String? = api.approvalDecide(approvalId, approve)
+}
+
+/** What the request list keeps of `peer_kind` whichever answer or event arrives first (VAULT-MESSAGING 0.69.0 §6.4). */
+internal object RequestKinds {
+    /** The accept's [waiting] request joins [list]; one the outgoing event already put there is kept and learns the kind. */
+    fun withAccepted(list: List<Approval>, waiting: Approval.OutgoingRequest): List<Approval> =
+        if (list.any { it is Approval.OutgoingRequest && it.connectionId == waiting.connectionId }) {
+            list.map {
+                val same = it is Approval.OutgoingRequest && it.connectionId == waiting.connectionId
+                if (same) (it as Approval.OutgoingRequest).copy(service = it.service || waiting.service) else it
+            }
+        } else {
+            list + waiting
+        }
+
+    /** A request list read replaces [old] with [read]; a request known as a service stays one when its entry lacks the marker. */
+    fun keepServices(old: List<Approval>, read: List<Approval>): List<Approval> {
+        val known = old.filterIsInstance<Approval.OutgoingRequest>().filter { it.service }.map { it.connectionId }.toSet()
+        return read.map { if (it is Approval.OutgoingRequest && it.connectionId in known) it.copy(service = true) else it }
+    }
 }

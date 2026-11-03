@@ -388,9 +388,11 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
             }
             val error = state.error
             if (error != null) {
+                // "Services can't do that." stands alone, without the screen's generic title.
+                val refused = error == com.vettid.core.data.vault.FailureKind.SERVICE_FORBIDDEN
                 NoticeCard(
-                    kind = NoticeKind.WARNING,
-                    title = stringResource(R.string.messages_error_title),
+                    kind = if (refused) NoticeKind.INFO else NoticeKind.WARNING,
+                    title = if (refused) "" else stringResource(R.string.messages_error_title),
                     body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.messages_ok)) } },

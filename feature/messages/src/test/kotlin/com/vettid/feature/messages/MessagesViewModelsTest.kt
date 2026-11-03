@@ -248,12 +248,33 @@ class MessagesViewModelsTest {
         assertEquals(FailureKind.SERVICE_FORBIDDEN, vm.uiState.value.error)
         assertTrue(vm.uiState.value.noComposer)
         assertFalse(vm.uiState.value.canSend)
+        // The connections are read again; the vault now says `peer_kind: service` for c2.
+        assertTrue("refresh" in social.calls.drop(1))
+        social.seed(social.connections.value.map { if (it.id == "c2") it.copy(service = true) else it })
         vm.dismissError()
         vm.setDraft("again")
         vm.send()
         advanceUntilIdle()
         assertNull(vm.uiState.value.error)
         assertEquals(1, social.calls.count { it == "send" })
+        // A new view model (after leaving the screen) has no composer either: the removal holds.
+        val again = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
+        advanceUntilIdle()
+        assertTrue(again.uiState.value.noComposer)
+    }
+
+    @Test
+    fun forbiddenToAPhotoDropsTheDraftAndTheComposer() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1)))
+        advanceUntilIdle()
+        attachments.fail["send"] = VaultFailure(FailureKind.OTHER, "forbidden")
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertEquals(FailureKind.SERVICE_FORBIDDEN, vm.uiState.value.error)
+        assertTrue(vm.uiState.value.noComposer)
     }
 
     @Test

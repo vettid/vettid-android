@@ -272,12 +272,22 @@ class ConversationViewModel @Inject constructor(
                 if (e.code == VaultCodes.FORBIDDEN) {
                     // ANDROID-PLAN 0.1.90: `forbidden` to a message: the connection is a service. Said once; the composer goes.
                     local.update { it.copy(sending = false, draft = "", error = FailureKind.SERVICE_FORBIDDEN, serviceRefused = true) }
+                    readAfterForbidden()
                     return@launch
                 }
                 // The draft stays so that the member can retry.
                 local.update { it.copy(sending = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
+    }
+
+    /**
+     * Reads the connections again after a `forbidden`, so that the vault's `peer_kind` arrives and the removal holds after the member
+     * leaves the screen. `forbidden` can also come from a recovering app, where conversations aren't reachable: the read may fail,
+     * and the refusal stays as said.
+     */
+    private suspend fun readAfterForbidden() {
+        runCatching { connections.refresh() }
     }
 
     /**
@@ -442,6 +452,15 @@ class ConversationViewModel @Inject constructor(
                     local.update { it.copy(photoDraft = d.copy(sending = true, inFlight = false)) }
                 } catch (e: VaultFailure) {
                     if (photosCancelled) return@launch
+                    if (e.code == VaultCodes.FORBIDDEN) {
+                        // ANDROID-PLAN 0.1.90: as a refused message: the photos go, the composer goes.
+                        pendingPhoto?.let { runCatching { attachments.abandon(it) } }
+                        pendingPhoto = null
+                        d.photos.forEach { it.wipe() }
+                        local.update { it.copy(photoDraft = null, error = FailureKind.SERVICE_FORBIDDEN, serviceRefused = true) }
+                        readAfterForbidden()
+                        return@launch
+                    }
                     val retry = AttachmentManager.retryable(e)
                     val problem = when {
                         e.code == AttachmentManager.CODE_QUOTA -> PhotoProblem.MAILBOX_FULL

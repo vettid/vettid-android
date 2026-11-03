@@ -117,7 +117,7 @@ class ShellViewModel @Inject constructor(
     ) { a, c, v, w ->
         ShellBadges(
             approvals = a.count { it.needsDecision },
-            unread = c.count { it.unread > 0 },
+            unread = c.count { it.unread > 0 && !it.connection.service },
             votes = v.badge,
             votesShown = v.shown,
             walletShown = w,
