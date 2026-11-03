@@ -16,7 +16,10 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/** The cover's alarm: an inexact, non-waking ELAPSED_REALTIME alarm with an immutable, explicit, empty broadcast; the receiver asks the notifier. */
+/**
+ * The cover's alarm: an inexact, non-waking ELAPSED_REALTIME alarm with an immutable, explicit, empty broadcast;
+ * the receiver asks the notifier.
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class CoverAlarmTest {

@@ -14,9 +14,10 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 
 /**
- * The cover's alarm (owner decision 2026-11-02, [CoverAlarm]): an inexact `AlarmManager.set(ELAPSED_REALTIME, ...)` (monotonic, not waking; a date set back
- * moves no deadline: the lead's decision of 2026-11-03) at the lock's background deadline, no exact-alarm permission. Its PendingIntent is immutable and explicit to [CoverAlarmReceiver],
- * which is not exported, and carries nothing.
+ * The cover's alarm (owner decision 2026-11-02, [CoverAlarm]): an inexact, non-waking
+ * `AlarmManager.set(ELAPSED_REALTIME, ...)` at the lock's background deadline on the monotonic clock (a date set back
+ * moves no deadline: the lead's decision of 2026-11-03); no exact-alarm permission. Its PendingIntent is immutable and
+ * explicit to [CoverAlarmReceiver], which is not exported, and carries nothing.
  */
 class AndroidCoverAlarm(
     private val context: Context,
